@@ -11,11 +11,17 @@ export function CockpitPage() {
   const [selectedJobId, setSelectedJobId] = useState<string>();
   const [workflowFilter, setWorkflowFilter] = useState<string>('all');
   const [stateFilter, setStateFilter] = useState<string>('all');
+  const [error, setError] = useState<string>('');
 
   const refresh = async () => {
-    const response = await loadJobs();
-    setJobs(response.jobs);
-    setSelectedJobId((current) => current || response.jobs[0]?.id);
+    try {
+      const response = await loadJobs();
+      setJobs(response.jobs);
+      setSelectedJobId((current) => current || response.jobs[0]?.id);
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'failed_to_load_jobs');
+    }
   };
 
   useEffect(() => {
@@ -44,6 +50,7 @@ export function CockpitPage() {
         <div>
           <h2>Open jobs</h2>
           <p>{jobs.length} active jobs across 3 workflows</p>
+          {error ? <p className="error-text">Citadel could not load jobs: {error}</p> : null}
         </div>
         <div className="filters">
           <select value={workflowFilter} onChange={(e) => setWorkflowFilter(e.target.value)}>

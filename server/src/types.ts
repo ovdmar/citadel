@@ -50,6 +50,7 @@ export interface JobRecord {
   tmuxWindow?: string;
   worktreePath?: string;
   transcriptPath?: string;
+  claudeSessionId?: string;
   planPath?: string;
   requestPath?: string;
   branchName?: string;

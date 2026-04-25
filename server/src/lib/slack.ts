@@ -3,17 +3,31 @@ import { getSlackBotToken, getSlackWorkspaceUrl } from './openclaw.js';
 
 const cache = new Map<string, { at: number; value: SlackThreadSummary }>();
 const TTL_MS = 30_000;
+const SLACK_TIMEOUT_MS = 1200;
+
+function buildSlackPermalink(channel: string, ts: string) {
+  const workspaceUrl = getSlackWorkspaceUrl();
+  if (!workspaceUrl) return undefined;
+  return `${workspaceUrl}/archives/${channel}/p${ts.replace('.', '')}?thread_ts=${ts}&cid=${channel}`;
+}
 
 async function slackApi(method: string, token: string, body: URLSearchParams) {
-  const res = await fetch(`https://slack.com/api/${method}`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
-    body
-  });
-  return res.json() as Promise<any>;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SLACK_TIMEOUT_MS);
+  try {
+    const res = await fetch(`https://slack.com/api/${method}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body,
+      signal: controller.signal
+    });
+    return res.json() as Promise<any>;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function fetchSlackThreadSummary(channel: string | undefined, ts: string | undefined): Promise<SlackThreadSummary> {
@@ -24,7 +38,7 @@ export async function fetchSlackThreadSummary(channel: string | undefined, ts: s
 
   const token = getSlackBotToken();
   if (!token) {
-    return { error: 'missing_slack_bot_token' };
+    return { permalink: buildSlackPermalink(channel, ts), error: 'missing_slack_bot_token' };
   }
 
   try {
@@ -34,9 +48,8 @@ export async function fetchSlackThreadSummary(channel: string | undefined, ts: s
     ]);
 
     const first = replies.messages?.[0];
-    const workspaceUrl = getSlackWorkspaceUrl();
     const value: SlackThreadSummary = {
-      permalink: permalink.permalink || (workspaceUrl ? `${workspaceUrl}/archives/${channel}/p${ts.replace('.', '')}` : undefined),
+      permalink: permalink.permalink || buildSlackPermalink(channel, ts),
       starterMessage: first?.text,
       starterUser: first?.user,
       fetchedAt: new Date().toISOString(),
@@ -45,6 +58,9 @@ export async function fetchSlackThreadSummary(channel: string | undefined, ts: s
     cache.set(key, { at: Date.now(), value });
     return value;
   } catch (error) {
-    return { error: error instanceof Error ? error.message : 'slack_fetch_failed' };
+    return {
+      permalink: buildSlackPermalink(channel, ts),
+      error: error instanceof Error ? error.message : 'slack_fetch_failed'
+    };
   }
 }

@@ -5,36 +5,32 @@ import { listJsonFiles, readJsonFile } from './fs.js';
 import { getOperatorFlags } from './operatorFlags.js';
 import { fetchSlackThreadSummary } from './slack.js';
 import { captureTmuxTail, listTmuxSessions } from './tmux.js';
-import { classifyWorkflowJob } from './classifiers.js';
 import { minutesSince, trimExcerpt } from './util.js';
 import type { JobRecord, JobState, WorkflowConfig } from '../types.js';
 
-function mapState(rawState: string | undefined, rawReason: string | undefined, tmuxExists: boolean, operatorMarkedStale: boolean): { state: JobState; reason: string } {
+function mapState(raw: Record<string, unknown>, tmuxExists: boolean, operatorMarkedStale: boolean, lastActivityAt?: string): { state: JobState; reason: string; detail?: string } {
+  const tail = String(raw.last_tmux_tail_excerpt || '').toLowerCase();
+  const lastError = typeof raw.last_error === 'string' ? raw.last_error : undefined;
+  const lastSentAction = typeof raw.last_sent_action === 'string' ? raw.last_sent_action : undefined;
+  const lastInboundReply = typeof raw.last_inbound_reply === 'string' ? raw.last_inbound_reply : undefined;
+  const approvalMode = typeof raw.approval_mode_effective === 'string' ? raw.approval_mode_effective : undefined;
+
   if (!tmuxExists) return { state: 'broken_missing_tmux', reason: 'tmux_session_missing' };
   if (operatorMarkedStale) return { state: 'stale', reason: 'operator_marked_stale' };
-  switch (rawState) {
-    case 'finished':
-    case 'ready_for_review':
-      return { state: 'waiting_review', reason: rawReason || rawState };
-    case 'waiting_for_approval':
-      return { state: 'waiting_approval', reason: rawReason || rawState };
-    case 'waiting_for_human':
-    case 'needs_human_input':
-      return { state: 'waiting_human', reason: rawReason || rawState };
-    case 'running':
-    case 'planning':
-    case 'reviewing':
-    case 'running_in_grace':
-      return { state: minutesSince(undefined) > 0 ? 'running' : 'running', reason: rawReason || rawState || 'running' };
-    case 'failed':
-    case 'stopped_unexpectedly':
-    case 'stuck':
-      return { state: rawState === 'stuck' ? 'stale' : 'failed', reason: rawReason || rawState };
-    case 'done':
-      return { state: 'done', reason: rawReason || rawState };
-    default:
-      return { state: 'unknown', reason: rawReason || rawState || 'unknown' };
+  if (lastError) return { state: 'failed', reason: 'last_error_present', detail: lastError };
+  if (lastSentAction === 'post_ready_for_review' || tail.includes('ready for review') || tail.includes('ready for qa')) {
+    return { state: 'waiting_review', reason: 'ready_for_review_signals' };
   }
+  if (approvalMode === 'manual' && (tail.includes('ready for your approval') || tail.includes('ready for approval') || tail.includes('waiting for approval'))) {
+    return { state: 'waiting_approval', reason: 'approval_gate_signals' };
+  }
+  if (tail.includes('waiting for your input') || tail.includes('would you prefer') || tail.includes('please confirm') || tail.includes('what do you think')) {
+    return { state: 'waiting_human', reason: 'human_input_signals', detail: lastInboundReply };
+  }
+  if (lastActivityAt && minutesSince(lastActivityAt) > JOB_STALE_MINUTES) {
+    return { state: 'stale', reason: 'no_recent_activity' };
+  }
+  return { state: 'running', reason: 'active_state_present', detail: lastInboundReply };
 }
 
 function getLastActivityAt(raw: Record<string, unknown>) {
@@ -73,16 +69,13 @@ export async function collectJobs(): Promise<JobRecord[]> {
         const tmuxSession = getPath(raw, 'tmux_session');
         const tmuxExists = tmuxSession ? tmuxSessions.has(tmuxSession) : false;
         const operatorFlags = getOperatorFlags(String(raw.job_id || raw.run_id || jobPath));
-        const computed = classifyWorkflowJob(workflow, jobPath) as Record<string, unknown>;
-        const mapped = mapState(computed.state as string | undefined, computed.reason as string | undefined, tmuxExists, Boolean(operatorFlags.markedStaleAt));
         const slackThreadTs = getPath(raw, 'slack_thread_ts');
         const slack = await fetchSlackThreadSummary(workflow.channelId, slackThreadTs);
         const lastActivityAt = getLastActivityAt(raw);
-        const staleByInactivity = mapped.state === 'running' && minutesSince(lastActivityAt) > JOB_STALE_MINUTES;
-        const finalState = staleByInactivity ? 'stale' : mapped.state;
-        const finalReason = staleByInactivity ? 'no_recent_activity' : mapped.reason;
         const liveTail = tmuxExists && tmuxSession ? captureTmuxTail(tmuxSession, 80) : '';
         const lastTmuxTailExcerpt = trimExcerpt(liveTail || (raw.last_tmux_tail_excerpt as string | undefined));
+        if (lastTmuxTailExcerpt) raw.last_tmux_tail_excerpt = lastTmuxTailExcerpt;
+        const mapped = mapState(raw, tmuxExists, Boolean(operatorFlags.markedStaleAt), lastActivityAt);
 
         return {
           id: String(raw.job_id || raw.run_id || jobPath),
@@ -101,6 +94,7 @@ export async function collectJobs(): Promise<JobRecord[]> {
           tmuxWindow: tmuxSession,
           worktreePath: getPath(raw, 'worktree_path'),
           transcriptPath: getPath(raw, 'transcript_path'),
+          claudeSessionId: getPath(raw, 'claude_session_id') || (getPath(raw, 'transcript_path')?.split('/').pop()?.replace(/\.jsonl$/, '')),
           planPath: getPath(raw, 'plan_path'),
           requestPath: getPath(raw, 'request_path'),
           branchName: getPath(raw, 'branch_name'),
@@ -108,10 +102,10 @@ export async function collectJobs(): Promise<JobRecord[]> {
           updatedAt: getPath(raw, 'updated_at'),
           lastActivityAt,
           lastTmuxTailExcerpt,
-          state: finalState,
-          stateReason: finalReason,
-          stateSource: workflow.classifyMode,
-          statusDetail: typeof computed.question === 'string' ? computed.question : undefined,
+          state: mapped.state,
+          stateReason: mapped.reason,
+          stateSource: 'citadel-fast-path',
+          statusDetail: mapped.detail,
           operatorFlags,
           actions: {
             canReconcile: true,

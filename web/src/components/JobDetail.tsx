@@ -43,6 +43,7 @@ export function JobDetail({ job, onChanged }: { job?: JobRecord; onChanged: () =
         <DetailItem label="Branch" value={job.branchName || '—'} mono />
         <DetailItem label="Worktree" value={job.worktreePath || '—'} mono />
         <DetailItem label="Transcript" value={job.transcriptPath || '—'} mono />
+        <DetailItem label="Claude session" value={job.claudeSessionId || '—'} mono />
         <DetailItem label="Plan" value={job.planPath || '—'} mono />
       </div>
 
