@@ -3,6 +3,10 @@ import { formatTime, relativeTime } from '../lib';
 import type { JobRecord } from '../types';
 
 export function JobList({ jobs, selectedJobId, onSelect }: { jobs: JobRecord[]; selectedJobId?: string; onSelect: (job: JobRecord) => void }) {
+  if (jobs.length === 0) {
+    return <div className="empty-list-state">No jobs match the current filters.</div>;
+  }
+
   return (
     <div className="job-list">
       {jobs.map((job) => (
@@ -14,15 +18,15 @@ export function JobList({ jobs, selectedJobId, onSelect }: { jobs: JobRecord[]; 
             </div>
             <StateBadge state={job.state} />
           </div>
-          <div className="job-meta-row">
+          <div className="job-mobile-summary">
             <span>{job.workflowLabel}</span>
-            <span>{job.tmuxSession || 'no tmux'}</span>
             <span>{relativeTime(job.lastActivityAt)}</span>
           </div>
           <div className="job-tail">{job.statusDetail || job.lastTmuxTailExcerpt || job.stateReason}</div>
           <div className="job-meta-row muted">
-            <span>Updated {formatTime(job.updatedAt)}</span>
+            <span>{job.tmuxSession || 'no tmux'}</span>
             <span>{job.tmuxExists ? 'tmux live' : 'tmux missing'}</span>
+            <span>Updated {formatTime(job.updatedAt)}</span>
           </div>
         </button>
       ))}

@@ -3,7 +3,7 @@ import { formatTime, markJobStale, openTerminal, reconcileJob } from '../lib';
 import type { JobRecord } from '../types';
 import { StateBadge } from './StateBadge';
 
-export function JobDetail({ job, onChanged }: { job?: JobRecord; onChanged: () => Promise<void> }) {
+export function JobDetail({ job, onChanged, onBack }: { job?: JobRecord; onChanged: () => Promise<void>; onBack?: () => void }) {
   const navigate = useNavigate();
 
   if (!job) {
@@ -19,6 +19,7 @@ export function JobDetail({ job, onChanged }: { job?: JobRecord; onChanged: () =
     <section className="detail-panel">
       <div className="detail-header">
         <div>
+          {onBack ? <button className="back-link-button" onClick={onBack}>← Jobs</button> : null}
           <div className="detail-eyebrow">{job.workflowLabel}</div>
           <h2>{job.jiraKey || job.id}</h2>
           <p>{job.title}</p>
