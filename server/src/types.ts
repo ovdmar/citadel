@@ -73,11 +73,13 @@ export interface JobRecord {
 
 export interface TerminalSessionRecord {
   key: string;
-  tmuxSession: string;
+  tmuxSession?: string;
+  worktreePath?: string;
   port: number;
   url: string;
   pid: number;
   createdAt: string;
   updatedAt: string;
   recoveryMode: boolean;
+  kind: 'tmux' | 'shell';
 }

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { API_PORT, APP_NAME } from './lib/config.js';
 import { collectJobs, getJobById, resolveWorkflow, triggerWorkflowReconcile } from './lib/jobs.js';
 import { setMarkedStale } from './lib/operatorFlags.js';
-import { ensureTerminalSession, listTerminalSessions } from './lib/tmux.js';
+import { ensureShellSession, ensureTerminalSession, listTerminalSessions } from './lib/tmux.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -74,6 +74,21 @@ app.post('/api/jobs/:jobId/actions/recovery-shell', async (req, res) => {
     res.json({ ok: true, terminal });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'recovery_shell_failed' });
+  }
+});
+
+app.post('/api/jobs/:jobId/actions/open-shell', async (req, res) => {
+  const job = await getJobById(req.params.jobId);
+  if (!job || !job.worktreePath) return res.status(404).json({ error: 'job_or_worktree_missing' });
+  try {
+    const terminal = await ensureShellSession({
+      key: `job:${job.id}:shell`,
+      worktreePath: job.worktreePath,
+      host: req.headers.host || '127.0.0.1'
+    });
+    res.json({ ok: true, terminal });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'shell_open_failed' });
   }
 });
 

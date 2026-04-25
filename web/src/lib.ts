@@ -47,6 +47,13 @@ export async function openTerminal(jobId: string, recovery = false) {
   });
 }
 
+export async function openShell(jobId: string) {
+  return api<{ ok: true; terminal: TerminalRecord }>(`/api/jobs/${jobId}/actions/open-shell`, {
+    method: 'POST',
+    body: JSON.stringify({})
+  });
+}
+
 export async function reconcileJob(jobId: string) {
   return api(`/api/jobs/${jobId}/actions/reconcile`, {
     method: 'POST',

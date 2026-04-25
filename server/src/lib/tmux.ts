@@ -50,13 +50,54 @@ async function findFreePort() {
   throw new Error('no_free_ttyd_port');
 }
 
-function shellCommand(tmuxSession: string, worktreePath?: string, recoveryMode = false) {
+function attachTmuxCommand(tmuxSession: string, worktreePath?: string, recoveryMode = false) {
   const escapedSession = tmuxSession.replace(/"/g, '\\"');
   const escapedWorktree = (worktreePath || process.env.HOME || '/tmp').replace(/"/g, '\\"');
   if (recoveryMode) {
     return `tmux has-session -t \"${escapedSession}\" 2>/dev/null || tmux new-session -d -s \"${escapedSession}\" -c \"${escapedWorktree}\"; tmux attach -t \"${escapedSession}\"`;
   }
   return `tmux attach -t \"${escapedSession}\"`;
+}
+
+function shellWorktreeCommand(worktreePath: string) {
+  const escapedWorktree = worktreePath.replace(/"/g, '\\"');
+  return `cd \"${escapedWorktree}\" && export PS1='citadel %~ %# ' && exec zsh -i`;
+}
+
+async function spawnTtyd(key: string, host: string, command: string, metadata: Pick<TerminalSessionRecord, 'tmuxSession' | 'worktreePath' | 'recoveryMode' | 'kind'>) {
+  const existing = terminalSessions.get(key);
+  if (existing && existing.child.exitCode == null) {
+    existing.record.updatedAt = new Date().toISOString();
+    return existing.record;
+  }
+
+  const port = await findFreePort();
+  const child = spawn(
+    TTYD_BIN,
+    ['-W', '--check-origin=false', '-p', String(port), 'zsh', '-lc', command],
+    {
+      detached: false,
+      stdio: 'ignore'
+    }
+  );
+
+  const record: TerminalSessionRecord = {
+    key,
+    port,
+    url: `http://${host.split(':')[0]}:${port}`,
+    pid: child.pid ?? -1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    ...metadata
+  };
+
+  child.on('exit', () => {
+    const current = terminalSessions.get(key);
+    if (current?.record.pid === record.pid) terminalSessions.delete(key);
+  });
+
+  terminalSessions.set(key, { record, child });
+  return record;
 }
 
 export async function ensureTerminalSession(params: {
@@ -66,44 +107,38 @@ export async function ensureTerminalSession(params: {
   host: string;
   recoveryMode?: boolean;
 }) {
-  const existing = terminalSessions.get(params.key);
-  if (existing && existing.child.exitCode == null) {
-    existing.record.updatedAt = new Date().toISOString();
-    return existing.record;
-  }
-
   if (!params.recoveryMode && !hasTmuxSession(params.tmuxSession)) {
     throw new Error('tmux_session_missing');
   }
 
-  const port = await findFreePort();
-  const child = spawn(
-    TTYD_BIN,
-    ['-W', '--check-origin=false', '-p', String(port), 'zsh', '-lc', shellCommand(params.tmuxSession, params.worktreePath, params.recoveryMode)],
+  return spawnTtyd(
+    params.key,
+    params.host,
+    attachTmuxCommand(params.tmuxSession, params.worktreePath, params.recoveryMode),
     {
-      detached: false,
-      stdio: 'ignore'
+      tmuxSession: params.tmuxSession,
+      worktreePath: params.worktreePath,
+      recoveryMode: Boolean(params.recoveryMode),
+      kind: 'tmux'
     }
   );
+}
 
-  const record: TerminalSessionRecord = {
-    key: params.key,
-    tmuxSession: params.tmuxSession,
-    port,
-    url: `http://${params.host.split(':')[0]}:${port}`,
-    pid: child.pid ?? -1,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    recoveryMode: Boolean(params.recoveryMode)
-  };
-
-  child.on('exit', () => {
-    const current = terminalSessions.get(params.key);
-    if (current?.record.pid === record.pid) terminalSessions.delete(params.key);
-  });
-
-  terminalSessions.set(params.key, { record, child });
-  return record;
+export async function ensureShellSession(params: {
+  key: string;
+  worktreePath: string;
+  host: string;
+}) {
+  return spawnTtyd(
+    params.key,
+    params.host,
+    shellWorktreeCommand(params.worktreePath),
+    {
+      worktreePath: params.worktreePath,
+      recoveryMode: false,
+      kind: 'shell'
+    }
+  );
 }
 
 export function listTerminalSessions() {
