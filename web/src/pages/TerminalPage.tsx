@@ -1,5 +1,7 @@
+import { ArrowLeft, ExternalLink, RadioTower, TerminalSquare } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Button, Field, KpiPill, Surface } from '../components/ui';
 import { loadJobs, loadTerminals, openTerminal } from '../lib';
 import type { JobRecord } from '../types';
 
@@ -32,28 +34,38 @@ export function TerminalPage() {
   };
 
   return (
-    <div className="page-shell terminal-shell">
-      <header className="page-header">
-        <div>
-          <h2>Terminal bridge</h2>
-          <p>Jump straight into an agent tmux session.</p>
+    <div className="page-shell terminal-shell jarvis-shell">
+      <header className="cockpit-header-card">
+        <div className="cockpit-title-block">
+          <div className="eyebrow-row"><TerminalSquare size={14} /> Terminal bridge</div>
+          <h2>{selectedJob?.jiraKey || 'Session access'}</h2>
+          <p>Low-friction browser access into the live tmux session.</p>
         </div>
-        <div className="filters">
-          <select value={selectedJob?.id || ''} onChange={(e) => setJobId(e.target.value)}>
-            {jobs.map((job) => (
-              <option value={job.id} key={job.id}>{job.jiraKey || job.id} · {job.tmuxSession || 'no tmux'} · {job.title}</option>
-            ))}
-          </select>
-          <button onClick={() => void handleAttach()} disabled={!selectedJob}>Attach</button>
-          <button onClick={() => navigate('/')}>Back to cockpit</button>
+        <div className="toolbar-row compact-toolbar">
+          <Button size="sm" variant="ghost" onClick={() => navigate('/')}><ArrowLeft size={14} /> Cockpit</Button>
+          <Button size="sm" onClick={() => void handleAttach()} disabled={!selectedJob}><RadioTower size={14} /> Attach</Button>
         </div>
       </header>
 
-      <div className="terminal-info">
-        <div><strong>Session:</strong> {selectedJob?.tmuxSession || '—'}</div>
-        <div><strong>State:</strong> {selectedJob?.state || '—'}</div>
-        <div><strong>Worktree:</strong> {selectedJob?.worktreePath || '—'}</div>
-      </div>
+      <section className="kpi-strip">
+        <KpiPill value={<><TerminalSquare size={15} /> {selectedJob?.tmuxSession || '—'}</>} label="session" tone="neutral" />
+        <KpiPill value={selectedJob?.state || '—'} label="state" tone="accent" />
+      </section>
+
+      <Surface className="terminal-toolbar-panel">
+        <Field value={selectedJob?.id || ''} onChange={(e) => setJobId(e.target.value)}>
+          {jobs.map((job) => (
+            <option value={job.id} key={job.id}>{job.jiraKey || job.id} · {job.tmuxSession || 'no tmux'} · {job.title}</option>
+          ))}
+        </Field>
+        {url ? <a className="inline-link" href={url} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open raw terminal</a> : null}
+      </Surface>
+
+      <Surface className="terminal-info-grid">
+        <div><strong>Session</strong><span>{selectedJob?.tmuxSession || '—'}</span></div>
+        <div><strong>Claude</strong><span>{selectedJob?.claudeSessionId || '—'}</span></div>
+        <div><strong>Worktree</strong><span>{selectedJob?.worktreePath || '—'}</span></div>
+      </Surface>
 
       {url ? <iframe className="terminal-frame" src={url} title="tmux terminal" /> : <div className="terminal-empty">Open a session to start.</div>}
     </div>

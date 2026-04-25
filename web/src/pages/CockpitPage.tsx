@@ -1,6 +1,8 @@
+import { Activity, AlertTriangle, RefreshCw, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { JobDetail } from '../components/JobDetail';
 import { JobList } from '../components/JobList';
+import { Field, Button, KpiPill } from '../components/ui';
 import { loadJobs } from '../lib';
 import type { JobRecord } from '../types';
 
@@ -63,56 +65,51 @@ export function CockpitPage() {
     if (!isMobile) setMobileView('list');
   }, [isMobile]);
 
-  const counts = useMemo(() => {
-    return {
-      running: filteredJobs.filter((job) => job.state === 'running').length,
-      waiting: filteredJobs.filter((job) => ['waiting_human', 'waiting_review', 'waiting_approval'].includes(job.state)).length,
-      broken: filteredJobs.filter((job) => ['broken_missing_tmux', 'failed', 'stale'].includes(job.state)).length,
-    };
-  }, [filteredJobs]);
+  const counts = useMemo(() => ({
+    running: filteredJobs.filter((job) => job.state === 'running').length,
+    waiting: filteredJobs.filter((job) => ['waiting_human', 'waiting_review', 'waiting_approval'].includes(job.state)).length,
+    broken: filteredJobs.filter((job) => ['broken_missing_tmux', 'failed', 'stale'].includes(job.state)).length,
+  }), [filteredJobs]);
 
   return (
-    <div className="page-shell">
-      <header className="page-header">
-        <div>
-          <h2>{isMobile && mobileView === 'detail' ? (selectedJob?.jiraKey || 'Job detail') : 'Open jobs'}</h2>
+    <div className="page-shell jarvis-shell">
+      <header className="cockpit-header-card">
+        <div className="cockpit-title-block">
+          <div className="eyebrow-row"><Sparkles size={14} /> Citadel operator mesh</div>
+          <h2>{isMobile && mobileView === 'detail' ? (selectedJob?.jiraKey || 'Job detail') : 'Live agent mesh'}</h2>
           <p>{filteredJobs.length} visible jobs, {jobs.length} active total</p>
           {error ? <p className="error-text">Citadel could not load jobs: {error}</p> : null}
         </div>
-        <div className="filters">
-          {isMobile && mobileView === 'detail' ? (
-            <button onClick={() => setMobileView('list')}>Back to jobs</button>
-          ) : (
-            <>
-              <select value={workflowFilter} onChange={(e) => setWorkflowFilter(e.target.value)}>
-                <option value="all">All workflows</option>
-                {workflowOrder.map((workflow) => (
-                  <option key={workflow} value={workflow}>{workflow}</option>
-                ))}
-              </select>
-              <select value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}>
-                <option value="all">All states</option>
-                <option value="running">running</option>
-                <option value="waiting_human">waiting human</option>
-                <option value="waiting_review">waiting review</option>
-                <option value="waiting_approval">waiting approval</option>
-                <option value="stale">stale</option>
-                <option value="broken_missing_tmux">broken</option>
-                <option value="failed">failed</option>
-              </select>
-              <button onClick={() => void refresh()}>Refresh</button>
-            </>
-          )}
-        </div>
+        {isMobile && mobileView === 'detail' ? (
+          <Button variant="ghost" size="sm" onClick={() => setMobileView('list')}>Back</Button>
+        ) : (
+          <div className="toolbar-row compact-toolbar">
+            <Field value={workflowFilter} onChange={(e) => setWorkflowFilter(e.target.value)}>
+              <option value="all">All workflows</option>
+              {workflowOrder.map((workflow) => <option key={workflow} value={workflow}>{workflow}</option>)}
+            </Field>
+            <Field value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}>
+              <option value="all">All states</option>
+              <option value="running">Running</option>
+              <option value="waiting_human">Waiting human</option>
+              <option value="waiting_review">Waiting review</option>
+              <option value="waiting_approval">Waiting approval</option>
+              <option value="stale">Stale</option>
+              <option value="broken_missing_tmux">Broken</option>
+              <option value="failed">Failed</option>
+            </Field>
+            <Button size="sm" variant="secondary" onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</Button>
+          </div>
+        )}
       </header>
 
-      {(!isMobile || mobileView === 'list') ? (
-        <section className="mobile-summary-strip">
-          <div className="summary-pill"><strong>{counts.running}</strong><span>running</span></div>
-          <div className="summary-pill"><strong>{counts.waiting}</strong><span>waiting</span></div>
-          <div className="summary-pill"><strong>{counts.broken}</strong><span>needs care</span></div>
+      {(!isMobile || mobileView === 'list') && (
+        <section className="kpi-strip">
+          <KpiPill value={<><Activity size={15} /> {counts.running}</>} label="running" tone="accent" />
+          <KpiPill value={<><Sparkles size={15} /> {counts.waiting}</>} label="waiting" tone="neutral" />
+          <KpiPill value={<><AlertTriangle size={15} /> {counts.broken}</>} label="needs care" tone="danger" />
         </section>
-      ) : null}
+      )}
 
       <div className={`cockpit-layout ${isMobile ? 'mobile-mode' : ''}`}>
         {(!isMobile || mobileView === 'list') ? (
