@@ -2,7 +2,8 @@ import { Activity, AlertTriangle, RefreshCw, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { JobDetail } from '../components/JobDetail';
 import { JobList } from '../components/JobList';
-import { Field, Button, KpiPill } from '../components/ui';
+import { nextActionLabel, priorityScore, topSignal } from '../components/ux';
+import { AppCard, Field, Button, KpiPill } from '../components/ui';
 import { loadJobs } from '../lib';
 import type { JobRecord } from '../types';
 
@@ -71,6 +72,8 @@ export function CockpitPage() {
     broken: filteredJobs.filter((job) => ['broken_missing_tmux', 'failed', 'stale'].includes(job.state)).length,
   }), [filteredJobs]);
 
+  const priorityJobs = useMemo(() => [...filteredJobs].sort((a, b) => priorityScore(b) - priorityScore(a)).slice(0, 3), [filteredJobs]);
+
   return (
     <div className="page-shell jarvis-shell">
       <header className="cockpit-header-card">
@@ -104,11 +107,39 @@ export function CockpitPage() {
       </header>
 
       {(!isMobile || mobileView === 'list') && (
-        <section className="kpi-strip">
-          <KpiPill value={<><Activity size={15} /> {counts.running}</>} label="running" tone="accent" />
-          <KpiPill value={<><Sparkles size={15} /> {counts.waiting}</>} label="waiting" tone="neutral" />
-          <KpiPill value={<><AlertTriangle size={15} /> {counts.broken}</>} label="needs care" tone="danger" />
-        </section>
+        <>
+          <section className="kpi-strip">
+            <KpiPill value={<><Activity size={15} /> {counts.running}</>} label="running" tone="accent" />
+            <KpiPill value={<><Sparkles size={15} /> {counts.waiting}</>} label="waiting" tone="neutral" />
+            <KpiPill value={<><AlertTriangle size={15} /> {counts.broken}</>} label="needs care" tone="danger" />
+          </section>
+
+          <section className="attention-lane">
+            <div className="section-label">What needs attention first</div>
+            <div className="attention-grid">
+              {priorityJobs.map((job) => (
+                <button
+                  key={job.id}
+                  className="attention-item"
+                  onClick={() => {
+                    setSelectedJobId(job.id);
+                    if (isMobile) setMobileView('detail');
+                  }}
+                >
+                  <AppCard className="attention-card">
+                    <div className="attention-top">
+                      <span className="job-key">{job.jiraKey || job.id}</span>
+                      <span className={`state-pill state-pill-${job.state}`}>{job.state.replaceAll('_', ' ')}</span>
+                    </div>
+                    <div className="attention-title">{job.title}</div>
+                    <div className="attention-signal">{topSignal(job)}</div>
+                    <div className="attention-next">Next: {nextActionLabel(job)}</div>
+                  </AppCard>
+                </button>
+              ))}
+            </div>
+          </section>
+        </>
       )}
 
       <div className={`cockpit-layout ${isMobile ? 'mobile-mode' : ''}`}>

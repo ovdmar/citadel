@@ -1,8 +1,9 @@
-import { ArrowUpRight, Clock3, Cpu, Workflow } from 'lucide-react';
+import { ArrowUpRight, Clock3, Workflow } from 'lucide-react';
 import { relativeTime } from '../lib';
 import type { JobRecord } from '../types';
 import { StateBadge } from './StateBadge';
 import { AppCard } from './ui';
+import { nextActionLabel, topSignal } from './ux';
 
 export function JobList({ jobs, selectedJobId, onSelect }: { jobs: JobRecord[]; selectedJobId?: string; onSelect: (job: JobRecord) => void }) {
   if (jobs.length === 0) {
@@ -28,12 +29,12 @@ export function JobList({ jobs, selectedJobId, onSelect }: { jobs: JobRecord[]; 
             <div className="job-signal-row">
               <span><Workflow size={13} /> {job.workflowLabel}</span>
               <span><Clock3 size={13} /> {relativeTime(job.lastActivityAt)}</span>
-              <span><Cpu size={13} /> {job.tmuxExists ? 'tmux live' : 'tmux missing'}</span>
             </div>
 
-            <div className="job-snapshot">{job.statusDetail || job.lastTmuxTailExcerpt || job.stateReason}</div>
+            <div className="job-snapshot">{topSignal(job)}</div>
 
-            <div className="job-footer-row">
+            <div className="job-footer-row job-footer-priority">
+              <span>{nextActionLabel(job)}</span>
               <span className="mono compact">{job.tmuxSession || 'no tmux'}</span>
             </div>
           </AppCard>

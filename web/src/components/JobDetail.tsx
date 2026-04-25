@@ -1,9 +1,10 @@
-import { ArrowLeft, BadgeCheck, Bot, ExternalLink, FolderTree, RefreshCw, TerminalSquare, Wrench } from 'lucide-react';
+import { ArrowLeft, BadgeCheck, Bot, ExternalLink, RefreshCw, TerminalSquare, Wrench } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { formatTime, markJobStale, openTerminal, reconcileJob } from '../lib';
 import type { JobRecord } from '../types';
 import { StateBadge } from './StateBadge';
 import { AppCard, Button, MetaRow, Surface } from './ui';
+import { nextActionLabel, topSignal } from './ux';
 
 export function JobDetail({ job, onChanged, onBack }: { job?: JobRecord; onChanged: () => Promise<void>; onBack?: () => void }) {
   const navigate = useNavigate();
@@ -37,20 +38,17 @@ export function JobDetail({ job, onChanged, onBack }: { job?: JobRecord; onChang
         </div>
       </AppCard>
 
+      <AppCard className="decision-card">
+        <div className="section-title">What you need to do</div>
+        <div className="decision-title">{nextActionLabel(job)}</div>
+        <div className="decision-body">{topSignal(job)}</div>
+      </AppCard>
+
       <div className="action-cluster">
         <Button size="sm" onClick={() => handleOpenTerminal(false)} disabled={!job.actions.canOpenTerminal}><TerminalSquare size={14} /> Terminal</Button>
         <Button size="sm" variant="secondary" onClick={() => handleOpenTerminal(true)} disabled={!job.actions.canCreateRecoveryShell}><Wrench size={14} /> Recover</Button>
         <Button size="sm" variant="secondary" onClick={async () => { await reconcileJob(job.id); await onChanged(); }}><RefreshCw size={14} /> Reconcile</Button>
         <Button size="sm" variant={job.operatorFlags.markedStaleAt ? 'danger' : 'ghost'} onClick={async () => { await markJobStale(job.id, !job.operatorFlags.markedStaleAt); await onChanged(); }}>{job.operatorFlags.markedStaleAt ? 'Clear stale' : 'Mark stale'}</Button>
-      </div>
-
-      <div className="detail-grid detail-grid-compact">
-        <Surface><MetaRow label="Updated" value={formatTime(job.updatedAt)} /></Surface>
-        <Surface><MetaRow label="Created" value={formatTime(job.createdAt)} /></Surface>
-        <Surface><MetaRow label="Branch" value={job.branchName || '—'} mono /></Surface>
-        <Surface><MetaRow label="Plan" value={job.planPath || '—'} mono /></Surface>
-        <Surface><MetaRow label="Worktree" value={job.worktreePath || '—'} mono /></Surface>
-        <Surface><MetaRow label="Transcript" value={job.transcriptPath || '—'} mono /></Surface>
       </div>
 
       <AppCard className="link-card">
@@ -78,6 +76,18 @@ export function JobDetail({ job, onChanged, onBack }: { job?: JobRecord; onChang
           <pre>{job.statusDetail}</pre>
         </AppCard>
       ) : null}
+
+      <details className="detail-disclosure">
+        <summary>Context and internals</summary>
+        <div className="detail-grid detail-grid-compact disclosure-grid">
+          <Surface><MetaRow label="Updated" value={formatTime(job.updatedAt)} /></Surface>
+          <Surface><MetaRow label="Created" value={formatTime(job.createdAt)} /></Surface>
+          <Surface><MetaRow label="Branch" value={job.branchName || '—'} mono /></Surface>
+          <Surface><MetaRow label="Plan" value={job.planPath || '—'} mono /></Surface>
+          <Surface><MetaRow label="Worktree" value={job.worktreePath || '—'} mono /></Surface>
+          <Surface><MetaRow label="Transcript" value={job.transcriptPath || '—'} mono /></Surface>
+        </div>
+      </details>
     </section>
   );
 }
