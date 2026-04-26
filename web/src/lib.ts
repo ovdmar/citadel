@@ -1,4 +1,8 @@
-import type { JobRecord, TerminalRecord } from './types';
+import type { CronRecord, CronRunEntry, JobRecord, OpenClawStats, TerminalRecord } from './types';
+
+function terminalProxyUrl(terminal: TerminalRecord) {
+  return `/terminals/${encodeURIComponent(terminal.key)}/`;
+}
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
@@ -41,17 +45,27 @@ export async function loadJobs() {
 }
 
 export async function openTerminal(jobId: string, recovery = false) {
-  return api<{ ok: true; terminal: TerminalRecord }>(`/api/jobs/${jobId}/actions/${recovery ? 'recovery-shell' : 'open-terminal'}`, {
+  const response = await api<{ ok: true; terminal: TerminalRecord }>(`/api/jobs/${jobId}/actions/${recovery ? 'recovery-shell' : 'open-terminal'}`, {
     method: 'POST',
     body: JSON.stringify({})
   });
+  return { ...response, terminal: { ...response.terminal, url: terminalProxyUrl(response.terminal) } };
+}
+
+export async function recoverClaude(jobId: string) {
+  const response = await api<{ ok: true; terminal: TerminalRecord }>(`/api/jobs/${jobId}/actions/recover-claude`, {
+    method: 'POST',
+    body: JSON.stringify({})
+  });
+  return { ...response, terminal: { ...response.terminal, url: terminalProxyUrl(response.terminal) } };
 }
 
 export async function openShell(jobId: string) {
-  return api<{ ok: true; terminal: TerminalRecord }>(`/api/jobs/${jobId}/actions/open-shell`, {
+  const response = await api<{ ok: true; terminal: TerminalRecord }>(`/api/jobs/${jobId}/actions/open-shell`, {
     method: 'POST',
     body: JSON.stringify({})
   });
+  return { ...response, terminal: { ...response.terminal, url: terminalProxyUrl(response.terminal) } };
 }
 
 export async function reconcileJob(jobId: string) {
@@ -69,5 +83,49 @@ export async function markJobStale(jobId: string, stale: boolean) {
 }
 
 export async function loadTerminals() {
-  return api<{ terminals: TerminalRecord[] }>('/api/terminals');
+  const response = await api<{ terminals: TerminalRecord[] }>('/api/terminals');
+  return { terminals: response.terminals.map((terminal) => ({ ...terminal, url: terminalProxyUrl(terminal) })) };
+}
+
+export async function loadCrons() {
+  return api<{ crons: CronRecord[] }>('/api/crons');
+}
+
+export async function loadCronDetail(cronId: string) {
+  return api<{ cron: CronRecord; runs: CronRunEntry[] }>(`/api/crons/${cronId}`);
+}
+
+export async function runCron(cronId: string) {
+  return api<{ ok: true; output?: string }>(`/api/crons/${cronId}/actions/run`, {
+    method: 'POST',
+    body: JSON.stringify({})
+  });
+}
+
+export async function setCronEnabled(cronId: string, enabled: boolean) {
+  return api<{ ok: true; output?: string }>(`/api/crons/${cronId}/actions/set-enabled`, {
+    method: 'POST',
+    body: JSON.stringify({ enabled })
+  });
+}
+
+
+export async function openHomeTerminal() {
+  const response = await api<{ ok: true; terminal: TerminalRecord }>('/api/system/home-terminal', {
+    method: 'POST',
+    body: JSON.stringify({})
+  });
+  return { ...response, terminal: { ...response.terminal, url: terminalProxyUrl(response.terminal) } };
+}
+
+export async function openOpenClawTerminal() {
+  const response = await api<{ ok: true; terminal: TerminalRecord }>('/api/system/openclaw-terminal', {
+    method: 'POST',
+    body: JSON.stringify({})
+  });
+  return { ...response, terminal: { ...response.terminal, url: terminalProxyUrl(response.terminal) } };
+}
+
+export async function loadOpenClawStats() {
+  return api<{ ok: true; stats: OpenClawStats }>('/api/openclaw/stats');
 }

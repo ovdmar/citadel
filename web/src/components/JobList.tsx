@@ -3,7 +3,7 @@ import { relativeTime } from '../lib';
 import type { JobRecord } from '../types';
 import { StateBadge } from './StateBadge';
 import { AppCard } from './ui';
-import { nextActionLabel, topSignal } from './ux';
+import { nextActionLabel } from './ux';
 
 export function JobList({ jobs, selectedJobId, onSelect }: { jobs: JobRecord[]; selectedJobId?: string; onSelect: (job: JobRecord) => void }) {
   if (jobs.length === 0) {
@@ -30,8 +30,6 @@ export function JobList({ jobs, selectedJobId, onSelect }: { jobs: JobRecord[]; 
               <span><Workflow size={13} /> {job.workflowLabel}</span>
               <span><Clock3 size={13} /> {relativeTime(job.lastActivityAt)}</span>
             </div>
-
-            <div className="job-snapshot">{topSignal(job)}</div>
 
             <div className="job-footer-row job-footer-priority">
               <span>{nextActionLabel(job)}</span>

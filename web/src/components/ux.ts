@@ -1,5 +1,14 @@
 import type { JobRecord } from '../types';
 
+function conciseStatusDetail(detail?: string) {
+  if (!detail) return undefined;
+  const normalized = detail.replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  if (detail.includes('\n')) return undefined;
+  if (normalized.length > 160) return undefined;
+  return normalized;
+}
+
 export function priorityScore(job: JobRecord) {
   switch (job.state) {
     case 'waiting_human':
@@ -42,7 +51,8 @@ export function nextActionLabel(job: JobRecord) {
 }
 
 export function topSignal(job: JobRecord) {
-  if (job.statusDetail) return job.statusDetail;
+  const detail = conciseStatusDetail(job.statusDetail);
+  if (detail) return detail;
   switch (job.state) {
     case 'waiting_human':
       return 'Claude is waiting for input from you.';

@@ -58,7 +58,7 @@ export function TerminalPage() {
             <option value={job.id} key={job.id}>{job.jiraKey || job.id} · {job.tmuxSession || 'no tmux'} · {job.title}</option>
           ))}
         </Field>
-        {url ? <a className="inline-link" href={url} target="_blank" rel="noreferrer"><ExternalLink size={14} /> Open raw terminal</a> : null}
+        {url ? <a className="inline-link" href={url}><ExternalLink size={14} /> Open raw terminal</a> : null}
       </Surface>
 
       <Surface className="terminal-info-grid">
