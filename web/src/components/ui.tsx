@@ -1,4 +1,4 @@
-import type { ReactNode, ButtonHTMLAttributes, HTMLAttributes, SelectHTMLAttributes } from 'react';
+import type { ReactNode, ButtonHTMLAttributes, HTMLAttributes, InputHTMLAttributes, SelectHTMLAttributes, TextareaHTMLAttributes } from 'react';
 
 function cn(...parts: Array<string | false | null | undefined>) {
   return parts.filter(Boolean).join(' ');
@@ -24,7 +24,15 @@ export function Field({ className, ...props }: SelectHTMLAttributes<HTMLSelectEl
   return <select className={cn('ui-field', className)} {...props} />;
 }
 
-export function KpiPill({ value, label, tone = 'neutral' }: { value: ReactNode; label: string; tone?: 'neutral' | 'accent' | 'warn' | 'danger' }) {
+export function TextInput({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
+  return <input className={cn('ui-text-input', className)} {...props} />;
+}
+
+export function TextArea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return <textarea className={cn('ui-text-area', className)} {...props} />;
+}
+
+export function KpiPill({ value, label, tone = 'neutral' }: { value: ReactNode; label: string; tone?: 'neutral' | 'accent' | 'ok' | 'warn' | 'danger' }) {
   return (
     <div className={cn('kpi-pill', `kpi-pill-${tone}`)}>
       <div className="kpi-value">{value}</div>

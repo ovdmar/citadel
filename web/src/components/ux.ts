@@ -13,6 +13,10 @@ export function priorityScore(job: JobRecord) {
   switch (job.state) {
     case 'waiting_human':
       return 100;
+    case 'conflicts':
+      return 95;
+    case 'ci_failed':
+      return 85;
     case 'broken_missing_tmux':
     case 'failed':
       return 90;
@@ -33,6 +37,10 @@ export function nextActionLabel(job: JobRecord) {
   switch (job.state) {
     case 'waiting_human':
       return 'Reply or jump into terminal';
+    case 'conflicts':
+      return 'Reconcile Claude, resolve conflicts, rerun CI';
+    case 'ci_failed':
+      return 'Inspect failing checks and send Claude back in';
     case 'broken_missing_tmux':
       return 'Recover session or inspect state';
     case 'failed':
@@ -56,6 +64,10 @@ export function topSignal(job: JobRecord) {
   switch (job.state) {
     case 'waiting_human':
       return 'Claude is waiting for input from you.';
+    case 'conflicts':
+      return 'PR is in merge-conflict state. Reconciler should push Claude to rebase, resolve conflicts, and get CI green again.';
+    case 'ci_failed':
+      return 'Claude appears done, but the PR checks are failing. This should go back into the fix-and-rerun loop, not to human review yet.';
     case 'broken_missing_tmux':
       return 'State says active, but the tmux session is missing.';
     case 'failed':

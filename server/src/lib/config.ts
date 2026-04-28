@@ -5,6 +5,7 @@ export const API_PORT = Number(process.env.CITADEL_PORT || 4010);
 export const OPENCLAW_ROOT = process.env.OPENCLAW_ROOT || '/Users/jonsnow/.openclaw';
 export const OPENCLAW_CONFIG_PATH = `${OPENCLAW_ROOT}/openclaw.json`;
 export const OPERATOR_DATA_PATH = `${OPENCLAW_ROOT}/workspace/citadel-data/operator-flags.json`;
+export const USAGE_HISTORY_PATH = `${OPENCLAW_ROOT}/workspace/citadel-data/usage-history.json`;
 export const TTYD_BIN = process.env.TTYD_BIN || '/opt/homebrew/bin/ttyd';
 export const TERMINAL_PORT_BASE = Number(process.env.CITADEL_TTYD_PORT_BASE || 7681);
 export const TERMINAL_PORT_MAX = Number(process.env.CITADEL_TTYD_PORT_MAX || 7720);

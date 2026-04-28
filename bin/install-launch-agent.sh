@@ -36,7 +36,7 @@ cat > "${PLIST_PATH}" <<PLIST
     <key>EnvironmentVariables</key>
     <dict>
       <key>PATH</key>
-      <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+      <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
       <key>CITADEL_PORT</key>
       <string>${PORT}</string>
     </dict>

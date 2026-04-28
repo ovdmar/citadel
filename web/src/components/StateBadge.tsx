@@ -5,6 +5,8 @@ const LABELS: Record<JobState, string> = {
   waiting_human: 'Need you',
   waiting_review: 'Review',
   waiting_approval: 'Approve',
+  conflicts: 'Conflicts',
+  ci_failed: 'CI failed',
   idle: 'Idle',
   stale: 'Stale',
   broken_missing_tmux: 'Broken',

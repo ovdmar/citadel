@@ -2,7 +2,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { JOB_STALE_MINUTES, OPENCLAW_ROOT, WORKFLOWS } from './config.js';
 import { listJsonFiles, readJsonFile } from './fs.js';
 import { getOperatorFlags } from './operatorFlags.js';
-import { fetchSlackThreadSummary } from './slack.js';
+import { buildSlackPermalink } from './slack.js';
 import { captureTmuxTail, listTmuxSessions } from './tmux.js';
 import { minutesSince, trimExcerpt } from './util.js';
 import type { DevLink, GitStatusSummary, JobRecord, JobState, PullRequestSummary, WorkflowConfig } from '../types.js';
@@ -11,22 +11,35 @@ const prCache = new Map<string, { expiresAt: number; value?: PullRequestSummary 
 const gitStatusCache = new Map<string, { expiresAt: number; value?: GitStatusSummary }>();
 const devLinksCache = new Map<string, { expiresAt: number; value?: DevLink[] }>();
 const workflowStateCache = new Map<string, { expiresAt: number; value?: WorkflowClassification }>();
-const PR_CACHE_MS = 30_000;
+const PR_CACHE_MS = 5 * 60_000;
 const GIT_STATUS_CACHE_MS = 8_000;
 const DEV_LINKS_CACHE_MS = 60_000;
 const WORKFLOW_STATE_CACHE_MS = 5_000;
+const SYSTEM_PATH = `${process.env.PATH || ''}:/usr/sbin:/sbin`;
+
+export type ManualWorkspaceCreateInput = {
+  workflow: WorkflowConfig['key'];
+  title?: string;
+  jiraKey?: string;
+  startMode: 'new' | 'existing_branch' | 'existing_pr';
+  branchName?: string;
+  prRef?: string;
+};
 
 type WorkflowClassification = {
   state?: string;
   reason?: string;
   detail?: string;
+  question?: string;
   payload?: Record<string, unknown> | null;
   tail?: string;
+  review_state?: Record<string, unknown>;
   pr?: {
     pr_exists?: boolean;
     pr_number?: number;
     pr_url?: string;
     checks_status?: string;
+    has_conflicts?: boolean;
   };
 };
 
@@ -162,6 +175,9 @@ function normalizeWorkflowState(
         case 'finished':
           return { state: 'waiting_review', reason, detail, source: 'workflow-classifier' };
         case 'stopped_unexpectedly':
+          if (reason === 'pr_has_merge_conflicts_with_main') {
+            return { state: 'conflicts', reason, detail, source: 'workflow-classifier' };
+          }
           if (!tmuxExists) return { state: 'broken_missing_tmux', reason, detail, source: 'workflow-classifier' };
           if (lastActivityAt && minutesSince(lastActivityAt) > JOB_STALE_MINUTES) return { state: 'stale', reason, detail, source: 'workflow-classifier' };
           return { state: 'idle', reason, detail, source: 'workflow-classifier' };
@@ -294,8 +310,16 @@ function extractChecks(checks: unknown) {
   }));
 }
 
-function classifyChecksState(prState: string | undefined, checks: unknown) {
+function classifyChecksState(
+  prState: string | undefined,
+  checks: unknown,
+  mergeable?: string,
+  mergeStateStatus?: string,
+) {
   if (prState === 'MERGED') return { checksState: 'merged' as const, checksTooltip: 'PR merged' };
+  if (mergeable === 'CONFLICTING' || mergeStateStatus === 'DIRTY') {
+    return { checksState: 'failing' as const, checksTooltip: 'PR has merge conflicts' };
+  }
   if (!Array.isArray(checks) || checks.length === 0) return { checksState: 'missing' as const, checksTooltip: 'No checks reported yet' };
 
   let pending = 0;
@@ -331,7 +355,7 @@ function classifyChecksState(prState: string | undefined, checks: unknown) {
   return { checksState: 'missing' as const, checksTooltip: 'Check status unavailable' };
 }
 
-function fetchPullRequestSummary(prUrl?: string, prNumber?: number): PullRequestSummary | undefined {
+export function fetchPullRequestSummary(prUrl?: string, prNumber?: number): PullRequestSummary | undefined {
   if (!prUrl) return undefined;
   const cached = cachedValue(prCache, prUrl);
   if (cached) return cached;
@@ -341,7 +365,7 @@ function fetchPullRequestSummary(prUrl?: string, prNumber?: number): PullRequest
       'view',
       prUrl,
       '--json',
-      'number,title,state,reviewDecision,isDraft,statusCheckRollup,url,additions,deletions'
+      'number,title,state,reviewDecision,isDraft,statusCheckRollup,url,additions,deletions,mergeable,mergeStateStatus'
     ], {
       encoding: 'utf8',
       timeout: 900,
@@ -357,9 +381,12 @@ function fetchPullRequestSummary(prUrl?: string, prNumber?: number): PullRequest
       url?: string;
       additions?: number;
       deletions?: number;
+      mergeable?: string;
+      mergeStateStatus?: string;
     };
-    const checks = classifyChecksState(parsed.state, parsed.statusCheckRollup);
+    const checks = classifyChecksState(parsed.state, parsed.statusCheckRollup, parsed.mergeable, parsed.mergeStateStatus);
     return setCachedValue(prCache, prUrl, {
+      refreshedAt: new Date().toISOString(),
       url: parsed.url || prUrl,
       number: parsed.number ?? prNumber,
       title: parsed.title,
@@ -374,11 +401,11 @@ function fetchPullRequestSummary(prUrl?: string, prNumber?: number): PullRequest
       deletions: parsed.deletions
     }, PR_CACHE_MS);
   } catch {
-    return setCachedValue(prCache, prUrl, prNumber || prUrl ? { url: prUrl, number: prNumber, checksState: 'missing', checksTooltip: 'PR metadata unavailable' } : undefined, PR_CACHE_MS);
+    return setCachedValue(prCache, prUrl, prNumber || prUrl ? { url: prUrl, number: prNumber, checksState: 'missing', checksTooltip: 'PR metadata unavailable', refreshedAt: new Date().toISOString() } : undefined, PR_CACHE_MS);
   }
 }
 
-function fetchGitStatusSummary(worktreePath?: string): GitStatusSummary | undefined {
+export function fetchGitStatusSummary(worktreePath?: string): GitStatusSummary | undefined {
   if (!worktreePath) return undefined;
   const cached = cachedValue(gitStatusCache, worktreePath);
   if (cached) return cached;
@@ -443,7 +470,7 @@ function probeLinkHealth(url: string) {
   }
 }
 
-function fetchDevLinks(worktreePath?: string): DevLink[] | undefined {
+export function fetchDevLinks(worktreePath?: string): DevLink[] | undefined {
   if (!worktreePath) return undefined;
   const cached = cachedValue(devLinksCache, worktreePath);
   if (cached) return cached;
@@ -451,6 +478,7 @@ function fetchDevLinks(worktreePath?: string): DevLink[] | undefined {
     const output = execFileSync('make', ['dev', 'links'], {
       cwd: worktreePath,
       encoding: 'utf8',
+      env: { ...process.env, PATH: SYSTEM_PATH },
       timeout: 900,
       stdio: ['ignore', 'pipe', 'ignore']
     });
@@ -473,6 +501,7 @@ function fetchDevLinks(worktreePath?: string): DevLink[] | undefined {
       const portsOutput = execFileSync('make', ['dev', 'ports'], {
         cwd: worktreePath,
         encoding: 'utf8',
+        env: { ...process.env, PATH: SYSTEM_PATH },
         timeout: 900,
         stdio: ['ignore', 'pipe', 'ignore']
       });
@@ -498,6 +527,162 @@ function fetchDevLinks(worktreePath?: string): DevLink[] | undefined {
   }
 }
 
+function buildJobRecord(
+  workflow: WorkflowConfig,
+  jobPath: string,
+  raw: Record<string, unknown>,
+  tmuxSessions: Set<string>,
+  workflowClassification?: WorkflowClassification
+): JobRecord {
+  const tmuxSession = getPath(raw, 'tmux_session');
+  const tmuxExists = tmuxSession ? tmuxSessions.has(tmuxSession) : false;
+  const operatorFlags = getOperatorFlags(String(raw.job_id || raw.run_id || jobPath));
+  const slackThreadTs = getPath(raw, 'slack_thread_ts');
+  const hasSlackThread = Boolean(slackThreadTs);
+  const source = (typeof raw.job_source === 'string' ? raw.job_source : undefined) === 'citadel_manual' || raw.manual === true || raw.manual_origin === 'citadel'
+    ? 'citadel_manual' as const
+    : 'slack' as const;
+  const manual = source === 'citadel_manual';
+  const sourceLabel = typeof raw.job_source_label === 'string'
+    ? raw.job_source_label
+    : manual
+      ? 'Manual'
+      : 'Slack';
+  const startMode = typeof raw.start_mode === 'string' ? raw.start_mode as JobRecord['startMode'] : undefined;
+  const lastActivityAt = getLastActivityAt(raw);
+  const liveTail = tmuxExists && tmuxSession ? captureTmuxTail(tmuxSession, 80) : '';
+  const lastTmuxTailExcerpt = trimExcerpt(liveTail || workflowClassification?.tail || (raw.last_tmux_tail_excerpt as string | undefined));
+  if (lastTmuxTailExcerpt) raw.last_tmux_tail_excerpt = lastTmuxTailExcerpt;
+  const mapped = normalizeWorkflowState(workflow, raw, workflowClassification, tmuxExists, Boolean(operatorFlags.markedStaleAt), lastActivityAt);
+  const classifierPr = workflowClassification?.pr;
+  const reviewState = workflowClassification?.review_state as Record<string, unknown> | undefined;
+  const latestFeedback = (raw.latest_feedback as Record<string, unknown> | undefined) || undefined;
+  const feedbackPendingReview = latestFeedback?.dispatch_status === 'acknowledged' && !raw.feedback_applied_at;
+  const prUrl = (classifierPr?.pr_url as string | undefined) || (raw.pr_url as string | undefined);
+  const prNumber = typeof classifierPr?.pr_number === 'number'
+    ? classifierPr.pr_number
+    : typeof raw.pr_number === 'number'
+      ? raw.pr_number
+      : undefined;
+  const classifierHasConflicts = Boolean(classifierPr?.has_conflicts);
+  const fetchedPr = fetchPullRequestSummary(prUrl, prNumber);
+  const livePrHasConflicts = fetchedPr?.checksTooltip === 'PR has merge conflicts' || fetchedPr?.checksState === 'failing' && fetchedPr?.checksTooltip === 'PR has merge conflicts';
+  const effectivePrHasConflicts = Boolean(classifierHasConflicts || livePrHasConflicts);
+  const pr: PullRequestSummary | undefined = prUrl
+    ? {
+        url: fetchedPr?.url || prUrl,
+        number: fetchedPr?.number ?? prNumber,
+        title: fetchedPr?.title,
+        state: fetchedPr?.state,
+        reviewDecision: fetchedPr?.reviewDecision,
+        isDraft: fetchedPr?.isDraft,
+        checksSummary: fetchedPr?.checksSummary,
+        checks: fetchedPr?.checks,
+        checksState: fetchedPr?.checksState || (effectivePrHasConflicts
+          ? 'failing'
+          : classifierPr?.checks_status === 'green'
+            ? 'passing'
+            : classifierPr?.checks_status === 'pending'
+              ? 'pending'
+              : classifierPr?.checks_status === 'failed'
+                ? 'failing'
+                : 'missing'),
+        checksTooltip: fetchedPr?.checksTooltip || (effectivePrHasConflicts
+          ? 'PR has merge conflicts'
+          : classifierPr?.checks_status ? `Workflow reported PR checks: ${classifierPr.checks_status}` : 'PR metadata deferred'),
+        additions: fetchedPr?.additions,
+        deletions: fetchedPr?.deletions,
+        refreshedAt: fetchedPr?.refreshedAt,
+      }
+    : undefined;
+  const effectivePrChecksFailed = Boolean(!effectivePrHasConflicts && (
+    fetchedPr?.checksState === 'failing' || classifierPr?.checks_status === 'failed'
+  ));
+  const effectiveMapped = effectivePrHasConflicts && workflow.classifyMode === 'implementation'
+    ? { state: 'conflicts' as const, reason: 'pr_has_merge_conflicts_with_main', detail: mapped.detail, source: 'live-pr' }
+    : effectivePrChecksFailed && workflow.classifyMode === 'implementation' && mapped.state === 'waiting_review'
+      ? { state: 'ci_failed' as const, reason: 'pr_checks_failed', detail: mapped.detail, source: 'live-pr' }
+      : mapped;
+  const worktreePath = getPath(raw, 'worktree_path');
+
+  return {
+    id: String(raw.job_id || raw.run_id || jobPath),
+    workflow: workflow.key,
+    workflowLabel: workflow.label,
+    channelId: workflow.channelId,
+    source,
+    sourceLabel,
+    manual,
+    hasSlackThread,
+    startMode,
+    jiraKey: raw.jira_key as string | undefined,
+    title: summarizeTitle(workflow, raw),
+    jiraUrl: raw.jira_url as string | undefined,
+    prUrl,
+    prNumber,
+    pr,
+    slackThreadTs,
+    slack: {
+      permalink: hasSlackThread && typeof slackThreadTs === 'string' ? buildSlackPermalink(workflow.channelId, slackThreadTs) : undefined
+    },
+    tmuxSession,
+    tmuxExists,
+    tmuxWindow: tmuxSession,
+    worktreePath,
+    transcriptPath: getPath(raw, 'transcript_path'),
+    claudeSessionId: getPath(raw, 'claude_session_id') || (getPath(raw, 'transcript_path')?.split('/').pop()?.replace(/\.jsonl$/, '')),
+    planPath: getPath(raw, 'plan_path'),
+    requestPath: getPath(raw, 'request_path'),
+    branchName: getPath(raw, 'branch_name'),
+    gitStatus: undefined,
+    devLinks: undefined,
+    createdAt: getPath(raw, 'created_at'),
+    updatedAt: getPath(raw, 'updated_at'),
+    lastActivityAt,
+    lastTmuxTailExcerpt,
+    state: effectiveMapped.state,
+    stateReason: effectiveMapped.reason,
+    stateSource: effectiveMapped.source,
+    statusDetail: effectiveMapped.detail,
+    stateEvaluation: {
+      finalState: effectiveMapped.state,
+      finalReason: effectiveMapped.reason,
+      source: effectiveMapped.source,
+      classifierState: workflowClassification?.state,
+      classifierReason: workflowClassification?.reason,
+      classifierQuestion: typeof workflowClassification?.question === 'string' ? workflowClassification.question : undefined,
+      prChecksStatus: typeof classifierPr?.checks_status === 'string' ? classifierPr.checks_status : undefined,
+      reviewVerdict: typeof reviewState?.review_verdict === 'string' ? String(reviewState.review_verdict) : undefined,
+      reviewReason: typeof reviewState?.reason === 'string' ? String(reviewState.reason) : undefined,
+      feedbackPendingReview: Boolean(feedbackPendingReview),
+      lastSentAction: typeof raw.last_sent_action === 'string' ? raw.last_sent_action : undefined,
+      lastSentAt: typeof raw.last_sent_at === 'string' ? raw.last_sent_at : undefined,
+      lastInboundClassification: typeof raw.last_inbound_classification === 'string' ? raw.last_inbound_classification : undefined,
+      lastInboundReplyAt: typeof raw.last_inbound_reply_at === 'string' ? raw.last_inbound_reply_at : undefined,
+      lastActivityAt,
+    },
+    operatorFlags,
+    actions: {
+      canReconcile: true,
+      canCreateRecoveryShell: !tmuxExists && Boolean(tmuxSession),
+      canOpenTerminal: Boolean(tmuxSession)
+    },
+    raw
+  } satisfies JobRecord;
+}
+
+async function enrichJobRecord(job: JobRecord): Promise<JobRecord> {
+  const pr = job.prUrl
+    ? (fetchPullRequestSummary(job.prUrl, job.prNumber) || job.pr)
+    : job.pr;
+  return {
+    ...job,
+    pr,
+    gitStatus: fetchGitStatusSummary(job.worktreePath),
+    devLinks: fetchDevLinks(job.worktreePath)
+  };
+}
+
 export async function collectJobs(): Promise<JobRecord[]> {
   const tmuxSessions = new Set(listTmuxSessions());
   const workflowJobPaths = new Map(WORKFLOWS.map((workflow) => [workflow.key, listJsonFiles(workflow.stateDir)]));
@@ -509,97 +694,13 @@ export async function collectJobs(): Promise<JobRecord[]> {
       workflowClassifications.set(`${workflow.key}:${jobPath}`, classification);
     }
   }
-  const jobs = await Promise.all(
-    WORKFLOWS.flatMap((workflow) =>
-      (workflowJobPaths.get(workflow.key) || []).map(async (jobPath) => {
-        const raw = readJsonFile<Record<string, unknown>>(jobPath);
-        if (!raw) return null;
 
-        const tmuxSession = getPath(raw, 'tmux_session');
-        const tmuxExists = tmuxSession ? tmuxSessions.has(tmuxSession) : false;
-        const operatorFlags = getOperatorFlags(String(raw.job_id || raw.run_id || jobPath));
-        const slackThreadTs = getPath(raw, 'slack_thread_ts');
-        const slack = await fetchSlackThreadSummary(workflow.channelId, slackThreadTs);
-        const lastActivityAt = getLastActivityAt(raw);
-        const workflowClassification = workflowClassifications.get(`${workflow.key}:${jobPath}`);
-        const liveTail = tmuxExists && tmuxSession ? captureTmuxTail(tmuxSession, 80) : '';
-        const lastTmuxTailExcerpt = trimExcerpt(liveTail || workflowClassification?.tail || (raw.last_tmux_tail_excerpt as string | undefined));
-        if (lastTmuxTailExcerpt) raw.last_tmux_tail_excerpt = lastTmuxTailExcerpt;
-        const mapped = normalizeWorkflowState(workflow, raw, workflowClassification, tmuxExists, Boolean(operatorFlags.markedStaleAt), lastActivityAt);
-        const classifierPr = workflowClassification?.pr;
-        const prUrl = (classifierPr?.pr_url as string | undefined) || (raw.pr_url as string | undefined);
-        const prNumber = typeof classifierPr?.pr_number === 'number'
-          ? classifierPr.pr_number
-          : typeof raw.pr_number === 'number'
-            ? raw.pr_number
-            : undefined;
-        const fetchedPr = fetchPullRequestSummary(prUrl, prNumber);
-        const pr: PullRequestSummary | undefined = prUrl
-          ? {
-              url: fetchedPr?.url || prUrl,
-              number: fetchedPr?.number ?? prNumber,
-              title: fetchedPr?.title,
-              state: fetchedPr?.state,
-              reviewDecision: fetchedPr?.reviewDecision,
-              isDraft: fetchedPr?.isDraft,
-              checksSummary: fetchedPr?.checksSummary,
-              checks: fetchedPr?.checks,
-              checksState: fetchedPr?.checksState || (classifierPr?.checks_status === 'green'
-                ? 'passing'
-                : classifierPr?.checks_status === 'pending'
-                  ? 'pending'
-                  : classifierPr?.checks_status === 'failed'
-                    ? 'failing'
-                    : 'missing'),
-              checksTooltip: fetchedPr?.checksTooltip || (classifierPr?.checks_status ? `Workflow reported PR checks: ${classifierPr.checks_status}` : 'PR metadata deferred'),
-              additions: fetchedPr?.additions,
-              deletions: fetchedPr?.deletions
-            }
-          : undefined;
-        const worktreePath = getPath(raw, 'worktree_path');
-
-        return {
-          id: String(raw.job_id || raw.run_id || jobPath),
-          workflow: workflow.key,
-          workflowLabel: workflow.label,
-          channelId: workflow.channelId,
-          jiraKey: raw.jira_key as string | undefined,
-          title: summarizeTitle(workflow, raw),
-          jiraUrl: raw.jira_url as string | undefined,
-          prUrl,
-          prNumber,
-          pr,
-          slackThreadTs,
-          slack,
-          tmuxSession,
-          tmuxExists,
-          tmuxWindow: tmuxSession,
-          worktreePath,
-          transcriptPath: getPath(raw, 'transcript_path'),
-          claudeSessionId: getPath(raw, 'claude_session_id') || (getPath(raw, 'transcript_path')?.split('/').pop()?.replace(/\.jsonl$/, '')),
-          planPath: getPath(raw, 'plan_path'),
-          requestPath: getPath(raw, 'request_path'),
-          branchName: getPath(raw, 'branch_name'),
-          gitStatus: undefined,
-          devLinks: undefined,
-          createdAt: getPath(raw, 'created_at'),
-          updatedAt: getPath(raw, 'updated_at'),
-          lastActivityAt,
-          lastTmuxTailExcerpt,
-          state: mapped.state,
-          stateReason: mapped.reason,
-          stateSource: mapped.source,
-          statusDetail: mapped.detail,
-          operatorFlags,
-          actions: {
-            canReconcile: true,
-            canCreateRecoveryShell: !tmuxExists && Boolean(tmuxSession),
-            canOpenTerminal: Boolean(tmuxSession)
-          },
-          raw
-        } satisfies JobRecord;
-      })
-    )
+  const jobs = WORKFLOWS.flatMap((workflow) =>
+    (workflowJobPaths.get(workflow.key) || []).map((jobPath) => {
+      const raw = readJsonFile<Record<string, unknown>>(jobPath);
+      if (!raw) return null;
+      return buildJobRecord(workflow, jobPath, raw, tmuxSessions, workflowClassifications.get(`${workflow.key}:${jobPath}`));
+    })
   );
 
   return jobs
@@ -608,9 +709,79 @@ export async function collectJobs(): Promise<JobRecord[]> {
     .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
 }
 
-export async function getJobById(jobId: string) {
+export async function getJobSummaryById(jobId: string) {
   const jobs = await collectJobs();
   return jobs.find((job) => job.id === jobId);
+}
+
+export async function getJobById(jobId: string) {
+  const job = await getJobSummaryById(jobId);
+  if (!job) return undefined;
+  return enrichJobRecord(job);
+}
+
+export function invalidateJobCaches(params: { prUrl?: string; worktreePath?: string }) {
+  if (params.prUrl) prCache.delete(params.prUrl);
+  if (params.worktreePath) {
+    devLinksCache.delete(params.worktreePath);
+    gitStatusCache.delete(params.worktreePath);
+  }
+}
+
+export function invalidateWorkflowStateCache() {
+  workflowStateCache.clear();
+}
+
+function waitForCommand(child: ReturnType<typeof spawn>, timeoutMs: number) {
+  return new Promise<{ code: number; output: string }>((resolve, reject) => {
+    const chunks: string[] = [];
+    const timer = setTimeout(() => {
+      try {
+        child.kill('SIGTERM');
+      } catch {}
+      reject(new Error('command_timeout'));
+    }, timeoutMs);
+
+    child.stdout?.on('data', (data) => chunks.push(String(data)));
+    child.stderr?.on('data', (data) => chunks.push(String(data)));
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      const output = chunks.join('').trim();
+      if (code === 0) resolve({ code, output });
+      else reject(new Error(output || `command_failed:${code ?? 'unknown'}`));
+    });
+  });
+}
+
+export function createManualWorkspace(input: ManualWorkspaceCreateInput) {
+  if (input.workflow !== 'implementation') {
+    throw new Error('manual_workspace_creation_only_supported_for_implementation');
+  }
+
+  const scriptPath = `${OPENCLAW_ROOT}/workspace-implementation/automation/implementation-jira/scripts/create-manual-job.py`;
+  const output = execFileSync('python3', [scriptPath, JSON.stringify(input)], {
+    encoding: 'utf8',
+    timeout: 8 * 60 * 1000,
+    maxBuffer: 10 * 1024 * 1024,
+    env: { ...process.env, PATH: SYSTEM_PATH },
+  });
+  const parsed = JSON.parse(output) as { job_id?: string };
+  if (!parsed.job_id) {
+    throw new Error('manual_workspace_creation_missing_job_id');
+  }
+  return parsed;
+}
+
+export async function runWorktreeDeploy(worktreePath: string) {
+  const child = spawn('make', ['dev', 'deploy'], {
+    cwd: worktreePath,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  return waitForCommand(child, 10 * 60 * 1000);
 }
 
 export function triggerWorkflowReconcile(workflow: WorkflowConfig) {

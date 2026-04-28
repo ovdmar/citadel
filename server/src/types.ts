@@ -5,6 +5,8 @@ export type JobState =
   | 'waiting_human'
   | 'waiting_review'
   | 'waiting_approval'
+  | 'conflicts'
+  | 'ci_failed'
   | 'idle'
   | 'stale'
   | 'broken_missing_tmux'
@@ -51,6 +53,7 @@ export interface PullRequestSummary {
   checksTooltip?: string;
   additions?: number;
   deletions?: number;
+  refreshedAt?: string;
 }
 
 export interface GitStatusSummary {
@@ -78,6 +81,11 @@ export interface JobRecord {
   workflow: WorkflowKey;
   workflowLabel: string;
   channelId: string;
+  source: 'slack' | 'citadel_manual';
+  sourceLabel: string;
+  manual: boolean;
+  hasSlackThread: boolean;
+  startMode?: 'new' | 'existing_branch' | 'existing_pr';
   jiraKey?: string;
   title: string;
   jiraUrl?: string;
@@ -112,6 +120,7 @@ export interface JobRecord {
     canOpenTerminal: boolean;
   };
   raw: Record<string, unknown>;
+  stateEvaluation?: StateEvaluation;
 }
 
 export interface TerminalSessionRecord {
@@ -202,4 +211,23 @@ export interface CronRunEntry {
   sessionId?: string;
   sessionKey?: string;
   usage?: Record<string, number>;
+}
+
+
+export interface StateEvaluation {
+  finalState: string;
+  finalReason: string;
+  source?: string;
+  classifierState?: string;
+  classifierReason?: string;
+  classifierQuestion?: string;
+  prChecksStatus?: string;
+  reviewVerdict?: string;
+  reviewReason?: string;
+  feedbackPendingReview?: boolean;
+  lastSentAction?: string;
+  lastSentAt?: string;
+  lastInboundClassification?: string;
+  lastInboundReplyAt?: string;
+  lastActivityAt?: string;
 }

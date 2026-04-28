@@ -1,10 +1,10 @@
-import { Box, GitPullRequest, RefreshCw, TerminalSquare, Wrench } from 'lucide-react';
+import { Box, GitPullRequest, Plus, RotateCw, RefreshCw, TerminalSquare, Wrench, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AppCard, Button, Field, MetaRow, Surface } from '../components/ui';
+import { AppCard, Button, Field, MetaRow, Surface, TextArea, TextInput } from '../components/ui';
 import { StateBadge } from '../components/StateBadge';
 import { nextActionLabel, priorityScore, topSignal } from '../components/ux';
-import { loadJobs, markJobStale, openShell, openTerminal, reconcileJob, recoverClaude, relativeTime } from '../lib';
+import { createWorkspace, loadJobDevLinks, loadJobGit, loadJobPr, loadJobs, markJobStale, openShell, openTerminal, reconcileJob, recoverClaude, redeployJobDev, refreshJobPr, refreshJobState, relativeTime } from '../lib';
 import type { JobRecord, PullRequestSummary } from '../types';
 
 const workflowOrder = ['implementation', 'tech-plan', 'concept-lab'] as const;
@@ -24,6 +24,57 @@ function SlackIcon(props: { className?: string }) {
 
 function JiraIcon(props: { className?: string }) {
   return <img className={props.className} src="/icons/jira.svg" alt="Jira" />;
+}
+
+type CreateWorkspaceForm = {
+  workflow: JobRecord['workflow'];
+  title: string;
+  jiraKey: string;
+  startMode: NonNullable<JobRecord['startMode']>;
+  branchName: string;
+  prRef: string;
+};
+
+const defaultCreateWorkspaceForm = (): CreateWorkspaceForm => ({
+  workflow: 'implementation',
+  title: '',
+  jiraKey: '',
+  startMode: 'new',
+  branchName: '',
+  prRef: '',
+});
+
+function renderSlackButton(job: JobRecord, stopPropagation = false) {
+  if (job.hasSlackThread && job.slack.permalink) {
+    return (
+      <a
+        className="icon-link-button slack-link-button"
+        href={job.slack.permalink}
+        target="_blank"
+        rel="noreferrer"
+        onClick={stopPropagation ? (event) => event.stopPropagation() : undefined}
+        title="Slack thread"
+      >
+        <SlackIcon className="brand-icon" />
+      </a>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="icon-link-button slack-link-button disabled"
+      disabled
+      onClick={stopPropagation ? (event) => event.stopPropagation() : undefined}
+      title="Manual workspace, no Slack thread"
+    >
+      <SlackIcon className="brand-icon" />
+    </button>
+  );
+}
+
+function renderSourceChip(job: JobRecord) {
+  if (!job.manual) return null;
+  return <span className="source-chip manual">{job.sourceLabel || 'Manual'}</span>;
 }
 
 function useIsMobile(breakpoint = 820) {
@@ -48,6 +99,10 @@ function formatPrSummary(job: JobRecord) {
   ].filter(Boolean).join(' · ');
 }
 
+function hasPrDiff(pr?: PullRequestSummary) {
+  return Boolean(pr && (typeof pr.additions === 'number' || typeof pr.deletions === 'number'));
+}
+
 function githubStatusClass(pr?: PullRequestSummary) {
   switch (pr?.checksState) {
     case 'pending': return 'github-icon-pending';
@@ -68,12 +123,6 @@ type LoadingPhase = {
   detail?: string;
 };
 
-type WarmupProgressState = {
-  phase: 'idle' | 'ai' | 'shell' | 'done';
-  done: number;
-  total: number;
-};
-
 function LoadingHud({ phase }: { phase: LoadingPhase }) {
   if (!phase.active) return null;
   return (
@@ -92,24 +141,40 @@ function LoadingHud({ phase }: { phase: LoadingPhase }) {
   );
 }
 
-function WarmupProgress({ progress }: { progress: WarmupProgressState }) {
-  if (progress.phase === 'idle') return null;
-  const ratio = progress.total > 0 ? Math.min(100, Math.round((progress.done / progress.total) * 100)) : 100;
-  const label = progress.phase === 'ai'
-    ? 'Warming AI streams'
-    : progress.phase === 'shell'
-      ? 'Warming side terminals'
-      : 'Terminal warmup complete';
+function StateEvaluationCard({ job }: { job: JobRecord }) {
+  const state = job.stateEvaluation;
   return (
-    <div className="terminal-warmup-card">
-      <div className="terminal-warmup-topline">
-        <span>{label}</span>
-        <span>{progress.total ? `${progress.done}/${progress.total}` : 'done'}</span>
+    <AppCard className="side-top-card">
+      <div className="overview-card-toprow">
+        <div className="section-title">State evaluation</div>
+        <StateBadge state={job.state} />
       </div>
-      <div className="terminal-warmup-bar">
-        <div className="terminal-warmup-fill" style={{ width: `${ratio}%` }} />
+      <div className="detail-grid compact-detail-grid">
+        <MetaRow label="Final" value={`${state?.finalState || job.state} · ${state?.finalReason || job.stateReason}`} />
+        <MetaRow label="Source" value={state?.source || job.stateSource || '—'} mono />
+        <MetaRow label="Classifier" value={state?.classifierState ? `${state.classifierState} · ${state.classifierReason || '—'}` : '—'} />
+        <MetaRow label="PR checks" value={state?.prChecksStatus || '—'} />
+        <MetaRow label="Review" value={state?.reviewVerdict ? `${state.reviewVerdict}${state.reviewReason ? ` · ${state.reviewReason}` : ''}` : '—'} />
+        <MetaRow label="Feedback pending" value={state?.feedbackPendingReview ? 'yes' : 'no'} />
+        <MetaRow label="Last sent" value={state?.lastSentAction || '—'} mono />
+        <MetaRow label="Last inbound" value={state?.lastInboundClassification || '—'} mono />
       </div>
-    </div>
+      {state?.classifierQuestion ? (
+        <div>
+          <div className="section-title">Classifier question</div>
+          <pre>{state.classifierQuestion}</pre>
+        </div>
+      ) : null}
+      {job.statusDetail ? (
+        <details className="detail-disclosure">
+          <summary>Why Citadel thinks this</summary>
+          <div className="disclosure-grid">
+            <pre>{job.statusDetail}</pre>
+            {job.lastTmuxTailExcerpt ? <pre>{job.lastTmuxTailExcerpt}</pre> : null}
+          </div>
+        </details>
+      ) : null}
+    </AppCard>
   );
 }
 
@@ -141,11 +206,18 @@ function TerminalPendingCard({
 
 export function CockpitPage() {
   const [jobs, setJobs] = useState<JobRecord[]>([]);
+  const [jobPrById, setJobPrById] = useState<Record<string, NonNullable<JobRecord['pr']>>>({});
+  const [jobGitById, setJobGitById] = useState<Record<string, NonNullable<JobRecord['gitStatus']>>>({});
+  const [jobDevLinksById, setJobDevLinksById] = useState<Record<string, NonNullable<JobRecord['devLinks']>>>({});
   const [selectedJobId, setSelectedJobId] = useState<string>();
   const [workflowFilter, setWorkflowFilter] = useState<string>('all');
   const [stateFilter, setStateFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState<'created_desc' | 'created_asc'>('created_desc');
   const [error, setError] = useState<string>('');
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createForm, setCreateForm] = useState<CreateWorkspaceForm>(() => defaultCreateWorkspaceForm());
+  const [createLoading, setCreateLoading] = useState(false);
+  const [createError, setCreateError] = useState('');
   const [mobileView, setMobileView] = useState<'list' | 'detail'>('list');
   const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [mobileDetailTab, setMobileDetailTab] = useState<'stream' | 'stats'>('stream');
@@ -155,7 +227,12 @@ export function CockpitPage() {
   const [shellTerminalUrls, setShellTerminalUrls] = useState<Record<string, string>>({});
   const [aiLoadingByJob, setAiLoadingByJob] = useState<Record<string, boolean>>({});
   const [shellLoadingByJob, setShellLoadingByJob] = useState<Record<string, boolean>>({});
-  const [warmupProgress, setWarmupProgress] = useState<WarmupProgressState>({ phase: 'idle', done: 0, total: 0 });
+  const [deployLoadingByJob, setDeployLoadingByJob] = useState<Record<string, boolean>>({});
+  const [prRefreshLoadingByJob, setPrRefreshLoadingByJob] = useState<Record<string, boolean>>({});
+  const [stateRefreshLoadingByJob, setStateRefreshLoadingByJob] = useState<Record<string, boolean>>({});
+  const [jobPrLoadingById, setJobPrLoadingById] = useState<Record<string, boolean>>({});
+  const [jobGitLoadingById, setJobGitLoadingById] = useState<Record<string, boolean>>({});
+  const [jobDevLinksLoadingById, setJobDevLinksLoadingById] = useState<Record<string, boolean>>({});
   const [streamError, setStreamError] = useState('');
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [loadingPhase, setLoadingPhase] = useState<LoadingPhase>({
@@ -166,7 +243,6 @@ export function CockpitPage() {
     detail: 'Connecting to the local operator cockpit'
   });
   const isMobile = useIsMobile();
-  const preloadGenerationRef = useRef(0);
   const aiInflightRef = useRef(new Map<string, Promise<string | undefined>>());
   const shellInflightRef = useRef(new Map<string, Promise<string | undefined>>());
 
@@ -196,11 +272,9 @@ export function CockpitPage() {
         return newestFirst[0]?.id;
       });
       setError('');
-      if (!silent && hasLoadedOnce) {
-        finishLoading('Workspace list refreshed', `Loaded ${ranked.length} workspace${ranked.length === 1 ? '' : 's'}`);
-      } else if (!ranked.length && !silent) {
+      if (!silent) {
         setHasLoadedOnce(true);
-        finishLoading('Ready', 'No active workspaces right now');
+        finishLoading(ranked.length ? 'Ready' : 'Ready', ranked.length ? `Loaded ${ranked.length} workspace${ranked.length === 1 ? '' : 's'}` : 'No active workspaces right now');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'failed_to_load_jobs');
@@ -216,14 +290,74 @@ export function CockpitPage() {
     }
   };
 
+  const openCreateModal = () => {
+    setCreateForm(defaultCreateWorkspaceForm());
+    setCreateError('');
+    setCreateModalOpen(true);
+  };
+
+  const closeCreateModal = () => {
+    if (createLoading) return;
+    setCreateModalOpen(false);
+    setCreateError('');
+  };
+
+  const submitCreateWorkspace = async () => {
+    setCreateError('');
+    if (createForm.startMode === 'new' && !createForm.title.trim() && !createForm.jiraKey.trim()) {
+      setCreateError('Title or Jira task is required for a new manual workspace.');
+      return;
+    }
+    if (createForm.startMode === 'existing_branch' && !createForm.branchName.trim()) {
+      setCreateError('Branch name is required for existing branch mode.');
+      return;
+    }
+    if (createForm.startMode === 'existing_pr' && !createForm.prRef.trim()) {
+      setCreateError('PR URL or PR number is required for existing PR mode.');
+      return;
+    }
+
+    try {
+      setCreateLoading(true);
+      showLoading(22, 'Creating workspace', 'Provisioning the manual workspace and launching the workflow', false);
+      const response = await createWorkspace({
+        workflow: createForm.workflow,
+        title: createForm.title.trim() || undefined,
+        jiraKey: createForm.jiraKey.trim() || undefined,
+        startMode: createForm.startMode,
+        branchName: createForm.startMode === 'existing_branch' ? createForm.branchName.trim() : undefined,
+        prRef: createForm.startMode === 'existing_pr' ? createForm.prRef.trim() : undefined,
+      });
+      await refresh(true);
+      if (response.job?.id) {
+        setSelectedJobId(response.job.id);
+        if (isMobile) setMobileView('detail');
+      }
+      setCreateModalOpen(false);
+      finishLoading('Workspace created', 'Manual workspace launched');
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : 'workspace_create_failed');
+      setLoadingPhase((current) => ({ ...current, active: false, blocking: false }));
+    } finally {
+      setCreateLoading(false);
+    }
+  };
+
   useEffect(() => {
     void refresh();
     const timer = window.setInterval(() => void refresh(true), 10000);
     return () => window.clearInterval(timer);
   }, []);
 
+  const mergedJobs = useMemo(() => jobs.map((job) => ({
+    ...job,
+    pr: jobPrById[job.id] || job.pr,
+    gitStatus: jobGitById[job.id] || job.gitStatus,
+    devLinks: jobDevLinksById[job.id] || job.devLinks,
+  })), [jobs, jobPrById, jobGitById, jobDevLinksById]);
+
   const filteredJobs = useMemo(() => {
-    const filtered = jobs.filter((job) => {
+    const filtered = mergedJobs.filter((job) => {
       if (workflowFilter !== 'all' && job.workflow !== workflowFilter) return false;
       if (stateFilter !== 'all' && job.state !== stateFilter) return false;
       return true;
@@ -233,9 +367,93 @@ export function CockpitPage() {
       const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
       return sortBy === 'created_asc' ? aTime - bTime : bTime - aTime;
     });
-  }, [jobs, workflowFilter, stateFilter, sortBy]);
+  }, [mergedJobs, workflowFilter, stateFilter, sortBy]);
 
   const selectedJob = filteredJobs.find((job) => job.id === selectedJobId) || filteredJobs[0];
+  const selectedJobPrLoading = selectedJob ? Boolean(jobPrLoadingById[selectedJob.id]) : false;
+  const selectedJobGitLoading = selectedJob ? Boolean(jobGitLoadingById[selectedJob.id]) : false;
+  const selectedJobDevLinksLoading = selectedJob ? Boolean(jobDevLinksLoadingById[selectedJob.id]) : false;
+
+  useEffect(() => {
+    if (!selectedJob) return;
+    if (!terminalUrls[selectedJob.id]) return;
+    if (jobPrById[selectedJob.id] || jobPrLoadingById[selectedJob.id] || !selectedJob.prUrl) return;
+    const jobId = selectedJob.id;
+    let cancelled = false;
+    setJobPrLoadingById((current) => ({ ...current, [jobId]: true }));
+    void loadJobPr(jobId)
+      .then((response) => {
+        if (cancelled || !response.pr) return;
+        setJobPrById((current) => ({ ...current, [jobId]: response.pr! }));
+      })
+      .catch(() => {})
+      .finally(() => {
+        setJobPrLoadingById((current) => {
+          const next = { ...current };
+          delete next[jobId];
+          return next;
+        });
+      });
+    return () => { cancelled = true; };
+  }, [selectedJob?.id, selectedJob?.prUrl, terminalUrls, jobPrById]);
+
+  useEffect(() => {
+    if (!selectedJob) return;
+    if (!terminalUrls[selectedJob.id]) return;
+    if (jobGitById[selectedJob.id] || jobGitLoadingById[selectedJob.id]) return;
+    const jobId = selectedJob.id;
+    let cancelled = false;
+    setJobGitLoadingById((current) => ({ ...current, [jobId]: true }));
+    void loadJobGit(jobId)
+      .then((response) => {
+        if (cancelled || !response.gitStatus) return;
+        setJobGitById((current) => ({ ...current, [jobId]: response.gitStatus! }));
+      })
+      .catch(() => {})
+      .finally(() => {
+        setJobGitLoadingById((current) => {
+          const next = { ...current };
+          delete next[jobId];
+          return next;
+        });
+      });
+    return () => { cancelled = true; };
+  }, [selectedJob?.id, terminalUrls, jobGitById]);
+
+  useEffect(() => {
+    if (!selectedJob?.worktreePath) return;
+    if (!terminalUrls[selectedJob.id]) return;
+    if (jobDevLinksById[selectedJob.id] || jobDevLinksLoadingById[selectedJob.id]) return;
+    const jobId = selectedJob.id;
+    let cancelled = false;
+    setJobDevLinksLoadingById((current) => ({ ...current, [jobId]: true }));
+    void loadJobDevLinks(jobId)
+      .then((response) => {
+        if (cancelled || !response.devLinks) return;
+        setJobDevLinksById((current) => ({ ...current, [jobId]: response.devLinks! }));
+      })
+      .catch(() => {})
+      .finally(() => {
+        setJobDevLinksLoadingById((current) => {
+          const next = { ...current };
+          delete next[jobId];
+          return next;
+        });
+      });
+    return () => { cancelled = true; };
+  }, [selectedJob?.id, selectedJob?.worktreePath, terminalUrls, jobDevLinksById]);
+
+  useEffect(() => {
+    if (!selectedJob?.prUrl) return;
+    const timer = window.setInterval(() => {
+      void loadJobPr(selectedJob.id)
+        .then((response) => {
+          if (response.pr) setJobPrById((current) => ({ ...current, [selectedJob.id]: response.pr! }));
+        })
+        .catch(() => {});
+    }, 5 * 60_000);
+    return () => window.clearInterval(timer);
+  }, [selectedJob?.id, selectedJob?.prUrl]);
 
   const ensureAiTerminal = async (job: JobRecord) => {
     const cached = terminalUrls[job.id];
@@ -290,6 +508,54 @@ export function CockpitPage() {
     return promise;
   };
 
+  const handleRedeployDev = async (job: JobRecord) => {
+    setDeployLoadingByJob((current) => ({ ...current, [job.id]: true }));
+    try {
+      const response = await redeployJobDev(job.id) as { job?: JobRecord };
+      if (response.job?.devLinks) setJobDevLinksById((current) => ({ ...current, [job.id]: response.job!.devLinks! }));
+      if (response.job?.gitStatus) setJobGitById((current) => ({ ...current, [job.id]: response.job!.gitStatus! }));
+      await refresh(true);
+    } finally {
+      setDeployLoadingByJob((current) => {
+        const next = { ...current };
+        delete next[job.id];
+        return next;
+      });
+    }
+  };
+
+  const handleRefreshPr = async (job: JobRecord) => {
+    setPrRefreshLoadingByJob((current) => ({ ...current, [job.id]: true }));
+    try {
+      const response = await refreshJobPr(job.id) as { job?: JobRecord };
+      if (response.job?.pr) setJobPrById((current) => ({ ...current, [job.id]: response.job!.pr! }));
+      await refresh(true);
+    } finally {
+      setPrRefreshLoadingByJob((current) => {
+        const next = { ...current };
+        delete next[job.id];
+        return next;
+      });
+    }
+  };
+
+  const handleRefreshState = async (job: JobRecord) => {
+    setStateRefreshLoadingByJob((current) => ({ ...current, [job.id]: true }));
+    try {
+      const response = await refreshJobState(job.id);
+      if (response.job?.pr) setJobPrById((current) => ({ ...current, [job.id]: response.job!.pr! }));
+      if (response.job?.gitStatus) setJobGitById((current) => ({ ...current, [job.id]: response.job!.gitStatus! }));
+      if (response.job?.devLinks) setJobDevLinksById((current) => ({ ...current, [job.id]: response.job!.devLinks! }));
+      await refresh(true);
+    } finally {
+      setStateRefreshLoadingByJob((current) => {
+        const next = { ...current };
+        delete next[job.id];
+        return next;
+      });
+    }
+  };
+
   useEffect(() => {
     if (selectedJob && selectedJob.id !== selectedJobId) setSelectedJobId(selectedJob.id);
   }, [selectedJob, selectedJobId]);
@@ -302,14 +568,9 @@ export function CockpitPage() {
   useEffect(() => {
     if (!selectedJob) return;
     const cachedUrl = terminalUrls[selectedJob.id];
-    showLoading(hasLoadedOnce ? 72 : 74, 'Attaching AI stream', selectedJob.jiraKey || selectedJob.title, !hasLoadedOnce && !cachedUrl);
     setAiUrl(cachedUrl || '');
     setStreamError('');
-    if (cachedUrl) {
-      setHasLoadedOnce(true);
-      finishLoading('Ready', 'AI stream attached');
-      return;
-    }
+    if (cachedUrl) return;
     let cancelled = false;
     (async () => {
       try {
@@ -317,18 +578,14 @@ export function CockpitPage() {
         if (cancelled) return;
         setAiUrl(url || '');
         setStreamError('');
-        setHasLoadedOnce(true);
-        finishLoading('Ready', 'AI stream attached');
       } catch (err) {
         if (cancelled) return;
         setAiUrl('');
         setStreamError(err instanceof Error ? err.message : 'terminal_open_failed');
-        setHasLoadedOnce(true);
-        finishLoading('Workspace loaded', 'AI stream is unavailable right now');
       }
     })();
     return () => { cancelled = true; };
-  }, [selectedJob?.id, terminalUrls, hasLoadedOnce]);
+  }, [selectedJob?.id, terminalUrls]);
 
   useEffect(() => {
     if (!selectedJob) {
@@ -338,63 +595,6 @@ export function CockpitPage() {
     setAiUrl(terminalUrls[selectedJob.id] || '');
     setShellUrl(shellTerminalUrls[selectedJob.id] || '');
   }, [selectedJob?.id, terminalUrls, shellTerminalUrls]);
-
-  useEffect(() => {
-    if (!selectedJob || !hasLoadedOnce || !jobs.length) return;
-    const generation = ++preloadGenerationRef.current;
-    const aiQueue = sortByCreatedAtDesc(jobs)
-      .filter((job) => job.actions.canOpenTerminal)
-      .filter((job) => job.id !== selectedJob.id)
-      .filter((job) => !terminalUrls[job.id]);
-    const shellQueue = sortByCreatedAtDesc(jobs)
-      .filter((job) => Boolean(job.worktreePath))
-      .filter((job) => !shellTerminalUrls[job.id]);
-
-    let cancelled = false;
-    (async () => {
-      if (aiQueue.length) setWarmupProgress({ phase: 'ai', done: 0, total: aiQueue.length });
-      let aiDone = 0;
-      for (const job of aiQueue) {
-        if (cancelled || generation !== preloadGenerationRef.current) return;
-        try {
-          await ensureAiTerminal(job);
-        } catch {
-          // best-effort warmup only
-        } finally {
-          aiDone += 1;
-          if (!cancelled && generation === preloadGenerationRef.current) {
-            setWarmupProgress({ phase: 'ai', done: aiDone, total: aiQueue.length });
-          }
-        }
-      }
-
-      if (cancelled || generation !== preloadGenerationRef.current) return;
-      if (shellQueue.length) setWarmupProgress({ phase: 'shell', done: 0, total: shellQueue.length });
-      let shellDone = 0;
-      for (const job of shellQueue) {
-        if (cancelled || generation !== preloadGenerationRef.current) return;
-        try {
-          await ensureShellTerminal(job);
-        } catch {
-          // best-effort warmup only
-        } finally {
-          shellDone += 1;
-          if (!cancelled && generation === preloadGenerationRef.current) {
-            setWarmupProgress({ phase: 'shell', done: shellDone, total: shellQueue.length });
-          }
-        }
-      }
-
-      if (!cancelled && generation === preloadGenerationRef.current) {
-        setWarmupProgress({ phase: 'done', done: shellQueue.length || aiQueue.length ? Math.max(shellQueue.length, aiQueue.length) : 0, total: shellQueue.length || aiQueue.length ? Math.max(shellQueue.length, aiQueue.length) : 0 });
-        window.setTimeout(() => {
-          if (generation === preloadGenerationRef.current) setWarmupProgress({ phase: 'idle', done: 0, total: 0 });
-        }, 1200);
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [selectedJob?.id, hasLoadedOnce, jobs, terminalUrls, shellTerminalUrls]);
 
   useEffect(() => {
     if (!isMobile) {
@@ -407,10 +607,81 @@ export function CockpitPage() {
     if (mobileView === 'detail') setMobileDetailTab('stream');
   }, [selectedJob?.id, mobileView]);
 
+  const createModal = createModalOpen ? (
+    <div className="modal-backdrop" onClick={closeCreateModal}>
+      <div className="modal-card create-workspace-modal" onClick={(event) => event.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <div className="section-title">Create workspace</div>
+            <div className="muted">Manual Citadel workspace, no Slack thread.</div>
+          </div>
+          <button type="button" className="modal-close" onClick={closeCreateModal} disabled={createLoading}>
+            <X size={16} />
+          </button>
+        </div>
+
+        <div className="modal-form-grid">
+          <label className="modal-field">
+            <span>Workflow</span>
+            <Field value={createForm.workflow} onChange={(event) => setCreateForm((current) => ({ ...current, workflow: event.target.value as JobRecord['workflow'] }))}>
+              <option value="implementation">Implementation</option>
+            </Field>
+          </label>
+
+          <label className="modal-field">
+            <span>Title</span>
+            <TextInput value={createForm.title} onChange={(event) => setCreateForm((current) => ({ ...current, title: event.target.value }))} placeholder="Required if no Jira task is attached" />
+          </label>
+
+          <label className="modal-field">
+            <span>Jira task</span>
+            <TextInput value={createForm.jiraKey} onChange={(event) => setCreateForm((current) => ({ ...current, jiraKey: event.target.value.toUpperCase() }))} placeholder="Optional, for example MS-123" />
+          </label>
+
+          <label className="modal-field">
+            <span>Start from</span>
+            <Field value={createForm.startMode} onChange={(event) => setCreateForm((current) => ({ ...current, startMode: event.target.value as CreateWorkspaceForm['startMode'] }))}>
+              <option value="new">New workspace</option>
+              <option value="existing_branch">Existing branch</option>
+              <option value="existing_pr">Existing PR</option>
+            </Field>
+          </label>
+
+          {createForm.startMode === 'existing_branch' ? (
+            <label className="modal-field">
+              <span>Branch name</span>
+              <TextInput value={createForm.branchName} onChange={(event) => setCreateForm((current) => ({ ...current, branchName: event.target.value }))} placeholder="feature/my-branch" />
+            </label>
+          ) : null}
+
+          {createForm.startMode === 'existing_pr' ? (
+            <label className="modal-field">
+              <span>PR URL or number</span>
+              <TextInput value={createForm.prRef} onChange={(event) => setCreateForm((current) => ({ ...current, prRef: event.target.value }))} placeholder="https://github.com/.../pull/123 or 123" />
+            </label>
+          ) : null}
+
+          <label className="modal-field modal-field-full">
+            <span>Notes</span>
+            <TextArea value={createForm.startMode === 'new' ? 'Fresh workspace from Citadel, optionally attached to Jira.' : createForm.startMode === 'existing_branch' ? 'Fresh workspace that checks out the requested branch.' : 'Fresh workspace that checks out the requested PR branch.'} readOnly rows={3} />
+          </label>
+        </div>
+
+        {createError ? <div className="error-text modal-error">{createError}</div> : null}
+
+        <div className="modal-actions">
+          <Button variant="ghost" onClick={closeCreateModal} disabled={createLoading}>Cancel</Button>
+          <Button onClick={() => void submitCreateWorkspace()} disabled={createLoading}>{createLoading ? 'Creating…' : 'Create workspace'}</Button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   if (isMobile) {
     return (
       <div className="page-shell jarvis-shell mobile-citadel-shell">
         <LoadingHud phase={loadingPhase} />
+        {createModal}
         <header className={`cockpit-header-card mobile-header-card ${mobileView === 'detail' ? 'detail' : ''}`}>
           <div className="cockpit-title-block">
             <div className="eyebrow-row">Citadel mobile</div>
@@ -420,12 +691,11 @@ export function CockpitPage() {
           </div>
           <div className="mobile-header-actions">
             {mobileView === 'detail' ? <Button variant="ghost" size="sm" onClick={() => setMobileView('list')}>Back</Button> : null}
+            <Button size="sm" onClick={openCreateModal}><Plus size={14} /> Create</Button>
             <Button size="sm" variant="secondary" onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</Button>
             {mobileView === 'list' ? <Button size="sm" variant="ghost" onClick={() => setMobileFiltersOpen((open) => !open)}>{mobileFiltersOpen ? 'Hide filters' : 'Filters'}</Button> : null}
           </div>
         </header>
-        <WarmupProgress progress={warmupProgress} />
-
         {mobileView === 'list' ? (
           <>
             {mobileFiltersOpen ? (
@@ -440,6 +710,8 @@ export function CockpitPage() {
                   <option value="waiting_human">Waiting human</option>
                   <option value="waiting_review">Waiting review</option>
                   <option value="waiting_approval">Waiting approval</option>
+                  <option value="conflicts">Conflicts</option>
+                  <option value="ci_failed">CI failed</option>
                   <option value="stale">Stale</option>
                   <option value="broken_missing_tmux">Broken</option>
                   <option value="failed">Failed</option>
@@ -454,15 +726,18 @@ export function CockpitPage() {
               {filteredJobs.map((job) => (
                 <button key={job.id} className="workspace-row" onClick={() => { setSelectedJobId(job.id); setMobileView('detail'); }}>
                   <div className="mobile-workspace-card-body">
-                    <div className="job-key">{job.jiraKey || job.id}</div>
+                    <div className="job-key-row">
+                      <div className="job-key">{job.jiraKey || job.id}</div>
+                      {renderSourceChip(job)}
+                    </div>
                     <div className="workspace-title">{job.title}</div>
                     <div className="mobile-card-icons-row">
-                      {job.slack.permalink ? <a className="icon-link-button slack-link-button" href={job.slack.permalink} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} title="Slack thread"><SlackIcon className="brand-icon" /></a> : null}
+                      {renderSlackButton(job, true)}
                       {job.jiraUrl ? <a className="icon-link-button jira-link-button" href={job.jiraUrl} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} title="Jira issue"><JiraIcon className="brand-icon" /></a> : null}
                       <a className={`icon-link-button ${githubStatusClass(job.pr)}`} href={job.pr?.url || job.prUrl || '#'} target="_blank" rel="noreferrer" title={job.pr?.checksTooltip || (job.pr ? 'PR status unavailable' : 'No PR linked yet')} onClick={(event) => { event.stopPropagation(); if (!job.pr && !job.prUrl) event.preventDefault(); }}>
                         <GitPullRequest size={15} />
                       </a>
-                      {job.pr && (job.pr.additions || job.pr.deletions) ? (
+                      {hasPrDiff(job.pr) ? (
                         <div className="pr-diff-summary mobile-pr-diff-summary">
                           <span className="pr-diff-added">+{job.pr.additions || 0}</span>
                           <span className="pr-diff-removed">-{job.pr.deletions || 0}</span>
@@ -512,14 +787,15 @@ export function CockpitPage() {
                     <span>{selectedJob.workflowLabel}</span>
                     <span>{relativeTime(selectedJob.lastActivityAt)}</span>
                     {selectedJob.pr?.number ? <span>PR #{selectedJob.pr.number}</span> : (selectedJob.prNumber ? <span>PR #{selectedJob.prNumber}</span> : null)}
+                    {selectedJob.manual ? <span>{selectedJob.sourceLabel}</span> : null}
                   </div>
                   <div className="icon-links-row overview-icon-links mobile-overview-icons">
-                    {selectedJob.slack.permalink ? <a className="icon-link-button slack-link-button" href={selectedJob.slack.permalink} target="_blank" rel="noreferrer" title="Slack thread"><SlackIcon className="brand-icon" /></a> : null}
+                    {renderSlackButton(selectedJob)}
                     {selectedJob.jiraUrl ? <a className="icon-link-button jira-link-button" href={selectedJob.jiraUrl} target="_blank" rel="noreferrer" title="Jira issue"><JiraIcon className="brand-icon" /></a> : null}
                     <a className={`icon-link-button ${githubStatusClass(selectedJob.pr)}`} href={selectedJob.pr?.url || selectedJob.prUrl || '#'} target="_blank" rel="noreferrer" title={selectedJob.pr?.checksTooltip || (selectedJob.pr ? 'PR status unavailable' : 'No PR linked yet')} onClick={(event) => { if (!selectedJob.pr && !selectedJob.prUrl) event.preventDefault(); }}>
                       <GitPullRequest size={15} />
                     </a>
-                    {selectedJob.pr && (selectedJob.pr.additions || selectedJob.pr.deletions) ? (
+                    {hasPrDiff(selectedJob.pr) ? (
                       <div className="pr-diff-summary mobile-pr-diff-summary">
                         <span className="pr-diff-added">+{selectedJob.pr.additions || 0}</span>
                         <span className="pr-diff-removed">-{selectedJob.pr.deletions || 0}</span>
@@ -527,6 +803,7 @@ export function CockpitPage() {
                     ) : null}
                   </div>
                   <div className="side-action-row">
+                    <Button size="sm" variant="secondary" onClick={() => void handleRefreshState(selectedJob)} disabled={Boolean(stateRefreshLoadingByJob[selectedJob.id])}><RotateCw size={14} /> {stateRefreshLoadingByJob[selectedJob.id] ? 'Refreshing…' : 'Refresh state'}</Button>
                     <Button size="sm" variant="secondary" onClick={async () => { await reconcileJob(selectedJob.id); await refresh(); }}><RefreshCw size={14} /> Reconcile</Button>
                     <Button size="sm" variant="ghost" onClick={async () => { await markJobStale(selectedJob.id, !selectedJob.operatorFlags.markedStaleAt); await refresh(); }}>{selectedJob.operatorFlags.markedStaleAt ? 'Clear stale' : 'Mark stale'}</Button>
                     <Button size="sm" variant="secondary" onClick={async () => {
@@ -546,9 +823,12 @@ export function CockpitPage() {
                   </div>
                 </AppCard>
 
-                {selectedJob.devLinks?.length ? (
-                  <AppCard>
+                <AppCard>
+                  <div className="overview-card-toprow">
                     <div className="section-title">Container links</div>
+                    <Button size="sm" variant="secondary" onClick={() => void handleRedeployDev(selectedJob)} disabled={!selectedJob.worktreePath || Boolean(deployLoadingByJob[selectedJob.id])}>{deployLoadingByJob[selectedJob.id] ? 'Deploying…' : 'Redeploy'}</Button>
+                  </div>
+                  {selectedJob.devLinks?.length ? (
                     <div className="dev-links-grid">
                       {selectedJob.devLinks.map((link) => (
                         <a key={link.url} className="dev-link-chip" href={link.url} target="_blank" rel="noreferrer" title={link.healthy ? 'Container healthy' : 'Container unhealthy'}>
@@ -557,35 +837,45 @@ export function CockpitPage() {
                         </a>
                       ))}
                     </div>
-                  </AppCard>
-                ) : null}
+                  ) : <div className="muted">No container links for this workspace yet.</div>}
+                </AppCard>
+
+                <StateEvaluationCard job={selectedJob} />
 
                 <AppCard>
                   <div className="section-title">Workspace stats</div>
                   <div className="detail-grid compact-detail-grid">
                     <Surface><MetaRow label="Claude" value={selectedJob.claudeSessionId || '—'} mono /></Surface>
                     <Surface><MetaRow label="Branch" value={selectedJob.branchName || selectedJob.gitStatus?.branch || '—'} mono /></Surface>
-                    <Surface><MetaRow label="PR" value={selectedJob.pr?.number ? `#${selectedJob.pr.number}` : (selectedJob.prNumber ? `#${selectedJob.prNumber}` : '—')} /></Surface>
                     <Surface><MetaRow label="State" value={selectedJob.state} /></Surface>
                   </div>
                 </AppCard>
 
-                {selectedJob.pr ? (
-                  <AppCard>
-                    <div className="section-title">Pull request</div>
-                    <a className="inline-link pr-link-block" href={selectedJob.pr.url} target="_blank" rel="noreferrer">
-                      <GitPullRequest size={14} className={githubStatusClass(selectedJob.pr)} />
-                      <span>{selectedJob.pr.title || `PR #${selectedJob.pr.number || selectedJob.prNumber}`}</span>
-                    </a>
-                    <div className="mobile-meta-list">
-                      {selectedJob.pr.number ? <span>#{selectedJob.pr.number}</span> : null}
-                      {selectedJob.pr.state ? <span>{selectedJob.pr.state.toLowerCase()}</span> : null}
-                      {selectedJob.pr.reviewDecision ? <span>{selectedJob.pr.reviewDecision.toLowerCase()}</span> : null}
-                      {selectedJob.pr.isDraft ? <span>draft</span> : null}
-                    </div>
-                    {selectedJob.pr.checksSummary ? <div className="decision-body compact-body">Checks: {selectedJob.pr.checksSummary}</div> : null}
-                  </AppCard>
-                ) : null}
+                <AppCard>
+                  <div className="overview-card-toprow">
+                    <div className="section-title">PR stats</div>
+                    <Button size="sm" variant="secondary" onClick={() => void handleRefreshPr(selectedJob)} disabled={!selectedJob.prUrl || Boolean(prRefreshLoadingByJob[selectedJob.id])}>{prRefreshLoadingByJob[selectedJob.id] ? 'Refreshing…' : 'Refresh'}</Button>
+                  </div>
+                  {selectedJob.pr ? (
+                    <>
+                      <a className="inline-link pr-link-block" href={selectedJob.pr.url} target="_blank" rel="noreferrer">
+                        <GitPullRequest size={14} className={githubStatusClass(selectedJob.pr)} />
+                        <span>{selectedJob.pr.title || `PR #${selectedJob.pr.number || selectedJob.prNumber}`}</span>
+                      </a>
+                      {selectedJob.pr.refreshedAt ? <div className="muted">Last refresh {relativeTime(selectedJob.pr.refreshedAt)}</div> : null}
+                      {selectedJob.pr.checks?.length ? (
+                        <div className="pr-checks-list">
+                          {selectedJob.pr.checks.map((check) => (
+                            <div key={`${check.name}:${check.status}`} className="pr-check-row">
+                              <span className={`pr-check-status pr-check-status-${check.status.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}>{check.status}</span>
+                              <span className="pr-check-name">{check.name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      ) : <div className="muted">No checks reported yet.</div>}
+                    </>
+                  ) : <div className="muted">No PR linked yet.</div>}
+                </AppCard>
 
                 <AppCard className={selectedJob.gitStatus?.clean ? 'side-top-card git-status-clean-card' : 'side-top-card'}>
                   <div className="section-title">Git status</div>
@@ -631,6 +921,7 @@ export function CockpitPage() {
   return (
     <div className="page-shell jarvis-shell superset-shell">
       <LoadingHud phase={loadingPhase} />
+      {createModal}
       <div className="superset-layout">
         <aside className="workspace-nav-pane">
           <div className="workspace-nav-top">
@@ -638,7 +929,10 @@ export function CockpitPage() {
               <div className="eyebrow-row">Workspaces</div>
               <h2 className="workspace-pane-title">Active agents</h2>
             </div>
-            <Button size="sm" variant="secondary" onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</Button>
+            <div className="workspace-nav-actions">
+              <Button size="sm" onClick={openCreateModal}><Plus size={14} /> Create workspace</Button>
+              <Button size="sm" variant="secondary" onClick={() => void refresh()}><RefreshCw size={14} /> Refresh</Button>
+            </div>
           </div>
 
           <div className="workspace-filters">
@@ -652,6 +946,8 @@ export function CockpitPage() {
               <option value="waiting_human">Waiting human</option>
               <option value="waiting_review">Waiting review</option>
               <option value="waiting_approval">Waiting approval</option>
+              <option value="conflicts">Conflicts</option>
+              <option value="ci_failed">CI failed</option>
               <option value="stale">Stale</option>
               <option value="broken_missing_tmux">Broken</option>
               <option value="failed">Failed</option>
@@ -661,22 +957,34 @@ export function CockpitPage() {
               <option value="created_asc">Oldest first</option>
             </Field>
           </div>
-          <WarmupProgress progress={warmupProgress} />
-
           <div className="workspace-list-rail">
             {filteredJobs.map((job) => (
               <button key={job.id} className={`workspace-nav-item ${selectedJob?.id === job.id ? 'selected' : ''}`} onClick={() => setSelectedJobId(job.id)}>
                 <div className="workspace-nav-topline">
-                  <span className="job-key">{job.jiraKey || job.id}</span>
+                  <div className="job-key-row">
+                    <span className="job-key">{job.jiraKey || job.id}</span>
+                    {renderSourceChip(job)}
+                  </div>
                   <StateBadge state={job.state} />
                 </div>
                 <div className="workspace-nav-title">{job.title}</div>
-                <div className="workspace-nav-meta">{job.workflowLabel} · {relativeTime(job.lastActivityAt)}</div>
+                <div className="workspace-nav-meta-row">
+                  <span className="workspace-nav-meta">{job.workflowLabel}</span>
+                  <span className="workspace-nav-meta">{relativeTime(job.lastActivityAt)}</span>
+                </div>
                 {job.pr ? (
-                  <a className="workspace-pr-row" href={job.pr.url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} title={job.pr.checksTooltip || undefined}>
-                    <GitPullRequest size={13} className={githubStatusClass(job.pr)} />
-                    <span>{formatPrSummary(job)}</span>
-                  </a>
+                  <div className="workspace-pr-line">
+                    <a className="workspace-pr-row" href={job.pr.url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} title={job.pr.checksTooltip || undefined}>
+                      <GitPullRequest size={13} className={githubStatusClass(job.pr)} />
+                      <span>{formatPrSummary(job)}</span>
+                    </a>
+                    {hasPrDiff(job.pr) ? (
+                      <div className="pr-diff-summary workspace-pr-diff-summary">
+                        <span className="pr-diff-added">+{job.pr.additions || 0}</span>
+                        <span className="pr-diff-removed">-{job.pr.deletions || 0}</span>
+                      </div>
+                    ) : null}
+                  </div>
                 ) : null}
               </button>
             ))}
@@ -688,6 +996,7 @@ export function CockpitPage() {
             <div>
               <div className="eyebrow-row">AI stream</div>
               <div className="stream-title">{selectedJob?.jiraKey || 'No workspace selected'} · {selectedJob?.title || ''}</div>
+              {selectedJob?.manual ? <div className="stream-subtitle">Manual workspace, no Slack thread</div> : null}
             </div>
             <div className="stream-top-actions">
               {selectedJob ? (
@@ -695,6 +1004,7 @@ export function CockpitPage() {
                   <summary className="actions-menu-trigger">Actions</summary>
                   <div className="actions-menu-list">
                     <Button size="sm" onClick={async () => { const url = await ensureAiTerminal(selectedJob); setAiUrl(url || ''); setStreamError(''); }}><TerminalSquare size={14} /> Reattach</Button>
+                    <Button size="sm" variant="secondary" onClick={() => void handleRefreshState(selectedJob)} disabled={Boolean(stateRefreshLoadingByJob[selectedJob.id])}><RotateCw size={14} /> {stateRefreshLoadingByJob[selectedJob.id] ? 'Refreshing…' : 'Refresh state'}</Button>
                     <Button size="sm" variant="secondary" onClick={async () => { await reconcileJob(selectedJob.id); await refresh(); }}><RefreshCw size={14} /> Reconcile</Button>
                     <Button size="sm" variant="ghost" onClick={async () => { await markJobStale(selectedJob.id, !selectedJob.operatorFlags.markedStaleAt); await refresh(); }}>{selectedJob.operatorFlags.markedStaleAt ? 'Clear stale' : 'Mark stale'}</Button>
                     <Button size="sm" variant="secondary" onClick={async () => {
@@ -724,22 +1034,26 @@ export function CockpitPage() {
         <aside className="workspace-side-pane">
           {selectedJob ? (
             <>
+              <StateEvaluationCard job={selectedJob} />
+
               <AppCard className="side-top-card">
                 <div className="overview-card-toprow">
                   <div>
                     <div className="section-title">Workspace overview</div>
                     <div className="decision-title">{nextActionLabel(selectedJob)}</div>
+                    {selectedJob.manual ? <div className="job-key-row overview-source-row">{renderSourceChip(selectedJob)}</div> : null}
                   </div>
                   <div className="icon-links-row overview-icon-links">
-                    {selectedJob.slack.permalink ? <a className="icon-link-button slack-link-button" href={selectedJob.slack.permalink} target="_blank" rel="noreferrer" title="Slack thread"><SlackIcon className="brand-icon" /></a> : null}
+                    {renderSlackButton(selectedJob)}
                     {selectedJob.jiraUrl ? <a className="icon-link-button jira-link-button" href={selectedJob.jiraUrl} target="_blank" rel="noreferrer" title="Jira issue"><JiraIcon className="brand-icon" /></a> : null}
                     <a className={`icon-link-button ${githubStatusClass(selectedJob.pr)}`} href={selectedJob.pr?.url || selectedJob.prUrl || '#'} target="_blank" rel="noreferrer" title={selectedJob.pr?.checksTooltip || (selectedJob.pr ? 'PR status unavailable' : 'No PR linked yet')} onClick={(event) => { if (!selectedJob.pr && !selectedJob.prUrl) event.preventDefault(); }}>
                       <GitPullRequest size={15} />
                     </a>
                   </div>
                 </div>
+                {selectedJobPrLoading || selectedJobGitLoading || selectedJobDevLinksLoading ? <div className="muted">Loading workspace sections…</div> : null}
                 <div className="decision-body">{topSignal(selectedJob)}</div>
-                {selectedJob.pr && (selectedJob.pr.additions || selectedJob.pr.deletions) ? (
+                {hasPrDiff(selectedJob.pr) ? (
                   <div className="pr-diff-summary">
                     <span className="pr-diff-added">+{selectedJob.pr.additions || 0}</span>
                     <span className="pr-diff-removed">-{selectedJob.pr.deletions || 0}</span>
@@ -748,7 +1062,10 @@ export function CockpitPage() {
               </AppCard>
 
               <AppCard className="side-top-card">
-                <div className="section-title">Container links</div>
+                <div className="overview-card-toprow">
+                  <div className="section-title">Container links</div>
+                  <Button size="sm" variant="secondary" onClick={() => void handleRedeployDev(selectedJob)} disabled={!selectedJob.worktreePath || Boolean(deployLoadingByJob[selectedJob.id])}>{deployLoadingByJob[selectedJob.id] ? 'Deploying…' : 'Redeploy'}</Button>
+                </div>
                 {selectedJob.devLinks?.length ? (
                   <div className="dev-links-grid">
                     {selectedJob.devLinks.map((link) => (
@@ -758,17 +1075,21 @@ export function CockpitPage() {
                       </a>
                     ))}
                   </div>
-                ) : <div className="muted">No container links for this workspace.</div>}
+                ) : selectedJobDevLinksLoading ? <div className="muted">Loading container links…</div> : <div className="muted">No container links for this workspace yet.</div>}
               </AppCard>
 
               <AppCard className="side-top-card">
-                <div className="section-title">PR stats</div>
+                <div className="overview-card-toprow">
+                  <div className="section-title">PR stats</div>
+                  <Button size="sm" variant="secondary" onClick={() => void handleRefreshPr(selectedJob)} disabled={!selectedJob.prUrl || Boolean(prRefreshLoadingByJob[selectedJob.id])}>{prRefreshLoadingByJob[selectedJob.id] ? 'Refreshing…' : 'Refresh'}</Button>
+                </div>
                 {selectedJob.pr ? (
                   <>
                     <a className="inline-link pr-link-block" href={selectedJob.pr.url} target="_blank" rel="noreferrer">
                       <GitPullRequest size={14} className={githubStatusClass(selectedJob.pr)} />
                       <span>{selectedJob.pr.title || `PR #${selectedJob.pr.number || selectedJob.prNumber}`}</span>
                     </a>
+                    {selectedJob.pr.refreshedAt ? <div className="muted">Last refresh {relativeTime(selectedJob.pr.refreshedAt)}</div> : null}
                     {selectedJob.pr.checks?.length ? (
                       <div className="pr-checks-list">
                         {selectedJob.pr.checks.map((check) => (
@@ -778,9 +1099,9 @@ export function CockpitPage() {
                           </div>
                         ))}
                       </div>
-                    ) : <div className="muted">No checks reported yet.</div>}
+                    ) : selectedJobPrLoading ? <div className="muted">Loading PR checks…</div> : <div className="muted">No checks reported yet.</div>}
                   </>
-                ) : <div className="muted">No PR linked yet.</div>}
+                ) : selectedJobPrLoading ? <div className="muted">Loading PR details…</div> : <div className="muted">No PR linked yet.</div>}
               </AppCard>
 
               <AppCard className={selectedJob.gitStatus?.clean ? 'side-top-card git-status-clean-card' : 'side-top-card'}>
@@ -799,7 +1120,7 @@ export function CockpitPage() {
                     </div>
                     {selectedJob.gitStatus.clean ? <div className="muted">Working tree clean.</div> : (selectedJob.gitStatus.lines.length ? <pre>{selectedJob.gitStatus.lines.join('\n')}</pre> : <div className="muted">Git status unavailable.</div>)}
                   </>
-                ) : <div className="muted">Git status unavailable.</div>}
+                ) : selectedJobGitLoading ? <div className="muted">Loading git status…</div> : <div className="muted">Git status unavailable.</div>}
               </AppCard>
 
               <div className="right-bottom-terminal">

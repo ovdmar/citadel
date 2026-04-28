@@ -3,6 +3,8 @@ export type JobState =
   | 'waiting_human'
   | 'waiting_review'
   | 'waiting_approval'
+  | 'conflicts'
+  | 'ci_failed'
   | 'idle'
   | 'stale'
   | 'broken_missing_tmux'
@@ -28,6 +30,7 @@ export interface PullRequestSummary {
   checksTooltip?: string;
   additions?: number;
   deletions?: number;
+  refreshedAt?: string;
 }
 
 export interface GitStatusSummary {
@@ -55,6 +58,11 @@ export interface JobRecord {
   workflow: 'implementation' | 'tech-plan' | 'concept-lab';
   workflowLabel: string;
   channelId: string;
+  source: 'slack' | 'citadel_manual';
+  sourceLabel: string;
+  manual: boolean;
+  hasSlackThread: boolean;
+  startMode?: 'new' | 'existing_branch' | 'existing_pr';
   jiraKey?: string;
   title: string;
   jiraUrl?: string;
@@ -96,6 +104,7 @@ export interface JobRecord {
     canOpenTerminal: boolean;
   };
   raw: Record<string, unknown>;
+  stateEvaluation?: StateEvaluation;
 }
 
 export interface TerminalRecord {
@@ -233,4 +242,79 @@ export interface OpenClawStats {
     crons: number;
     terminals: number;
   };
+}
+
+
+export type UsageProviderId = 'claude' | 'codex';
+
+export interface UsageWindow {
+  usedPercent?: number;
+  remainingPercent?: number;
+  resetsAt?: string;
+  resetDescription?: string;
+  windowMinutes?: number;
+  lastsUntilReset?: boolean;
+  paceStatus?: 'lasts' | 'wont_last';
+  paceSource?: 'provider' | 'computed';
+  reservePercent?: number;
+  expectedUsedPercent?: number;
+}
+
+export interface UsageProviderSnapshot {
+  provider: UsageProviderId;
+  available: boolean;
+  status: 'ready' | 'pending' | 'error';
+  stale: boolean;
+  refreshing: boolean;
+  fetchedAt?: string;
+  source?: string;
+  version?: string;
+  error?: string;
+  primary?: UsageWindow;
+  secondary?: UsageWindow;
+  tertiary?: UsageWindow;
+  loginMethod?: string;
+  accountEmail?: string;
+  providerID?: string;
+  raw?: unknown;
+}
+
+export interface UsageSnapshot {
+  generatedAt: string;
+  cacheTtlMs: number;
+  refreshing: boolean;
+  hasAnyData: boolean;
+  providers: Record<UsageProviderId, UsageProviderSnapshot>;
+}
+
+export interface UsageHistoryPoint {
+  provider: UsageProviderId;
+  fetchedAt: string;
+  weeklyRemainingPercent?: number;
+  weeklyUsedPercent?: number;
+  shortRemainingPercent?: number;
+  shortUsedPercent?: number;
+  lastsUntilReset?: boolean;
+  paceStatus?: 'lasts' | 'wont_last';
+  reservePercent?: number;
+  expectedUsedPercent?: number;
+}
+
+
+export interface StateEvaluation {
+  finalState: string;
+  finalReason: string;
+  source?: string;
+  classifierState?: string;
+  classifierReason?: string;
+  classifierQuestion?: string;
+  prChecksStatus?: string;
+  reviewVerdict?: string;
+  reviewReason?: string;
+  feedbackPendingReview?: boolean;
+  lastSentAction?: string;
+  lastSentAt?: string;
+  lastInboundClassification?: string;
+  lastInboundReplyAt?: string;
+  lastActivityAt?: string;
 }
