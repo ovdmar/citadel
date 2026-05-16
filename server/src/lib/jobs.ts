@@ -5,7 +5,17 @@ import { getOperatorFlags } from './operatorFlags.js';
 import { buildSlackPermalink } from './slack.js';
 import { captureTmuxTail, listTmuxSessions } from './tmux.js';
 import { minutesSince, trimExcerpt } from './util.js';
-import type { DevLink, GitStatusSummary, JobRecord, JobState, PullRequestSummary, WorkflowConfig } from '../types.js';
+import type {
+  DevLink,
+  GenericWorkflowState,
+  GitStatusSummary,
+  ImplementationEngineView,
+  JobRecord,
+  JobState,
+  PullRequestSummary,
+  WorkflowConfig,
+  WorkflowStateView,
+} from '../types.js';
 
 const prCache = new Map<string, { expiresAt: number; value?: PullRequestSummary }>();
 const gitStatusCache = new Map<string, { expiresAt: number; value?: GitStatusSummary }>();
@@ -240,6 +250,150 @@ function summarizeTitle(workflow: WorkflowConfig, raw: Record<string, unknown>) 
     || (raw.slug as string | undefined)
     || (raw.jira_key as string | undefined)
     || `${workflow.label} job`;
+}
+
+function workflowViewStateFromJobState(state: JobState): GenericWorkflowState {
+  switch (state) {
+    case 'conflicts':
+      return 'blocked_conflicts';
+    case 'ci_failed':
+      return 'blocked_ci';
+    case 'broken_missing_tmux':
+      return 'broken';
+    default:
+      return state;
+  }
+}
+
+function workflowViewLabel(state: GenericWorkflowState) {
+  switch (state) {
+    case 'queued': return 'Queued';
+    case 'running': return 'Running';
+    case 'waiting_human': return 'Waiting for human';
+    case 'waiting_review': return 'Waiting for review';
+    case 'waiting_approval': return 'Waiting for approval';
+    case 'blocked_conflicts': return 'Blocked on conflicts';
+    case 'blocked_ci': return 'Blocked on CI';
+    case 'idle': return 'Idle';
+    case 'stale': return 'Stale';
+    case 'broken': return 'Broken';
+    case 'failed': return 'Failed';
+    case 'done': return 'Done';
+    case 'unknown': return 'Unknown';
+  }
+}
+
+function buildWorkflowView(input: { state: JobState; reason: string; source?: string; detail?: string }): WorkflowStateView {
+  const state = workflowViewStateFromJobState(input.state);
+  return {
+    state,
+    label: workflowViewLabel(state),
+    reason: input.reason,
+    source: input.source,
+    detail: input.detail,
+  };
+}
+
+function buildEngineView(params: {
+  workflow: WorkflowConfig;
+  tmuxSession?: string;
+  tmuxExists: boolean;
+  transcriptPath?: string;
+  claudeSessionId?: string;
+  workflowState: JobState;
+}): ImplementationEngineView {
+  const kind = params.workflow.key === 'implementation' ? 'claude' : 'unknown';
+  const label = kind === 'claude' ? 'Claude' : 'Agent';
+  const sessionId = params.claudeSessionId;
+  const canRecover = Boolean(params.tmuxSession && params.tmuxExists && params.workflow.key === 'implementation' && sessionId);
+
+  if (!params.tmuxSession) {
+    return {
+      kind,
+      label,
+      sessionId,
+      transcriptPath: params.transcriptPath,
+      state: 'missing',
+      stateLabel: 'Missing',
+      reason: 'tmux_session_missing',
+      tmuxSession: params.tmuxSession,
+      terminalTitle: `${label} terminal`,
+      canRecover,
+    };
+  }
+
+  if (!params.tmuxExists) {
+    return {
+      kind,
+      label,
+      sessionId,
+      transcriptPath: params.transcriptPath,
+      state: 'degraded',
+      stateLabel: 'Detached',
+      reason: 'tmux_session_not_found',
+      tmuxSession: params.tmuxSession,
+      terminalTitle: `${label} terminal`,
+      canRecover,
+    };
+  }
+
+  if (params.workflowState === 'waiting_human') {
+    return {
+      kind,
+      label,
+      sessionId,
+      transcriptPath: params.transcriptPath,
+      state: 'waiting_human',
+      stateLabel: 'Waiting for input',
+      reason: 'workflow_waiting_human',
+      tmuxSession: params.tmuxSession,
+      terminalTitle: `${label} terminal`,
+      canRecover,
+    };
+  }
+
+  if (params.workflowState === 'waiting_review' || params.workflowState === 'done') {
+    return {
+      kind,
+      label,
+      sessionId,
+      transcriptPath: params.transcriptPath,
+      state: 'completed',
+      stateLabel: 'Completed',
+      reason: params.workflowState === 'done' ? 'workflow_done' : 'workflow_waiting_review',
+      tmuxSession: params.tmuxSession,
+      terminalTitle: `${label} terminal`,
+      canRecover,
+    };
+  }
+
+  if (params.workflowState === 'idle' || params.workflowState === 'stale') {
+    return {
+      kind,
+      label,
+      sessionId,
+      transcriptPath: params.transcriptPath,
+      state: 'idle',
+      stateLabel: 'Idle',
+      reason: params.workflowState === 'stale' ? 'workflow_stale' : 'workflow_idle',
+      tmuxSession: params.tmuxSession,
+      terminalTitle: `${label} terminal`,
+      canRecover,
+    };
+  }
+
+  return {
+    kind,
+    label,
+    sessionId,
+    transcriptPath: params.transcriptPath,
+    state: 'running',
+    stateLabel: 'Running',
+    reason: 'tmux_live',
+    tmuxSession: params.tmuxSession,
+    terminalTitle: `${label} terminal`,
+    canRecover,
+  };
 }
 
 function getPath(raw: Record<string, unknown>, key: string) {
@@ -604,6 +758,17 @@ function buildJobRecord(
       ? { state: 'ci_failed' as const, reason: 'pr_checks_failed', detail: mapped.detail, source: 'live-pr' }
       : mapped;
   const worktreePath = getPath(raw, 'worktree_path');
+  const transcriptPath = getPath(raw, 'transcript_path');
+  const claudeSessionId = getPath(raw, 'claude_session_id') || (transcriptPath?.split('/').pop()?.replace(/\.jsonl$/, ''));
+  const workflowView = buildWorkflowView(effectiveMapped);
+  const engine = buildEngineView({
+    workflow,
+    tmuxSession,
+    tmuxExists,
+    transcriptPath,
+    claudeSessionId,
+    workflowState: effectiveMapped.state,
+  });
 
   return {
     id: String(raw.job_id || raw.run_id || jobPath),
@@ -629,8 +794,10 @@ function buildJobRecord(
     tmuxExists,
     tmuxWindow: tmuxSession,
     worktreePath,
-    transcriptPath: getPath(raw, 'transcript_path'),
-    claudeSessionId: getPath(raw, 'claude_session_id') || (getPath(raw, 'transcript_path')?.split('/').pop()?.replace(/\.jsonl$/, '')),
+    transcriptPath,
+    claudeSessionId,
+    workflowView,
+    engine,
     planPath: getPath(raw, 'plan_path'),
     requestPath: getPath(raw, 'request_path'),
     branchName: getPath(raw, 'branch_name'),
@@ -665,7 +832,8 @@ function buildJobRecord(
     actions: {
       canReconcile: true,
       canCreateRecoveryShell: !tmuxExists && Boolean(tmuxSession),
-      canOpenTerminal: Boolean(tmuxSession)
+      canOpenTerminal: Boolean(tmuxSession),
+      canRecoverEngine: engine.canRecover,
     },
     raw
   } satisfies JobRecord;

@@ -10,6 +10,7 @@
     "build": "vite build && tsc -p tsconfig.server.json",
     "start": "node dist/server/index.js",
     "check": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+    "test": "tsx --test server/src/**/*.test.ts",
     "lint": "npm run check"
   },
   "dependencies": {

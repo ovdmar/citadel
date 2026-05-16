@@ -14,6 +14,32 @@ export type JobState =
   | 'done'
   | 'unknown';
 
+export type GenericWorkflowState =
+  | 'queued'
+  | 'running'
+  | 'waiting_human'
+  | 'waiting_review'
+  | 'waiting_approval'
+  | 'blocked_conflicts'
+  | 'blocked_ci'
+  | 'idle'
+  | 'stale'
+  | 'broken'
+  | 'failed'
+  | 'done'
+  | 'unknown';
+
+export type ImplementationEngineKind = 'claude' | 'codex' | 'unknown';
+
+export type ImplementationEngineState =
+  | 'running'
+  | 'waiting_human'
+  | 'idle'
+  | 'missing'
+  | 'degraded'
+  | 'completed'
+  | 'unknown';
+
 export interface WorkflowConfig {
   key: WorkflowKey;
   label: string;
@@ -76,6 +102,27 @@ export interface DevLink {
   healthy?: boolean;
 }
 
+export interface WorkflowStateView {
+  state: GenericWorkflowState;
+  label: string;
+  reason: string;
+  source?: string;
+  detail?: string;
+}
+
+export interface ImplementationEngineView {
+  kind: ImplementationEngineKind;
+  label: string;
+  sessionId?: string;
+  transcriptPath?: string;
+  state: ImplementationEngineState;
+  stateLabel: string;
+  reason: string;
+  tmuxSession?: string;
+  terminalTitle: string;
+  canRecover: boolean;
+}
+
 export interface JobRecord {
   id: string;
   workflow: WorkflowKey;
@@ -100,6 +147,8 @@ export interface JobRecord {
   worktreePath?: string;
   transcriptPath?: string;
   claudeSessionId?: string;
+  workflowView: WorkflowStateView;
+  engine: ImplementationEngineView;
   planPath?: string;
   requestPath?: string;
   branchName?: string;
@@ -118,6 +167,7 @@ export interface JobRecord {
     canReconcile: boolean;
     canCreateRecoveryShell: boolean;
     canOpenTerminal: boolean;
+    canRecoverEngine: boolean;
   };
   raw: Record<string, unknown>;
   stateEvaluation?: StateEvaluation;
