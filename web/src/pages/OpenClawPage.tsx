@@ -47,7 +47,7 @@ export function OpenClawPage() {
     void Promise.all([loadTerminal(), refreshStats()]);
     const timer = window.setInterval(() => {
       void refreshStats(true);
-    }, 15000);
+    }, 60_000);
     return () => window.clearInterval(timer);
   }, []);
 

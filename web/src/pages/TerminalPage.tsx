@@ -39,7 +39,7 @@ export function TerminalPage() {
         <div className="cockpit-title-block">
           <div className="eyebrow-row"><TerminalSquare size={14} /> Terminal bridge</div>
           <h2>{selectedJob?.jiraKey || 'Session access'}</h2>
-          <p>Low-friction browser access into the live tmux session.</p>
+          <p>Low-friction browser access into the live execution terminal.</p>
         </div>
         <div className="toolbar-row compact-toolbar">
           <Button size="sm" variant="ghost" onClick={() => navigate('/')}><ArrowLeft size={14} /> Cockpit</Button>
@@ -62,8 +62,8 @@ export function TerminalPage() {
       </Surface>
 
       <Surface className="terminal-info-grid">
-        <div><strong>Session</strong><span>{selectedJob?.tmuxSession || '—'}</span></div>
-        <div><strong>Claude</strong><span>{selectedJob?.claudeSessionId || '—'}</span></div>
+        <div><strong>Terminal</strong><span>{selectedJob?.tmuxSession || '—'}</span></div>
+        <div><strong>Engine</strong><span>{selectedJob ? `${selectedJob.engine.label} · ${selectedJob.engine.sessionId || '—'}` : '—'}</span></div>
         <div><strong>Worktree</strong><span>{selectedJob?.worktreePath || '—'}</span></div>
       </Surface>
 

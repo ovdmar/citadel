@@ -32,9 +32,9 @@ export function JobDetail({ job, onChanged, onBack }: { job?: JobRecord; onChang
         <div className="hero-key">{job.jiraKey || job.id}</div>
         <div className="hero-title">{job.title}</div>
         <div className="hero-subgrid">
-          <span><Bot size={14} /> {job.claudeSessionId || 'no Claude id yet'}</span>
-          <span><TerminalSquare size={14} /> {job.tmuxSession || 'no tmux'}</span>
-          <span><BadgeCheck size={14} /> {job.stateReason}</span>
+          <span><Bot size={14} /> {job.engine.sessionId || `no ${job.engine.label} session yet`}</span>
+          <span><TerminalSquare size={14} /> {job.tmuxSession || 'terminal unavailable'}</span>
+          <span><BadgeCheck size={14} /> {job.workflowView.label} · {job.workflowView.reason}</span>
         </div>
       </AppCard>
 
@@ -46,7 +46,7 @@ export function JobDetail({ job, onChanged, onBack }: { job?: JobRecord; onChang
 
       <div className="action-cluster">
         <Button size="sm" onClick={() => handleOpenTerminal(false)} disabled={!job.actions.canOpenTerminal}><TerminalSquare size={14} /> Terminal</Button>
-        <Button size="sm" variant="secondary" onClick={() => handleOpenTerminal(true)} disabled={!job.actions.canCreateRecoveryShell}><Wrench size={14} /> Recover</Button>
+        <Button size="sm" variant="secondary" onClick={() => handleOpenTerminal(true)} disabled={!job.actions.canCreateRecoveryShell}><Wrench size={14} /> Recover terminal</Button>
         <Button size="sm" variant="secondary" onClick={async () => { await reconcileJob(job.id); await onChanged(); }}><RefreshCw size={14} /> Reconcile</Button>
         <Button size="sm" variant={job.operatorFlags.markedStaleAt ? 'danger' : 'ghost'} onClick={async () => { await markJobStale(job.id, !job.operatorFlags.markedStaleAt); await onChanged(); }}>{job.operatorFlags.markedStaleAt ? 'Clear stale' : 'Mark stale'}</Button>
       </div>

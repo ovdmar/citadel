@@ -115,8 +115,8 @@ export async function openTerminal(jobId: string, recovery = false) {
   return { ...response, terminal: { ...response.terminal, url: terminalProxyUrl(response.terminal) } };
 }
 
-export async function recoverClaude(jobId: string) {
-  const response = await api<{ ok: true; terminal: TerminalRecord }>(`/api/jobs/${jobId}/actions/recover-claude`, {
+export async function recoverEngine(jobId: string) {
+  const response = await api<{ ok: true; terminal: TerminalRecord }>(`/api/jobs/${jobId}/actions/recover-engine`, {
     method: 'POST',
     body: JSON.stringify({})
   });

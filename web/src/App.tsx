@@ -48,7 +48,7 @@ export default function App() {
       } catch {}
     };
     void load();
-    const timer = window.setInterval(() => { void load(); }, 10_000);
+    const timer = window.setInterval(() => { void load(); }, 60_000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
@@ -64,7 +64,7 @@ export default function App() {
       } catch {}
     };
     void load();
-    const timer = window.setInterval(() => { void load(); }, 10_000);
+    const timer = window.setInterval(() => { void load(); }, 60_000);
     return () => {
       cancelled = true;
       window.clearInterval(timer);

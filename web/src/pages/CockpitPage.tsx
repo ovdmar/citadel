@@ -4,11 +4,33 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AppCard, Button, Field, MetaRow, Surface, TextArea, TextInput } from '../components/ui';
 import { StateBadge } from '../components/StateBadge';
 import { nextActionLabel, priorityScore, topSignal } from '../components/ux';
-import { createWorkspace, loadJobDevLinks, loadJobGit, loadJobPr, loadJobs, markJobStale, openShell, openTerminal, reconcileJob, recoverClaude, redeployJobDev, refreshJobPr, refreshJobState, relativeTime } from '../lib';
-import type { JobRecord, PullRequestSummary } from '../types';
+import { createWorkspace, loadJobDevLinks, loadJobGit, loadJobPr, loadJobs, markJobStale, openShell, openTerminal, reconcileJob, recoverEngine, redeployJobDev, refreshJobPr, refreshJobState, relativeTime } from '../lib';
+import type { GenericWorkflowState, ImplementationEngineView, JobRecord, PullRequestSummary } from '../types';
 
 const workflowOrder = ['implementation', 'tech-plan', 'concept-lab'] as const;
 const LAST_SELECTED_JOB_ID_KEY = 'citadel:last-selected-job-id';
+const workflowStateOptions: Array<{ value: GenericWorkflowState | 'all'; label: string }> = [
+  { value: 'all', label: 'All workflow states' },
+  { value: 'running', label: 'Running' },
+  { value: 'waiting_human', label: 'Waiting human' },
+  { value: 'waiting_review', label: 'Waiting review' },
+  { value: 'waiting_approval', label: 'Waiting approval' },
+  { value: 'blocked_conflicts', label: 'Blocked by conflicts' },
+  { value: 'blocked_ci', label: 'Blocked by CI' },
+  { value: 'queued', label: 'Queued' },
+  { value: 'idle', label: 'Idle' },
+  { value: 'stale', label: 'Stale' },
+  { value: 'broken', label: 'Broken' },
+  { value: 'failed', label: 'Failed' },
+  { value: 'done', label: 'Done' },
+  { value: 'unknown', label: 'Unknown' },
+];
+const engineOptions: Array<{ value: JobRecord['engine']['kind'] | 'all'; label: string }> = [
+  { value: 'all', label: 'All engines' },
+  { value: 'claude', label: 'Claude' },
+  { value: 'codex', label: 'Codex' },
+  { value: 'unknown', label: 'Unknown engine' },
+];
 
 function sortByCreatedAtDesc<T extends { createdAt?: string }>(items: T[]) {
   return [...items].sort((a, b) => {
@@ -75,6 +97,55 @@ function renderSlackButton(job: JobRecord, stopPropagation = false) {
 function renderSourceChip(job: JobRecord) {
   if (!job.manual) return null;
   return <span className="source-chip manual">{job.sourceLabel || 'Manual'}</span>;
+}
+
+function contextToneFromWorkflowState(state: GenericWorkflowState) {
+  switch (state) {
+    case 'running':
+      return 'info';
+    case 'waiting_review':
+    case 'waiting_approval':
+    case 'done':
+      return 'ok';
+    case 'waiting_human':
+    case 'stale':
+      return 'warn';
+    case 'blocked_conflicts':
+    case 'blocked_ci':
+    case 'broken':
+    case 'failed':
+      return 'danger';
+    default:
+      return 'neutral';
+  }
+}
+
+function contextToneFromEngine(engine: ImplementationEngineView) {
+  switch (engine.state) {
+    case 'running':
+      return 'info';
+    case 'completed':
+      return 'ok';
+    case 'waiting_human':
+      return 'warn';
+    case 'degraded':
+    case 'missing':
+      return 'danger';
+    default:
+      return 'neutral';
+  }
+}
+
+function ContextChip({ label, value, tone = 'neutral' }: { label: string; value: string; tone?: 'neutral' | 'info' | 'ok' | 'warn' | 'danger' }) {
+  return <span className={`context-chip context-chip-${tone}`}><strong>{label}</strong>{value}</span>;
+}
+
+function WorkflowChip({ job }: { job: JobRecord }) {
+  return <ContextChip label="Workflow" value={job.workflowView.label} tone={contextToneFromWorkflowState(job.workflowView.state)} />;
+}
+
+function EngineChip({ job }: { job: JobRecord }) {
+  return <ContextChip label="Engine" value={`${job.engine.label} · ${job.engine.stateLabel}`} tone={contextToneFromEngine(job.engine)} />;
 }
 
 function useIsMobile(breakpoint = 820) {
@@ -150,7 +221,7 @@ function StateEvaluationCard({ job }: { job: JobRecord }) {
         <StateBadge state={job.state} />
       </div>
       <div className="detail-grid compact-detail-grid">
-        <MetaRow label="Final" value={`${state?.finalState || job.state} · ${state?.finalReason || job.stateReason}`} />
+        <MetaRow label="Final" value={`${job.workflowView.label} · ${job.workflowView.reason}`} />
         <MetaRow label="Source" value={state?.source || job.stateSource || '—'} mono />
         <MetaRow label="Classifier" value={state?.classifierState ? `${state.classifierState} · ${state.classifierReason || '—'}` : '—'} />
         <MetaRow label="PR checks" value={state?.prChecksStatus || '—'} />
@@ -211,7 +282,8 @@ export function CockpitPage() {
   const [jobDevLinksById, setJobDevLinksById] = useState<Record<string, NonNullable<JobRecord['devLinks']>>>({});
   const [selectedJobId, setSelectedJobId] = useState<string>();
   const [workflowFilter, setWorkflowFilter] = useState<string>('all');
-  const [stateFilter, setStateFilter] = useState<string>('all');
+  const [workflowStateFilter, setWorkflowStateFilter] = useState<GenericWorkflowState | 'all'>('all');
+  const [engineFilter, setEngineFilter] = useState<JobRecord['engine']['kind'] | 'all'>('all');
   const [sortBy, setSortBy] = useState<'created_desc' | 'created_asc'>('created_desc');
   const [error, setError] = useState<string>('');
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -345,7 +417,7 @@ export function CockpitPage() {
 
   useEffect(() => {
     void refresh();
-    const timer = window.setInterval(() => void refresh(true), 10000);
+    const timer = window.setInterval(() => void refresh(true), 60_000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -359,7 +431,8 @@ export function CockpitPage() {
   const filteredJobs = useMemo(() => {
     const filtered = mergedJobs.filter((job) => {
       if (workflowFilter !== 'all' && job.workflow !== workflowFilter) return false;
-      if (stateFilter !== 'all' && job.state !== stateFilter) return false;
+      if (workflowStateFilter !== 'all' && job.workflowView.state !== workflowStateFilter) return false;
+      if (engineFilter !== 'all' && job.engine.kind !== engineFilter) return false;
       return true;
     });
     return filtered.sort((a, b) => {
@@ -367,7 +440,7 @@ export function CockpitPage() {
       const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
       return sortBy === 'created_asc' ? aTime - bTime : bTime - aTime;
     });
-  }, [mergedJobs, workflowFilter, stateFilter, sortBy]);
+  }, [mergedJobs, workflowFilter, workflowStateFilter, engineFilter, sortBy]);
 
   const selectedJob = filteredJobs.find((job) => job.id === selectedJobId) || filteredJobs[0];
   const selectedJobPrLoading = selectedJob ? Boolean(jobPrLoadingById[selectedJob.id]) : false;
@@ -704,17 +777,11 @@ export function CockpitPage() {
                   <option value="all">All workflows</option>
                   {workflowOrder.map((workflow) => <option key={workflow} value={workflow}>{workflow}</option>)}
                 </Field>
-                <Field value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}>
-                  <option value="all">All states</option>
-                  <option value="running">Running</option>
-                  <option value="waiting_human">Waiting human</option>
-                  <option value="waiting_review">Waiting review</option>
-                  <option value="waiting_approval">Waiting approval</option>
-                  <option value="conflicts">Conflicts</option>
-                  <option value="ci_failed">CI failed</option>
-                  <option value="stale">Stale</option>
-                  <option value="broken_missing_tmux">Broken</option>
-                  <option value="failed">Failed</option>
+                <Field value={workflowStateFilter} onChange={(e) => setWorkflowStateFilter(e.target.value as GenericWorkflowState | 'all')}>
+                  {workflowStateOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </Field>
+                <Field value={engineFilter} onChange={(e) => setEngineFilter(e.target.value as JobRecord['engine']['kind'] | 'all')}>
+                  {engineOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                 </Field>
                 <Field value={sortBy} onChange={(e) => setSortBy(e.target.value as 'created_desc' | 'created_asc')}>
                   <option value="created_desc">Newest first</option>
@@ -731,6 +798,10 @@ export function CockpitPage() {
                       {renderSourceChip(job)}
                     </div>
                     <div className="workspace-title">{job.title}</div>
+                    <div className="chip-row">
+                      <WorkflowChip job={job} />
+                      <EngineChip job={job} />
+                    </div>
                     <div className="mobile-card-icons-row">
                       {renderSlackButton(job, true)}
                       {job.jiraUrl ? <a className="icon-link-button jira-link-button" href={job.jiraUrl} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} title="Jira issue"><JiraIcon className="brand-icon" /></a> : null}
@@ -761,7 +832,7 @@ export function CockpitPage() {
               <div className="mobile-terminal-block mobile-terminal-block-full">
                 <div className="mobile-terminal-header">
                   <div>
-                    <div className="section-title">Claude terminal</div>
+                    <div className="section-title">{selectedJob.engine.terminalTitle}</div>
                     <div className="shell-pane-subtitle">Live session for this workspace</div>
                   </div>
                   <div className="mobile-terminal-actions">
@@ -769,8 +840,8 @@ export function CockpitPage() {
                     <Button size="sm" variant="secondary" onClick={async () => { const url = await ensureAiTerminal(selectedJob); setAiUrl(url || ''); setStreamError(''); }}><TerminalSquare size={14} /> Reattach</Button>
                   </div>
                 </div>
-                {streamError ? <AppCard className="stream-error-card">AI stream unavailable: {streamError}</AppCard> : null}
-                {aiUrl ? <iframe key={`mobile-ai-${selectedJob.id}-${aiUrl}`} className="mobile-terminal-frame mobile-terminal-frame-large" src={aiUrl} title="mobile-ai-stream" /> : <TerminalPendingCard loading={Boolean(aiLoadingByJob[selectedJob.id])} onLoadNow={async () => { await ensureAiTerminal(selectedJob); }}>Claude terminal</TerminalPendingCard>}
+                {streamError ? <AppCard className="stream-error-card">Execution stream unavailable: {streamError}</AppCard> : null}
+                {aiUrl ? <iframe key={`mobile-ai-${selectedJob.id}-${aiUrl}`} className="mobile-terminal-frame mobile-terminal-frame-large" src={aiUrl} title="mobile-ai-stream" /> : <TerminalPendingCard loading={Boolean(aiLoadingByJob[selectedJob.id])} onLoadNow={async () => { await ensureAiTerminal(selectedJob); }}>{selectedJob.engine.terminalTitle}</TerminalPendingCard>}
               </div>
             ) : (
               <div className="mobile-stats-stack">
@@ -788,6 +859,10 @@ export function CockpitPage() {
                     <span>{relativeTime(selectedJob.lastActivityAt)}</span>
                     {selectedJob.pr?.number ? <span>PR #{selectedJob.pr.number}</span> : (selectedJob.prNumber ? <span>PR #{selectedJob.prNumber}</span> : null)}
                     {selectedJob.manual ? <span>{selectedJob.sourceLabel}</span> : null}
+                  </div>
+                  <div className="chip-row">
+                    <WorkflowChip job={selectedJob} />
+                    <EngineChip job={selectedJob} />
                   </div>
                   <div className="icon-links-row overview-icon-links mobile-overview-icons">
                     {renderSlackButton(selectedJob)}
@@ -815,11 +890,11 @@ export function CockpitPage() {
                     }} disabled={!selectedJob.actions.canCreateRecoveryShell}><Wrench size={14} /> Recover tmux</Button>
                     <Button size="sm" variant="secondary" onClick={async () => {
                       setAiUrl('');
-                      const r = await recoverClaude(selectedJob.id);
+                      const r = await recoverEngine(selectedJob.id);
                       setTerminalUrls((current) => ({ ...current, [selectedJob.id]: r.terminal.url }));
                       setAiUrl(r.terminal.url);
                       setStreamError('');
-                    }} disabled={!selectedJob.claudeSessionId}><Wrench size={14} /> Recover Claude</Button>
+                    }} disabled={!selectedJob.actions.canRecoverEngine}><Wrench size={14} /> Recover {selectedJob.engine.label}</Button>
                   </div>
                 </AppCard>
 
@@ -845,9 +920,10 @@ export function CockpitPage() {
                 <AppCard>
                   <div className="section-title">Workspace stats</div>
                   <div className="detail-grid compact-detail-grid">
-                    <Surface><MetaRow label="Claude" value={selectedJob.claudeSessionId || '—'} mono /></Surface>
+                    <Surface><MetaRow label="Engine" value={`${selectedJob.engine.label} · ${selectedJob.engine.stateLabel}`} /></Surface>
+                    <Surface><MetaRow label={`${selectedJob.engine.label} session`} value={selectedJob.engine.sessionId || '—'} mono /></Surface>
                     <Surface><MetaRow label="Branch" value={selectedJob.branchName || selectedJob.gitStatus?.branch || '—'} mono /></Surface>
-                    <Surface><MetaRow label="State" value={selectedJob.state} /></Surface>
+                    <Surface><MetaRow label="Workflow" value={selectedJob.workflowView.label} /></Surface>
                   </div>
                 </AppCard>
 
@@ -927,7 +1003,8 @@ export function CockpitPage() {
           <div className="workspace-nav-top">
             <div>
               <div className="eyebrow-row">Workspaces</div>
-              <h2 className="workspace-pane-title">Active agents</h2>
+              <h2 className="workspace-pane-title">Active workspaces</h2>
+              <div className="workspace-subtle">{filteredJobs.length} visible</div>
             </div>
             <div className="workspace-nav-actions">
               <Button size="sm" onClick={openCreateModal}><Plus size={14} /> Create workspace</Button>
@@ -940,17 +1017,11 @@ export function CockpitPage() {
               <option value="all">All workflows</option>
               {workflowOrder.map((workflow) => <option key={workflow} value={workflow}>{workflow}</option>)}
             </Field>
-            <Field value={stateFilter} onChange={(e) => setStateFilter(e.target.value)}>
-              <option value="all">All states</option>
-              <option value="running">Running</option>
-              <option value="waiting_human">Waiting human</option>
-              <option value="waiting_review">Waiting review</option>
-              <option value="waiting_approval">Waiting approval</option>
-              <option value="conflicts">Conflicts</option>
-              <option value="ci_failed">CI failed</option>
-              <option value="stale">Stale</option>
-              <option value="broken_missing_tmux">Broken</option>
-              <option value="failed">Failed</option>
+            <Field value={workflowStateFilter} onChange={(e) => setWorkflowStateFilter(e.target.value as GenericWorkflowState | 'all')}>
+              {workflowStateOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </Field>
+            <Field value={engineFilter} onChange={(e) => setEngineFilter(e.target.value as JobRecord['engine']['kind'] | 'all')}>
+              {engineOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </Field>
             <Field value={sortBy} onChange={(e) => setSortBy(e.target.value as 'created_desc' | 'created_asc')}>
               <option value="created_desc">Newest first</option>
@@ -971,6 +1042,10 @@ export function CockpitPage() {
                 <div className="workspace-nav-meta-row">
                   <span className="workspace-nav-meta">{job.workflowLabel}</span>
                   <span className="workspace-nav-meta">{relativeTime(job.lastActivityAt)}</span>
+                </div>
+                <div className="chip-row compact-chip-row">
+                  <WorkflowChip job={job} />
+                  <EngineChip job={job} />
                 </div>
                 {job.pr ? (
                   <div className="workspace-pr-line">
@@ -994,7 +1069,7 @@ export function CockpitPage() {
         <section className="workspace-stream-pane">
           <div className="stream-pane-topbar">
             <div>
-              <div className="eyebrow-row">AI stream</div>
+              <div className="eyebrow-row">Execution stream</div>
               <div className="stream-title">{selectedJob?.jiraKey || 'No workspace selected'} · {selectedJob?.title || ''}</div>
               {selectedJob?.manual ? <div className="stream-subtitle">Manual workspace, no Slack thread</div> : null}
             </div>
@@ -1016,19 +1091,19 @@ export function CockpitPage() {
                     }} disabled={!selectedJob.actions.canCreateRecoveryShell}><Wrench size={14} /> Recover tmux</Button>
                     <Button size="sm" variant="secondary" onClick={async () => {
                       setAiUrl('');
-                      const r = await recoverClaude(selectedJob.id);
+                      const r = await recoverEngine(selectedJob.id);
                       setTerminalUrls((current) => ({ ...current, [selectedJob.id]: r.terminal.url }));
                       setAiUrl(r.terminal.url);
                       setStreamError('');
-                    }} disabled={!selectedJob.claudeSessionId}><Wrench size={14} /> Recover Claude</Button>
+                    }} disabled={!selectedJob.actions.canRecoverEngine}><Wrench size={14} /> Recover {selectedJob.engine.label}</Button>
                   </div>
                 </details>
               ) : null}
             </div>
           </div>
 
-          {streamError ? <AppCard className="stream-error-card">AI stream unavailable: {streamError}</AppCard> : null}
-          {selectedJob ? (aiUrl ? <iframe key={`desktop-ai-${selectedJob?.id || 'none'}-${aiUrl}`} className="workspace-stream-frame" src={aiUrl} title="ai-stream" /> : <TerminalPendingCard loading={Boolean(aiLoadingByJob[selectedJob.id])} onLoadNow={async () => { await ensureAiTerminal(selectedJob); }}>Claude terminal</TerminalPendingCard>) : <AppCard className="stream-placeholder">Open a workspace to attach to the AI stream.</AppCard>}
+          {streamError ? <AppCard className="stream-error-card">Execution stream unavailable: {streamError}</AppCard> : null}
+          {selectedJob ? (aiUrl ? <iframe key={`desktop-ai-${selectedJob?.id || 'none'}-${aiUrl}`} className="workspace-stream-frame" src={aiUrl} title="ai-stream" /> : <TerminalPendingCard loading={Boolean(aiLoadingByJob[selectedJob.id])} onLoadNow={async () => { await ensureAiTerminal(selectedJob); }}>{selectedJob.engine.terminalTitle}</TerminalPendingCard>) : <AppCard className="stream-placeholder">Open a workspace to attach to the execution stream.</AppCard>}
         </section>
 
         <aside className="workspace-side-pane">
@@ -1053,6 +1128,10 @@ export function CockpitPage() {
                 </div>
                 {selectedJobPrLoading || selectedJobGitLoading || selectedJobDevLinksLoading ? <div className="muted">Loading workspace sections…</div> : null}
                 <div className="decision-body">{topSignal(selectedJob)}</div>
+                <div className="chip-row">
+                  <WorkflowChip job={selectedJob} />
+                  <EngineChip job={selectedJob} />
+                </div>
                 {hasPrDiff(selectedJob.pr) ? (
                   <div className="pr-diff-summary">
                     <span className="pr-diff-added">+{selectedJob.pr.additions || 0}</span>

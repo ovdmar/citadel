@@ -231,7 +231,7 @@ export function UsagePage() {
 
   useEffect(() => {
     void load();
-    const timer = window.setInterval(() => { void load(); }, 10_000);
+    const timer = window.setInterval(() => { void load(); }, 60_000);
     return () => window.clearInterval(timer);
   }, []);
 

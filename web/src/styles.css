@@ -105,6 +105,15 @@ button, select { font: inherit; }
 .job-key { color: #91f7ff; font-size: 11px; text-transform: uppercase; letter-spacing: 0.14em; }
 .source-chip { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 8px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .source-chip.manual { background: rgba(148, 163, 184, 0.16); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.22); }
+.chip-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.compact-chip-row { margin-top: 2px; }
+.context-chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 4px 9px; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 700; border: 1px solid rgba(148, 163, 184, 0.18); }
+.context-chip strong { font-weight: 800; }
+.context-chip-neutral { background: rgba(148, 163, 184, 0.12); color: #cbd5e1; }
+.context-chip-info { background: rgba(56, 189, 248, 0.12); color: #93ecff; }
+.context-chip-ok { background: rgba(52, 211, 153, 0.12); color: #86efac; }
+.context-chip-warn { background: rgba(250, 204, 21, 0.12); color: #fde68a; }
+.context-chip-danger { background: rgba(248, 113, 113, 0.12); color: #fca5a5; }
 .job-title { margin-top: 3px; font-size: 15px; font-weight: 600; line-height: 1.35; letter-spacing: -0.02em; }
 .job-go { color: var(--muted); flex: 0 0 auto; }
 .job-signal-row, .job-footer-row { display: flex; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }

@@ -433,23 +433,32 @@ app.post('/api/jobs/:jobId/actions/open-shell', async (req, res) => {
   }
 });
 
-app.post('/api/jobs/:jobId/actions/recover-claude', async (req, res) => {
+async function recoverImplementationEngine(req: express.Request, res: express.Response) {
   const jobs = await loadJobsCached();
   const job = jobs.find((item) => item.id === req.params.jobId);
-  if (!job || !job.tmuxSession || !job.worktreePath || !job.claudeSessionId) return res.status(404).json({ error: 'job_tmux_worktree_or_claude_session_missing' });
-  try {
-    const terminal = await ensureClaudeResumeSession({
-      key: `job:${job.id}:claude-recover`,
-      tmuxSession: job.tmuxSession,
-      worktreePath: job.worktreePath,
-      claudeSessionId: job.claudeSessionId,
-      host: req.headers.host || '127.0.0.1'
-    });
-    res.json({ ok: true, terminal });
-  } catch (error) {
-    res.status(500).json({ error: error instanceof Error ? error.message : 'claude_recover_failed' });
+  if (!job || !job.tmuxSession || !job.worktreePath) return res.status(404).json({ error: 'job_tmux_or_worktree_missing' });
+
+  if (job.engine.kind === 'claude') {
+    if (!job.engine.sessionId) return res.status(404).json({ error: 'engine_session_missing' });
+    try {
+      const terminal = await ensureClaudeResumeSession({
+        key: `job:${job.id}:engine-recover`,
+        tmuxSession: job.tmuxSession,
+        worktreePath: job.worktreePath,
+        claudeSessionId: job.engine.sessionId,
+        host: req.headers.host || '127.0.0.1'
+      });
+      return res.json({ ok: true, terminal });
+    } catch (error) {
+      return res.status(500).json({ error: error instanceof Error ? error.message : 'engine_recover_failed' });
+    }
   }
-});
+
+  return res.status(400).json({ error: `engine_recover_not_supported:${job.engine.kind}` });
+}
+
+app.post('/api/jobs/:jobId/actions/recover-engine', recoverImplementationEngine);
+app.post('/api/jobs/:jobId/actions/recover-claude', recoverImplementationEngine);
 
 app.get('/api/terminals', (_req, res) => {
   res.json({ terminals: listTerminalSessions() });
