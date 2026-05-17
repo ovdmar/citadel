@@ -179,10 +179,20 @@
   - `provider_summary 2435ms`
   - `web_cockpit_visible 388ms`
   - `workspace_settings_switch 181ms`
+- Added alternate-screen terminal support:
+  - gateway now prefers `tmux capture-pane -a` when an alternate screen is active and falls back to normal scrollback otherwise,
+  - added real tmux tests for local alternate-screen capture and WebSocket delivery of alternate-screen output.
+- Reran `make check`: passed with 45 tests across 15 files. App/package source coverage is 91.97% statements.
+- Reran `pnpm e2e`: 4 Playwright tests passed.
+- Reran `pnpm performance`:
+  - `api_state 574ms`
+  - `provider_summary 2370ms`
+  - `web_cockpit_visible 444ms`
+  - `workspace_settings_switch 246ms`
 
 Known current gaps before final DoD:
 
-- Terminal WebSocket still uses tmux capture polling rather than a raw PTY stream. Control input, paste, resize, deeper reconnect scrollback, long output, and cross-session output isolation are now implemented/tested, but alternate-screen fidelity needs more verification before the final campaign gate.
+- Terminal WebSocket still uses tmux capture polling rather than a raw PTY stream, but control input, paste, resize, deeper reconnect scrollback, long output, cross-session output isolation, and alternate-screen capture are now implemented/tested.
 - Diff reader now has renamed/binary/truncation tests; the cockpit diff UI still needs richer states before the full `MS-482` bar is complete.
 - Workspace setup/teardown hook execution is implemented for static config hooks, and settings can now edit/persist hook config; deeper hook validation and workflow tests are still needed.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, Jira issue/transition summaries, and Jira workflow transition actions, but check logs, richer provider caching, and UI action gating still need expansion.

@@ -7,6 +7,7 @@ import WebSocket from "ws";
 import {
   attachTerminalWebSocket,
   captureTmux,
+  captureTmuxVisibleScreen,
   ensureTmuxSession,
   killTmuxSession,
   pasteText,
@@ -82,6 +83,56 @@ describe("tmux terminal gateway helpers", () => {
     await waitForCapture(sessionName, "$");
 
     expect(fs.readFileSync(path.join(cwd, "pasted.txt"), "utf8")).toBe("alpha\nbeta\n");
+  });
+
+  it("captures active alternate-screen output when an interactive program switches screens", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
+    dirs.push(cwd);
+    const sessionName = `citadel_alt_test_${Date.now().toString(36)}`;
+    sessions.push(sessionName);
+    await ensureTmuxSession({
+      sessionName,
+      cwd,
+      command: "bash",
+      args: ["--noprofile", "--norc"],
+    });
+
+    sendKeys(sessionName, "printf '\\033[?1049hALTSCREEN'; sleep 1; printf '\\033[?1049l'");
+    sendKeys(sessionName, "\r");
+    await waitForVisibleScreen(sessionName, "ALTSCREEN");
+
+    expect(captureTmuxVisibleScreen(sessionName, 20)).toContain("ALTSCREEN");
+  });
+
+  it("bridges alternate-screen output over WebSocket", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
+    dirs.push(cwd);
+    const sessionName = `citadel_ws_alt_${Date.now().toString(36)}`;
+    sessions.push(sessionName);
+    await ensureTmuxSession({
+      sessionName,
+      cwd,
+      command: "bash",
+      args: ["--noprofile", "--norc"],
+    });
+    const server = http.createServer();
+    attachTerminalWebSocket(server, (id) => (id === "alt" ? sessionName : null));
+    await listen(server);
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP test server address");
+      const ws = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/alt`);
+      await waitForOpen(ws);
+
+      ws.send(JSON.stringify({ type: "input", data: "printf '\\033[?1049hWSALT'; sleep 1; printf '\\033[?1049l'" }));
+      ws.send(JSON.stringify({ type: "input", data: "\r" }));
+      await waitForWebSocketOutput(ws, "WSALT");
+
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      await closeServer(server);
+    }
   });
 
   it("bridges tmux sessions over WebSocket input, output, and resize messages", async () => {
@@ -180,6 +231,15 @@ async function waitForCapture(sessionName: string, expected: string) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`Timed out waiting for ${expected}`);
+}
+
+async function waitForVisibleScreen(sessionName: string, expected: string) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const output = captureTmuxVisibleScreen(sessionName, 20);
+    if (output.includes(expected)) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out waiting for visible screen ${expected}`);
 }
 
 async function waitForFile(filePath: string, expected: string) {

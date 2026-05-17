@@ -47,6 +47,18 @@ export function captureTmux(sessionName: string, lines = 200) {
   }
 }
 
+export function captureTmuxVisibleScreen(sessionName: string, lines = 200) {
+  try {
+    return execFileSync("tmux", ["capture-pane", "-a", "-p", "-S", `-${lines}`, "-t", sessionName], {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return captureTmux(sessionName, lines);
+  }
+}
+
 export function sendKeys(sessionName: string, data: string) {
   for (const token of tokenizeTerminalInput(data)) {
     if (token.literal) {
@@ -89,7 +101,7 @@ export function attachTerminalWebSocket(server: http.Server, resolveSession: (id
     wss.handleUpgrade(request, socket, head, (ws) => {
       let last = "";
       const push = () => {
-        const current = captureTmux(tmuxSession, 1000);
+        const current = captureTmuxVisibleScreen(tmuxSession, 1000);
         if (current !== last) {
           ws.send(JSON.stringify({ type: "output", data: current }));
           last = current;
