@@ -231,6 +231,27 @@ p {
   padding: 4px 8px;
 }
 
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.inline-actions button {
+  border: 1px solid color-mix(in srgb, CanvasText 16%, transparent);
+  border-radius: 7px;
+  cursor: pointer;
+  min-height: 30px;
+  background: Canvas;
+  color: CanvasText;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.inline-actions button:disabled {
+  opacity: 0.55;
+}
+
 .health {
   margin-bottom: 8px;
 }

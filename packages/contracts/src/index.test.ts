@@ -7,6 +7,7 @@ import {
   CreateRepoInputSchema,
   CreateWorkspaceInputSchema,
   IssueTrackerSummarySchema,
+  IssueTransitionActionResultSchema,
   OperationSchema,
   ProviderHealthSchema,
   RepoSchema,
@@ -141,5 +142,15 @@ describe("contract schemas", () => {
         checkedAt: timestamp,
       }).transitions[0]?.toStatus,
     ).toBe("Done");
+    expect(
+      IssueTransitionActionResultSchema.parse({
+        providerId: "jira-jtk",
+        status: "healthy",
+        reason: null,
+        key: "MS-496",
+        transition: "31",
+        checkedAt: timestamp,
+      }).transition,
+    ).toBe("31");
   });
 });

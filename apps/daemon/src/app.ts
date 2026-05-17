@@ -7,11 +7,17 @@ import {
   CreateAgentSessionInputSchema,
   CreateRepoInputSchema,
   CreateWorkspaceInputSchema,
+  TransitionIssueInputSchema,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, mcpStatus, serializeWorkspaceResource } from "@citadel/mcp";
 import { OperationService } from "@citadel/operations";
-import { collectGitHubVersionControlSummary, collectJiraIssueSummary, collectProviderHealth } from "@citadel/providers";
+import {
+  collectGitHubVersionControlSummary,
+  collectJiraIssueSummary,
+  collectProviderHealth,
+  transitionJiraIssue,
+} from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import { attachTerminalWebSocket } from "@citadel/terminal";
 import cors from "cors";
@@ -135,6 +141,23 @@ export function createDaemonApp(input: {
       if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
       const issueTracker = await collectJiraIssueSummary(workspace.issueKey);
       res.json({ issueTracker });
+    }),
+  );
+
+  app.post(
+    "/api/workspaces/:workspaceId/issue-transition",
+    asyncRoute(async (req, res) => {
+      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
+      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
+      if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
+      const input = TransitionIssueInputSchema.parse(req.body);
+      const result = await transitionJiraIssue({
+        issueKey: workspace.issueKey,
+        transition: input.transition,
+        fields: input.fields,
+      });
+      emit("provider.issue_transition", { workspaceId: workspace.id, issueKey: workspace.issueKey, result });
+      res.status(result.status === "healthy" ? 202 : 424).json({ result });
     }),
   );
 

@@ -147,6 +147,15 @@ export const IssueTrackerSummarySchema = z.object({
   checkedAt: z.string(),
 });
 
+export const IssueTransitionActionResultSchema = z.object({
+  providerId: z.string(),
+  status: ProviderStatusSchema,
+  reason: z.string().nullable(),
+  key: z.string(),
+  transition: z.string(),
+  checkedAt: z.string(),
+});
+
 export const OperationSchema = z.object({
   id: IdSchema,
   type: z.string(),
@@ -204,6 +213,11 @@ export const CreateAgentSessionInputSchema = z.object({
   prompt: z.string().optional(),
 });
 
+export const TransitionIssueInputSchema = z.object({
+  transition: z.string().min(1),
+  fields: z.record(z.string()).default({}),
+});
+
 export const DiffFileSchema = z.object({
   path: z.string(),
   status: z.string(),
@@ -229,12 +243,14 @@ export type PullRequestSummary = z.infer<typeof PullRequestSummarySchema>;
 export type VersionControlSummary = z.infer<typeof VersionControlSummarySchema>;
 export type IssueTransition = z.infer<typeof IssueTransitionSchema>;
 export type IssueTrackerSummary = z.infer<typeof IssueTrackerSummarySchema>;
+export type IssueTransitionActionResult = z.infer<typeof IssueTransitionActionResultSchema>;
 export type Operation = z.infer<typeof OperationSchema>;
 export type ActivityEvent = z.infer<typeof ActivityEventSchema>;
 export type AppEvent = z.infer<typeof AppEventSchema>;
 export type CreateRepoInput = z.infer<typeof CreateRepoInputSchema>;
 export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
 export type CreateAgentSessionInput = z.infer<typeof CreateAgentSessionInputSchema>;
+export type TransitionIssueInput = z.infer<typeof TransitionIssueInputSchema>;
 export type DiffFile = z.infer<typeof DiffFileSchema>;
 export type WorkspaceDiff = z.infer<typeof WorkspaceDiffSchema>;
 

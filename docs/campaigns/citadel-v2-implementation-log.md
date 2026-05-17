@@ -141,12 +141,25 @@
   - `provider_summary 2586ms`
   - `web_cockpit_visible 424ms`
   - `workspace_settings_switch 193ms`
+- Added Jira workflow transition actions:
+  - shared `IssueTransitionActionResult` contract and transition input schema,
+  - provider wrapper for `jtk transitions do`,
+  - daemon endpoint `POST /api/workspaces/:workspaceId/issue-transition`,
+  - cockpit action buttons for available Jira transitions.
+- Split web API/config-form helpers out of `apps/web/src/main.tsx` to keep the file-size guard green.
+- Reran `make check`: passed with 42 tests across 15 files. App/package source coverage is 92.28% statements.
+- Reran `pnpm e2e`: 4 Playwright tests passed.
+- Reran `pnpm performance`:
+  - `api_state 571ms`
+  - `provider_summary 2666ms`
+  - `web_cockpit_visible 419ms`
+  - `workspace_settings_switch 173ms`
 
 Known current gaps before final DoD:
 
 - Terminal WebSocket still uses tmux capture polling rather than a raw PTY stream. Control input, paste, resize, and deeper reconnect scrollback are now implemented and tested, but alternate-screen fidelity and output isolation need more verification before the final campaign gate.
 - Diff reader now has renamed/binary/truncation tests; the cockpit diff UI still needs richer states before the full `MS-482` bar is complete.
 - Workspace setup/teardown hook execution is implemented for static config hooks, and settings can now edit/persist hook config; deeper hook validation and workflow tests are still needed.
-- Provider implementation now includes normalized GitHub VC/current PR/check summary and Jira issue/transition summaries, but Jira workflow actions, check logs, richer provider caching, and UI action gating still need expansion.
+- Provider implementation now includes normalized GitHub VC/current PR/check summary, Jira issue/transition summaries, and Jira workflow transition actions, but check logs, richer provider caching, and UI action gating still need expansion.
 - MCP has a local/internal callable JSON tool shim for status/list operations, but a full MCP protocol transport and mutating tools remain to be implemented before the final MCP bar is complete.
 - First-run settings flow and full shadcn/Tailwind component system still need implementation.

@@ -9,6 +9,7 @@ import {
   commandHealth,
   parseJiraIssueOutput,
   parseJiraTransitionsOutput,
+  transitionJiraIssue,
 } from "./index.js";
 
 const dirs: string[] = [];
@@ -110,6 +111,15 @@ describe("commandHealth", () => {
     expect(summary.status).toBe("degraded");
     expect(summary.key).toBe("NOT-A-REAL-ISSUE-KEY");
     expect(summary.transitions).toEqual([]);
+  });
+
+  it("returns degraded Jira transition results when transition fails", async () => {
+    const result = await transitionJiraIssue({ issueKey: "not-a-real-issue-key", transition: "31" });
+
+    expect(result.providerId).toBe("jira-jtk");
+    expect(result.status).toBe("degraded");
+    expect(result.key).toBe("NOT-A-REAL-ISSUE-KEY");
+    expect(result.transition).toBe("31");
   });
 });
 

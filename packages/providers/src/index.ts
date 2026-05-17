@@ -6,6 +6,7 @@ import type {
   CheckSummary,
   IssueTrackerSummary,
   IssueTransition,
+  IssueTransitionActionResult,
   ProviderHealth,
   VersionControlSummary,
 } from "@citadel/contracts";
@@ -173,6 +174,37 @@ export function parseJiraTransitionsOutput(output: string): IssueTransition[] {
       name: name ?? "",
       toStatus: toStatus ?? "",
     }));
+}
+
+export async function transitionJiraIssue(input: {
+  issueKey: string;
+  transition: string;
+  fields?: Record<string, string>;
+}): Promise<IssueTransitionActionResult> {
+  const checkedAt = new Date().toISOString();
+  const key = input.issueKey.trim().toUpperCase();
+  const transition = input.transition.trim();
+  try {
+    const fieldArgs = Object.entries(input.fields ?? {}).flatMap(([field, value]) => ["--field", `${field}=${value}`]);
+    await jtk(["transitions", "do", key, transition, ...fieldArgs, "--no-color"]);
+    return {
+      providerId: "jira-jtk",
+      status: "healthy",
+      reason: null,
+      key,
+      transition,
+      checkedAt,
+    };
+  } catch (error) {
+    return {
+      providerId: "jira-jtk",
+      status: "degraded",
+      reason: error instanceof Error ? error.message : "Jira transition failed",
+      key,
+      transition,
+      checkedAt,
+    };
+  }
 }
 
 async function discoverDefaultBranch(rootPath: string) {
