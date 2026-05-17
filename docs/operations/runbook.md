@@ -26,3 +26,16 @@ make e2e
 ```
 
 `make check` is intended to cover architecture boundaries, file size, typecheck, Biome, unit tests, coverage, dependency policy, and build.
+
+## Local MCP Status
+
+MCP is enabled by default for local/internal deployments. The current v2 surface exposes normalized status/resources and a local JSON tool-call shim:
+
+```bash
+curl -sS http://127.0.0.1:4337/api/mcp/status
+curl -sS -X POST http://127.0.0.1:4337/api/mcp/tools/call \
+  -H 'content-type: application/json' \
+  -d '{"name":"inspect_status"}'
+```
+
+This endpoint is not designed for public internet exposure.

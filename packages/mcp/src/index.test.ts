@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mcpStatus, serializeWorkspaceResource } from "./index.js";
+import { callMcpTool, mcpStatus, serializeWorkspaceResource } from "./index.js";
 
 describe("mcp helpers", () => {
   it("reports local/internal MCP tools and resources", () => {
@@ -36,5 +36,21 @@ describe("mcp helpers", () => {
       status: "running",
       tmuxSessionName: "citadel_test",
     });
+  });
+
+  it("executes normalized local/internal tool calls", () => {
+    const result = callMcpTool(
+      { name: "inspect_status" },
+      {
+        repos: [],
+        workspaces: [],
+        sessions: [],
+        operations: [],
+        providerHealth: [],
+        runtimes: [],
+      },
+    );
+
+    expect(result).toMatchObject({ repos: 0, workspaces: 0, sessions: 0 });
   });
 });

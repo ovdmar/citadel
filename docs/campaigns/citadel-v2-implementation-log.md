@@ -15,7 +15,7 @@
 - Added strict TypeScript project references, pnpm workspace metadata, Biome config, Makefile command surface, architecture boundary check, file-size check, dependency lockfile policy, and startup smoke script.
 - Added initial typed contracts, local config loader, SQLite schema/migration/repository layer, operation service, provider health checks, runtime health checks, tmux session creation, terminal WebSocket bridge, MCP status/resource helpers, daemon REST/SSE endpoints, and a dense operator cockpit UI.
 - Ran `pnpm test`: 4 tests passed across `packages/core` and `packages/db`.
-- Ran `pnpm coverage`: command completed, but total coverage is currently 31.46% statements and does not satisfy the final 90% campaign gate.
+- Ran `pnpm coverage`: command completed, but total coverage is currently 32.37% statements and does not satisfy the final 90% campaign gate.
 - Ran `pnpm check`: passed architecture boundaries, file-size check, typecheck, Biome, tests, coverage command, dependency policy, and build.
 - Ran `make check`: passed the Makefile command surface for the same gates.
 - Started the local daemon at `http://127.0.0.1:4337` and web UI at `http://127.0.0.1:5173`.
@@ -57,6 +57,10 @@
 - Reran `make check` and `pnpm e2e`: both passed after the hook integration slice.
 - Added targeted unit coverage for config defaults/static hooks, provider command health, runtime health, command hook execution, and MCP status/resource serialization.
 - Reran `make check`: passed with 13 tests across 7 test files.
+- Added normalized local/internal MCP-style tool dispatcher with callable `inspect_status`, `list_repos`, `list_workspaces`, `list_agent_sessions`, `list_provider_health`, and `list_runtimes` tools.
+- Exposed local JSON tool call endpoint at `POST /api/mcp/tools/call` and documented usage in `docs/operations/runbook.md`.
+- Verified `inspect_status` against the running daemon; it returned 1 repo, 1 workspace, 1 session, and 2 provider health records.
+- Reran `make check`: passed with 14 tests across 7 test files.
 
 Known current gaps before final DoD:
 
@@ -66,4 +70,5 @@ Known current gaps before final DoD:
 - Diff viewer is bounded and read-only for staged/unstaged/untracked text previews, but renamed/deleted/binary edge cases need broader tests and UI states before the full `MS-482` bar is complete.
 - Workspace setup/teardown hook execution is implemented for static config hooks, but UI/API hook configuration and deeper hook tests are still needed.
 - Provider implementations are health-check scaffolds; normalized PR/CI/Jira data and action gating still need expansion.
+- MCP has a local/internal callable JSON tool shim for status/list operations, but a full MCP protocol transport and mutating tools remain to be implemented before the final MCP bar is complete.
 - First-run settings flow and full shadcn/Tailwind component system still need implementation.

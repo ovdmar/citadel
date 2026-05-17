@@ -11,7 +11,7 @@ import {
   type DiffFile,
 } from "@citadel/contracts";
 import { SqliteStore } from "@citadel/db";
-import { mcpStatus, serializeWorkspaceResource } from "@citadel/mcp";
+import { type McpToolCall, callMcpTool, mcpStatus, serializeWorkspaceResource } from "@citadel/mcp";
 import { OperationService } from "@citadel/operations";
 import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
@@ -142,6 +142,24 @@ app.get("/api/mcp/resources/workspaces", (_req, res) => {
     }),
   );
 });
+
+app.post(
+  "/api/mcp/tools/call",
+  asyncRoute(async (req, res) => {
+    if (!config.mcp.enabled) return res.status(503).json({ error: "mcp_disabled" });
+    const call = req.body as McpToolCall;
+    const providerHealth = await collectProviderHealth(config.providers);
+    const result = callMcpTool(call, {
+      repos: store.listRepos(),
+      workspaces: store.listWorkspaces(),
+      sessions: store.listSessions(),
+      operations: store.listOperations(),
+      providerHealth,
+      runtimes: listRuntimeHealth(config.runtimes),
+    });
+    res.json({ result });
+  }),
+);
 
 app.get("/api/workspaces/:workspaceId/diff", (req, res) => {
   const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
