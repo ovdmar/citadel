@@ -68,12 +68,14 @@
   - cockpit provider panel shows current branch/PR summary when available.
 - Verified provider summary against the running daemon; this repo reported healthy, current branch `main`, default branch `main`, remote `origin`, and no active PR.
 - Reran `make check` and `pnpm e2e`: both passed with 15 unit tests across 7 files and 4 Playwright tests.
+- Split the web build into manual `react`, `tanstack`, and `terminal` chunks. The production build no longer emits the >500 KB chunk warning; largest generated JS chunk is `terminal` at about 292 KB.
+- Reran `make check` and `pnpm e2e`: both passed after chunk splitting.
 
 Known current gaps before final DoD:
 
 - `make check` needs to be rerun after subsequent implementation slices; the current equivalent `pnpm check` passed.
 - Terminal WebSocket currently uses tmux capture polling and `send-keys`; interactive fidelity must be expanded and verified against the campaign gate.
-- Web terminal exists, but terminal protocol still needs stronger fidelity tests for raw/control/meta input, paste, resize, alternate screen, reconnect, output isolation, and long scrollback.
+- Web terminal exists and build chunking is split, but terminal protocol still needs stronger fidelity tests for raw/control/meta input, paste, resize, alternate screen, reconnect, output isolation, and long scrollback.
 - Diff viewer is bounded and read-only for staged/unstaged/untracked text previews, but renamed/deleted/binary edge cases need broader tests and UI states before the full `MS-482` bar is complete.
 - Workspace setup/teardown hook execution is implemented for static config hooks, but UI/API hook configuration and deeper hook tests are still needed.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, but Jira workflow actions, check logs, richer provider caching, and UI action gating still need expansion.

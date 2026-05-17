@@ -3,6 +3,18 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("@xterm")) return "terminal";
+          if (id.includes("@tanstack")) return "tanstack";
+          if (id.includes("react") || id.includes("react-dom")) return "react";
+          return undefined;
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     proxy: {
