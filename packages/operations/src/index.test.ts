@@ -22,6 +22,7 @@ describe("OperationService", () => {
       hooks: [
         {
           id: "setup",
+          kind: "command",
           event: "workspace.setup",
           command: "node",
           args: ["-e", `process.stdin.pipe(require('fs').createWriteStream(${JSON.stringify(hookOutput)}))`],
@@ -66,6 +67,70 @@ describe("OperationService", () => {
 
     expect(archived).toMatchObject({ removed: false, archived: true, dirty: true });
     expect(fs.existsSync(workspace?.path ?? "")).toBe(true);
+    expect(store.listWorkspaces()).toHaveLength(0);
+  });
+
+  it("marks workspace creation failed when a blocking setup hook fails", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [
+        {
+          id: "setup-fails",
+          kind: "command",
+          event: "workspace.setup",
+          command: "node",
+          args: ["-e", "process.stderr.write('setup denied'); process.exit(12)"],
+          blocking: true,
+        },
+      ],
+      repoDefaults: { setupHookIds: ["setup-fails"], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const result = await service.createWorkspace({ repoId: repo.id, name: "Blocked Setup", source: "scratch" });
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === result.workspaceId);
+
+    expect(workspace?.lifecycle).toBe("failed");
+    expect(store.listOperations().find((operation) => operation.id === result.operationId)).toMatchObject({
+      status: "failed",
+      error: expect.stringContaining("setup denied"),
+    });
+  });
+
+  it("blocks destructive cleanup on teardown failure unless force is explicit", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [
+        {
+          id: "teardown-fails",
+          kind: "command",
+          event: "workspace.teardown",
+          command: "node",
+          args: ["-e", "process.stderr.write('teardown denied'); process.exit(13)"],
+          blocking: true,
+        },
+      ],
+      repoDefaults: { setupHookIds: [], teardownHookIds: ["teardown-fails"] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "Teardown Policy", source: "scratch" });
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === created.workspaceId);
+
+    const blocked = await service.removeWorkspace({ workspaceId: created.workspaceId });
+    expect(blocked).toMatchObject({ removed: false, archived: false, dirty: false });
+    expect(fs.existsSync(workspace?.path ?? "")).toBe(true);
+    expect(store.listWorkspaces()).toHaveLength(1);
+
+    const forced = await service.removeWorkspace({ workspaceId: created.workspaceId, force: true });
+    expect(forced).toMatchObject({ removed: true, archived: false, dirty: false });
+    expect(fs.existsSync(workspace?.path ?? "")).toBe(false);
     expect(store.listWorkspaces()).toHaveLength(0);
   });
 });

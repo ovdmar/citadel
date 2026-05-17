@@ -10,6 +10,7 @@ type ConfigResponse = {
     runtimes: { id: string; displayName: string; command: string; args: string[] }[];
     hooks: {
       id: string;
+      kind: "command";
       event: "workspace.setup" | "workspace.teardown";
       command: string;
       args: string[];

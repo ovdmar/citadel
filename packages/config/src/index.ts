@@ -12,47 +12,74 @@ export const RuntimeConfigSchema = z.object({
 
 export const HookConfigSchema = z.object({
   id: z.string().min(1),
+  kind: z.literal("command").default("command"),
   event: z.enum(["workspace.setup", "workspace.teardown"]),
   command: z.string().min(1),
   args: z.array(z.string()).default([]),
-  cwd: z.string().optional(),
+  cwd: z
+    .string()
+    .optional()
+    .refine((value) => value === undefined || path.isAbsolute(value), "Hook cwd must be an absolute path"),
   blocking: z.boolean().default(true),
 });
 
-export const CitadelConfigSchema = z.object({
-  version: z.literal(1).default(1),
-  dataDir: z.string().min(1),
-  databasePath: z.string().min(1),
-  bindHost: z.string().default("127.0.0.1"),
-  port: z.number().int().min(1).max(65535).default(4337),
-  mcp: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
-  providers: z
-    .object({
-      github: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
-      jira: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
-    })
-    .default({ github: { enabled: true }, jira: { enabled: true } }),
-  runtimes: z.array(RuntimeConfigSchema).default([
-    { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] },
-    { id: "codex", displayName: "Codex", command: "codex", args: [] },
-    { id: "cursor-agent", displayName: "Cursor Agent", command: "cursor-agent", args: [] },
-    { id: "pi", displayName: "Pi", command: "pi", args: [] },
-    { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
-  ]),
-  hooks: z.array(HookConfigSchema).default([]),
-  repoDefaults: z
-    .object({
-      setupHookIds: z.array(z.string()).default([]),
-      teardownHookIds: z.array(z.string()).default([]),
-    })
-    .default({ setupHookIds: [], teardownHookIds: [] }),
-  commandPolicy: z
-    .object({
-      hookTimeoutMs: z.number().int().min(1000).default(120000),
-      allowDestructiveWorkspaceCleanup: z.boolean().default(false),
-    })
-    .default({ hookTimeoutMs: 120000, allowDestructiveWorkspaceCleanup: false }),
-});
+export const CitadelConfigSchema = z
+  .object({
+    version: z.literal(1).default(1),
+    dataDir: z.string().min(1),
+    databasePath: z.string().min(1),
+    bindHost: z.string().default("127.0.0.1"),
+    port: z.number().int().min(1).max(65535).default(4337),
+    mcp: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
+    providers: z
+      .object({
+        github: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
+        jira: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
+      })
+      .default({ github: { enabled: true }, jira: { enabled: true } }),
+    runtimes: z.array(RuntimeConfigSchema).default([
+      { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] },
+      { id: "codex", displayName: "Codex", command: "codex", args: [] },
+      { id: "cursor-agent", displayName: "Cursor Agent", command: "cursor-agent", args: [] },
+      { id: "pi", displayName: "Pi", command: "pi", args: [] },
+      { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
+    ]),
+    hooks: z.array(HookConfigSchema).default([]),
+    repoDefaults: z
+      .object({
+        setupHookIds: z.array(z.string()).default([]),
+        teardownHookIds: z.array(z.string()).default([]),
+      })
+      .default({ setupHookIds: [], teardownHookIds: [] }),
+    commandPolicy: z
+      .object({
+        hookTimeoutMs: z.number().int().min(1000).default(120000),
+        allowDestructiveWorkspaceCleanup: z.boolean().default(false),
+      })
+      .default({ hookTimeoutMs: 120000, allowDestructiveWorkspaceCleanup: false }),
+  })
+  .superRefine((config, context) => {
+    const hooksById = new Map<string, z.infer<typeof HookConfigSchema>>();
+    for (const hook of config.hooks) {
+      if (hooksById.has(hook.id)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["hooks"],
+          message: `Duplicate hook id: ${hook.id}`,
+        });
+      }
+      hooksById.set(hook.id, hook);
+    }
+
+    validateHookReferences(context, hooksById, config.repoDefaults.setupHookIds, "workspace.setup", [
+      "repoDefaults",
+      "setupHookIds",
+    ]);
+    validateHookReferences(context, hooksById, config.repoDefaults.teardownHookIds, "workspace.teardown", [
+      "repoDefaults",
+      "teardownHookIds",
+    ]);
+  });
 
 export type CitadelConfig = z.infer<typeof CitadelConfigSchema>;
 export type RuntimeConfig = z.infer<typeof RuntimeConfigSchema>;
@@ -94,5 +121,32 @@ export function mergeConfigPatch(current: CitadelConfig, patch: unknown) {
   return CitadelConfigSchema.parse({
     ...current,
     ...(typeof patch === "object" && patch !== null ? patch : {}),
+  });
+}
+
+function validateHookReferences(
+  context: z.RefinementCtx,
+  hooksById: Map<string, z.infer<typeof HookConfigSchema>>,
+  hookIds: string[],
+  event: z.infer<typeof HookConfigSchema>["event"],
+  pathPrefix: Array<string | number>,
+) {
+  hookIds.forEach((hookId, index) => {
+    const hook = hooksById.get(hookId);
+    if (!hook) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...pathPrefix, index],
+        message: `Unknown hook id: ${hookId}`,
+      });
+      return;
+    }
+    if (hook.event !== event) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [...pathPrefix, index],
+        message: `Hook ${hookId} is configured for ${hook.event}, not ${event}`,
+      });
+    }
   });
 }

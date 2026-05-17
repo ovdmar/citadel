@@ -42,7 +42,43 @@ describe("loadConfig", () => {
     const config = loadConfig(configPath);
 
     expect(config.hooks[0]?.id).toBe("setup");
+    expect(config.hooks[0]?.kind).toBe("command");
     expect(config.repoDefaults.setupHookIds).toEqual(["setup"]);
+  });
+
+  it("rejects hook references that are missing or wired to the wrong event", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-config-"));
+    dirs.push(dir);
+    const configPath = path.join(dir, "citadel.config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        dataDir: dir,
+        databasePath: path.join(dir, "citadel.sqlite"),
+        hooks: [{ id: "setup", event: "workspace.setup", command: "true" }],
+        repoDefaults: { setupHookIds: ["missing"], teardownHookIds: ["setup"] },
+      }),
+    );
+
+    expect(() => loadConfig(configPath)).toThrow(/Unknown hook id|not workspace.teardown/);
+  });
+
+  it("rejects malformed command hook cwd values", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-config-"));
+    dirs.push(dir);
+    const configPath = path.join(dir, "citadel.config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        dataDir: dir,
+        databasePath: path.join(dir, "citadel.sqlite"),
+        hooks: [{ id: "setup", event: "workspace.setup", command: "true", cwd: "relative/path" }],
+      }),
+    );
+
+    expect(() => loadConfig(configPath)).toThrow("Hook cwd must be an absolute path");
   });
 
   it("merges and saves operator config updates", () => {
