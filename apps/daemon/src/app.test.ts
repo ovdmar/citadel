@@ -35,6 +35,24 @@ describe("createDaemonApp", () => {
       expect(updated.config.mcp.enabled).toBe(false);
       expect(updated.config.providers.jira.enabled).toBe(false);
       expect(JSON.parse(fs.readFileSync(fixture.configPath, "utf8")).mcp.enabled).toBe(false);
+      expect(
+        (await getJson<{ activity: Array<{ type: string }> }>(`${baseUrl}/api/activity`)).activity[0],
+      ).toMatchObject({
+        type: "settings.updated",
+      });
+
+      const invalidConfig = await fetch(`${baseUrl}/api/config`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          hooks: [{ id: "setup", event: "workspace.setup", command: "true", cwd: "relative" }],
+        }),
+      });
+      expect(invalidConfig.status).toBe(400);
+      expect(await invalidConfig.json()).toMatchObject({
+        error: "validation_failed",
+        issues: [expect.objectContaining({ path: "hooks.0.cwd" })],
+      });
 
       const mcpStatus = await getJson<{ enabled: boolean }>(`${baseUrl}/api/mcp/status`);
       expect(mcpStatus.enabled).toBe(false);

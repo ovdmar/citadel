@@ -24,6 +24,7 @@ import { listRuntimeHealth } from "@citadel/runtimes";
 import { attachTerminalWebSocket } from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
+import { ZodError } from "zod";
 import { readWorkspaceDiff } from "./workspace-diff.js";
 
 export type DaemonApp = {
@@ -123,6 +124,16 @@ export function createDaemonApp(input: {
     const saved = saveConfig(nextConfig, configPath);
     Object.assign(config, saved);
     providerCache.clear();
+    store.addActivity({
+      id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+      type: "settings.updated",
+      source: "user",
+      repoId: null,
+      workspaceId: null,
+      operationId: null,
+      message: "Updated local config",
+      createdAt: new Date().toISOString(),
+    });
     emit("config.updated", { configPath });
     res.json({ config, configPath });
   });
@@ -349,6 +360,12 @@ export function createDaemonApp(input: {
   });
 
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    if (error instanceof ZodError) {
+      return res.status(400).json({
+        error: "validation_failed",
+        issues: error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message })),
+      });
+    }
     const message = error instanceof Error ? error.message : "request_failed";
     res.status(400).json({ error: message });
   });

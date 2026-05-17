@@ -356,6 +356,17 @@ p {
   font-size: 13px;
 }
 
+.form-error-list {
+  display: grid;
+  gap: 4px;
+  color: #b42318;
+  font-size: 13px;
+}
+
+.form-error-list p {
+  margin: 0;
+}
+
 .activity-row {
   grid-template-columns: 120px 1fr auto;
   margin-bottom: 8px;

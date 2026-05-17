@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Save } from "lucide-react";
 import { useEffect, useState } from "react";
-import { api, queryClient } from "./api.js";
+import { ApiError, api, queryClient } from "./api.js";
 
 type ConfigResponse = {
   config: {
@@ -155,9 +155,25 @@ export function ConfigForm() {
       <button className="primary" type="submit" disabled={mutation.isPending}>
         <Save size={15} /> Save config
       </button>
-      {formError || mutation.error ? <p className="form-error">{formError ?? String(mutation.error)}</p> : null}
+      <ConfigError error={formError ? new Error(formError) : mutation.error} />
     </form>
   );
+}
+
+function ConfigError(props: { error: Error | null }) {
+  if (!props.error) return null;
+  if (props.error instanceof ApiError && props.error.issues.length > 0) {
+    return (
+      <div className="form-error-list" role="alert">
+        {props.error.issues.map((issue) => (
+          <p key={`${issue.path}-${issue.message}`}>
+            <strong>{issue.path || "config"}</strong>: {issue.message}
+          </p>
+        ))}
+      </div>
+    );
+  }
+  return <p className="form-error">{props.error.message}</p>;
 }
 
 function splitIds(input: string) {

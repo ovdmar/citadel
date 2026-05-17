@@ -687,6 +687,12 @@ function SettingsView() {
           <ConfigForm />
         </section>
         <section className="panel">
+          <PanelTitle icon={<HeartPulse />} title="Providers" />
+          {state.data?.providerHealth.map((provider) => (
+            <HealthRow key={provider.id} provider={provider} />
+          ))}
+        </section>
+        <section className="panel">
           <PanelTitle icon={<TerminalSquare />} title="Runtimes" />
           {state.data?.runtimes.map((runtime) => (
             <HealthRow

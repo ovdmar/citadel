@@ -278,6 +278,18 @@
   - `provider_summary 2506ms`
   - `web_cockpit_visible 384ms`
   - `workspace_settings_switch 201ms`
+- Improved settings validation and health visibility:
+  - config writes now record a `settings.updated` activity event,
+  - Zod validation failures return structured field paths/messages from the daemon,
+  - settings form renders validation issue lists instead of raw error payloads,
+  - settings now includes provider health next to provider activation controls.
+- Reran `make check`: passed with 52 tests across 15 files. App/package source coverage is 92.13% statements.
+- Reran `pnpm e2e`: 5 Playwright tests passed, 1 mobile-only duplicate workflow smoke skipped.
+- Reran `pnpm performance`:
+  - `api_state 589ms`
+  - `provider_summary 2347ms`
+  - `web_cockpit_visible 386ms`
+  - `workspace_settings_switch 212ms`
 
 Known current gaps before final DoD:
 
@@ -286,4 +298,4 @@ Known current gaps before final DoD:
 - Workspace setup/teardown hook execution is implemented for static config hooks; settings can edit/persist hook config; config validation now catches bad hook references, wrong event wiring, duplicate IDs, and unsafe relative cwd; operation tests cover setup/teardown failure policies. Remaining hook gaps are non-blocking notification hooks and hook-provided links/actions in workspace surfaces.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, GitHub CI run summaries/log endpoint, Jira issue/transition summaries, Jira workflow transition actions, cockpit action gating from provider health, and daemon-side short TTL caching for summary calls.
 - MCP now has local/internal JSON tool calls, a JSON-RPC-style endpoint, resources, read-only tools, daemon-handled workspace create/archive tools, and daemon-handled agent-session launch. Additional protocol compatibility testing against external MCP clients is still needed before treating it as fully production-complete.
-- First-run settings flow and full shadcn/Tailwind component system still need implementation.
+- First-run settings flow and full shadcn/Tailwind component system still need implementation; settings now validates writes with field-level feedback, records activity, and shows provider health.
