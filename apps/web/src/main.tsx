@@ -33,6 +33,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "@xterm/xterm/css/xterm.css";
 import { api, queryClient } from "./api.js";
+import { Badge } from "./components/ui/badge.js";
 import { ConfigForm } from "./config-form.js";
 import "./styles.css";
 
@@ -748,7 +749,7 @@ function SetupRow(props: { label: string; status: string; ready: boolean }) {
   return (
     <div className={`setup-row ${props.ready ? "ready" : "pending"}`}>
       <strong>{props.label}</strong>
-      <span>{props.status}</span>
+      <Badge variant={props.ready ? "ready" : "blocked"}>{props.status}</Badge>
     </div>
   );
 }

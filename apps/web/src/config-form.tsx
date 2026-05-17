@@ -2,6 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Save } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ApiError, api, queryClient } from "./api.js";
+import { Button } from "./components/ui/button.js";
 
 type ConfigResponse = {
   config: {
@@ -152,9 +153,9 @@ export function ConfigForm() {
           <textarea value={runtimesJson} onChange={(event) => setRuntimesJson(event.target.value)} rows={8} />
         </label>
       </div>
-      <button className="primary" type="submit" disabled={mutation.isPending}>
+      <Button type="submit" disabled={mutation.isPending}>
         <Save size={15} /> Save config
-      </button>
+      </Button>
       <ConfigError error={formError ? new Error(formError) : mutation.error} />
     </form>
   );

@@ -301,6 +301,19 @@
   - `web_cockpit_visible 413ms`
   - `workspace_settings_switch 221ms`
 - Added `docs/architecture/ui-design-brief.md` covering Citadel target users, workflows, information hierarchy, density/navigation, interaction principles, mobile behavior, performance principles, product copy filtering, and visual-system rules.
+- Added initial Tailwind/shadcn-style component foundation:
+  - Tailwind Vite plugin and CSS import,
+  - shadcn-style `cn()` utility,
+  - reusable `Button` and `Badge` primitives using `class-variance-authority`, `tailwind-merge`, `clsx`, and Radix Slot,
+  - settings save control and setup status badges migrated to the new primitives,
+  - lockfile updated and reviewed through the dependency policy check.
+- Reran `make check`: passed with 52 tests across 15 files. App/package source coverage is 92.04% statements.
+- Reran `pnpm e2e`: 5 Playwright tests passed, 1 mobile-only duplicate workflow smoke skipped.
+- Reran `pnpm performance`:
+  - `api_state 579ms`
+  - `provider_summary 2783ms`
+  - `web_cockpit_visible 434ms`
+  - `workspace_settings_switch 241ms`
 
 Known current gaps before final DoD:
 
@@ -309,4 +322,4 @@ Known current gaps before final DoD:
 - Workspace setup/teardown hook execution is implemented for static config hooks; settings can edit/persist hook config; config validation now catches bad hook references, wrong event wiring, duplicate IDs, and unsafe relative cwd; operation tests cover setup/teardown failure policies. Remaining hook gaps are non-blocking notification hooks and hook-provided links/actions in workspace surfaces.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, GitHub CI run summaries/log endpoint, Jira issue/transition summaries, Jira workflow transition actions, cockpit action gating from provider health, and daemon-side short TTL caching for summary calls.
 - MCP now has local/internal JSON tool calls, a JSON-RPC-style endpoint, resources, read-only tools, daemon-handled workspace create/archive tools, and daemon-handled agent-session launch. Additional protocol compatibility testing against external MCP clients is still needed before treating it as fully production-complete.
-- First-run settings flow now has setup status, field-level validation feedback, provider health, and activity logging; the UI design brief now exists; the full shadcn/Tailwind component system remains incomplete.
+- First-run settings flow now has setup status, field-level validation feedback, provider health, and activity logging; the UI design brief exists; Tailwind and initial shadcn-style primitives are wired. Remaining UI-system work is migrating more cockpit/settings surfaces onto those primitives and tightening visual consistency.
