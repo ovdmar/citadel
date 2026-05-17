@@ -32,17 +32,35 @@ export type DaemonApp = {
   emit: (type: string, payload: unknown) => void;
 };
 
+type ProviderCollectors = {
+  collectGitHubVersionControlSummary: typeof collectGitHubVersionControlSummary;
+  collectGitHubCiRuns: typeof collectGitHubCiRuns;
+  collectGitHubCiRunLog: typeof collectGitHubCiRunLog;
+  collectJiraIssueSummary: typeof collectJiraIssueSummary;
+  transitionJiraIssue: typeof transitionJiraIssue;
+};
+
 export function createDaemonApp(input: {
   config: CitadelConfig;
   configPath: string;
   store: SqliteStore;
   operations?: OperationService;
+  providers?: Partial<ProviderCollectors>;
 }): DaemonApp {
   const { config, configPath, store } = input;
   const operations = input.operations ?? new OperationService(store, config);
+  const providers: ProviderCollectors = {
+    collectGitHubVersionControlSummary,
+    collectGitHubCiRuns,
+    collectGitHubCiRunLog,
+    collectJiraIssueSummary,
+    transitionJiraIssue,
+    ...input.providers,
+  };
   const app = express();
   const server = http.createServer(app);
   const sseClients = new Set<express.Response>();
+  const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
 
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
@@ -104,6 +122,7 @@ export function createDaemonApp(input: {
     const nextConfig = mergeConfigPatch(config, req.body);
     const saved = saveConfig(nextConfig, configPath);
     Object.assign(config, saved);
+    providerCache.clear();
     emit("config.updated", { configPath });
     res.json({ config, configPath });
   });
@@ -126,7 +145,9 @@ export function createDaemonApp(input: {
       if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const versionControl = await collectGitHubVersionControlSummary(repo.rootPath);
+      const versionControl = await cachedProvider(`vc:${repo.id}:${repo.updatedAt}`, () =>
+        providers.collectGitHubVersionControlSummary(repo.rootPath),
+      );
       res.json({ versionControl });
     }),
   );
@@ -138,7 +159,9 @@ export function createDaemonApp(input: {
       if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const ci = await collectGitHubCiRuns(repo.rootPath);
+      const ci = await cachedProvider(`ci:${repo.id}:${repo.updatedAt}`, () =>
+        providers.collectGitHubCiRuns(repo.rootPath),
+      );
       res.json({ ci });
     }),
   );
@@ -152,7 +175,7 @@ export function createDaemonApp(input: {
       if (typeof runId !== "string") return res.status(400).json({ error: "run_id_required" });
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const log = await collectGitHubCiRunLog(repo.rootPath, runId);
+      const log = await providers.collectGitHubCiRunLog(repo.rootPath, runId);
       res.json({ log });
     }),
   );
@@ -167,7 +190,9 @@ export function createDaemonApp(input: {
       const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
       if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
       if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
-      const issueTracker = await collectJiraIssueSummary(workspace.issueKey);
+      const issueTracker = await cachedProvider(`issue:${workspace.issueKey}`, () =>
+        providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
+      );
       res.json({ issueTracker });
     }),
   );
@@ -179,11 +204,12 @@ export function createDaemonApp(input: {
       if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
       if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
       const input = TransitionIssueInputSchema.parse(req.body);
-      const result = await transitionJiraIssue({
+      const result = await providers.transitionJiraIssue({
         issueKey: workspace.issueKey,
         transition: input.transition,
         fields: input.fields,
       });
+      providerCache.delete(`issue:${workspace.issueKey}`);
       emit("provider.issue_transition", { workspaceId: workspace.id, issueKey: workspace.issueKey, result });
       res.status(result.status === "healthy" ? 202 : 424).json({ result });
     }),
@@ -363,6 +389,15 @@ export function createDaemonApp(input: {
       workspaces: store.listWorkspaces(),
       sessions: store.listSessions(),
     });
+  }
+
+  async function cachedProvider<T>(key: string, load: () => Promise<T>, ttlMs = 10_000) {
+    const cached = providerCache.get(key);
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) return cached.value as T;
+    const value = await load();
+    providerCache.set(key, { expiresAt: now + ttlMs, value });
+    return value;
   }
 }
 

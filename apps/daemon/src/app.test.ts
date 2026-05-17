@@ -145,6 +145,58 @@ describe("createDaemonApp", () => {
       await closeServer(server);
     }
   });
+
+  it("caches provider summaries and clears them on config updates", async () => {
+    const fixture = createFixture();
+    const now = new Date().toISOString();
+    fixture.store.insertRepo({
+      id: "repo_cache",
+      name: "Cache Repo",
+      rootPath: fixture.config.dataDir,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: ["github-gh"],
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    let calls = 0;
+    const { server } = createDaemonApp({
+      ...fixture,
+      providers: {
+        collectGitHubVersionControlSummary: async () => {
+          calls += 1;
+          return {
+            providerId: "github-gh",
+            status: "healthy",
+            reason: null,
+            defaultBranch: "main",
+            currentBranch: "main",
+            remotes: ["origin"],
+            pullRequest: null,
+            checkedAt: new Date().toISOString(),
+          };
+        },
+      },
+    });
+    const baseUrl = await listen(server);
+    try {
+      await getJson(`${baseUrl}/api/repos/repo_cache/provider-summary`);
+      await getJson(`${baseUrl}/api/repos/repo_cache/provider-summary`);
+      expect(calls).toBe(1);
+
+      await putJson(`${baseUrl}/api/config`, {
+        providers: { github: { enabled: true }, jira: { enabled: false } },
+      });
+      await getJson(`${baseUrl}/api/repos/repo_cache/provider-summary`);
+      expect(calls).toBe(2);
+    } finally {
+      await closeServer(server);
+    }
+  });
 });
 
 function createFixture() {

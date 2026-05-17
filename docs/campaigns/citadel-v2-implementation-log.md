@@ -253,12 +253,24 @@
   - `provider_summary 2430ms`
   - `web_cockpit_visible 523ms`
   - `workspace_settings_switch 220ms`
+- Added daemon-side provider summary caching:
+  - short TTL cache for GitHub version-control summaries, GitHub CI run summaries, and Jira issue summaries,
+  - uncached CI log fetches to avoid stale log inspection,
+  - cache invalidation on config updates and Jira transitions,
+  - daemon test coverage with injected provider collectors.
+- Reran `make check`: passed with 51 tests across 15 files. App/package source coverage is 92.33% statements.
+- Reran `pnpm e2e`: 5 Playwright tests passed, 1 mobile-only duplicate workflow smoke skipped.
+- Reran `pnpm performance`:
+  - `api_state 588ms`
+  - `provider_summary 2535ms`
+  - `web_cockpit_visible 461ms`
+  - `workspace_settings_switch 230ms`
 
 Known current gaps before final DoD:
 
 - Terminal WebSocket still uses tmux capture polling rather than a raw PTY stream, but control input, paste, resize, deeper reconnect scrollback, long output, cross-session output isolation, and alternate-screen capture are now implemented/tested.
 - Diff reader now has renamed/binary/truncation tests and the cockpit diff UI exposes explicit file states, truncation, refresh, and read-only previews. Remaining `MS-482` risk is mostly visual polish and deeper syntax-aware diff presentation.
 - Workspace setup/teardown hook execution is implemented for static config hooks; settings can edit/persist hook config; config validation now catches bad hook references, wrong event wiring, duplicate IDs, and unsafe relative cwd; operation tests cover setup/teardown failure policies. Remaining hook gaps are non-blocking notification hooks and hook-provided links/actions in workspace surfaces.
-- Provider implementation now includes normalized GitHub VC/current PR/check summary, GitHub CI run summaries/log endpoint, Jira issue/transition summaries, Jira workflow transition actions, and cockpit action gating from provider health. Richer provider caching still needs expansion.
+- Provider implementation now includes normalized GitHub VC/current PR/check summary, GitHub CI run summaries/log endpoint, Jira issue/transition summaries, Jira workflow transition actions, cockpit action gating from provider health, and daemon-side short TTL caching for summary calls.
 - MCP now has local/internal JSON tool calls, a JSON-RPC-style endpoint, resources, read-only tools, and daemon-handled workspace create/archive tools. Additional protocol compatibility testing against external MCP clients is still needed before treating it as fully production-complete.
 - First-run settings flow and full shadcn/Tailwind component system still need implementation.
