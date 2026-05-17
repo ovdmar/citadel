@@ -300,6 +300,7 @@
   - `provider_summary 2369ms`
   - `web_cockpit_visible 413ms`
   - `workspace_settings_switch 221ms`
+- Added `docs/architecture/ui-design-brief.md` covering Citadel target users, workflows, information hierarchy, density/navigation, interaction principles, mobile behavior, performance principles, product copy filtering, and visual-system rules.
 
 Known current gaps before final DoD:
 
@@ -308,4 +309,4 @@ Known current gaps before final DoD:
 - Workspace setup/teardown hook execution is implemented for static config hooks; settings can edit/persist hook config; config validation now catches bad hook references, wrong event wiring, duplicate IDs, and unsafe relative cwd; operation tests cover setup/teardown failure policies. Remaining hook gaps are non-blocking notification hooks and hook-provided links/actions in workspace surfaces.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, GitHub CI run summaries/log endpoint, Jira issue/transition summaries, Jira workflow transition actions, cockpit action gating from provider health, and daemon-side short TTL caching for summary calls.
 - MCP now has local/internal JSON tool calls, a JSON-RPC-style endpoint, resources, read-only tools, daemon-handled workspace create/archive tools, and daemon-handled agent-session launch. Additional protocol compatibility testing against external MCP clients is still needed before treating it as fully production-complete.
-- First-run settings flow now has setup status, field-level validation feedback, provider health, and activity logging; the full shadcn/Tailwind component system remains incomplete.
+- First-run settings flow now has setup status, field-level validation feedback, provider health, and activity logging; the UI design brief now exists; the full shadcn/Tailwind component system remains incomplete.
