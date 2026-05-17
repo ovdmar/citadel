@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadConfig } from "./index.js";
+import { loadConfig, mergeConfigPatch, saveConfig } from "./index.js";
 
 const dirs: string[] = [];
 
@@ -43,5 +43,26 @@ describe("loadConfig", () => {
 
     expect(config.hooks[0]?.id).toBe("setup");
     expect(config.repoDefaults.setupHookIds).toEqual(["setup"]);
+  });
+
+  it("merges and saves operator config updates", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-config-"));
+    dirs.push(dir);
+    const configPath = path.join(dir, "citadel.config.json");
+    const current = loadConfig(configPath);
+
+    const next = mergeConfigPatch(current, {
+      mcp: { enabled: false },
+      providers: { github: { enabled: true }, jira: { enabled: false } },
+      hooks: [{ id: "setup", event: "workspace.setup", command: "node", args: ["setup.js"], blocking: false }],
+      repoDefaults: { setupHookIds: ["setup"], teardownHookIds: [] },
+    });
+    saveConfig(next, configPath);
+
+    const reloaded = loadConfig(configPath);
+    expect(reloaded.mcp.enabled).toBe(false);
+    expect(reloaded.providers.jira.enabled).toBe(false);
+    expect(reloaded.hooks[0]).toMatchObject({ id: "setup", blocking: false });
+    expect(reloaded.repoDefaults.setupHookIds).toEqual(["setup"]);
   });
 });

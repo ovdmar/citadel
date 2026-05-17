@@ -87,13 +87,26 @@
 - Added a real terminal WebSocket integration test covering tmux-backed output, input, resize messages, and connection cleanup. `packages/terminal` source coverage is now 92.59% statements.
 - Split daemon workspace diff logic into `apps/daemon/src/workspace-diff.ts` and added tests for porcelain rename/copy parsing, staged changes, untracked previews, binary hiding, and truncation. The diff module is now 100% statement covered.
 - Reran `make check`: passed with 28 tests across 11 files. Total coverage increased from 61.14% to 77.90% statements.
+- Added daemon config read/update endpoints:
+  - `GET /api/config` returns the active local config and config path,
+  - `PUT /api/config` validates, persists, and applies updates in-memory for new operations.
+- Added config package helpers for saving and merging validated operator config updates.
+- Expanded settings UI with editable local config controls for MCP, GitHub/Jira provider toggles, destructive cleanup policy, hook timeout, default setup/teardown hook IDs, hooks JSON, and runtimes JSON.
+- Updated Playwright settings coverage to assert the local config panel and save action on desktop/mobile.
+- Reran `make check`: passed with 29 tests across 11 files. Total coverage is 77.82% statements.
+- Reran `pnpm e2e`: 4 Playwright tests passed and settings screenshots were refreshed.
+- Reran `pnpm performance`:
+  - `api_state 583ms`
+  - `provider_summary 2502ms`
+  - `web_cockpit_visible 411ms`
+  - `workspace_settings_switch 200ms`
 
 Known current gaps before final DoD:
 
 - Terminal WebSocket currently uses tmux capture polling and `send-keys`; interactive fidelity must be expanded and verified against the campaign gate.
 - Web terminal exists and build chunking is split, but terminal protocol still needs stronger fidelity support/tests for raw/control/meta input, paste, alternate screen, reconnect, output isolation, and long scrollback.
 - Diff reader now has renamed/binary/truncation tests; the cockpit diff UI still needs richer states before the full `MS-482` bar is complete.
-- Workspace setup/teardown hook execution is implemented for static config hooks, but UI/API hook configuration and deeper hook tests are still needed.
+- Workspace setup/teardown hook execution is implemented for static config hooks, and settings can now edit/persist hook config; deeper hook validation and workflow tests are still needed.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, but Jira workflow actions, check logs, richer provider caching, and UI action gating still need expansion.
 - MCP has a local/internal callable JSON tool shim for status/list operations, but a full MCP protocol transport and mutating tools remain to be implemented before the final MCP bar is complete.
 - First-run settings flow and full shadcn/Tailwind component system still need implementation.

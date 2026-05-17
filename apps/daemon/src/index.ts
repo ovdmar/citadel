@@ -1,6 +1,6 @@
 import http from "node:http";
 import path from "node:path";
-import { loadConfig } from "@citadel/config";
+import { defaultConfigPath, loadConfig, mergeConfigPatch, saveConfig } from "@citadel/config";
 import {
   type AppEvent,
   CreateAgentSessionInputSchema,
@@ -17,7 +17,8 @@ import cors from "cors";
 import express from "express";
 import { readWorkspaceDiff } from "./workspace-diff.js";
 
-const config = loadConfig();
+const configPath = defaultConfigPath();
+const config = loadConfig(configPath);
 const store = new SqliteStore(config.databasePath);
 store.migrate();
 const operations = new OperationService(store, config);
@@ -65,6 +66,18 @@ app.get(
     });
   }),
 );
+
+app.get("/api/config", (_req, res) => {
+  res.json({ config, configPath });
+});
+
+app.put("/api/config", (req, res) => {
+  const nextConfig = mergeConfigPatch(config, req.body);
+  const saved = saveConfig(nextConfig, configPath);
+  Object.assign(config, saved);
+  emit("config.updated", { configPath });
+  res.json({ config, configPath });
+});
 
 app.post("/api/repos", (req, res) => {
   const input = CreateRepoInputSchema.parse(req.body);

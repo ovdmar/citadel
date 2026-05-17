@@ -82,3 +82,17 @@ export function loadConfig(configPath = defaultConfigPath()): CitadelConfig {
   const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
   return CitadelConfigSchema.parse({ ...defaults, ...raw });
 }
+
+export function saveConfig(config: CitadelConfig, configPath = defaultConfigPath()) {
+  const parsed = CitadelConfigSchema.parse(config);
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
+  return parsed;
+}
+
+export function mergeConfigPatch(current: CitadelConfig, patch: unknown) {
+  return CitadelConfigSchema.parse({
+    ...current,
+    ...(typeof patch === "object" && patch !== null ? patch : {}),
+  });
+}

@@ -19,7 +19,9 @@ body {
 }
 
 button,
-select {
+select,
+textarea,
+input {
   font: inherit;
 }
 
@@ -243,12 +245,14 @@ p {
 }
 
 .runtime-launcher,
-.stack-form {
+.stack-form,
+.config-form {
   display: grid;
   gap: 10px;
 }
 
-.stack-form label {
+.stack-form label,
+.config-form label {
   display: grid;
   gap: 5px;
   color: #667085;
@@ -257,13 +261,24 @@ p {
 
 .runtime-launcher select,
 .stack-form input,
-.stack-form select {
+.stack-form select,
+.config-form input,
+.config-form textarea {
   min-height: 38px;
   border-radius: 7px;
   border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
   background: Canvas;
   color: CanvasText;
   padding: 0 9px;
+}
+
+.config-form textarea {
+  min-height: 160px;
+  padding: 9px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .stack-form {
@@ -279,6 +294,45 @@ p {
   min-height: 38px;
   background: #1267d7;
   color: white;
+}
+
+.config-path {
+  color: #667085;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.toggle-grid,
+.form-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.toggle-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.toggle-grid label {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  border-radius: 7px;
+  color: CanvasText;
+}
+
+.form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-grid label:has(input[type="number"]) {
+  max-width: 220px;
+}
+
+.form-error {
+  color: #b42318;
+  font-size: 13px;
 }
 
 .activity-row {
@@ -377,7 +431,9 @@ p {
   }
 
   .metrics,
-  .grid {
+  .grid,
+  .toggle-grid,
+  .form-grid {
     grid-template-columns: 1fr;
   }
 
