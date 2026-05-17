@@ -15,7 +15,7 @@
 - Added strict TypeScript project references, pnpm workspace metadata, Biome config, Makefile command surface, architecture boundary check, file-size check, dependency lockfile policy, and startup smoke script.
 - Added initial typed contracts, local config loader, SQLite schema/migration/repository layer, operation service, provider health checks, runtime health checks, tmux session creation, terminal WebSocket bridge, MCP status/resource helpers, daemon REST/SSE endpoints, and a dense operator cockpit UI.
 - Ran `pnpm test`: 4 tests passed across `packages/core` and `packages/db`.
-- Ran `pnpm coverage`: command completed, but total coverage is currently 46.55% statements and does not satisfy the final 90% campaign gate.
+- Ran `pnpm coverage`: command completed, but total coverage is currently 49.89% statements and does not satisfy the final 90% campaign gate.
 - Ran `pnpm check`: passed architecture boundaries, file-size check, typecheck, Biome, tests, coverage command, dependency policy, and build.
 - Ran `make check`: passed the Makefile command surface for the same gates.
 - Started the local daemon at `http://127.0.0.1:4337` and web UI at `http://127.0.0.1:5173`.
@@ -78,6 +78,8 @@
 - Reran `make check`: passed after adding performance smoke.
 - Added `packages/operations` integration tests around repo registration, real git worktree creation, setup hook execution, dirty destructive removal blocking, and metadata-only archive.
 - Reran `make check`: passed with 17 tests across 8 files. `packages/operations` coverage is now 82.82% statements.
+- Added `packages/terminal` tmux integration test covering durable session creation, persisted tmux id/name, input delivery, output capture, resize, and cleanup.
+- Reran `make check`: passed with 18 tests across 9 files. `packages/terminal` coverage is now 69.6% statements.
 
 Known current gaps before final DoD:
 
