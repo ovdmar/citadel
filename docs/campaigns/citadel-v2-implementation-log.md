@@ -82,13 +82,17 @@
 - Reran `make check`: passed with 18 tests across 9 files. `packages/terminal` coverage is now 69.6% statements.
 - Added `packages/contracts` schema tests for repo/workspace/session, command inputs, provider health, operations, app events, runtime capabilities, workspace diffs, and version-control summaries.
 - Reran `make check`: passed with 21 tests across 10 files. `packages/contracts` coverage is now 100% statements.
+- Added persistence coverage for workspace/session/operation/activity round-trips, lifecycle updates, operation upserts, activity filters, and archived workspace filtering. `packages/db` source coverage is now 100% statements.
+- Added provider coverage for degraded command health and successful local git repository summaries without requiring an open PR. `packages/providers` source coverage is now 72.85% statements.
+- Added a real terminal WebSocket integration test covering tmux-backed output, input, resize messages, and connection cleanup. `packages/terminal` source coverage is now 92.59% statements.
+- Split daemon workspace diff logic into `apps/daemon/src/workspace-diff.ts` and added tests for porcelain rename/copy parsing, staged changes, untracked previews, binary hiding, and truncation. The diff module is now 100% statement covered.
+- Reran `make check`: passed with 28 tests across 11 files. Total coverage increased from 61.14% to 77.90% statements.
 
 Known current gaps before final DoD:
 
-- `make check` needs to be rerun after subsequent implementation slices; the current equivalent `pnpm check` passed.
 - Terminal WebSocket currently uses tmux capture polling and `send-keys`; interactive fidelity must be expanded and verified against the campaign gate.
-- Web terminal exists and build chunking is split, but terminal protocol still needs stronger fidelity tests for raw/control/meta input, paste, resize, alternate screen, reconnect, output isolation, and long scrollback.
-- Diff viewer is bounded and read-only for staged/unstaged/untracked text previews, but renamed/deleted/binary edge cases need broader tests and UI states before the full `MS-482` bar is complete.
+- Web terminal exists and build chunking is split, but terminal protocol still needs stronger fidelity support/tests for raw/control/meta input, paste, alternate screen, reconnect, output isolation, and long scrollback.
+- Diff reader now has renamed/binary/truncation tests; the cockpit diff UI still needs richer states before the full `MS-482` bar is complete.
 - Workspace setup/teardown hook execution is implemented for static config hooks, but UI/API hook configuration and deeper hook tests are still needed.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, but Jira workflow actions, check logs, richer provider caching, and UI action gating still need expansion.
 - MCP has a local/internal callable JSON tool shim for status/list operations, but a full MCP protocol transport and mutating tools remain to be implemented before the final MCP bar is complete.

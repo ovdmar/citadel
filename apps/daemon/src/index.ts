@@ -1,5 +1,3 @@
-import { execFileSync } from "node:child_process";
-import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { loadConfig } from "@citadel/config";
@@ -8,7 +6,6 @@ import {
   CreateAgentSessionInputSchema,
   CreateRepoInputSchema,
   CreateWorkspaceInputSchema,
-  type DiffFile,
 } from "@citadel/contracts";
 import { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, mcpStatus, serializeWorkspaceResource } from "@citadel/mcp";
@@ -18,6 +15,7 @@ import { listRuntimeHealth } from "@citadel/runtimes";
 import { attachTerminalWebSocket } from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
+import { readWorkspaceDiff } from "./workspace-diff.js";
 
 const config = loadConfig();
 const store = new SqliteStore(config.databasePath);
@@ -220,60 +218,6 @@ function asyncRoute(
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
     handler(req, res, next).catch(next);
   };
-}
-
-function readWorkspaceDiff(workspaceId: string, cwd: string) {
-  const maxBytes = 128 * 1024;
-  const status = execGit(cwd, ["status", "--porcelain=v1", "-z"]);
-  const paths = parseStatus(status);
-  const files: DiffFile[] = paths.slice(0, 80).map((entry) => {
-    const diff =
-      entry.status === "??"
-        ? readUntrackedFilePreview(cwd, entry.path, maxBytes)
-        : execGit(cwd, ["diff", "--no-ext-diff", "HEAD", "--", entry.path]);
-    const binary = diff.includes("Binary files") || diff.includes("GIT binary patch");
-    const truncated = diff.length > maxBytes;
-    return {
-      path: entry.path,
-      status: entry.status,
-      binary,
-      truncated,
-      diff: binary ? "" : diff.slice(0, maxBytes),
-    };
-  });
-  return {
-    workspaceId,
-    clean: paths.length === 0,
-    files,
-    truncated: paths.length > files.length || files.some((file) => file.truncated),
-  };
-}
-
-function readUntrackedFilePreview(cwd: string, relativePath: string, maxBytes: number) {
-  const absolutePath = path.resolve(cwd, relativePath);
-  if (!absolutePath.startsWith(path.resolve(cwd))) throw new Error("invalid_diff_path");
-  if (!fs.existsSync(absolutePath) || fs.statSync(absolutePath).isDirectory()) return "";
-  const content = fs.readFileSync(absolutePath);
-  const preview = content.subarray(0, maxBytes).toString("utf8");
-  return `--- /dev/null\n+++ b/${relativePath}\n@@ untracked preview @@\n${preview}`;
-}
-
-function execGit(cwd: string, args: string[]) {
-  return execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 2 * 1024 * 1024 });
-}
-
-function parseStatus(input: string) {
-  const parts = input.split("\0").filter(Boolean);
-  const entries: { status: string; path: string }[] = [];
-  for (let index = 0; index < parts.length; index += 1) {
-    const item = parts[index];
-    if (!item) continue;
-    const status = item.slice(0, 2);
-    const filePath = item.slice(3);
-    if (status.startsWith("R") || status.startsWith("C")) index += 1;
-    entries.push({ status, path: filePath });
-  }
-  return entries;
 }
 
 server.listen(config.port, config.bindHost, () => {
