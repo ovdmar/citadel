@@ -154,6 +154,19 @@
   - `provider_summary 2666ms`
   - `web_cockpit_visible 419ms`
   - `workspace_settings_switch 173ms`
+- Expanded MCP support:
+  - added normalized tool definitions with JSON schemas,
+  - exposed `create_workspace` and `archive_workspace` as daemon-handled MCP tools,
+  - kept pure package calls read-only with an explicit daemon-required result for mutating tools,
+  - added JSON-RPC-style endpoint `POST /api/mcp/rpc` supporting `initialize`, `tools/list`, `tools/call`, `resources/list`, and `resources/read`.
+- Added daemon tests for MCP JSON-RPC tool listing, tool calls, and resource reads.
+- Reran `make check`: passed with 42 tests across 15 files. App/package source coverage is 91.83% statements.
+- Reran `pnpm e2e`: 4 Playwright tests passed.
+- Reran `pnpm performance`:
+  - `api_state 575ms`
+  - `provider_summary 2427ms`
+  - `web_cockpit_visible 412ms`
+  - `workspace_settings_switch 225ms`
 
 Known current gaps before final DoD:
 
@@ -161,5 +174,5 @@ Known current gaps before final DoD:
 - Diff reader now has renamed/binary/truncation tests; the cockpit diff UI still needs richer states before the full `MS-482` bar is complete.
 - Workspace setup/teardown hook execution is implemented for static config hooks, and settings can now edit/persist hook config; deeper hook validation and workflow tests are still needed.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, Jira issue/transition summaries, and Jira workflow transition actions, but check logs, richer provider caching, and UI action gating still need expansion.
-- MCP has a local/internal callable JSON tool shim for status/list operations, but a full MCP protocol transport and mutating tools remain to be implemented before the final MCP bar is complete.
+- MCP now has local/internal JSON tool calls, a JSON-RPC-style endpoint, resources, read-only tools, and daemon-handled workspace create/archive tools. Additional protocol compatibility testing against external MCP clients is still needed before treating it as fully production-complete.
 - First-run settings flow and full shadcn/Tailwind component system still need implementation.

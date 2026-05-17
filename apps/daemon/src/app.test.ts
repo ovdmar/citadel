@@ -91,6 +91,35 @@ describe("createDaemonApp", () => {
           },
         ),
       ).toMatchObject({ result: { repos: 0, workspaces: 0, sessions: 0 } });
+      expect(
+        await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/list",
+        }),
+      ).toMatchObject({
+        result: { tools: expect.arrayContaining([expect.objectContaining({ name: "create_workspace" })]) },
+      });
+      expect(
+        await postJson<{ result: { content: Array<{ json: { repos: number } }> } }>(`${baseUrl}/api/mcp/rpc`, {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: { name: "inspect_status" },
+        }),
+      ).toMatchObject({
+        result: { content: [expect.objectContaining({ json: expect.objectContaining({ repos: 0 }) })] },
+      });
+      expect(
+        await postJson<{ result: { contents: Array<{ json: { workspaces: unknown[] } }> } }>(`${baseUrl}/api/mcp/rpc`, {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "resources/read",
+          params: { uri: "citadel://workspaces" },
+        }),
+      ).toMatchObject({
+        result: { contents: [expect.objectContaining({ json: { repos: [], workspaces: [], sessions: [] } })] },
+      });
 
       expect((await fetch(`${baseUrl}/api/repos/repo_missing/provider-summary`)).status).toBe(404);
       expect((await fetch(`${baseUrl}/api/workspaces/ws_missing/diff`)).status).toBe(404);
@@ -160,7 +189,8 @@ async function putJson<T>(url: string, body: unknown) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  expect(response.ok).toBe(true);
+  const text = await response.clone().text();
+  expect(response.ok, text).toBe(true);
   return response.json() as Promise<T>;
 }
 
@@ -170,6 +200,7 @@ async function postJson<T>(url: string, body: unknown) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  expect(response.ok).toBe(true);
+  const text = await response.clone().text();
+  expect(response.ok, text).toBe(true);
   return response.json() as Promise<T>;
 }

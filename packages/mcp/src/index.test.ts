@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { McpToolContext } from "./index.js";
-import { callMcpTool, mcpStatus, serializeWorkspaceResource } from "./index.js";
+import { callMcpTool, mcpStatus, mcpToolDefinitions, serializeWorkspaceResource } from "./index.js";
 
 describe("mcp helpers", () => {
   it("reports local/internal MCP tools and resources", () => {
@@ -8,6 +8,9 @@ describe("mcp helpers", () => {
 
     expect(status.enabled).toBe(true);
     expect(status.tools).toContain("inspect_status");
+    expect(mcpToolDefinitions().find((tool) => tool.name === "archive_workspace")).toMatchObject({
+      destructive: false,
+    });
   });
 
   it("serializes normalized workspace resources without raw terminal transport", () => {
@@ -151,5 +154,8 @@ describe("mcp helpers", () => {
       providerHealth: context.providerHealth,
     });
     expect(callMcpTool({ name: "list_runtimes" }, context)).toEqual({ runtimes: context.runtimes });
+    expect(callMcpTool({ name: "archive_workspace", arguments: { workspaceId: "ws_test" } }, context)).toEqual({
+      error: "mutating_tool_requires_daemon",
+    });
   });
 });

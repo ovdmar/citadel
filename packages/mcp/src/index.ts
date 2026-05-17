@@ -12,7 +12,16 @@ export type McpToolName =
   | "list_workspaces"
   | "list_agent_sessions"
   | "list_provider_health"
-  | "list_runtimes";
+  | "list_runtimes"
+  | "create_workspace"
+  | "archive_workspace";
+
+export type McpToolDefinition = {
+  name: McpToolName;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  destructive: boolean;
+};
 
 export type McpToolContext = {
   repos: Repo[];
@@ -32,15 +41,78 @@ export function mcpStatus(enabled: boolean): McpStatusSnapshot {
   return {
     enabled,
     resources: ["citadel://repos", "citadel://workspaces", "citadel://provider-health"],
-    tools: [
-      "inspect_status",
-      "list_repos",
-      "list_workspaces",
-      "list_agent_sessions",
-      "list_provider_health",
-      "list_runtimes",
-    ],
+    tools: mcpToolDefinitions().map((tool) => tool.name),
   };
+}
+
+export function mcpToolDefinitions(): McpToolDefinition[] {
+  return [
+    {
+      name: "inspect_status",
+      description: "Summarize Citadel local state and provider health.",
+      inputSchema: { type: "object", additionalProperties: false },
+      destructive: false,
+    },
+    {
+      name: "list_repos",
+      description: "List registered repositories.",
+      inputSchema: { type: "object", additionalProperties: false },
+      destructive: false,
+    },
+    {
+      name: "list_workspaces",
+      description: "List workspaces, optionally filtered by repoId.",
+      inputSchema: { type: "object", properties: { repoId: { type: "string" } }, additionalProperties: false },
+      destructive: false,
+    },
+    {
+      name: "list_agent_sessions",
+      description: "List agent sessions, optionally filtered by workspaceId.",
+      inputSchema: { type: "object", properties: { workspaceId: { type: "string" } }, additionalProperties: false },
+      destructive: false,
+    },
+    {
+      name: "list_provider_health",
+      description: "List normalized provider health snapshots.",
+      inputSchema: { type: "object", additionalProperties: false },
+      destructive: false,
+    },
+    {
+      name: "list_runtimes",
+      description: "List configured agent runtimes and their health.",
+      inputSchema: { type: "object", additionalProperties: false },
+      destructive: false,
+    },
+    {
+      name: "create_workspace",
+      description: "Create a workspace through the daemon operation service.",
+      inputSchema: {
+        type: "object",
+        required: ["repoId", "name"],
+        properties: {
+          repoId: { type: "string" },
+          name: { type: "string" },
+          source: { type: "string" },
+          issueKey: { type: "string" },
+          issueTitle: { type: "string" },
+          prUrl: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "archive_workspace",
+      description: "Archive workspace metadata without deleting the worktree.",
+      inputSchema: {
+        type: "object",
+        required: ["workspaceId"],
+        properties: { workspaceId: { type: "string" } },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+  ];
 }
 
 export function callMcpTool(call: McpToolCall, context: McpToolContext) {
@@ -67,6 +139,9 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
       return { providerHealth: context.providerHealth };
     case "list_runtimes":
       return { runtimes: context.runtimes };
+    case "create_workspace":
+    case "archive_workspace":
+      return { error: "mutating_tool_requires_daemon" };
     default:
       return assertNever(call.name);
   }

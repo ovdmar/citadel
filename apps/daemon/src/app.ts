@@ -10,7 +10,7 @@ import {
   TransitionIssueInputSchema,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
-import { type McpToolCall, callMcpTool, mcpStatus, serializeWorkspaceResource } from "@citadel/mcp";
+import { type McpToolCall, callMcpTool, mcpStatus, mcpToolDefinitions, serializeWorkspaceResource } from "@citadel/mcp";
 import { OperationService } from "@citadel/operations";
 import {
   collectGitHubVersionControlSummary,
@@ -226,16 +226,51 @@ export function createDaemonApp(input: {
     asyncRoute(async (req, res) => {
       if (!config.mcp.enabled) return res.status(503).json({ error: "mcp_disabled" });
       const call = req.body as McpToolCall;
-      const providerHealth = await collectProviderHealth(config.providers);
-      const result = callMcpTool(call, {
-        repos: store.listRepos(),
-        workspaces: store.listWorkspaces(),
-        sessions: store.listSessions(),
-        operations: store.listOperations(),
-        providerHealth,
-        runtimes: listRuntimeHealth(config.runtimes),
-      });
+      const result = await callDaemonMcpTool(call);
       res.json({ result });
+    }),
+  );
+
+  app.post(
+    "/api/mcp/rpc",
+    asyncRoute(async (req, res) => {
+      const request = req.body as { id?: string | number | null; method?: string; params?: Record<string, unknown> };
+      if (!config.mcp.enabled) return res.status(503).json(rpcError(request.id, -32000, "mcp_disabled"));
+      switch (request.method) {
+        case "initialize":
+          return res.json(
+            rpcResult(request.id, {
+              protocolVersion: "2024-11-05",
+              serverInfo: { name: "citadel", version: "0.2.0" },
+              capabilities: { resources: {}, tools: {} },
+            }),
+          );
+        case "tools/list":
+          return res.json(rpcResult(request.id, { tools: mcpToolDefinitions() }));
+        case "tools/call": {
+          const params = request.params as McpToolCall;
+          const result = await callDaemonMcpTool(params);
+          return res.json(rpcResult(request.id, { content: [{ type: "json", json: result }] }));
+        }
+        case "resources/list":
+          return res.json(
+            rpcResult(request.id, {
+              resources: mcpStatus(config.mcp.enabled).resources.map((uri) => ({
+                uri,
+                name: uri.replace("citadel://", ""),
+              })),
+            }),
+          );
+        case "resources/read": {
+          const uri = typeof request.params?.uri === "string" ? request.params.uri : "";
+          if (uri !== "citadel://workspaces") return res.json(rpcError(request.id, -32602, "unknown_resource"));
+          return res.json(
+            rpcResult(request.id, { contents: [{ uri, mimeType: "application/json", json: workspaceResource() }] }),
+          );
+        }
+        default:
+          return res.json(rpcError(request.id, -32601, "method_not_found"));
+      }
     }),
   );
 
@@ -270,6 +305,45 @@ export function createDaemonApp(input: {
   });
 
   return { app, server, emit };
+
+  async function callDaemonMcpTool(call: McpToolCall) {
+    if (call.name === "create_workspace") {
+      const result = await operations.createWorkspace(CreateWorkspaceInputSchema.parse(call.arguments ?? {}));
+      emit("workspace.updated", result);
+      return result;
+    }
+    if (call.name === "archive_workspace") {
+      const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";
+      const result = await operations.removeWorkspace({ workspaceId, archiveOnly: true });
+      emit("workspace.updated", result);
+      return result;
+    }
+    const providerHealth = await collectProviderHealth(config.providers);
+    return callMcpTool(call, {
+      repos: store.listRepos(),
+      workspaces: store.listWorkspaces(),
+      sessions: store.listSessions(),
+      operations: store.listOperations(),
+      providerHealth,
+      runtimes: listRuntimeHealth(config.runtimes),
+    });
+  }
+
+  function workspaceResource() {
+    return serializeWorkspaceResource({
+      repos: store.listRepos(),
+      workspaces: store.listWorkspaces(),
+      sessions: store.listSessions(),
+    });
+  }
+}
+
+function rpcResult(id: string | number | null | undefined, result: unknown) {
+  return { jsonrpc: "2.0", id: id ?? null, result };
+}
+
+function rpcError(id: string | number | null | undefined, code: number, message: string) {
+  return { jsonrpc: "2.0", id: id ?? null, error: { code, message } };
 }
 
 function asyncRoute(
