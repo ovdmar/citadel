@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { slugify, summarizeWorkspaceState, workspaceBranchName } from "./index.js";
+import {
+  assertUniqueRepoPath,
+  assertUniqueWorkspaceName,
+  createId,
+  repoDisplayName,
+  slugify,
+  summarizeWorkspaceState,
+  workspaceBranchName,
+} from "./index.js";
 
 describe("workspace naming", () => {
   it("creates issue-backed branch names with issue key and dashified title", () => {
@@ -15,6 +23,9 @@ describe("workspace naming", () => {
 
   it("falls back to a safe workspace slug", () => {
     expect(slugify("Review: terminal + resize!")).toBe("review-terminal-resize");
+    expect(slugify("!!!")).toBe("workspace");
+    expect(repoDisplayName("/tmp/citadel")).toBe("citadel");
+    expect(createId("ws")).toMatch(/^ws_[a-z0-9]+_[a-z0-9]+$/);
   });
 });
 
@@ -59,5 +70,133 @@ describe("workspace state summary", () => {
 
     expect(result.suggestedSection).toBe("review");
     expect(result.reasons).toContain("Pinned by operator");
+  });
+
+  it("moves unpinned workspaces to blocked or in-progress from session and provider signals", () => {
+    const workspace = {
+      id: "ws_test",
+      repoId: "repo_test",
+      name: "Task",
+      path: "/tmp/task",
+      branch: "task",
+      baseBranch: "main",
+      source: "scratch",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+      archivedAt: null,
+    } as const;
+
+    expect(
+      summarizeWorkspaceState({
+        workspace,
+        sessions: [
+          {
+            id: "sess_failed",
+            workspaceId: "ws_test",
+            runtimeId: "shell",
+            displayName: "Shell",
+            status: "failed",
+            transport: "disconnected",
+            tmuxSessionName: null,
+            tmuxSessionId: null,
+            createdAt: "2026-05-17T00:00:00.000Z",
+            updatedAt: "2026-05-17T00:00:00.000Z",
+          },
+        ],
+        providerHealth: [],
+      }).suggestedSection,
+    ).toBe("blocked");
+
+    expect(
+      summarizeWorkspaceState({
+        workspace,
+        sessions: [
+          {
+            id: "sess_running",
+            workspaceId: "ws_test",
+            runtimeId: "shell",
+            displayName: "Shell",
+            status: "running",
+            transport: "connected",
+            tmuxSessionName: "citadel_test",
+            tmuxSessionId: "$1",
+            createdAt: "2026-05-17T00:00:00.000Z",
+            updatedAt: "2026-05-17T00:00:00.000Z",
+          },
+        ],
+        providerHealth: [],
+      }).suggestedSection,
+    ).toBe("in-progress");
+
+    expect(
+      summarizeWorkspaceState({
+        workspace,
+        sessions: [],
+        providerHealth: [
+          {
+            id: "github-gh",
+            kind: "version-control",
+            displayName: "GitHub CLI",
+            status: "degraded",
+            reason: "not authenticated",
+            checkedAt: "2026-05-17T00:00:00.000Z",
+          },
+        ],
+      }).reasons,
+    ).toContain("Provider data is degraded or unavailable");
+  });
+});
+
+describe("uniqueness guards", () => {
+  it("rejects active duplicate repo paths and workspace names while allowing archived records", () => {
+    const repo = {
+      id: "repo_test",
+      name: "Repo",
+      rootPath: "/tmp/repo",
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: "/tmp/worktrees",
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+      archivedAt: null,
+    };
+    const workspace = {
+      id: "ws_test",
+      repoId: repo.id,
+      name: "Task",
+      path: "/tmp/worktrees/task",
+      branch: "task",
+      baseBranch: "main",
+      source: "scratch",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+      archivedAt: null,
+    } as const;
+
+    expect(() => assertUniqueRepoPath([repo], "/tmp/repo")).toThrow("Repository already registered");
+    expect(() => assertUniqueWorkspaceName([workspace], repo.id, "Task")).toThrow("Workspace name already exists");
+    expect(() =>
+      assertUniqueRepoPath([{ ...repo, archivedAt: "2026-05-17T00:00:00.000Z" }], "/tmp/repo"),
+    ).not.toThrow();
+    expect(() =>
+      assertUniqueWorkspaceName([{ ...workspace, archivedAt: "2026-05-17T00:00:00.000Z" }], repo.id, "Task"),
+    ).not.toThrow();
   });
 });

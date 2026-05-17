@@ -18,4 +18,38 @@ describe("runCommandHook", () => {
 
     expect(result.stdout).toBe("citadel");
   });
+
+  it("rejects failed hooks with captured output", async () => {
+    await expect(
+      runCommandHook(
+        {
+          id: "fail",
+          event: "workspace.teardown",
+          command: "node",
+          args: ["-e", "process.stderr.write('teardown failed'); process.exit(7)"],
+          cwd: process.cwd(),
+          timeoutMs: 5000,
+          blocking: true,
+        },
+        { name: "citadel" },
+      ),
+    ).rejects.toThrow("teardown failed");
+  });
+
+  it("terminates hooks that exceed their timeout", async () => {
+    await expect(
+      runCommandHook(
+        {
+          id: "timeout",
+          event: "workspace.setup",
+          command: "node",
+          args: ["-e", "setTimeout(() => {}, 5000)"],
+          cwd: process.cwd(),
+          timeoutMs: 50,
+          blocking: true,
+        },
+        { name: "citadel" },
+      ),
+    ).rejects.toThrow("Hook timed out");
+  });
 });

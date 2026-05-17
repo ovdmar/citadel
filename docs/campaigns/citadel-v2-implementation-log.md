@@ -104,6 +104,11 @@
 - Added HTTP-level daemon tests for `/api/config`, persisted config updates, MCP disabled behavior, and a missing-runtime API error path.
 - Reran `make check`: passed with 30 tests across 12 files. Total coverage increased to 82.60% statements.
 - Reran `pnpm e2e`: 4 Playwright tests passed after the daemon refactor.
+- Added shared-helper coverage for:
+  - MCP list/filter tool calls across repos, workspaces, sessions, provider health, and runtimes,
+  - hook failure and timeout paths,
+  - core ID/display-name helpers, duplicate guards, and workspace section suggestions for blocked/in-progress/provider-degraded states.
+- Reran `make check`: passed with 34 tests across 12 files. Total coverage increased to 85.54% statements.
 
 Known current gaps before final DoD:
 

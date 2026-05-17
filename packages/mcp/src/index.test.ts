@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { McpToolContext } from "./index.js";
 import { callMcpTool, mcpStatus, serializeWorkspaceResource } from "./index.js";
 
 describe("mcp helpers", () => {
@@ -39,18 +40,116 @@ describe("mcp helpers", () => {
   });
 
   it("executes normalized local/internal tool calls", () => {
-    const result = callMcpTool(
-      { name: "inspect_status" },
-      {
-        repos: [],
-        workspaces: [],
-        sessions: [],
-        operations: [],
-        providerHealth: [],
-        runtimes: [],
-      },
-    );
+    const context = {
+      repos: [
+        {
+          id: "repo_test",
+          name: "Repo",
+          rootPath: "/tmp/repo",
+          defaultBranch: "main",
+          defaultRemote: "origin",
+          worktreeParent: "/tmp/worktrees",
+          setupHookIds: [],
+          teardownHookIds: [],
+          providerIds: [],
+          createdAt: "2026-05-17T00:00:00.000Z",
+          updatedAt: "2026-05-17T00:00:00.000Z",
+          archivedAt: null,
+        },
+      ],
+      workspaces: [
+        {
+          id: "ws_test",
+          repoId: "repo_test",
+          name: "Workspace",
+          path: "/tmp/worktrees/workspace",
+          branch: "workspace",
+          baseBranch: "main",
+          source: "scratch",
+          prUrl: null,
+          issueKey: null,
+          issueTitle: null,
+          section: "backlog",
+          pinned: false,
+          lifecycle: "ready",
+          dirty: false,
+          createdAt: "2026-05-17T00:00:00.000Z",
+          updatedAt: "2026-05-17T00:00:00.000Z",
+          archivedAt: null,
+        },
+      ],
+      sessions: [
+        {
+          id: "sess_test",
+          workspaceId: "ws_test",
+          runtimeId: "shell",
+          displayName: "Shell",
+          status: "running",
+          transport: "connected",
+          tmuxSessionName: "citadel_test",
+          tmuxSessionId: "$1",
+          createdAt: "2026-05-17T00:00:00.000Z",
+          updatedAt: "2026-05-17T00:00:00.000Z",
+        },
+      ],
+      operations: [
+        {
+          id: "op_test",
+          type: "workspace.create",
+          status: "succeeded",
+          repoId: "repo_test",
+          workspaceId: "ws_test",
+          progress: 100,
+          message: null,
+          error: null,
+          createdAt: "2026-05-17T00:00:00.000Z",
+          updatedAt: "2026-05-17T00:00:00.000Z",
+        },
+      ],
+      providerHealth: [
+        {
+          id: "github-gh",
+          displayName: "GitHub CLI",
+          kind: "version-control",
+          status: "healthy",
+          reason: null,
+          checkedAt: "2026-05-17T00:00:00.000Z",
+        },
+      ],
+      runtimes: [
+        {
+          id: "shell",
+          displayName: "Shell",
+          command: "bash",
+          args: ["-l"],
+          health: "healthy",
+          healthReason: null,
+          capabilities: {
+            supportsPrompt: false,
+            supportsResume: false,
+            supportsModelSelection: false,
+            supportsTranscript: false,
+            supportsStatusDetection: false,
+            supportsNonInteractiveGoal: false,
+            supportsShell: true,
+            supportsUsage: false,
+          },
+        },
+      ],
+    } satisfies McpToolContext;
 
-    expect(result).toMatchObject({ repos: 0, workspaces: 0, sessions: 0 });
+    const result = callMcpTool({ name: "inspect_status" }, context);
+    expect(result).toMatchObject({ repos: 1, workspaces: 1, sessions: 1 });
+    expect(callMcpTool({ name: "list_repos" }, context)).toEqual({ repos: context.repos });
+    expect(callMcpTool({ name: "list_workspaces", arguments: { repoId: "repo_test" } }, context)).toEqual({
+      workspaces: context.workspaces,
+    });
+    expect(callMcpTool({ name: "list_agent_sessions", arguments: { workspaceId: "ws_test" } }, context)).toEqual({
+      sessions: context.sessions,
+    });
+    expect(callMcpTool({ name: "list_provider_health" }, context)).toEqual({
+      providerHealth: context.providerHealth,
+    });
+    expect(callMcpTool({ name: "list_runtimes" }, context)).toEqual({ runtimes: context.runtimes });
   });
 });
