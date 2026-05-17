@@ -18,6 +18,7 @@ import {
   collectGitHubVersionControlSummary,
   collectJiraIssueSummary,
   collectProviderHealth,
+  collectRuntimeUsage,
   transitionJiraIssue,
 } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
@@ -239,6 +240,21 @@ export function createDaemonApp(input: {
   app.get("/api/runtimes", (_req, res) => {
     res.json({ runtimes: listRuntimeHealth(config.runtimes) });
   });
+
+  app.get(
+    "/api/runtimes/:runtimeId/usage",
+    asyncRoute(async (req, res) => {
+      const runtimeId = req.params.runtimeId;
+      if (typeof runtimeId !== "string") return res.status(400).json({ error: "runtime_id_required" });
+      const runtime = config.runtimes.find((candidate) => candidate.id === runtimeId);
+      if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
+      const provider = config.usageProviders.find((candidate) => candidate.runtimeId === runtimeId);
+      const usage = await cachedProvider(`usage:${runtimeId}:${provider?.id ?? "unsupported"}`, () =>
+        collectRuntimeUsage(runtimeId, provider),
+      );
+      res.json({ usage });
+    }),
+  );
 
   app.post(
     "/api/agent-sessions",

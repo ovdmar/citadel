@@ -10,6 +10,17 @@ export const RuntimeConfigSchema = z.object({
   args: z.array(z.string()).default([]),
 });
 
+export const UsageProviderConfigSchema = z.object({
+  id: z.string().min(1),
+  runtimeId: z.string().min(1),
+  command: z.string().min(1),
+  args: z.array(z.string()).default([]),
+  cwd: z
+    .string()
+    .optional()
+    .refine((value) => value === undefined || path.isAbsolute(value), "Usage provider cwd must be an absolute path"),
+});
+
 export const HookEventSchema = z.enum([
   "workspace.setup",
   "workspace.teardown",
@@ -58,6 +69,7 @@ export const CitadelConfigSchema = z
       { id: "pi", displayName: "Pi", command: "pi", args: [] },
       { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
     ]),
+    usageProviders: z.array(UsageProviderConfigSchema).default([]),
     hooks: z.array(HookConfigSchema).default([]),
     repoDefaults: z
       .object({
@@ -97,6 +109,7 @@ export const CitadelConfigSchema = z
 
 export type CitadelConfig = z.infer<typeof CitadelConfigSchema>;
 export type RuntimeConfig = z.infer<typeof RuntimeConfigSchema>;
+export type UsageProviderConfig = z.infer<typeof UsageProviderConfigSchema>;
 export type HookConfig = z.infer<typeof HookConfigSchema>;
 
 export function defaultDataDir() {

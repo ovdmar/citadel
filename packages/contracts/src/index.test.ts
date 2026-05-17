@@ -12,6 +12,7 @@ import {
   OperationSchema,
   ProviderHealthSchema,
   RepoSchema,
+  RuntimeUsageSummarySchema,
   VersionControlSummarySchema,
   WorkspaceDiffSchema,
   WorkspaceSchema,
@@ -149,6 +150,20 @@ describe("contract schemas", () => {
         checkedAt: timestamp,
       }).runs[0]?.conclusion,
     ).toBe("success");
+    expect(
+      RuntimeUsageSummarySchema.parse({
+        runtimeId: "codex",
+        providerId: "usage-codex",
+        source: "codex-usage",
+        status: "unavailable",
+        reason: "Unsupported on this host",
+        model: null,
+        remaining: null,
+        spend: null,
+        resetAt: null,
+        checkedAt: timestamp,
+      }).runtimeId,
+    ).toBe("codex");
     expect(
       IssueTrackerSummarySchema.parse({
         providerId: "jira-jtk",

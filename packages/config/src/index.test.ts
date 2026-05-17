@@ -21,6 +21,7 @@ describe("loadConfig", () => {
     expect(config.version).toBe(1);
     expect(config.mcp.enabled).toBe(true);
     expect(config.runtimes.map((runtime) => runtime.id)).toContain("shell");
+    expect(config.usageProviders).toEqual([]);
     expect(fs.existsSync(configPath)).toBe(true);
   });
 
@@ -109,6 +110,7 @@ describe("loadConfig", () => {
     const next = mergeConfigPatch(current, {
       mcp: { enabled: false },
       providers: { github: { enabled: true }, jira: { enabled: false } },
+      usageProviders: [{ id: "usage-shell", runtimeId: "shell", command: "node", args: ["usage.js"] }],
       hooks: [{ id: "setup", event: "workspace.setup", command: "node", args: ["setup.js"], blocking: false }],
       repoDefaults: { setupHookIds: ["setup"], teardownHookIds: [] },
     });
@@ -117,6 +119,7 @@ describe("loadConfig", () => {
     const reloaded = loadConfig(configPath);
     expect(reloaded.mcp.enabled).toBe(false);
     expect(reloaded.providers.jira.enabled).toBe(false);
+    expect(reloaded.usageProviders[0]).toMatchObject({ id: "usage-shell", runtimeId: "shell" });
     expect(reloaded.hooks[0]).toMatchObject({ id: "setup", blocking: false });
     expect(reloaded.repoDefaults.setupHookIds).toEqual(["setup"]);
   });

@@ -8,9 +8,11 @@ import {
   collectGitHubCiRuns,
   collectGitHubVersionControlSummary,
   collectJiraIssueSummary,
+  collectRuntimeUsage,
   commandHealth,
   normalizeCiRun,
   normalizeCiRunList,
+  normalizeRuntimeUsage,
   parseJiraIssueOutput,
   parseJiraTransitionsOutput,
   transitionJiraIssue,
@@ -151,6 +153,23 @@ describe("commandHealth", () => {
     expect(result.status).toBe("degraded");
     expect(result.key).toBe("NOT-A-REAL-ISSUE-KEY");
     expect(result.transition).toBe("31");
+  });
+
+  it("normalizes runtime usage and reports unsupported runtimes clearly", async () => {
+    expect(
+      normalizeRuntimeUsage(
+        "codex",
+        "usage-codex",
+        JSON.stringify({ source: "codex-usage", model: "gpt", remaining: "42%", spend: "$1.25" }),
+      ),
+    ).toMatchObject({ runtimeId: "codex", status: "healthy", remaining: "42%" });
+
+    const unsupported = await collectRuntimeUsage("codex", undefined);
+    expect(unsupported).toMatchObject({
+      runtimeId: "codex",
+      status: "unavailable",
+      reason: "No usage provider configured for this runtime",
+    });
   });
 });
 

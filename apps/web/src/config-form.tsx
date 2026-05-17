@@ -9,6 +9,7 @@ type ConfigResponse = {
     mcp: { enabled: boolean };
     providers: { github: { enabled: boolean }; jira: { enabled: boolean } };
     runtimes: { id: string; displayName: string; command: string; args: string[] }[];
+    usageProviders: { id: string; runtimeId: string; command: string; args: string[]; cwd?: string }[];
     hooks: {
       id: string;
       kind: "command";
@@ -40,6 +41,7 @@ export function ConfigForm() {
   const [jiraEnabled, setJiraEnabled] = useState(true);
   const [hooksJson, setHooksJson] = useState("[]");
   const [runtimesJson, setRuntimesJson] = useState("[]");
+  const [usageProvidersJson, setUsageProvidersJson] = useState("[]");
   const [setupHookIds, setSetupHookIds] = useState("");
   const [teardownHookIds, setTeardownHookIds] = useState("");
   const [hookTimeoutMs, setHookTimeoutMs] = useState(120000);
@@ -54,6 +56,7 @@ export function ConfigForm() {
     setJiraEnabled(config.providers.jira.enabled);
     setHooksJson(JSON.stringify(config.hooks, null, 2));
     setRuntimesJson(JSON.stringify(config.runtimes, null, 2));
+    setUsageProvidersJson(JSON.stringify(config.usageProviders, null, 2));
     setSetupHookIds(config.repoDefaults.setupHookIds.join(", "));
     setTeardownHookIds(config.repoDefaults.teardownHookIds.join(", "));
     setHookTimeoutMs(config.commandPolicy.hookTimeoutMs);
@@ -65,9 +68,11 @@ export function ConfigForm() {
       setFormError(null);
       let hooks: ConfigResponse["config"]["hooks"];
       let runtimes: ConfigResponse["config"]["runtimes"];
+      let usageProviders: ConfigResponse["config"]["usageProviders"];
       try {
         hooks = JSON.parse(hooksJson) as ConfigResponse["config"]["hooks"];
         runtimes = JSON.parse(runtimesJson) as ConfigResponse["config"]["runtimes"];
+        usageProviders = JSON.parse(usageProvidersJson) as ConfigResponse["config"]["usageProviders"];
       } catch (error) {
         throw new Error(error instanceof Error ? error.message : "Invalid JSON");
       }
@@ -77,6 +82,7 @@ export function ConfigForm() {
           mcp: { enabled: mcpEnabled },
           providers: { github: { enabled: githubEnabled }, jira: { enabled: jiraEnabled } },
           runtimes,
+          usageProviders,
           hooks,
           repoDefaults: {
             setupHookIds: splitIds(setupHookIds),
@@ -159,6 +165,10 @@ export function ConfigForm() {
           <textarea value={runtimesJson} onChange={(event) => setRuntimesJson(event.target.value)} rows={8} />
         </label>
       </div>
+      <label>
+        Usage providers JSON
+        <textarea value={usageProvidersJson} onChange={(event) => setUsageProvidersJson(event.target.value)} rows={5} />
+      </label>
       <Button type="submit" disabled={mutation.isPending}>
         <Save size={15} /> Save config
       </Button>

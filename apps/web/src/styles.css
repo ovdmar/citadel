@@ -389,11 +389,32 @@ p {
 }
 
 .setup-row.ready {
-  border-color: color-mix(in srgb, #067647 28%, transparent);
+  border-color: color-mix(in srgb, var(--color-success) 28%, transparent);
 }
 
 .setup-row.pending {
-  border-color: color-mix(in srgb, #b42318 24%, transparent);
+  border-color: color-mix(in srgb, var(--color-danger) 24%, transparent);
+}
+
+.runtime-row {
+  display: grid;
+  gap: 6px;
+}
+
+.usage-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: color-mix(in srgb, CanvasText 6%, transparent);
+  font-size: 12px;
+}
+
+.usage-row p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #667085;
 }
 
 .activity-row {

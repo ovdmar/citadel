@@ -337,6 +337,20 @@
   - `provider_summary 2389ms`
   - `web_cockpit_visible 393ms`
   - `workspace_settings_switch 195ms`
+- Added runtime-scoped usage provider support:
+  - shared contracts now include `RuntimeUsageSummary`,
+  - config now accepts `usageProviders` entries mapping runtimes to command-backed usage collectors,
+  - provider code normalizes collector JSON and returns explicit unavailable/degraded summaries for unsupported or failed collectors,
+  - daemon exposes `/api/runtimes/:runtimeId/usage` with short-TTL provider caching,
+  - settings renders a usage row below each runtime and exposes usage-provider config JSON,
+  - tests cover the shared schema, config persistence, provider normalization/unsupported state, and daemon unavailable usage endpoint.
+- Reran `make check`: passed with 55 tests across 15 files. App/package source coverage is 91.94% statements.
+- Reran `pnpm e2e`: 5 Playwright tests passed, 1 mobile-only duplicate workflow smoke skipped.
+- Reran `pnpm performance`:
+  - `api_state 590ms`
+  - `provider_summary 11ms`
+  - `web_cockpit_visible 422ms`
+  - `workspace_settings_switch 258ms`
 
 Known current gaps before final DoD:
 
@@ -344,5 +358,6 @@ Known current gaps before final DoD:
 - Diff reader now has renamed/binary/truncation tests and the cockpit diff UI exposes explicit file states, truncation, refresh, and read-only previews. Remaining `MS-482` risk is mostly visual polish and deeper syntax-aware diff presentation.
 - Workspace setup/teardown hook execution is implemented for static config hooks; lifecycle notification hooks cover workspace created/archived/removed and agent started; settings can edit/persist hook config; config validation now catches bad hook references, wrong event wiring, duplicate IDs, and unsafe relative cwd; operation tests cover setup/teardown and notification failure policies. Remaining hook gap is hook-provided links/actions in workspace surfaces.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, GitHub CI run summaries/log endpoint, Jira issue/transition summaries, Jira workflow transition actions, cockpit action gating from provider health, and daemon-side short TTL caching for summary calls.
+- Runtime usage provider support now has explicit unsupported/custom-command surfaces; deeper built-in adapters and manual refresh controls remain future polish.
 - MCP now has local/internal JSON tool calls, a JSON-RPC-style endpoint, resources with matching `resources/read` support, read-only tools, daemon-handled workspace create/archive tools, and daemon-handled agent-session launch. Additional protocol compatibility testing against external MCP clients is still needed before treating it as fully production-complete.
 - First-run settings flow now has setup status, field-level validation feedback, provider health, and activity logging; the UI design brief exists; Tailwind and initial shadcn-style primitives are wired. Remaining UI-system work is migrating more cockpit/settings surfaces onto those primitives and tightening visual consistency.

@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import type { UsageProviderConfig } from "@citadel/config";
 import type {
   CheckSummary,
   CiProviderSummary,
@@ -10,6 +11,7 @@ import type {
   IssueTransition,
   IssueTransitionActionResult,
   ProviderHealth,
+  RuntimeUsageSummary,
   VersionControlSummary,
 } from "@citadel/contracts";
 
@@ -169,6 +171,69 @@ export async function collectGitHubCiRunLog(rootPath: string, runId: string) {
       checkedAt: new Date().toISOString(),
     };
   }
+}
+
+export async function collectRuntimeUsage(
+  runtimeId: string,
+  provider: UsageProviderConfig | undefined,
+): Promise<RuntimeUsageSummary> {
+  const checkedAt = new Date().toISOString();
+  if (!provider) {
+    return {
+      runtimeId,
+      providerId: "usage-unsupported",
+      source: "unsupported",
+      status: "unavailable",
+      reason: "No usage provider configured for this runtime",
+      model: null,
+      remaining: null,
+      spend: null,
+      resetAt: null,
+      checkedAt,
+    };
+  }
+  try {
+    const { stdout } = await execFileAsync(provider.command, provider.args, {
+      cwd: provider.cwd,
+      timeout: 8000,
+      maxBuffer: 128 * 1024,
+    });
+    return normalizeRuntimeUsage(runtimeId, provider.id, stdout, checkedAt);
+  } catch (error) {
+    return {
+      runtimeId,
+      providerId: provider.id,
+      source: provider.command,
+      status: "degraded",
+      reason: error instanceof Error ? error.message : "Usage provider failed",
+      model: null,
+      remaining: null,
+      spend: null,
+      resetAt: null,
+      checkedAt,
+    };
+  }
+}
+
+export function normalizeRuntimeUsage(
+  runtimeId: string,
+  providerId: string,
+  output: string,
+  checkedAt = new Date().toISOString(),
+): RuntimeUsageSummary {
+  const parsed = JSON.parse(output) as Record<string, unknown>;
+  return {
+    runtimeId,
+    providerId,
+    source: typeof parsed.source === "string" ? parsed.source : providerId,
+    status: parsed.status === "degraded" || parsed.status === "unavailable" ? parsed.status : "healthy",
+    reason: typeof parsed.reason === "string" ? parsed.reason : null,
+    model: typeof parsed.model === "string" ? parsed.model : null,
+    remaining: typeof parsed.remaining === "string" ? parsed.remaining : null,
+    spend: typeof parsed.spend === "string" ? parsed.spend : null,
+    resetAt: typeof parsed.resetAt === "string" ? parsed.resetAt : null,
+    checkedAt,
+  };
 }
 
 export function normalizeCiRun(input: Record<string, unknown>): CiRunSummary {

@@ -246,6 +246,9 @@ importers:
 
   packages/providers:
     dependencies:
+      '@citadel/config':
+        specifier: workspace:*
+        version: link:../config
       '@citadel/contracts':
         specifier: workspace:*
         version: link:../contracts

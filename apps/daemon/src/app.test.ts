@@ -102,6 +102,11 @@ describe("createDaemonApp", () => {
       expect(await getJson<{ runtimes: unknown[] }>(`${baseUrl}/api/runtimes`)).toMatchObject({
         runtimes: [expect.objectContaining({ id: "shell" })],
       });
+      expect(
+        await getJson<{ usage: { runtimeId: string; status: string } }>(`${baseUrl}/api/runtimes/shell/usage`),
+      ).toMatchObject({
+        usage: { runtimeId: "shell", status: "unavailable" },
+      });
       expect(await getJson<{ activity: unknown[] }>(`${baseUrl}/api/activity`)).toEqual({ activity: [] });
       expect(
         await getJson<{ repos: unknown[]; workspaces: unknown[]; sessions: unknown[] }>(

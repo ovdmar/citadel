@@ -6,6 +6,7 @@ import type {
   IssueTransitionActionResult,
   ProviderHealth,
   Repo,
+  RuntimeUsageSummary,
   VersionControlSummary,
   Workspace,
   WorkspaceDiff,
@@ -701,17 +702,19 @@ function SettingsView() {
         <section className="panel">
           <PanelTitle icon={<TerminalSquare />} title="Runtimes" />
           {state.data?.runtimes.map((runtime) => (
-            <HealthRow
-              key={runtime.id}
-              provider={{
-                id: runtime.id,
-                displayName: runtime.displayName,
-                kind: "usage",
-                status: runtime.health,
-                reason: runtime.healthReason,
-                checkedAt: new Date().toISOString(),
-              }}
-            />
+            <div key={runtime.id} className="runtime-row">
+              <HealthRow
+                provider={{
+                  id: runtime.id,
+                  displayName: runtime.displayName,
+                  kind: "usage",
+                  status: runtime.health,
+                  reason: runtime.healthReason,
+                  checkedAt: new Date().toISOString(),
+                }}
+              />
+              <RuntimeUsage runtime={runtime} />
+            </div>
           ))}
         </section>
         <section className="panel">
@@ -719,6 +722,22 @@ function SettingsView() {
           <div className="empty">{state.data?.mcp.enabled ? "Enabled for local/internal use" : "Disabled"}</div>
         </section>
       </div>
+    </div>
+  );
+}
+
+function RuntimeUsage(props: { runtime: AgentRuntime }) {
+  const usage = useQuery({
+    queryKey: ["runtime-usage", props.runtime.id],
+    queryFn: () => api<{ usage: RuntimeUsageSummary }>(`/api/runtimes/${props.runtime.id}/usage`),
+  });
+  const summary = usage.data?.usage;
+  if (!summary) return <div className="usage-row">Usage unavailable</div>;
+  return (
+    <div className={`usage-row ${summary.status}`}>
+      <span>{summary.source}</span>
+      <strong>{summary.remaining ?? summary.spend ?? summary.status}</strong>
+      {summary.reason ? <p>{summary.reason}</p> : null}
     </div>
   );
 }
