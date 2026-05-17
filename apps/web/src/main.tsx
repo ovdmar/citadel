@@ -23,12 +23,10 @@ import {
   CheckCircle2,
   GitBranch,
   HeartPulse,
-  Moon,
   Play,
   Plus,
   RefreshCcw,
   Settings,
-  Sun,
   TerminalSquare,
 } from "lucide-react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -40,6 +38,7 @@ import { Badge } from "./components/ui/badge.js";
 import { ConfigForm } from "./config-form.js";
 import { formatLabel } from "./labels.js";
 import "./styles.css";
+import { ThemeControls } from "./theme-controls.js";
 
 type StateResponse = {
   repos: Repo[];
@@ -77,12 +76,6 @@ declare module "@tanstack/react-router" {
 }
 
 function Shell() {
-  const [theme, setTheme] = useState(() => localStorage.getItem("citadel.theme") || "system");
-  useEffect(() => {
-    localStorage.setItem("citadel.theme", theme);
-    document.documentElement.dataset.theme = theme;
-  }, [theme]);
-
   return (
     <div className="shell">
       <aside className="rail">
@@ -95,14 +88,7 @@ function Shell() {
             <Settings size={17} /> Settings
           </Link>
         </nav>
-        <div className="theme">
-          <button type="button" aria-label="Light theme" onClick={() => setTheme("light")}>
-            <Sun size={16} />
-          </button>
-          <button type="button" aria-label="Dark theme" onClick={() => setTheme("dark")}>
-            <Moon size={16} />
-          </button>
-        </div>
+        <ThemeControls />
       </aside>
       <main>
         <Outlet />

@@ -16,6 +16,13 @@
   color: #edf1f7;
 }
 
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    background: #101318;
+    color: #edf1f7;
+  }
+}
+
 * {
   box-sizing: border-box;
 }

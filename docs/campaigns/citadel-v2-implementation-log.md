@@ -414,6 +414,18 @@
   - `provider_summary 2386ms`
   - `web_cockpit_visible 442ms`
   - `workspace_settings_switch 281ms`
+- Completed the light/dark/system theme control:
+  - extracted a reusable `ThemeControls` component,
+  - added a system theme button,
+  - persisted the selected mode while allowing system mode to follow `prefers-color-scheme`,
+  - kept the web entry file within the size guard.
+- Reran `make check`: passed with 58 tests across 15 files. App/package source coverage is 92.34% statements.
+- Reran `pnpm e2e`: 5 Playwright tests passed, 1 mobile-only duplicate workflow smoke skipped.
+- Reran `pnpm performance`:
+  - `api_state 587ms`
+  - `provider_summary 12ms`
+  - `web_cockpit_visible 408ms`
+  - `workspace_settings_switch 270ms`
 
 Known current gaps before final DoD:
 
