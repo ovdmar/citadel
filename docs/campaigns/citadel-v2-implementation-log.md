@@ -390,6 +390,7 @@
   - `provider_summary 2540ms`
   - `web_cockpit_visible 415ms`
   - `workspace_settings_switch 228ms`
+- Added `docs/operations/config-reference.md` documenting local server config, provider toggles, runtime adapters, runtime usage provider JSON, command hook events/output, MCP resources/tools, and terminal gateway behavior. Linked it from the runbook.
 
 Known current gaps before final DoD:
 

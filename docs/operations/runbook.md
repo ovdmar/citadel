@@ -17,6 +17,8 @@ Default SQLite database: `~/.local/share/citadel/citadel.sqlite`
 
 Set `CITADEL_DATA_DIR` or `CITADEL_CONFIG` to override local paths.
 
+See [config-reference.md](./config-reference.md) for providers, runtimes, usage providers, hooks, MCP resources/tools, and terminal gateway behavior.
+
 ## Verification
 
 ```bash
