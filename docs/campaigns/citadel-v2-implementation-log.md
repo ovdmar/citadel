@@ -434,6 +434,12 @@
   - `provider_summary 12ms`
   - `web_cockpit_visible 444ms`
   - `workspace_settings_switch 280ms`
+- Added `.github/workflows/ci.yml` as the OSS CI baseline:
+  - installs Linux host prerequisites (`sqlite3`, `tmux`),
+  - uses Node 24 and pnpm with the frozen lockfile,
+  - runs `make check`,
+  - installs Playwright Chromium and runs `pnpm e2e`,
+  - starts the local dev servers, runs `make smoke`, and runs `pnpm performance`.
 
 Known current gaps before final DoD:
 
