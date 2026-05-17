@@ -1,6 +1,7 @@
 import type {
   AgentRuntime,
   AgentSession,
+  IssueTrackerSummary,
   ProviderHealth,
   Repo,
   VersionControlSummary,
@@ -185,7 +186,7 @@ function Cockpit() {
           {data?.providerHealth.map((provider) => (
             <HealthRow key={provider.id} provider={provider} />
           ))}
-          {selectedRepo ? <ProviderSummary repo={selectedRepo} /> : null}
+          {selectedRepo ? <ProviderSummary repo={selectedRepo} workspace={selectedWorkspace ?? null} /> : null}
         </section>
 
         <section className="panel">
@@ -285,20 +286,41 @@ function HealthRow(props: { provider: ProviderHealth }) {
   );
 }
 
-function ProviderSummary(props: { repo: Repo }) {
+function ProviderSummary(props: { repo: Repo; workspace: Workspace | null }) {
   const summary = useQuery({
     queryKey: ["provider-summary", props.repo.id],
     queryFn: () => api<{ versionControl: VersionControlSummary }>(`/api/repos/${props.repo.id}/provider-summary`),
   });
+  const issueSummary = useQuery({
+    queryKey: ["issue-summary", props.workspace?.id],
+    enabled: Boolean(props.workspace?.issueKey),
+    queryFn: () => api<{ issueTracker: IssueTrackerSummary }>(`/api/workspaces/${props.workspace?.id}/issue-summary`),
+  });
   const vc = summary.data?.versionControl;
-  if (!vc) return null;
+  const issue = issueSummary.data?.issueTracker;
+  if (!vc && !issue) return null;
   return (
-    <div className={`health ${vc.status}`}>
-      <strong>{vc.currentBranch || props.repo.defaultBranch}</strong>
-      <span>{vc.pullRequest ? `PR #${vc.pullRequest.number}` : "No active PR"}</span>
-      {vc.pullRequest ? <p>{vc.pullRequest.title}</p> : null}
-      {vc.reason ? <p>{vc.reason}</p> : null}
-    </div>
+    <>
+      {vc ? (
+        <div className={`health ${vc.status}`}>
+          <strong>{vc.currentBranch || props.repo.defaultBranch}</strong>
+          <span>{vc.pullRequest ? `PR #${vc.pullRequest.number}` : "No active PR"}</span>
+          {vc.pullRequest ? <p>{vc.pullRequest.title}</p> : null}
+          {vc.reason ? <p>{vc.reason}</p> : null}
+        </div>
+      ) : null}
+      {issue ? (
+        <div className={`health ${issue.status}`}>
+          <strong>{issue.key}</strong>
+          <span>{issue.issueStatus || issue.status}</span>
+          {issue.summary ? <p>{issue.summary}</p> : null}
+          {issue.transitions.length > 0 ? (
+            <p>{issue.transitions.map((transition) => transition.toStatus).join(" · ")}</p>
+          ) : null}
+          {issue.reason ? <p>{issue.reason}</p> : null}
+        </div>
+      ) : null}
+    </>
   );
 }
 

@@ -127,6 +127,26 @@ export const VersionControlSummarySchema = z.object({
   checkedAt: z.string(),
 });
 
+export const IssueTransitionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  toStatus: z.string(),
+});
+
+export const IssueTrackerSummarySchema = z.object({
+  providerId: z.string(),
+  status: ProviderStatusSchema,
+  reason: z.string().nullable(),
+  key: z.string(),
+  summary: z.string().nullable(),
+  issueStatus: z.string().nullable(),
+  assignee: z.string().nullable(),
+  updated: z.string().nullable(),
+  url: z.string().nullable(),
+  transitions: z.array(IssueTransitionSchema),
+  checkedAt: z.string(),
+});
+
 export const OperationSchema = z.object({
   id: IdSchema,
   type: z.string(),
@@ -207,6 +227,8 @@ export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 export type CheckSummary = z.infer<typeof CheckSummarySchema>;
 export type PullRequestSummary = z.infer<typeof PullRequestSummarySchema>;
 export type VersionControlSummary = z.infer<typeof VersionControlSummarySchema>;
+export type IssueTransition = z.infer<typeof IssueTransitionSchema>;
+export type IssueTrackerSummary = z.infer<typeof IssueTrackerSummarySchema>;
 export type Operation = z.infer<typeof OperationSchema>;
 export type ActivityEvent = z.infer<typeof ActivityEventSchema>;
 export type AppEvent = z.infer<typeof AppEventSchema>;

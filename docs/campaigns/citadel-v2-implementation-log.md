@@ -127,12 +127,26 @@
   - `provider_summary 2466ms`
   - `web_cockpit_visible 448ms`
   - `workspace_settings_switch 254ms`
+- Added Jira issue provider summary support:
+  - shared `IssueTrackerSummary` and transition contracts,
+  - `collectJiraIssueSummary()` through `jtk issues get` and `jtk transitions list`,
+  - resilient parsers for jtk issue details and workflow transition table output,
+  - daemon endpoint `GET /api/workspaces/:workspaceId/issue-summary`,
+  - cockpit provider panel display for selected issue status and available transition targets.
+- Added provider tests for Jira parsing and degraded issue lookup behavior.
+- Reran `make check`: passed with 41 tests across 15 files. App/package source coverage is 93.04% statements.
+- Reran `pnpm e2e`: 4 Playwright tests passed.
+- Reran `pnpm performance`:
+  - `api_state 584ms`
+  - `provider_summary 2586ms`
+  - `web_cockpit_visible 424ms`
+  - `workspace_settings_switch 193ms`
 
 Known current gaps before final DoD:
 
 - Terminal WebSocket still uses tmux capture polling rather than a raw PTY stream. Control input, paste, resize, and deeper reconnect scrollback are now implemented and tested, but alternate-screen fidelity and output isolation need more verification before the final campaign gate.
 - Diff reader now has renamed/binary/truncation tests; the cockpit diff UI still needs richer states before the full `MS-482` bar is complete.
 - Workspace setup/teardown hook execution is implemented for static config hooks, and settings can now edit/persist hook config; deeper hook validation and workflow tests are still needed.
-- Provider implementation now includes normalized GitHub VC/current PR/check summary, but Jira workflow actions, check logs, richer provider caching, and UI action gating still need expansion.
+- Provider implementation now includes normalized GitHub VC/current PR/check summary and Jira issue/transition summaries, but Jira workflow actions, check logs, richer provider caching, and UI action gating still need expansion.
 - MCP has a local/internal callable JSON tool shim for status/list operations, but a full MCP protocol transport and mutating tools remain to be implemented before the final MCP bar is complete.
 - First-run settings flow and full shadcn/Tailwind component system still need implementation.

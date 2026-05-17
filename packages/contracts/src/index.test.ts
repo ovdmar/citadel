@@ -6,6 +6,7 @@ import {
   CreateAgentSessionInputSchema,
   CreateRepoInputSchema,
   CreateWorkspaceInputSchema,
+  IssueTrackerSummarySchema,
   OperationSchema,
   ProviderHealthSchema,
   RepoSchema,
@@ -125,5 +126,20 @@ describe("contract schemas", () => {
         checkedAt: timestamp,
       }).remotes,
     ).toEqual(["origin"]);
+    expect(
+      IssueTrackerSummarySchema.parse({
+        providerId: "jira-jtk",
+        status: "healthy",
+        reason: null,
+        key: "MS-496",
+        summary: "Campaign",
+        issueStatus: "In Progress",
+        assignee: "Unassigned",
+        updated: "2026-05-17",
+        url: null,
+        transitions: [{ id: "31", name: "Done", toStatus: "Done" }],
+        checkedAt: timestamp,
+      }).transitions[0]?.toStatus,
+    ).toBe("Done");
   });
 });

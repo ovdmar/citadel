@@ -3,7 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { collectGitHubVersionControlSummary, commandHealth } from "./index.js";
+import {
+  collectGitHubVersionControlSummary,
+  collectJiraIssueSummary,
+  commandHealth,
+  parseJiraIssueOutput,
+  parseJiraTransitionsOutput,
+} from "./index.js";
 
 const dirs: string[] = [];
 
@@ -75,6 +81,35 @@ describe("commandHealth", () => {
       pullRequest: null,
     });
     expect(Date.parse(summary.checkedAt)).not.toBeNaN();
+  });
+
+  it("parses Jira issue details and workflow transitions", () => {
+    expect(
+      parseJiraIssueOutput(
+        "Key: MS-496\nSummary: Citadel: prepare and run v2 headless implementation campaign\nStatus: To Do\nAssignee: Unassigned\nUpdated: 2026-05-17\n",
+      ),
+    ).toEqual({
+      key: "MS-496",
+      summary: "Citadel: prepare and run v2 headless implementation campaign",
+      issueStatus: "To Do",
+      assignee: "Unassigned",
+      updated: "2026-05-17",
+    });
+    expect(
+      parseJiraTransitionsOutput("ID | NAME | TO_STATUS\n21 | In Progress | In Progress\n31 | Done | Done\n"),
+    ).toEqual([
+      { id: "21", name: "In Progress", toStatus: "In Progress" },
+      { id: "31", name: "Done", toStatus: "Done" },
+    ]);
+  });
+
+  it("returns degraded Jira summaries when issue lookup fails", async () => {
+    const summary = await collectJiraIssueSummary("not-a-real-issue-key");
+
+    expect(summary.providerId).toBe("jira-jtk");
+    expect(summary.status).toBe("degraded");
+    expect(summary.key).toBe("NOT-A-REAL-ISSUE-KEY");
+    expect(summary.transitions).toEqual([]);
   });
 });
 
