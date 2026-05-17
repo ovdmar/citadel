@@ -46,6 +46,25 @@ describe("loadConfig", () => {
     expect(config.repoDefaults.setupHookIds).toEqual(["setup"]);
   });
 
+  it("defaults lifecycle notification hooks to non-blocking", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-config-"));
+    dirs.push(dir);
+    const configPath = path.join(dir, "citadel.config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        dataDir: dir,
+        databasePath: path.join(dir, "citadel.sqlite"),
+        hooks: [{ id: "notify", event: "workspace.created", command: "true" }],
+      }),
+    );
+
+    const config = loadConfig(configPath);
+
+    expect(config.hooks[0]).toMatchObject({ id: "notify", blocking: false });
+  });
+
   it("rejects hook references that are missing or wired to the wrong event", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-config-"));
     dirs.push(dir);

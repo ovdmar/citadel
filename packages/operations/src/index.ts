@@ -99,6 +99,7 @@ export class OperationService {
         workspace.id,
         operation.id,
       );
+      await this.runNotificationHooks("workspace.created", repo, workspace, operation.id, { repo, workspace });
       this.store.upsertOperation({
         ...operation,
         workspaceId: workspace.id,
@@ -149,6 +150,8 @@ export class OperationService {
     };
     this.store.insertSession(session);
     this.activity("agent.started", "user", `Started ${session.displayName}`, workspace.repoId, workspace.id, null);
+    const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+    if (repo) await this.runNotificationHooks("agent.started", repo, workspace, null, { repo, workspace, session });
     return session;
   }
 
@@ -234,6 +237,13 @@ export class OperationService {
       workspace.id,
       operation.id,
     );
+    await this.runNotificationHooks(
+      input.archiveOnly ? "workspace.archived" : "workspace.removed",
+      repo,
+      workspace,
+      operation.id,
+      { repo, workspace, result: { removed: !input.archiveOnly, archived: Boolean(input.archiveOnly), dirty } },
+    );
     return { operationId: operation.id, removed: !input.archiveOnly, archived: Boolean(input.archiveOnly), dirty };
   }
 
@@ -313,6 +323,53 @@ export class OperationService {
       );
     }
   }
+
+  private async runNotificationHooks(
+    event: HookConfig["event"],
+    repo: Repo,
+    workspace: Workspace,
+    operationId: string | null,
+    payload: unknown,
+  ) {
+    const hooks = (this.config?.hooks ?? []).filter((hook) => hook.event === event);
+    for (const hook of hooks) {
+      try {
+        const result = await runCommandHook(
+          {
+            id: hook.id,
+            event,
+            command: hook.command,
+            args: hook.args,
+            cwd: hook.cwd || workspace.path,
+            timeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
+            blocking: hook.blocking,
+          },
+          { event, ...asObject(payload), operationId },
+        );
+        this.activity(
+          `hook.${event}`,
+          "hook",
+          `Hook ${hook.id} completed${result.stderr ? " with stderr" : ""}`,
+          repo.id,
+          workspace.id,
+          operationId,
+        );
+      } catch (error) {
+        this.activity(
+          `hook.${event}.failed`,
+          "hook",
+          `Hook ${hook.id} failed: ${error instanceof Error ? error.message : "hook_failed"}`,
+          repo.id,
+          workspace.id,
+          operationId,
+        );
+      }
+    }
+  }
+}
+
+function asObject(payload: unknown) {
+  return typeof payload === "object" && payload !== null ? payload : {};
 }
 
 function discoverDefaultBranch(rootPath: string) {

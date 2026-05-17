@@ -12,7 +12,13 @@ type ConfigResponse = {
     hooks: {
       id: string;
       kind: "command";
-      event: "workspace.setup" | "workspace.teardown";
+      event:
+        | "workspace.setup"
+        | "workspace.teardown"
+        | "workspace.created"
+        | "workspace.archived"
+        | "workspace.removed"
+        | "agent.started";
       command: string;
       args: string[];
       cwd?: string;

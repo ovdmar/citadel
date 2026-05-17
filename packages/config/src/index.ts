@@ -10,18 +10,32 @@ export const RuntimeConfigSchema = z.object({
   args: z.array(z.string()).default([]),
 });
 
-export const HookConfigSchema = z.object({
-  id: z.string().min(1),
-  kind: z.literal("command").default("command"),
-  event: z.enum(["workspace.setup", "workspace.teardown"]),
-  command: z.string().min(1),
-  args: z.array(z.string()).default([]),
-  cwd: z
-    .string()
-    .optional()
-    .refine((value) => value === undefined || path.isAbsolute(value), "Hook cwd must be an absolute path"),
-  blocking: z.boolean().default(true),
-});
+export const HookEventSchema = z.enum([
+  "workspace.setup",
+  "workspace.teardown",
+  "workspace.created",
+  "workspace.archived",
+  "workspace.removed",
+  "agent.started",
+]);
+
+export const HookConfigSchema = z
+  .object({
+    id: z.string().min(1),
+    kind: z.literal("command").default("command"),
+    event: HookEventSchema,
+    command: z.string().min(1),
+    args: z.array(z.string()).default([]),
+    cwd: z
+      .string()
+      .optional()
+      .refine((value) => value === undefined || path.isAbsolute(value), "Hook cwd must be an absolute path"),
+    blocking: z.boolean().optional(),
+  })
+  .transform((hook) => ({
+    ...hook,
+    blocking: hook.blocking ?? ["workspace.setup", "workspace.teardown"].includes(hook.event),
+  }));
 
 export const CitadelConfigSchema = z
   .object({

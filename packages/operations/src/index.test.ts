@@ -133,6 +133,36 @@ describe("OperationService", () => {
     expect(fs.existsSync(workspace?.path ?? "")).toBe(false);
     expect(store.listWorkspaces()).toHaveLength(0);
   });
+
+  it("records notification hook failures without blocking workspace readiness", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [
+        {
+          id: "notify-fails",
+          kind: "command",
+          event: "workspace.created",
+          command: "node",
+          args: ["-e", "process.stderr.write('notify denied'); process.exit(14)"],
+          blocking: false,
+        },
+      ],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const result = await service.createWorkspace({ repoId: repo.id, name: "Notify Policy", source: "scratch" });
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === result.workspaceId);
+
+    expect(workspace?.lifecycle).toBe("ready");
+    expect(store.listActivity().find((event) => event.type === "hook.workspace.created.failed")).toMatchObject({
+      source: "hook",
+      message: expect.stringContaining("notify denied"),
+    });
+  });
 });
 
 function createGitFixture() {
