@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import type http from "node:http";
 import { promisify } from "node:util";
 import { WebSocketServer } from "ws";
@@ -99,26 +99,71 @@ export function attachTerminalWebSocket(server: http.Server, resolveSession: (id
       return;
     }
     wss.handleUpgrade(request, socket, head, (ws) => {
-      let last = "";
-      const push = () => {
-        const current = captureTmuxVisibleScreen(tmuxSession, 1000);
-        if (current !== last) {
-          ws.send(JSON.stringify({ type: "output", data: current }));
-          last = current;
-        }
+      const sendSnapshot = () => {
+        if (ws.readyState === ws.OPEN)
+          ws.send(JSON.stringify({ type: "output", data: captureTmuxVisibleScreen(tmuxSession, 1000) }));
       };
-      const timer = setInterval(push, 250);
-      push();
+      sendSnapshot();
+      const control = attachTmuxControlStream(tmuxSession, (data) => {
+        if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "outputChunk", data }));
+      });
       ws.on("message", (raw) => {
         const message = JSON.parse(raw.toString()) as { type: string; data?: string; cols?: number; rows?: number };
-        if (message.type === "input" && typeof message.data === "string") sendKeys(tmuxSession, message.data);
-        if (message.type === "paste" && typeof message.data === "string") pasteText(tmuxSession, message.data);
-        if (message.type === "resize" && message.cols && message.rows)
+        let shouldCatchUp = false;
+        if (message.type === "input" && typeof message.data === "string") {
+          sendKeys(tmuxSession, message.data);
+          shouldCatchUp = true;
+        }
+        if (message.type === "paste" && typeof message.data === "string") {
+          pasteText(tmuxSession, message.data);
+          shouldCatchUp = true;
+        }
+        if (message.type === "resize" && message.cols && message.rows) {
           resizePane(tmuxSession, message.cols, message.rows);
+          shouldCatchUp = true;
+        }
+        if (shouldCatchUp) setTimeout(sendSnapshot, 50).unref();
       });
-      ws.on("close", () => clearInterval(timer));
+      ws.on("close", () => control.close());
     });
   });
+}
+
+export function attachTmuxControlStream(sessionName: string, onOutput: (data: string) => void) {
+  const child = spawn("tmux", ["-C", "attach-session", "-t", sessionName], {
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  let buffered = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    buffered += chunk;
+    const lines = buffered.split("\n");
+    buffered = lines.pop() ?? "";
+    for (const line of lines) {
+      const data = parseTmuxControlOutput(line);
+      if (data) onOutput(data);
+    }
+  });
+  return {
+    close: () => {
+      child.stdout.destroy();
+      child.stdin.destroy();
+      child.kill("SIGTERM");
+      setTimeout(() => {
+        if (!child.killed || child.exitCode === null) child.kill("SIGKILL");
+      }, 250).unref();
+    },
+  };
+}
+
+export function parseTmuxControlOutput(line: string) {
+  const match = /^%output\s+\S+\s+(.*)$/.exec(line);
+  if (!match) return null;
+  return decodeTmuxControlValue(match[1] ?? "");
+}
+
+export function decodeTmuxControlValue(value: string) {
+  return value.replace(/\\([0-7]{3})/g, (_match, octal: string) => String.fromCharCode(Number.parseInt(octal, 8)));
 }
 
 function tokenizeTerminalInput(input: string) {

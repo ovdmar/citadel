@@ -10,6 +10,7 @@ import {
   captureTmuxVisibleScreen,
   ensureTmuxSession,
   killTmuxSession,
+  parseTmuxControlOutput,
   pasteText,
   resizePane,
   sendKeys,
@@ -25,6 +26,11 @@ afterEach(() => {
 });
 
 describe("tmux terminal gateway helpers", () => {
+  it("decodes tmux control-mode output chunks", () => {
+    expect(parseTmuxControlOutput("%output %1 hello\\015\\012")).toBe("hello\r\n");
+    expect(parseTmuxControlOutput("%session-changed $1 shell")).toBeNull();
+  });
+
   it("creates durable sessions, sends input, captures output, resizes, and cleans up", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
     dirs.push(cwd);
@@ -155,9 +161,11 @@ describe("tmux terminal gateway helpers", () => {
       const ws = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/sess_test`);
       await waitForOpen(ws);
 
+      const streamedOutput = waitForWebSocketOutput(ws, "websocket-smoke", "outputChunk");
       ws.send(JSON.stringify({ type: "input", data: "printf websocket-smoke" }));
       ws.send(JSON.stringify({ type: "input", data: "\r" }));
       await waitForWebSocketOutput(ws, "websocket-smoke");
+      await streamedOutput;
 
       ws.send(JSON.stringify({ type: "input", data: "cat > websocket-paste.txt" }));
       ws.send(JSON.stringify({ type: "input", data: "\r" }));
@@ -277,15 +285,19 @@ function waitForClose(ws: WebSocket) {
   });
 }
 
-function waitForWebSocketOutput(ws: WebSocket, expected: string) {
+function waitForWebSocketOutput(ws: WebSocket, expected: string, type?: string) {
   return new Promise<void>((resolve, reject) => {
+    let accumulated = "";
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error(`Timed out waiting for WebSocket output ${expected}`));
     }, 5000);
     const onMessage = (raw: WebSocket.RawData) => {
       const message = JSON.parse(raw.toString()) as { type?: string; data?: string };
-      if (message.type === "output" && message.data?.includes(expected)) {
+      if ((!type || message.type === type) && message.data) {
+        accumulated = `${accumulated}${message.data}`.slice(-64_000);
+      }
+      if (accumulated.includes(expected)) {
         cleanup();
         resolve();
       }

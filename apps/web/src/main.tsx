@@ -650,6 +650,9 @@ function TerminalPane(props: { session: AgentSession }) {
         terminal.reset();
         terminal.write(message.data);
       }
+      if (message.type === "outputChunk" && typeof message.data === "string") {
+        terminal.write(message.data);
+      }
     });
     socket.addEventListener("close", () => setState("closed"));
     return () => {
