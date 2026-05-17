@@ -286,6 +286,17 @@ export function createDaemonApp(input: {
     );
   });
 
+  app.get("/api/mcp/resources/repos", (_req, res) => {
+    res.json({ repos: store.listRepos() });
+  });
+
+  app.get(
+    "/api/mcp/resources/provider-health",
+    asyncRoute(async (_req, res) => {
+      res.json({ providerHealth: await collectProviderHealth(config.providers) });
+    }),
+  );
+
   app.post(
     "/api/mcp/tools/call",
     asyncRoute(async (req, res) => {
@@ -328,10 +339,9 @@ export function createDaemonApp(input: {
           );
         case "resources/read": {
           const uri = typeof request.params?.uri === "string" ? request.params.uri : "";
-          if (uri !== "citadel://workspaces") return res.json(rpcError(request.id, -32602, "unknown_resource"));
-          return res.json(
-            rpcResult(request.id, { contents: [{ uri, mimeType: "application/json", json: workspaceResource() }] }),
-          );
+          const resource = await readMcpResource(uri);
+          if (!resource) return res.json(rpcError(request.id, -32602, "unknown_resource"));
+          return res.json(rpcResult(request.id, { contents: [{ uri, mimeType: "application/json", json: resource }] }));
         }
         default:
           return res.json(rpcError(request.id, -32601, "method_not_found"));
@@ -414,6 +424,13 @@ export function createDaemonApp(input: {
       workspaces: store.listWorkspaces(),
       sessions: store.listSessions(),
     });
+  }
+
+  async function readMcpResource(uri: string) {
+    if (uri === "citadel://repos") return { repos: store.listRepos() };
+    if (uri === "citadel://workspaces") return workspaceResource();
+    if (uri === "citadel://provider-health") return { providerHealth: await collectProviderHealth(config.providers) };
+    return null;
   }
 
   async function cachedProvider<T>(key: string, load: () => Promise<T>, ttlMs = 10_000) {

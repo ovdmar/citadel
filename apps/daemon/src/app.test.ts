@@ -93,6 +93,12 @@ describe("createDaemonApp", () => {
       });
       expect(await getJson<{ repos: unknown[] }>(`${baseUrl}/api/repos`)).toEqual({ repos: [] });
       expect(await getJson<{ workspaces: unknown[] }>(`${baseUrl}/api/workspaces`)).toEqual({ workspaces: [] });
+      expect(await getJson<{ repos: unknown[] }>(`${baseUrl}/api/mcp/resources/repos`)).toEqual({ repos: [] });
+      expect(
+        await getJson<{ providerHealth: unknown[] }>(`${baseUrl}/api/mcp/resources/provider-health`),
+      ).toMatchObject({
+        providerHealth: [expect.objectContaining({ id: "github-gh" }), expect.objectContaining({ id: "jira-jtk" })],
+      });
       expect(await getJson<{ runtimes: unknown[] }>(`${baseUrl}/api/runtimes`)).toMatchObject({
         runtimes: [expect.objectContaining({ id: "shell" })],
       });
@@ -138,6 +144,30 @@ describe("createDaemonApp", () => {
         }),
       ).toMatchObject({
         result: { contents: [expect.objectContaining({ json: { repos: [], workspaces: [], sessions: [] } })] },
+      });
+      expect(
+        await postJson<{ result: { contents: Array<{ json: { providerHealth: unknown[] } }> } }>(
+          `${baseUrl}/api/mcp/rpc`,
+          {
+            jsonrpc: "2.0",
+            id: 4,
+            method: "resources/read",
+            params: { uri: "citadel://provider-health" },
+          },
+        ),
+      ).toMatchObject({
+        result: {
+          contents: [
+            expect.objectContaining({
+              json: {
+                providerHealth: [
+                  expect.objectContaining({ id: "github-gh" }),
+                  expect.objectContaining({ id: "jira-jtk" }),
+                ],
+              },
+            }),
+          ],
+        },
       });
 
       expect((await fetch(`${baseUrl}/api/repos/repo_missing/provider-summary`)).status).toBe(404);
