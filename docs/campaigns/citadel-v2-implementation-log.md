@@ -113,11 +113,24 @@
 - Added smoke tests for the small CLI/testing/UI package exports.
 - Scoped Vitest coverage to app/package source. Dev check scripts are still executed by `make check` through `check:arch`, `check:size`, and `check:deps`, but are no longer counted as uncovered unit-test targets.
 - Reran `make check`: passed with 38 tests across 15 files. App/package source coverage is now 93.34% statements.
+- Improved terminal gateway fidelity:
+  - maps control input and common xterm escape sequences to tmux keys (`Ctrl-C`, `Ctrl-D`, arrows, Home/End/Delete/PageUp/PageDown),
+  - supports explicit multi-line paste through a tmux paste buffer,
+  - clamps resize messages to bounded terminal dimensions,
+  - increases WebSocket capture window to 1000 lines for reconnect/deeper scrollback.
+- Wired the web terminal paste event to the new WebSocket `paste` message.
+- Added real tmux tests for shell history arrows, `Ctrl-C`, `Ctrl-D`, multi-line paste, bounded resize, and WebSocket paste.
+- Reran `make check`: passed with 39 tests across 15 files. App/package source coverage is now 93.47% statements.
+- Reran `pnpm e2e`: 4 Playwright tests passed.
+- Reran `pnpm performance`:
+  - `api_state 577ms`
+  - `provider_summary 2466ms`
+  - `web_cockpit_visible 448ms`
+  - `workspace_settings_switch 254ms`
 
 Known current gaps before final DoD:
 
-- Terminal WebSocket currently uses tmux capture polling and `send-keys`; interactive fidelity must be expanded and verified against the campaign gate.
-- Web terminal exists and build chunking is split, but terminal protocol still needs stronger fidelity support/tests for raw/control/meta input, paste, alternate screen, reconnect, output isolation, and long scrollback.
+- Terminal WebSocket still uses tmux capture polling rather than a raw PTY stream. Control input, paste, resize, and deeper reconnect scrollback are now implemented and tested, but alternate-screen fidelity and output isolation need more verification before the final campaign gate.
 - Diff reader now has renamed/binary/truncation tests; the cockpit diff UI still needs richer states before the full `MS-482` bar is complete.
 - Workspace setup/teardown hook execution is implemented for static config hooks, and settings can now edit/persist hook config; deeper hook validation and workflow tests are still needed.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, but Jira workflow actions, check logs, richer provider caching, and UI action gating still need expansion.

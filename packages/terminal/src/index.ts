@@ -48,15 +48,25 @@ export function captureTmux(sessionName: string, lines = 200) {
 }
 
 export function sendKeys(sessionName: string, data: string) {
-  if (data === "\r" || data === "\n") {
-    execFileSync("tmux", ["send-keys", "-t", sessionName, "Enter"]);
-    return;
+  for (const token of tokenizeTerminalInput(data)) {
+    if (token.literal) {
+      execFileSync("tmux", ["send-keys", "-l", "-t", sessionName, token.value]);
+    } else {
+      execFileSync("tmux", ["send-keys", "-t", sessionName, token.value]);
+    }
   }
-  execFileSync("tmux", ["send-keys", "-l", "-t", sessionName, data]);
+}
+
+export function pasteText(sessionName: string, data: string) {
+  const bufferName = `citadel_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  execFileSync("tmux", ["load-buffer", "-b", bufferName, "-"], { input: data });
+  execFileSync("tmux", ["paste-buffer", "-d", "-b", bufferName, "-t", sessionName]);
 }
 
 export function resizePane(sessionName: string, cols: number, rows: number) {
-  execFileSync("tmux", ["resize-pane", "-t", sessionName, "-x", String(cols), "-y", String(rows)]);
+  const safeCols = Math.min(400, Math.max(20, Math.trunc(cols)));
+  const safeRows = Math.min(120, Math.max(5, Math.trunc(rows)));
+  execFileSync("tmux", ["resize-pane", "-t", sessionName, "-x", String(safeCols), "-y", String(safeRows)]);
 }
 
 export function killTmuxSession(sessionName: string) {
@@ -79,7 +89,7 @@ export function attachTerminalWebSocket(server: http.Server, resolveSession: (id
     wss.handleUpgrade(request, socket, head, (ws) => {
       let last = "";
       const push = () => {
-        const current = captureTmux(tmuxSession, 300);
+        const current = captureTmux(tmuxSession, 1000);
         if (current !== last) {
           ws.send(JSON.stringify({ type: "output", data: current }));
           last = current;
@@ -90,10 +100,83 @@ export function attachTerminalWebSocket(server: http.Server, resolveSession: (id
       ws.on("message", (raw) => {
         const message = JSON.parse(raw.toString()) as { type: string; data?: string; cols?: number; rows?: number };
         if (message.type === "input" && typeof message.data === "string") sendKeys(tmuxSession, message.data);
+        if (message.type === "paste" && typeof message.data === "string") pasteText(tmuxSession, message.data);
         if (message.type === "resize" && message.cols && message.rows)
           resizePane(tmuxSession, message.cols, message.rows);
       });
       ws.on("close", () => clearInterval(timer));
     });
   });
+}
+
+function tokenizeTerminalInput(input: string) {
+  const tokens: { literal: boolean; value: string }[] = [];
+  let literal = "";
+  const flush = () => {
+    if (literal) {
+      tokens.push({ literal: true, value: literal });
+      literal = "";
+    }
+  };
+
+  for (let index = 0; index < input.length; index += 1) {
+    const rest = input.slice(index);
+    const escapeKey = keyForEscapeSequence(rest);
+    if (escapeKey) {
+      flush();
+      tokens.push({ literal: false, value: escapeKey.key });
+      index += escapeKey.length - 1;
+      continue;
+    }
+
+    const key = keyForControlCharacter(input[index] ?? "");
+    if (key) {
+      flush();
+      tokens.push({ literal: false, value: key });
+      continue;
+    }
+    literal += input[index];
+  }
+  flush();
+  return tokens;
+}
+
+function keyForControlCharacter(char: string) {
+  switch (char) {
+    case "\r":
+    case "\n":
+      return "Enter";
+    case "\t":
+      return "Tab";
+    case "\u0003":
+      return "C-c";
+    case "\u0004":
+      return "C-d";
+    case "\u001a":
+      return "C-z";
+    case "\u001b":
+      return "Escape";
+    case "\u007f":
+      return "BSpace";
+    default:
+      return null;
+  }
+}
+
+function keyForEscapeSequence(input: string) {
+  const sequences: Record<string, string> = {
+    "\u001b[A": "Up",
+    "\u001b[B": "Down",
+    "\u001b[C": "Right",
+    "\u001b[D": "Left",
+    "\u001b[H": "Home",
+    "\u001b[F": "End",
+    "\u001b[3~": "Delete",
+    "\u001b[5~": "PageUp",
+    "\u001b[6~": "PageDown",
+  };
+  for (const [sequence, key] of Object.entries(sequences)) {
+    if (input.startsWith(sequence)) return { key, length: sequence.length };
+  }
+  return null;
 }

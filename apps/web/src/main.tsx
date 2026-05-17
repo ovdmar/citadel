@@ -503,15 +503,25 @@ function TerminalPane(props: { session: AgentSession }) {
 
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     const socket = new WebSocket(`${protocol}://${window.location.host}/terminal/${props.session.id}`);
+    const sendTerminalMessage = (message: unknown) => {
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+    };
     const resize = () => {
       fit.fit();
-      socket.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows }));
+      sendTerminalMessage({ type: "resize", cols: terminal.cols, rows: terminal.rows });
     };
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(containerRef.current);
     const inputDisposable = terminal.onData((data) => {
-      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }));
+      sendTerminalMessage({ type: "input", data });
     });
+    const pasteListener = (event: ClipboardEvent) => {
+      const text = event.clipboardData?.getData("text/plain");
+      if (!text) return;
+      event.preventDefault();
+      sendTerminalMessage({ type: "paste", data: text });
+    };
+    terminal.element?.addEventListener("paste", pasteListener);
     socket.addEventListener("open", () => {
       setState("connected");
       resize();
@@ -527,6 +537,7 @@ function TerminalPane(props: { session: AgentSession }) {
     return () => {
       resizeObserver.disconnect();
       inputDisposable.dispose();
+      terminal.element?.removeEventListener("paste", pasteListener);
       socket.close();
       terminal.dispose();
     };
