@@ -160,7 +160,13 @@ function Cockpit() {
           {data?.providerHealth.map((provider) => (
             <HealthRow key={provider.id} provider={provider} />
           ))}
-          {selectedRepo ? <ProviderSummary repo={selectedRepo} workspace={selectedWorkspace ?? null} /> : null}
+          {selectedRepo ? (
+            <ProviderSummary
+              repo={selectedRepo}
+              workspace={selectedWorkspace ?? null}
+              providerHealth={data?.providerHealth ?? []}
+            />
+          ) : null}
         </section>
 
         <section className="panel">
@@ -260,18 +266,24 @@ function HealthRow(props: { provider: ProviderHealth }) {
   );
 }
 
-function ProviderSummary(props: { repo: Repo; workspace: Workspace | null }) {
+function ProviderSummary(props: { repo: Repo; workspace: Workspace | null; providerHealth: ProviderHealth[] }) {
+  const githubHealth = props.providerHealth.find((provider) => provider.id === "github-gh");
+  const jiraHealth = props.providerHealth.find((provider) => provider.id === "jira-jtk");
+  const githubAvailable = githubHealth?.status === "healthy";
+  const jiraAvailable = jiraHealth?.status === "healthy";
   const summary = useQuery({
     queryKey: ["provider-summary", props.repo.id],
+    enabled: githubAvailable,
     queryFn: () => api<{ versionControl: VersionControlSummary }>(`/api/repos/${props.repo.id}/provider-summary`),
   });
   const issueSummary = useQuery({
     queryKey: ["issue-summary", props.workspace?.id],
-    enabled: Boolean(props.workspace?.issueKey),
+    enabled: Boolean(props.workspace?.issueKey) && jiraAvailable,
     queryFn: () => api<{ issueTracker: IssueTrackerSummary }>(`/api/workspaces/${props.workspace?.id}/issue-summary`),
   });
   const ciSummary = useQuery({
     queryKey: ["ci-runs", props.repo.id],
+    enabled: githubAvailable,
     queryFn: () => api<{ ci: CiProviderSummary }>(`/api/repos/${props.repo.id}/ci-runs`),
   });
   const transition = useMutation({
@@ -288,15 +300,29 @@ function ProviderSummary(props: { repo: Repo; workspace: Workspace | null }) {
   const vc = summary.data?.versionControl;
   const issue = issueSummary.data?.issueTracker;
   const ci = ciSummary.data?.ci;
-  if (!vc && !issue && !ci) return null;
+  if (!vc && !issue && !ci && githubAvailable && (!props.workspace?.issueKey || jiraAvailable)) return null;
   return (
     <>
+      {!githubAvailable && githubHealth ? (
+        <div className={`health ${githubHealth.status}`}>
+          <strong>GitHub</strong>
+          <span>Unavailable</span>
+          {githubHealth.reason ? <p>{githubHealth.reason}</p> : null}
+        </div>
+      ) : null}
       {vc ? (
         <div className={`health ${vc.status}`}>
           <strong>{vc.currentBranch || props.repo.defaultBranch}</strong>
           <span>{vc.pullRequest ? `PR #${vc.pullRequest.number}` : "No active PR"}</span>
           {vc.pullRequest ? <p>{vc.pullRequest.title}</p> : null}
           {vc.reason ? <p>{vc.reason}</p> : null}
+        </div>
+      ) : null}
+      {props.workspace?.issueKey && !jiraAvailable && jiraHealth ? (
+        <div className={`health ${jiraHealth.status}`}>
+          <strong>{props.workspace.issueKey}</strong>
+          <span>Issue tracker unavailable</span>
+          {jiraHealth.reason ? <p>{jiraHealth.reason}</p> : null}
         </div>
       ) : null}
       {issue ? (
@@ -310,7 +336,7 @@ function ProviderSummary(props: { repo: Repo; workspace: Workspace | null }) {
                 <button
                   type="button"
                   key={candidate.id}
-                  disabled={transition.isPending}
+                  disabled={transition.isPending || issue.status !== "healthy" || !jiraAvailable}
                   onClick={() => transition.mutate(candidate.id)}
                 >
                   {candidate.toStatus}
