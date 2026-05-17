@@ -123,6 +123,54 @@ describe("tmux terminal gateway helpers", () => {
       await closeServer(server);
     }
   });
+
+  it("keeps WebSocket output isolated across sessions and supports reconnect scrollback", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
+    dirs.push(cwd);
+    const sessionA = `citadel_iso_a_${Date.now().toString(36)}`;
+    const sessionB = `citadel_iso_b_${Date.now().toString(36)}`;
+    sessions.push(sessionA, sessionB);
+    await ensureTmuxSession({ sessionName: sessionA, cwd, command: "bash", args: ["--noprofile", "--norc"] });
+    await ensureTmuxSession({ sessionName: sessionB, cwd, command: "bash", args: ["--noprofile", "--norc"] });
+    const server = http.createServer();
+    attachTerminalWebSocket(server, (id) => (id === "a" ? sessionA : id === "b" ? sessionB : null));
+    await listen(server);
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP test server address");
+      const wsA = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/a`);
+      const wsB = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/b`);
+      await Promise.all([waitForOpen(wsA), waitForOpen(wsB)]);
+
+      wsA.send(
+        JSON.stringify({
+          type: "input",
+          data: "printf 'session-a-only\\n'; for i in $(seq 1 120); do echo long-a-$i; done",
+        }),
+      );
+      wsA.send(JSON.stringify({ type: "input", data: "\r" }));
+      wsB.send(JSON.stringify({ type: "input", data: "printf session-b-only" }));
+      wsB.send(JSON.stringify({ type: "input", data: "\r" }));
+
+      await waitForWebSocketOutput(wsA, "long-a-120");
+      await waitForWebSocketOutput(wsB, "session-b-only");
+      expect(captureTmux(sessionB, 40)).not.toContain("session-a-only");
+      expect(captureTmux(sessionA, 1000)).toContain("long-a-120");
+
+      wsA.close();
+      await waitForClose(wsA);
+      const reconnectA = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/a`);
+      const reconnectOutput = waitForWebSocketOutput(reconnectA, "long-a-120");
+      await waitForOpen(reconnectA);
+      await reconnectOutput;
+
+      reconnectA.close();
+      wsB.close();
+      await Promise.all([waitForClose(reconnectA), waitForClose(wsB)]);
+    } finally {
+      await closeServer(server);
+    }
+  }, 15000);
 });
 
 async function waitForCapture(sessionName: string, expected: string) {

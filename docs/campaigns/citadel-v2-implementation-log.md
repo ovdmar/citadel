@@ -167,10 +167,22 @@
   - `provider_summary 2427ms`
   - `web_cockpit_visible 412ms`
   - `workspace_settings_switch 225ms`
+- Added terminal reconnect/isolation coverage:
+  - two concurrent WebSocket clients bound to different tmux sessions,
+  - verified output does not cross sessions,
+  - emitted long output and verified it remains available in the deeper capture window,
+  - closed and reconnected a WebSocket to the same tmux session and verified scrollback output is replayed.
+- Reran `make check`: passed with 43 tests across 15 files. App/package source coverage is 91.93% statements.
+- Reran `pnpm e2e`: 4 Playwright tests passed.
+- Reran `pnpm performance`:
+  - `api_state 591ms`
+  - `provider_summary 2435ms`
+  - `web_cockpit_visible 388ms`
+  - `workspace_settings_switch 181ms`
 
 Known current gaps before final DoD:
 
-- Terminal WebSocket still uses tmux capture polling rather than a raw PTY stream. Control input, paste, resize, and deeper reconnect scrollback are now implemented and tested, but alternate-screen fidelity and output isolation need more verification before the final campaign gate.
+- Terminal WebSocket still uses tmux capture polling rather than a raw PTY stream. Control input, paste, resize, deeper reconnect scrollback, long output, and cross-session output isolation are now implemented/tested, but alternate-screen fidelity needs more verification before the final campaign gate.
 - Diff reader now has renamed/binary/truncation tests; the cockpit diff UI still needs richer states before the full `MS-482` bar is complete.
 - Workspace setup/teardown hook execution is implemented for static config hooks, and settings can now edit/persist hook config; deeper hook validation and workflow tests are still needed.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, Jira issue/transition summaries, and Jira workflow transition actions, but check logs, richer provider caching, and UI action gating still need expansion.
