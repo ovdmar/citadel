@@ -2,11 +2,11 @@ import cors from 'cors';
 import express from 'express';
 import fs from 'node:fs';
 import http from 'node:http';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import httpProxy from 'http-proxy';
-import { API_PORT, APP_NAME, WORKFLOWS } from './lib/config.js';
+import { API_PORT, APP_NAME, OPENCLAW_STATUS_TIMEOUT_MS, WORKFLOWS } from './lib/config.js';
 import { collectCrons, getCronById, listCronRuns, runCronNow, setCronEnabled } from './lib/crons.js';
 import { listJsonFiles } from './lib/fs.js';
 import { collectJobs, createManualWorkspace, fetchDevLinks, fetchGitStatusSummary, fetchPullRequestSummary, getJobById, getJobSummaryById, invalidateJobCaches, invalidateWorkflowStateCache, resolveWorkflow, runWorktreeDeploy, triggerWorkflowReconcile } from './lib/jobs.js';
@@ -88,14 +88,35 @@ function invalidateJobsCache() {
   jobsCache = null;
 }
 
-function readOpenClawStatus() {
+async function readOpenClawStatus() {
   const now = Date.now();
   if (openClawStatsCache && now - openClawStatsCache.at < OPENCLAW_STATS_CACHE_TTL_MS) return openClawStatsCache.stats;
-  const raw = execFileSync('openclaw', ['status', '--json'], {
-    encoding: 'utf8',
-    maxBuffer: 10 * 1024 * 1024
+  const stdout = await new Promise<string>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const child = execFile('openclaw', ['status', '--json'], {
+      encoding: 'utf8',
+      maxBuffer: 10 * 1024 * 1024
+    }, (error, childStdout) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(childStdout);
+    });
+    timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        child.kill('SIGKILL');
+      } catch {}
+      reject(new Error('openclaw_status_timeout'));
+    }, OPENCLAW_STATUS_TIMEOUT_MS);
   });
-  const stats = JSON.parse(raw) as Record<string, any>;
+  const stats = JSON.parse(stdout) as Record<string, any>;
   openClawStatsCache = { at: now, stats };
   return stats;
 }
@@ -131,7 +152,7 @@ app.get('/api/openclaw/stats', async (_req, res) => {
   try {
     const crons = collectCrons();
     const jobCount = WORKFLOWS.reduce((count, workflow) => count + listJsonFiles(workflow.stateDir).length, 0);
-    const status = readOpenClawStatus();
+    const status = await readOpenClawStatus();
     const sessions = status.sessions || {};
     const gateway = status.gateway || {};
     const gatewayService = status.gatewayService || {};
@@ -468,7 +489,7 @@ app.post('/api/system/openclaw-terminal', async (req, res) => {
   try {
     const terminal = await ensureOpenClawTuiSession({
       key: 'system:openclaw:tui',
-      homePath: process.env.HOME || '/Users/jonsnow',
+      homePath: process.env.HOME || '/home/jonsnow',
       host: req.headers.host || '127.0.0.1'
     });
     res.json({ ok: true, terminal });
@@ -481,7 +502,7 @@ app.post('/api/system/home-terminal', async (req, res) => {
   try {
     const terminal = await ensureHomeShellSession({
       key: 'system:home:shell',
-      homePath: process.env.HOME || '/Users/jonsnow',
+      homePath: process.env.HOME || '/home/jonsnow',
       host: req.headers.host || '127.0.0.1'
     });
     res.json({ ok: true, terminal });
@@ -519,20 +540,20 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 async function start() {
+  server.listen(API_PORT, '0.0.0.0', () => {
+    console.log(`${APP_NAME} API listening on http://0.0.0.0:${API_PORT}`);
+  });
+
   try {
     await primeSlackWorkspaceUrl();
-primeUsageCacheInBackground();
+    primeUsageCacheInBackground();
   } catch {}
   try {
     await loadJobsCached();
   } catch {}
   try {
-    readOpenClawStatus();
+    await readOpenClawStatus();
   } catch {}
-
-  server.listen(API_PORT, '0.0.0.0', () => {
-    console.log(`${APP_NAME} API listening on http://0.0.0.0:${API_PORT}`);
-  });
 }
 
 void start();

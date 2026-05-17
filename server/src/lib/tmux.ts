@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process';
 import net from 'node:net';
-import { TTYD_BIN, TERMINAL_PORT_BASE, TERMINAL_PORT_MAX } from './config.js';
+import { TTYD_BIN, TERMINAL_PORT_BASE, TERMINAL_PORT_MAX, TERMINAL_SHELL_BIN } from './config.js';
 import type { TerminalSessionRecord } from '../types.js';
 
 const terminalSessions = new Map<string, { record: TerminalSessionRecord; child: ReturnType<typeof spawn> }>();
@@ -82,13 +82,15 @@ function ensureTmuxSessionExists(tmuxSession: string, directory: string, initial
 
 function shellWorktreeCommand(worktreePath: string) {
   const escapedWorktree = worktreePath.replace(/"/g, '\\"');
-  return `cd \"${escapedWorktree}\" && export PS1='citadel %~ %# ' && exec zsh -i`;
+  const escapedShell = TERMINAL_SHELL_BIN.replace(/"/g, '\\"');
+  return `cd \"${escapedWorktree}\" && export PS1='citadel \\w \\$ ' && exec \"${escapedShell}\" -i`;
 }
 
-function shellDirectoryCommand(directory: string, prompt = 'citadel %~ %# ') {
+function shellDirectoryCommand(directory: string, prompt = 'citadel \\w \\$ ') {
   const escapedDirectory = directory.replace(/"/g, '\\"');
   const escapedPrompt = prompt.replace(/'/g, `\\'`);
-  return `cd \"${escapedDirectory}\" && export PS1='${escapedPrompt}' && exec zsh -i`;
+  const escapedShell = TERMINAL_SHELL_BIN.replace(/"/g, '\\"');
+  return `cd \"${escapedDirectory}\" && export PS1='${escapedPrompt}' && exec \"${escapedShell}\" -i`;
 }
 
 function claudeResumeCommand(worktreePath: string, claudeSessionId: string) {
@@ -123,7 +125,7 @@ async function spawnTtyd(key: string, host: string, command: string, metadata: P
   try {
     child = spawn(
       TTYD_BIN,
-      ['-W', '--check-origin=false', '-p', String(port), 'zsh', '-lc', command],
+      ['-W', '--check-origin=false', '-p', String(port), TERMINAL_SHELL_BIN, '-lc', command],
       {
         detached: false,
         stdio: 'ignore'

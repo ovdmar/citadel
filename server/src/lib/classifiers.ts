@@ -12,7 +12,7 @@ export function classifyWorkflowJob(workflow: WorkflowConfig, jobPath: string) {
       `
 import json, sys
 from pathlib import Path
-base = Path('/Users/jonsnow/.openclaw/workspace-implementation/automation/implementation-jira/scripts')
+base = Path('/home/jonsnow/.openclaw/workspace-implementation/automation/implementation-jira/scripts')
 sys.path.insert(0, str(base))
 import workflow_state
 job = json.loads(Path(sys.argv[1]).read_text())
@@ -27,7 +27,7 @@ print(json.dumps(workflow_state.compute_state(job)))
       `
 import json, sys
 from pathlib import Path
-base = Path('/Users/jonsnow/.openclaw/workspace-tech-plan/automation/tech-plan-jira/scripts')
+base = Path('/home/jonsnow/.openclaw/workspace-tech-plan/automation/tech-plan-jira/scripts')
 sys.path.insert(0, str(base))
 import classify_job
 print(json.dumps(classify_job.classify(Path(sys.argv[1]))))
@@ -40,7 +40,7 @@ print(json.dumps(classify_job.classify(Path(sys.argv[1]))))
     `
 import json, sys
 from pathlib import Path
-base = Path('/Users/jonsnow/.openclaw/workspace-concept-lab/automation/concept-lab/scripts')
+base = Path('/home/jonsnow/.openclaw/workspace-concept-lab/automation/concept-lab/scripts')
 sys.path.insert(0, str(base))
 import workflow_state
 job = json.loads(Path(sys.argv[1]).read_text())

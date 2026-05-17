@@ -2,11 +2,13 @@ import type { WorkflowConfig } from '../types.js';
 
 export const APP_NAME = 'Citadel';
 export const API_PORT = Number(process.env.CITADEL_PORT || 4010);
-export const OPENCLAW_ROOT = process.env.OPENCLAW_ROOT || '/Users/jonsnow/.openclaw';
+export const OPENCLAW_ROOT = process.env.OPENCLAW_ROOT || '/home/jonsnow/.openclaw';
 export const OPENCLAW_CONFIG_PATH = `${OPENCLAW_ROOT}/openclaw.json`;
 export const OPERATOR_DATA_PATH = `${OPENCLAW_ROOT}/workspace/citadel-data/operator-flags.json`;
 export const USAGE_HISTORY_PATH = `${OPENCLAW_ROOT}/workspace/citadel-data/usage-history.json`;
 export const TTYD_BIN = process.env.TTYD_BIN || '/opt/homebrew/bin/ttyd';
+export const TERMINAL_SHELL_BIN = process.env.CITADEL_SHELL_BIN || process.env.SHELL || '/bin/bash';
+export const OPENCLAW_STATUS_TIMEOUT_MS = Number(process.env.CITADEL_OPENCLAW_STATUS_TIMEOUT_MS || 5000);
 export const TERMINAL_PORT_BASE = Number(process.env.CITADEL_TTYD_PORT_BASE || 7681);
 export const TERMINAL_PORT_MAX = Number(process.env.CITADEL_TTYD_PORT_MAX || 7720);
 export const JOB_STALE_MINUTES = Number(process.env.CITADEL_STALE_MINUTES || 20);
