@@ -14,6 +14,7 @@ export type McpToolName =
   | "list_provider_health"
   | "list_runtimes"
   | "create_workspace"
+  | "start_agent_session"
   | "archive_workspace";
 
 export type McpToolDefinition = {
@@ -102,6 +103,22 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       destructive: false,
     },
     {
+      name: "start_agent_session",
+      description: "Start a configured agent runtime in a workspace through the daemon operation service.",
+      inputSchema: {
+        type: "object",
+        required: ["workspaceId", "runtimeId"],
+        properties: {
+          workspaceId: { type: "string" },
+          runtimeId: { type: "string" },
+          displayName: { type: "string" },
+          prompt: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
       name: "archive_workspace",
       description: "Archive workspace metadata without deleting the worktree.",
       inputSchema: {
@@ -140,6 +157,7 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "list_runtimes":
       return { runtimes: context.runtimes };
     case "create_workspace":
+    case "start_agent_session":
     case "archive_workspace":
       return { error: "mutating_tool_requires_daemon" };
     default:

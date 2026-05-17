@@ -366,6 +366,14 @@ export function createDaemonApp(input: {
       emit("workspace.updated", result);
       return result;
     }
+    if (call.name === "start_agent_session") {
+      const input = CreateAgentSessionInputSchema.parse(call.arguments ?? {});
+      const runtime = config.runtimes.find((candidate) => candidate.id === input.runtimeId);
+      if (!runtime) throw new Error(`Unknown runtime: ${input.runtimeId}`);
+      const session = await operations.createAgentSession(input, runtime);
+      emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
+      return { session };
+    }
     if (call.name === "archive_workspace") {
       const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";
       const result = await operations.removeWorkspace({ workspaceId, archiveOnly: true });

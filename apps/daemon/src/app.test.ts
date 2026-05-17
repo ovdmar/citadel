@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { loadConfig } from "@citadel/config";
 import { SqliteStore } from "@citadel/db";
+import type { OperationService } from "@citadel/operations";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDaemonApp } from "./app.js";
 
@@ -193,6 +194,52 @@ describe("createDaemonApp", () => {
       });
       await getJson(`${baseUrl}/api/repos/repo_cache/provider-summary`);
       expect(calls).toBe(2);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("starts agent sessions through the MCP JSON-RPC tool surface", async () => {
+    const fixture = createFixture();
+    let runtimeCommand = "";
+    const operations = {
+      createAgentSession: async (
+        input: { workspaceId: string; runtimeId: string; displayName?: string },
+        runtime: { command: string },
+      ) => {
+        runtimeCommand = runtime.command;
+        return {
+          id: "sess_mcp",
+          workspaceId: input.workspaceId,
+          runtimeId: input.runtimeId,
+          displayName: input.displayName ?? "MCP Shell",
+          status: "running",
+          transport: "disconnected",
+          tmuxSessionName: "citadel_mcp",
+          tmuxSessionId: "$mcp",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+      },
+    } as unknown as OperationService;
+    const { server } = createDaemonApp({ ...fixture, operations });
+    const baseUrl = await listen(server);
+    try {
+      const response = await postJson<{ result: { content: Array<{ json: { session: { id: string } } }> } }>(
+        `${baseUrl}/api/mcp/rpc`,
+        {
+          jsonrpc: "2.0",
+          id: 4,
+          method: "tools/call",
+          params: {
+            name: "start_agent_session",
+            arguments: { workspaceId: "ws_test", runtimeId: "shell", displayName: "MCP Shell" },
+          },
+        },
+      );
+
+      expect(response.result.content[0]?.json.session.id).toBe("sess_mcp");
+      expect(runtimeCommand).toBe("bash");
     } finally {
       await closeServer(server);
     }

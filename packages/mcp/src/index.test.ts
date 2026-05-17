@@ -8,6 +8,7 @@ describe("mcp helpers", () => {
 
     expect(status.enabled).toBe(true);
     expect(status.tools).toContain("inspect_status");
+    expect(status.tools).toContain("start_agent_session");
     expect(mcpToolDefinitions().find((tool) => tool.name === "archive_workspace")).toMatchObject({
       destructive: false,
     });
@@ -155,6 +156,11 @@ describe("mcp helpers", () => {
     });
     expect(callMcpTool({ name: "list_runtimes" }, context)).toEqual({ runtimes: context.runtimes });
     expect(callMcpTool({ name: "archive_workspace", arguments: { workspaceId: "ws_test" } }, context)).toEqual({
+      error: "mutating_tool_requires_daemon",
+    });
+    expect(
+      callMcpTool({ name: "start_agent_session", arguments: { workspaceId: "ws_test", runtimeId: "shell" } }, context),
+    ).toEqual({
       error: "mutating_tool_requires_daemon",
     });
   });

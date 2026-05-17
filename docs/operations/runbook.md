@@ -29,13 +29,24 @@ make e2e
 
 ## Local MCP Status
 
-MCP is enabled by default for local/internal deployments. The current v2 surface exposes normalized status/resources and a local JSON tool-call shim:
+MCP is enabled by default for local/internal deployments. The v2 surface exposes normalized status/resources, JSON-RPC-style tools, and a local JSON tool-call shim:
 
 ```bash
 curl -sS http://127.0.0.1:4337/api/mcp/status
 curl -sS -X POST http://127.0.0.1:4337/api/mcp/tools/call \
   -H 'content-type: application/json' \
   -d '{"name":"inspect_status"}'
+curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-This endpoint is not designed for public internet exposure.
+Mutating tools are handled by the daemon. `create_workspace`, `start_agent_session`, and `archive_workspace` use normalized Citadel concepts:
+
+```bash
+curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"start_agent_session","arguments":{"workspaceId":"ws_example","runtimeId":"shell","displayName":"Shell"}}}'
+```
+
+This surface is for trusted local/internal deployments. Do not bind it to a public interface without adding an explicit authorization layer and network controls.
