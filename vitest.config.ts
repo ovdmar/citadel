@@ -5,7 +5,7 @@ export default defineConfig({
     include: ["packages/*/src/**/*.test.ts", "apps/*/src/**/*.test.ts"],
     exclude: ["**/node_modules/**", "e2e/**", "**/dist/**", "**/coverage/**"],
     coverage: {
-      include: ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts", "scripts/**/*.ts"],
+      include: ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts"],
       exclude: ["e2e/**", "dist/**", "coverage/**", "test-results/**", "playwright-report/**"],
     },
   },

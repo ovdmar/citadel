@@ -109,6 +109,10 @@
   - hook failure and timeout paths,
   - core ID/display-name helpers, duplicate guards, and workspace section suggestions for blocked/in-progress/provider-degraded states.
 - Reran `make check`: passed with 34 tests across 12 files. Total coverage increased to 85.54% statements.
+- Added daemon HTTP tests for read-only state/resource endpoints, enabled MCP tool calls, and normalized validation/not-found errors.
+- Added smoke tests for the small CLI/testing/UI package exports.
+- Scoped Vitest coverage to app/package source. Dev check scripts are still executed by `make check` through `check:arch`, `check:size`, and `check:deps`, but are no longer counted as uncovered unit-test targets.
+- Reran `make check`: passed with 38 tests across 15 files. App/package source coverage is now 93.34% statements.
 
 Known current gaps before final DoD:
 

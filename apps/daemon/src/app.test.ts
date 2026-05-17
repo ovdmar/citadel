@@ -55,6 +55,67 @@ describe("createDaemonApp", () => {
       await closeServer(server);
     }
   });
+
+  it("serves read-only state resources and normalized API errors", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      expect(await getJson<{ ok: boolean; degradedProviders: number }>(`${baseUrl}/api/health`)).toMatchObject({
+        ok: true,
+        degradedProviders: 2,
+      });
+      expect(
+        await getJson<{ repos: unknown[]; workspaces: unknown[]; sessions: unknown[] }>(`${baseUrl}/api/state`),
+      ).toMatchObject({
+        repos: [],
+        workspaces: [],
+        sessions: [],
+      });
+      expect(await getJson<{ repos: unknown[] }>(`${baseUrl}/api/repos`)).toEqual({ repos: [] });
+      expect(await getJson<{ workspaces: unknown[] }>(`${baseUrl}/api/workspaces`)).toEqual({ workspaces: [] });
+      expect(await getJson<{ runtimes: unknown[] }>(`${baseUrl}/api/runtimes`)).toMatchObject({
+        runtimes: [expect.objectContaining({ id: "shell" })],
+      });
+      expect(await getJson<{ activity: unknown[] }>(`${baseUrl}/api/activity`)).toEqual({ activity: [] });
+      expect(
+        await getJson<{ repos: unknown[]; workspaces: unknown[]; sessions: unknown[] }>(
+          `${baseUrl}/api/mcp/resources/workspaces`,
+        ),
+      ).toEqual({ repos: [], workspaces: [], sessions: [] });
+      expect(
+        await postJson<{ result: { repos: number; workspaces: number; sessions: number } }>(
+          `${baseUrl}/api/mcp/tools/call`,
+          {
+            name: "inspect_status",
+          },
+        ),
+      ).toMatchObject({ result: { repos: 0, workspaces: 0, sessions: 0 } });
+
+      expect((await fetch(`${baseUrl}/api/repos/repo_missing/provider-summary`)).status).toBe(404);
+      expect((await fetch(`${baseUrl}/api/workspaces/ws_missing/diff`)).status).toBe(404);
+      expect(
+        (
+          await fetch(`${baseUrl}/api/repos`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          })
+        ).status,
+      ).toBe(400);
+      expect(
+        (
+          await fetch(`${baseUrl}/api/workspaces`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ repoId: "bad id", name: "" }),
+          })
+        ).status,
+      ).toBe(400);
+    } finally {
+      await closeServer(server);
+    }
+  });
 });
 
 function createFixture() {
@@ -96,6 +157,16 @@ async function getJson<T>(url: string) {
 async function putJson<T>(url: string, body: unknown) {
   const response = await fetch(url, {
     method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  expect(response.ok).toBe(true);
+  return response.json() as Promise<T>;
+}
+
+async function postJson<T>(url: string, body: unknown) {
+  const response = await fetch(url, {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
