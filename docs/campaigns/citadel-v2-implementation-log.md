@@ -426,6 +426,14 @@
   - `provider_summary 12ms`
   - `web_cockpit_visible 408ms`
   - `workspace_settings_switch 270ms`
+- Migrated the main cockpit action controls to the shadcn-style `Button` primitive, covering repo registration, workspace creation, runtime launch, Jira transitions, diff retry/refresh, and metadata archive actions.
+- Reran `make check`: passed with 58 tests across 15 files. App/package source coverage is 92.34% statements.
+- Reran `pnpm e2e`: 5 Playwright tests passed, 1 mobile-only duplicate workflow smoke skipped.
+- Reran `pnpm performance`:
+  - `api_state 576ms`
+  - `provider_summary 12ms`
+  - `web_cockpit_visible 444ms`
+  - `workspace_settings_switch 280ms`
 
 Known current gaps before final DoD:
 
@@ -435,4 +443,4 @@ Known current gaps before final DoD:
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, GitHub CI run summaries/log endpoint, Jira issue/transition summaries, Jira workflow transition actions, cockpit action gating from provider health, and daemon-side short TTL caching for summary calls.
 - Runtime usage provider support now has explicit unsupported/custom-command surfaces; deeper built-in adapters and manual refresh controls remain future polish.
 - MCP now has local/internal JSON tool calls, a JSON-RPC-style endpoint with initialization/notification/ping handling, resources with matching `resources/read` support, activity/workspace-link visibility, read-only tools, daemon-handled workspace create/archive tools, and daemon-handled agent-session launch. Additional protocol compatibility testing against external MCP clients is still useful before treating it as fully production-complete.
-- First-run settings flow now has setup status, field-level validation feedback, provider health, and activity logging; the UI design brief exists; Tailwind and initial shadcn-style primitives are wired; cockpit labels now avoid raw enum-style values in common operator surfaces. Remaining UI-system work is migrating more cockpit/settings surfaces onto those primitives and broader visual consistency polish.
+- First-run settings flow now has setup status, field-level validation feedback, provider health, and activity logging; the UI design brief exists; Tailwind and shadcn-style primitives are wired into primary cockpit/settings actions; cockpit labels now avoid raw enum-style values in common operator surfaces. Remaining UI-system work is broader visual consistency polish.

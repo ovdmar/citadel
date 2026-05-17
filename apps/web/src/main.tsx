@@ -35,6 +35,7 @@ import "@xterm/xterm/css/xterm.css";
 import { ActivityRow } from "./activity-row.js";
 import { api, queryClient } from "./api.js";
 import { Badge } from "./components/ui/badge.js";
+import { Button } from "./components/ui/button.js";
 import { ConfigForm } from "./config-form.js";
 import { formatLabel } from "./labels.js";
 import "./styles.css";
@@ -321,14 +322,15 @@ function ProviderSummary(props: { repo: Repo; workspace: Workspace | null; provi
           {issue.transitions.length > 0 ? (
             <div className="inline-actions">
               {issue.transitions.slice(0, 4).map((candidate) => (
-                <button
+                <Button
                   type="button"
                   key={candidate.id}
+                  variant="secondary"
                   disabled={transition.isPending || issue.status !== "healthy" || !jiraAvailable}
                   onClick={() => transition.mutate(candidate.id)}
                 >
                   {candidate.toStatus}
-                </button>
+                </Button>
               ))}
             </div>
           ) : null}
@@ -379,9 +381,9 @@ function RepoForm() {
         Name
         <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional display name" />
       </label>
-      <button type="submit" disabled={!rootPath || mutation.isPending}>
+      <Button type="submit" disabled={!rootPath || mutation.isPending}>
         Register repo
-      </button>
+      </Button>
       {mutation.error ? <p>{String(mutation.error)}</p> : null}
     </form>
   );
@@ -446,9 +448,9 @@ function WorkspaceForm(props: { repo: Repo }) {
           </label>
         </>
       ) : null}
-      <button type="submit" disabled={!name || mutation.isPending}>
+      <Button type="submit" disabled={!name || mutation.isPending}>
         Create workspace
-      </button>
+      </Button>
       {mutation.error ? <p>{String(mutation.error)}</p> : null}
     </form>
   );
@@ -477,13 +479,13 @@ function RuntimeLauncher(props: { workspace: Workspace; runtimes: AgentRuntime[]
           </option>
         ))}
       </select>
-      <button
+      <Button
         type="button"
         disabled={!runtime || runtime.health !== "healthy" || mutation.isPending}
         onClick={() => mutation.mutate()}
       >
         <Play size={15} /> Start
-      </button>
+      </Button>
       {runtime?.healthReason ? <p>{runtime.healthReason}</p> : null}
     </div>
   );
@@ -503,9 +505,9 @@ function DiffPanel(props: { workspace: Workspace }) {
     return (
       <div className="diff-empty">
         <Empty text="Diff is unavailable" />
-        <button type="button" onClick={() => diff.refetch()} disabled={diff.isFetching}>
+        <Button type="button" variant="secondary" onClick={() => diff.refetch()} disabled={diff.isFetching}>
           <RefreshCcw size={15} /> Retry
-        </button>
+        </Button>
       </div>
     );
   }
@@ -514,12 +516,12 @@ function DiffPanel(props: { workspace: Workspace }) {
       <div className="diff-empty">
         <Empty text="Workspace is clean" />
         <div className="diff-actions">
-          <button type="button" onClick={() => diff.refetch()} disabled={diff.isFetching}>
+          <Button type="button" variant="secondary" onClick={() => diff.refetch()} disabled={diff.isFetching}>
             <RefreshCcw size={15} /> Refresh
-          </button>
-          <button type="button" onClick={() => archive.mutate()} disabled={archive.isPending}>
+          </Button>
+          <Button type="button" variant="secondary" onClick={() => archive.mutate()} disabled={archive.isPending}>
             Archive metadata
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -529,9 +531,9 @@ function DiffPanel(props: { workspace: Workspace }) {
       <div className="diff-toolbar">
         <span>{diff.data?.files.length ?? 0} changed files</span>
         {diff.data?.truncated ? <strong>Large diff bounded</strong> : null}
-        <button type="button" onClick={() => diff.refetch()} disabled={diff.isFetching}>
+        <Button type="button" variant="secondary" onClick={() => diff.refetch()} disabled={diff.isFetching}>
           <RefreshCcw size={15} /> Refresh
-        </button>
+        </Button>
       </div>
       <div className="diff-list">
         {diff.data?.files.map((file, index) => (
