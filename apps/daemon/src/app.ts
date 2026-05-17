@@ -331,22 +331,30 @@ export function createDaemonApp(input: {
     "/api/mcp/rpc",
     asyncRoute(async (req, res) => {
       const request = req.body as { id?: string | number | null; method?: string; params?: Record<string, unknown> };
+      const isNotification = request.id === undefined || request.id === null;
       if (!config.mcp.enabled) return res.status(503).json(rpcError(request.id, -32000, "mcp_disabled"));
       switch (request.method) {
         case "initialize":
           return res.json(
             rpcResult(request.id, {
-              protocolVersion: "2024-11-05",
+              protocolVersion:
+                typeof request.params?.protocolVersion === "string" && request.params.protocolVersion === "2024-11-05"
+                  ? request.params.protocolVersion
+                  : "2024-11-05",
               serverInfo: { name: "citadel", version: "0.2.0" },
               capabilities: { resources: {}, tools: {} },
             }),
           );
+        case "notifications/initialized":
+          return res.status(202).end();
+        case "ping":
+          return res.json(rpcResult(request.id, {}));
         case "tools/list":
           return res.json(rpcResult(request.id, { tools: mcpToolDefinitions() }));
         case "tools/call": {
           const params = request.params as McpToolCall;
           const result = await callDaemonMcpTool(params);
-          return res.json(rpcResult(request.id, { content: [{ type: "json", json: result }] }));
+          return res.json(rpcResult(request.id, rpcJsonContent(result)));
         }
         case "resources/list":
           return res.json(
@@ -361,9 +369,10 @@ export function createDaemonApp(input: {
           const uri = typeof request.params?.uri === "string" ? request.params.uri : "";
           const resource = await readMcpResource(uri);
           if (!resource) return res.json(rpcError(request.id, -32602, "unknown_resource"));
-          return res.json(rpcResult(request.id, { contents: [{ uri, mimeType: "application/json", json: resource }] }));
+          return res.json(rpcResult(request.id, { contents: [rpcResourceContent(uri, resource)] }));
         }
         default:
+          if (isNotification) return res.status(202).end();
           return res.json(rpcError(request.id, -32601, "method_not_found"));
       }
     }),
@@ -471,6 +480,21 @@ function rpcResult(id: string | number | null | undefined, result: unknown) {
 
 function rpcError(id: string | number | null | undefined, code: number, message: string) {
   return { jsonrpc: "2.0", id: id ?? null, error: { code, message } };
+}
+
+function rpcJsonContent(value: unknown) {
+  return {
+    content: [{ type: "text", text: JSON.stringify(value) }],
+    structuredContent: value,
+  };
+}
+
+function rpcResourceContent(uri: string, value: unknown) {
+  return {
+    uri,
+    mimeType: "application/json",
+    text: JSON.stringify(value),
+  };
 }
 
 function asyncRoute(

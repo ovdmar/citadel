@@ -391,6 +391,19 @@
   - `web_cockpit_visible 415ms`
   - `workspace_settings_switch 228ms`
 - Added `docs/operations/config-reference.md` documenting local server config, provider toggles, runtime adapters, runtime usage provider JSON, command hook events/output, MCP resources/tools, and terminal gateway behavior. Linked it from the runbook.
+- Tightened MCP JSON-RPC compatibility:
+  - `initialize` negotiates the supported `2024-11-05` protocol version,
+  - `notifications/initialized` and unknown notifications return no JSON-RPC error body,
+  - `ping` returns an empty JSON-RPC result,
+  - `tools/call` returns standard text content plus structured content,
+  - `resources/read` returns JSON resources as `text` with `application/json` MIME type.
+- Reran `make check`: passed with 58 tests across 15 files. App/package source coverage is 92.59% statements.
+- Reran `pnpm e2e`: 5 Playwright tests passed, 1 mobile-only duplicate workflow smoke skipped.
+- Reran `pnpm performance`:
+  - `api_state 591ms`
+  - `provider_summary 15ms`
+  - `web_cockpit_visible 419ms`
+  - `workspace_settings_switch 248ms`
 
 Known current gaps before final DoD:
 
@@ -399,5 +412,5 @@ Known current gaps before final DoD:
 - Workspace setup/teardown hook execution is implemented for static config hooks; lifecycle notification hooks cover workspace created/archived/removed and agent started; settings can edit/persist hook config; config validation now catches bad hook references, wrong event wiring, duplicate IDs, and unsafe relative cwd; operation tests cover setup/teardown and notification failure policies; hook-provided links/actions now appear in the activity surface. Remaining hook work is deeper action execution semantics beyond URL/open controls.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, GitHub CI run summaries/log endpoint, Jira issue/transition summaries, Jira workflow transition actions, cockpit action gating from provider health, and daemon-side short TTL caching for summary calls.
 - Runtime usage provider support now has explicit unsupported/custom-command surfaces; deeper built-in adapters and manual refresh controls remain future polish.
-- MCP now has local/internal JSON tool calls, a JSON-RPC-style endpoint, resources with matching `resources/read` support, activity/workspace-link visibility, read-only tools, daemon-handled workspace create/archive tools, and daemon-handled agent-session launch. Additional protocol compatibility testing against external MCP clients is still needed before treating it as fully production-complete.
+- MCP now has local/internal JSON tool calls, a JSON-RPC-style endpoint with initialization/notification/ping handling, resources with matching `resources/read` support, activity/workspace-link visibility, read-only tools, daemon-handled workspace create/archive tools, and daemon-handled agent-session launch. Additional protocol compatibility testing against external MCP clients is still useful before treating it as fully production-complete.
 - First-run settings flow now has setup status, field-level validation feedback, provider health, and activity logging; the UI design brief exists; Tailwind and initial shadcn-style primitives are wired. Remaining UI-system work is migrating more cockpit/settings surfaces onto those primitives and tightening visual consistency.

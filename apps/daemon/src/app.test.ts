@@ -139,58 +139,87 @@ describe("createDaemonApp", () => {
         },
       });
       expect(
-        await postJson<{ result: { content: Array<{ json: { repos: number } }> } }>(`${baseUrl}/api/mcp/rpc`, {
+        await postJson<{ result: { protocolVersion: string } }>(`${baseUrl}/api/mcp/rpc`, {
           jsonrpc: "2.0",
-          id: 2,
-          method: "tools/call",
-          params: { name: "inspect_status" },
+          id: "init",
+          method: "initialize",
+          params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "test", version: "0" } },
         }),
+      ).toMatchObject({ result: { protocolVersion: "2024-11-05" } });
+      expect(
+        (
+          await fetch(`${baseUrl}/api/mcp/rpc`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+          })
+        ).status,
+      ).toBe(202);
+      expect(
+        await postJson<{ result: { content: Array<{ text: string }>; structuredContent: { repos: number } } }>(
+          `${baseUrl}/api/mcp/rpc`,
+          {
+            jsonrpc: "2.0",
+            id: 2,
+            method: "tools/call",
+            params: { name: "inspect_status" },
+          },
+        ),
       ).toMatchObject({
-        result: { content: [expect.objectContaining({ json: expect.objectContaining({ repos: 0 }) })] },
+        result: {
+          content: [expect.objectContaining({ type: "text" })],
+          structuredContent: expect.objectContaining({ repos: 0 }),
+        },
       });
       expect(
-        await postJson<{ result: { contents: Array<{ json: { workspaces: unknown[] } }> } }>(`${baseUrl}/api/mcp/rpc`, {
+        await postJson<{ result: Record<string, never> }>(`${baseUrl}/api/mcp/rpc`, {
+          jsonrpc: "2.0",
+          id: "ping",
+          method: "ping",
+        }),
+      ).toEqual({ jsonrpc: "2.0", id: "ping", result: {} });
+      expect(
+        await postJson<{ result: { contents: Array<{ text: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
           jsonrpc: "2.0",
           id: 3,
           method: "resources/read",
           params: { uri: "citadel://workspaces" },
         }),
       ).toMatchObject({
-        result: { contents: [expect.objectContaining({ json: { repos: [], workspaces: [], sessions: [] } })] },
-      });
-      expect(
-        await postJson<{ result: { contents: Array<{ json: { providerHealth: unknown[] } }> } }>(
-          `${baseUrl}/api/mcp/rpc`,
-          {
-            jsonrpc: "2.0",
-            id: 4,
-            method: "resources/read",
-            params: { uri: "citadel://provider-health" },
-          },
-        ),
-      ).toMatchObject({
         result: {
           contents: [
             expect.objectContaining({
-              json: {
-                providerHealth: [
-                  expect.objectContaining({ id: "github-gh" }),
-                  expect.objectContaining({ id: "jira-jtk" }),
-                ],
-              },
+              mimeType: "application/json",
+              text: JSON.stringify({ repos: [], workspaces: [], sessions: [] }),
             }),
           ],
         },
       });
       expect(
-        await postJson<{ result: { contents: Array<{ json: { activity: unknown[] } }> } }>(`${baseUrl}/api/mcp/rpc`, {
+        await postJson<{ result: { contents: Array<{ text: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
+          jsonrpc: "2.0",
+          id: 4,
+          method: "resources/read",
+          params: { uri: "citadel://provider-health" },
+        }),
+      ).toMatchObject({
+        result: {
+          contents: [
+            expect.objectContaining({
+              text: expect.stringContaining("github-gh"),
+            }),
+          ],
+        },
+      });
+      expect(
+        await postJson<{ result: { contents: Array<{ text: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
           jsonrpc: "2.0",
           id: 5,
           method: "resources/read",
           params: { uri: "citadel://activity" },
         }),
       ).toMatchObject({
-        result: { contents: [expect.objectContaining({ json: { activity: [] } })] },
+        result: { contents: [expect.objectContaining({ text: JSON.stringify({ activity: [] }) })] },
       });
 
       expect((await fetch(`${baseUrl}/api/repos/repo_missing/provider-summary`)).status).toBe(404);
@@ -296,7 +325,7 @@ describe("createDaemonApp", () => {
     const { server } = createDaemonApp({ ...fixture, operations });
     const baseUrl = await listen(server);
     try {
-      const response = await postJson<{ result: { content: Array<{ json: { session: { id: string } } }> } }>(
+      const response = await postJson<{ result: { structuredContent: { session: { id: string } } } }>(
         `${baseUrl}/api/mcp/rpc`,
         {
           jsonrpc: "2.0",
@@ -309,7 +338,7 @@ describe("createDaemonApp", () => {
         },
       );
 
-      expect(response.result.content[0]?.json.session.id).toBe("sess_mcp");
+      expect(response.result.structuredContent.session.id).toBe("sess_mcp");
       expect(runtimeCommand).toBe("bash");
     } finally {
       await closeServer(server);
