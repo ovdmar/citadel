@@ -15,7 +15,7 @@
 - Added strict TypeScript project references, pnpm workspace metadata, Biome config, Makefile command surface, architecture boundary check, file-size check, dependency lockfile policy, and startup smoke script.
 - Added initial typed contracts, local config loader, SQLite schema/migration/repository layer, operation service, provider health checks, runtime health checks, tmux session creation, terminal WebSocket bridge, MCP status/resource helpers, daemon REST/SSE endpoints, and a dense operator cockpit UI.
 - Ran `pnpm test`: 4 tests passed across `packages/core` and `packages/db`.
-- Ran `pnpm coverage`: command completed, but total coverage is currently 13.73% statements and does not satisfy the final 90% campaign gate.
+- Ran `pnpm coverage`: command completed, but total coverage is currently 31.46% statements and does not satisfy the final 90% campaign gate.
 - Ran `pnpm check`: passed architecture boundaries, file-size check, typecheck, Biome, tests, coverage command, dependency policy, and build.
 - Ran `make check`: passed the Makefile command surface for the same gates.
 - Started the local daemon at `http://127.0.0.1:4337` and web UI at `http://127.0.0.1:5173`.
@@ -55,6 +55,8 @@
   - destructive workspace removal runs teardown hooks and blocks cleanup on teardown failure unless force is used,
   - hook completions emit activity records.
 - Reran `make check` and `pnpm e2e`: both passed after the hook integration slice.
+- Added targeted unit coverage for config defaults/static hooks, provider command health, runtime health, command hook execution, and MCP status/resource serialization.
+- Reran `make check`: passed with 13 tests across 7 test files.
 
 Known current gaps before final DoD:
 
