@@ -13,7 +13,7 @@ import {
 import { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, mcpStatus, serializeWorkspaceResource } from "@citadel/mcp";
 import { OperationService } from "@citadel/operations";
-import { collectProviderHealth } from "@citadel/providers";
+import { collectGitHubVersionControlSummary, collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import { attachTerminalWebSocket } from "@citadel/terminal";
 import cors from "cors";
@@ -78,6 +78,18 @@ app.post("/api/repos", (req, res) => {
 app.get("/api/repos", (_req, res) => {
   res.json({ repos: store.listRepos() });
 });
+
+app.get(
+  "/api/repos/:repoId/provider-summary",
+  asyncRoute(async (req, res) => {
+    const repoId = req.params.repoId;
+    if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
+    const repo = store.listRepos().find((candidate) => candidate.id === repoId);
+    if (!repo) return res.status(404).json({ error: "repo_not_found" });
+    const versionControl = await collectGitHubVersionControlSummary(repo.rootPath);
+    res.json({ versionControl });
+  }),
+);
 
 app.get("/api/workspaces", (_req, res) => {
   res.json({ workspaces: store.listWorkspaces() });

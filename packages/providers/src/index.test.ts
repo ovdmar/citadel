@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandHealth } from "./index.js";
+import { collectGitHubVersionControlSummary, commandHealth } from "./index.js";
 
 describe("commandHealth", () => {
   it("reports disabled providers as unavailable", async () => {
@@ -26,5 +26,13 @@ describe("commandHealth", () => {
     });
 
     expect(health.status).toBe("healthy");
+  });
+
+  it("returns degraded normalized summaries for invalid repos", async () => {
+    const summary = await collectGitHubVersionControlSummary("/definitely/not/a/repo");
+
+    expect(summary.providerId).toBe("github-gh");
+    expect(summary.status).toBe("degraded");
+    expect(summary.pullRequest).toBeNull();
   });
 });

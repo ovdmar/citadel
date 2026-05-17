@@ -1,4 +1,12 @@
-import type { AgentRuntime, AgentSession, ProviderHealth, Repo, Workspace, WorkspaceDiff } from "@citadel/contracts";
+import type {
+  AgentRuntime,
+  AgentSession,
+  ProviderHealth,
+  Repo,
+  VersionControlSummary,
+  Workspace,
+  WorkspaceDiff,
+} from "@citadel/contracts";
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import { Link, Outlet, RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { FitAddon } from "@xterm/addon-fit";
@@ -157,6 +165,7 @@ function Cockpit() {
           {data?.providerHealth.map((provider) => (
             <HealthRow key={provider.id} provider={provider} />
           ))}
+          {selectedRepo ? <ProviderSummary repo={selectedRepo} /> : null}
         </section>
 
         <section className="panel">
@@ -252,6 +261,23 @@ function HealthRow(props: { provider: ProviderHealth }) {
       <strong>{props.provider.displayName}</strong>
       <span>{props.provider.status}</span>
       {props.provider.reason ? <p>{props.provider.reason}</p> : null}
+    </div>
+  );
+}
+
+function ProviderSummary(props: { repo: Repo }) {
+  const summary = useQuery({
+    queryKey: ["provider-summary", props.repo.id],
+    queryFn: () => api<{ versionControl: VersionControlSummary }>(`/api/repos/${props.repo.id}/provider-summary`),
+  });
+  const vc = summary.data?.versionControl;
+  if (!vc) return null;
+  return (
+    <div className={`health ${vc.status}`}>
+      <strong>{vc.currentBranch || props.repo.defaultBranch}</strong>
+      <span>{vc.pullRequest ? `PR #${vc.pullRequest.number}` : "No active PR"}</span>
+      {vc.pullRequest ? <p>{vc.pullRequest.title}</p> : null}
+      {vc.reason ? <p>{vc.reason}</p> : null}
     </div>
   );
 }

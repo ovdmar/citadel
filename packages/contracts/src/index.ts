@@ -99,6 +99,34 @@ export const ProviderHealthSchema = z.object({
   checkedAt: z.string(),
 });
 
+export const CheckSummarySchema = z.object({
+  name: z.string(),
+  status: z.string(),
+  conclusion: z.string().nullable(),
+  url: z.string().nullable(),
+});
+
+export const PullRequestSummarySchema = z.object({
+  number: z.number(),
+  title: z.string(),
+  url: z.string(),
+  state: z.string(),
+  draft: z.boolean(),
+  reviewDecision: z.string().nullable(),
+  checks: z.array(CheckSummarySchema),
+});
+
+export const VersionControlSummarySchema = z.object({
+  providerId: z.string(),
+  status: ProviderStatusSchema,
+  reason: z.string().nullable(),
+  defaultBranch: z.string().nullable(),
+  currentBranch: z.string().nullable(),
+  remotes: z.array(z.string()),
+  pullRequest: PullRequestSummarySchema.nullable(),
+  checkedAt: z.string(),
+});
+
 export const OperationSchema = z.object({
   id: IdSchema,
   type: z.string(),
@@ -176,6 +204,9 @@ export type Workspace = z.infer<typeof WorkspaceSchema>;
 export type AgentSession = z.infer<typeof AgentSessionSchema>;
 export type AgentRuntime = z.infer<typeof AgentRuntimeSchema>;
 export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
+export type CheckSummary = z.infer<typeof CheckSummarySchema>;
+export type PullRequestSummary = z.infer<typeof PullRequestSummarySchema>;
+export type VersionControlSummary = z.infer<typeof VersionControlSummarySchema>;
 export type Operation = z.infer<typeof OperationSchema>;
 export type ActivityEvent = z.infer<typeof ActivityEventSchema>;
 export type AppEvent = z.infer<typeof AppEventSchema>;
