@@ -441,7 +441,7 @@
   - installs Playwright Chromium and runs `pnpm e2e`,
   - starts the local dev servers, runs `make smoke`, and runs `pnpm performance`.
 
-Known current gaps before final DoD:
+Known limitations after the local-first v2 baseline:
 
 - Terminal WebSocket now uses tmux control-mode streaming for live output, with bounded reconnect snapshots and interaction catch-up snapshots. Remaining terminal risk is deeper manual soak testing across full-screen TUIs and very high-volume output beyond the automated fidelity coverage.
 - Diff reader now has renamed/binary/truncation tests and the cockpit diff UI exposes explicit file states, truncation, refresh, and read-only previews. Remaining `MS-482` risk is mostly visual polish and deeper syntax-aware diff presentation.
