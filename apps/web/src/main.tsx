@@ -112,6 +112,7 @@ function Cockpit() {
   useEventRefresh();
   const data = state.data;
   const selectedWorkspace = data?.workspaces[0];
+  const selectedRepo = data?.repos[0];
 
   return (
     <div className="page">
@@ -120,9 +121,6 @@ function Cockpit() {
           <h1>Operations</h1>
           <p>Local repos, workspaces, agent sessions, provider health, and terminal access.</p>
         </div>
-        <button type="button" className="primary">
-          <Plus size={16} /> New workspace
-        </button>
       </header>
 
       <section className="metrics">
@@ -153,6 +151,16 @@ function Cockpit() {
           {data?.providerHealth.map((provider) => (
             <HealthRow key={provider.id} provider={provider} />
           ))}
+        </section>
+
+        <section className="panel">
+          <PanelTitle icon={<Plus />} title="Create" />
+          <RepoForm />
+          {selectedRepo ? (
+            <WorkspaceForm repo={selectedRepo} />
+          ) : (
+            <Empty text="Register a repo before creating workspaces" />
+          )}
         </section>
 
         <section className="panel">
@@ -230,6 +238,112 @@ function HealthRow(props: { provider: ProviderHealth }) {
       <span>{props.provider.status}</span>
       {props.provider.reason ? <p>{props.provider.reason}</p> : null}
     </div>
+  );
+}
+
+function RepoForm() {
+  const [rootPath, setRootPath] = useState("");
+  const [name, setName] = useState("");
+  const mutation = useMutation({
+    mutationFn: () =>
+      api("/api/repos", {
+        method: "POST",
+        body: JSON.stringify({ rootPath, name: name || undefined }),
+      }),
+    onSuccess: () => {
+      setRootPath("");
+      setName("");
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+    },
+  });
+  return (
+    <form
+      className="stack-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        mutation.mutate();
+      }}
+    >
+      <label>
+        Repo path
+        <input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="/home/me/project" />
+      </label>
+      <label>
+        Name
+        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional display name" />
+      </label>
+      <button type="submit" disabled={!rootPath || mutation.isPending}>
+        Register repo
+      </button>
+      {mutation.error ? <p>{String(mutation.error)}</p> : null}
+    </form>
+  );
+}
+
+function WorkspaceForm(props: { repo: Repo }) {
+  const [name, setName] = useState("");
+  const [source, setSource] = useState<"scratch" | "issue">("scratch");
+  const [issueKey, setIssueKey] = useState("");
+  const [issueTitle, setIssueTitle] = useState("");
+  const mutation = useMutation({
+    mutationFn: () =>
+      api("/api/workspaces", {
+        method: "POST",
+        body: JSON.stringify({
+          repoId: props.repo.id,
+          name,
+          source,
+          issueKey: issueKey || undefined,
+          issueTitle: issueTitle || undefined,
+        }),
+      }),
+    onSuccess: () => {
+      setName("");
+      setIssueKey("");
+      setIssueTitle("");
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+    },
+  });
+  return (
+    <form
+      className="stack-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        mutation.mutate();
+      }}
+    >
+      <label>
+        Workspace
+        <input value={name} onChange={(event) => setName(event.target.value)} placeholder="short-task-name" />
+      </label>
+      <label>
+        Source
+        <select value={source} onChange={(event) => setSource(event.target.value as "scratch" | "issue")}>
+          <option value="scratch">Scratch</option>
+          <option value="issue">Issue</option>
+        </select>
+      </label>
+      {source === "issue" ? (
+        <>
+          <label>
+            Issue key
+            <input value={issueKey} onChange={(event) => setIssueKey(event.target.value)} placeholder="MS-123" />
+          </label>
+          <label>
+            Issue title
+            <input
+              value={issueTitle}
+              onChange={(event) => setIssueTitle(event.target.value)}
+              placeholder="Optional title"
+            />
+          </label>
+        </>
+      ) : null}
+      <button type="submit" disabled={!name || mutation.isPending}>
+        Create workspace
+      </button>
+      {mutation.error ? <p>{String(mutation.error)}</p> : null}
+    </form>
   );
 }
 

@@ -39,6 +39,7 @@
   - tmux sessions are killed only for destructive cleanup.
 - Implemented bounded read-only diff endpoint `GET /api/workspaces/:workspaceId/diff` with staged/unstaged/untracked status parsing, binary/truncation flags, and untracked file previews.
 - Added cockpit diff panel and metadata archive action.
+- Added cockpit create panel for repo registration and scratch/issue workspace creation, so the configured-state workflow is available from the UI and not only through REST calls.
 - Verified diff/removal manually against `ws_mp9rthge_4n4s2g9z`:
   - created untracked `citadel-diff-smoke.txt`,
   - diff endpoint returned `clean=false` and a bounded preview,
@@ -49,7 +50,7 @@ Known current gaps before final DoD:
 
 - `make check` needs to be rerun after subsequent implementation slices; the current equivalent `pnpm check` passed.
 - Terminal WebSocket currently uses tmux capture polling and `send-keys`; interactive fidelity must be expanded and verified against the campaign gate.
-- Diff viewer endpoint is a placeholder; `MS-482` requires full bounded read-only git diff support.
+- Diff viewer is bounded and read-only for staged/unstaged/untracked text previews, but renamed/deleted/binary edge cases need broader tests and UI states before the full `MS-482` bar is complete.
 - Workspace removal safety and setup/teardown hook execution still need implementation.
 - Provider implementations are health-check scaffolds; normalized PR/CI/Jira data and action gating still need expansion.
 - First-run settings flow and full shadcn/Tailwind component system still need implementation.
