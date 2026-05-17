@@ -1,4 +1,14 @@
-import type { AgentRuntime, AgentSession, Operation, ProviderHealth, Repo, Workspace } from "@citadel/contracts";
+import type {
+  ActivityEvent,
+  AgentRuntime,
+  AgentSession,
+  HookAction,
+  HookLink,
+  Operation,
+  ProviderHealth,
+  Repo,
+  Workspace,
+} from "@citadel/contracts";
 
 export type McpStatusSnapshot = {
   enabled: boolean;
@@ -13,6 +23,7 @@ export type McpToolName =
   | "list_agent_sessions"
   | "list_provider_health"
   | "list_runtimes"
+  | "list_workspace_links"
   | "create_workspace"
   | "start_agent_session"
   | "archive_workspace";
@@ -29,6 +40,7 @@ export type McpToolContext = {
   workspaces: Workspace[];
   sessions: AgentSession[];
   operations: Operation[];
+  activity: ActivityEvent[];
   providerHealth: ProviderHealth[];
   runtimes: AgentRuntime[];
 };
@@ -41,7 +53,7 @@ export type McpToolCall = {
 export function mcpStatus(enabled: boolean): McpStatusSnapshot {
   return {
     enabled,
-    resources: ["citadel://repos", "citadel://workspaces", "citadel://provider-health"],
+    resources: ["citadel://repos", "citadel://workspaces", "citadel://provider-health", "citadel://activity"],
     tools: mcpToolDefinitions().map((tool) => tool.name),
   };
 }
@@ -82,6 +94,12 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       name: "list_runtimes",
       description: "List configured agent runtimes and their health.",
       inputSchema: { type: "object", additionalProperties: false },
+      destructive: false,
+    },
+    {
+      name: "list_workspace_links",
+      description: "List hook-provided workspace links and actions, optionally filtered by workspaceId.",
+      inputSchema: { type: "object", properties: { workspaceId: { type: "string" } }, additionalProperties: false },
       destructive: false,
     },
     {
@@ -156,6 +174,8 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
       return { providerHealth: context.providerHealth };
     case "list_runtimes":
       return { runtimes: context.runtimes };
+    case "list_workspace_links":
+      return listWorkspaceLinks(context.activity, call.arguments?.workspaceId);
     case "create_workspace":
     case "start_agent_session":
     case "archive_workspace":
@@ -181,6 +201,27 @@ export function serializeWorkspaceResource(input: {
       tmuxSessionName: session.tmuxSessionName,
     })),
   };
+}
+
+export function listWorkspaceLinks(activity: ActivityEvent[], workspaceId: unknown) {
+  const events =
+    typeof workspaceId === "string" ? activity.filter((event) => event.workspaceId === workspaceId) : activity;
+  const links: Array<HookLink & { workspaceId: string; eventId: string }> = [];
+  const actions: Array<HookAction & { workspaceId: string; eventId: string }> = [];
+  for (const event of events) {
+    if (!event.workspaceId || !event.hookOutput) continue;
+    links.push(
+      ...event.hookOutput.links.map((link) => ({ ...link, workspaceId: event.workspaceId ?? "", eventId: event.id })),
+    );
+    actions.push(
+      ...event.hookOutput.actions.map((action) => ({
+        ...action,
+        workspaceId: event.workspaceId ?? "",
+        eventId: event.id,
+      })),
+    );
+  }
+  return { links, actions };
 }
 
 function filterByRepo(workspaces: Workspace[], repoId: unknown) {

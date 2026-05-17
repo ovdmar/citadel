@@ -9,6 +9,8 @@ describe("mcp helpers", () => {
     expect(status.enabled).toBe(true);
     expect(status.tools).toContain("inspect_status");
     expect(status.tools).toContain("start_agent_session");
+    expect(status.tools).toContain("list_workspace_links");
+    expect(status.resources).toContain("citadel://activity");
     expect(mcpToolDefinitions().find((tool) => tool.name === "archive_workspace")).toMatchObject({
       destructive: false,
     });
@@ -110,6 +112,23 @@ describe("mcp helpers", () => {
           updatedAt: "2026-05-17T00:00:00.000Z",
         },
       ],
+      activity: [
+        {
+          id: "evt_links",
+          type: "hook.workspace.created",
+          source: "hook",
+          repoId: "repo_test",
+          workspaceId: "ws_test",
+          operationId: "op_test",
+          message: "Hook workspace-links completed",
+          hookOutput: {
+            links: [{ label: "Preview", url: "https://example.test/preview", kind: "preview" }],
+            actions: [{ id: "redeploy", label: "Redeploy", description: null, url: "https://example.test/deploy" }],
+            metadata: {},
+          },
+          createdAt: "2026-05-17T00:00:00.000Z",
+        },
+      ],
       providerHealth: [
         {
           id: "github-gh",
@@ -155,6 +174,10 @@ describe("mcp helpers", () => {
       providerHealth: context.providerHealth,
     });
     expect(callMcpTool({ name: "list_runtimes" }, context)).toEqual({ runtimes: context.runtimes });
+    expect(callMcpTool({ name: "list_workspace_links", arguments: { workspaceId: "ws_test" } }, context)).toEqual({
+      links: [expect.objectContaining({ label: "Preview", workspaceId: "ws_test" })],
+      actions: [expect.objectContaining({ id: "redeploy", workspaceId: "ws_test" })],
+    });
     expect(callMcpTool({ name: "archive_workspace", arguments: { workspaceId: "ws_test" } }, context)).toEqual({
       error: "mutating_tool_requires_daemon",
     });

@@ -108,6 +108,9 @@ describe("createDaemonApp", () => {
         usage: { runtimeId: "shell", status: "unavailable" },
       });
       expect(await getJson<{ activity: unknown[] }>(`${baseUrl}/api/activity`)).toEqual({ activity: [] });
+      expect(await getJson<{ activity: unknown[] }>(`${baseUrl}/api/mcp/resources/activity`)).toEqual({
+        activity: [],
+      });
       expect(
         await getJson<{ repos: unknown[]; workspaces: unknown[]; sessions: unknown[] }>(
           `${baseUrl}/api/mcp/resources/workspaces`,
@@ -128,7 +131,12 @@ describe("createDaemonApp", () => {
           method: "tools/list",
         }),
       ).toMatchObject({
-        result: { tools: expect.arrayContaining([expect.objectContaining({ name: "create_workspace" })]) },
+        result: {
+          tools: expect.arrayContaining([
+            expect.objectContaining({ name: "create_workspace" }),
+            expect.objectContaining({ name: "list_workspace_links" }),
+          ]),
+        },
       });
       expect(
         await postJson<{ result: { content: Array<{ json: { repos: number } }> } }>(`${baseUrl}/api/mcp/rpc`, {
@@ -173,6 +181,16 @@ describe("createDaemonApp", () => {
             }),
           ],
         },
+      });
+      expect(
+        await postJson<{ result: { contents: Array<{ json: { activity: unknown[] } }> } }>(`${baseUrl}/api/mcp/rpc`, {
+          jsonrpc: "2.0",
+          id: 5,
+          method: "resources/read",
+          params: { uri: "citadel://activity" },
+        }),
+      ).toMatchObject({
+        result: { contents: [expect.objectContaining({ json: { activity: [] } })] },
       });
 
       expect((await fetch(`${baseUrl}/api/repos/repo_missing/provider-summary`)).status).toBe(404);

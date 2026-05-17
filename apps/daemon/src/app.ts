@@ -313,6 +313,10 @@ export function createDaemonApp(input: {
     }),
   );
 
+  app.get("/api/mcp/resources/activity", (_req, res) => {
+    res.json({ activity: store.listActivity() });
+  });
+
   app.post(
     "/api/mcp/tools/call",
     asyncRoute(async (req, res) => {
@@ -429,6 +433,7 @@ export function createDaemonApp(input: {
       workspaces: store.listWorkspaces(),
       sessions: store.listSessions(),
       operations: store.listOperations(),
+      activity: store.listActivity(),
       providerHealth,
       runtimes: listRuntimeHealth(config.runtimes),
     });
@@ -446,6 +451,7 @@ export function createDaemonApp(input: {
     if (uri === "citadel://repos") return { repos: store.listRepos() };
     if (uri === "citadel://workspaces") return workspaceResource();
     if (uri === "citadel://provider-health") return { providerHealth: await collectProviderHealth(config.providers) };
+    if (uri === "citadel://activity") return { activity: store.listActivity() };
     return null;
   }
 
