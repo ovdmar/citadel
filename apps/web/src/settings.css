@@ -1,0 +1,127 @@
+.page {
+  padding: 24px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.header h1 {
+  font-size: 28px;
+}
+
+.header p {
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1.4fr 0.8fr;
+  gap: 14px;
+}
+
+.panel {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.panel-title {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.panel-title h2 {
+  font-size: 15px;
+}
+
+.config-path,
+.form-error-list,
+.form-error,
+.usage-row p {
+  font-size: 12px;
+}
+
+.config-path {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.toggle-grid,
+.form-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.toggle-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.toggle-grid label {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: CanvasText;
+}
+
+.form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-grid label:has(input[type="number"]) {
+  max-width: 220px;
+}
+
+.form-error,
+.form-error-list {
+  color: var(--color-danger);
+}
+
+.setup-list,
+.runtime-row {
+  display: grid;
+  gap: 8px;
+}
+
+.setup-row,
+.usage-row {
+  display: grid;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+}
+
+.setup-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.setup-row.ready {
+  border-color: color-mix(in srgb, var(--color-success) 28%, transparent);
+}
+
+.setup-row.pending {
+  border-color: color-mix(in srgb, var(--color-danger) 24%, transparent);
+}
+
+.usage-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  background: color-mix(in srgb, CanvasText 6%, transparent);
+}
+
+.usage-row p {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}

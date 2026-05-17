@@ -1,4 +1,9 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { chromium } from "@playwright/test";
+import WebSocket from "ws";
 
 const apiBaseUrl = process.env.CITADEL_BASE_URL || "http://127.0.0.1:4337";
 const webBaseUrl = process.env.CITADEL_WEB_URL || "http://127.0.0.1:5173";
@@ -17,22 +22,50 @@ if (state.result.repos[0]) {
   });
 }
 
-const browser = await chromium.launch();
+const fixture = createGitFixture();
+const workspaceIds: string[] = [];
 try {
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-  await time("web_cockpit_visible", 2000, async () => {
-    await page.goto(webBaseUrl);
-    await page.getByRole("heading", { name: "Operations" }).waitFor();
-    await page.getByRole("heading", { name: "Workspace Board" }).waitFor();
-  });
-  await time("workspace_settings_switch", 1000, async () => {
-    await page.getByRole("link", { name: /settings/i }).click();
-    await page.getByRole("heading", { name: "Settings" }).waitFor();
-    await page.getByRole("link", { name: /workspaces/i }).click();
-    await page.getByRole("heading", { name: "Operations" }).waitFor();
-  });
+  const repo = await registerRepo(fixture);
+  const first = await createWorkspace(repo.id, `perf-a-${Date.now().toString(36)}`);
+  const second = await createWorkspace(repo.id, `perf-b-${Date.now().toString(36)}`);
+  workspaceIds.push(first.workspaceId, second.workspaceId);
+  await waitForWorkspace(first.workspaceId, "ready");
+  await waitForWorkspace(second.workspaceId, "ready");
+  const firstSession = await startSession(first.workspaceId, "Perf Shell A");
+  const secondSession = await startSession(second.workspaceId, "Perf Shell B");
+  await seedTerminal(firstSession.id);
+  await seedTerminal(secondSession.id);
+
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    await time("web_ade_visible", 2000, async () => {
+      await page.goto(webBaseUrl);
+      await page.getByText("Agent Development Environment").waitFor();
+      await page.getByTestId("terminal-stage").waitFor();
+    });
+    await time("workspace_switch_long_buffers", 1000, async () => {
+      await page.getByRole("button", { name: /perf-a-/i }).click();
+      await page.getByRole("heading", { name: /perf-a-/i }).waitFor();
+      await page.getByRole("button", { name: /perf-b-/i }).click();
+      await page.getByRole("heading", { name: /perf-b-/i }).waitFor();
+      await page.getByRole("button", { name: /perf-a-/i }).click();
+      await page.getByRole("heading", { name: /perf-a-/i }).waitFor();
+    });
+    await time("workspace_settings_switch", 1000, async () => {
+      await page.getByRole("link", { name: /settings/i }).click();
+      await page.getByRole("heading", { name: "Settings" }).waitFor();
+      await page.getByRole("link", { name: /workspaces/i }).click();
+      await page.getByText("Agent Development Environment").waitFor();
+    });
+  } finally {
+    await browser.close();
+  }
 } finally {
-  await browser.close();
+  for (const workspaceId of workspaceIds) {
+    await fetch(`${apiBaseUrl}/api/workspaces/${workspaceId}?archiveOnly=true`, { method: "DELETE" });
+  }
+  fs.rmSync(fixture.dir, { recursive: true, force: true });
 }
 
 async function time<T>(name: string, maxMs: number, fn: () => Promise<T>) {
@@ -42,4 +75,80 @@ async function time<T>(name: string, maxMs: number, fn: () => Promise<T>) {
   console.log(`${name} ${durationMs}ms`);
   if (durationMs > maxMs) throw new Error(`${name} exceeded ${maxMs}ms`);
   return { durationMs, result };
+}
+
+async function registerRepo(fixture: ReturnType<typeof createGitFixture>) {
+  const response = await fetch(`${apiBaseUrl}/api/repos`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      rootPath: fixture.repoPath,
+      name: `Perf ${Date.now().toString(36)}`,
+      worktreeParent: path.join(fixture.dir, "worktrees"),
+    }),
+  });
+  if (!response.ok) throw new Error(`repo registration returned ${response.status}`);
+  return ((await response.json()) as { repo: { id: string } }).repo;
+}
+
+async function createWorkspace(repoId: string, name: string) {
+  const response = await fetch(`${apiBaseUrl}/api/workspaces`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repoId, name, source: "scratch" }),
+  });
+  if (!response.ok) throw new Error(`workspace create returned ${response.status}`);
+  return (await response.json()) as { workspaceId: string };
+}
+
+async function startSession(workspaceId: string, displayName: string) {
+  const response = await fetch(`${apiBaseUrl}/api/agent-sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspaceId, runtimeId: "shell", displayName }),
+  });
+  if (!response.ok) throw new Error(`session create returned ${response.status}`);
+  return ((await response.json()) as { session: { id: string } }).session;
+}
+
+async function waitForWorkspace(workspaceId: string, lifecycle: string) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const response = await fetch(`${apiBaseUrl}/api/workspaces`);
+    const body = (await response.json()) as { workspaces: Array<{ id: string; lifecycle: string }> };
+    if (body.workspaces.find((workspace) => workspace.id === workspaceId)?.lifecycle === lifecycle) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Timed out waiting for workspace ${workspaceId}`);
+}
+
+async function seedTerminal(sessionId: string) {
+  const ws = new WebSocket(`${apiBaseUrl.replace(/^http/, "ws")}/terminal/${sessionId}`);
+  await new Promise<void>((resolve, reject) => {
+    ws.once("open", resolve);
+    ws.once("error", reject);
+  });
+  ws.send(JSON.stringify({ type: "paste", data: `printf '${"terminal-buffer-line\\n".repeat(600)}'\\r` }));
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  ws.close();
+}
+
+function createGitFixture() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-perf-"));
+  const remotePath = path.join(dir, "remote.git");
+  const repoPath = path.join(dir, "repo");
+  run("git", ["init", "--bare", remotePath], dir);
+  run("git", ["clone", remotePath, repoPath], dir);
+  run("git", ["config", "user.email", "test@example.test"], repoPath);
+  run("git", ["config", "user.name", "Citadel Perf"], repoPath);
+  fs.writeFileSync(path.join(repoPath, "README.md"), "# perf\n");
+  run("git", ["add", "README.md"], repoPath);
+  run("git", ["commit", "-m", "initial"], repoPath);
+  run("git", ["branch", "-M", "main"], repoPath);
+  run("git", ["push", "-u", "origin", "main"], repoPath);
+  run("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], repoPath);
+  return { dir, repoPath };
+}
+
+function run(command: string, args: string[], cwd: string) {
+  execFileSync(command, args, { cwd, stdio: "pipe" });
 }

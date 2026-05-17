@@ -1,0 +1,64 @@
+.diff-panel,
+.diff-empty {
+  padding: 12px;
+}
+
+.diff-toolbar {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.diff-toolbar strong {
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+}
+
+.diff-file {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.diff-file summary {
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+}
+
+.diff-message {
+  padding: 10px;
+  background: color-mix(in srgb, CanvasText 7%, transparent);
+  font-size: 13px;
+}
+
+.diff-code {
+  max-height: calc(100vh - 210px);
+  overflow: auto;
+  background: color-mix(in srgb, CanvasText 7%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.diff-line {
+  display: block;
+  min-height: 16px;
+  padding: 0 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-line-add {
+  background: color-mix(in srgb, var(--color-success) 13%, transparent);
+}
+
+.diff-line-remove {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+}
+
+.diff-line-hunk {
+  color: #175cd3;
+  background: color-mix(in srgb, #175cd3 10%, transparent);
+}
