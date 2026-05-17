@@ -15,7 +15,7 @@
 - Added strict TypeScript project references, pnpm workspace metadata, Biome config, Makefile command surface, architecture boundary check, file-size check, dependency lockfile policy, and startup smoke script.
 - Added initial typed contracts, local config loader, SQLite schema/migration/repository layer, operation service, provider health checks, runtime health checks, tmux session creation, terminal WebSocket bridge, MCP status/resource helpers, daemon REST/SSE endpoints, and a dense operator cockpit UI.
 - Ran `pnpm test`: 4 tests passed across `packages/core` and `packages/db`.
-- Ran `pnpm coverage`: command completed, but total coverage is currently 31.67% statements and does not satisfy the final 90% campaign gate.
+- Ran `pnpm coverage`: command completed, but total coverage is currently 30.99% statements and does not satisfy the final 90% campaign gate.
 - Ran `pnpm check`: passed architecture boundaries, file-size check, typecheck, Biome, tests, coverage command, dependency policy, and build.
 - Ran `make check`: passed the Makefile command surface for the same gates.
 - Started the local daemon at `http://127.0.0.1:4337` and web UI at `http://127.0.0.1:5173`.
@@ -70,6 +70,12 @@
 - Reran `make check` and `pnpm e2e`: both passed with 15 unit tests across 7 files and 4 Playwright tests.
 - Split the web build into manual `react`, `tanstack`, and `terminal` chunks. The production build no longer emits the >500 KB chunk warning; largest generated JS chunk is `terminal` at about 292 KB.
 - Reran `make check` and `pnpm e2e`: both passed after chunk splitting.
+- Added `pnpm performance` / `make performance` smoke command. Latest local run:
+  - `api_state 609ms`
+  - `provider_summary 2471ms`
+  - `web_cockpit_visible 425ms`
+  - `workspace_settings_switch 213ms`
+- Reran `make check`: passed after adding performance smoke.
 
 Known current gaps before final DoD:
 

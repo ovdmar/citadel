@@ -20,6 +20,7 @@
     "test": "vitest run",
     "coverage": "vitest run --coverage",
     "e2e": "playwright test",
+    "performance": "tsx scripts/dev/performance-smoke.ts",
     "check:arch": "tsx scripts/checks/architecture-boundaries.ts",
     "check:size": "tsx scripts/checks/file-size.ts",
     "check:deps": "tsx scripts/checks/dependency-policy.ts",
