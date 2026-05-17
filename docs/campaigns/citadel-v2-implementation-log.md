@@ -15,7 +15,7 @@
 - Added strict TypeScript project references, pnpm workspace metadata, Biome config, Makefile command surface, architecture boundary check, file-size check, dependency lockfile policy, and startup smoke script.
 - Added initial typed contracts, local config loader, SQLite schema/migration/repository layer, operation service, provider health checks, runtime health checks, tmux session creation, terminal WebSocket bridge, MCP status/resource helpers, daemon REST/SSE endpoints, and a dense operator cockpit UI.
 - Ran `pnpm test`: 4 tests passed across `packages/core` and `packages/db`.
-- Ran `pnpm coverage`: command completed, but total coverage is currently 16.26% statements and does not satisfy the final 90% campaign gate.
+- Ran `pnpm coverage`: command completed, but total coverage is currently 14.59% statements and does not satisfy the final 90% campaign gate.
 - Ran `pnpm check`: passed architecture boundaries, file-size check, typecheck, Biome, tests, coverage command, dependency policy, and build.
 - Ran `make check`: passed the Makefile command surface for the same gates.
 - Started the local daemon at `http://127.0.0.1:4337` and web UI at `http://127.0.0.1:5173`.
@@ -32,6 +32,18 @@
   - `docs/campaigns/screenshot-desktop-settings.png`
   - `docs/campaigns/screenshot-mobile-cockpit.png`
   - `docs/campaigns/screenshot-mobile-settings.png`
+- Implemented workspace removal safety:
+  - `DELETE /api/workspaces/:workspaceId` checks dirty git status,
+  - dirty workspaces fail destructive cleanup with HTTP 409 unless explicit force or metadata-only archive is used,
+  - metadata-only archive remains available,
+  - tmux sessions are killed only for destructive cleanup.
+- Implemented bounded read-only diff endpoint `GET /api/workspaces/:workspaceId/diff` with staged/unstaged/untracked status parsing, binary/truncation flags, and untracked file previews.
+- Added cockpit diff panel and metadata archive action.
+- Verified diff/removal manually against `ws_mp9rthge_4n4s2g9z`:
+  - created untracked `citadel-diff-smoke.txt`,
+  - diff endpoint returned `clean=false` and a bounded preview,
+  - destructive remove without force returned HTTP 409 with `dirty=true`.
+- Reran `make check` and `pnpm e2e`: both passed after the diff/removal slice.
 
 Known current gaps before final DoD:
 

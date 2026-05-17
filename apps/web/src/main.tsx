@@ -1,4 +1,4 @@
-import type { AgentRuntime, AgentSession, ProviderHealth, Repo, Workspace } from "@citadel/contracts";
+import type { AgentRuntime, AgentSession, ProviderHealth, Repo, Workspace, WorkspaceDiff } from "@citadel/contracts";
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import { Link, Outlet, RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import {
@@ -164,6 +164,11 @@ function Cockpit() {
           )}
         </section>
 
+        <section className="panel">
+          <PanelTitle icon={<GitBranch />} title="Diff" />
+          {selectedWorkspace ? <DiffPanel workspace={selectedWorkspace} /> : <Empty text="No workspace selected" />}
+        </section>
+
         <section className="panel wide">
           <PanelTitle icon={<Activity />} title="Activity" />
           {data?.activity.slice(0, 12).map((event) => (
@@ -259,6 +264,42 @@ function RuntimeLauncher(props: { workspace: Workspace; runtimes: AgentRuntime[]
         <Play size={15} /> Start
       </button>
       {runtime?.healthReason ? <p>{runtime.healthReason}</p> : null}
+    </div>
+  );
+}
+
+function DiffPanel(props: { workspace: Workspace }) {
+  const diff = useQuery({
+    queryKey: ["diff", props.workspace.id],
+    queryFn: () => api<WorkspaceDiff>(`/api/workspaces/${props.workspace.id}/diff`),
+  });
+  const archive = useMutation({
+    mutationFn: () => api(`/api/workspaces/${props.workspace.id}?archiveOnly=true`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+  });
+  if (diff.isLoading) return <Empty text="Reading git status" />;
+  if (diff.data?.clean) {
+    return (
+      <div className="runtime-launcher">
+        <Empty text="Workspace is clean" />
+        <button type="button" onClick={() => archive.mutate()} disabled={archive.isPending}>
+          Archive metadata
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div className="diff-list">
+      {diff.data?.files.map((file) => (
+        <details key={file.path} className="diff-file">
+          <summary>
+            <span>{file.status}</span>
+            <strong>{file.path}</strong>
+            {file.truncated ? <em>truncated</em> : null}
+          </summary>
+          <pre>{file.binary ? "Binary file" : file.diff || "No textual diff available"}</pre>
+        </details>
+      ))}
     </div>
   );
 }

@@ -11,7 +11,7 @@ import type {
 } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
-import { ensureTmuxSession } from "@citadel/terminal";
+import { ensureTmuxSession, killTmuxSession } from "@citadel/terminal";
 
 export class OperationService {
   constructor(private readonly store: SqliteStore) {}
@@ -114,6 +114,8 @@ export class OperationService {
   ) {
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
     if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+    const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+    if (!repo) throw new Error(`Workspace repo is missing: ${workspace.repoId}`);
     const now = nowIso();
     const sessionName = `citadel_${workspace.id}_${createId("agent").slice(-8)}`;
     const tmux = await ensureTmuxSession({
@@ -137,6 +139,66 @@ export class OperationService {
     this.store.insertSession(session);
     this.activity("agent.started", "user", `Started ${session.displayName}`, workspace.repoId, workspace.id, null);
     return session;
+  }
+
+  removeWorkspace(input: { workspaceId: string; force?: boolean; archiveOnly?: boolean }) {
+    const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+    if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+    const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+    if (!repo) throw new Error(`Workspace repo is missing: ${workspace.repoId}`);
+    const operation = this.operation(
+      "workspace.remove",
+      "running",
+      workspace.repoId,
+      workspace.id,
+      10,
+      "Checking workspace status",
+    );
+    const dirty = workspaceIsDirty(workspace.path);
+    if (dirty && !input.force && !input.archiveOnly) {
+      this.store.updateWorkspaceLifecycle(workspace.id, "ready", true);
+      this.store.upsertOperation({
+        ...operation,
+        status: "failed",
+        progress: 100,
+        error: "Workspace has uncommitted changes. Use metadata archive or explicit force cleanup.",
+        updatedAt: nowIso(),
+      });
+      this.activity(
+        "workspace.remove.blocked",
+        "system",
+        `Removal blocked because ${workspace.name} has dirty git status`,
+        workspace.repoId,
+        workspace.id,
+        operation.id,
+      );
+      return { operationId: operation.id, removed: false, archived: false, dirty };
+    }
+
+    for (const session of this.store.listSessions(workspace.id)) {
+      if (session.tmuxSessionName && !input.archiveOnly) killTmuxSession(session.tmuxSessionName);
+    }
+
+    if (!input.archiveOnly && fs.existsSync(workspace.path)) {
+      tryRunGit(repo.rootPath, ["worktree", "remove", "--force", workspace.path]);
+    }
+    this.store.archiveWorkspace(workspace.id, input.archiveOnly ? "archived" : "removed", dirty);
+    this.store.upsertOperation({
+      ...operation,
+      status: "succeeded",
+      progress: 100,
+      message: input.archiveOnly ? "Workspace metadata archived" : "Workspace removed",
+      updatedAt: nowIso(),
+    });
+    this.activity(
+      input.archiveOnly ? "workspace.archived" : "workspace.removed",
+      "user",
+      input.archiveOnly ? `Archived ${workspace.name}` : `Removed ${workspace.name}`,
+      workspace.repoId,
+      workspace.id,
+      operation.id,
+    );
+    return { operationId: operation.id, removed: !input.archiveOnly, archived: Boolean(input.archiveOnly), dirty };
   }
 
   private operation(
@@ -201,4 +263,14 @@ function discoverDefaultBranch(rootPath: string) {
 
 function tryRunGit(cwd: string, args: string[]) {
   execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
+}
+
+function workspaceIsDirty(workspacePath: string) {
+  if (!fs.existsSync(workspacePath)) return false;
+  const output = execFileSync("git", ["status", "--porcelain=v1"], {
+    cwd: workspacePath,
+    encoding: "utf8",
+    maxBuffer: 512 * 1024,
+  });
+  return output.trim().length > 0;
 }

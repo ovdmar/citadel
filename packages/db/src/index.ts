@@ -166,6 +166,15 @@ export class SqliteStore {
     );
   }
 
+  archiveWorkspace(workspaceId: string, lifecycle: Workspace["lifecycle"], dirty = false) {
+    const now = new Date().toISOString();
+    this.exec(
+      `UPDATE workspaces SET lifecycle = ${q(lifecycle)}, dirty = ${dirty ? 1 : 0}, archived_at = ${q(now)}, updated_at = ${q(
+        now,
+      )} WHERE id = ${q(workspaceId)}`,
+    );
+  }
+
   listSessions(workspaceId?: string): AgentSession[] {
     const where = workspaceId ? `WHERE workspace_id = ${q(workspaceId)}` : "";
     return this.query<Record<string, unknown>>(`SELECT * FROM agent_sessions ${where} ORDER BY updated_at DESC`).map(

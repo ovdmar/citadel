@@ -261,6 +261,35 @@ p {
   align-items: center;
 }
 
+.diff-list {
+  display: grid;
+  gap: 8px;
+}
+
+.diff-file {
+  border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.diff-file summary {
+  cursor: pointer;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+}
+
+.diff-file pre {
+  margin: 0;
+  max-height: 280px;
+  overflow: auto;
+  padding: 10px;
+  background: color-mix(in srgb, CanvasText 7%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .empty {
   padding: 18px;
   border: 1px dashed color-mix(in srgb, CanvasText 18%, transparent);

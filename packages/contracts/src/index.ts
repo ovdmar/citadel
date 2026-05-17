@@ -156,6 +156,21 @@ export const CreateAgentSessionInputSchema = z.object({
   prompt: z.string().optional(),
 });
 
+export const DiffFileSchema = z.object({
+  path: z.string(),
+  status: z.string(),
+  binary: z.boolean(),
+  truncated: z.boolean(),
+  diff: z.string(),
+});
+
+export const WorkspaceDiffSchema = z.object({
+  workspaceId: IdSchema,
+  clean: z.boolean(),
+  files: z.array(DiffFileSchema),
+  truncated: z.boolean(),
+});
+
 export type Repo = z.infer<typeof RepoSchema>;
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 export type AgentSession = z.infer<typeof AgentSessionSchema>;
@@ -167,6 +182,8 @@ export type AppEvent = z.infer<typeof AppEventSchema>;
 export type CreateRepoInput = z.infer<typeof CreateRepoInputSchema>;
 export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
 export type CreateAgentSessionInput = z.infer<typeof CreateAgentSessionInputSchema>;
+export type DiffFile = z.infer<typeof DiffFileSchema>;
+export type WorkspaceDiff = z.infer<typeof WorkspaceDiffSchema>;
 
 export type ApiError = {
   error: string;

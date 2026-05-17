@@ -59,6 +59,11 @@ export function resizePane(sessionName: string, cols: number, rows: number) {
   execFileSync("tmux", ["resize-pane", "-t", sessionName, "-x", String(cols), "-y", String(rows)]);
 }
 
+export function killTmuxSession(sessionName: string) {
+  if (!tmuxSessionExists(sessionName)) return;
+  execFileSync("tmux", ["kill-session", "-t", sessionName]);
+}
+
 export function attachTerminalWebSocket(server: http.Server, resolveSession: (id: string) => string | null) {
   const wss = new WebSocketServer({ noServer: true });
   server.on("upgrade", (request, socket, head) => {
