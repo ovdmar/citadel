@@ -23,6 +23,7 @@ import {
   Moon,
   Play,
   Plus,
+  RefreshCcw,
   Settings,
   Sun,
   TerminalSquare,
@@ -484,30 +485,89 @@ function DiffPanel(props: { workspace: Workspace }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
   if (diff.isLoading) return <Empty text="Reading git status" />;
-  if (diff.data?.clean) {
+  if (diff.isError) {
     return (
-      <div className="runtime-launcher">
-        <Empty text="Workspace is clean" />
-        <button type="button" onClick={() => archive.mutate()} disabled={archive.isPending}>
-          Archive metadata
+      <div className="diff-empty">
+        <Empty text="Diff is unavailable" />
+        <button type="button" onClick={() => diff.refetch()} disabled={diff.isFetching}>
+          <RefreshCcw size={15} /> Retry
         </button>
       </div>
     );
   }
+  if (diff.data?.clean) {
+    return (
+      <div className="diff-empty">
+        <Empty text="Workspace is clean" />
+        <div className="diff-actions">
+          <button type="button" onClick={() => diff.refetch()} disabled={diff.isFetching}>
+            <RefreshCcw size={15} /> Refresh
+          </button>
+          <button type="button" onClick={() => archive.mutate()} disabled={archive.isPending}>
+            Archive metadata
+          </button>
+        </div>
+      </div>
+    );
+  }
   return (
-    <div className="diff-list">
-      {diff.data?.files.map((file) => (
-        <details key={file.path} className="diff-file">
-          <summary>
-            <span>{file.status}</span>
-            <strong>{file.path}</strong>
-            {file.truncated ? <em>truncated</em> : null}
-          </summary>
-          <pre>{file.binary ? "Binary file" : file.diff || "No textual diff available"}</pre>
-        </details>
-      ))}
+    <div className="diff-panel">
+      <div className="diff-toolbar">
+        <span>{diff.data?.files.length ?? 0} changed files</span>
+        {diff.data?.truncated ? <strong>Large diff bounded</strong> : null}
+        <button type="button" onClick={() => diff.refetch()} disabled={diff.isFetching}>
+          <RefreshCcw size={15} /> Refresh
+        </button>
+      </div>
+      <div className="diff-list">
+        {diff.data?.files.map((file, index) => (
+          <details key={file.path} className="diff-file" open={index < 2}>
+            <summary>
+              <span className="diff-state">{formatDiffStatus(file.status)}</span>
+              <strong>{file.path}</strong>
+              {file.binary ? <em>Binary</em> : null}
+              {file.truncated ? <em>Truncated</em> : null}
+            </summary>
+            <DiffBody file={file} />
+          </details>
+        ))}
+      </div>
     </div>
   );
+}
+
+function DiffBody(props: { file: WorkspaceDiff["files"][number] }) {
+  if (props.file.binary) return <div className="diff-message">Binary file changed. Text preview is not available.</div>;
+  if (!props.file.diff && props.file.status.includes("D")) {
+    return <div className="diff-message">File was deleted. No text preview is available.</div>;
+  }
+  if (!props.file.diff) return <div className="diff-message">No textual diff available.</div>;
+  return (
+    <pre className="diff-code">
+      {props.file.diff.split("\n").map((line, index) => (
+        <span key={`${index}-${line.slice(0, 16)}`} className={diffLineClass(line)}>
+          {line || " "}
+          {"\n"}
+        </span>
+      ))}
+    </pre>
+  );
+}
+
+function formatDiffStatus(status: string) {
+  if (status.includes("R")) return "Renamed";
+  if (status === "??") return "Untracked";
+  if (status.includes("D")) return "Deleted";
+  if (status.includes("A")) return "Added";
+  if (status.includes("M")) return "Modified";
+  return "Changed";
+}
+
+function diffLineClass(line: string) {
+  if (line.startsWith("+") && !line.startsWith("+++")) return "diff-line diff-line-add";
+  if (line.startsWith("-") && !line.startsWith("---")) return "diff-line diff-line-remove";
+  if (line.startsWith("@@")) return "diff-line diff-line-hunk";
+  return "diff-line";
 }
 
 function TerminalPane(props: { session: AgentSession }) {

@@ -362,9 +362,41 @@ p {
   align-items: center;
 }
 
+.diff-panel,
+.diff-empty,
 .diff-list {
   display: grid;
   gap: 8px;
+}
+
+.diff-toolbar,
+.diff-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.diff-toolbar {
+  justify-content: space-between;
+}
+
+.diff-toolbar span,
+.diff-toolbar strong,
+.diff-state,
+.diff-file em {
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, CanvasText 8%, transparent);
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.diff-toolbar strong {
+  color: #b42318;
+  background: color-mix(in srgb, #b42318 12%, transparent);
 }
 
 .diff-file {
@@ -378,17 +410,44 @@ p {
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
   padding: 8px 10px;
 }
 
-.diff-file pre {
+.diff-message {
+  padding: 10px;
+  background: color-mix(in srgb, CanvasText 7%, transparent);
+  font-size: 13px;
+}
+
+.diff-code {
   margin: 0;
   max-height: 280px;
   overflow: auto;
-  padding: 10px;
   background: color-mix(in srgb, CanvasText 7%, transparent);
   font-size: 12px;
   line-height: 1.4;
+}
+
+.diff-line {
+  display: block;
+  min-height: 16px;
+  padding: 0 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.diff-line-add {
+  background: color-mix(in srgb, #067647 13%, transparent);
+}
+
+.diff-line-remove {
+  background: color-mix(in srgb, #b42318 12%, transparent);
+}
+
+.diff-line-hunk {
+  color: #175cd3;
+  background: color-mix(in srgb, #175cd3 10%, transparent);
 }
 
 .terminal-shell {

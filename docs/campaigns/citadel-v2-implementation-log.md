@@ -217,11 +217,24 @@
   - `provider_summary 2484ms`
   - `web_cockpit_visible 431ms`
   - `workspace_settings_switch 266ms`
+- Hardened cockpit diff viewer states:
+  - changed-file count and manual refresh controls,
+  - product-level file state labels for modified, added, deleted, renamed, untracked, binary, and truncated entries,
+  - explicit read-only messages for binary/deleted/no-text-preview files,
+  - styled unified diff additions, removals, and hunk headers,
+  - retry state when the diff API is unavailable.
+- Reran `make check`: passed with 46 tests across 15 files. App/package source coverage is 91.11% statements.
+- Reran `pnpm e2e`: 5 Playwright tests passed, 1 mobile-only duplicate workflow smoke skipped.
+- Reran `pnpm performance`:
+  - `api_state 590ms`
+  - `provider_summary 2574ms`
+  - `web_cockpit_visible 459ms`
+  - `workspace_settings_switch 276ms`
 
 Known current gaps before final DoD:
 
 - Terminal WebSocket still uses tmux capture polling rather than a raw PTY stream, but control input, paste, resize, deeper reconnect scrollback, long output, cross-session output isolation, and alternate-screen capture are now implemented/tested.
-- Diff reader now has renamed/binary/truncation tests; the cockpit diff UI still needs richer states before the full `MS-482` bar is complete.
+- Diff reader now has renamed/binary/truncation tests and the cockpit diff UI exposes explicit file states, truncation, refresh, and read-only previews. Remaining `MS-482` risk is mostly visual polish and deeper syntax-aware diff presentation.
 - Workspace setup/teardown hook execution is implemented for static config hooks, and settings can now edit/persist hook config; deeper hook validation and workflow tests are still needed.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, GitHub CI run summaries/log endpoint, Jira issue/transition summaries, and Jira workflow transition actions. Richer provider caching and UI action gating still need expansion.
 - MCP now has local/internal JSON tool calls, a JSON-RPC-style endpoint, resources, read-only tools, and daemon-handled workspace create/archive tools. Additional protocol compatibility testing against external MCP clients is still needed before treating it as fully production-complete.
