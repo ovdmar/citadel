@@ -4,9 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  collectGitHubCiRunLog,
+  collectGitHubCiRuns,
   collectGitHubVersionControlSummary,
   collectJiraIssueSummary,
   commandHealth,
+  normalizeCiRun,
+  normalizeCiRunList,
   parseJiraIssueOutput,
   parseJiraTransitionsOutput,
   transitionJiraIssue,
@@ -82,6 +86,33 @@ describe("commandHealth", () => {
       pullRequest: null,
     });
     expect(Date.parse(summary.checkedAt)).not.toBeNaN();
+  });
+
+  it("normalizes GitHub Actions CI runs and degrades without a valid repo", async () => {
+    expect(
+      normalizeCiRun({
+        databaseId: 123,
+        name: "CI",
+        status: "completed",
+        conclusion: "success",
+        headBranch: "main",
+        event: "push",
+        url: "https://example.test/run/123",
+        createdAt: "2026-05-17T00:00:00Z",
+      }),
+    ).toMatchObject({ id: "123", name: "CI", conclusion: "success", branch: "main" });
+    expect(normalizeCiRunList('[{"databaseId":456,"name":"Test","status":"queued"}]')[0]).toMatchObject({
+      id: "456",
+      name: "Test",
+      conclusion: null,
+    });
+
+    const summary = await collectGitHubCiRuns("/definitely/not/a/repo");
+    expect(summary.status).toBe("degraded");
+    expect(summary.runs).toEqual([]);
+    const log = await collectGitHubCiRunLog("/definitely/not/a/repo", "123");
+    expect(log.status).toBe("degraded");
+    expect(log.log).toBe("");
   });
 
   it("parses Jira issue details and workflow transitions", () => {

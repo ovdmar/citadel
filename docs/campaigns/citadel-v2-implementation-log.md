@@ -189,12 +189,26 @@
   - `provider_summary 2370ms`
   - `web_cockpit_visible 444ms`
   - `workspace_settings_switch 246ms`
+- Added GitHub CI provider summaries:
+  - shared CI run/provider summary contracts,
+  - `collectGitHubCiRuns()` through `gh run list`,
+  - bounded `collectGitHubCiRunLog()` through `gh run view --log`,
+  - daemon endpoints `GET /api/repos/:repoId/ci-runs` and `GET /api/repos/:repoId/ci-runs/:runId/logs`,
+  - cockpit provider panel display for latest check run status/conclusion.
+- Added provider tests for CI run normalization and degraded CI/log lookup behavior.
+- Reran `make check`: passed with 46 tests across 15 files. App/package source coverage is 91.11% statements.
+- Reran `pnpm e2e`: 4 Playwright tests passed.
+- Reran `pnpm performance`:
+  - `api_state 586ms`
+  - `provider_summary 2367ms`
+  - `web_cockpit_visible 403ms`
+  - `workspace_settings_switch 217ms`
 
 Known current gaps before final DoD:
 
 - Terminal WebSocket still uses tmux capture polling rather than a raw PTY stream, but control input, paste, resize, deeper reconnect scrollback, long output, cross-session output isolation, and alternate-screen capture are now implemented/tested.
 - Diff reader now has renamed/binary/truncation tests; the cockpit diff UI still needs richer states before the full `MS-482` bar is complete.
 - Workspace setup/teardown hook execution is implemented for static config hooks, and settings can now edit/persist hook config; deeper hook validation and workflow tests are still needed.
-- Provider implementation now includes normalized GitHub VC/current PR/check summary, Jira issue/transition summaries, and Jira workflow transition actions, but check logs, richer provider caching, and UI action gating still need expansion.
+- Provider implementation now includes normalized GitHub VC/current PR/check summary, GitHub CI run summaries/log endpoint, Jira issue/transition summaries, and Jira workflow transition actions. Richer provider caching and UI action gating still need expansion.
 - MCP now has local/internal JSON tool calls, a JSON-RPC-style endpoint, resources, read-only tools, and daemon-handled workspace create/archive tools. Additional protocol compatibility testing against external MCP clients is still needed before treating it as fully production-complete.
 - First-run settings flow and full shadcn/Tailwind component system still need implementation.

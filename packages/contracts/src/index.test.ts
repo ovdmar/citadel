@@ -3,6 +3,7 @@ import {
   AgentRuntimeSchema,
   AgentSessionSchema,
   AppEventSchema,
+  CiProviderSummarySchema,
   CreateAgentSessionInputSchema,
   CreateRepoInputSchema,
   CreateWorkspaceInputSchema,
@@ -127,6 +128,27 @@ describe("contract schemas", () => {
         checkedAt: timestamp,
       }).remotes,
     ).toEqual(["origin"]);
+    expect(
+      CiProviderSummarySchema.parse({
+        providerId: "github-gh",
+        status: "healthy",
+        reason: null,
+        runs: [
+          {
+            providerId: "github-gh",
+            id: "123",
+            name: "CI",
+            status: "completed",
+            conclusion: "success",
+            branch: "main",
+            event: "push",
+            url: "https://example.test/run/123",
+            createdAt: timestamp,
+          },
+        ],
+        checkedAt: timestamp,
+      }).runs[0]?.conclusion,
+    ).toBe("success");
     expect(
       IssueTrackerSummarySchema.parse({
         providerId: "jira-jtk",

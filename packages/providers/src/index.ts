@@ -4,6 +4,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type {
   CheckSummary,
+  CiProviderSummary,
+  CiRunSummary,
   IssueTrackerSummary,
   IssueTransition,
   IssueTransitionActionResult,
@@ -107,6 +109,84 @@ export async function collectGitHubVersionControlSummary(rootPath: string): Prom
       checkedAt,
     };
   }
+}
+
+export async function collectGitHubCiRuns(rootPath: string): Promise<CiProviderSummary> {
+  const checkedAt = new Date().toISOString();
+  try {
+    if (!fs.existsSync(path.join(rootPath, ".git"))) throw new Error(`Not a git repository: ${rootPath}`);
+    const currentBranch = await gitOptional(rootPath, ["branch", "--show-current"]);
+    const args = [
+      "run",
+      "list",
+      "--limit",
+      "10",
+      "--json",
+      "databaseId,name,status,conclusion,url,createdAt,headBranch,event",
+    ];
+    if (currentBranch) args.push("--branch", currentBranch);
+    const raw = await gh(rootPath, args);
+    const parsed = JSON.parse(raw) as Array<Record<string, unknown>>;
+    return {
+      providerId: "github-gh",
+      status: "healthy",
+      reason: null,
+      runs: parsed.map(normalizeCiRun),
+      checkedAt,
+    };
+  } catch (error) {
+    return {
+      providerId: "github-gh",
+      status: "degraded",
+      reason: error instanceof Error ? error.message : "GitHub CI summary failed",
+      runs: [],
+      checkedAt,
+    };
+  }
+}
+
+export async function collectGitHubCiRunLog(rootPath: string, runId: string) {
+  try {
+    if (!fs.existsSync(path.join(rootPath, ".git"))) throw new Error(`Not a git repository: ${rootPath}`);
+    const raw = await gh(rootPath, ["run", "view", runId, "--log"]);
+    return {
+      providerId: "github-gh",
+      status: "healthy" as const,
+      reason: null,
+      runId,
+      truncated: raw.length > 256 * 1024,
+      log: raw.slice(0, 256 * 1024),
+      checkedAt: new Date().toISOString(),
+    };
+  } catch (error) {
+    return {
+      providerId: "github-gh",
+      status: "degraded" as const,
+      reason: error instanceof Error ? error.message : "GitHub CI log fetch failed",
+      runId,
+      truncated: false,
+      log: "",
+      checkedAt: new Date().toISOString(),
+    };
+  }
+}
+
+export function normalizeCiRun(input: Record<string, unknown>): CiRunSummary {
+  return {
+    providerId: "github-gh",
+    id: String(input.databaseId ?? input.id ?? ""),
+    name: String(input.name ?? "workflow"),
+    status: String(input.status ?? "unknown"),
+    conclusion: typeof input.conclusion === "string" ? input.conclusion : null,
+    branch: typeof input.headBranch === "string" ? input.headBranch : null,
+    event: typeof input.event === "string" ? input.event : null,
+    url: typeof input.url === "string" ? input.url : null,
+    createdAt: typeof input.createdAt === "string" ? input.createdAt : null,
+  };
+}
+
+export function normalizeCiRunList(output: string) {
+  return (JSON.parse(output) as Array<Record<string, unknown>>).map(normalizeCiRun);
 }
 
 export async function collectJiraIssueSummary(issueKey: string): Promise<IssueTrackerSummary> {

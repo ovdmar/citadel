@@ -13,6 +13,8 @@ import type { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, mcpStatus, mcpToolDefinitions, serializeWorkspaceResource } from "@citadel/mcp";
 import { OperationService } from "@citadel/operations";
 import {
+  collectGitHubCiRunLog,
+  collectGitHubCiRuns,
   collectGitHubVersionControlSummary,
   collectJiraIssueSummary,
   collectProviderHealth,
@@ -126,6 +128,32 @@ export function createDaemonApp(input: {
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
       const versionControl = await collectGitHubVersionControlSummary(repo.rootPath);
       res.json({ versionControl });
+    }),
+  );
+
+  app.get(
+    "/api/repos/:repoId/ci-runs",
+    asyncRoute(async (req, res) => {
+      const repoId = req.params.repoId;
+      if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
+      const repo = store.listRepos().find((candidate) => candidate.id === repoId);
+      if (!repo) return res.status(404).json({ error: "repo_not_found" });
+      const ci = await collectGitHubCiRuns(repo.rootPath);
+      res.json({ ci });
+    }),
+  );
+
+  app.get(
+    "/api/repos/:repoId/ci-runs/:runId/logs",
+    asyncRoute(async (req, res) => {
+      const repoId = req.params.repoId;
+      const runId = req.params.runId;
+      if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
+      if (typeof runId !== "string") return res.status(400).json({ error: "run_id_required" });
+      const repo = store.listRepos().find((candidate) => candidate.id === repoId);
+      if (!repo) return res.status(404).json({ error: "repo_not_found" });
+      const log = await collectGitHubCiRunLog(repo.rootPath, runId);
+      res.json({ log });
     }),
   );
 

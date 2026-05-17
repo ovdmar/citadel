@@ -1,6 +1,7 @@
 import type {
   AgentRuntime,
   AgentSession,
+  CiProviderSummary,
   IssueTrackerSummary,
   IssueTransitionActionResult,
   ProviderHealth,
@@ -268,6 +269,10 @@ function ProviderSummary(props: { repo: Repo; workspace: Workspace | null }) {
     enabled: Boolean(props.workspace?.issueKey),
     queryFn: () => api<{ issueTracker: IssueTrackerSummary }>(`/api/workspaces/${props.workspace?.id}/issue-summary`),
   });
+  const ciSummary = useQuery({
+    queryKey: ["ci-runs", props.repo.id],
+    queryFn: () => api<{ ci: CiProviderSummary }>(`/api/repos/${props.repo.id}/ci-runs`),
+  });
   const transition = useMutation({
     mutationFn: (transitionId: string) =>
       api<{ result: IssueTransitionActionResult }>(`/api/workspaces/${props.workspace?.id}/issue-transition`, {
@@ -281,7 +286,8 @@ function ProviderSummary(props: { repo: Repo; workspace: Workspace | null }) {
   });
   const vc = summary.data?.versionControl;
   const issue = issueSummary.data?.issueTracker;
-  if (!vc && !issue) return null;
+  const ci = ciSummary.data?.ci;
+  if (!vc && !issue && !ci) return null;
   return (
     <>
       {vc ? (
@@ -313,6 +319,14 @@ function ProviderSummary(props: { repo: Repo; workspace: Workspace | null }) {
           ) : null}
           {issue.reason ? <p>{issue.reason}</p> : null}
           {transition.error ? <p>{String(transition.error)}</p> : null}
+        </div>
+      ) : null}
+      {ci ? (
+        <div className={`health ${ci.status}`}>
+          <strong>Checks</strong>
+          <span>{ci.runs[0] ? `${ci.runs[0].name}: ${ci.runs[0].status}` : ci.status}</span>
+          {ci.runs[0]?.conclusion ? <p>{ci.runs[0].conclusion}</p> : null}
+          {ci.reason ? <p>{ci.reason}</p> : null}
         </div>
       ) : null}
     </>

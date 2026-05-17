@@ -106,6 +106,26 @@ export const CheckSummarySchema = z.object({
   url: z.string().nullable(),
 });
 
+export const CiRunSummarySchema = z.object({
+  providerId: z.string(),
+  id: z.string(),
+  name: z.string(),
+  status: z.string(),
+  conclusion: z.string().nullable(),
+  branch: z.string().nullable(),
+  event: z.string().nullable(),
+  url: z.string().nullable(),
+  createdAt: z.string().nullable(),
+});
+
+export const CiProviderSummarySchema = z.object({
+  providerId: z.string(),
+  status: ProviderStatusSchema,
+  reason: z.string().nullable(),
+  runs: z.array(CiRunSummarySchema),
+  checkedAt: z.string(),
+});
+
 export const PullRequestSummarySchema = z.object({
   number: z.number(),
   title: z.string(),
@@ -239,6 +259,8 @@ export type AgentSession = z.infer<typeof AgentSessionSchema>;
 export type AgentRuntime = z.infer<typeof AgentRuntimeSchema>;
 export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 export type CheckSummary = z.infer<typeof CheckSummarySchema>;
+export type CiRunSummary = z.infer<typeof CiRunSummarySchema>;
+export type CiProviderSummary = z.infer<typeof CiProviderSummarySchema>;
 export type PullRequestSummary = z.infer<typeof PullRequestSummarySchema>;
 export type VersionControlSummary = z.infer<typeof VersionControlSummarySchema>;
 export type IssueTransition = z.infer<typeof IssueTransitionSchema>;
