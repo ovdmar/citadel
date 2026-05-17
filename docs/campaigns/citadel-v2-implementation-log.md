@@ -203,6 +203,20 @@
   - `provider_summary 2367ms`
   - `web_cockpit_visible 403ms`
   - `workspace_settings_switch 217ms`
+- Added desktop workflow e2e smoke coverage:
+  - creates an isolated local git fixture with a bare remote and clone,
+  - registers the fixture repo through the daemon API,
+  - creates a scratch workspace and waits for it to become ready,
+  - launches the shell runtime,
+  - connects to the terminal WebSocket and verifies command output from inside the workspace path,
+  - archives the workspace metadata and removes the temporary fixture.
+- Reran `pnpm e2e`: 5 Playwright tests passed, 1 mobile-only duplicate workflow smoke skipped.
+- Reran `make check`: passed with 46 tests across 15 files. App/package source coverage is 91.11% statements.
+- Reran `pnpm performance`:
+  - `api_state 568ms`
+  - `provider_summary 2484ms`
+  - `web_cockpit_visible 431ms`
+  - `workspace_settings_switch 266ms`
 
 Known current gaps before final DoD:
 
