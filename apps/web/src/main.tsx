@@ -18,6 +18,7 @@ import {
   Activity,
   Boxes,
   Cable,
+  CheckCircle2,
   GitBranch,
   HeartPulse,
   Moon,
@@ -687,6 +688,10 @@ function SettingsView() {
           <ConfigForm />
         </section>
         <section className="panel">
+          <PanelTitle icon={<CheckCircle2 />} title="Setup Status" />
+          <SetupStatus state={state.data} />
+        </section>
+        <section className="panel">
           <PanelTitle icon={<HeartPulse />} title="Providers" />
           {state.data?.providerHealth.map((provider) => (
             <HealthRow key={provider.id} provider={provider} />
@@ -713,6 +718,37 @@ function SettingsView() {
           <div className="empty">{state.data?.mcp.enabled ? "Enabled for local/internal use" : "Disabled"}</div>
         </section>
       </div>
+    </div>
+  );
+}
+
+function SetupStatus(props: { state: StateResponse | undefined }) {
+  const healthyProviders = props.state?.providerHealth.filter((provider) => provider.status === "healthy").length ?? 0;
+  const totalProviders = props.state?.providerHealth.length ?? 0;
+  const healthyRuntimes = props.state?.runtimes.filter((runtime) => runtime.health === "healthy").length ?? 0;
+  return (
+    <div className="setup-list">
+      <SetupRow label="Config file" status="Ready" ready />
+      <SetupRow
+        label="Providers"
+        status={`${healthyProviders}/${totalProviders} healthy`}
+        ready={healthyProviders > 0}
+      />
+      <SetupRow label="Runtimes" status={`${healthyRuntimes} available`} ready={healthyRuntimes > 0} />
+      <SetupRow
+        label="Repos"
+        status={`${props.state?.repos.length ?? 0} registered`}
+        ready={(props.state?.repos.length ?? 0) > 0}
+      />
+    </div>
+  );
+}
+
+function SetupRow(props: { label: string; status: string; ready: boolean }) {
+  return (
+    <div className={`setup-row ${props.ready ? "ready" : "pending"}`}>
+      <strong>{props.label}</strong>
+      <span>{props.status}</span>
     </div>
   );
 }

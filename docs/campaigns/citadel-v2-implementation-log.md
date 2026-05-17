@@ -290,6 +290,16 @@
   - `provider_summary 2347ms`
   - `web_cockpit_visible 386ms`
   - `workspace_settings_switch 212ms`
+- Added first-run setup status surface:
+  - settings now summarizes config file readiness, provider health, available runtimes, and repo registration,
+  - Playwright settings coverage asserts the setup status surface on desktop/mobile screenshots.
+- Reran `make check`: passed with 52 tests across 15 files. App/package source coverage is 92.13% statements.
+- Reran `pnpm e2e`: 5 Playwright tests passed, 1 mobile-only duplicate workflow smoke skipped.
+- Reran `pnpm performance`:
+  - `api_state 620ms`
+  - `provider_summary 2369ms`
+  - `web_cockpit_visible 413ms`
+  - `workspace_settings_switch 221ms`
 
 Known current gaps before final DoD:
 
@@ -298,4 +308,4 @@ Known current gaps before final DoD:
 - Workspace setup/teardown hook execution is implemented for static config hooks; settings can edit/persist hook config; config validation now catches bad hook references, wrong event wiring, duplicate IDs, and unsafe relative cwd; operation tests cover setup/teardown failure policies. Remaining hook gaps are non-blocking notification hooks and hook-provided links/actions in workspace surfaces.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, GitHub CI run summaries/log endpoint, Jira issue/transition summaries, Jira workflow transition actions, cockpit action gating from provider health, and daemon-side short TTL caching for summary calls.
 - MCP now has local/internal JSON tool calls, a JSON-RPC-style endpoint, resources, read-only tools, daemon-handled workspace create/archive tools, and daemon-handled agent-session launch. Additional protocol compatibility testing against external MCP clients is still needed before treating it as fully production-complete.
-- First-run settings flow and full shadcn/Tailwind component system still need implementation; settings now validates writes with field-level feedback, records activity, and shows provider health.
+- First-run settings flow now has setup status, field-level validation feedback, provider health, and activity logging; the full shadcn/Tailwind component system remains incomplete.

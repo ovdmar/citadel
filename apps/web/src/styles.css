@@ -367,6 +367,35 @@ p {
   margin: 0;
 }
 
+.setup-list {
+  display: grid;
+  gap: 8px;
+}
+
+.setup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  border-radius: 7px;
+}
+
+.setup-row span {
+  color: #667085;
+  font-size: 12px;
+  text-align: right;
+}
+
+.setup-row.ready {
+  border-color: color-mix(in srgb, #067647 28%, transparent);
+}
+
+.setup-row.pending {
+  border-color: color-mix(in srgb, #b42318 24%, transparent);
+}
+
 .activity-row {
   grid-template-columns: 120px 1fr auto;
   margin-bottom: 8px;
