@@ -100,6 +100,10 @@
   - `provider_summary 2502ms`
   - `web_cockpit_visible 411ms`
   - `workspace_settings_switch 200ms`
+- Refactored daemon boot into a testable `createDaemonApp()` factory while keeping `apps/daemon/src/index.ts` as the production listener entrypoint.
+- Added HTTP-level daemon tests for `/api/config`, persisted config updates, MCP disabled behavior, and a missing-runtime API error path.
+- Reran `make check`: passed with 30 tests across 12 files. Total coverage increased to 82.60% statements.
+- Reran `pnpm e2e`: 4 Playwright tests passed after the daemon refactor.
 
 Known current gaps before final DoD:
 
