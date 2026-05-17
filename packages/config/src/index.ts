@@ -10,6 +10,15 @@ export const RuntimeConfigSchema = z.object({
   args: z.array(z.string()).default([]),
 });
 
+export const HookConfigSchema = z.object({
+  id: z.string().min(1),
+  event: z.enum(["workspace.setup", "workspace.teardown"]),
+  command: z.string().min(1),
+  args: z.array(z.string()).default([]),
+  cwd: z.string().optional(),
+  blocking: z.boolean().default(true),
+});
+
 export const CitadelConfigSchema = z.object({
   version: z.literal(1).default(1),
   dataDir: z.string().min(1),
@@ -30,6 +39,13 @@ export const CitadelConfigSchema = z.object({
     { id: "pi", displayName: "Pi", command: "pi", args: [] },
     { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
   ]),
+  hooks: z.array(HookConfigSchema).default([]),
+  repoDefaults: z
+    .object({
+      setupHookIds: z.array(z.string()).default([]),
+      teardownHookIds: z.array(z.string()).default([]),
+    })
+    .default({ setupHookIds: [], teardownHookIds: [] }),
   commandPolicy: z
     .object({
       hookTimeoutMs: z.number().int().min(1000).default(120000),
@@ -40,6 +56,7 @@ export const CitadelConfigSchema = z.object({
 
 export type CitadelConfig = z.infer<typeof CitadelConfigSchema>;
 export type RuntimeConfig = z.infer<typeof RuntimeConfigSchema>;
+export type HookConfig = z.infer<typeof HookConfigSchema>;
 
 export function defaultDataDir() {
   return process.env.CITADEL_DATA_DIR || path.join(os.homedir(), ".local", "share", "citadel");

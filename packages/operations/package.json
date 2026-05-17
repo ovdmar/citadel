@@ -13,6 +13,7 @@
     "@citadel/core": "workspace:*",
     "@citadel/db": "workspace:*",
     "@citadel/hooks": "workspace:*",
+    "@citadel/config": "workspace:*",
     "@citadel/providers": "workspace:*",
     "@citadel/terminal": "workspace:*"
   },

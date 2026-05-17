@@ -7,6 +7,7 @@
   },
   "references": [
     { "path": "../contracts" },
+    { "path": "../config" },
     { "path": "../core" },
     { "path": "../db" },
     { "path": "../hooks" },

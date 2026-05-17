@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import type { CitadelConfig, HookConfig } from "@citadel/config";
 import type {
   AgentSession,
   CreateAgentSessionInput,
@@ -11,10 +12,14 @@ import type {
 } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
+import { runCommandHook } from "@citadel/hooks";
 import { ensureTmuxSession, killTmuxSession } from "@citadel/terminal";
 
 export class OperationService {
-  constructor(private readonly store: SqliteStore) {}
+  constructor(
+    private readonly store: SqliteStore,
+    private readonly config?: Pick<CitadelConfig, "hooks" | "repoDefaults" | "commandPolicy">,
+  ) {}
 
   registerRepo(input: { rootPath: string; name?: string | undefined; worktreeParent?: string | undefined }) {
     const now = nowIso();
@@ -27,8 +32,8 @@ export class OperationService {
       defaultBranch: discoverDefaultBranch(rootPath),
       defaultRemote: "origin",
       worktreeParent: input.worktreeParent || path.join(path.dirname(rootPath), `${path.basename(rootPath)}-worktrees`),
-      setupHookIds: [],
-      teardownHookIds: [],
+      setupHookIds: this.config?.repoDefaults.setupHookIds ?? [],
+      teardownHookIds: this.config?.repoDefaults.teardownHookIds ?? [],
       providerIds: ["github-gh", "jira-jtk"],
       createdAt: now,
       updatedAt: now,
@@ -39,7 +44,7 @@ export class OperationService {
     return repo;
   }
 
-  createWorkspace(input: CreateWorkspaceInput) {
+  async createWorkspace(input: CreateWorkspaceInput) {
     const repo = this.store.listRepos().find((candidate) => candidate.id === input.repoId);
     if (!repo) throw new Error(`Unknown repo: ${input.repoId}`);
     const now = nowIso();
@@ -77,6 +82,14 @@ export class OperationService {
       tryRunGit(repo.rootPath, ["fetch", "--prune", repo.defaultRemote]);
       const startPoint = `${repo.defaultRemote}/${repo.defaultBranch}`;
       tryRunGit(repo.rootPath, ["worktree", "add", "-b", branch, workspacePath, startPoint]);
+      this.store.upsertOperation({
+        ...operation,
+        workspaceId: workspace.id,
+        progress: 75,
+        message: "Running workspace setup hooks",
+        updatedAt: nowIso(),
+      });
+      await this.runWorkspaceHooks("workspace.setup", repo.setupHookIds, repo, workspace, operation.id);
       this.store.updateWorkspaceLifecycle(workspace.id, "ready");
       this.activity(
         "workspace.created",
@@ -114,8 +127,6 @@ export class OperationService {
   ) {
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
     if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
-    const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-    if (!repo) throw new Error(`Workspace repo is missing: ${workspace.repoId}`);
     const now = nowIso();
     const sessionName = `citadel_${workspace.id}_${createId("agent").slice(-8)}`;
     const tmux = await ensureTmuxSession({
@@ -141,7 +152,7 @@ export class OperationService {
     return session;
   }
 
-  removeWorkspace(input: { workspaceId: string; force?: boolean; archiveOnly?: boolean }) {
+  async removeWorkspace(input: { workspaceId: string; force?: boolean; archiveOnly?: boolean }) {
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
     if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
     const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
@@ -177,6 +188,31 @@ export class OperationService {
 
     for (const session of this.store.listSessions(workspace.id)) {
       if (session.tmuxSessionName && !input.archiveOnly) killTmuxSession(session.tmuxSessionName);
+    }
+
+    if (!input.archiveOnly) {
+      try {
+        await this.runWorkspaceHooks("workspace.teardown", repo.teardownHookIds, repo, workspace, operation.id);
+      } catch (error) {
+        if (!input.force) {
+          this.store.upsertOperation({
+            ...operation,
+            status: "failed",
+            progress: 100,
+            error: error instanceof Error ? error.message : "workspace_teardown_failed",
+            updatedAt: nowIso(),
+          });
+          this.activity(
+            "workspace.remove.blocked",
+            "system",
+            `Removal blocked because teardown failed for ${workspace.name}`,
+            workspace.repoId,
+            workspace.id,
+            operation.id,
+          );
+          return { operationId: operation.id, removed: false, archived: false, dirty };
+        }
+      }
     }
 
     if (!input.archiveOnly && fs.existsSync(workspace.path)) {
@@ -228,7 +264,7 @@ export class OperationService {
 
   private activity(
     type: string,
-    source: "user" | "system",
+    source: "user" | "system" | "hook",
     message: string,
     repoId: string | null,
     workspaceId: string | null,
@@ -244,6 +280,38 @@ export class OperationService {
       message,
       createdAt: nowIso(),
     });
+  }
+
+  private async runWorkspaceHooks(
+    event: HookConfig["event"],
+    hookIds: string[],
+    repo: Repo,
+    workspace: Workspace,
+    operationId: string,
+  ) {
+    const hooks = (this.config?.hooks ?? []).filter((hook) => hook.event === event && hookIds.includes(hook.id));
+    for (const hook of hooks) {
+      const result = await runCommandHook(
+        {
+          id: hook.id,
+          event,
+          command: hook.command,
+          args: hook.args,
+          cwd: hook.cwd || workspace.path,
+          timeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
+          blocking: hook.blocking,
+        },
+        { event, repo, workspace, operationId },
+      );
+      this.activity(
+        `hook.${event}`,
+        "hook",
+        `Hook ${hook.id} completed${result.stderr ? " with stderr" : ""}`,
+        repo.id,
+        workspace.id,
+        operationId,
+      );
+    }
   }
 }
 

@@ -15,7 +15,7 @@
 - Added strict TypeScript project references, pnpm workspace metadata, Biome config, Makefile command surface, architecture boundary check, file-size check, dependency lockfile policy, and startup smoke script.
 - Added initial typed contracts, local config loader, SQLite schema/migration/repository layer, operation service, provider health checks, runtime health checks, tmux session creation, terminal WebSocket bridge, MCP status/resource helpers, daemon REST/SSE endpoints, and a dense operator cockpit UI.
 - Ran `pnpm test`: 4 tests passed across `packages/core` and `packages/db`.
-- Ran `pnpm coverage`: command completed, but total coverage is currently 14.59% statements and does not satisfy the final 90% campaign gate.
+- Ran `pnpm coverage`: command completed, but total coverage is currently 13.73% statements and does not satisfy the final 90% campaign gate.
 - Ran `pnpm check`: passed architecture boundaries, file-size check, typecheck, Biome, tests, coverage command, dependency policy, and build.
 - Ran `make check`: passed the Makefile command surface for the same gates.
 - Started the local daemon at `http://127.0.0.1:4337` and web UI at `http://127.0.0.1:5173`.
@@ -48,6 +48,13 @@
 - Added xterm.js cockpit terminal pane connected to the daemon `/terminal/:sessionId` WebSocket for the selected agent session.
 - Reran `pnpm e2e`: 4 Playwright desktop/mobile tests passed and screenshots were refreshed.
 - Reran `make check`: passed. Build now warns that the web chunk is larger than 500 KB after adding xterm; code splitting/manual chunks should be added before final performance signoff.
+- Wired static config hooks into workspace operations:
+  - config now supports `hooks`, `repoDefaults.setupHookIds`, and `repoDefaults.teardownHookIds`,
+  - newly registered repos inherit default setup/teardown hook IDs,
+  - workspace create runs blocking setup hooks after worktree creation and before ready state,
+  - destructive workspace removal runs teardown hooks and blocks cleanup on teardown failure unless force is used,
+  - hook completions emit activity records.
+- Reran `make check` and `pnpm e2e`: both passed after the hook integration slice.
 
 Known current gaps before final DoD:
 
@@ -55,6 +62,6 @@ Known current gaps before final DoD:
 - Terminal WebSocket currently uses tmux capture polling and `send-keys`; interactive fidelity must be expanded and verified against the campaign gate.
 - Web terminal exists, but terminal protocol still needs stronger fidelity tests for raw/control/meta input, paste, resize, alternate screen, reconnect, output isolation, and long scrollback.
 - Diff viewer is bounded and read-only for staged/unstaged/untracked text previews, but renamed/deleted/binary edge cases need broader tests and UI states before the full `MS-482` bar is complete.
-- Workspace removal safety and setup/teardown hook execution still need implementation.
+- Workspace setup/teardown hook execution is implemented for static config hooks, but UI/API hook configuration and deeper hook tests are still needed.
 - Provider implementations are health-check scaffolds; normalized PR/CI/Jira data and action gating still need expansion.
 - First-run settings flow and full shadcn/Tailwind component system still need implementation.

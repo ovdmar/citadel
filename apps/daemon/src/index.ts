@@ -22,7 +22,7 @@ import express from "express";
 const config = loadConfig();
 const store = new SqliteStore(config.databasePath);
 store.migrate();
-const operations = new OperationService(store);
+const operations = new OperationService(store, config);
 const app = express();
 const server = http.createServer(app);
 const sseClients = new Set<express.Response>();
@@ -83,12 +83,15 @@ app.get("/api/workspaces", (_req, res) => {
   res.json({ workspaces: store.listWorkspaces() });
 });
 
-app.post("/api/workspaces", (req, res) => {
-  const input = CreateWorkspaceInputSchema.parse(req.body);
-  const result = operations.createWorkspace(input);
-  emit("workspace.updated", result);
-  res.status(202).json(result);
-});
+app.post(
+  "/api/workspaces",
+  asyncRoute(async (req, res) => {
+    const input = CreateWorkspaceInputSchema.parse(req.body);
+    const result = await operations.createWorkspace(input);
+    emit("workspace.updated", result);
+    res.status(202).json(result);
+  }),
+);
 
 app.get("/api/runtimes", (_req, res) => {
   res.json({ runtimes: listRuntimeHealth(config.runtimes) });
@@ -111,15 +114,20 @@ app.get("/api/activity", (req, res) => {
   res.json({ activity: store.listActivity(workspaceId) });
 });
 
-app.delete("/api/workspaces/:workspaceId", (req, res) => {
-  const result = operations.removeWorkspace({
-    workspaceId: req.params.workspaceId,
-    force: req.query.force === "true",
-    archiveOnly: req.query.archiveOnly === "true",
-  });
-  emit("workspace.updated", result);
-  res.status(result.removed || result.archived ? 202 : 409).json(result);
-});
+app.delete(
+  "/api/workspaces/:workspaceId",
+  asyncRoute(async (req, res) => {
+    const workspaceId = req.params.workspaceId;
+    if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+    const result = await operations.removeWorkspace({
+      workspaceId,
+      force: req.query.force === "true",
+      archiveOnly: req.query.archiveOnly === "true",
+    });
+    emit("workspace.updated", result);
+    res.status(result.removed || result.archived ? 202 : 409).json(result);
+  }),
+);
 
 app.get("/api/mcp/status", (_req, res) => {
   res.json(mcpStatus(config.mcp.enabled));
