@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "references": [
+    { "path": "../../packages/config" },
+    { "path": "../../packages/contracts" },
+    { "path": "../../packages/db" },
+    { "path": "../../packages/mcp" },
+    { "path": "../../packages/operations" },
+    { "path": "../../packages/providers" },
+    { "path": "../../packages/runtimes" },
+    { "path": "../../packages/terminal" }
+  ],
+  "include": ["src/**/*.ts"]
+}

@@ -1,0 +1,204 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import type {
+  AgentSession,
+  CreateAgentSessionInput,
+  CreateWorkspaceInput,
+  Operation,
+  Repo,
+  Workspace,
+} from "@citadel/contracts";
+import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
+import type { SqliteStore } from "@citadel/db";
+import { ensureTmuxSession } from "@citadel/terminal";
+
+export class OperationService {
+  constructor(private readonly store: SqliteStore) {}
+
+  registerRepo(input: { rootPath: string; name?: string | undefined; worktreeParent?: string | undefined }) {
+    const now = nowIso();
+    const rootPath = path.resolve(input.rootPath);
+    if (!fs.existsSync(path.join(rootPath, ".git"))) throw new Error(`Not a git repository: ${rootPath}`);
+    const repo: Repo = {
+      id: createId("repo"),
+      name: input.name || repoDisplayName(rootPath),
+      rootPath,
+      defaultBranch: discoverDefaultBranch(rootPath),
+      defaultRemote: "origin",
+      worktreeParent: input.worktreeParent || path.join(path.dirname(rootPath), `${path.basename(rootPath)}-worktrees`),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: ["github-gh", "jira-jtk"],
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    };
+    this.store.insertRepo(repo);
+    this.activity("repo.registered", "user", `Registered ${repo.name}`, repo.id, null, null);
+    return repo;
+  }
+
+  createWorkspace(input: CreateWorkspaceInput) {
+    const repo = this.store.listRepos().find((candidate) => candidate.id === input.repoId);
+    if (!repo) throw new Error(`Unknown repo: ${input.repoId}`);
+    const now = nowIso();
+    const operation = this.operation("workspace.create", "running", repo.id, null, 5, "Validating workspace request");
+    const branch = workspaceBranchName(input);
+    const workspacePath = path.join(repo.worktreeParent, branch);
+    const workspace: Workspace = {
+      id: createId("ws"),
+      repoId: repo.id,
+      name: input.name,
+      path: workspacePath,
+      branch,
+      baseBranch: repo.defaultBranch,
+      source: input.source,
+      prUrl: input.prUrl ?? null,
+      issueKey: input.issueKey ?? null,
+      issueTitle: input.issueTitle ?? null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "creating",
+      dirty: false,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    };
+    this.store.insertWorkspace(workspace);
+    this.store.upsertOperation({
+      ...operation,
+      workspaceId: workspace.id,
+      progress: 20,
+      message: "Fetching remote metadata",
+    });
+    fs.mkdirSync(repo.worktreeParent, { recursive: true });
+    try {
+      tryRunGit(repo.rootPath, ["fetch", "--prune", repo.defaultRemote]);
+      const startPoint = `${repo.defaultRemote}/${repo.defaultBranch}`;
+      tryRunGit(repo.rootPath, ["worktree", "add", "-b", branch, workspacePath, startPoint]);
+      this.store.updateWorkspaceLifecycle(workspace.id, "ready");
+      this.activity(
+        "workspace.created",
+        "system",
+        `Created workspace ${workspace.name}`,
+        repo.id,
+        workspace.id,
+        operation.id,
+      );
+      this.store.upsertOperation({
+        ...operation,
+        workspaceId: workspace.id,
+        status: "succeeded",
+        progress: 100,
+        message: "Workspace ready",
+        updatedAt: nowIso(),
+      });
+    } catch (error) {
+      this.store.updateWorkspaceLifecycle(workspace.id, "failed");
+      this.store.upsertOperation({
+        ...operation,
+        workspaceId: workspace.id,
+        status: "failed",
+        progress: 100,
+        error: error instanceof Error ? error.message : "workspace_create_failed",
+        updatedAt: nowIso(),
+      });
+    }
+    return { operationId: operation.id, workspaceId: workspace.id };
+  }
+
+  async createAgentSession(
+    input: CreateAgentSessionInput,
+    runtime: { command: string; args: string[]; displayName: string },
+  ) {
+    const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+    if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+    const now = nowIso();
+    const sessionName = `citadel_${workspace.id}_${createId("agent").slice(-8)}`;
+    const tmux = await ensureTmuxSession({
+      sessionName,
+      cwd: workspace.path,
+      command: runtime.command,
+      args: runtime.args,
+    });
+    const session: AgentSession = {
+      id: createId("sess"),
+      workspaceId: workspace.id,
+      runtimeId: input.runtimeId,
+      displayName: input.displayName || runtime.displayName,
+      status: "running",
+      transport: "disconnected",
+      tmuxSessionName: tmux.tmuxSessionName,
+      tmuxSessionId: tmux.tmuxSessionId,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.store.insertSession(session);
+    this.activity("agent.started", "user", `Started ${session.displayName}`, workspace.repoId, workspace.id, null);
+    return session;
+  }
+
+  private operation(
+    type: string,
+    status: Operation["status"],
+    repoId: string | null,
+    workspaceId: string | null,
+    progress: number,
+    message: string,
+  ) {
+    const now = nowIso();
+    const operation: Operation = {
+      id: createId("op"),
+      type,
+      status,
+      repoId,
+      workspaceId,
+      progress,
+      message,
+      error: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.store.upsertOperation(operation);
+    return operation;
+  }
+
+  private activity(
+    type: string,
+    source: "user" | "system",
+    message: string,
+    repoId: string | null,
+    workspaceId: string | null,
+    operationId: string | null,
+  ) {
+    this.store.addActivity({
+      id: createId("evt"),
+      type,
+      source,
+      repoId,
+      workspaceId,
+      operationId,
+      message,
+      createdAt: nowIso(),
+    });
+  }
+}
+
+function discoverDefaultBranch(rootPath: string) {
+  try {
+    const remoteHead = execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
+      cwd: rootPath,
+      encoding: "utf8",
+    })
+      .trim()
+      .replace("refs/remotes/origin/", "");
+    return remoteHead || "main";
+  } catch {
+    return "main";
+  }
+}
+
+function tryRunGit(cwd: string, args: string[]) {
+  execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
+}

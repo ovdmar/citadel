@@ -1,0 +1,20 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/contracts" },
+    { "path": "packages/config" },
+    { "path": "packages/db" },
+    { "path": "packages/hooks" },
+    { "path": "packages/providers" },
+    { "path": "packages/runtimes" },
+    { "path": "packages/terminal" },
+    { "path": "packages/operations" },
+    { "path": "packages/mcp" },
+    { "path": "packages/testing" },
+    { "path": "packages/ui" },
+    { "path": "apps/daemon" },
+    { "path": "apps/web" },
+    { "path": "apps/cli" }
+  ]
+}

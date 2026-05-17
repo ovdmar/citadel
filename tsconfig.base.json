@@ -1,14 +1,34 @@
 {
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "strict": true,
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "jsx": "react-jsx",
-    "types": ["node"]
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "baseUrl": ".",
+    "paths": {
+      "@citadel/core": ["packages/core/src/index.ts"],
+      "@citadel/contracts": ["packages/contracts/src/index.ts"],
+      "@citadel/config": ["packages/config/src/index.ts"],
+      "@citadel/db": ["packages/db/src/index.ts"],
+      "@citadel/operations": ["packages/operations/src/index.ts"],
+      "@citadel/terminal": ["packages/terminal/src/index.ts"],
+      "@citadel/runtimes": ["packages/runtimes/src/index.ts"],
+      "@citadel/providers": ["packages/providers/src/index.ts"],
+      "@citadel/hooks": ["packages/hooks/src/index.ts"],
+      "@citadel/mcp": ["packages/mcp/src/index.ts"],
+      "@citadel/testing": ["packages/testing/src/index.ts"],
+      "@citadel/ui": ["packages/ui/src/index.ts"]
+    }
   }
 }

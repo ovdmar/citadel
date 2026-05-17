@@ -1,0 +1,22 @@
+{
+  "name": "@citadel/operations",
+  "version": "0.2.0",
+  "type": "module",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "dependencies": {
+    "@citadel/contracts": "workspace:*",
+    "@citadel/core": "workspace:*",
+    "@citadel/db": "workspace:*",
+    "@citadel/hooks": "workspace:*",
+    "@citadel/providers": "workspace:*",
+    "@citadel/terminal": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  }
+}

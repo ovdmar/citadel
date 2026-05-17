@@ -1,38 +1,60 @@
 {
   "name": "citadel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.1.2",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=10.0.0"
+  },
   "scripts": {
-    "dev": "concurrently \"npm:dev:api\" \"npm:dev:web\"",
-    "dev:api": "tsx watch server/src/index.ts",
-    "dev:web": "vite --host 0.0.0.0",
-    "build": "vite build && tsc -p tsconfig.server.json",
-    "start": "node dist/server/index.js",
-    "check": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit",
-    "test": "tsx --test server/src/**/*.test.ts",
-    "lint": "npm run check"
+    "dev": "pnpm --parallel --filter @citadel/daemon --filter @citadel/web dev",
+    "dev:daemon": "pnpm --filter @citadel/daemon dev",
+    "dev:web": "pnpm --filter @citadel/web dev",
+    "build": "pnpm -r --filter './packages/*' --filter './apps/*' build",
+    "check": "pnpm run check:arch && pnpm run check:size && pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run coverage && pnpm run check:deps && pnpm run build",
+    "typecheck": "tsc -b tsconfig.json",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "e2e": "playwright test",
+    "check:arch": "tsx scripts/checks/architecture-boundaries.ts",
+    "check:size": "tsx scripts/checks/file-size.ts",
+    "check:deps": "tsx scripts/checks/dependency-policy.ts",
+    "smoke": "tsx scripts/dev/smoke.ts"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.90.10",
+    "@tanstack/react-router": "^1.132.0",
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0",
     "cors": "^2.8.5",
     "express": "^4.21.2",
-    "http-proxy": "^1.18.1",
-    "lucide-react": "^1.11.0",
+    "lucide-react": "^0.468.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
-    "react-router-dom": "^7.5.3"
+    "ws": "^8.18.0",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@playwright/test": "^1.49.1",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.1",
-    "@types/http-proxy": "^1.17.17",
     "@types/node": "^22.14.1",
     "@types/react": "^19.1.1",
     "@types/react-dom": "^19.1.2",
+    "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^4.3.4",
-    "concurrently": "^9.1.2",
-    "tsx": "^4.19.3",
+    "@vitest/coverage-v8": "^2.1.8",
     "typescript": "^5.8.3",
-    "vite": "^6.3.5"
+    "vite": "^6.3.5",
+    "vitest": "^2.1.8",
+    "tsx": "^4.19.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["@biomejs/biome", "esbuild"]
   }
 }

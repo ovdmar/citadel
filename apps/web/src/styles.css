@@ -1,0 +1,315 @@
+:root {
+  color-scheme: light dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f7f8fb;
+  color: #15181e;
+}
+
+:root[data-theme="dark"] {
+  background: #101318;
+  color: #edf1f7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+select {
+  font: inherit;
+}
+
+.shell {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  min-height: 100vh;
+}
+
+.rail {
+  background: #171b22;
+  color: #f8fafc;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.brand {
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.rail nav {
+  display: grid;
+  gap: 8px;
+}
+
+.rail a,
+.theme button,
+.primary,
+.runtime-launcher button {
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.rail a {
+  color: #cbd5e1;
+  text-decoration: none;
+  padding: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.rail a.active,
+.rail a:hover {
+  background: #28303b;
+  color: white;
+}
+
+.theme {
+  margin-top: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.theme button {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  background: #28303b;
+  color: white;
+}
+
+.page {
+  padding: 24px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+.header h1 {
+  font-size: 28px;
+}
+
+.header p {
+  color: #667085;
+  margin-top: 4px;
+}
+
+.primary,
+.runtime-launcher button {
+  background: #1267d7;
+  color: white;
+  padding: 10px 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.primary:disabled,
+.runtime-launcher button:disabled {
+  opacity: 0.5;
+}
+
+.metrics,
+.grid {
+  display: grid;
+  gap: 14px;
+}
+
+.metrics {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 14px;
+}
+
+.metric,
+.panel {
+  background: color-mix(in srgb, Canvas 92%, CanvasText 8%);
+  border: 1px solid color-mix(in srgb, CanvasText 14%, transparent);
+  border-radius: 8px;
+}
+
+.metric {
+  padding: 14px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.metric svg,
+.panel-title svg {
+  width: 18px;
+  height: 18px;
+}
+
+.grid {
+  grid-template-columns: 1.4fr 0.8fr;
+}
+
+.panel {
+  padding: 14px;
+  min-width: 0;
+}
+
+.wide {
+  grid-column: span 1;
+}
+
+.panel-title {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.panel-title h2 {
+  font-size: 15px;
+}
+
+.workspace-list {
+  display: grid;
+  gap: 8px;
+}
+
+.workspace-row,
+.activity-row,
+.health {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  border-radius: 7px;
+}
+
+.workspace-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.workspace-row span,
+.activity-row span,
+.activity-row time,
+.health span,
+.health p,
+.runtime-launcher p,
+.empty {
+  color: #667085;
+  font-size: 13px;
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.badges span {
+  background: color-mix(in srgb, CanvasText 8%, transparent);
+  border-radius: 999px;
+  padding: 4px 8px;
+}
+
+.health {
+  margin-bottom: 8px;
+}
+
+.health.healthy span {
+  color: #12753b;
+}
+
+.health.degraded span,
+.health.unavailable span {
+  color: #b54708;
+}
+
+.runtime-launcher {
+  display: grid;
+  gap: 10px;
+}
+
+.runtime-launcher select {
+  min-height: 38px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  background: Canvas;
+  color: CanvasText;
+}
+
+.activity-row {
+  grid-template-columns: 120px 1fr auto;
+  margin-bottom: 8px;
+  align-items: center;
+}
+
+.empty {
+  padding: 18px;
+  border: 1px dashed color-mix(in srgb, CanvasText 18%, transparent);
+  border-radius: 8px;
+}
+
+@media (max-width: 820px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .rail {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .rail nav {
+    grid-auto-flow: column;
+    overflow-x: auto;
+  }
+
+  .theme {
+    margin-left: auto;
+    margin-top: 0;
+  }
+
+  .page {
+    padding: 16px;
+  }
+
+  .header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .metrics,
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-row,
+  .activity-row {
+    grid-template-columns: 1fr;
+  }
+
+  .badges {
+    justify-content: flex-start;
+  }
+}

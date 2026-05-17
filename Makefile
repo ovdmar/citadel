@@ -1,61 +1,50 @@
 SHELL := /bin/bash
 
-LABEL := ai.openclaw.citadel
-UID := $(shell id -u)
-DOMAIN := gui/$(UID)
-SERVICE := $(DOMAIN)/$(LABEL)
-PLIST := $(HOME)/Library/LaunchAgents/$(LABEL).plist
-LOG_DIR := $(HOME)/Library/Logs/Citadel
-STDOUT_LOG := $(LOG_DIR)/stdout.log
-STDERR_LOG := $(LOG_DIR)/stderr.log
-
-.PHONY: help dev build deploy install-agent start stop restart logs status
+.PHONY: help install dev dev-daemon dev-web build check typecheck lint test coverage e2e smoke clean
 
 help:
-	@echo "Citadel commands"
-	@echo "  make dev            Run the dev server"
-	@echo "  make build          Build production assets"
-	@echo "  make install-agent  Write/update the launchd plist"
-	@echo "  make deploy         Build, install agent, and restart Citadel"
-	@echo "  make start          Start the Citadel launchd service"
-	@echo "  make stop           Stop the Citadel launchd service"
-	@echo "  make restart        Restart the Citadel launchd service"
-	@echo "  make logs           Tail Citadel stdout/stderr logs"
-	@echo "  make status         Show launchd status for Citadel"
+	@echo "Citadel v2 commands"
+	@echo "  make install      Install pnpm dependencies"
+	@echo "  make dev          Run daemon and web dev servers"
+	@echo "  make check        Run architecture, size, type, lint, test, coverage, security, build"
+	@echo "  make smoke        Run local API smoke against a running daemon"
+	@echo "  make e2e          Run Playwright happy-path tests"
+
+install:
+	pnpm install
 
 dev:
-	npm run dev
+	pnpm dev
+
+dev-daemon:
+	pnpm dev:daemon
+
+dev-web:
+	pnpm dev:web
 
 build:
-	npm run build
+	pnpm build
 
-install-agent:
-	./bin/install-launch-agent.sh
+check:
+	pnpm check
 
-deploy: build install-agent restart
+typecheck:
+	pnpm typecheck
 
-start: install-agent
-	@mkdir -p "$(LOG_DIR)"
-	@launchctl print "$(SERVICE)" >/dev/null 2>&1 || launchctl bootstrap "$(DOMAIN)" "$(PLIST)"
-	@launchctl enable "$(SERVICE)" >/dev/null 2>&1 || true
-	@launchctl kickstart -k "$(SERVICE)"
-	@echo "Citadel started via $(SERVICE)"
+lint:
+	pnpm lint
 
-stop:
-	@launchctl bootout "$(SERVICE)" >/dev/null 2>&1 || launchctl bootout "$(DOMAIN)" "$(PLIST)" >/dev/null 2>&1 || true
-	@echo "Citadel stopped"
+test:
+	pnpm test
 
-restart: install-agent
-	@mkdir -p "$(LOG_DIR)"
-	@launchctl print "$(SERVICE)" >/dev/null 2>&1 || launchctl bootstrap "$(DOMAIN)" "$(PLIST)"
-	@launchctl enable "$(SERVICE)" >/dev/null 2>&1 || true
-	@launchctl kickstart -k "$(SERVICE)"
-	@echo "Citadel restarted via $(SERVICE)"
+coverage:
+	pnpm coverage
 
-logs:
-	@mkdir -p "$(LOG_DIR)"
-	@touch "$(STDOUT_LOG)" "$(STDERR_LOG)"
-	@tail -n 200 -f "$(STDOUT_LOG)" "$(STDERR_LOG)"
+e2e:
+	pnpm e2e
 
-status:
-	@launchctl print "$(SERVICE)"
+smoke:
+	pnpm smoke
+
+clean:
+	rm -rf apps/*/dist packages/*/dist coverage test-results playwright-report

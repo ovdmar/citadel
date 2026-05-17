@@ -1,0 +1,26 @@
+{
+  "name": "@citadel/daemon",
+  "version": "0.2.0",
+  "type": "module",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@citadel/config": "workspace:*",
+    "@citadel/contracts": "workspace:*",
+    "@citadel/db": "workspace:*",
+    "@citadel/mcp": "workspace:*",
+    "@citadel/operations": "workspace:*",
+    "@citadel/providers": "workspace:*",
+    "@citadel/runtimes": "workspace:*",
+    "@citadel/terminal": "workspace:*",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}

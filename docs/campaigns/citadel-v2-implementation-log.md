@@ -1,0 +1,43 @@
+# Citadel v2 Implementation Log
+
+## 2026-05-17
+
+- Started the headless implementation campaign on `main`.
+- Confirmed `docs/campaigns/citadel-v2-goal.md` and Jira `MS-496` are the campaign contract.
+- Fetched Jira child-task source material for `MS-472` through `MS-497`; a subagent summarized `MS-478` through `MS-488` provider/UI/MCP/security/test requirements.
+- Replaced the old flat npm-era structure with the target pnpm workspace shape:
+  - `apps/daemon`
+  - `apps/web`
+  - `apps/cli`
+  - `packages/core`, `contracts`, `config`, `db`, `operations`, `terminal`, `runtimes`, `providers`, `hooks`, `mcp`, `ui`, `testing`
+  - `scripts/checks`, `scripts/dev`, `docs/architecture`, `docs/operations`, `docs/contributors`, `e2e`
+- Removed obsolete v1 server/web files, npm lockfile, and the old OpenClaw UI/server routes from the active v2 tree.
+- Added strict TypeScript project references, pnpm workspace metadata, Biome config, Makefile command surface, architecture boundary check, file-size check, dependency lockfile policy, and startup smoke script.
+- Added initial typed contracts, local config loader, SQLite schema/migration/repository layer, operation service, provider health checks, runtime health checks, tmux session creation, terminal WebSocket bridge, MCP status/resource helpers, daemon REST/SSE endpoints, and a dense operator cockpit UI.
+- Ran `pnpm test`: 4 tests passed across `packages/core` and `packages/db`.
+- Ran `pnpm coverage`: command completed, but total coverage is currently 16.26% statements and does not satisfy the final 90% campaign gate.
+- Ran `pnpm check`: passed architecture boundaries, file-size check, typecheck, Biome, tests, coverage command, dependency policy, and build.
+- Ran `make check`: passed the Makefile command surface for the same gates.
+- Started the local daemon at `http://127.0.0.1:4337` and web UI at `http://127.0.0.1:5173`.
+- Ran `pnpm smoke`: `/api/health`, `/api/state`, and `/api/mcp/status` passed.
+- Exercised the core smoke path against the running daemon:
+  - registered `/home/jonsnow/Workspace/citadel` as repo `repo_mp9rtdix_qxm4c95u`,
+  - created real git worktree workspace `ws_mp9rthge_4n4s2g9z` at `/home/jonsnow/Workspace/citadel-worktrees/smoke-1779022089`,
+  - started shell runtime session `sess_mp9rupj4_v95pfdv2` in tmux session `citadel_ws_mp9rthge_4n4s2g9z_0bbu8fpq`,
+  - verified terminal WebSocket input by sending `pwd` and confirming output from the same worktree tmux session.
+- Installed Playwright Chromium with `pnpm exec playwright install chromium`.
+- Added and ran Playwright desktop/mobile smoke tests: 4 passed.
+- Captured screenshots:
+  - `docs/campaigns/screenshot-desktop-cockpit.png`
+  - `docs/campaigns/screenshot-desktop-settings.png`
+  - `docs/campaigns/screenshot-mobile-cockpit.png`
+  - `docs/campaigns/screenshot-mobile-settings.png`
+
+Known current gaps before final DoD:
+
+- `make check` needs to be rerun after subsequent implementation slices; the current equivalent `pnpm check` passed.
+- Terminal WebSocket currently uses tmux capture polling and `send-keys`; interactive fidelity must be expanded and verified against the campaign gate.
+- Diff viewer endpoint is a placeholder; `MS-482` requires full bounded read-only git diff support.
+- Workspace removal safety and setup/teardown hook execution still need implementation.
+- Provider implementations are health-check scaffolds; normalized PR/CI/Jira data and action gating still need expansion.
+- First-run settings flow and full shadcn/Tailwind component system still need implementation.

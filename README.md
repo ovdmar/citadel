@@ -1,19 +1,32 @@
 # Citadel
 
-Local operator cockpit for OpenClaw agent workflows.
+Citadel v2 is a local-first Linux operator cockpit for repositories, workspaces, tmux-backed agent runtimes, providers, hooks, MCP, and operational activity.
 
-## Why host-native
+## Quickstart
 
-Citadel needs direct access to host tmux sessions and local workflow state. On macOS, Docker Desktop is the wrong fit for that because host tmux sockets and host process control are not cleanly container-accessible. So v1 runs natively on the Mac, by design.
+```bash
+pnpm install
+make dev
+```
 
-## Scripts
+- Web UI: `http://127.0.0.1:5173`
+- Daemon API: `http://127.0.0.1:4337`
+- Default config: `~/.local/share/citadel/citadel.config.json`
+- Default SQLite DB: `~/.local/share/citadel/citadel.sqlite`
 
-- `npm install`
-- `npm run dev`
-- `npm run build`
-- `npm start`
+## Checks
 
-Default ports:
-- API: `4010`
-- Web dev: `5173`
-- Terminal bridge: dynamic `7681+`
+```bash
+make check
+make smoke
+make e2e
+```
+
+Citadel uses pnpm, strict TypeScript project references, Biome, Vitest, Playwright, SQLite, tmux, REST/SSE for app state, and a dedicated WebSocket for terminal I/O.
+
+## Docs
+
+- [Architecture](docs/architecture/citadel-v2-architecture.md)
+- [Runbook](docs/operations/runbook.md)
+- [Engineering standards](docs/contributors/v2-engineering-standards.md)
+- [Campaign log](docs/campaigns/citadel-v2-implementation-log.md)
