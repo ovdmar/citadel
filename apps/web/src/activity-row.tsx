@@ -1,11 +1,12 @@
 import type { ActivityEvent } from "@citadel/contracts";
 import { ExternalLink, Play } from "lucide-react";
+import { formatLabel } from "./labels.js";
 
 export function ActivityRow(props: { event: ActivityEvent }) {
   const output = props.event.hookOutput;
   return (
     <div className="activity-row">
-      <span>{props.event.type}</span>
+      <span>{formatLabel(props.event.type)}</span>
       <p>{props.event.message}</p>
       <time>{new Date(props.event.createdAt).toLocaleTimeString()}</time>
       {output && (output.links.length > 0 || output.actions.length > 0) ? (

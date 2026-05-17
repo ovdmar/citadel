@@ -38,6 +38,7 @@ import { ActivityRow } from "./activity-row.js";
 import { api, queryClient } from "./api.js";
 import { Badge } from "./components/ui/badge.js";
 import { ConfigForm } from "./config-form.js";
+import { formatLabel } from "./labels.js";
 import "./styles.css";
 
 type StateResponse = {
@@ -249,8 +250,8 @@ function WorkspaceRow(props: { workspace: Workspace; sessions: AgentSession[] })
         <span>{props.workspace.branch}</span>
       </div>
       <div className="badges">
-        <span>{props.workspace.lifecycle}</span>
-        <span>{props.workspace.section}</span>
+        <span>{formatLabel(props.workspace.lifecycle)}</span>
+        <span>{formatLabel(props.workspace.section)}</span>
         <span>{props.sessions.length} sessions</span>
       </div>
     </div>
@@ -261,7 +262,7 @@ function HealthRow(props: { provider: ProviderHealth }) {
   return (
     <div className={`health ${props.provider.status}`}>
       <strong>{props.provider.displayName}</strong>
-      <span>{props.provider.status}</span>
+      <span>{formatLabel(props.provider.status)}</span>
       {props.provider.reason ? <p>{props.provider.reason}</p> : null}
     </div>
   );
@@ -329,7 +330,7 @@ function ProviderSummary(props: { repo: Repo; workspace: Workspace | null; provi
       {issue ? (
         <div className={`health ${issue.status}`}>
           <strong>{issue.key}</strong>
-          <span>{issue.issueStatus || issue.status}</span>
+          <span>{issue.issueStatus || formatLabel(issue.status)}</span>
           {issue.summary ? <p>{issue.summary}</p> : null}
           {issue.transitions.length > 0 ? (
             <div className="inline-actions">
@@ -352,8 +353,8 @@ function ProviderSummary(props: { repo: Repo; workspace: Workspace | null; provi
       {ci ? (
         <div className={`health ${ci.status}`}>
           <strong>Checks</strong>
-          <span>{ci.runs[0] ? `${ci.runs[0].name}: ${ci.runs[0].status}` : ci.status}</span>
-          {ci.runs[0]?.conclusion ? <p>{ci.runs[0].conclusion}</p> : null}
+          <span>{ci.runs[0] ? `${ci.runs[0].name}: ${formatLabel(ci.runs[0].status)}` : formatLabel(ci.status)}</span>
+          {ci.runs[0]?.conclusion ? <p>{formatLabel(ci.runs[0].conclusion)}</p> : null}
           {ci.reason ? <p>{ci.reason}</p> : null}
         </div>
       ) : null}
@@ -737,7 +738,7 @@ function RuntimeUsage(props: { runtime: AgentRuntime }) {
   return (
     <div className={`usage-row ${summary.status}`}>
       <span>{summary.source}</span>
-      <strong>{summary.remaining ?? summary.spend ?? summary.status}</strong>
+      <strong>{summary.remaining ?? summary.spend ?? formatLabel(summary.status)}</strong>
       {summary.reason ? <p>{summary.reason}</p> : null}
     </div>
   );
