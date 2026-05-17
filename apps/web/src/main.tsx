@@ -1,6 +1,8 @@
 import type { AgentRuntime, AgentSession, ProviderHealth, Repo, Workspace, WorkspaceDiff } from "@citadel/contracts";
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import { Link, Outlet, RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal } from "@xterm/xterm";
 import {
   Activity,
   Boxes,
@@ -14,8 +16,9 @@ import {
   Sun,
   TerminalSquare,
 } from "lucide-react";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 
 type StateResponse = {
@@ -113,6 +116,9 @@ function Cockpit() {
   const data = state.data;
   const selectedWorkspace = data?.workspaces[0];
   const selectedRepo = data?.repos[0];
+  const selectedSession = selectedWorkspace
+    ? data?.sessions.find((session) => session.workspaceId === selectedWorkspace.id)
+    : undefined;
 
   return (
     <div className="page">
@@ -175,6 +181,15 @@ function Cockpit() {
         <section className="panel">
           <PanelTitle icon={<GitBranch />} title="Diff" />
           {selectedWorkspace ? <DiffPanel workspace={selectedWorkspace} /> : <Empty text="No workspace selected" />}
+        </section>
+
+        <section className="panel wide">
+          <PanelTitle icon={<TerminalSquare />} title="Terminal" />
+          {selectedSession ? (
+            <TerminalPane session={selectedSession} />
+          ) : (
+            <Empty text="Start a runtime session to open a terminal" />
+          )}
         </section>
 
         <section className="panel wide">
@@ -414,6 +429,70 @@ function DiffPanel(props: { workspace: Workspace }) {
           <pre>{file.binary ? "Binary file" : file.diff || "No textual diff available"}</pre>
         </details>
       ))}
+    </div>
+  );
+}
+
+function TerminalPane(props: { session: AgentSession }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [state, setState] = useState<"connecting" | "connected" | "closed">("connecting");
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const terminal = new Terminal({
+      cursorBlink: true,
+      convertEol: true,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
+      fontSize: 12,
+      scrollback: 5000,
+      theme: {
+        background: "#101318",
+        foreground: "#f8fafc",
+      },
+    });
+    const fit = new FitAddon();
+    terminal.loadAddon(fit);
+    terminal.open(containerRef.current);
+    fit.fit();
+
+    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+    const socket = new WebSocket(`${protocol}://${window.location.host}/terminal/${props.session.id}`);
+    const resize = () => {
+      fit.fit();
+      socket.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows }));
+    };
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(containerRef.current);
+    const inputDisposable = terminal.onData((data) => {
+      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }));
+    });
+    socket.addEventListener("open", () => {
+      setState("connected");
+      resize();
+    });
+    socket.addEventListener("message", (event) => {
+      const message = JSON.parse(String(event.data)) as { type: string; data?: string };
+      if (message.type === "output" && typeof message.data === "string") {
+        terminal.reset();
+        terminal.write(message.data);
+      }
+    });
+    socket.addEventListener("close", () => setState("closed"));
+    return () => {
+      resizeObserver.disconnect();
+      inputDisposable.dispose();
+      socket.close();
+      terminal.dispose();
+    };
+  }, [props.session.id]);
+
+  return (
+    <div className="terminal-shell">
+      <div className="terminal-status">
+        <span>{props.session.displayName}</span>
+        <strong>{state}</strong>
+      </div>
+      <div ref={containerRef} className="terminal-surface" data-testid="terminal-surface" />
     </div>
   );
 }

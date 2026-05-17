@@ -6,6 +6,7 @@ test("operator cockpit renders key local-first views", async ({ page }, testInfo
   await expect(page.getByRole("heading", { name: "Provider Health" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Runtime Launch" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Create" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Terminal" })).toBeVisible();
   await expect(page.getByLabel("Repo path")).toBeVisible();
   await page.screenshot({ path: `docs/campaigns/screenshot-${testInfo.project.name}-cockpit.png`, fullPage: true });
 });

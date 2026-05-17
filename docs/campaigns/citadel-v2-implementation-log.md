@@ -45,11 +45,15 @@
   - diff endpoint returned `clean=false` and a bounded preview,
   - destructive remove without force returned HTTP 409 with `dirty=true`.
 - Reran `make check` and `pnpm e2e`: both passed after the diff/removal slice.
+- Added xterm.js cockpit terminal pane connected to the daemon `/terminal/:sessionId` WebSocket for the selected agent session.
+- Reran `pnpm e2e`: 4 Playwright desktop/mobile tests passed and screenshots were refreshed.
+- Reran `make check`: passed. Build now warns that the web chunk is larger than 500 KB after adding xterm; code splitting/manual chunks should be added before final performance signoff.
 
 Known current gaps before final DoD:
 
 - `make check` needs to be rerun after subsequent implementation slices; the current equivalent `pnpm check` passed.
 - Terminal WebSocket currently uses tmux capture polling and `send-keys`; interactive fidelity must be expanded and verified against the campaign gate.
+- Web terminal exists, but terminal protocol still needs stronger fidelity tests for raw/control/meta input, paste, resize, alternate screen, reconnect, output isolation, and long scrollback.
 - Diff viewer is bounded and read-only for staged/unstaged/untracked text previews, but renamed/deleted/binary edge cases need broader tests and UI states before the full `MS-482` bar is complete.
 - Workspace removal safety and setup/teardown hook execution still need implementation.
 - Provider implementations are health-check scaffolds; normalized PR/CI/Jira data and action gating still need expansion.
