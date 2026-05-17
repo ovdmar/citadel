@@ -33,7 +33,7 @@ describe("SqliteStore", () => {
     });
 
     expect(store.listRepos()).toHaveLength(1);
-    expect(store.query("SELECT version FROM schema_migrations")).toEqual([{ version: 1 }]);
+    expect(store.query("SELECT version FROM schema_migrations")).toEqual([{ version: 1 }, { version: 2 }]);
   });
 
   it("round-trips workspace, session, operation, and activity state", () => {
@@ -107,6 +107,11 @@ describe("SqliteStore", () => {
       workspaceId: "ws_test",
       operationId: "op_test",
       message: "Created John's task",
+      hookOutput: {
+        links: [{ label: "Preview", url: "https://example.test/preview", kind: "preview" }],
+        actions: [],
+        metadata: {},
+      },
       createdAt: "2026-05-17T00:04:00.000Z",
     });
 
@@ -136,7 +141,9 @@ describe("SqliteStore", () => {
     ]);
     expect(store.listSessions("ws_test")).toMatchObject([{ id: "sess_test", transport: "connected" }]);
     expect(store.listOperations()).toMatchObject([{ id: "op_test", status: "succeeded", progress: 100 }]);
-    expect(store.listActivity("ws_test")).toMatchObject([{ id: "evt_test", source: "system" }]);
+    expect(store.listActivity("ws_test")).toMatchObject([
+      { id: "evt_test", source: "system", hookOutput: { links: [{ label: "Preview" }] } },
+    ]);
 
     store.archiveWorkspace("ws_test", "archived", true);
 

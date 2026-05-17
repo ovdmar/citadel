@@ -202,6 +202,27 @@ export const OperationSchema = z.object({
   updatedAt: z.string(),
 });
 
+export const HookLinkSchema = z.object({
+  label: z.string().min(1).max(80),
+  url: z.string().url(),
+  kind: z.enum(["preview", "deploy", "docs", "external"]).default("external"),
+});
+
+export const HookActionSchema = z.object({
+  id: IdSchema,
+  label: z.string().min(1).max(80),
+  description: z.string().max(200).nullable().default(null),
+  url: z.string().url().nullable().default(null),
+});
+
+export const HookOutputSchema = z
+  .object({
+    links: z.array(HookLinkSchema).max(20).default([]),
+    actions: z.array(HookActionSchema).max(20).default([]),
+    metadata: z.record(z.unknown()).default({}),
+  })
+  .default({ links: [], actions: [], metadata: {} });
+
 export const ActivityEventSchema = z.object({
   id: IdSchema,
   type: z.string(),
@@ -210,6 +231,7 @@ export const ActivityEventSchema = z.object({
   workspaceId: IdSchema.nullable().default(null),
   operationId: IdSchema.nullable().default(null),
   message: z.string(),
+  hookOutput: HookOutputSchema.nullable().default(null),
   createdAt: z.string(),
 });
 
@@ -281,6 +303,9 @@ export type IssueTransition = z.infer<typeof IssueTransitionSchema>;
 export type IssueTrackerSummary = z.infer<typeof IssueTrackerSummarySchema>;
 export type IssueTransitionActionResult = z.infer<typeof IssueTransitionActionResultSchema>;
 export type Operation = z.infer<typeof OperationSchema>;
+export type HookLink = z.infer<typeof HookLinkSchema>;
+export type HookAction = z.infer<typeof HookActionSchema>;
+export type HookOutput = z.infer<typeof HookOutputSchema>;
 export type ActivityEvent = z.infer<typeof ActivityEventSchema>;
 export type AppEvent = z.infer<typeof AppEventSchema>;
 export type CreateRepoInput = z.infer<typeof CreateRepoInputSchema>;

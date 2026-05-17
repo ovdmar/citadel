@@ -351,12 +351,26 @@
   - `provider_summary 11ms`
   - `web_cockpit_visible 422ms`
   - `workspace_settings_switch 258ms`
+- Added hook-provided workspace surface output:
+  - shared contracts now define bounded hook links/actions/metadata,
+  - command-hook stdout can be parsed as structured JSON output,
+  - activity events persist optional hook output through a schema migration that is safe for existing local databases,
+  - operation hooks attach parsed links/actions to hook activity events,
+  - the cockpit activity panel renders hook links/actions as compact operator controls,
+  - tests cover hook output schema parsing, hook parser behavior, DB round-tripping, and operation-level link/action capture.
+- Reran `make check`: passed with 57 tests across 15 files. App/package source coverage is 92.16% statements.
+- Reran `pnpm e2e`: 5 Playwright tests passed, 1 mobile-only duplicate workflow smoke skipped.
+- Reran `pnpm performance`:
+  - `api_state 609ms`
+  - `provider_summary 15ms`
+  - `web_cockpit_visible 412ms`
+  - `workspace_settings_switch 310ms`
 
 Known current gaps before final DoD:
 
 - Terminal WebSocket still uses tmux capture polling rather than a raw PTY stream, but control input, paste, resize, deeper reconnect scrollback, long output, cross-session output isolation, and alternate-screen capture are now implemented/tested.
 - Diff reader now has renamed/binary/truncation tests and the cockpit diff UI exposes explicit file states, truncation, refresh, and read-only previews. Remaining `MS-482` risk is mostly visual polish and deeper syntax-aware diff presentation.
-- Workspace setup/teardown hook execution is implemented for static config hooks; lifecycle notification hooks cover workspace created/archived/removed and agent started; settings can edit/persist hook config; config validation now catches bad hook references, wrong event wiring, duplicate IDs, and unsafe relative cwd; operation tests cover setup/teardown and notification failure policies. Remaining hook gap is hook-provided links/actions in workspace surfaces.
+- Workspace setup/teardown hook execution is implemented for static config hooks; lifecycle notification hooks cover workspace created/archived/removed and agent started; settings can edit/persist hook config; config validation now catches bad hook references, wrong event wiring, duplicate IDs, and unsafe relative cwd; operation tests cover setup/teardown and notification failure policies; hook-provided links/actions now appear in the activity surface. Remaining hook work is deeper action execution semantics beyond URL/open controls.
 - Provider implementation now includes normalized GitHub VC/current PR/check summary, GitHub CI run summaries/log endpoint, Jira issue/transition summaries, Jira workflow transition actions, cockpit action gating from provider health, and daemon-side short TTL caching for summary calls.
 - Runtime usage provider support now has explicit unsupported/custom-command surfaces; deeper built-in adapters and manual refresh controls remain future polish.
 - MCP now has local/internal JSON tool calls, a JSON-RPC-style endpoint, resources with matching `resources/read` support, read-only tools, daemon-handled workspace create/archive tools, and daemon-handled agent-session launch. Additional protocol compatibility testing against external MCP clients is still needed before treating it as fully production-complete.

@@ -1,4 +1,5 @@
 import type {
+  ActivityEvent,
   AgentRuntime,
   AgentSession,
   CiProviderSummary,
@@ -33,6 +34,7 @@ import {
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "@xterm/xterm/css/xterm.css";
+import { ActivityRow } from "./activity-row.js";
 import { api, queryClient } from "./api.js";
 import { Badge } from "./components/ui/badge.js";
 import { ConfigForm } from "./config-form.js";
@@ -43,7 +45,7 @@ type StateResponse = {
   workspaces: Workspace[];
   sessions: AgentSession[];
   operations: unknown[];
-  activity: { id: string; message: string; createdAt: string; type: string }[];
+  activity: ActivityEvent[];
   providerHealth: ProviderHealth[];
   runtimes: AgentRuntime[];
   mcp: { enabled: boolean; resources: string[]; tools: string[] };
@@ -208,11 +210,7 @@ function Cockpit() {
         <section className="panel wide">
           <PanelTitle icon={<Activity />} title="Activity" />
           {data?.activity.slice(0, 12).map((event) => (
-            <div className="activity-row" key={event.id}>
-              <span>{event.type}</span>
-              <p>{event.message}</p>
-              <time>{new Date(event.createdAt).toLocaleTimeString()}</time>
-            </div>
+            <ActivityRow key={event.id} event={event} />
           ))}
         </section>
       </div>

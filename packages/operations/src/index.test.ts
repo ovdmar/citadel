@@ -163,6 +163,41 @@ describe("OperationService", () => {
       message: expect.stringContaining("notify denied"),
     });
   });
+
+  it("records hook-provided workspace links and actions", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [
+        {
+          id: "workspace-links",
+          kind: "command",
+          event: "workspace.created",
+          command: "node",
+          args: [
+            "-e",
+            "process.stdout.write(JSON.stringify({links:[{label:'Preview',url:'https://example.test/preview',kind:'preview'}],actions:[{id:'redeploy',label:'Redeploy',url:'https://example.test/deploy'}]}))",
+          ],
+          blocking: false,
+        },
+      ],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const result = await service.createWorkspace({ repoId: repo.id, name: "Hook Surface", source: "scratch" });
+
+    expect(
+      store.listActivity(result.workspaceId).find((event) => event.type === "hook.workspace.created"),
+    ).toMatchObject({
+      hookOutput: {
+        links: [{ label: "Preview", kind: "preview" }],
+        actions: [{ id: "redeploy", label: "Redeploy" }],
+      },
+    });
+  });
 });
 
 function createGitFixture() {

@@ -6,13 +6,14 @@ import type {
   AgentSession,
   CreateAgentSessionInput,
   CreateWorkspaceInput,
+  HookOutput,
   Operation,
   Repo,
   Workspace,
 } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
-import { runCommandHook } from "@citadel/hooks";
+import { parseHookOutput, runCommandHook } from "@citadel/hooks";
 import { ensureTmuxSession, killTmuxSession } from "@citadel/terminal";
 
 export class OperationService {
@@ -279,6 +280,7 @@ export class OperationService {
     repoId: string | null,
     workspaceId: string | null,
     operationId: string | null,
+    hookOutput?: HookOutput | null,
   ) {
     this.store.addActivity({
       id: createId("evt"),
@@ -288,6 +290,7 @@ export class OperationService {
       workspaceId,
       operationId,
       message,
+      hookOutput: hookOutput ?? null,
       createdAt: nowIso(),
     });
   }
@@ -313,6 +316,7 @@ export class OperationService {
         },
         { event, repo, workspace, operationId },
       );
+      const hookOutput = parseHookOutput(result.stdout);
       this.activity(
         `hook.${event}`,
         "hook",
@@ -320,6 +324,7 @@ export class OperationService {
         repo.id,
         workspace.id,
         operationId,
+        hookOutput,
       );
     }
   }
@@ -346,6 +351,7 @@ export class OperationService {
           },
           { event, ...asObject(payload), operationId },
         );
+        const hookOutput = parseHookOutput(result.stdout);
         this.activity(
           `hook.${event}`,
           "hook",
@@ -353,6 +359,7 @@ export class OperationService {
           repo.id,
           workspace.id,
           operationId,
+          hookOutput,
         );
       } catch (error) {
         this.activity(

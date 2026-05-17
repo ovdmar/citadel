@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { ActivityEvent, AgentSession, Operation, Repo, Workspace } from "@citadel/contracts";
+import type { ActivityEvent, AgentSession, HookOutput, Operation, Repo, Workspace } from "@citadel/contracts";
 
 export class SqliteStore {
   readonly databasePath: string;
@@ -85,10 +85,16 @@ export class SqliteStore {
         workspace_id TEXT,
         operation_id TEXT,
         message TEXT NOT NULL,
+        hook_output TEXT,
         created_at TEXT NOT NULL
       );
       INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
       VALUES (1, 'initial-local-first-schema', datetime('now'));
+    `);
+    this.ensureActivityHookOutputColumn();
+    this.exec(`
+      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+      VALUES (2, 'activity-hook-output', datetime('now'));
     `);
   }
 
@@ -222,9 +228,19 @@ export class SqliteStore {
     );
   }
 
-  addActivity(event: ActivityEvent) {
+  addActivity(event: Omit<ActivityEvent, "hookOutput"> & { hookOutput?: HookOutput | null }) {
     this.exec(
-      `INSERT INTO activity_events VALUES (${[
+      `INSERT INTO activity_events (
+        id,
+        type,
+        source,
+        repo_id,
+        workspace_id,
+        operation_id,
+        message,
+        hook_output,
+        created_at
+      ) VALUES (${[
         q(event.id),
         q(event.type),
         q(event.source),
@@ -232,6 +248,7 @@ export class SqliteStore {
         q(event.workspaceId),
         q(event.operationId),
         q(event.message),
+        q(event.hookOutput ? JSON.stringify(event.hookOutput) : null),
         q(event.createdAt),
       ].join(",")})`,
     );
@@ -242,6 +259,13 @@ export class SqliteStore {
     return this.query<Record<string, unknown>>(
       `SELECT * FROM activity_events ${where} ORDER BY created_at DESC LIMIT 200`,
     ).map(activityFromRow);
+  }
+
+  private ensureActivityHookOutputColumn() {
+    const columns = this.query<{ name: string }>("PRAGMA table_info(activity_events)");
+    if (!columns.some((column) => column.name === "hook_output")) {
+      this.exec("ALTER TABLE activity_events ADD COLUMN hook_output TEXT");
+    }
   }
 }
 
@@ -257,6 +281,11 @@ function asString(row: Record<string, unknown>, key: string) {
 function jsonArray(row: Record<string, unknown>, key: string) {
   const raw = asString(row, key);
   return raw ? (JSON.parse(raw) as string[]) : [];
+}
+
+function jsonObject<T>(row: Record<string, unknown>, key: string) {
+  const raw = asString(row, key);
+  return raw ? (JSON.parse(raw) as T) : null;
 }
 
 function repoFromRow(row: Record<string, unknown>): Repo {
@@ -337,6 +366,7 @@ function activityFromRow(row: Record<string, unknown>): ActivityEvent {
     workspaceId: row.workspace_id ? asString(row, "workspace_id") : null,
     operationId: row.operation_id ? asString(row, "operation_id") : null,
     message: asString(row, "message"),
+    hookOutput: jsonObject<HookOutput>(row, "hook_output"),
     createdAt: asString(row, "created_at"),
   };
 }

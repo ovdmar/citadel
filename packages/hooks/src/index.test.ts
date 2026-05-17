@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runCommandHook } from "./index.js";
+import { parseHookOutput, runCommandHook } from "./index.js";
 
 describe("runCommandHook", () => {
   it("passes JSON input to command hooks and captures bounded output", async () => {
@@ -51,5 +51,16 @@ describe("runCommandHook", () => {
         { name: "citadel" },
       ),
     ).rejects.toThrow("Hook timed out");
+  });
+
+  it("parses structured hook output for links and actions", () => {
+    expect(
+      parseHookOutput(
+        JSON.stringify({
+          links: [{ label: "Preview", url: "https://example.test/preview", kind: "preview" }],
+          actions: [{ id: "redeploy", label: "Redeploy", url: "https://example.test/deploy" }],
+        }),
+      ),
+    ).toMatchObject({ links: [{ label: "Preview" }], actions: [{ id: "redeploy" }] });
   });
 });

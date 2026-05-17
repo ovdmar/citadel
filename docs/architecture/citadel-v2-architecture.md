@@ -36,7 +36,7 @@ Long-running work returns operation IDs and runs through the operation service. 
 
 ## Providers And Hooks
 
-Providers are capability-first: version control, pull request/review, CI/checks, issue tracker, agent runtime, runtime usage, and notification/hook. GitHub through `gh` and Jira through `jtk` are bundled implementations, not domain concepts. Provider-backed actions are disabled or marked unavailable when health is degraded. Hooks use JSON input/output; command hooks run with bounded output, timeouts, cwd/env policy, and operation logging.
+Providers are capability-first: version control, pull request/review, CI/checks, issue tracker, agent runtime, runtime usage, and notification/hook. GitHub through `gh` and Jira through `jtk` are bundled implementations, not domain concepts. Provider-backed actions are disabled or marked unavailable when health is degraded. Hooks use JSON input/output; command hooks run with bounded output, timeouts, cwd/env policy, and operation logging. Successful hooks may return bounded `links`, `actions`, and `metadata`; Citadel persists that output on activity events so workspace surfaces can show preview/deploy/docs links without hardcoded workflow assumptions.
 
 ## Terminal Runtime
 

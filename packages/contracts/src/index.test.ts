@@ -7,6 +7,7 @@ import {
   CreateAgentSessionInputSchema,
   CreateRepoInputSchema,
   CreateWorkspaceInputSchema,
+  HookOutputSchema,
   IssueTrackerSummarySchema,
   IssueTransitionActionResultSchema,
   OperationSchema,
@@ -164,6 +165,15 @@ describe("contract schemas", () => {
         checkedAt: timestamp,
       }).runtimeId,
     ).toBe("codex");
+    expect(
+      HookOutputSchema.parse({
+        links: [{ label: "Preview", url: "https://example.test/preview", kind: "preview" }],
+        actions: [{ id: "redeploy", label: "Redeploy", url: "https://example.test/deploy" }],
+      }),
+    ).toMatchObject({
+      links: [{ label: "Preview", kind: "preview" }],
+      actions: [{ id: "redeploy", description: null }],
+    });
     expect(
       IssueTrackerSummarySchema.parse({
         providerId: "jira-jtk",

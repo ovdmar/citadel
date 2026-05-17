@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { type HookOutput, HookOutputSchema } from "@citadel/contracts";
 
 export type CommandHook = {
   id: string;
@@ -37,4 +38,10 @@ export async function runCommandHook(hook: CommandHook, payload: unknown) {
     });
     child.stdin.end(input);
   });
+}
+
+export function parseHookOutput(stdout: string): HookOutput | null {
+  const trimmed = stdout.trim();
+  if (!trimmed) return null;
+  return HookOutputSchema.parse(JSON.parse(trimmed));
 }

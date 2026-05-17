@@ -423,6 +423,29 @@ p {
   align-items: center;
 }
 
+.activity-output {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.activity-output a,
+.activity-output span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 28%, transparent);
+  border-radius: 7px;
+  color: var(--color-accent);
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+
 .diff-panel,
 .diff-empty,
 .diff-list {
@@ -581,6 +604,10 @@ p {
   .workspace-row,
   .activity-row {
     grid-template-columns: 1fr;
+  }
+
+  .activity-output {
+    grid-column: 1;
   }
 
   .badges {
