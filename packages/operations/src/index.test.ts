@@ -221,6 +221,43 @@ describe("OperationService", () => {
     });
   });
 
+  it("cancels a running operation and rejects retry when not retriable", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    await service.createWorkspace({ repoId: repo.id, name: "cancel-target", source: "scratch" });
+    const running = store.listOperations().find((operation) => operation.status === "running");
+    expect(running).toBeUndefined();
+    // Seed a fake queued operation to cancel.
+    store.upsertOperation({
+      id: "op_to_cancel",
+      type: "workspace.action.custom",
+      status: "queued",
+      repoId: repo.id,
+      workspaceId: null,
+      progress: 0,
+      message: "Waiting",
+      error: null,
+      logs: [],
+      retriable: false,
+      retryInput: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    const result = service.cancelOperation("op_to_cancel");
+    expect(result.cancelled).toBe(true);
+    expect(store.findOperation("op_to_cancel")?.status).toBe("cancelled");
+    const retry = await service.retryOperation("op_to_cancel");
+    expect(retry.retried).toBe(false);
+    expect(retry.reason).toBe("not_retriable");
+  });
+
   it("stops a session, marks it stopped, and records activity", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));

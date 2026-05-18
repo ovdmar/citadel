@@ -170,18 +170,21 @@ export function WorkspaceCockpitPanel(props: {
             </div>
             <div className="check-list">
               {checks.length ? (
-                checks.map((check) => (
-                  <a
-                    key={`${check.name}-${check.status}-${check.conclusion ?? ""}`}
-                    className={`check-row ${check.conclusion || check.status}`}
-                    href={check.url ?? undefined}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    <strong>{check.name}</strong>
-                    <span>{formatLabel(check.conclusion ?? check.status)}</span>
-                  </a>
-                ))
+                <>
+                  <CheckSummaryHeader checks={checks} />
+                  {checks.map((check) => (
+                    <a
+                      key={`${check.name}-${check.status}-${check.conclusion ?? ""}`}
+                      className={`check-row ${check.conclusion || check.status}`}
+                      href={check.url ?? undefined}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      <strong>{check.name}</strong>
+                      <span>{formatLabel(check.conclusion ?? check.status)}</span>
+                    </a>
+                  ))}
+                </>
               ) : (
                 <div className="empty compact">No check data reported by the PR provider</div>
               )}
@@ -191,9 +194,89 @@ export function WorkspaceCockpitPanel(props: {
           <div className="empty compact">No active PR for this workspace branch</div>
         )}
       </section>
+      <CiRunsCard runs={summary.ci.runs} />
+      <PrDiffSection workspaceId={summary.workspaceId} />
       <GitStatusCard summary={summary} />
       <AppsActionsPanel apps={summary.apps} />
     </div>
+  );
+}
+
+function CheckSummaryHeader(props: {
+  checks: Array<{ name: string; status: string; conclusion: string | null }>;
+}) {
+  const failed = props.checks.filter((check) =>
+    ["failure", "cancelled", "timed_out", "action_required"].includes(String(check.conclusion ?? "").toLowerCase()),
+  ).length;
+  const pending = props.checks.filter((check) =>
+    ["queued", "in_progress", "pending"].includes(String(check.status).toLowerCase()),
+  ).length;
+  const passing = props.checks.filter((check) => String(check.conclusion ?? "").toLowerCase() === "success").length;
+  return (
+    <div className="check-summary">
+      <span className="failed">{failed} failing</span>
+      <span className="pending">{pending} pending</span>
+      <span className="passing">{passing} passing</span>
+    </div>
+  );
+}
+
+function CiRunsCard(props: { runs: WorkspaceCockpitSummary["ci"]["runs"] }) {
+  if (!props.runs.length) return null;
+  return (
+    <section className="detail-panel">
+      <div className="detail-title">
+        <h2>CI runs</h2>
+      </div>
+      <div className="ci-run-list">
+        {props.runs.slice(0, 10).map((run) => (
+          <a
+            key={run.id}
+            className={`ci-run-row ${run.conclusion || run.status}`}
+            href={run.url ?? undefined}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <strong>{run.name}</strong>
+            <span>{formatLabel(run.conclusion ?? run.status)}</span>
+            <em>{run.createdAt ? new Date(run.createdAt).toLocaleTimeString() : ""}</em>
+          </a>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function PrDiffSection(props: { workspaceId: string }) {
+  const [enabled, setEnabled] = useState(false);
+  const diff = useQuery({
+    queryKey: ["pr-diff", props.workspaceId],
+    enabled,
+    queryFn: () =>
+      api<{ diff: string; truncated: boolean; error?: string }>(`/api/workspaces/${props.workspaceId}/pr-diff`),
+  });
+  return (
+    <section className="detail-panel pr-diff-panel">
+      <div className="detail-title">
+        <h2>PR diff</h2>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => setEnabled(true)}
+          disabled={enabled && diff.isFetching}
+        >
+          {enabled ? "Refresh" : "Load PR diff"}
+        </Button>
+      </div>
+      {enabled && diff.isLoading ? <div className="empty compact">Fetching gh pr diff…</div> : null}
+      {diff.data?.error ? <div className="empty compact">{diff.data.error}</div> : null}
+      {diff.data?.diff ? (
+        <>
+          {diff.data.truncated ? <small>Diff truncated to 256 KiB</small> : null}
+          <pre className="diff-code">{diff.data.diff}</pre>
+        </>
+      ) : null}
+    </section>
   );
 }
 

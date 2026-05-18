@@ -1,0 +1,281 @@
+import type { HookDiagnostic, Repo } from "@citadel/contracts";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { Link, useParams } from "@tanstack/react-router";
+import { ArrowLeft, RefreshCcw, Save, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { api, queryClient } from "../api.js";
+import { useStateQuery } from "../app-state.js";
+import { Button } from "../components/ui/button.js";
+import { formatLabel } from "../labels.js";
+
+export function RepoSettingsView() {
+  const params = useParams({ strict: false }) as { repoId?: string };
+  const repoId = params.repoId ?? "";
+  const state = useStateQuery();
+  const repo = state.data?.repos.find((candidate) => candidate.id === repoId);
+  if (!repo) {
+    return (
+      <div className="page">
+        <header className="header">
+          <h1>Repository not found</h1>
+          <Link to="/settings" className="settings-link">
+            <ArrowLeft size={14} /> Back to settings
+          </Link>
+        </header>
+      </div>
+    );
+  }
+  return (
+    <div className="page repo-settings">
+      <header className="header">
+        <div>
+          <h1>{repo.name}</h1>
+          <p>{repo.rootPath}</p>
+        </div>
+        <div className="settings-header-actions">
+          <Link className="settings-link" to="/settings">
+            <ArrowLeft size={14} /> Back
+          </Link>
+          <Link className="settings-link" to="/">
+            Workspaces
+          </Link>
+        </div>
+      </header>
+      <div className="grid">
+        <RepoIdentitySection repo={repo} />
+        <RepoHooksSection repo={repo} />
+        <RepoProvidersSection repo={repo} />
+        <RepoActionsSection repo={repo} />
+      </div>
+    </div>
+  );
+}
+
+function RepoIdentitySection(props: { repo: Repo }) {
+  const [name, setName] = useState(props.repo.name);
+  const [worktreeParent, setWorktreeParent] = useState(props.repo.worktreeParent);
+  useEffect(() => {
+    setName(props.repo.name);
+    setWorktreeParent(props.repo.worktreeParent);
+  }, [props.repo.name, props.repo.worktreeParent]);
+  const mutation = useMutation({
+    mutationFn: () =>
+      api(`/api/repos/${props.repo.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name, worktreeParent }),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+  });
+  return (
+    <section className="panel wide">
+      <h2>Identity</h2>
+      <form
+        className="stack-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          mutation.mutate();
+        }}
+      >
+        <label>
+          Display name
+          <input value={name} onChange={(event) => setName(event.target.value)} />
+        </label>
+        <label>
+          Worktree parent
+          <input value={worktreeParent} onChange={(event) => setWorktreeParent(event.target.value)} />
+        </label>
+        <label>
+          Root path (read-only)
+          <input value={props.repo.rootPath} readOnly />
+        </label>
+        <label>
+          Default branch (read-only)
+          <input value={props.repo.defaultBranch} readOnly />
+        </label>
+        <Button type="submit" disabled={mutation.isPending}>
+          <Save size={14} /> Save identity
+        </Button>
+        {mutation.error ? <p>{String(mutation.error)}</p> : null}
+      </form>
+    </section>
+  );
+}
+
+function RepoHooksSection(props: { repo: Repo }) {
+  const diagnostics = useQuery({
+    queryKey: ["hook-diagnostics", props.repo.id],
+    queryFn: () =>
+      api<{ diagnostics: HookDiagnostic[]; sample: unknown }>(`/api/repos/${props.repo.id}/hook-diagnostics`),
+  });
+  const config = useQuery({
+    queryKey: ["config"],
+    queryFn: () => api<{ config: { hooks: Array<{ id: string; event: string }> } }>("/api/config"),
+  });
+  const [setupIds, setSetupIds] = useState(props.repo.setupHookIds.join(", "));
+  const [teardownIds, setTeardownIds] = useState(props.repo.teardownHookIds.join(", "));
+  useEffect(() => {
+    setSetupIds(props.repo.setupHookIds.join(", "));
+    setTeardownIds(props.repo.teardownHookIds.join(", "));
+  }, [props.repo.setupHookIds, props.repo.teardownHookIds]);
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/api/repos/${props.repo.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          setupHookIds: split(setupIds),
+          teardownHookIds: split(teardownIds),
+        }),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+  });
+  const knownHooks = config.data?.config.hooks ?? [];
+  return (
+    <section className="panel wide">
+      <div className="panel-title-row">
+        <h2>Hooks</h2>
+        <Button type="button" variant="ghost" size="icon" onClick={() => diagnostics.refetch()}>
+          <RefreshCcw size={14} />
+        </Button>
+      </div>
+      <form
+        className="stack-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          save.mutate();
+        }}
+      >
+        <label>
+          Setup hook IDs (comma-separated)
+          <input value={setupIds} onChange={(event) => setSetupIds(event.target.value)} />
+        </label>
+        <label>
+          Teardown hook IDs (comma-separated)
+          <input value={teardownIds} onChange={(event) => setTeardownIds(event.target.value)} />
+        </label>
+        <small>
+          Available hook IDs in config:{" "}
+          {knownHooks.length ? knownHooks.map((h) => `${h.id} (${h.event})`).join(", ") : "(none defined)"}
+        </small>
+        <Button type="submit" disabled={save.isPending}>
+          <Save size={14} /> Save hook bindings
+        </Button>
+      </form>
+      <div className="hook-diagnostics">
+        {(diagnostics.data?.diagnostics ?? []).map((hook) => (
+          <details key={`${hook.event}-${hook.hookId}`} className={`hook-row ${hook.validationStatus}`}>
+            <summary>
+              <strong>{hook.hookId}</strong>
+              <span>{hook.event}</span>
+              <em>{hook.validationStatus}</em>
+            </summary>
+            <div className="hook-grid">
+              <KeyValue label="Command" value={[hook.command, ...hook.args].join(" ")} />
+              <KeyValue label="CWD" value={hook.cwd ?? "workspace"} />
+              <KeyValue label="Blocking" value={hook.blocking ? "yes" : "no"} />
+              <KeyValue label="Last run" value={hook.lastRunAt ?? "not run"} />
+            </div>
+            {hook.validationErrors.length ? <pre>{hook.validationErrors.join("\n")}</pre> : null}
+          </details>
+        ))}
+        {diagnostics.data && !diagnostics.data.diagnostics.length ? (
+          <div className="empty compact">No hooks bound to this repo</div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function RepoProvidersSection(props: { repo: Repo }) {
+  const [active, setActive] = useState(props.repo.providerIds);
+  useEffect(() => setActive(props.repo.providerIds), [props.repo.providerIds]);
+  const known = [
+    { id: "github-gh", displayName: "GitHub CLI" },
+    { id: "jira-jtk", displayName: "Jira CLI" },
+  ];
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/api/repos/${props.repo.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ providerIds: active }),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+  });
+  return (
+    <section className="panel">
+      <h2>Providers</h2>
+      <form
+        className="stack-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          save.mutate();
+        }}
+      >
+        {known.map((provider) => (
+          <label key={provider.id}>
+            <input
+              type="checkbox"
+              checked={active.includes(provider.id)}
+              onChange={(event) =>
+                setActive((current) =>
+                  event.target.checked ? [...current, provider.id] : current.filter((id) => id !== provider.id),
+                )
+              }
+            />
+            {provider.displayName}
+          </label>
+        ))}
+        <Button type="submit" disabled={save.isPending}>
+          <Save size={14} /> Save providers
+        </Button>
+      </form>
+    </section>
+  );
+}
+
+function RepoActionsSection(props: { repo: Repo }) {
+  const refresh = useMutation({
+    mutationFn: () => api(`/api/repos/${props.repo.id}/refresh`, { method: "POST" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+  });
+  const remove = useMutation({
+    mutationFn: () => api(`/api/repos/${props.repo.id}?force=true`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+  });
+  const cleanup = useMutation({
+    mutationFn: () => api(`/api/repos/${props.repo.id}?force=true&cleanupWorktrees=true`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+  });
+  return (
+    <section className="panel">
+      <h2>Actions</h2>
+      <div className="stack-form">
+        <Button type="button" variant="secondary" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
+          <RefreshCcw size={14} /> Refresh provider cache
+        </Button>
+        <Button type="button" variant="secondary" onClick={() => remove.mutate()} disabled={remove.isPending}>
+          <Trash2 size={14} /> Remove tracking (keep worktrees)
+        </Button>
+        <Button type="button" onClick={() => cleanup.mutate()} disabled={cleanup.isPending}>
+          <Trash2 size={14} /> Remove + clean worktrees
+        </Button>
+        <small>Status: {formatLabel(props.repo.archivedAt ? "archived" : "active")}</small>
+      </div>
+    </section>
+  );
+}
+
+function KeyValue(props: { label: string; value: string }) {
+  return (
+    <div className="key-value">
+      <span>{props.label}</span>
+      <strong>{props.value}</strong>
+    </div>
+  );
+}
+
+function split(value: string) {
+  return value
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+}

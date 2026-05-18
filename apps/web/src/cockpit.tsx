@@ -8,7 +8,6 @@ import type {
   Workspace,
   WorkspaceCockpitSummary,
 } from "@citadel/contracts";
-import { useMutation } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   Activity,
@@ -22,18 +21,22 @@ import {
   PanelLeftClose,
   PanelRightClose,
   Plus,
-  RefreshCcw,
   Search,
   Settings,
-  Square,
   TerminalSquare,
 } from "lucide-react";
 import type React from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ActivityRow } from "./activity-row.js";
-import { api, queryClient } from "./api.js";
 import { useEventRefresh, useStateQuery } from "./app-state.js";
 import { type WorkspaceAttention, nextAction, readinessForWorkspace } from "./cockpit-readiness.js";
+import {
+  CommandPalette,
+  MobileMonitor,
+  ReconcileButton,
+  SessionStopButton,
+  type StageMode as ShellStageMode,
+} from "./cockpit-shell.js";
 import {
   AppsActionsPanel,
   DiffPanel,
@@ -48,8 +51,8 @@ import {
 import { Button } from "./components/ui/button.js";
 import { formatLabel } from "./labels.js";
 
-type StageMode = "terminal" | "diff" | "review";
-type MobileView = "navigator" | "stage" | "inspector";
+type StageMode = ShellStageMode;
+type MobileView = "monitor" | "navigator" | "stage" | "inspector";
 
 export function Cockpit() {
   const state = useStateQuery();
@@ -137,7 +140,7 @@ export function Cockpit() {
       </header>
 
       <nav className="mobile-switcher" aria-label="Workspace layout">
-        {(["navigator", "stage", "inspector"] as MobileView[]).map((view) => (
+        {(["monitor", "navigator", "stage", "inspector"] as MobileView[]).map((view) => (
           <button
             key={view}
             type="button"
@@ -148,6 +151,19 @@ export function Cockpit() {
           </button>
         ))}
       </nav>
+
+      <aside
+        className={`mobile-monitor mobile-${mobileView === "monitor" ? "active" : "hidden"}`}
+        aria-label="Mobile monitor"
+      >
+        <MobileMonitor
+          workspaces={data?.workspaces ?? []}
+          sessions={data?.sessions ?? []}
+          operations={data?.operations ?? []}
+          providerHealth={data?.providerHealth ?? []}
+          activity={data?.activity ?? []}
+        />
+      </aside>
 
       <aside className={`workspace-navigator mobile-${mobileView === "navigator" ? "active" : "hidden"}`}>
         <NavigatorHeader
@@ -245,7 +261,9 @@ export function Cockpit() {
       ) : null}
 
       <footer className="operations-bar">
-        <span>{data?.operations.length ?? 0} queued/running operations</span>
+        <Link to="/operations" className="settings-link compact">
+          {data?.operations.length ?? 0} operations
+        </Link>
         <span>{data?.activity[0]?.message ?? "No recent activity"}</span>
         <span>MCP {data?.mcp.enabled ? "enabled" : "disabled"}</span>
       </footer>
@@ -254,6 +272,8 @@ export function Cockpit() {
         <CommandPalette
           workspaces={data?.workspaces ?? []}
           sessions={data?.sessions ?? []}
+          activeWorkspace={activeWorkspace}
+          activeSession={activeSession}
           onClose={() => setCommandOpen(false)}
           onSelect={(workspace) => {
             focusWorkspace(workspace);
@@ -262,6 +282,9 @@ export function Cockpit() {
           onMode={(mode) => {
             setStageMode(mode);
             setCommandOpen(false);
+          }}
+          onNavigate={(path) => {
+            window.location.assign(path);
           }}
         />
       ) : null}
@@ -562,105 +585,6 @@ function InspectorHeader(props: { onCollapse: () => void }) {
       <Button type="button" variant="ghost" size="icon" onClick={props.onCollapse} aria-label="Collapse inspector">
         <PanelRightClose size={16} />
       </Button>
-    </div>
-  );
-}
-
-function ReconcileButton() {
-  const mutation = useMutation({
-    mutationFn: () =>
-      api<{ sessions: number; workspaces: number; repos: number }>("/api/reconcile", { method: "POST" }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["state"] });
-    },
-  });
-  const result = mutation.data;
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      onClick={() => mutation.mutate()}
-      disabled={mutation.isPending}
-      aria-label="Reconcile local state"
-      title={
-        result
-          ? `Reconciled: ${result.sessions} sessions, ${result.workspaces} workspaces, ${result.repos} repos`
-          : "Reconcile local state with disk"
-      }
-    >
-      <RefreshCcw size={15} />
-    </Button>
-  );
-}
-
-function SessionStopButton(props: { session: AgentSession | null }) {
-  const stop = useMutation({
-    mutationFn: () => api(`/api/agent-sessions/${props.session?.id}`, { method: "DELETE" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
-  });
-  if (!props.session) return null;
-  const disabled = stop.isPending || ["stopped", "failed", "orphaned"].includes(props.session.status);
-  return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      aria-label="Stop session"
-      title="Stop session"
-      onClick={() => stop.mutate()}
-      disabled={disabled}
-    >
-      <Square size={14} />
-    </Button>
-  );
-}
-
-function CommandPalette(props: {
-  workspaces: Workspace[];
-  sessions: AgentSession[];
-  onClose: () => void;
-  onSelect: (workspace: Workspace) => void;
-  onMode: (mode: StageMode) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-  const matches = props.workspaces
-    .filter((workspace) =>
-      `${workspace.name} ${workspace.branch} ${workspace.issueKey ?? ""}`.toLowerCase().includes(query.toLowerCase()),
-    )
-    .slice(0, 8);
-  return (
-    <div className="command-backdrop" onMouseDown={props.onClose}>
-      <dialog className="command-palette" aria-label="Quick open" open onMouseDown={(event) => event.stopPropagation()}>
-        <label className="quick-search command-search">
-          <Command size={16} />
-          <input
-            ref={inputRef}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Switch workspace or run command"
-          />
-        </label>
-        <div className="command-list">
-          {matches.map((workspace) => (
-            <button key={workspace.id} type="button" onClick={() => props.onSelect(workspace)}>
-              <strong>{workspace.name}</strong>
-              <span>{workspace.branch}</span>
-              <em>{props.sessions.filter((session) => session.workspaceId === workspace.id).length} sessions</em>
-            </button>
-          ))}
-          {(["terminal", "diff", "review"] as StageMode[]).map((mode) => (
-            <button key={mode} type="button" onClick={() => props.onMode(mode)}>
-              <strong>Open {formatLabel(mode)}</strong>
-              <span>Stage focus</span>
-            </button>
-          ))}
-        </div>
-      </dialog>
     </div>
   );
 }

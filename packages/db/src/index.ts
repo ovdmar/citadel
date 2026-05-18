@@ -1,19 +1,71 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-import type { ActivityEvent, AgentSession, HookOutput, Operation, Repo, Workspace } from "@citadel/contracts";
+import type {
+  ActivityEvent,
+  AgentSession,
+  HookOutput,
+  Operation,
+  OperationLogEntry,
+  Repo,
+  Workspace,
+} from "@citadel/contracts";
+
+// Avoid a static `import "node:sqlite"` so vite-based test runners do not
+// try to bundle the built-in. Resolved through `createRequire` at runtime.
+type DatabaseSyncCtor = new (path: string, options?: { open?: boolean; readOnly?: boolean }) => SqliteDatabase;
+type SqliteDatabase = {
+  exec(sql: string): void;
+  prepare(sql: string): SqliteStatement;
+  close(): void;
+};
+type SqliteStatement = {
+  all(...params: unknown[]): unknown[];
+  get(...params: unknown[]): unknown;
+  run(...params: unknown[]): { changes: number };
+};
+
+let DatabaseSyncCtor: DatabaseSyncCtor | null = null;
+function loadDatabaseSync(): DatabaseSyncCtor {
+  if (DatabaseSyncCtor) return DatabaseSyncCtor;
+  const requireFn = createRequire(import.meta.url);
+  const mod = requireFn("node:sqlite") as { DatabaseSync: DatabaseSyncCtor };
+  DatabaseSyncCtor = mod.DatabaseSync;
+  return DatabaseSyncCtor;
+}
 
 export class SqliteStore {
   readonly databasePath: string;
+  private db: SqliteDatabase | null = null;
 
   constructor(databasePath: string) {
     this.databasePath = databasePath;
   }
 
+  private get database(): SqliteDatabase {
+    if (!this.db) {
+      fs.mkdirSync(path.dirname(this.databasePath), { recursive: true });
+      const Ctor = loadDatabaseSync();
+      this.db = new Ctor(this.databasePath);
+      this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+    }
+    return this.db;
+  }
+
+  close() {
+    if (this.db) {
+      try {
+        this.db.close();
+      } catch {
+        // best-effort
+      }
+      this.db = null;
+    }
+  }
+
   migrate() {
-    fs.mkdirSync(path.dirname(this.databasePath), { recursive: true });
-    this.exec(`
-      PRAGMA journal_mode = WAL;
+    const db = this.database;
+    db.exec(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
         name TEXT NOT NULL,
@@ -91,207 +143,274 @@ export class SqliteStore {
       INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
       VALUES (1, 'initial-local-first-schema', datetime('now'));
     `);
-    this.ensureActivityHookOutputColumn();
-    this.exec(`
+    this.ensureColumn("activity_events", "hook_output", "TEXT");
+    this.ensureColumn("operations", "logs", "TEXT");
+    this.ensureColumn("operations", "retriable", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureColumn("operations", "retry_input", "TEXT");
+    db.exec(`
       INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
       VALUES (2, 'activity-hook-output', datetime('now'));
+      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+      VALUES (3, 'operation-logs-retry', datetime('now'));
     `);
   }
 
   exec(sql: string) {
-    execFileSync("sqlite3", [this.databasePath, sql], { encoding: "utf8" });
+    this.database.exec(sql);
   }
 
   query<T>(sql: string): T[] {
-    const output = execFileSync("sqlite3", ["-json", this.databasePath, sql], { encoding: "utf8" });
-    if (!output.trim()) return [];
-    return JSON.parse(output) as T[];
+    return this.database.prepare(sql).all() as unknown as T[];
   }
 
   listRepos(): Repo[] {
-    return this.query<Record<string, unknown>>("SELECT * FROM repos WHERE archived_at IS NULL ORDER BY name").map(
-      repoFromRow,
-    );
+    return this.database
+      .prepare("SELECT * FROM repos WHERE archived_at IS NULL ORDER BY name")
+      .all()
+      .map((row) => repoFromRow(row as Record<string, unknown>));
   }
 
   insertRepo(repo: Repo) {
-    this.exec(
-      `INSERT INTO repos VALUES (${[
-        q(repo.id),
-        q(repo.name),
-        q(repo.rootPath),
-        q(repo.defaultBranch),
-        q(repo.defaultRemote),
-        q(repo.worktreeParent),
-        q(JSON.stringify(repo.setupHookIds)),
-        q(JSON.stringify(repo.teardownHookIds)),
-        q(JSON.stringify(repo.providerIds)),
-        q(repo.createdAt),
-        q(repo.updatedAt),
-        q(repo.archivedAt),
-      ].join(",")})`,
-    );
+    this.database
+      .prepare(
+        `INSERT INTO repos (id, name, root_path, default_branch, default_remote, worktree_parent,
+          setup_hook_ids, teardown_hook_ids, provider_ids, created_at, updated_at, archived_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        repo.id,
+        repo.name,
+        repo.rootPath,
+        repo.defaultBranch,
+        repo.defaultRemote,
+        repo.worktreeParent,
+        JSON.stringify(repo.setupHookIds),
+        JSON.stringify(repo.teardownHookIds),
+        JSON.stringify(repo.providerIds),
+        repo.createdAt,
+        repo.updatedAt,
+        repo.archivedAt ?? null,
+      );
+  }
+
+  updateRepo(
+    repoId: string,
+    patch: Partial<Pick<Repo, "name" | "worktreeParent" | "setupHookIds" | "teardownHookIds" | "providerIds">>,
+  ) {
+    const existing = this.database.prepare("SELECT * FROM repos WHERE id = ?").get(repoId) as
+      | Record<string, unknown>
+      | undefined;
+    if (!existing) return null;
+    const current = repoFromRow(existing);
+    const next: Repo = {
+      ...current,
+      name: patch.name ?? current.name,
+      worktreeParent: patch.worktreeParent ?? current.worktreeParent,
+      setupHookIds: patch.setupHookIds ?? current.setupHookIds,
+      teardownHookIds: patch.teardownHookIds ?? current.teardownHookIds,
+      providerIds: patch.providerIds ?? current.providerIds,
+      updatedAt: new Date().toISOString(),
+    };
+    this.database
+      .prepare(
+        `UPDATE repos SET name = ?, worktree_parent = ?, setup_hook_ids = ?, teardown_hook_ids = ?,
+          provider_ids = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(
+        next.name,
+        next.worktreeParent,
+        JSON.stringify(next.setupHookIds),
+        JSON.stringify(next.teardownHookIds),
+        JSON.stringify(next.providerIds),
+        next.updatedAt,
+        repoId,
+      );
+    return next;
   }
 
   listWorkspaces(repoId?: string): Workspace[] {
-    const where = repoId ? `WHERE repo_id = ${q(repoId)} AND archived_at IS NULL` : "WHERE archived_at IS NULL";
-    return this.query<Record<string, unknown>>(`SELECT * FROM workspaces ${where} ORDER BY updated_at DESC`).map(
-      workspaceFromRow,
-    );
+    const stmt = repoId
+      ? this.database.prepare(
+          "SELECT * FROM workspaces WHERE repo_id = ? AND archived_at IS NULL ORDER BY updated_at DESC",
+        )
+      : this.database.prepare("SELECT * FROM workspaces WHERE archived_at IS NULL ORDER BY updated_at DESC");
+    const rows = (repoId ? stmt.all(repoId) : stmt.all()) as Array<Record<string, unknown>>;
+    return rows.map(workspaceFromRow);
   }
 
   insertWorkspace(workspace: Workspace) {
-    this.exec(
-      `INSERT INTO workspaces VALUES (${[
-        q(workspace.id),
-        q(workspace.repoId),
-        q(workspace.name),
-        q(workspace.path),
-        q(workspace.branch),
-        q(workspace.baseBranch),
-        q(workspace.source),
-        q(workspace.prUrl),
-        q(workspace.issueKey),
-        q(workspace.issueTitle),
-        q(workspace.section),
+    this.database
+      .prepare(
+        `INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, pr_url,
+          issue_key, issue_title, section, pinned, lifecycle, dirty, created_at, updated_at, archived_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        workspace.id,
+        workspace.repoId,
+        workspace.name,
+        workspace.path,
+        workspace.branch,
+        workspace.baseBranch,
+        workspace.source,
+        workspace.prUrl ?? null,
+        workspace.issueKey ?? null,
+        workspace.issueTitle ?? null,
+        workspace.section,
         workspace.pinned ? 1 : 0,
-        q(workspace.lifecycle),
+        workspace.lifecycle,
         workspace.dirty ? 1 : 0,
-        q(workspace.createdAt),
-        q(workspace.updatedAt),
-        q(workspace.archivedAt),
-      ].join(",")})`,
-    );
+        workspace.createdAt,
+        workspace.updatedAt,
+        workspace.archivedAt ?? null,
+      );
   }
 
   updateWorkspaceLifecycle(workspaceId: string, lifecycle: Workspace["lifecycle"], dirty = false) {
-    this.exec(
-      `UPDATE workspaces SET lifecycle = ${q(lifecycle)}, dirty = ${dirty ? 1 : 0}, updated_at = ${q(
-        new Date().toISOString(),
-      )} WHERE id = ${q(workspaceId)}`,
-    );
+    this.database
+      .prepare("UPDATE workspaces SET lifecycle = ?, dirty = ?, updated_at = ? WHERE id = ?")
+      .run(lifecycle, dirty ? 1 : 0, new Date().toISOString(), workspaceId);
   }
 
   archiveWorkspace(workspaceId: string, lifecycle: Workspace["lifecycle"], dirty = false) {
     const now = new Date().toISOString();
-    this.exec(
-      `UPDATE workspaces SET lifecycle = ${q(lifecycle)}, dirty = ${dirty ? 1 : 0}, archived_at = ${q(now)}, updated_at = ${q(
-        now,
-      )} WHERE id = ${q(workspaceId)}`,
-    );
+    this.database
+      .prepare("UPDATE workspaces SET lifecycle = ?, dirty = ?, archived_at = ?, updated_at = ? WHERE id = ?")
+      .run(lifecycle, dirty ? 1 : 0, now, now, workspaceId);
   }
 
   archiveRepo(repoId: string) {
     const now = new Date().toISOString();
-    this.exec(`UPDATE repos SET archived_at = ${q(now)}, updated_at = ${q(now)} WHERE id = ${q(repoId)}`);
-    this.exec(
-      `UPDATE workspaces SET lifecycle = 'archived', archived_at = ${q(now)}, updated_at = ${q(
-        now,
-      )} WHERE repo_id = ${q(repoId)} AND archived_at IS NULL`,
-    );
+    this.database.prepare("UPDATE repos SET archived_at = ?, updated_at = ? WHERE id = ?").run(now, now, repoId);
+    this.database
+      .prepare(
+        "UPDATE workspaces SET lifecycle = 'archived', archived_at = ?, updated_at = ? WHERE repo_id = ? AND archived_at IS NULL",
+      )
+      .run(now, now, repoId);
   }
 
   listSessions(workspaceId?: string): AgentSession[] {
-    const where = workspaceId ? `WHERE workspace_id = ${q(workspaceId)}` : "";
-    return this.query<Record<string, unknown>>(`SELECT * FROM agent_sessions ${where} ORDER BY updated_at DESC`).map(
-      sessionFromRow,
-    );
+    const stmt = workspaceId
+      ? this.database.prepare("SELECT * FROM agent_sessions WHERE workspace_id = ? ORDER BY updated_at DESC")
+      : this.database.prepare("SELECT * FROM agent_sessions ORDER BY updated_at DESC");
+    const rows = (workspaceId ? stmt.all(workspaceId) : stmt.all()) as Array<Record<string, unknown>>;
+    return rows.map(sessionFromRow);
   }
 
   insertSession(session: AgentSession) {
-    this.exec(
-      `INSERT INTO agent_sessions VALUES (${[
-        q(session.id),
-        q(session.workspaceId),
-        q(session.runtimeId),
-        q(session.displayName),
-        q(session.status),
-        q(session.transport),
-        q(session.tmuxSessionName),
-        q(session.tmuxSessionId),
-        q(session.createdAt),
-        q(session.updatedAt),
-      ].join(",")})`,
-    );
+    this.database
+      .prepare(
+        `INSERT INTO agent_sessions (id, workspace_id, runtime_id, display_name, status, transport,
+          tmux_session_name, tmux_session_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        session.id,
+        session.workspaceId,
+        session.runtimeId,
+        session.displayName,
+        session.status,
+        session.transport,
+        session.tmuxSessionName ?? null,
+        session.tmuxSessionId ?? null,
+        session.createdAt,
+        session.updatedAt,
+      );
   }
 
   updateSessionStatus(sessionId: string, status: AgentSession["status"]) {
-    this.exec(
-      `UPDATE agent_sessions SET status = ${q(status)}, updated_at = ${q(new Date().toISOString())} WHERE id = ${q(sessionId)}`,
-    );
+    this.database
+      .prepare("UPDATE agent_sessions SET status = ?, updated_at = ? WHERE id = ?")
+      .run(status, new Date().toISOString(), sessionId);
   }
 
   deleteSession(sessionId: string) {
-    this.exec(`DELETE FROM agent_sessions WHERE id = ${q(sessionId)}`);
+    this.database.prepare("DELETE FROM agent_sessions WHERE id = ?").run(sessionId);
   }
 
   upsertOperation(operation: Operation) {
-    this.exec(
-      `INSERT OR REPLACE INTO operations VALUES (${[
-        q(operation.id),
-        q(operation.type),
-        q(operation.status),
-        q(operation.repoId),
-        q(operation.workspaceId),
+    this.database
+      .prepare(
+        `INSERT OR REPLACE INTO operations (id, type, status, repo_id, workspace_id, progress, message,
+          error, logs, retriable, retry_input, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        operation.id,
+        operation.type,
+        operation.status,
+        operation.repoId ?? null,
+        operation.workspaceId ?? null,
         operation.progress,
-        q(operation.message),
-        q(operation.error),
-        q(operation.createdAt),
-        q(operation.updatedAt),
-      ].join(",")})`,
-    );
+        operation.message ?? null,
+        operation.error ?? null,
+        JSON.stringify(operation.logs ?? []),
+        operation.retriable ? 1 : 0,
+        operation.retryInput ? JSON.stringify(operation.retryInput) : null,
+        operation.createdAt,
+        operation.updatedAt,
+      );
+  }
+
+  appendOperationLog(operationId: string, entry: OperationLogEntry) {
+    const existing = this.database.prepare("SELECT logs FROM operations WHERE id = ?").get(operationId) as
+      | { logs: string | null }
+      | undefined;
+    if (!existing) return;
+    const logs = existing.logs ? (JSON.parse(existing.logs) as OperationLogEntry[]) : [];
+    logs.push(entry);
+    this.database
+      .prepare("UPDATE operations SET logs = ?, updated_at = ? WHERE id = ?")
+      .run(JSON.stringify(logs.slice(-200)), new Date().toISOString(), operationId);
   }
 
   listOperations(): Operation[] {
-    return this.query<Record<string, unknown>>("SELECT * FROM operations ORDER BY updated_at DESC LIMIT 100").map(
-      operationFromRow,
-    );
+    const rows = this.database.prepare("SELECT * FROM operations ORDER BY updated_at DESC LIMIT 100").all() as Array<
+      Record<string, unknown>
+    >;
+    return rows.map(operationFromRow);
+  }
+
+  findOperation(operationId: string): Operation | null {
+    const row = this.database.prepare("SELECT * FROM operations WHERE id = ?").get(operationId);
+    if (!row) return null;
+    return operationFromRow(row as Record<string, unknown>);
   }
 
   addActivity(event: Omit<ActivityEvent, "hookOutput"> & { hookOutput?: HookOutput | null }) {
-    this.exec(
-      `INSERT INTO activity_events (
-        id,
-        type,
-        source,
-        repo_id,
-        workspace_id,
-        operation_id,
-        message,
-        hook_output,
-        created_at
-      ) VALUES (${[
-        q(event.id),
-        q(event.type),
-        q(event.source),
-        q(event.repoId),
-        q(event.workspaceId),
-        q(event.operationId),
-        q(event.message),
-        q(event.hookOutput ? JSON.stringify(event.hookOutput) : null),
-        q(event.createdAt),
-      ].join(",")})`,
-    );
+    this.database
+      .prepare(
+        `INSERT INTO activity_events (id, type, source, repo_id, workspace_id, operation_id, message,
+          hook_output, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        event.id,
+        event.type,
+        event.source,
+        event.repoId ?? null,
+        event.workspaceId ?? null,
+        event.operationId ?? null,
+        event.message,
+        event.hookOutput ? JSON.stringify(event.hookOutput) : null,
+        event.createdAt,
+      );
   }
 
   listActivity(workspaceId?: string): ActivityEvent[] {
-    const where = workspaceId ? `WHERE workspace_id = ${q(workspaceId)}` : "";
-    return this.query<Record<string, unknown>>(
-      `SELECT * FROM activity_events ${where} ORDER BY created_at DESC LIMIT 200`,
-    ).map(activityFromRow);
+    const stmt = workspaceId
+      ? this.database.prepare("SELECT * FROM activity_events WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 200")
+      : this.database.prepare("SELECT * FROM activity_events ORDER BY created_at DESC LIMIT 200");
+    const rows = (workspaceId ? stmt.all(workspaceId) : stmt.all()) as Array<Record<string, unknown>>;
+    return rows.map(activityFromRow);
   }
 
-  private ensureActivityHookOutputColumn() {
-    const columns = this.query<{ name: string }>("PRAGMA table_info(activity_events)");
-    if (!columns.some((column) => column.name === "hook_output")) {
-      this.exec("ALTER TABLE activity_events ADD COLUMN hook_output TEXT");
+  private ensureColumn(table: string, column: string, definition: string) {
+    const cols = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!cols.some((entry) => entry.name === column)) {
+      this.database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
   }
-}
-
-function q(value: string | null) {
-  if (value === null) return "NULL";
-  return `'${value.replace(/'/g, "''")}'`;
 }
 
 function asString(row: Record<string, unknown>, key: string) {
@@ -363,6 +482,8 @@ function sessionFromRow(row: Record<string, unknown>): AgentSession {
 }
 
 function operationFromRow(row: Record<string, unknown>): Operation {
+  const logs = jsonObject<OperationLogEntry[]>(row, "logs") ?? [];
+  const retryInput = jsonObject<Record<string, unknown>>(row, "retry_input");
   return {
     id: asString(row, "id"),
     type: asString(row, "type"),
@@ -372,6 +493,9 @@ function operationFromRow(row: Record<string, unknown>): Operation {
     progress: Number(row.progress),
     message: row.message ? asString(row, "message") : null,
     error: row.error ? asString(row, "error") : null,
+    logs,
+    retriable: Number(row.retriable ?? 0) === 1,
+    retryInput,
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
   };

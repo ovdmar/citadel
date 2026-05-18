@@ -191,6 +191,12 @@ export const IssueTransitionActionResultSchema = z.object({
   checkedAt: z.string(),
 });
 
+export const OperationLogEntrySchema = z.object({
+  level: z.enum(["info", "warn", "error"]).default("info"),
+  message: z.string(),
+  at: z.string(),
+});
+
 export const OperationSchema = z.object({
   id: IdSchema,
   type: z.string(),
@@ -200,6 +206,9 @@ export const OperationSchema = z.object({
   progress: z.number().min(0).max(100),
   message: z.string().nullable().default(null),
   error: z.string().nullable().default(null),
+  logs: z.array(OperationLogEntrySchema).default([]),
+  retriable: z.boolean().default(false),
+  retryInput: z.record(z.unknown()).nullable().default(null),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -405,6 +414,7 @@ export type IssueTransition = z.infer<typeof IssueTransitionSchema>;
 export type IssueTrackerSummary = z.infer<typeof IssueTrackerSummarySchema>;
 export type IssueTransitionActionResult = z.infer<typeof IssueTransitionActionResultSchema>;
 export type Operation = z.infer<typeof OperationSchema>;
+export type OperationLogEntry = z.infer<typeof OperationLogEntrySchema>;
 export type GitStatusSummary = z.infer<typeof GitStatusSummarySchema>;
 export type HookApplication = z.infer<typeof HookApplicationSchema>;
 export type HookLink = z.infer<typeof HookLinkSchema>;

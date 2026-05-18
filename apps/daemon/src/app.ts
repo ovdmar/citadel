@@ -32,8 +32,8 @@ import { attachTerminalWebSocket } from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
+import { registerMcpRoutes } from "./mcp-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
-import { rpcError, rpcJsonContent, rpcResourceContent, rpcResult } from "./rpc.js";
 import { readWorkspaceDiff, readWorkspaceGitStatus } from "./workspace-diff.js";
 
 export type DaemonApp = {
@@ -88,10 +88,13 @@ export function createDaemonApp(input: {
     for (const client of sseClients) client.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
   };
 
+  const cachedProviderHealth = () =>
+    cachedProvider("provider-health", () => collectProviderHealth(config.providers), 15_000);
+
   app.get(
     "/api/health",
     asyncRoute(async (_req, res) => {
-      const providerHealth = await collectProviderHealth(config.providers);
+      const providerHealth = await cachedProviderHealth();
       const degradedProviders = providerHealth.filter((provider) => provider.status !== "healthy");
       res.json({
         ok: true,
@@ -112,7 +115,7 @@ export function createDaemonApp(input: {
       const repos = store.listRepos();
       const workspaces = store.listWorkspaces();
       const sessions = store.listSessions();
-      const providerHealth = await collectProviderHealth(config.providers);
+      const providerHealth = await cachedProviderHealth();
       res.json({
         repos,
         workspaces,
@@ -363,7 +366,7 @@ export function createDaemonApp(input: {
           workspace,
           sessions: store.listSessions(workspace.id),
           operations: store.listOperations().filter((operation) => operation.workspaceId === workspace.id),
-          providerHealth: await collectProviderHealth(config.providers),
+          providerHealth: await cachedProviderHealth(),
           git,
           versionControl,
           ci,
@@ -491,6 +494,93 @@ export function createDaemonApp(input: {
   );
 
   app.post(
+    "/api/operations/:operationId/cancel",
+    asyncRoute(async (req, res) => {
+      const operationId = String(req.params.operationId);
+      const result = operations.cancelOperation(operationId);
+      if (!result.cancelled) return res.status(409).json(result);
+      emit("operation.updated", { operationId });
+      res.status(202).json(result);
+    }),
+  );
+
+  app.post(
+    "/api/operations/:operationId/retry",
+    asyncRoute(async (req, res) => {
+      const operationId = String(req.params.operationId);
+      const result = await operations.retryOperation(operationId);
+      if (!result.retried) return res.status(409).json(result);
+      emit("operation.updated", { operationId });
+      res.status(202).json(result);
+    }),
+  );
+
+  app.get("/api/operations", (_req, res) => {
+    res.json({ operations: store.listOperations() });
+  });
+
+  app.get("/api/operations/:operationId", (req, res) => {
+    const operation = store.findOperation(String(req.params.operationId));
+    if (!operation) return res.status(404).json({ error: "operation_not_found" });
+    res.json({ operation });
+  });
+
+  app.patch(
+    "/api/repos/:repoId",
+    asyncRoute(async (req, res) => {
+      const repoId = String(req.params.repoId);
+      const patch = req.body ?? {};
+      const allowed: Record<string, unknown> = {};
+      if (typeof patch.name === "string" && patch.name.length) allowed.name = patch.name;
+      if (typeof patch.worktreeParent === "string" && patch.worktreeParent.length)
+        allowed.worktreeParent = patch.worktreeParent;
+      if (Array.isArray(patch.setupHookIds))
+        allowed.setupHookIds = patch.setupHookIds.filter((id: unknown) => typeof id === "string");
+      if (Array.isArray(patch.teardownHookIds))
+        allowed.teardownHookIds = patch.teardownHookIds.filter((id: unknown) => typeof id === "string");
+      if (Array.isArray(patch.providerIds))
+        allowed.providerIds = patch.providerIds.filter((id: unknown) => typeof id === "string");
+      const next = store.updateRepo(repoId, allowed);
+      if (!next) return res.status(404).json({ error: "repo_not_found" });
+      emit("repo.updated", { repoId: next.id, repo: next });
+      res.json({ repo: next });
+    }),
+  );
+
+  app.get(
+    "/api/workspaces/:workspaceId/pr-diff",
+    asyncRoute(async (req, res) => {
+      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
+      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
+      try {
+        const { execFile: execFileCb } = await import("node:child_process");
+        const { promisify } = await import("node:util");
+        const exec = promisify(execFileCb);
+        const { stdout } = await exec(config.providers.github.command ?? "gh", ["pr", "diff"], {
+          cwd: workspace.path,
+          timeout: 12_000,
+          maxBuffer: 4 * 1024 * 1024,
+        });
+        const truncated = stdout.length > 256 * 1024;
+        res.json({
+          provider: "github-gh",
+          truncated,
+          diff: stdout.slice(0, 256 * 1024),
+          checkedAt: new Date().toISOString(),
+        });
+      } catch (error) {
+        res.status(424).json({
+          provider: "github-gh",
+          diff: "",
+          truncated: false,
+          error: error instanceof Error ? error.message : "gh_pr_diff_failed",
+          checkedAt: new Date().toISOString(),
+        });
+      }
+    }),
+  );
+
+  app.post(
     "/api/workspaces/:workspaceId/refresh",
     asyncRoute(async (req, res) => {
       const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
@@ -545,95 +635,12 @@ export function createDaemonApp(input: {
     }),
   );
 
-  app.get("/api/mcp/status", (_req, res) => {
-    res.json(mcpStatus(config.mcp.enabled));
+  registerMcpRoutes(app, asyncRoute, {
+    config,
+    store,
+    callDaemonMcpTool,
+    readMcpResource,
   });
-
-  app.get("/api/mcp/resources/workspaces", (_req, res) => {
-    res.json(
-      serializeWorkspaceResource({
-        repos: store.listRepos(),
-        workspaces: store.listWorkspaces(),
-        sessions: store.listSessions(),
-      }),
-    );
-  });
-
-  app.get("/api/mcp/resources/repos", (_req, res) => {
-    res.json({ repos: store.listRepos() });
-  });
-
-  app.get(
-    "/api/mcp/resources/provider-health",
-    asyncRoute(async (_req, res) => {
-      res.json({ providerHealth: await collectProviderHealth(config.providers) });
-    }),
-  );
-
-  app.get("/api/mcp/resources/activity", (_req, res) => {
-    res.json({ activity: store.listActivity() });
-  });
-
-  app.post(
-    "/api/mcp/tools/call",
-    asyncRoute(async (req, res) => {
-      if (!config.mcp.enabled) return res.status(503).json({ error: "mcp_disabled" });
-      const call = req.body as McpToolCall;
-      const result = await callDaemonMcpTool(call);
-      res.json({ result });
-    }),
-  );
-
-  app.post(
-    "/api/mcp/rpc",
-    asyncRoute(async (req, res) => {
-      const request = req.body as { id?: string | number | null; method?: string; params?: Record<string, unknown> };
-      const isNotification = request.id === undefined || request.id === null;
-      if (!config.mcp.enabled) return res.status(503).json(rpcError(request.id, -32000, "mcp_disabled"));
-      switch (request.method) {
-        case "initialize":
-          return res.json(
-            rpcResult(request.id, {
-              protocolVersion:
-                typeof request.params?.protocolVersion === "string" && request.params.protocolVersion === "2024-11-05"
-                  ? request.params.protocolVersion
-                  : "2024-11-05",
-              serverInfo: { name: "citadel", version: "0.2.0" },
-              capabilities: { resources: {}, tools: {} },
-            }),
-          );
-        case "notifications/initialized":
-          return res.status(202).end();
-        case "ping":
-          return res.json(rpcResult(request.id, {}));
-        case "tools/list":
-          return res.json(rpcResult(request.id, { tools: mcpToolDefinitions() }));
-        case "tools/call": {
-          const params = request.params as McpToolCall;
-          const result = await callDaemonMcpTool(params);
-          return res.json(rpcResult(request.id, rpcJsonContent(result)));
-        }
-        case "resources/list":
-          return res.json(
-            rpcResult(request.id, {
-              resources: mcpStatus(config.mcp.enabled).resources.map((uri) => ({
-                uri,
-                name: uri.replace("citadel://", ""),
-              })),
-            }),
-          );
-        case "resources/read": {
-          const uri = typeof request.params?.uri === "string" ? request.params.uri : "";
-          const resource = await readMcpResource(uri);
-          if (!resource) return res.json(rpcError(request.id, -32602, "unknown_resource"));
-          return res.json(rpcResult(request.id, { contents: [rpcResourceContent(uri, resource)] }));
-        }
-        default:
-          if (isNotification) return res.status(202).end();
-          return res.json(rpcError(request.id, -32601, "method_not_found"));
-      }
-    }),
-  );
 
   app.get("/api/workspaces/:workspaceId/diff", (req, res) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);

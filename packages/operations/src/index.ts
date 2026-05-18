@@ -16,8 +16,17 @@ import type {
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { hookDiagnostic, parseHookOutput, runCommandHook, runCommandHookForDiagnostics } from "@citadel/hooks";
-import { ensureTmuxSession, killTmuxSession, sendKeys, tmuxSessionExists } from "@citadel/terminal";
-import { asObject, discoverDefaultBranch, tryRunGit, withActionHookIds, workspaceIsDirty } from "./helpers.js";
+import { ensureTmuxSession, killTmuxSession, sendKeys } from "@citadel/terminal";
+import {
+  asObject,
+  cancelOperationInStore,
+  discoverDefaultBranch,
+  listHookDiagnostics,
+  reconcileStore,
+  tryRunGit,
+  withActionHookIds,
+  workspaceIsDirty,
+} from "./helpers.js";
 
 export class OperationService {
   constructor(
@@ -223,6 +232,38 @@ export class OperationService {
     return { stopped: true, reason: "ok" as const };
   }
 
+  cancelOperation(operationId: string) {
+    const result = cancelOperationInStore(this.store, operationId, nowIso);
+    if (result.cancelled && result.operation)
+      this.activity(
+        "operation.cancelled",
+        "user",
+        `Cancelled ${result.operation.type}`,
+        result.operation.repoId,
+        result.operation.workspaceId,
+        result.operation.id,
+      );
+    return { cancelled: result.cancelled, reason: result.reason };
+  }
+
+  async retryOperation(operationId: string) {
+    const operation = this.store.findOperation(operationId);
+    if (!operation) return { retried: false, reason: "not_found" as const };
+    if (!operation.retriable || !operation.retryInput) return { retried: false, reason: "not_retriable" as const };
+    const kind = operation.retryInput.kind;
+    if (kind === "workspace.action") {
+      const workspaceId = operation.retryInput.workspaceId as string;
+      const action = operation.retryInput.action as HookAction;
+      const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+      if (!workspace) return { retried: false, reason: "workspace_missing" as const };
+      const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+      if (!repo) return { retried: false, reason: "repo_missing" as const };
+      const result = await this.runWorkspaceAction({ repo, workspace, action });
+      return { retried: true, operationId: result.operationId, status: result.status };
+    }
+    return { retried: false, reason: "unknown_kind" as const };
+  }
+
   /**
    * Reconcile local state with reality:
    *  - mark sessions as `orphaned` when their tmux session is gone
@@ -232,38 +273,9 @@ export class OperationService {
    * Returns counts of the cleanup performed.
    */
   reconcile(): { sessions: number; workspaces: number; repos: number; deletedSessions: number } {
-    let sessionCount = 0;
-    let workspaceCount = 0;
-    let repoCount = 0;
-    let deletedSessions = 0;
-    for (const session of this.store.listSessions()) {
-      if (!session.tmuxSessionName) continue;
-      if (["stopped", "orphaned", "failed"].includes(session.status)) continue;
-      if (!tmuxSessionExists(session.tmuxSessionName)) {
-        const workspaceExists = this.store.listWorkspaces().some((workspace) => workspace.id === session.workspaceId);
-        if (!workspaceExists) {
-          this.store.deleteSession(session.id);
-          deletedSessions += 1;
-        } else {
-          this.store.updateSessionStatus(session.id, "orphaned");
-        }
-        sessionCount += 1;
-      }
-    }
-    for (const workspace of this.store.listWorkspaces()) {
-      if (workspace.lifecycle === "ready" && !fs.existsSync(workspace.path)) {
-        this.store.updateWorkspaceLifecycle(workspace.id, "failed");
-        workspaceCount += 1;
-      }
-    }
-    for (const repo of this.store.listRepos()) {
-      if (!fs.existsSync(path.join(repo.rootPath, ".git"))) {
-        this.store.archiveRepo(repo.id);
-        this.activity("repo.removed", "system", `Auto-archived ${repo.name} (rootPath missing)`, repo.id, null, null);
-        repoCount += 1;
-      }
-    }
-    return { sessions: sessionCount, workspaces: workspaceCount, repos: repoCount, deletedSessions };
+    return reconcileStore(this.store, (message, repoId) =>
+      this.activity("repo.removed", "system", message, repoId, null, null),
+    );
   }
 
   async removeWorkspace(input: { workspaceId: string; force?: boolean; archiveOnly?: boolean }) {
@@ -619,6 +631,8 @@ export class OperationService {
         status: "failed",
         progress: 100,
         error: message,
+        retriable: true,
+        retryInput: { kind: "workspace.action", workspaceId: input.workspace.id, action: input.action },
         updatedAt: nowIso(),
       });
       this.activity(
@@ -634,35 +648,13 @@ export class OperationService {
   }
 
   hookDiagnostics(repo: Repo, workspace?: Workspace | null) {
-    const events: Array<HookConfig["event"]> = [
-      "workspace.setup",
-      "workspace.teardown",
-      "workspace.apps",
-      "workspace.action",
-    ];
-    return events.flatMap((event) => {
-      const ids =
-        event === "workspace.setup"
-          ? repo.setupHookIds
-          : event === "workspace.teardown"
-            ? repo.teardownHookIds
-            : event === "workspace.apps"
-              ? (this.config?.repoDefaults.appHookIds ?? [])
-              : (this.config?.repoDefaults.actionHookIds ?? []);
-      return this.configuredHooks(event, ids).map((hook) =>
-        hookDiagnostic({
-          hook: {
-            id: hook.id,
-            event: hook.event,
-            command: hook.command,
-            args: hook.args,
-            cwd: hook.cwd || workspace?.path || repo.rootPath,
-            timeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
-            blocking: hook.blocking,
-          },
-          enabled: true,
-        }),
-      );
+    return listHookDiagnostics({
+      repo,
+      workspace,
+      hooks: this.config?.hooks ?? [],
+      appHookIds: this.config?.repoDefaults.appHookIds ?? [],
+      actionHookIds: this.config?.repoDefaults.actionHookIds ?? [],
+      hookTimeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
     });
   }
 
@@ -684,6 +676,9 @@ export class OperationService {
       progress,
       message,
       error: null,
+      logs: [],
+      retriable: false,
+      retryInput: null,
       createdAt: now,
       updatedAt: now,
     };

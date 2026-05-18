@@ -1,0 +1,381 @@
+.mobile-monitor,
+.mobile-monitor.mobile-active {
+  display: none;
+}
+
+.mobile-monitor-panel {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+}
+
+.mobile-monitor-panel section {
+  display: grid;
+  gap: 8px;
+}
+
+.mobile-monitor-panel section ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.mobile-monitor-panel section li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.health-line.degraded {
+  color: var(--color-danger);
+}
+
+.refresh-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+}
+
+.workspace-preview {
+  display: flex;
+  gap: 12px;
+  font-size: 0.85em;
+  color: var(--muted);
+}
+
+.repo-inspect {
+  border: 1px dashed var(--line);
+  padding: 8px 10px;
+  border-radius: 6px;
+  display: grid;
+  gap: 4px;
+}
+
+.repo-inspect.warn {
+  border-color: var(--color-danger);
+}
+
+.config-section {
+  display: grid;
+  gap: 8px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.structured-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.operations-page .operations-list {
+  display: grid;
+  gap: 6px;
+}
+
+.operation-row {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.operation-row.status-failed {
+  border-color: var(--color-danger);
+}
+
+.operation-row summary {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.operation-logs {
+  max-height: 240px;
+  overflow: auto;
+  background: var(--surface-strong);
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+.operation-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.onboarding-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 12px;
+}
+
+.onboarding-step {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.onboarding-step.done {
+  color: var(--color-success);
+}
+
+.onboarding-step.active {
+  background: var(--surface-strong);
+}
+
+.onboarding-card {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.onboarding-card-title {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.onboarding-provider-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.stack-form-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.check-summary {
+  display: flex;
+  gap: 8px;
+  font-size: 0.85em;
+}
+
+.check-summary .failed {
+  color: var(--color-danger);
+}
+
+.check-summary .pending {
+  color: var(--muted);
+}
+
+.check-summary .passing {
+  color: var(--color-success);
+}
+
+.ci-run-list {
+  display: grid;
+  gap: 4px;
+}
+
+.ci-run-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.pr-diff-panel .diff-code {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.panel-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.command-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: start center;
+  padding-top: 10vh;
+  background: rgba(16, 19, 24, 0.44);
+}
+
+.command-palette {
+  width: min(620px, calc(100vw - 28px));
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: Canvas;
+  box-shadow: 0 24px 80px rgba(16, 19, 24, 0.24);
+}
+
+.command-search {
+  margin-top: 0;
+}
+
+.command-list {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.command-list button {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 8px;
+  padding: 8px;
+  text-align: left;
+}
+
+.command-list button:hover {
+  background: var(--surface);
+}
+
+.command-list span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.command-list em {
+  grid-row: span 2;
+  align-self: center;
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.health {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  margin-bottom: 8px;
+}
+
+.health.healthy span {
+  color: var(--color-success);
+}
+
+.health.degraded span,
+.health.unavailable span {
+  color: #b54708;
+}
+
+.inline-actions {
+  flex-wrap: wrap;
+}
+
+.stack-form label,
+.config-form label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.runtime-launcher select,
+.stack-form input,
+.stack-form select,
+.config-form input,
+.config-form textarea {
+  min-height: 38px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: Canvas;
+  color: CanvasText;
+  padding: 0 9px;
+}
+
+.config-form textarea {
+  min-height: 160px;
+  padding: 9px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.stack-form {
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+}
+
+.create-start.compact .stack-form {
+  margin-bottom: 8px;
+}
+
+.activity-row {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr) auto;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+.activity-row span,
+.activity-row time {
+  color: var(--muted);
+}
+
+.activity-output {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.activity-output a,
+.activity-output span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--color-accent) 28%, transparent);
+  border-radius: 7px;
+  color: var(--color-accent);
+  font-size: 12px;
+  font-weight: 650;
+  text-decoration: none;
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+}
+
+.empty {
+  padding: 16px;
+  border: 1px dashed var(--line);
+  border-radius: 7px;
+}
+
+.empty.compact {
+  padding: 10px;
+}
+
+.ade-loading {
+  padding: 24px;
+}

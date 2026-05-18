@@ -15,9 +15,9 @@ test("ADE shell renders workspace-first regions", async ({ page }, testInfo) => 
   if (testInfo.project.name === "mobile") {
     await expect(page.getByLabel("Workspace layout").getByRole("button", { name: "Inspector" })).toBeVisible();
     await page.getByLabel("Workspace layout").getByRole("button", { name: "Navigator" }).click();
-    await expect(page.getByText("Workspaces").first()).toBeVisible();
+    await expect(page.locator(".workspace-navigator .navigator-title")).toBeVisible();
   } else {
-    await expect(page.getByText("Workspaces").first()).toBeVisible();
+    await expect(page.locator(".workspace-navigator .navigator-title")).toBeVisible();
     await expect(page.locator(".workspace-inspector")).toBeVisible();
   }
   await expect(page.getByRole("button", { name: "Quick open" })).toBeVisible();
@@ -105,15 +105,50 @@ test("mobile ADE uses stage and inspector navigation", async ({ page, request },
   }
 });
 
+test("onboarding wizard renders step cards", async ({ page }) => {
+  await page.goto("/onboarding");
+  await expect(page.getByRole("heading", { name: "Welcome to Citadel" })).toBeVisible();
+  // The wizard advances past the providers step when a repo already exists in the test DB.
+  await expect(
+    page
+      .locator(".onboarding-card-title")
+      .getByRole("heading", { name: /Providers|Register a repository|Create your first workspace/ }),
+  ).toBeVisible();
+});
+
+test("operations route renders the operations list", async ({ page }) => {
+  await page.goto("/operations");
+  await expect(page.getByRole("heading", { name: "Operations" })).toBeVisible();
+});
+
+test("desktop repo settings page renders identity and provider toggles", async ({ page, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "repo settings UI coverage");
+  const fixture = createGitFixture();
+  let repoId: string | null = null;
+  try {
+    const repo = await registerRepo(request, fixture, `Repo Settings ${Date.now().toString(36)}`);
+    repoId = repo.id;
+    await page.goto(`/repos/${repo.id}`);
+    await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Hooks" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Providers" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Actions" })).toBeVisible();
+    await page.getByRole("button", { name: "Save providers" }).click();
+  } finally {
+    if (repoId) await request.delete(`${API_BASE}/api/repos/${repoId}?force=true`).catch(() => {});
+    fs.rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
 test("settings renders runtime and MCP visibility", async ({ page }, testInfo) => {
   await page.goto("/settings");
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Local Config" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Setup Status" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Providers" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Runtimes" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "MCP" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Repositories" })).toBeVisible();
+  await expect(page.locator(".panel-title").getByRole("heading", { name: "Local Config" })).toBeVisible();
+  await expect(page.locator(".panel-title").getByRole("heading", { name: "Setup Status" })).toBeVisible();
+  await expect(page.locator(".panel-title").getByRole("heading", { name: "Providers" })).toBeVisible();
+  await expect(page.locator(".panel-title").getByRole("heading", { name: "Runtimes" })).toBeVisible();
+  await expect(page.locator(".panel-title").getByRole("heading", { name: "MCP" })).toBeVisible();
+  await expect(page.locator(".panel-title").getByRole("heading", { name: "Repositories" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Save config" }).or(page.getByText("Loading config"))).toBeVisible();
   await page.screenshot({ path: `docs/campaigns/screenshot-${testInfo.project.name}-settings.png`, fullPage: true });
 });

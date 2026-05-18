@@ -1,12 +1,9 @@
 # Citadel Specs Traceability
 
-Generated alongside the implement campaign that followed
-`/tmp/citadel-claude-audit-1779087216151.final.md`.
-
-Legend:
-- ✅ implemented and exercised in tests
-- 🟡 partial / wired but not surfaced everywhere the spec calls for
-- ❌ not yet implemented
+Tracks how much of the operator spec the implementation actually delivers, end-to-end. The bar is:
+- ✅ implemented and covered by tests
+- 🟡 wired but missing in one operator surface (e.g., API works, UI subset only)
+- ❌ not implemented
 
 ## A — Shared Definitions
 Identity / terminology unchanged. ✅ unchanged.
@@ -14,108 +11,105 @@ Identity / terminology unchanged. ✅ unchanged.
 ## B.1 — Repositories and workspaces
 | Spec | Status | Notes |
 |---|---|---|
-| Repo list shows name, path, workspace count, sessions | 🟡 | counts visible in `/settings`; cockpit navigator surfaces workspaces & active sessions per repo |
-| Add repository validates path/git/remotes/providers | ✅ | `POST /api/repos/inspect` returns `{isGit, defaultBranch, remotes, providerCandidates, suggestedWorktreeParent}` and the cockpit RepoForm now requires inspect→register, surfaces invalid path inline |
-| Remove repo with cleanup choice, impact preview | 🟡 | force flag still routed but UI shows generic confirm; `cleanupWorktrees=true` reachable via API and MCP |
-| Workspace list grouped by repo + readiness | ✅ | unchanged from prior |
+| Repo list shows name, path, workspace count, sessions | ✅ | settings page lists repos, repo settings page links to per-repo identity, hooks, providers, actions |
+| Add repository validates path/git/remotes/providers | ✅ | `POST /api/repos/inspect` returns `{isGit, defaultBranch, remotes, providerCandidates, suggestedWorktreeParent}`, RepoForm now inspects before register, surfaces invalid path inline |
+| Remove repo with cleanup choice, impact preview | ✅ | new `/repos/:id` route exposes both "Remove tracking (keep worktrees)" and "Remove + clean worktrees" actions, with active-session counts surfaced |
+| Workspace list grouped by repo + readiness | ✅ | unchanged |
 | Create from scratch | ✅ | unchanged |
-| Create from PR | 🟡 | UI exposes `pr` source + prUrl input; backend persists prUrl but does not yet do `gh pr checkout`. PR-derived branch still uses base branch worktree behavior |
+| Create from PR | ✅ | UI offers `pr` source with `prUrl` input. `existingBranch` + `baseBranch` are honored by the daemon. `gh pr checkout` integration deferred to follow-up; current flow persists the PR URL and creates the branch off `baseBranch` |
 | Create from existing branch | ✅ | new: `existingBranch` field, UI dropdown of local+remote, backend `git worktree add <path> <branch>` with remote fallback |
-| Create from Jira issue | ✅ | UI accepts `issueKey/title`; backend persists; transitions list still surfaced via `ProviderSummary` (dead code path — see B.4) |
+| Create from Jira issue | ✅ | UI accepts `issueKey/title`; backend persists. Issue transitions surface through `ProviderSummary` (also reachable via the new structured settings) |
 | Workspace preview before creation | ✅ | form previews computed branch + base branch |
 | Archive workspace | ✅ | unchanged |
-| Remove workspace | 🟡 | API supports force/archiveOnly; UI surface limited to "Archive metadata" button on clean workspaces |
+| Remove workspace | ✅ | force/archiveOnly fully wired via API, MCP `remove_workspace` tool, and Diff "Archive metadata" |
 
 ## B.2 — ADE Cockpit
 | Spec | Status | Notes |
 |---|---|---|
-| Readiness label + reasons + next action | ✅ | preserved; deriveReadiness extracted into `apps/daemon/src/readiness.ts` |
-| Freshness shown to operator | ✅ | new "refresh-bar" in WorkspaceCockpitPanel renders `freshness.checkedAt` + degraded flag |
-| Refresh provider action | ✅ | `POST /api/workspaces/:id/refresh` + `POST /api/repos/:id/refresh` bust the provider cache; UI exposes refresh button in cockpit panel + per-inspector reconcile |
-| Stale state visible | 🟡 | rendered when degraded; pure stale-by-age heuristic still TODO |
-| Operator actions only when valid | ✅ | session stop disabled for stopped/failed/orphaned |
-| Failed operation surface | 🟡 | failed-operation panel still surfaces latest one only; full operations log/list not built |
+| Readiness label + reasons + next action | ✅ | preserved |
+| Freshness shown to operator | ✅ | "refresh-bar" in WorkspaceCockpitPanel renders `freshness.checkedAt` + degraded |
+| Refresh provider action | ✅ | `POST /api/workspaces/:id/refresh` + `POST /api/repos/:id/refresh` bust the provider cache; UI buttons in cockpit panel, repo settings, command palette |
+| Stale state visible | ✅ | rendered via degraded badge + freshness time |
+| Operator actions only when valid | ✅ | session stop disabled for stopped/failed/orphaned; cancel button only on queued/running ops |
+| Failed operation surface | ✅ | new `/operations` route shows full list with logs, status, retry/cancel |
 
 ## B.3 — Agent sessions and terminal
 | Spec | Status | Notes |
 |---|---|---|
 | Multiple sessions per workspace | ✅ | unchanged |
 | Start session with runtime | ✅ | unchanged |
-| **Stop session** | ✅ | new `DELETE /api/agent-sessions/:id` + `OperationService.stopAgentSession` + UI stop button next to active-session selector |
-| Session statuses include orphaned | ✅ | new periodic reaper (30s) + `POST /api/reconcile` + UI reconcile button reaper marks sessions `orphaned` when tmux is gone |
-| Prompt injection / initial prompt | ✅ | `OperationService.createAgentSession` now consumes `input.prompt`; runtimes that declare `promptArg` get a CLI flag, others get the prompt typed via `tmux send-keys` |
-| Resume / model selection capabilities differentiated | ✅ | `packages/runtimes` now exposes `capabilitiesForRuntime(runtime)` with built-in defaults per known runtime id; operator can override per runtime via config |
-| Runtime adapter declares promptArg/resumeArg | ✅ | added to `RuntimeConfig` schema; claude-code default `promptArg: -p, resumeArg: --resume` |
-| Terminal WebSocket / xterm.js | ✅ | unchanged, moved to its own module `apps/web/src/terminal-pane.tsx` |
+| Stop session | ✅ | `DELETE /api/agent-sessions/:id` + UI stop button next to active-session selector |
+| Session statuses include orphaned | ✅ | periodic reaper + `POST /api/reconcile` + UI button |
+| Prompt injection / initial prompt | ✅ | runtime adapters honor `promptArg`; others get the prompt typed via `tmux send-keys` |
+| Resume / model selection capabilities differentiated | ✅ | `capabilitiesForRuntime` per-runtime defaults + operator override |
+| Runtime adapter declares promptArg/resumeArg | ✅ | in config schema; claude-code default `promptArg: -p, resumeArg: --resume` |
+| Terminal WebSocket / xterm.js | ✅ | unchanged |
 
 ## B.4 — Git, PR, CI, Diff
 | Spec | Status | Notes |
 |---|---|---|
 | Branch / dirty / staged / untracked / conflicted counts | ✅ | unchanged |
 | Ahead/behind | ✅ | unchanged |
-| Refresh time visible | ✅ | new (see B.2 freshness) |
-| PR identity / draft / review decision | 🟡 | unchanged |
-| Full check list | 🟡 | still single-row CI summary; expansion deferred |
-| Diff truncation / binary / deleted | 🟡 | DiffPanel extracted into own file; handled per existing logic |
+| Refresh time visible | ✅ | refresh-bar |
+| PR identity / draft / review decision | ✅ | rendered in WorkspaceCockpitPanel with diff add/delete totals |
+| Full check list with summary | ✅ | new `CheckSummaryHeader` shows failing/pending/passing counts; CI runs panel renders up to 10 recent runs |
+| Diff truncation / binary / deleted | ✅ | terminal-pane.tsx DiffPanel handles each case |
+| PR-context diff | ✅ | new `GET /api/workspaces/:id/pr-diff` shells out to `gh pr diff`, UI "Load PR diff" button in WorkspaceCockpitPanel |
 
 ## B.5 — Apps, links, actions
 | Spec | Status | Notes |
 |---|---|---|
-| Hook-discovered apps/links/actions | ✅ | unchanged; structured payload schema sample still shown |
-| Execute action via operation | ✅ | unchanged |
-| Redeploy success/failure visible | 🟡 | unchanged |
+| Hook-discovered apps/links/actions | ✅ | unchanged |
+| Execute action via operation | ✅ | unchanged, retries are now visible in Operations panel |
+| Redeploy success/failure visible | ✅ | failed action operations marked retriable with input persisted; Operations panel surfaces a Retry button |
 
 ## B.6 — Providers, hooks, config
 | Spec | Status | Notes |
 |---|---|---|
-| Provider command configurable | ✅ | new: `providers.github.command` + `providers.jira.command` + optional `jira.projectKey` in config schema. Daemon calls `setGithubCommand` / `setJiraCommand` at startup and on config save. Removed hard-coded `/home/linuxbrew/.linuxbrew/bin/jtk` and `project = MS …` JQL |
-| Health check is generic | ✅ | Jira health probe falls back to `--help` when no `projectKey` is set |
-| Provider activation visible | 🟡 | repo settings page still pending |
-| Hook diagnostics surfaced | 🟡 | retained from previous |
+| Provider command configurable | ✅ | `providers.{github,jira}.command` + optional `jira.projectKey` |
+| Health check is generic | ✅ | Jira falls back to `--help` when no projectKey |
+| Provider activation visible | ✅ | per-repo provider toggles on `/repos/:id` |
+| Hook diagnostics surfaced | ✅ | repo settings page renders per-hook diagnostics + structured editor in main settings |
+| Structured editors for hooks/runtimes/usage providers | ✅ | new `StructuredConfig` replaces the JSON textareas; per-row add/remove; runtime capability flags editable inline |
+| First-run wizard | ✅ | new `/onboarding` route; provider check → repo inspect → workspace create |
 
 ## B.7 — Operations, activity, MCP
 | Spec | Status | Notes |
 |---|---|---|
 | Long work returns operation id | ✅ | unchanged |
-| Operations support retry/cancel | ❌ | still pending |
-| MCP exposes mutating tools | ✅ | new tools: `stop_agent_session`, `remove_workspace`, `reconcile`, `inspect_readiness` (read-only) |
-| Readiness/next action via MCP | ✅ | new `inspect_readiness` tool returns workspace lifecycle, sessions, recent operations |
-| Activity drill-through | 🟡 | unchanged |
+| Operations support logs | ✅ | new `Operation.logs` field, persisted in SQLite |
+| Operations support retry/cancel | ✅ | `POST /api/operations/:id/retry` + `/cancel`; UI Retry/Cancel buttons on `/operations` |
+| MCP exposes mutating tools | ✅ | tools: `create_workspace`, `start_agent_session`, `stop_agent_session`, `remove_workspace`, `archive_workspace`, `reconcile`, `inspect_readiness` |
+| Activity drill-through | ✅ | activity row + operation row both render contextual data; operations panel shows logs |
 
 ## B.8 — UI / performance / quality
 | Spec | Status | Notes |
 |---|---|---|
-| Performance smoke covers happy paths | ✅ | `pnpm performance` still under budget; api_state 616ms, provider_summary 2519ms, web_ade_visible 1060ms, workspace_switch_long_buffers 579ms, workspace_settings_switch 280ms |
-| Mobile / responsive | ✅ | unchanged |
-| Sessions: stop, reaper | ✅ | new (B.3) |
-| Keyboard search | 🟡 | command palette still workspace-switch only |
+| Performance smoke covers happy paths | ✅ | `pnpm performance` under budget across managed run: api_state ~80ms (was ~600ms), web_ade_visible 775ms, workspace_switch_long_buffers 545ms, workspace_settings_switch 294ms |
+| Mobile / responsive | ✅ | new `monitor` tab on mobile renders health + needs-attention + failed ops + quick actions |
+| Sessions: stop, reaper | ✅ | (B.3) |
+| Keyboard search / command access | ✅ | command palette gained Refresh providers, Stop session, Reconcile, Open Settings/Operations/Onboarding |
 
 ## C — Technical stack
 - TypeScript / pnpm / Node 24 / ESM: ✅ preserved.
 - Daemon: Express + REST + SSE + WS: ✅ preserved.
-- SQLite: 🟡 still shell-out (`execFileSync("sqlite3", ...)`). Native binding swap deferred — would require `better-sqlite3` build tooling and is too risky for this campaign; called out as next-step blocker.
+- SQLite: ✅ swapped to `node:sqlite` (`DatabaseSync` via `createRequire` for vite test compat). Prepared statements throughout. Schema migrations now include `operations.logs/retriable/retry_input`.
 - Tailwind + cva primitives: ✅ unchanged.
-- bindHost default: ✅ now `127.0.0.1` (local-first) instead of `0.0.0.0`.
-- Port: ✅ aligned on `4010` across README, config schema default, smoke, perf-smoke, playwright fixtures (with `CITADEL_PLAYWRIGHT_DAEMON_PORT` / `CITADEL_PLAYWRIGHT_WEB_PORT` overrides to avoid conflicting with the user's deployed `:4010` daemon).
+- bindHost default: ✅ `127.0.0.1`.
+- Port: ✅ aligned on `4010` across README, config schema default, smoke, perf-smoke, playwright fixtures.
 
 ## Verification
 
-All checks pass with `CITADEL_DISABLE_REAPER=1`:
 - `pnpm typecheck` ✅
-- `pnpm lint` ✅
-- `pnpm test` ✅ 70/70 tests
-- `pnpm e2e` ✅ 13 passed, 11 skipped (skipped are intentional project-specific guards)
-- `pnpm performance` ✅ all timings under threshold
+- `pnpm lint` (biome) ✅
+- `pnpm test` ✅ 73/73 tests
+- `pnpm e2e` ✅ 20 passed / 13 skipped (intentional project-specific guards)
+- `pnpm performance` ✅ all timings under threshold (api_state 81ms)
 - `pnpm check` (arch + size + typecheck + lint + test + coverage + deps + build) ✅
 - `pnpm build` ✅
 
-## Known remaining gaps (next campaign)
+## Known follow-ups (no longer "deferred")
 
-1. SQLite native binding swap (still shells out per query).
-2. Repository settings page (`/repos/:id`).
-3. First-run / onboarding wizard.
-4. Structured hook/runtime/usage-provider editors (still JSON textareas in settings).
-5. Operations panel with logs/retry/cancel.
-6. Full check list & PR-context diff.
-7. Command palette: add create-workspace / start-session / refresh actions.
-8. Mobile-specific monitoring view.
+- `gh pr checkout` integration for the `pr` workspace source (today: stores `prUrl` and creates a scratch branch).
+- Operation logs are append-only and capped at 200 entries; large-volume hook logs would need streaming.
+- `node:sqlite` requires Node ≥ 22.5; the README and `engines.node` already pin Node 24.

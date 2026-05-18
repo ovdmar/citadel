@@ -89,7 +89,8 @@
   }
 
   .workspace-navigator.mobile-active,
-  .workspace-inspector.mobile-active {
+  .workspace-inspector.mobile-active,
+  .mobile-monitor.mobile-active {
     display: block;
   }
 

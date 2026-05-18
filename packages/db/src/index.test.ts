@@ -33,7 +33,11 @@ describe("SqliteStore", () => {
     });
 
     expect(store.listRepos()).toHaveLength(1);
-    expect(store.query("SELECT version FROM schema_migrations")).toEqual([{ version: 1 }, { version: 2 }]);
+    expect(store.query("SELECT version FROM schema_migrations ORDER BY version")).toEqual([
+      { version: 1 },
+      { version: 2 },
+      { version: 3 },
+    ]);
   });
 
   it("round-trips workspace, session, operation, and activity state", () => {
@@ -96,6 +100,9 @@ describe("SqliteStore", () => {
       progress: 50,
       message: "Creating workspace",
       error: null,
+      logs: [],
+      retriable: false,
+      retryInput: null,
       createdAt: "2026-05-17T00:03:00.000Z",
       updatedAt: "2026-05-17T00:03:00.000Z",
     });
@@ -125,6 +132,9 @@ describe("SqliteStore", () => {
       progress: 100,
       message: "Workspace ready",
       error: null,
+      logs: [],
+      retriable: false,
+      retryInput: null,
       createdAt: "2026-05-17T00:03:00.000Z",
       updatedAt: "2026-05-17T00:05:00.000Z",
     });

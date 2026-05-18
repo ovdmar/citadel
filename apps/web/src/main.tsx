@@ -18,9 +18,13 @@ import { type StateResponse, useStateQuery } from "./app-state.js";
 import { Cockpit } from "./cockpit.js";
 import { Badge } from "./components/ui/badge.js";
 import { Button } from "./components/ui/button.js";
-import { ConfigForm } from "./config-form.js";
 import { formatLabel } from "./labels.js";
+import { OnboardingView } from "./routes/onboarding.js";
+import { OperationsView } from "./routes/operations.js";
+import { RepoSettingsView } from "./routes/repo-settings.js";
+import { StructuredConfig } from "./structured-config.js";
 import "./styles.css";
+import "./cockpit-extras.css";
 import "./cockpit-tools.css";
 import "./settings.css";
 import "./responsive.css";
@@ -42,7 +46,27 @@ const settingsRoute = createRoute({
   component: SettingsView,
 });
 
-const router = createRouter({ routeTree: rootRoute.addChildren([indexRoute, settingsRoute]) });
+const repoSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/repos/$repoId",
+  component: RepoSettingsView,
+});
+
+const operationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/operations",
+  component: OperationsView,
+});
+
+const onboardingRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/onboarding",
+  component: OnboardingView,
+});
+
+const router = createRouter({
+  routeTree: rootRoute.addChildren([indexRoute, settingsRoute, repoSettingsRoute, operationsRoute, onboardingRoute]),
+});
 
 declare module "@tanstack/react-router" {
   interface Register {
@@ -69,6 +93,12 @@ function SettingsView() {
         </div>
         <div className="settings-header-actions">
           <ThemeControls />
+          <Link className="settings-link" to="/onboarding">
+            Onboarding
+          </Link>
+          <Link className="settings-link" to="/operations">
+            Operations
+          </Link>
           <Link className="settings-link" to="/">
             Workspaces
           </Link>
@@ -77,7 +107,7 @@ function SettingsView() {
       <div className="grid">
         <section className="panel wide">
           <PanelTitle icon={<Settings />} title="Local Config" />
-          <ConfigForm />
+          <StructuredConfig />
         </section>
         <section className="panel">
           <PanelTitle icon={<CheckCircle2 />} title="Setup Status" />
@@ -244,6 +274,14 @@ function RepositoryRow(props: {
         {confirming || needsConfirmation ? (
           <small>Removal preserves local repos/worktrees. Confirm when active work exists.</small>
         ) : null}
+        <Link
+          to="/repos/$repoId"
+          params={{ repoId: props.repo.id }}
+          className="settings-link"
+          aria-label={`Open settings for ${props.repo.name}`}
+        >
+          Repo settings
+        </Link>
         <Button
           type="button"
           className={confirming ? "danger-action" : undefined}

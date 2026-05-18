@@ -57,9 +57,15 @@ try {
       await page.getByRole("heading", { name: /perf-a-/i }).waitFor();
     });
     await time("workspace_settings_switch", 1000, async () => {
-      await page.getByRole("link", { name: /settings/i }).click();
-      await page.getByRole("heading", { name: "Settings" }).waitFor();
-      await page.getByRole("link", { name: /workspaces/i }).click();
+      await page
+        .locator(".ade-topbar-actions")
+        .getByRole("link", { name: /settings/i })
+        .click();
+      await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
+      await page
+        .locator(".settings-header-actions")
+        .getByRole("link", { name: /workspaces/i })
+        .click();
       await page.getByText("Agent Development Environment").waitFor();
     });
   } finally {
