@@ -24,6 +24,8 @@ export const UsageProviderConfigSchema = z.object({
 export const HookEventSchema = z.enum([
   "workspace.setup",
   "workspace.teardown",
+  "workspace.apps",
+  "workspace.action",
   "workspace.created",
   "workspace.archived",
   "workspace.removed",
@@ -75,8 +77,10 @@ export const CitadelConfigSchema = z
       .object({
         setupHookIds: z.array(z.string()).default([]),
         teardownHookIds: z.array(z.string()).default([]),
+        appHookIds: z.array(z.string()).default([]),
+        actionHookIds: z.array(z.string()).default([]),
       })
-      .default({ setupHookIds: [], teardownHookIds: [] }),
+      .default({ setupHookIds: [], teardownHookIds: [], appHookIds: [], actionHookIds: [] }),
     commandPolicy: z
       .object({
         hookTimeoutMs: z.number().int().min(1000).default(120000),
@@ -104,6 +108,14 @@ export const CitadelConfigSchema = z
     validateHookReferences(context, hooksById, config.repoDefaults.teardownHookIds, "workspace.teardown", [
       "repoDefaults",
       "teardownHookIds",
+    ]);
+    validateHookReferences(context, hooksById, config.repoDefaults.appHookIds, "workspace.apps", [
+      "repoDefaults",
+      "appHookIds",
+    ]);
+    validateHookReferences(context, hooksById, config.repoDefaults.actionHookIds, "workspace.action", [
+      "repoDefaults",
+      "actionHookIds",
     ]);
   });
 

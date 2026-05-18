@@ -181,6 +181,16 @@ export class SqliteStore {
     );
   }
 
+  archiveRepo(repoId: string) {
+    const now = new Date().toISOString();
+    this.exec(`UPDATE repos SET archived_at = ${q(now)}, updated_at = ${q(now)} WHERE id = ${q(repoId)}`);
+    this.exec(
+      `UPDATE workspaces SET lifecycle = 'archived', archived_at = ${q(now)}, updated_at = ${q(
+        now,
+      )} WHERE repo_id = ${q(repoId)} AND archived_at IS NULL`,
+    );
+  }
+
   listSessions(workspaceId?: string): AgentSession[] {
     const where = workspaceId ? `WHERE workspace_id = ${q(workspaceId)}` : "";
     return this.query<Record<string, unknown>>(`SELECT * FROM agent_sessions ${where} ORDER BY updated_at DESC`).map(

@@ -1,13 +1,23 @@
-import type { AgentRuntime, ProviderHealth, RuntimeUsageSummary } from "@citadel/contracts";
-import { QueryClientProvider, useQuery } from "@tanstack/react-query";
+import type {
+  AgentRuntime,
+  AgentSession,
+  Operation,
+  ProviderHealth,
+  Repo,
+  RuntimeUsageSummary,
+  Workspace,
+} from "@citadel/contracts";
+import { QueryClientProvider, useMutation, useQuery } from "@tanstack/react-query";
 import { Link, Outlet, RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
-import { Boxes, Cable, CheckCircle2, HeartPulse, Settings, TerminalSquare } from "lucide-react";
+import { Cable, CheckCircle2, HeartPulse, Settings, TerminalSquare, Trash2 } from "lucide-react";
+import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import "@xterm/xterm/css/xterm.css";
 import { api, queryClient } from "./api.js";
 import { type StateResponse, useStateQuery } from "./app-state.js";
 import { Cockpit } from "./cockpit.js";
 import { Badge } from "./components/ui/badge.js";
+import { Button } from "./components/ui/button.js";
 import { ConfigForm } from "./config-form.js";
 import { formatLabel } from "./labels.js";
 import "./styles.css";
@@ -42,22 +52,8 @@ declare module "@tanstack/react-router" {
 
 function Shell() {
   return (
-    <div className="shell">
-      <aside className="rail">
-        <div className="brand">Citadel</div>
-        <nav>
-          <Link to="/" activeProps={{ className: "active" }}>
-            <Boxes size={17} /> Workspaces
-          </Link>
-          <Link to="/settings" activeProps={{ className: "active" }}>
-            <Settings size={17} /> Settings
-          </Link>
-        </nav>
-        <ThemeControls />
-      </aside>
-      <main>
-        <Outlet />
-      </main>
+    <div className="app-root">
+      <Outlet />
     </div>
   );
 }
@@ -70,6 +66,12 @@ function SettingsView() {
         <div>
           <h1>Settings</h1>
           <p>Config, providers, runtimes, MCP, and local-first health.</p>
+        </div>
+        <div className="settings-header-actions">
+          <ThemeControls />
+          <Link className="settings-link" to="/">
+            Workspaces
+          </Link>
         </div>
       </header>
       <div className="grid">
@@ -108,6 +110,10 @@ function SettingsView() {
         <section className="panel">
           <PanelTitle icon={<Cable />} title="MCP" />
           <div className="empty">{state.data?.mcp.enabled ? "Enabled for local/internal use" : "Disabled"}</div>
+        </section>
+        <section className="panel wide">
+          <PanelTitle icon={<Trash2 />} title="Repositories" />
+          <RepositoryManagement state={state.data} />
         </section>
       </div>
     </div>
@@ -176,6 +182,78 @@ function SetupRow(props: { label: string; status: string; ready: boolean }) {
     <div className={`setup-row ${props.ready ? "ready" : "pending"}`}>
       <strong>{props.label}</strong>
       <Badge variant={props.ready ? "ready" : "blocked"}>{props.status}</Badge>
+    </div>
+  );
+}
+
+function RepositoryManagement(props: { state: StateResponse | undefined }) {
+  if (!props.state?.repos.length) return <div className="empty">No repositories registered</div>;
+  return (
+    <div className="repo-management">
+      {props.state.repos.map((repo) => (
+        <RepositoryRow
+          key={repo.id}
+          repo={repo}
+          workspaces={props.state?.workspaces.filter((workspace) => workspace.repoId === repo.id) ?? []}
+          sessions={props.state?.sessions ?? []}
+          operations={props.state?.operations ?? []}
+        />
+      ))}
+    </div>
+  );
+}
+
+function RepositoryRow(props: {
+  repo: Repo;
+  workspaces: Workspace[];
+  sessions: AgentSession[];
+  operations: Operation[];
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const activeSessions = props.sessions.filter(
+    (session) =>
+      props.workspaces.some((workspace) => workspace.id === session.workspaceId) &&
+      ["starting", "running", "waiting", "idle"].includes(session.status),
+  ).length;
+  const runningOperations = props.operations.filter(
+    (operation) => operation.repoId === props.repo.id && ["queued", "running"].includes(operation.status),
+  ).length;
+  const remove = useMutation({
+    mutationFn: () =>
+      api(`/api/repos/${props.repo.id}${confirming ? "?force=true" : ""}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      setConfirming(false);
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+    },
+    onError: () => setConfirming(true),
+  });
+  const needsConfirmation = activeSessions > 0 || runningOperations > 0;
+  return (
+    <div className="repo-row">
+      <div>
+        <strong>{props.repo.name}</strong>
+        <span>{props.repo.rootPath}</span>
+        <small>
+          {props.workspaces.length} workspaces - {activeSessions} active sessions - {runningOperations} running
+          operations
+        </small>
+      </div>
+      <div className="repo-remove-controls">
+        {confirming || needsConfirmation ? (
+          <small>Removal preserves local repos/worktrees. Confirm when active work exists.</small>
+        ) : null}
+        <Button
+          type="button"
+          className={confirming ? "danger-action" : undefined}
+          variant={confirming ? "default" : "secondary"}
+          onClick={() => remove.mutate()}
+        >
+          <Trash2 size={14} />
+          {confirming ? "Confirm remove" : "Remove tracking"}
+        </Button>
+      </div>
     </div>
   );
 }

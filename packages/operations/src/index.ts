@@ -6,20 +6,32 @@ import type {
   AgentSession,
   CreateAgentSessionInput,
   CreateWorkspaceInput,
+  HookAction,
+  HookDiagnostic,
   HookOutput,
   Operation,
   Repo,
   Workspace,
+  WorkspaceAppsSummary,
 } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
-import { parseHookOutput, runCommandHook } from "@citadel/hooks";
+import { hookDiagnostic, parseHookOutput, runCommandHook, runCommandHookForDiagnostics } from "@citadel/hooks";
 import { ensureTmuxSession, killTmuxSession } from "@citadel/terminal";
 
 export class OperationService {
   constructor(
     private readonly store: SqliteStore,
-    private readonly config?: Pick<CitadelConfig, "hooks" | "repoDefaults" | "commandPolicy">,
+    private readonly config?: {
+      hooks: HookConfig[];
+      repoDefaults: {
+        setupHookIds: string[];
+        teardownHookIds: string[];
+        appHookIds?: string[];
+        actionHookIds?: string[];
+      };
+      commandPolicy: CitadelConfig["commandPolicy"];
+    },
   ) {}
 
   registerRepo(input: { rootPath: string; name?: string | undefined; worktreeParent?: string | undefined }) {
@@ -248,6 +260,314 @@ export class OperationService {
     return { operationId: operation.id, removed: !input.archiveOnly, archived: Boolean(input.archiveOnly), dirty };
   }
 
+  async removeRepo(input: { repoId: string; force?: boolean; cleanupWorktrees?: boolean }) {
+    const repo = this.store.listRepos().find((candidate) => candidate.id === input.repoId);
+    if (!repo) throw new Error(`Unknown repo: ${input.repoId}`);
+    const workspaces = this.store.listWorkspaces(repo.id);
+    const sessions = this.store
+      .listSessions()
+      .filter((session) => workspaces.some((workspace) => workspace.id === session.workspaceId));
+    const activeSessions = sessions.filter((session) =>
+      ["starting", "running", "waiting", "idle"].includes(session.status),
+    );
+    const runningOperations = this.store
+      .listOperations()
+      .filter((operation) => operation.repoId === repo.id && ["queued", "running"].includes(operation.status));
+    const operation = this.operation(
+      "repo.remove",
+      "running",
+      repo.id,
+      null,
+      10,
+      input.cleanupWorktrees ? "Checking repository cleanup impact" : "Archiving repository metadata",
+    );
+
+    if (!input.force && (activeSessions.length || runningOperations.length)) {
+      this.store.upsertOperation({
+        ...operation,
+        status: "failed",
+        progress: 100,
+        error: `Repository has ${activeSessions.length} active sessions and ${runningOperations.length} running operations. Confirm removal to continue.`,
+        updatedAt: nowIso(),
+      });
+      this.activity(
+        "repo.remove.blocked",
+        "system",
+        `Removal blocked for ${repo.name}; active sessions or operations exist`,
+        repo.id,
+        null,
+        operation.id,
+      );
+      return {
+        operationId: operation.id,
+        removed: false,
+        archivedWorkspaces: 0,
+        cleanupWorktrees: Boolean(input.cleanupWorktrees),
+        activeSessions: activeSessions.length,
+        runningOperations: runningOperations.length,
+      };
+    }
+
+    for (const session of sessions) {
+      if (session.tmuxSessionName && input.cleanupWorktrees) killTmuxSession(session.tmuxSessionName);
+    }
+
+    let cleanedWorktrees = 0;
+    if (input.cleanupWorktrees) {
+      for (const workspace of workspaces) {
+        if (!fs.existsSync(workspace.path)) continue;
+        try {
+          tryRunGit(repo.rootPath, ["worktree", "remove", "--force", workspace.path]);
+          cleanedWorktrees += 1;
+        } catch (error) {
+          if (!input.force) {
+            const message = error instanceof Error ? error.message : "repo_cleanup_failed";
+            this.store.upsertOperation({
+              ...operation,
+              status: "failed",
+              progress: 100,
+              error: message,
+              updatedAt: nowIso(),
+            });
+            this.activity(
+              "repo.remove.blocked",
+              "system",
+              `Cleanup failed while removing ${repo.name}: ${message}`,
+              repo.id,
+              null,
+              operation.id,
+            );
+            return {
+              operationId: operation.id,
+              removed: false,
+              archivedWorkspaces: 0,
+              cleanupWorktrees: true,
+              cleanedWorktrees,
+              activeSessions: activeSessions.length,
+              runningOperations: runningOperations.length,
+            };
+          }
+        }
+      }
+    }
+
+    this.store.archiveRepo(repo.id);
+    this.store.upsertOperation({
+      ...operation,
+      status: "succeeded",
+      progress: 100,
+      message: input.cleanupWorktrees
+        ? `Repository removed and ${cleanedWorktrees} worktrees cleaned up`
+        : "Repository removed from Citadel tracking; worktrees preserved",
+      updatedAt: nowIso(),
+    });
+    this.activity(
+      "repo.removed",
+      "user",
+      input.cleanupWorktrees
+        ? `Removed ${repo.name} and cleaned ${cleanedWorktrees} worktrees`
+        : `Removed ${repo.name} from tracking and preserved worktrees`,
+      repo.id,
+      null,
+      operation.id,
+    );
+    return {
+      operationId: operation.id,
+      removed: true,
+      archivedWorkspaces: workspaces.length,
+      cleanupWorktrees: Boolean(input.cleanupWorktrees),
+      cleanedWorktrees,
+      activeSessions: activeSessions.length,
+      runningOperations: runningOperations.length,
+    };
+  }
+
+  async discoverWorkspaceApps(input: { repo: Repo; workspace: Workspace; providerContext?: unknown }) {
+    const checkedAt = nowIso();
+    const hookIds = this.config?.repoDefaults.appHookIds ?? [];
+    const hooks = this.configuredHooks("workspace.apps", hookIds);
+    const diagnostics: HookDiagnostic[] = [];
+    const outputs: HookOutput[] = [];
+
+    for (const hook of hooks) {
+      const commandHook = {
+        id: hook.id,
+        event: hook.event,
+        command: hook.command,
+        args: hook.args,
+        cwd: hook.cwd || input.workspace.path,
+        timeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
+        blocking: hook.blocking,
+      };
+      try {
+        const result = await runCommandHookForDiagnostics(commandHook, {
+          event: "workspace.apps",
+          repo: input.repo,
+          workspace: input.workspace,
+          providerContext: input.providerContext ?? {},
+          environment: process.env.NODE_ENV ?? "development",
+        });
+        const diagnostic = hookDiagnostic({ hook: commandHook, enabled: true, result, lastRunAt: checkedAt });
+        diagnostics.push(diagnostic);
+        if (diagnostic.structuredPayload) {
+          outputs.push(withActionHookIds(diagnostic.structuredPayload, hook.id));
+          this.activity(
+            "hook.workspace.apps",
+            "hook",
+            `Hook ${hook.id} discovered workspace apps/actions`,
+            input.repo.id,
+            input.workspace.id,
+            null,
+            diagnostic.structuredPayload,
+          );
+        } else if (diagnostic.validationErrors.length) {
+          this.activity(
+            "hook.workspace.apps.invalid",
+            "hook",
+            `Hook ${hook.id} returned invalid app/action output`,
+            input.repo.id,
+            input.workspace.id,
+            null,
+          );
+        }
+      } catch (error) {
+        diagnostics.push(hookDiagnostic({ hook: commandHook, enabled: true, error, lastRunAt: checkedAt }));
+        this.activity(
+          "hook.workspace.apps.failed",
+          "hook",
+          `Hook ${hook.id} failed: ${error instanceof Error ? error.message : "hook_failed"}`,
+          input.repo.id,
+          input.workspace.id,
+          null,
+        );
+      }
+    }
+
+    return {
+      workspaceId: input.workspace.id,
+      status: diagnostics.some((diagnostic) => diagnostic.validationStatus === "invalid") ? "degraded" : "healthy",
+      reason: diagnostics.length ? null : "No workspace application discovery hooks configured",
+      hooks: diagnostics,
+      applications: outputs.flatMap((output) => output.applications ?? []),
+      links: outputs.flatMap((output) => output.links),
+      actions: outputs.flatMap((output) => output.actions),
+      checkedAt,
+    } satisfies WorkspaceAppsSummary;
+  }
+
+  async runWorkspaceAction(input: { repo: Repo; workspace: Workspace; action: HookAction }) {
+    const operation = this.operation(
+      `workspace.action.${input.action.kind ?? "custom"}`,
+      "running",
+      input.repo.id,
+      input.workspace.id,
+      10,
+      `Running ${input.action.label}`,
+    );
+    const hookIds = input.action.hookId ? [input.action.hookId] : (this.config?.repoDefaults.actionHookIds ?? []);
+    const hooks = this.configuredHooks("workspace.action", hookIds);
+    if (!hooks.length) {
+      this.store.upsertOperation({
+        ...operation,
+        status: "failed",
+        progress: 100,
+        error: "No workspace action hooks are configured",
+        updatedAt: nowIso(),
+      });
+      return { operationId: operation.id, status: "failed" as const };
+    }
+    try {
+      for (const hook of hooks) {
+        const result = await runCommandHook(
+          {
+            id: hook.id,
+            event: hook.event,
+            command: hook.command,
+            args: hook.args,
+            cwd: hook.cwd || input.workspace.path,
+            timeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
+            blocking: hook.blocking,
+          },
+          {
+            event: "workspace.action",
+            repo: input.repo,
+            workspace: input.workspace,
+            action: input.action,
+            operationId: operation.id,
+          },
+        );
+        this.activity(
+          "hook.workspace.action",
+          "hook",
+          `${input.action.label} completed via hook ${hook.id}${result.stderr ? " with stderr" : ""}`,
+          input.repo.id,
+          input.workspace.id,
+          operation.id,
+          parseHookOutput(result.stdout),
+        );
+      }
+      this.store.upsertOperation({
+        ...operation,
+        status: "succeeded",
+        progress: 100,
+        message: `${input.action.label} completed`,
+        updatedAt: nowIso(),
+      });
+      return { operationId: operation.id, status: "succeeded" as const };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "workspace_action_failed";
+      this.store.upsertOperation({
+        ...operation,
+        status: "failed",
+        progress: 100,
+        error: message,
+        updatedAt: nowIso(),
+      });
+      this.activity(
+        "hook.workspace.action.failed",
+        "hook",
+        `${input.action.label} failed: ${message}`,
+        input.repo.id,
+        input.workspace.id,
+        operation.id,
+      );
+      return { operationId: operation.id, status: "failed" as const };
+    }
+  }
+
+  hookDiagnostics(repo: Repo, workspace?: Workspace | null) {
+    const events: Array<HookConfig["event"]> = [
+      "workspace.setup",
+      "workspace.teardown",
+      "workspace.apps",
+      "workspace.action",
+    ];
+    return events.flatMap((event) => {
+      const ids =
+        event === "workspace.setup"
+          ? repo.setupHookIds
+          : event === "workspace.teardown"
+            ? repo.teardownHookIds
+            : event === "workspace.apps"
+              ? (this.config?.repoDefaults.appHookIds ?? [])
+              : (this.config?.repoDefaults.actionHookIds ?? []);
+      return this.configuredHooks(event, ids).map((hook) =>
+        hookDiagnostic({
+          hook: {
+            id: hook.id,
+            event: hook.event,
+            command: hook.command,
+            args: hook.args,
+            cwd: hook.cwd || workspace?.path || repo.rootPath,
+            timeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
+            blocking: hook.blocking,
+          },
+          enabled: true,
+        }),
+      );
+    });
+  }
+
   private operation(
     type: string,
     status: Operation["status"],
@@ -373,6 +693,11 @@ export class OperationService {
       }
     }
   }
+
+  private configuredHooks(event: HookConfig["event"], hookIds: string[]) {
+    const hooks = (this.config?.hooks ?? []).filter((hook) => hook.event === event);
+    return hookIds.length ? hooks.filter((hook) => hookIds.includes(hook.id)) : hooks;
+  }
 }
 
 function asObject(payload: unknown) {
@@ -405,4 +730,11 @@ function workspaceIsDirty(workspacePath: string) {
     maxBuffer: 512 * 1024,
   });
   return output.trim().length > 0;
+}
+
+function withActionHookIds(output: HookOutput, hookId: string): HookOutput {
+  return {
+    ...output,
+    actions: output.actions.map((action) => ({ ...action, hookId: action.hookId ?? hookId })),
+  };
 }

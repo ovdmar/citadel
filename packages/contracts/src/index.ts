@@ -147,6 +147,8 @@ export const PullRequestSummarySchema = z.object({
   draft: z.boolean(),
   reviewDecision: z.string().nullable(),
   checks: z.array(CheckSummarySchema),
+  additions: z.number().nullable().default(null),
+  deletions: z.number().nullable().default(null),
 });
 
 export const VersionControlSummarySchema = z.object({
@@ -202,10 +204,39 @@ export const OperationSchema = z.object({
   updatedAt: z.string(),
 });
 
+export const GitStatusSummarySchema = z.object({
+  branch: z.string().nullable().default(null),
+  upstream: z.string().nullable().default(null),
+  ahead: z.number().int().default(0),
+  behind: z.number().int().default(0),
+  modified: z.number().int().default(0),
+  staged: z.number().int().default(0),
+  untracked: z.number().int().default(0),
+  deleted: z.number().int().default(0),
+  renamed: z.number().int().default(0),
+  conflicted: z.number().int().default(0),
+  clean: z.boolean(),
+  lines: z.array(z.string()).max(200).default([]),
+  checkedAt: z.string(),
+});
+
 export const HookLinkSchema = z.object({
   label: z.string().min(1).max(80),
   url: z.string().url(),
   kind: z.enum(["preview", "deploy", "docs", "external"]).default("external"),
+});
+
+export const HookApplicationSchema = z.object({
+  id: IdSchema,
+  label: z.string().min(1).max(80),
+  kind: z.enum(["preview", "deployment", "service", "docs", "external"]).default("service"),
+  url: z.string().url().nullable().default(null),
+  environment: z.string().max(80).nullable().default(null),
+  status: z.enum(["healthy", "degraded", "unavailable", "unknown"]).default("unknown"),
+  version: z.string().max(120).nullable().default(null),
+  commit: z.string().max(80).nullable().default(null),
+  updatedAt: z.string().nullable().default(null),
+  metadata: z.record(z.unknown()).default({}),
 });
 
 export const HookActionSchema = z.object({
@@ -213,15 +244,82 @@ export const HookActionSchema = z.object({
   label: z.string().min(1).max(80),
   description: z.string().max(200).nullable().default(null),
   url: z.string().url().nullable().default(null),
+  kind: z.enum(["redeploy", "restart", "logs", "open", "custom"]).optional(),
+  safety: z.enum(["safe", "confirm", "destructive"]).optional(),
+  executable: z.boolean().optional(),
+  hookId: z.string().nullable().optional(),
+  metadata: z.record(z.unknown()).optional(),
 });
 
 export const HookOutputSchema = z
   .object({
+    applications: z.array(HookApplicationSchema).max(30).optional(),
     links: z.array(HookLinkSchema).max(20).default([]),
     actions: z.array(HookActionSchema).max(20).default([]),
     metadata: z.record(z.unknown()).default({}),
   })
   .default({ links: [], actions: [], metadata: {} });
+
+export const HookDiagnosticSchema = z.object({
+  hookId: z.string(),
+  event: z.string(),
+  command: z.string(),
+  args: z.array(z.string()).default([]),
+  cwd: z.string().nullable().default(null),
+  blocking: z.boolean(),
+  enabled: z.boolean(),
+  validationStatus: z.enum(["valid", "invalid"]),
+  validationErrors: z.array(z.string()).default([]),
+  lastRunAt: z.string().nullable().default(null),
+  durationMs: z.number().int().nullable().default(null),
+  exitStatus: z.number().int().nullable().default(null),
+  outputSummary: z.string().nullable().default(null),
+  structuredPayload: HookOutputSchema.nullable().default(null),
+});
+
+export const WorkspaceReadinessSchema = z.object({
+  state: z.enum([
+    "working",
+    "needs-review",
+    "checks-failing",
+    "conflicts",
+    "dirty",
+    "waiting-provider",
+    "action-failed",
+    "ready-to-merge",
+    "idle",
+    "blocked",
+  ]),
+  tone: z.enum(["neutral", "info", "success", "warning", "danger"]),
+  nextAction: z.string(),
+  reasons: z.array(z.string()).default([]),
+  freshness: z.object({
+    checkedAt: z.string(),
+    stale: z.boolean(),
+    degraded: z.boolean(),
+  }),
+});
+
+export const WorkspaceAppsSummarySchema = z.object({
+  workspaceId: IdSchema,
+  status: ProviderStatusSchema,
+  reason: z.string().nullable().default(null),
+  hooks: z.array(HookDiagnosticSchema).default([]),
+  applications: z.array(HookApplicationSchema).default([]),
+  links: z.array(HookLinkSchema).default([]),
+  actions: z.array(HookActionSchema).default([]),
+  checkedAt: z.string(),
+});
+
+export const WorkspaceCockpitSummarySchema = z.object({
+  workspaceId: IdSchema,
+  readiness: WorkspaceReadinessSchema,
+  git: GitStatusSummarySchema,
+  versionControl: VersionControlSummarySchema,
+  ci: CiProviderSummarySchema,
+  issueTracker: IssueTrackerSummarySchema.nullable().default(null),
+  apps: WorkspaceAppsSummarySchema,
+});
 
 export const ActivityEventSchema = z.object({
   id: IdSchema,
@@ -286,6 +384,8 @@ export const WorkspaceDiffSchema = z.object({
   clean: z.boolean(),
   files: z.array(DiffFileSchema),
   truncated: z.boolean(),
+  addedLines: z.number().int().default(0),
+  deletedLines: z.number().int().default(0),
 });
 
 export type Repo = z.infer<typeof RepoSchema>;
@@ -303,9 +403,15 @@ export type IssueTransition = z.infer<typeof IssueTransitionSchema>;
 export type IssueTrackerSummary = z.infer<typeof IssueTrackerSummarySchema>;
 export type IssueTransitionActionResult = z.infer<typeof IssueTransitionActionResultSchema>;
 export type Operation = z.infer<typeof OperationSchema>;
+export type GitStatusSummary = z.infer<typeof GitStatusSummarySchema>;
+export type HookApplication = z.infer<typeof HookApplicationSchema>;
 export type HookLink = z.infer<typeof HookLinkSchema>;
 export type HookAction = z.infer<typeof HookActionSchema>;
 export type HookOutput = z.infer<typeof HookOutputSchema>;
+export type HookDiagnostic = z.infer<typeof HookDiagnosticSchema>;
+export type WorkspaceReadiness = z.infer<typeof WorkspaceReadinessSchema>;
+export type WorkspaceAppsSummary = z.infer<typeof WorkspaceAppsSummarySchema>;
+export type WorkspaceCockpitSummary = z.infer<typeof WorkspaceCockpitSummarySchema>;
 export type ActivityEvent = z.infer<typeof ActivityEventSchema>;
 export type AppEvent = z.infer<typeof AppEventSchema>;
 export type CreateRepoInput = z.infer<typeof CreateRepoInputSchema>;

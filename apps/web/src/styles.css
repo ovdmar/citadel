@@ -54,6 +54,10 @@ input {
   min-height: 100vh;
 }
 
+.app-root {
+  min-height: 100vh;
+}
+
 .rail {
   background: #171b22;
   color: #f8fafc;
@@ -285,7 +289,6 @@ input {
   gap: 6px;
 }
 
-.workspace-group h2,
 .inspector-section h2 {
   font-size: 12px;
   text-transform: uppercase;
@@ -295,8 +298,8 @@ input {
 
 .workspace-nav-row {
   width: 100%;
-  min-height: 74px;
-  padding: 9px;
+  min-height: 58px;
+  padding: 7px 8px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 8px;
@@ -375,10 +378,13 @@ input {
   background: Canvas;
 }
 
+.stage-header {
+  border-bottom: 1px solid var(--line);
+}
+
 .stage-toolbar {
   min-height: 52px;
   padding: 9px 12px;
-  border-bottom: 1px solid var(--line);
 }
 
 .workspace-identity {
@@ -500,6 +506,10 @@ input {
   gap: 9px;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--line);
+}
+
+.inspector-section.danger {
+  color: var(--color-danger);
 }
 
 .inspector-section.muted {

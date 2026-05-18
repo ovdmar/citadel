@@ -1,7 +1,16 @@
-import type { ActivityEvent, AgentRuntime, AgentSession, ProviderHealth, Repo, Workspace } from "@citadel/contracts";
+import type {
+  ActivityEvent,
+  AgentRuntime,
+  AgentSession,
+  Operation,
+  ProviderHealth,
+  Repo,
+  Workspace,
+  WorkspaceCockpitSummary,
+} from "@citadel/contracts";
+import { Link } from "@tanstack/react-router";
 import {
   Activity,
-  Blocks,
   Boxes,
   Cable,
   ChevronsLeft,
@@ -13,17 +22,28 @@ import {
   PanelRightClose,
   Plus,
   Search,
+  Settings,
   TerminalSquare,
 } from "lucide-react";
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityRow } from "./activity-row.js";
 import { useEventRefresh, useStateQuery } from "./app-state.js";
-import { DiffPanel, ProviderSummary, RepoForm, RuntimeLauncher, TerminalPane, WorkspaceForm } from "./cockpit-tools.js";
+import {
+  AppsActionsPanel,
+  DiffPanel,
+  HookDiagnosticsPanel,
+  RepoForm,
+  RuntimeLauncher,
+  TerminalPane,
+  WorkspaceCockpitPanel,
+  WorkspaceForm,
+  useWorkspaceCockpitSummary,
+} from "./cockpit-tools.js";
 import { Button } from "./components/ui/button.js";
 import { formatLabel } from "./labels.js";
 
-type StageMode = "terminal" | "diff" | "review" | "goal" | "plan";
+type StageMode = "terminal" | "diff" | "review";
 type MobileView = "navigator" | "stage" | "inspector";
 
 export function Cockpit() {
@@ -53,6 +73,7 @@ export function Cockpit() {
   const activeWorkspaceSessions = activeWorkspace
     ? (data?.sessions.filter((session) => session.workspaceId === activeWorkspace.id) ?? [])
     : [];
+  const cockpitSummary = useWorkspaceCockpitSummary(activeWorkspace);
   const activeSessionId = activeWorkspace ? activeSessionByWorkspace[activeWorkspace.id] : "";
   const activeSession =
     activeWorkspaceSessions.find((session) => session.id === activeSessionId) ?? activeWorkspaceSessions[0] ?? null;
@@ -74,9 +95,9 @@ export function Cockpit() {
         event.preventDefault();
         setCommandOpen((open) => !open);
       }
-      if (!editable && event.key.toLowerCase() === "g") setStageMode("goal");
       if (!editable && event.key.toLowerCase() === "t") setStageMode("terminal");
       if (!editable && event.key.toLowerCase() === "d") setStageMode("diff");
+      if (!editable && event.key.toLowerCase() === "r") setStageMode("review");
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -102,6 +123,10 @@ export function Cockpit() {
           <Button type="button" variant="secondary" onClick={() => setCommandOpen(true)}>
             <Command size={15} /> Quick open
           </Button>
+          <Link className="settings-link icon" to="/settings" aria-label="Settings">
+            <Settings size={15} />
+            Settings
+          </Link>
           <HealthStrip providerHealth={data?.providerHealth ?? []} mcpEnabled={Boolean(data?.mcp.enabled)} />
         </div>
       </header>
@@ -129,8 +154,11 @@ export function Cockpit() {
         />
         {data?.workspaces.length ? (
           <WorkspaceNavigator
+            repos={data.repos}
             workspaces={data.workspaces}
             sessions={data.sessions}
+            operations={data.operations}
+            activeSummary={cockpitSummary.data}
             activeWorkspaceId={activeWorkspace?.id ?? ""}
             query={query}
             onSelect={focusWorkspace}
@@ -159,6 +187,7 @@ export function Cockpit() {
               workspace={activeWorkspace}
               sessions={activeWorkspaceSessions}
               activeSession={activeSession}
+              summary={cockpitSummary.data}
               stageMode={stageMode}
               onMode={setStageMode}
               onSession={(sessionId) =>
@@ -170,6 +199,8 @@ export function Cockpit() {
               sessions={data?.sessions ?? []}
               activeSession={activeSession}
               stageMode={stageMode}
+              summary={cockpitSummary.data}
+              summaryLoading={cockpitSummary.isLoading}
             />
           </>
         ) : (
@@ -186,7 +217,10 @@ export function Cockpit() {
             sessions={activeWorkspaceSessions}
             runtimes={data?.runtimes ?? []}
             providerHealth={data?.providerHealth ?? []}
+            operations={data?.operations ?? []}
             activity={data?.activity ?? []}
+            summary={cockpitSummary.data}
+            summaryLoading={cockpitSummary.isLoading}
           />
         ) : (
           <CreateWorkspaceStart repo={selectedRepo ?? null} compact />
@@ -263,8 +297,11 @@ function NavigatorHeader(props: {
 }
 
 function WorkspaceNavigator(props: {
+  repos: Repo[];
   workspaces: Workspace[];
   sessions: AgentSession[];
+  operations: Operation[];
+  activeSummary: WorkspaceCockpitSummary | undefined;
   activeWorkspaceId: string;
   query: string;
   onSelect: (workspace: Workspace) => void;
@@ -274,28 +311,51 @@ function WorkspaceNavigator(props: {
       `${workspace.name} ${workspace.branch} ${workspace.issueKey ?? ""} ${workspace.issueTitle ?? ""}`.toLowerCase();
     return value.includes(props.query.toLowerCase());
   });
-  const groups = ["in-progress", "blocked", "backlog", "done"].map((section) => ({
-    section,
-    workspaces: filtered.filter((workspace) => bucketForWorkspace(workspace) === section),
-  }));
+  const repoGroups = props.repos
+    .map((repo) => ({
+      repo,
+      workspaces: filtered.filter((workspace) => workspace.repoId === repo.id),
+    }))
+    .filter((group) => group.workspaces.length);
   return (
     <div className="workspace-groups">
-      {groups.map((group) =>
-        group.workspaces.length ? (
-          <section key={group.section} className="workspace-group">
-            <h2>{formatLabel(group.section)}</h2>
-            {group.workspaces.map((workspace) => (
-              <WorkspaceNavRow
-                key={workspace.id}
-                workspace={workspace}
-                sessions={props.sessions.filter((session) => session.workspaceId === workspace.id)}
-                active={workspace.id === props.activeWorkspaceId}
-                onSelect={() => props.onSelect(workspace)}
-              />
-            ))}
-          </section>
-        ) : null,
-      )}
+      {repoGroups.map((repoGroup) => (
+        <section key={repoGroup.repo.id} className="workspace-repo-group">
+          <h2>{repoGroup.repo.name}</h2>
+          {["blocked", "needs-review", "working", "dirty", "idle", "done"].map((section) => {
+            const sectionWorkspaces = repoGroup.workspaces.filter(
+              (workspace) =>
+                readinessForWorkspace(workspace, {
+                  sessions: props.sessions.filter((session) => session.workspaceId === workspace.id),
+                  operations: props.operations.filter((operation) => operation.workspaceId === workspace.id),
+                  summary: workspace.id === props.activeSummary?.workspaceId ? props.activeSummary : undefined,
+                }).section === section,
+            );
+            return sectionWorkspaces.length ? (
+              <div key={section} className="workspace-group">
+                <h3>{formatLabel(section)}</h3>
+                {sectionWorkspaces.map((workspace) => {
+                  const attention = readinessForWorkspace(workspace, {
+                    sessions: props.sessions.filter((session) => session.workspaceId === workspace.id),
+                    operations: props.operations.filter((operation) => operation.workspaceId === workspace.id),
+                    summary: workspace.id === props.activeSummary?.workspaceId ? props.activeSummary : undefined,
+                  });
+                  return (
+                    <WorkspaceNavRow
+                      key={workspace.id}
+                      workspace={workspace}
+                      sessions={props.sessions.filter((session) => session.workspaceId === workspace.id)}
+                      attention={attention}
+                      active={workspace.id === props.activeWorkspaceId}
+                      onSelect={() => props.onSelect(workspace)}
+                    />
+                  );
+                })}
+              </div>
+            ) : null;
+          })}
+        </section>
+      ))}
       {!filtered.length ? <div className="empty compact">No matching workspaces</div> : null}
     </div>
   );
@@ -304,22 +364,25 @@ function WorkspaceNavigator(props: {
 function WorkspaceNavRow(props: {
   workspace: Workspace;
   sessions: AgentSession[];
+  attention: WorkspaceAttention;
   active: boolean;
   onSelect: () => void;
 }) {
   return (
     <button type="button" className={`workspace-nav-row ${props.active ? "active" : ""}`} onClick={props.onSelect}>
-      <span className={`status-dot ${statusTone(props.workspace)}`} />
+      <span className={`status-dot ${props.attention.tone}`} />
       <span className="workspace-row-main">
         <strong>{props.workspace.name}</strong>
-        <small>{props.workspace.branch}</small>
+        <small>
+          {props.attention.label} - {props.attention.nextAction}
+        </small>
       </span>
       <span className="workspace-row-badges">
         {props.workspace.pinned ? <em>Pin</em> : null}
         {props.workspace.issueKey ? <em>{props.workspace.issueKey}</em> : null}
         {props.workspace.prUrl ? <em>PR</em> : null}
         {props.workspace.dirty ? <em>Dirty</em> : null}
-        <em>{props.sessions.length} sessions</em>
+        <em>{props.sessions.filter((session) => ["running", "waiting"].includes(session.status)).length} active</em>
       </span>
     </button>
   );
@@ -329,45 +392,50 @@ function StageToolbar(props: {
   workspace: Workspace;
   sessions: AgentSession[];
   activeSession: AgentSession | null;
+  summary: WorkspaceCockpitSummary | undefined;
   stageMode: StageMode;
   onMode: (mode: StageMode) => void;
   onSession: (sessionId: string) => void;
 }) {
+  const readiness = props.summary?.readiness;
   return (
-    <div className="stage-toolbar">
-      <div className="workspace-identity">
-        <GitBranch size={16} />
-        <span>{props.workspace.branch}</span>
-        <strong>{formatLabel(props.workspace.lifecycle)}</strong>
+    <div className="stage-header">
+      <div className="stage-toolbar">
+        <div className="workspace-identity">
+          <GitBranch size={16} />
+          <span>{props.workspace.branch}</span>
+          <strong>{readiness ? formatLabel(readiness.state) : formatLabel(props.workspace.lifecycle)}</strong>
+        </div>
+        <div className="stage-tabs" role="tablist" aria-label="Agent stage modes">
+          {(["terminal", "diff", "review"] as StageMode[]).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              className={props.stageMode === mode ? "active" : ""}
+              onClick={() => props.onMode(mode)}
+            >
+              {formatLabel(mode)}
+            </button>
+          ))}
+        </div>
+        <select
+          className="session-select"
+          value={props.activeSession?.id ?? ""}
+          onChange={(event) => props.onSession(event.target.value)}
+          aria-label="Active session"
+        >
+          {props.sessions.length ? (
+            props.sessions.map((session) => (
+              <option key={session.id} value={session.id}>
+                {session.displayName} - {formatLabel(session.status)}
+              </option>
+            ))
+          ) : (
+            <option value="">No sessions</option>
+          )}
+        </select>
       </div>
-      <div className="stage-tabs" role="tablist" aria-label="Agent stage modes">
-        {(["terminal", "diff", "review", "goal", "plan"] as StageMode[]).map((mode) => (
-          <button
-            key={mode}
-            type="button"
-            className={props.stageMode === mode ? "active" : ""}
-            onClick={() => props.onMode(mode)}
-          >
-            {formatLabel(mode)}
-          </button>
-        ))}
-      </div>
-      <select
-        className="session-select"
-        value={props.activeSession?.id ?? ""}
-        onChange={(event) => props.onSession(event.target.value)}
-        aria-label="Active session"
-      >
-        {props.sessions.length ? (
-          props.sessions.map((session) => (
-            <option key={session.id} value={session.id}>
-              {session.displayName}
-            </option>
-          ))
-        ) : (
-          <option value="">No sessions</option>
-        )}
-      </select>
+      <ReadinessStrip workspace={props.workspace} sessions={props.sessions} summary={props.summary} />
     </div>
   );
 }
@@ -377,6 +445,8 @@ function StageBody(props: {
   sessions: AgentSession[];
   activeSession: AgentSession | null;
   stageMode: StageMode;
+  summary: WorkspaceCockpitSummary | undefined;
+  summaryLoading: boolean | undefined;
 }) {
   if (props.stageMode === "terminal") {
     const workspaceSessions = props.sessions.filter((session) => session.workspaceId === props.workspace.id);
@@ -402,31 +472,7 @@ function StageBody(props: {
     );
   }
   if (props.stageMode === "diff") return <DiffPanel workspace={props.workspace} />;
-  if (props.stageMode === "review") {
-    return (
-      <StagePlaceholder
-        icon={<Blocks />}
-        title="Review workspace"
-        body="Stacked PR review lanes can attach here in v3."
-      />
-    );
-  }
-  if (props.stageMode === "goal") {
-    return (
-      <StagePlaceholder
-        icon={<Command />}
-        title={props.workspace.issueTitle || props.workspace.issueKey || "Workspace goal"}
-        body="Managed goals and transcript intelligence will attach to this primary workspace context."
-      />
-    );
-  }
-  return (
-    <StagePlaceholder
-      icon={<Activity />}
-      title="Plan"
-      body="Agent plan and next-step state stays centered on the active workspace."
-    />
-  );
+  return <WorkspaceCockpitPanel summary={props.summary} loading={props.summaryLoading} />;
 }
 
 function WorkspaceInspector(props: {
@@ -435,22 +481,47 @@ function WorkspaceInspector(props: {
   sessions: AgentSession[];
   runtimes: AgentRuntime[];
   providerHealth: ProviderHealth[];
+  operations: Operation[];
   activity: ActivityEvent[];
+  summary: WorkspaceCockpitSummary | undefined;
+  summaryLoading: boolean | undefined;
 }) {
   const workspaceActivity = props.activity.filter((event) => event.workspaceId === props.workspace.id).slice(0, 8);
+  const failedOperation = props.operations.find(
+    (operation) => operation.workspaceId === props.workspace.id && operation.status === "failed",
+  );
   return (
     <div className="inspector-stack">
       <section className="inspector-section">
         <h2>Next action</h2>
-        <p>{nextAction(props.workspace, props.sessions)}</p>
+        <p>{props.summary?.readiness.nextAction ?? nextAction(props.workspace, props.sessions)}</p>
+        {props.summary?.readiness.reasons.length ? (
+          <ul className="reason-list">
+            {props.summary.readiness.reasons.slice(0, 4).map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        ) : null}
         <div className="inspector-actions">
           <RuntimeLauncher workspace={props.workspace} runtimes={props.runtimes} />
         </div>
       </section>
+      {failedOperation ? (
+        <section className="inspector-section danger">
+          <h2>Failed operation</h2>
+          <p>{failedOperation.error || failedOperation.message || failedOperation.type}</p>
+        </section>
+      ) : null}
       {props.repo ? (
         <section className="inspector-section">
-          <h2>Provider context</h2>
-          <ProviderSummary repo={props.repo} workspace={props.workspace} providerHealth={props.providerHealth} />
+          <h2>Applications</h2>
+          <AppsActionsPanel apps={props.summary?.apps} />
+        </section>
+      ) : null}
+      {props.repo ? (
+        <section className="inspector-section">
+          <h2>Hook diagnostics</h2>
+          <HookDiagnosticsPanel repo={props.repo} workspace={props.workspace} />
         </section>
       ) : null}
       <section className="inspector-section">
@@ -459,6 +530,10 @@ function WorkspaceInspector(props: {
         <KeyValue label="Base" value={props.workspace.baseBranch} />
         <KeyValue label="Source" value={formatLabel(props.workspace.source)} />
         <KeyValue label="Sessions" value={String(props.sessions.length)} />
+        <KeyValue
+          label="Providers"
+          value={`${props.providerHealth.filter((provider) => provider.status === "healthy").length}/${props.providerHealth.length}`}
+        />
       </section>
       <section className="inspector-section">
         <h2>Activity</h2>
@@ -467,13 +542,6 @@ function WorkspaceInspector(props: {
         ) : (
           <div className="empty compact">No workspace activity yet</div>
         )}
-      </section>
-      <section className="inspector-section muted">
-        <h2>V3 placeholders</h2>
-        <p>
-          Stacked PRs, transcript intelligence, managed goals, notifications, and MCP control have reserved inspector
-          slots.
-        </p>
       </section>
     </div>
   );
@@ -528,7 +596,7 @@ function CommandPalette(props: {
               <em>{props.sessions.filter((session) => session.workspaceId === workspace.id).length} sessions</em>
             </button>
           ))}
-          {(["terminal", "diff", "review", "goal", "plan"] as StageMode[]).map((mode) => (
+          {(["terminal", "diff", "review"] as StageMode[]).map((mode) => (
             <button key={mode} type="button" onClick={() => props.onMode(mode)}>
               <strong>Open {formatLabel(mode)}</strong>
               <span>Stage focus</span>
@@ -597,6 +665,43 @@ function KeyValue(props: { label: string; value: string }) {
   );
 }
 
+function ReadinessStrip(props: {
+  workspace: Workspace;
+  sessions: AgentSession[];
+  summary: WorkspaceCockpitSummary | undefined;
+}) {
+  const attention = readinessForWorkspace(props.workspace, {
+    sessions: props.sessions,
+    operations: [],
+    summary: props.summary,
+  });
+  const reasons = props.summary?.readiness.reasons ?? [];
+  return (
+    <div className={`readiness-strip ${attention.tone}`}>
+      <div>
+        <strong>{attention.label}</strong>
+        <span>{attention.nextAction}</span>
+      </div>
+      <div className="readiness-metrics">
+        {props.summary ? (
+          <>
+            <span>{props.summary.git.clean ? "clean" : "dirty"}</span>
+            <span>
+              {props.summary.versionControl.pullRequest
+                ? `PR #${props.summary.versionControl.pullRequest.number}`
+                : "no PR"}
+            </span>
+            <span>{props.summary.apps.actions.length} actions</span>
+          </>
+        ) : (
+          <span>{props.sessions.length} sessions</span>
+        )}
+      </div>
+      {reasons.length ? <small>{reasons.slice(0, 2).join(" | ")}</small> : null}
+    </div>
+  );
+}
+
 function useLocalStorage(key: string, fallback: string) {
   const [value, setValue] = useState(() => localStorage.getItem(key) || fallback);
   useEffect(() => localStorage.setItem(key, value), [key, value]);
@@ -615,17 +720,45 @@ function useLocalStorageRecord(key: string) {
   return [value, setValue] as const;
 }
 
-function bucketForWorkspace(workspace: Workspace) {
-  if (workspace.lifecycle === "failed" || workspace.dirty) return "blocked";
-  if (workspace.lifecycle === "archived" || workspace.lifecycle === "removed") return "done";
-  if (workspace.lifecycle === "ready" || workspace.lifecycle === "creating") return "in-progress";
-  return workspace.section || "backlog";
+type WorkspaceAttention = {
+  section: string;
+  label: string;
+  nextAction: string;
+  tone: "neutral" | "info" | "success" | "warning" | "danger";
+};
+
+function readinessForWorkspace(
+  workspace: Workspace,
+  input: { sessions: AgentSession[]; operations: Operation[]; summary: WorkspaceCockpitSummary | undefined },
+): WorkspaceAttention {
+  if (input.summary) {
+    return {
+      section: readinessSection(input.summary.readiness.state),
+      label: formatLabel(input.summary.readiness.state),
+      nextAction: input.summary.readiness.nextAction,
+      tone: input.summary.readiness.tone,
+    };
+  }
+  const failedOperation = input.operations.some((operation) => operation.status === "failed");
+  const activeSession = input.sessions.some((session) => ["running", "waiting"].includes(session.status));
+  const failedSession = input.sessions.some((session) => ["failed", "orphaned"].includes(session.status));
+  if (workspace.lifecycle === "failed" || failedOperation || failedSession) {
+    return { section: "blocked", label: "Blocked", nextAction: "Inspect failure output", tone: "danger" };
+  }
+  if (workspace.lifecycle === "archived" || workspace.lifecycle === "removed") {
+    return { section: "done", label: "Done", nextAction: "Archived", tone: "neutral" };
+  }
+  if (workspace.dirty) return { section: "dirty", label: "Dirty", nextAction: "Review diff", tone: "warning" };
+  if (activeSession) return { section: "working", label: "Working", nextAction: "Continue session", tone: "info" };
+  return { section: "idle", label: "Idle", nextAction: "Start runtime", tone: "neutral" };
 }
 
-function statusTone(workspace: Workspace) {
-  if (workspace.lifecycle === "failed" || workspace.dirty) return "warn";
-  if (workspace.lifecycle === "ready") return "ready";
-  return "neutral";
+function readinessSection(state: string) {
+  if (["blocked", "checks-failing", "conflicts", "action-failed", "waiting-provider"].includes(state)) return "blocked";
+  if (["needs-review", "ready-to-merge"].includes(state)) return "needs-review";
+  if (["dirty"].includes(state)) return "dirty";
+  if (state === "working") return "working";
+  return "idle";
 }
 
 function nextAction(workspace: Workspace, sessions: AgentSession[]) {

@@ -8,11 +8,13 @@ import WebSocket from "ws";
 test("ADE shell renders workspace-first regions", async ({ page }, testInfo) => {
   await page.goto("/");
   await expect(page.getByText("Agent Development Environment")).toBeVisible();
-  await expect(page.getByText("Workspaces").first()).toBeVisible();
   await expect(page.getByTestId("terminal-stage").or(page.getByText("Start with a workspace"))).toBeVisible();
   if (testInfo.project.name === "mobile") {
     await expect(page.getByLabel("Workspace layout").getByRole("button", { name: "Inspector" })).toBeVisible();
+    await page.getByLabel("Workspace layout").getByRole("button", { name: "Navigator" }).click();
+    await expect(page.getByText("Workspaces").first()).toBeVisible();
   } else {
+    await expect(page.getByText("Workspaces").first()).toBeVisible();
     await expect(page.locator(".workspace-inspector")).toBeVisible();
   }
   await expect(page.getByRole("button", { name: "Quick open" })).toBeVisible();
@@ -108,8 +110,37 @@ test("settings renders runtime and MCP visibility", async ({ page }, testInfo) =
   await expect(page.getByRole("heading", { name: "Providers" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Runtimes" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "MCP" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Repositories" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Save config" }).or(page.getByText("Loading config"))).toBeVisible();
   await page.screenshot({ path: `docs/campaigns/screenshot-${testInfo.project.name}-settings.png`, fullPage: true });
+});
+
+test("desktop settings removes repository tracking with active-work confirmation", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "repo removal UI coverage runs once against the shared daemon");
+  const fixture = createGitFixture();
+  let workspaceId: string | null = null;
+  const repoName = `Remove ${Date.now().toString(36)}`;
+  try {
+    const repo = await registerRepo(request, fixture, repoName);
+    workspaceId = (await createWorkspace(request, repo.id, `remove-${Date.now().toString(36)}`)).workspaceId;
+    await waitForWorkspace(request, workspaceId, "ready");
+    await startSession(request, workspaceId, "Remove Shell");
+
+    await page.goto("/settings");
+    const repoRow = page.locator(".repo-row").filter({ hasText: repoName });
+    await expect(repoRow).toContainText("1 active sessions");
+    await repoRow.getByRole("button", { name: "Remove tracking" }).click();
+    await expect(repoRow.getByRole("button", { name: "Confirm remove" })).toBeVisible();
+    await repoRow.getByRole("button", { name: "Confirm remove" }).click();
+    await expect(repoRow).toBeHidden();
+    workspaceId = null;
+  } finally {
+    if (workspaceId) await request.delete(`http://127.0.0.1:4337/api/workspaces/${workspaceId}?archiveOnly=true`);
+    fs.rmSync(fixture.dir, { recursive: true, force: true });
+  }
 });
 
 test("desktop smoke creates a workspace and reaches its terminal", async ({ request }, testInfo) => {
@@ -152,11 +183,11 @@ async function waitForWorkspace(request: APIRequestContext, workspaceId: string,
   throw new Error(`Timed out waiting for workspace ${workspaceId} to become ${lifecycle}`);
 }
 
-async function registerRepo(request: APIRequestContext, fixture: ReturnType<typeof createGitFixture>) {
+async function registerRepo(request: APIRequestContext, fixture: ReturnType<typeof createGitFixture>, name?: string) {
   const repoResponse = await request.post("http://127.0.0.1:4337/api/repos", {
     data: {
       rootPath: fixture.repoPath,
-      name: `E2E ${Date.now().toString(36)}`,
+      name: name ?? `E2E ${Date.now().toString(36)}`,
       worktreeParent: path.join(fixture.dir, "worktrees"),
     },
   });

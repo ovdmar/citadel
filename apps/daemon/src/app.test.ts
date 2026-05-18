@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import type http from "node:http";
 import os from "node:os";
@@ -344,6 +345,188 @@ describe("createDaemonApp", () => {
       await closeServer(server);
     }
   });
+
+  it("serves workspace cockpit summaries with readiness, git status, apps, and hook diagnostics", async () => {
+    const fixture = createFixture();
+    const git = createGitRepo(fixture.config.dataDir);
+    const now = new Date().toISOString();
+    fixture.config.hooks = [
+      {
+        id: "apps",
+        kind: "command",
+        event: "workspace.apps",
+        command: "node",
+        args: [
+          "-e",
+          "process.stdout.write(JSON.stringify({applications:[{id:'preview',label:'Preview',kind:'preview',url:'https://example.test/preview',status:'healthy'}],links:[{label:'Docs',url:'https://example.test/docs',kind:'docs'}],actions:[{id:'redeploy',label:'Redeploy',kind:'redeploy',executable:true}]}))",
+        ],
+        blocking: false,
+      },
+    ];
+    fixture.config.repoDefaults.appHookIds = ["apps"];
+    fixture.store.insertRepo({
+      id: "repo_cockpit",
+      name: "Cockpit Repo",
+      rootPath: git.repoPath,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: ["github-gh"],
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fixture.store.insertWorkspace({
+      id: "ws_cockpit",
+      repoId: "repo_cockpit",
+      name: "Cockpit Workspace",
+      path: git.repoPath,
+      branch: "feature",
+      baseBranch: "main",
+      source: "scratch",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: true,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fs.writeFileSync(path.join(git.repoPath, "dirty.txt"), "dirty\n");
+    const { server } = createDaemonApp({
+      ...fixture,
+      providers: {
+        collectGitHubVersionControlSummary: async () => ({
+          providerId: "github-gh",
+          status: "healthy",
+          reason: null,
+          defaultBranch: "main",
+          currentBranch: "feature",
+          remotes: ["origin"],
+          pullRequest: {
+            number: 42,
+            title: "Cockpit PR",
+            url: "https://example.test/pr/42",
+            state: "OPEN",
+            draft: false,
+            reviewDecision: "REVIEW_REQUIRED",
+            additions: 9,
+            deletions: 2,
+            checks: [{ name: "unit", status: "COMPLETED", conclusion: "SUCCESS", url: "https://example.test/check" }],
+          },
+          checkedAt: now,
+        }),
+        collectGitHubCiRuns: async () => ({
+          providerId: "github-gh",
+          status: "healthy",
+          reason: null,
+          runs: [],
+          checkedAt: now,
+        }),
+      },
+    });
+    const baseUrl = await listen(server);
+    try {
+      const summary = await getJson<{
+        readiness: { state: string; nextAction: string };
+        git: { clean: boolean; untracked: number };
+        versionControl: { pullRequest: { number: number; additions: number; deletions: number } };
+        apps: { applications: unknown[]; actions: Array<{ id: string; executable: boolean }> };
+      }>(`${baseUrl}/api/workspaces/ws_cockpit/cockpit-summary`);
+
+      expect(summary.readiness.state).toBe("dirty");
+      expect(summary.git.clean).toBe(false);
+      expect(summary.git.untracked).toBe(1);
+      expect(summary.versionControl.pullRequest).toMatchObject({ number: 42, additions: 9, deletions: 2 });
+      expect(summary.apps.applications).toHaveLength(1);
+      expect(summary.apps.actions[0]).toMatchObject({ id: "redeploy", executable: true });
+
+      const diagnostics = await getJson<{ diagnostics: Array<{ hookId: string }>; sample: unknown }>(
+        `${baseUrl}/api/repos/repo_cockpit/hook-diagnostics`,
+      );
+      expect(diagnostics.diagnostics).toEqual([expect.objectContaining({ hookId: "apps" })]);
+      expect(diagnostics.sample).toMatchObject({ applications: expect.any(Array), actions: expect.any(Array) });
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("removes repositories through a tracked operation with explicit active-session confirmation", async () => {
+    const fixture = createFixture();
+    const git = createGitRepo(fixture.config.dataDir);
+    const now = new Date().toISOString();
+    fixture.store.insertRepo({
+      id: "repo_remove",
+      name: "Remove Repo",
+      rootPath: git.repoPath,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: ["github-gh"],
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fixture.store.insertWorkspace({
+      id: "ws_remove",
+      repoId: "repo_remove",
+      name: "Remove Workspace",
+      path: git.repoPath,
+      branch: "main",
+      baseBranch: "main",
+      source: "scratch",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fixture.store.insertSession({
+      id: "sess_remove",
+      workspaceId: "ws_remove",
+      runtimeId: "shell",
+      displayName: "Shell",
+      status: "running",
+      transport: "disconnected",
+      tmuxSessionName: null,
+      tmuxSessionId: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const blocked = await fetch(`${baseUrl}/api/repos/repo_remove`, { method: "DELETE" });
+      expect(blocked.status).toBe(409);
+      expect(await blocked.json()).toMatchObject({ removed: false, activeSessions: 1 });
+      expect((await getJson<{ repos: unknown[] }>(`${baseUrl}/api/repos`)).repos).toHaveLength(1);
+
+      const removed = await fetch(`${baseUrl}/api/repos/repo_remove?force=true`, { method: "DELETE" });
+      expect(removed.status).toBe(202);
+      expect(await removed.json()).toMatchObject({ removed: true, archivedWorkspaces: 1, cleanupWorktrees: false });
+      expect((await getJson<{ repos: unknown[] }>(`${baseUrl}/api/repos`)).repos).toEqual([]);
+      expect((await getJson<{ workspaces: unknown[] }>(`${baseUrl}/api/workspaces`)).workspaces).toEqual([]);
+      expect(
+        (await getJson<{ activity: Array<{ type: string }> }>(`${baseUrl}/api/activity`)).activity[0],
+      ).toMatchObject({
+        type: "repo.removed",
+      });
+    } finally {
+      await closeServer(server);
+    }
+  });
 });
 
 function createFixture() {
@@ -358,6 +541,19 @@ function createFixture() {
   const store = new SqliteStore(config.databasePath);
   store.migrate();
   return { config, configPath, store };
+}
+
+function createGitRepo(dir: string) {
+  const repoPath = path.join(dir, `repo-${Date.now().toString(36)}`);
+  fs.mkdirSync(repoPath, { recursive: true });
+  execFileSync("git", ["init"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "test@example.test"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Citadel Test"], { cwd: repoPath, stdio: "pipe" });
+  fs.writeFileSync(path.join(repoPath, "README.md"), "# fixture\n");
+  execFileSync("git", ["add", "README.md"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["branch", "-M", "main"], { cwd: repoPath, stdio: "pipe" });
+  return { repoPath };
 }
 
 function listen(server: http.Server) {

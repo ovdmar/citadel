@@ -1,4 +1,12 @@
-import type { ActivityEvent, AgentRuntime, AgentSession, ProviderHealth, Repo, Workspace } from "@citadel/contracts";
+import type {
+  ActivityEvent,
+  AgentRuntime,
+  AgentSession,
+  Operation,
+  ProviderHealth,
+  Repo,
+  Workspace,
+} from "@citadel/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { api, queryClient } from "./api.js";
@@ -7,7 +15,7 @@ export type StateResponse = {
   repos: Repo[];
   workspaces: Workspace[];
   sessions: AgentSession[];
-  operations: unknown[];
+  operations: Operation[];
   activity: ActivityEvent[];
   providerHealth: ProviderHealth[];
   runtimes: AgentRuntime[];
@@ -26,6 +34,7 @@ export function useEventRefresh() {
   useEffect(() => {
     const events = new EventSource("/events");
     events.onmessage = () => queryClient.invalidateQueries({ queryKey: ["state"] });
+    events.addEventListener("repo.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("workspace.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("agent.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     return () => events.close();

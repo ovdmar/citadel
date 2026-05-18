@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +7,10 @@ import WebSocket from "ws";
 
 const apiBaseUrl = process.env.CITADEL_BASE_URL || "http://127.0.0.1:4337";
 const webBaseUrl = process.env.CITADEL_WEB_URL || "http://127.0.0.1:5173";
+const managedProcesses: ChildProcess[] = [];
+const managedDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-perf-runtime-"));
+
+await ensureLocalServices();
 
 const state = await time("api_state", 2000, async () => {
   const response = await fetch(`${apiBaseUrl}/api/state`);
@@ -65,7 +69,55 @@ try {
   for (const workspaceId of workspaceIds) {
     await fetch(`${apiBaseUrl}/api/workspaces/${workspaceId}?archiveOnly=true`, { method: "DELETE" });
   }
+  for (const child of managedProcesses) child.kill("SIGTERM");
+  fs.rmSync(managedDataDir, { recursive: true, force: true });
   fs.rmSync(fixture.dir, { recursive: true, force: true });
+}
+
+async function ensureLocalServices() {
+  const externalApi = Boolean(process.env.CITADEL_BASE_URL);
+  const externalWeb = Boolean(process.env.CITADEL_WEB_URL);
+  if (!externalApi && !(await canFetch(`${apiBaseUrl}/api/health`))) {
+    managedProcesses.push(
+      spawn("pnpm", ["--filter", "@citadel/daemon", "dev"], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          CITADEL_DATA_DIR: managedDataDir,
+          CITADEL_CONFIG: path.join(managedDataDir, "citadel.config.json"),
+        },
+        stdio: "ignore",
+      }),
+    );
+  }
+  if (!externalWeb && !(await canFetch(webBaseUrl))) {
+    managedProcesses.push(
+      spawn("pnpm", ["--filter", "@citadel/web", "dev", "--", "--host", "127.0.0.1", "--port", "5173"], {
+        cwd: process.cwd(),
+        stdio: "ignore",
+      }),
+    );
+  }
+  await waitForHttp(`${apiBaseUrl}/api/health`, 15_000);
+  await waitForHttp(webBaseUrl, 15_000);
+}
+
+async function canFetch(url: string) {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(750) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForHttp(url: string, timeoutMs: number) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (await canFetch(url)) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Timed out waiting for ${url}`);
 }
 
 async function time<T>(name: string, maxMs: number, fn: () => Promise<T>) {

@@ -2,18 +2,22 @@ import type {
   AgentRuntime,
   AgentSession,
   CiProviderSummary,
+  HookAction,
+  HookDiagnostic,
   IssueTrackerSummary,
   IssueTransitionActionResult,
   ProviderHealth,
   Repo,
   VersionControlSummary,
   Workspace,
+  WorkspaceAppsSummary,
+  WorkspaceCockpitSummary,
   WorkspaceDiff,
 } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
-import { Archive, Play, RefreshCcw } from "lucide-react";
+import { Archive, ExternalLink, Play, RefreshCcw, Rocket, ShieldCheck } from "lucide-react";
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
@@ -104,6 +108,180 @@ export function ProviderSummary(props: { repo: Repo; workspace: Workspace | null
       ) : null}
       {!vc && !issue && !ci ? (
         <div className="empty compact">Provider details are unavailable for this workspace</div>
+      ) : null}
+    </div>
+  );
+}
+
+export function useWorkspaceCockpitSummary(workspace: Workspace | null) {
+  return useQuery({
+    queryKey: ["workspace-cockpit", workspace?.id],
+    enabled: Boolean(workspace),
+    refetchInterval: 10_000,
+    queryFn: () => api<WorkspaceCockpitSummary>(`/api/workspaces/${workspace?.id}/cockpit-summary`),
+  });
+}
+
+export function WorkspaceCockpitPanel(props: {
+  summary: WorkspaceCockpitSummary | undefined;
+  loading: boolean | undefined;
+}) {
+  if (props.loading) return <Empty text="Loading cockpit context" />;
+  const summary = props.summary;
+  if (!summary) return <Empty text="Cockpit context is unavailable" />;
+  const pr = summary.versionControl.pullRequest;
+  const checks = pr?.checks ?? [];
+  return (
+    <div className="cockpit-detail-stack">
+      <section className="detail-panel">
+        <div className="detail-title">
+          <ShieldCheck size={16} />
+          <h2>Review</h2>
+        </div>
+        {pr ? (
+          <>
+            <div className="pr-summary-line">
+              <a href={pr.url} target="_blank" rel="noreferrer">
+                PR #{pr.number}: {pr.title}
+              </a>
+              <span>{formatLabel(pr.state)}</span>
+              {pr.draft ? <span>Draft</span> : null}
+              {pr.reviewDecision ? <span>{formatLabel(pr.reviewDecision)}</span> : null}
+              <span className="diff-add">+{pr.additions ?? 0}</span>
+              <span className="diff-del">-{pr.deletions ?? 0}</span>
+            </div>
+            <div className="check-list">
+              {checks.length ? (
+                checks.map((check) => (
+                  <a
+                    key={`${check.name}-${check.status}-${check.conclusion ?? ""}`}
+                    className={`check-row ${check.conclusion || check.status}`}
+                    href={check.url ?? undefined}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <strong>{check.name}</strong>
+                    <span>{formatLabel(check.conclusion ?? check.status)}</span>
+                  </a>
+                ))
+              ) : (
+                <div className="empty compact">No check data reported by the PR provider</div>
+              )}
+            </div>
+          </>
+        ) : (
+          <div className="empty compact">No active PR for this workspace branch</div>
+        )}
+      </section>
+      <GitStatusCard summary={summary} />
+      <AppsActionsPanel apps={summary.apps} />
+    </div>
+  );
+}
+
+export function AppsActionsPanel(props: { apps: WorkspaceAppsSummary | undefined }) {
+  const apps = props.apps;
+  const runAction = useMutation({
+    mutationFn: (action: HookAction) =>
+      api(`/api/workspaces/${apps?.workspaceId}/actions`, {
+        method: "POST",
+        body: JSON.stringify(action),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      queryClient.invalidateQueries({ queryKey: ["workspace-cockpit", apps?.workspaceId] });
+    },
+  });
+  if (!apps) return <Empty text="Workspace apps unavailable" />;
+  return (
+    <section className="detail-panel apps-panel">
+      <div className="detail-title">
+        <Rocket size={16} />
+        <h2>Apps and actions</h2>
+        <span>{formatLabel(apps.status)}</span>
+      </div>
+      {apps.applications.length ? (
+        <div className="app-list">
+          {apps.applications.map((app) => (
+            <a
+              key={app.id}
+              className={`app-row ${app.status}`}
+              href={app.url ?? undefined}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <strong>{app.label}</strong>
+              <span>{app.environment ?? formatLabel(app.kind)}</span>
+              <em>{formatLabel(app.status)}</em>
+            </a>
+          ))}
+        </div>
+      ) : (
+        <div className="empty compact">No deployed applications discovered for this workspace</div>
+      )}
+      {apps.links.length ? (
+        <div className="link-cloud">
+          {apps.links.map((link) => (
+            <a key={`${link.kind}-${link.url}`} href={link.url} target="_blank" rel="noreferrer">
+              <ExternalLink size={13} />
+              {link.label}
+              <span>{formatLabel(link.kind)}</span>
+            </a>
+          ))}
+        </div>
+      ) : null}
+      {apps.actions.length ? (
+        <div className="action-list">
+          {apps.actions.map((action) => (
+            <div key={action.id} className="action-row">
+              <div>
+                <strong>{action.label}</strong>
+                <span>{action.description || formatLabel(action.kind ?? "custom")}</span>
+              </div>
+              {action.executable ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={runAction.isPending}
+                  onClick={() => runAction.mutate(action)}
+                >
+                  <Play size={14} /> Run
+                </Button>
+              ) : action.url ? (
+                <a href={action.url} target="_blank" rel="noreferrer">
+                  Open
+                </a>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {apps.reason ? <p className="panel-note">{apps.reason}</p> : null}
+    </section>
+  );
+}
+
+export function HookDiagnosticsPanel(props: { repo: Repo | null; workspace: Workspace | null }) {
+  const diagnostics = useQuery({
+    queryKey: ["hook-diagnostics", props.repo?.id],
+    enabled: Boolean(props.repo),
+    queryFn: () =>
+      api<{ diagnostics: HookDiagnostic[]; sample: unknown }>(`/api/repos/${props.repo?.id}/hook-diagnostics`),
+  });
+  return (
+    <div className="hook-diagnostics">
+      {diagnostics.data?.diagnostics.length ? (
+        diagnostics.data.diagnostics.map((hook) => (
+          <HookDiagnosticRow key={`${hook.event}-${hook.hookId}`} hook={hook} />
+        ))
+      ) : (
+        <div className="empty compact">No repo hooks configured for this repo</div>
+      )}
+      {diagnostics.data?.sample ? (
+        <details className="schema-sample">
+          <summary>Expected app/action payload</summary>
+          <pre>{JSON.stringify(diagnostics.data.sample, null, 2)}</pre>
+        </details>
       ) : null}
     </div>
   );
@@ -296,6 +474,8 @@ export function DiffPanel(props: { workspace: Workspace }) {
     <div className="diff-panel">
       <div className="diff-toolbar">
         <span>{diff.data?.files.length ?? 0} changed files</span>
+        <span className="diff-add">+{diff.data?.addedLines ?? 0}</span>
+        <span className="diff-del">-{diff.data?.deletedLines ?? 0}</span>
         {diff.data?.truncated ? <strong>Large diff bounded</strong> : null}
         <Button type="button" variant="secondary" onClick={() => diff.refetch()} disabled={diff.isFetching}>
           <RefreshCcw size={15} /> Refresh
@@ -399,6 +579,58 @@ function HealthTile(props: {
       <span>{props.detail}</span>
       {props.note ? <p>{props.note}</p> : null}
       {props.children}
+    </div>
+  );
+}
+
+function GitStatusCard(props: { summary: WorkspaceCockpitSummary }) {
+  const git = props.summary.git;
+  return (
+    <section className={`detail-panel git-panel ${git.clean ? "clean" : "dirty"}`}>
+      <div className="detail-title">
+        <h2>Git status</h2>
+        <span>{git.clean ? "Clean" : "Dirty"}</span>
+        {git.ahead ? <span>ahead {git.ahead}</span> : null}
+        {git.behind ? <span>behind {git.behind}</span> : null}
+      </div>
+      <div className="git-counts">
+        <span>{git.modified} modified</span>
+        <span>{git.staged} staged</span>
+        <span>{git.untracked} untracked</span>
+        <span>{git.deleted} deleted</span>
+        <span>{git.renamed} renamed</span>
+        <span>{git.conflicted} conflicted</span>
+      </div>
+      {git.lines.length ? <pre>{git.lines.join("\n")}</pre> : <div className="empty compact">Working tree clean</div>}
+    </section>
+  );
+}
+
+function HookDiagnosticRow(props: { hook: HookDiagnostic }) {
+  return (
+    <details className={`hook-row ${props.hook.validationStatus}`}>
+      <summary>
+        <strong>{props.hook.hookId}</strong>
+        <span>{props.hook.event}</span>
+        <em>{props.hook.validationStatus}</em>
+      </summary>
+      <div className="hook-grid">
+        <KeyValue label="Command" value={[props.hook.command, ...props.hook.args].join(" ")} />
+        <KeyValue label="CWD" value={props.hook.cwd ?? "workspace"} />
+        <KeyValue label="Blocking" value={props.hook.blocking ? "yes" : "no"} />
+        <KeyValue label="Last run" value={props.hook.lastRunAt ?? "not run"} />
+      </div>
+      {props.hook.validationErrors.length ? <pre>{props.hook.validationErrors.join("\n")}</pre> : null}
+      {props.hook.structuredPayload ? <pre>{JSON.stringify(props.hook.structuredPayload, null, 2)}</pre> : null}
+    </details>
+  );
+}
+
+function KeyValue(props: { label: string; value: string }) {
+  return (
+    <div className="key-value">
+      <span>{props.label}</span>
+      <strong>{props.value}</strong>
     </div>
   );
 }

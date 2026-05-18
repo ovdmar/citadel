@@ -1,5 +1,7 @@
+import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { CitadelConfig } from "@citadel/config";
 import { mergeConfigPatch, saveConfig } from "@citadel/config";
 import {
@@ -7,7 +9,10 @@ import {
   CreateAgentSessionInputSchema,
   CreateRepoInputSchema,
   CreateWorkspaceInputSchema,
+  HookActionSchema,
   TransitionIssueInputSchema,
+  type WorkspaceCockpitSummary,
+  type WorkspaceReadiness,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, mcpStatus, mcpToolDefinitions, serializeWorkspaceResource } from "@citadel/mcp";
@@ -26,7 +31,7 @@ import { attachTerminalWebSocket } from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
-import { readWorkspaceDiff } from "./workspace-diff.js";
+import { readWorkspaceDiff, readWorkspaceGitStatus } from "./workspace-diff.js";
 
 export type DaemonApp = {
   app: express.Express;
@@ -150,6 +155,22 @@ export function createDaemonApp(input: {
     res.json({ repos: store.listRepos() });
   });
 
+  app.delete(
+    "/api/repos/:repoId",
+    asyncRoute(async (req, res) => {
+      const repoId = req.params.repoId;
+      if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
+      const result = await operations.removeRepo({
+        repoId,
+        force: req.query.force === "true",
+        cleanupWorktrees: req.query.cleanupWorktrees === "true",
+      });
+      providerCache.clear();
+      emit("repo.updated", result);
+      res.status(result.removed ? 202 : 409).json(result);
+    }),
+  );
+
   app.get(
     "/api/repos/:repoId/provider-summary",
     asyncRoute(async (req, res) => {
@@ -206,6 +227,84 @@ export function createDaemonApp(input: {
         providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
       );
       res.json({ issueTracker });
+    }),
+  );
+
+  app.get(
+    "/api/workspaces/:workspaceId/cockpit-summary",
+    asyncRoute(async (req, res) => {
+      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
+      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
+      const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+      if (!repo) return res.status(404).json({ error: "repo_not_found" });
+
+      const [git, versionControl, ci, issueTracker, apps] = await Promise.all([
+        cachedProvider(
+          `git:${workspace.id}:${workspace.updatedAt}`,
+          () => readWorkspaceGitStatus(workspace.path),
+          3000,
+        ),
+        cachedProvider(`vc:${workspace.id}:${workspace.updatedAt}`, () =>
+          providers.collectGitHubVersionControlSummary(workspace.path),
+        ),
+        cachedProvider(`ci:${workspace.id}:${workspace.updatedAt}`, () =>
+          providers.collectGitHubCiRuns(workspace.path),
+        ),
+        workspace.issueKey
+          ? cachedProvider(`issue:${workspace.issueKey}`, () =>
+              providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
+            )
+          : Promise.resolve(null),
+        cachedProvider(
+          `apps:${workspace.id}:${workspace.updatedAt}`,
+          () => operations.discoverWorkspaceApps({ repo, workspace }),
+          60_000,
+        ),
+      ]);
+      const summary: WorkspaceCockpitSummary = {
+        workspaceId: workspace.id,
+        readiness: deriveReadiness({
+          workspace,
+          sessions: store.listSessions(workspace.id),
+          operations: store.listOperations().filter((operation) => operation.workspaceId === workspace.id),
+          providerHealth: await collectProviderHealth(config.providers),
+          git,
+          versionControl,
+          ci,
+          apps,
+        }),
+        git,
+        versionControl,
+        ci,
+        issueTracker,
+        apps,
+      };
+      res.json(summary);
+    }),
+  );
+
+  app.get("/api/repos/:repoId/hook-diagnostics", (req, res) => {
+    const repo = store.listRepos().find((candidate) => candidate.id === req.params.repoId);
+    if (!repo) return res.status(404).json({ error: "repo_not_found" });
+    const workspace = store.listWorkspaces(repo.id)[0] ?? null;
+    res.json({
+      diagnostics: operations.hookDiagnostics(repo, workspace),
+      sample: workspaceAppHookSample(),
+    });
+  });
+
+  app.post(
+    "/api/workspaces/:workspaceId/actions",
+    asyncRoute(async (req, res) => {
+      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
+      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
+      const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+      if (!repo) return res.status(404).json({ error: "repo_not_found" });
+      const action = HookActionSchema.parse(req.body);
+      const result = await operations.runWorkspaceAction({ repo, workspace, action });
+      providerCache.delete(`apps:${workspace.id}:${workspace.updatedAt}`);
+      emit("workspace.action", { workspaceId: workspace.id, operationId: result.operationId, status: result.status });
+      res.status(result.status === "succeeded" ? 202 : 424).json(result);
     }),
   );
 
@@ -398,6 +497,15 @@ export function createDaemonApp(input: {
     req.on("close", () => sseClients.delete(res));
   });
 
+  const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
+  if (fs.existsSync(path.join(webDist, "index.html"))) {
+    app.use(express.static(webDist, { index: false }));
+    app.get("*", (req, res, next) => {
+      if (req.path.startsWith("/api/") || req.path === "/events") return next();
+      res.sendFile(path.join(webDist, "index.html"));
+    });
+  }
+
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     if (error instanceof ZodError) {
       return res.status(400).json({
@@ -464,7 +572,7 @@ export function createDaemonApp(input: {
     return null;
   }
 
-  async function cachedProvider<T>(key: string, load: () => Promise<T>, ttlMs = 10_000) {
+  async function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000) {
     const cached = providerCache.get(key);
     const now = Date.now();
     if (cached && cached.expiresAt > now) return cached.value as T;
@@ -494,6 +602,153 @@ function rpcResourceContent(uri: string, value: unknown) {
     uri,
     mimeType: "application/json",
     text: JSON.stringify(value),
+  };
+}
+
+function deriveReadiness(input: {
+  workspace: { lifecycle: string; dirty: boolean };
+  sessions: Array<{ status: string }>;
+  operations: Array<{ status: string; type: string; error: string | null }>;
+  providerHealth: Array<{ status: string; reason: string | null }>;
+  git: { clean: boolean; conflicted: number; modified: number; staged: number; untracked: number; checkedAt: string };
+  versionControl: {
+    status: string;
+    reason: string | null;
+    pullRequest: {
+      draft: boolean;
+      reviewDecision: string | null;
+      checks: Array<{ status: string; conclusion: string | null }>;
+    } | null;
+    checkedAt: string;
+  };
+  ci: {
+    status: string;
+    reason: string | null;
+    runs: Array<{ conclusion: string | null; status: string }>;
+    checkedAt: string;
+  };
+  apps: { status: string; reason: string | null; actions: unknown[] };
+}): WorkspaceReadiness {
+  const checkedAt = new Date().toISOString();
+  const failedOperation = input.operations.find((operation) => operation.status === "failed");
+  const failingCheck = input.versionControl.pullRequest?.checks.some((check) =>
+    ["failure", "cancelled", "timed_out", "action_required"].includes(String(check.conclusion ?? "").toLowerCase()),
+  );
+  const pendingCheck = input.versionControl.pullRequest?.checks.some((check) =>
+    ["queued", "in_progress", "pending"].includes(String(check.status).toLowerCase()),
+  );
+  const degraded =
+    input.versionControl.status !== "healthy" || input.ci.status !== "healthy" || input.apps.status !== "healthy";
+  const activeSession = input.sessions.some((session) => ["running", "waiting"].includes(session.status));
+  const failedSession = input.sessions.some((session) => ["failed", "orphaned"].includes(session.status));
+  const reasons = [
+    input.workspace.lifecycle === "failed" ? "Workspace lifecycle failed" : null,
+    failedSession ? "A terminal or agent session needs attention" : null,
+    failedOperation ? failedOperation.error || `${failedOperation.type} failed` : null,
+    input.git.conflicted ? `${input.git.conflicted} conflicted files` : null,
+    failingCheck ? "One or more PR checks are failing" : null,
+    pendingCheck ? "PR checks are still running" : null,
+    degraded ? "Provider, hook, or app data is degraded" : null,
+    !input.git.clean ? "Working tree has local changes" : null,
+    activeSession ? "An agent/session is active" : null,
+  ].filter((reason): reason is string => Boolean(reason));
+
+  if (input.workspace.lifecycle === "failed" || failedSession || failedOperation) {
+    return readiness(
+      "blocked",
+      "danger",
+      "Open failure output and decide whether to retry or archive",
+      reasons,
+      checkedAt,
+      degraded,
+    );
+  }
+  if (input.git.conflicted) {
+    return readiness(
+      "conflicts",
+      "danger",
+      "Resolve conflicts before reviewing or deploying",
+      reasons,
+      checkedAt,
+      degraded,
+    );
+  }
+  if (failingCheck)
+    return readiness(
+      "checks-failing",
+      "danger",
+      "Inspect failing checks and fix the branch",
+      reasons,
+      checkedAt,
+      degraded,
+    );
+  if (degraded)
+    return readiness(
+      "waiting-provider",
+      "warning",
+      "Refresh providers or inspect hook diagnostics",
+      reasons,
+      checkedAt,
+      true,
+    );
+  if (!input.git.clean)
+    return readiness("dirty", "warning", "Review the diff and prepare the PR", reasons, checkedAt, false);
+  if (input.versionControl.pullRequest?.reviewDecision === "APPROVED" && !pendingCheck) {
+    return readiness(
+      "ready-to-merge",
+      "success",
+      "Review final context and merge outside Citadel",
+      reasons,
+      checkedAt,
+      false,
+    );
+  }
+  if (input.versionControl.pullRequest)
+    return readiness("needs-review", "info", "Review PR, checks, and latest diff", reasons, checkedAt, false);
+  if (activeSession)
+    return readiness("working", "info", "Continue from the active terminal session", reasons, checkedAt, false);
+  return readiness("idle", "neutral", "Start a runtime or open the workspace actions", reasons, checkedAt, false);
+}
+
+function readiness(
+  state: WorkspaceReadiness["state"],
+  tone: WorkspaceReadiness["tone"],
+  nextAction: string,
+  reasons: string[],
+  checkedAt: string,
+  degraded: boolean,
+): WorkspaceReadiness {
+  return { state, tone, nextAction, reasons, freshness: { checkedAt, stale: false, degraded } };
+}
+
+function workspaceAppHookSample() {
+  return {
+    applications: [
+      {
+        id: "preview",
+        label: "Preview",
+        kind: "preview",
+        url: "https://preview.example.internal",
+        environment: "dev",
+        status: "healthy",
+        version: "optional version",
+        commit: "optional commit",
+        updatedAt: new Date().toISOString(),
+        metadata: {},
+      },
+    ],
+    links: [{ label: "Runbook", url: "https://docs.example.internal", kind: "docs" }],
+    actions: [
+      {
+        id: "redeploy",
+        label: "Redeploy",
+        kind: "redeploy",
+        safety: "confirm",
+        executable: true,
+        metadata: {},
+      },
+    ],
+    metadata: {},
   };
 }
 

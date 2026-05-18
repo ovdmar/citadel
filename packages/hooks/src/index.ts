@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { type HookOutput, HookOutputSchema } from "@citadel/contracts";
+import { type HookDiagnostic, type HookOutput, HookOutputSchema } from "@citadel/contracts";
 
 export type CommandHook = {
   id: string;
@@ -11,9 +11,23 @@ export type CommandHook = {
   blocking: boolean;
 };
 
+export type CommandHookResult = {
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  exitStatus: number | null;
+};
+
 export async function runCommandHook(hook: CommandHook, payload: unknown) {
+  const result = await runCommandHookForDiagnostics(hook, payload);
+  if (result.exitStatus === 0) return result;
+  throw new Error(`Hook exited with ${result.exitStatus}: ${result.stderr || result.stdout}`);
+}
+
+export async function runCommandHookForDiagnostics(hook: CommandHook, payload: unknown): Promise<CommandHookResult> {
   const input = JSON.stringify(payload);
-  return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
+  return new Promise<CommandHookResult>((resolve, reject) => {
+    const startedAt = Date.now();
     const child = spawn(hook.command, hook.args, { cwd: hook.cwd, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
@@ -33,8 +47,7 @@ export async function runCommandHook(hook: CommandHook, payload: unknown) {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`Hook exited with ${code}: ${stderr || stdout}`));
+      resolve({ stdout, stderr, durationMs: Date.now() - startedAt, exitStatus: code });
     });
     child.stdin.end(input);
   });
@@ -44,4 +57,43 @@ export function parseHookOutput(stdout: string): HookOutput | null {
   const trimmed = stdout.trim();
   if (!trimmed) return null;
   return HookOutputSchema.parse(JSON.parse(trimmed));
+}
+
+export function hookDiagnostic(input: {
+  hook: CommandHook;
+  enabled: boolean;
+  lastRunAt?: string | null;
+  result?: CommandHookResult | null;
+  error?: unknown;
+}): HookDiagnostic {
+  const output = input.result?.stdout.trim() || input.result?.stderr.trim() || null;
+  let structuredPayload: HookOutput | null = null;
+  const validationErrors: string[] = [];
+  if (input.result?.stdout.trim()) {
+    try {
+      structuredPayload = parseHookOutput(input.result.stdout);
+    } catch (error) {
+      validationErrors.push(error instanceof Error ? error.message : "Invalid hook output");
+    }
+  }
+  if (input.error) validationErrors.push(input.error instanceof Error ? input.error.message : "Hook failed");
+  if (input.result && input.result.exitStatus !== 0) {
+    validationErrors.push(`Hook exited with ${input.result.exitStatus}`);
+  }
+  return {
+    hookId: input.hook.id,
+    event: input.hook.event,
+    command: input.hook.command,
+    args: input.hook.args,
+    cwd: input.hook.cwd,
+    blocking: input.hook.blocking,
+    enabled: input.enabled,
+    validationStatus: validationErrors.length ? "invalid" : "valid",
+    validationErrors,
+    lastRunAt: input.lastRunAt ?? null,
+    durationMs: input.result?.durationMs ?? null,
+    exitStatus: input.result?.exitStatus ?? null,
+    outputSummary: output ? output.slice(0, 4000) : null,
+    structuredPayload,
+  };
 }

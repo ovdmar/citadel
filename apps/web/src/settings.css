@@ -10,6 +10,12 @@
   margin-bottom: 20px;
 }
 
+.settings-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .header h1 {
   font-size: 28px;
 }
@@ -90,13 +96,15 @@
 }
 
 .setup-list,
-.runtime-row {
+.runtime-row,
+.repo-management {
   display: grid;
   gap: 8px;
 }
 
 .setup-row,
-.usage-row {
+.usage-row,
+.repo-row {
   display: grid;
   gap: 8px;
   padding: 8px 10px;
@@ -124,4 +132,29 @@
 .usage-row p {
   grid-column: 1 / -1;
   color: var(--muted);
+}
+
+.repo-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.repo-row span,
+.repo-row small,
+.repo-remove-controls small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.repo-remove-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.danger-action {
+  background: var(--color-danger);
 }

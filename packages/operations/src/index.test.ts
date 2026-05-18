@@ -70,6 +70,63 @@ describe("OperationService", () => {
     expect(store.listWorkspaces()).toHaveLength(0);
   });
 
+  it("removes repository tracking while preserving worktrees by default", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    await service.createWorkspace({ repoId: repo.id, name: "Repo Remove", source: "scratch" });
+    const workspace = store.listWorkspaces()[0];
+
+    const removed = await service.removeRepo({ repoId: repo.id });
+
+    expect(removed).toMatchObject({ removed: true, archivedWorkspaces: 1, cleanupWorktrees: false });
+    expect(store.listRepos()).toEqual([]);
+    expect(store.listWorkspaces()).toEqual([]);
+    expect(fs.existsSync(workspace?.path ?? "")).toBe(true);
+    expect(store.listActivity().find((event) => event.type === "repo.removed")).toMatchObject({
+      message: expect.stringContaining("preserved worktrees"),
+    });
+  });
+
+  it("blocks repository removal with active sessions until force is explicit", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "Active Repo", source: "scratch" });
+    store.insertSession({
+      id: "sess_active",
+      workspaceId: created.workspaceId,
+      runtimeId: "shell",
+      displayName: "Shell",
+      status: "running",
+      transport: "disconnected",
+      tmuxSessionName: null,
+      tmuxSessionId: null,
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+    });
+
+    const blocked = await service.removeRepo({ repoId: repo.id });
+    expect(blocked).toMatchObject({ removed: false, activeSessions: 1 });
+    expect(store.listRepos()).toHaveLength(1);
+
+    const forced = await service.removeRepo({ repoId: repo.id, force: true });
+    expect(forced).toMatchObject({ removed: true, activeSessions: 1 });
+    expect(store.listRepos()).toEqual([]);
+  });
+
   it("marks workspace creation failed when a blocking setup hook fails", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));

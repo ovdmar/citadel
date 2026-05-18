@@ -367,7 +367,7 @@ async function currentPullRequest(rootPath: string) {
       "pr",
       "view",
       "--json",
-      "number,title,url,state,isDraft,reviewDecision,statusCheckRollup",
+      "number,title,url,state,isDraft,reviewDecision,statusCheckRollup,additions,deletions",
     ]);
     const parsed = JSON.parse(raw) as {
       number: number;
@@ -377,6 +377,8 @@ async function currentPullRequest(rootPath: string) {
       isDraft: boolean;
       reviewDecision?: string | null;
       statusCheckRollup?: Array<Record<string, unknown>>;
+      additions?: number | null;
+      deletions?: number | null;
     };
     return {
       number: parsed.number,
@@ -386,6 +388,8 @@ async function currentPullRequest(rootPath: string) {
       draft: parsed.isDraft,
       reviewDecision: parsed.reviewDecision ?? null,
       checks: (parsed.statusCheckRollup ?? []).map(normalizeCheck),
+      additions: typeof parsed.additions === "number" ? parsed.additions : null,
+      deletions: typeof parsed.deletions === "number" ? parsed.deletions : null,
     };
   } catch {
     return null;

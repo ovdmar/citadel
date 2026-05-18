@@ -152,4 +152,56 @@ describe("SqliteStore", () => {
       expect.objectContaining({ lifecycle: "archived", dirty: 1 }),
     ]);
   });
+
+  it("archives repositories and hides their active workspaces", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
+    dirs.push(dir);
+    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    store.migrate();
+    const repo = {
+      id: "repo_remove",
+      name: "Repo",
+      rootPath: path.join(dir, "repo"),
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(dir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: ["github-gh"],
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+      archivedAt: null,
+    };
+    store.insertRepo(repo);
+    store.insertWorkspace({
+      id: "ws_remove",
+      repoId: repo.id,
+      name: "Remove me",
+      path: path.join(dir, "worktrees", "remove-me"),
+      branch: "remove-me",
+      baseBranch: "main",
+      source: "scratch",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      createdAt: "2026-05-17T00:01:00.000Z",
+      updatedAt: "2026-05-17T00:01:00.000Z",
+      archivedAt: null,
+    });
+
+    store.archiveRepo(repo.id);
+
+    expect(store.listRepos()).toEqual([]);
+    expect(store.listWorkspaces(repo.id)).toEqual([]);
+    expect(store.query("SELECT archived_at FROM repos WHERE id = 'repo_remove'")[0]).toEqual(
+      expect.objectContaining({ archived_at: expect.any(String) }),
+    );
+    expect(store.query("SELECT lifecycle, archived_at FROM workspaces WHERE id = 'ws_remove'")[0]).toEqual(
+      expect.objectContaining({ lifecycle: "archived", archived_at: expect.any(String) }),
+    );
+  });
 });

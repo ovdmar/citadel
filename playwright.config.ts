@@ -15,7 +15,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: "pnpm --filter @citadel/daemon dev",
+      command: "CITADEL_DATA_DIR=/tmp/citadel-playwright-data pnpm --filter @citadel/daemon dev",
       url: "http://127.0.0.1:4337/api/health",
       reuseExistingServer: true,
       timeout: 30_000,

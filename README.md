@@ -26,6 +26,7 @@ Citadel uses pnpm, strict TypeScript project references, Biome, Vitest, Playwrig
 
 ## Docs
 
+- [Product specs](specs/README.md)
 - [Architecture](docs/architecture/citadel-v2-architecture.md)
 - [Runbook](docs/operations/runbook.md)
 - [Engineering standards](docs/contributors/v2-engineering-standards.md)
