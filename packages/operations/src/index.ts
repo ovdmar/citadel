@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
@@ -17,7 +16,8 @@ import type {
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { hookDiagnostic, parseHookOutput, runCommandHook, runCommandHookForDiagnostics } from "@citadel/hooks";
-import { ensureTmuxSession, killTmuxSession } from "@citadel/terminal";
+import { ensureTmuxSession, killTmuxSession, sendKeys, tmuxSessionExists } from "@citadel/terminal";
+import { asObject, discoverDefaultBranch, tryRunGit, withActionHookIds, workspaceIsDirty } from "./helpers.js";
 
 export class OperationService {
   constructor(
@@ -64,13 +64,15 @@ export class OperationService {
     const operation = this.operation("workspace.create", "running", repo.id, null, 5, "Validating workspace request");
     const branch = workspaceBranchName(input);
     const workspacePath = path.join(repo.worktreeParent, branch);
+    const baseBranch = input.baseBranch?.trim() || repo.defaultBranch;
+    const existingBranch = input.existingBranch?.trim() || null;
     const workspace: Workspace = {
       id: createId("ws"),
       repoId: repo.id,
       name: input.name,
       path: workspacePath,
-      branch,
-      baseBranch: repo.defaultBranch,
+      branch: existingBranch ?? branch,
+      baseBranch,
       source: input.source,
       prUrl: input.prUrl ?? null,
       issueKey: input.issueKey ?? null,
@@ -93,8 +95,24 @@ export class OperationService {
     fs.mkdirSync(repo.worktreeParent, { recursive: true });
     try {
       tryRunGit(repo.rootPath, ["fetch", "--prune", repo.defaultRemote]);
-      const startPoint = `${repo.defaultRemote}/${repo.defaultBranch}`;
-      tryRunGit(repo.rootPath, ["worktree", "add", "-b", branch, workspacePath, startPoint]);
+      if (existingBranch) {
+        // Try to add a worktree pointing at the existing branch (local or remote).
+        try {
+          tryRunGit(repo.rootPath, ["worktree", "add", workspacePath, existingBranch]);
+        } catch {
+          tryRunGit(repo.rootPath, [
+            "worktree",
+            "add",
+            "-B",
+            existingBranch,
+            workspacePath,
+            `${repo.defaultRemote}/${existingBranch}`,
+          ]);
+        }
+      } else {
+        const startPoint = `${repo.defaultRemote}/${baseBranch}`;
+        tryRunGit(repo.rootPath, ["worktree", "add", "-b", branch, workspacePath, startPoint]);
+      }
       this.store.upsertOperation({
         ...operation,
         workspaceId: workspace.id,
@@ -137,18 +155,38 @@ export class OperationService {
 
   async createAgentSession(
     input: CreateAgentSessionInput,
-    runtime: { command: string; args: string[]; displayName: string },
+    runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
   ) {
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
     if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
     const now = nowIso();
     const sessionName = `citadel_${workspace.id}_${createId("agent").slice(-8)}`;
+    // Build runtime args. If runtime declares a promptArg flag, embed prompt as a CLI flag.
+    const runtimeArgs = [...runtime.args];
+    let promptForKeys: string | null = null;
+    if (input.prompt?.length) {
+      if (runtime.promptArg) {
+        runtimeArgs.push(runtime.promptArg, input.prompt);
+      } else {
+        promptForKeys = input.prompt;
+      }
+    }
     const tmux = await ensureTmuxSession({
       sessionName,
       cwd: workspace.path,
       command: runtime.command,
-      args: runtime.args,
+      args: runtimeArgs,
     });
+    // For runtimes that do not support inline prompt args, type the prompt into the
+    // tmux session after the runtime is up.
+    if (promptForKeys) {
+      try {
+        sendKeys(sessionName, promptForKeys);
+        sendKeys(sessionName, "\r");
+      } catch {
+        // best-effort: prompt injection failures are surfaced via activity below
+      }
+    }
     const session: AgentSession = {
       id: createId("sess"),
       workspaceId: workspace.id,
@@ -166,6 +204,66 @@ export class OperationService {
     const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
     if (repo) await this.runNotificationHooks("agent.started", repo, workspace, null, { repo, workspace, session });
     return session;
+  }
+
+  stopAgentSession(input: { sessionId: string }) {
+    const session = this.store.listSessions().find((candidate) => candidate.id === input.sessionId);
+    if (!session) return { stopped: false, reason: "session_not_found" as const };
+    if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
+    this.store.updateSessionStatus(session.id, "stopped");
+    const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
+    this.activity(
+      "agent.stopped",
+      "user",
+      `Stopped ${session.displayName}`,
+      workspace?.repoId ?? null,
+      session.workspaceId,
+      null,
+    );
+    return { stopped: true, reason: "ok" as const };
+  }
+
+  /**
+   * Reconcile local state with reality:
+   *  - mark sessions as `orphaned` when their tmux session is gone
+   *  - mark workspaces whose worktree directory no longer exists as failed
+   *  - archive repos whose rootPath no longer exists.
+   *
+   * Returns counts of the cleanup performed.
+   */
+  reconcile(): { sessions: number; workspaces: number; repos: number; deletedSessions: number } {
+    let sessionCount = 0;
+    let workspaceCount = 0;
+    let repoCount = 0;
+    let deletedSessions = 0;
+    for (const session of this.store.listSessions()) {
+      if (!session.tmuxSessionName) continue;
+      if (["stopped", "orphaned", "failed"].includes(session.status)) continue;
+      if (!tmuxSessionExists(session.tmuxSessionName)) {
+        const workspaceExists = this.store.listWorkspaces().some((workspace) => workspace.id === session.workspaceId);
+        if (!workspaceExists) {
+          this.store.deleteSession(session.id);
+          deletedSessions += 1;
+        } else {
+          this.store.updateSessionStatus(session.id, "orphaned");
+        }
+        sessionCount += 1;
+      }
+    }
+    for (const workspace of this.store.listWorkspaces()) {
+      if (workspace.lifecycle === "ready" && !fs.existsSync(workspace.path)) {
+        this.store.updateWorkspaceLifecycle(workspace.id, "failed");
+        workspaceCount += 1;
+      }
+    }
+    for (const repo of this.store.listRepos()) {
+      if (!fs.existsSync(path.join(repo.rootPath, ".git"))) {
+        this.store.archiveRepo(repo.id);
+        this.activity("repo.removed", "system", `Auto-archived ${repo.name} (rootPath missing)`, repo.id, null, null);
+        repoCount += 1;
+      }
+    }
+    return { sessions: sessionCount, workspaces: workspaceCount, repos: repoCount, deletedSessions };
   }
 
   async removeWorkspace(input: { workspaceId: string; force?: boolean; archiveOnly?: boolean }) {
@@ -698,43 +796,4 @@ export class OperationService {
     const hooks = (this.config?.hooks ?? []).filter((hook) => hook.event === event);
     return hookIds.length ? hooks.filter((hook) => hookIds.includes(hook.id)) : hooks;
   }
-}
-
-function asObject(payload: unknown) {
-  return typeof payload === "object" && payload !== null ? payload : {};
-}
-
-function discoverDefaultBranch(rootPath: string) {
-  try {
-    const remoteHead = execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
-      cwd: rootPath,
-      encoding: "utf8",
-    })
-      .trim()
-      .replace("refs/remotes/origin/", "");
-    return remoteHead || "main";
-  } catch {
-    return "main";
-  }
-}
-
-function tryRunGit(cwd: string, args: string[]) {
-  execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
-}
-
-function workspaceIsDirty(workspacePath: string) {
-  if (!fs.existsSync(workspacePath)) return false;
-  const output = execFileSync("git", ["status", "--porcelain=v1"], {
-    cwd: workspacePath,
-    encoding: "utf8",
-    maxBuffer: 512 * 1024,
-  });
-  return output.trim().length > 0;
-}
-
-function withActionHookIds(output: HookOutput, hookId: string): HookOutput {
-  return {
-    ...output,
-    actions: output.actions.map((action) => ({ ...action, hookId: action.hookId ?? hookId })),
-  };
 }

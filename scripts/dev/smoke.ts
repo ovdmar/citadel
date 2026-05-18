@@ -1,4 +1,4 @@
-const baseUrl = process.env.CITADEL_BASE_URL || "http://127.0.0.1:4337";
+const baseUrl = process.env.CITADEL_BASE_URL || "http://127.0.0.1:4010";
 
 for (const path of ["/api/health", "/api/state", "/api/mcp/status"]) {
   const response = await fetch(`${baseUrl}${path}`);

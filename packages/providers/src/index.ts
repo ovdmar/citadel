@@ -60,13 +60,30 @@ export async function commandHealth(input: {
   }
 }
 
-export async function collectProviderHealth(config: { github: { enabled: boolean }; jira: { enabled: boolean } }) {
+export type ProviderConfigInput = {
+  github: { enabled: boolean; command?: string | undefined };
+  jira: { enabled: boolean; command?: string | undefined; projectKey?: string | undefined };
+};
+
+export async function collectProviderHealth(config: ProviderConfigInput) {
+  const jiraCommand = config.jira.command ?? "jtk";
+  const jiraHealthArgs = config.jira.projectKey
+    ? [
+        "issues",
+        "search",
+        "--jql",
+        `project = ${config.jira.projectKey} ORDER BY updated DESC`,
+        "--max",
+        "1",
+        "--no-color",
+      ]
+    : ["--help"];
   return Promise.all([
     commandHealth({
       id: "github-gh",
       displayName: "GitHub CLI",
       kind: "version-control",
-      command: "gh",
+      command: config.github.command ?? "gh",
       args: ["auth", "status"],
       enabled: config.github.enabled,
     }),
@@ -74,8 +91,8 @@ export async function collectProviderHealth(config: { github: { enabled: boolean
       id: "jira-jtk",
       displayName: "Jira CLI",
       kind: "issue-tracker",
-      command: "/home/linuxbrew/.linuxbrew/bin/jtk",
-      args: ["issues", "search", "--jql", "project = MS ORDER BY updated DESC", "--max", "1", "--no-color"],
+      command: jiraCommand,
+      args: jiraHealthArgs,
       enabled: config.jira.enabled,
     }),
   ]);
@@ -418,13 +435,29 @@ async function gitOptional(rootPath: string, args: string[]) {
   }
 }
 
+let githubCommandOverride = "gh";
+
+export function setGithubCommand(command: string | undefined) {
+  githubCommandOverride = command?.length ? command : "gh";
+}
+
 async function gh(rootPath: string, args: string[]) {
-  const result = await execFileAsync("gh", args, { cwd: rootPath, timeout: 12000, maxBuffer: 1024 * 1024 });
+  const result = await execFileAsync(githubCommandOverride, args, {
+    cwd: rootPath,
+    timeout: 12000,
+    maxBuffer: 1024 * 1024,
+  });
   return result.stdout.trim();
 }
 
+let jiraCommandOverride = "jtk";
+
+export function setJiraCommand(command: string | undefined) {
+  jiraCommandOverride = command?.length ? command : "jtk";
+}
+
 async function jtk(args: string[]) {
-  const result = await execFileAsync("/home/linuxbrew/.linuxbrew/bin/jtk", args, {
+  const result = await execFileAsync(jiraCommandOverride, args, {
     timeout: 12000,
     maxBuffer: 1024 * 1024,
   });

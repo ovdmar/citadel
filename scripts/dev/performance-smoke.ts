@@ -5,8 +5,8 @@ import path from "node:path";
 import { chromium } from "@playwright/test";
 import WebSocket from "ws";
 
-const apiBaseUrl = process.env.CITADEL_BASE_URL || "http://127.0.0.1:4337";
-const webBaseUrl = process.env.CITADEL_WEB_URL || "http://127.0.0.1:5173";
+const apiBaseUrl = process.env.CITADEL_BASE_URL || "http://127.0.0.1:4010";
+const webBaseUrl = process.env.CITADEL_WEB_URL || apiBaseUrl;
 const managedProcesses: ChildProcess[] = [];
 const managedDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-perf-runtime-"));
 

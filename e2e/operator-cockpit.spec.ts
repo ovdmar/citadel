@@ -5,6 +5,9 @@ import path from "node:path";
 import { type APIRequestContext, expect, test } from "@playwright/test";
 import WebSocket from "ws";
 
+const API_BASE =
+  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "4012"}`;
+
 test("ADE shell renders workspace-first regions", async ({ page }, testInfo) => {
   await page.goto("/");
   await expect(page.getByText("Agent Development Environment")).toBeVisible();
@@ -71,7 +74,7 @@ test("ADE workflow switches workspaces, preserves sessions, and toggles regions"
     await expect(page.getByPlaceholder("Switch workspace or run command")).toBeVisible();
   } finally {
     for (const workspaceId of workspaceIds) {
-      await request.delete(`http://127.0.0.1:4337/api/workspaces/${workspaceId}?archiveOnly=true`);
+      await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
     }
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
@@ -97,7 +100,7 @@ test("mobile ADE uses stage and inspector navigation", async ({ page, request },
     await expect(page.getByText("Next action")).toBeVisible();
     await expect(page.getByText("Workspace state")).toBeVisible();
   } finally {
-    if (workspaceId) await request.delete(`http://127.0.0.1:4337/api/workspaces/${workspaceId}?archiveOnly=true`);
+    if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
@@ -138,7 +141,45 @@ test("desktop settings removes repository tracking with active-work confirmation
     await expect(repoRow).toBeHidden();
     workspaceId = null;
   } finally {
-    if (workspaceId) await request.delete(`http://127.0.0.1:4337/api/workspaces/${workspaceId}?archiveOnly=true`);
+    if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
+    fs.rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("desktop session stop endpoint marks the session stopped", async ({ request }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "session lifecycle coverage runs once against the shared daemon");
+  const fixture = createGitFixture();
+  let workspaceId: string | null = null;
+  try {
+    const repo = await registerRepo(request, fixture);
+    workspaceId = (await createWorkspace(request, repo.id, `stop-${Date.now().toString(36)}`)).workspaceId;
+    await waitForWorkspace(request, workspaceId, "ready");
+    const session = await startSession(request, workspaceId, "Stop Shell");
+    const stop = await request.delete(`${API_BASE}/api/agent-sessions/${session.id}`);
+    expect(stop.ok()).toBe(true);
+    const state = await request.get(`${API_BASE}/api/state`);
+    const body = (await state.json()) as { sessions: Array<{ id: string; status: string }> };
+    expect(body.sessions.find((entry) => entry.id === session.id)?.status).toBe("stopped");
+  } finally {
+    if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
+    fs.rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("desktop reconcile endpoint cleans orphan repos", async ({ request }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "reconcile coverage runs once against the shared daemon");
+  const fixture = createGitFixture();
+  let repoId: string | null = null;
+  try {
+    const repo = await registerRepo(request, fixture);
+    repoId = repo.id;
+    fs.rmSync(fixture.repoPath, { recursive: true, force: true });
+    const response = await request.post(`${API_BASE}/api/reconcile`);
+    expect(response.ok()).toBe(true);
+    const state = await request.get(`${API_BASE}/api/state`);
+    const body = (await state.json()) as { repos: Array<{ id: string }> };
+    expect(body.repos.find((entry) => entry.id === repoId)).toBeUndefined();
+  } finally {
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
@@ -154,7 +195,7 @@ test("desktop smoke creates a workspace and reaches its terminal", async ({ requ
 
     const session = await startSession(request, workspaceId, "E2E Shell");
 
-    const ws = new WebSocket(`ws://127.0.0.1:4337/terminal/${session.id}`);
+    const ws = new WebSocket(`${API_BASE.replace(/^http/, "ws")}/terminal/${session.id}`);
     try {
       await waitForOpen(ws);
       ws.send(JSON.stringify({ type: "input", data: "pwd" }));
@@ -166,7 +207,7 @@ test("desktop smoke creates a workspace and reaches its terminal", async ({ requ
     }
   } finally {
     if (workspaceId) {
-      await request.delete(`http://127.0.0.1:4337/api/workspaces/${workspaceId}?archiveOnly=true`);
+      await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
     }
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
@@ -174,7 +215,7 @@ test("desktop smoke creates a workspace and reaches its terminal", async ({ requ
 
 async function waitForWorkspace(request: APIRequestContext, workspaceId: string, lifecycle: string) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const response = await request.get("http://127.0.0.1:4337/api/workspaces");
+    const response = await request.get(`${API_BASE}/api/workspaces`);
     const body = (await response.json()) as { workspaces: Array<{ id: string; lifecycle: string }> };
     const workspace = body.workspaces.find((candidate) => candidate.id === workspaceId);
     if (workspace?.lifecycle === lifecycle) return;
@@ -184,7 +225,7 @@ async function waitForWorkspace(request: APIRequestContext, workspaceId: string,
 }
 
 async function registerRepo(request: APIRequestContext, fixture: ReturnType<typeof createGitFixture>, name?: string) {
-  const repoResponse = await request.post("http://127.0.0.1:4337/api/repos", {
+  const repoResponse = await request.post(`${API_BASE}/api/repos`, {
     data: {
       rootPath: fixture.repoPath,
       name: name ?? `E2E ${Date.now().toString(36)}`,
@@ -196,7 +237,7 @@ async function registerRepo(request: APIRequestContext, fixture: ReturnType<type
 }
 
 async function createWorkspace(request: APIRequestContext, repoId: string, name: string) {
-  const workspaceResponse = await request.post("http://127.0.0.1:4337/api/workspaces", {
+  const workspaceResponse = await request.post(`${API_BASE}/api/workspaces`, {
     data: { repoId, name, source: "scratch" },
   });
   expect(workspaceResponse.ok()).toBe(true);
@@ -204,7 +245,7 @@ async function createWorkspace(request: APIRequestContext, repoId: string, name:
 }
 
 async function startSession(request: APIRequestContext, workspaceId: string, displayName: string) {
-  const sessionResponse = await request.post("http://127.0.0.1:4337/api/agent-sessions", {
+  const sessionResponse = await request.post(`${API_BASE}/api/agent-sessions`, {
     data: { workspaceId, runtimeId: "shell", displayName },
   });
   expect(sessionResponse.ok()).toBe(true);

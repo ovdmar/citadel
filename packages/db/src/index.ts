@@ -215,6 +215,16 @@ export class SqliteStore {
     );
   }
 
+  updateSessionStatus(sessionId: string, status: AgentSession["status"]) {
+    this.exec(
+      `UPDATE agent_sessions SET status = ${q(status)}, updated_at = ${q(new Date().toISOString())} WHERE id = ${q(sessionId)}`,
+    );
+  }
+
+  deleteSession(sessionId: string) {
+    this.exec(`DELETE FROM agent_sessions WHERE id = ${q(sessionId)}`);
+  }
+
   upsertOperation(operation: Operation) {
     this.exec(
       `INSERT OR REPLACE INTO operations VALUES (${[

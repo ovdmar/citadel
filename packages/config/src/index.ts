@@ -8,6 +8,11 @@ export const RuntimeConfigSchema = z.object({
   displayName: z.string().min(1),
   command: z.string().min(1),
   args: z.array(z.string()).default([]),
+  promptArg: z.string().optional(),
+  resumeArg: z.string().optional(),
+  supportsResume: z.boolean().optional(),
+  supportsPrompt: z.boolean().optional(),
+  supportsModelSelection: z.boolean().optional(),
 });
 
 export const UsageProviderConfigSchema = z.object({
@@ -56,20 +61,57 @@ export const CitadelConfigSchema = z
     dataDir: z.string().min(1),
     databasePath: z.string().min(1),
     bindHost: z.string().default("127.0.0.1"),
-    port: z.number().int().min(1).max(65535).default(4337),
+    port: z.number().int().min(1).max(65535).default(4010),
     mcp: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
     providers: z
       .object({
-        github: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
-        jira: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
+        github: z
+          .object({
+            enabled: z.boolean().default(true),
+            command: z.string().min(1).default("gh"),
+          })
+          .default({ enabled: true, command: "gh" }),
+        jira: z
+          .object({
+            enabled: z.boolean().default(true),
+            command: z.string().min(1).default("jtk"),
+            projectKey: z.string().min(1).optional(),
+          })
+          .default({ enabled: true, command: "jtk" }),
       })
-      .default({ github: { enabled: true }, jira: { enabled: true } }),
+      .default({
+        github: { enabled: true, command: "gh" },
+        jira: { enabled: true, command: "jtk" },
+      }),
     runtimes: z.array(RuntimeConfigSchema).default([
-      { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] },
-      { id: "codex", displayName: "Codex", command: "codex", args: [] },
-      { id: "cursor-agent", displayName: "Cursor Agent", command: "cursor-agent", args: [] },
+      {
+        id: "claude-code",
+        displayName: "Claude Code",
+        command: "claude",
+        args: [],
+        promptArg: "-p",
+        resumeArg: "--resume",
+        supportsResume: true,
+        supportsPrompt: true,
+        supportsModelSelection: true,
+      },
+      {
+        id: "codex",
+        displayName: "Codex",
+        command: "codex",
+        args: [],
+        supportsResume: true,
+        supportsPrompt: true,
+      },
+      {
+        id: "cursor-agent",
+        displayName: "Cursor Agent",
+        command: "cursor-agent",
+        args: [],
+        supportsPrompt: true,
+      },
       { id: "pi", displayName: "Pi", command: "pi", args: [] },
-      { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
+      { id: "shell", displayName: "Shell", command: "bash", args: ["-l"], supportsPrompt: true },
     ]),
     usageProviders: z.array(UsageProviderConfigSchema).default([]),
     hooks: z.array(HookConfigSchema).default([]),

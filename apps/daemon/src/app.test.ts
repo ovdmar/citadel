@@ -15,6 +15,8 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+process.env.CITADEL_DISABLE_REAPER = "1";
+
 describe("createDaemonApp", () => {
   it("serves config, runtime, MCP, and error endpoints without starting the production listener", async () => {
     const fixture = createFixture();
@@ -456,6 +458,78 @@ describe("createDaemonApp", () => {
     }
   });
 
+  it("inspects a path, lists branches, refreshes provider caches, and reconciles ghost state", async () => {
+    const fixture = createFixture();
+    const { repoPath } = createGitRepo(fixture.config.dataDir);
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const inspect = await postJson<{ isGit: boolean; defaultBranch: string | null; providerCandidates: unknown[] }>(
+        `${baseUrl}/api/repos/inspect`,
+        { rootPath: repoPath },
+      );
+      expect(inspect.isGit).toBe(true);
+      expect(inspect.providerCandidates.length).toBeGreaterThan(0);
+
+      const repoResp = await postJson<{ repo: { id: string } }>(`${baseUrl}/api/repos`, { rootPath: repoPath });
+      const repoId = repoResp.repo.id;
+
+      const branches = await getJson<{ defaultBranch: string; local: string[]; remote: string[] }>(
+        `${baseUrl}/api/repos/${repoId}/branches`,
+      );
+      expect(branches.local.length).toBeGreaterThan(0);
+
+      const refresh = await fetch(`${baseUrl}/api/repos/${repoId}/refresh`, { method: "POST" });
+      expect(refresh.status).toBe(200);
+
+      const reconcile = await fetch(`${baseUrl}/api/reconcile`, { method: "POST" });
+      expect(reconcile.status).toBe(200);
+      const body = (await reconcile.json()) as { sessions: number };
+      expect(typeof body.sessions).toBe("number");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("stops an agent session through DELETE /api/agent-sessions/:id", async () => {
+    const fixture = createFixture();
+    const { repoPath } = createGitFixtureWithRemote(fixture.config.dataDir);
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const repoResp = await postJson<{ repo: { id: string } }>(`${baseUrl}/api/repos`, { rootPath: repoPath });
+      const workspaceResp = await postJson<{ workspaceId: string }>(`${baseUrl}/api/workspaces`, {
+        repoId: repoResp.repo.id,
+        name: "stop-target",
+        source: "scratch",
+      });
+      // Wait for workspace.create to land.
+      let ready = false;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const state = await getJson<{ workspaces: Array<{ id: string; lifecycle: string }> }>(
+          `${baseUrl}/api/workspaces`,
+        );
+        if (state.workspaces.find((w) => w.id === workspaceResp.workspaceId)?.lifecycle === "ready") {
+          ready = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      expect(ready).toBe(true);
+      const sessionResp = await postJson<{ session: { id: string } }>(`${baseUrl}/api/agent-sessions`, {
+        workspaceId: workspaceResp.workspaceId,
+        runtimeId: "shell",
+      });
+      const stop = await fetch(`${baseUrl}/api/agent-sessions/${sessionResp.session.id}`, { method: "DELETE" });
+      expect(stop.status).toBe(202);
+      const state = await getJson<{ sessions: Array<{ id: string; status: string }> }>(`${baseUrl}/api/state`);
+      const updated = state.sessions.find((s) => s.id === sessionResp.session.id);
+      expect(updated?.status).toBe("stopped");
+    } finally {
+      await closeServer(server);
+    }
+  }, 20_000);
+
   it("removes repositories through a tracked operation with explicit active-session confirmation", async () => {
     const fixture = createFixture();
     const git = createGitRepo(fixture.config.dataDir);
@@ -536,11 +610,34 @@ function createFixture() {
   const config = loadConfig(configPath);
   config.dataDir = dir;
   config.databasePath = path.join(dir, "citadel.sqlite");
-  config.providers = { github: { enabled: false }, jira: { enabled: false } };
+  config.providers = {
+    github: { enabled: false, command: "gh" },
+    jira: { enabled: false, command: "jtk" },
+  };
   config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
   const store = new SqliteStore(config.databasePath);
   store.migrate();
   return { config, configPath, store };
+}
+
+function createGitFixtureWithRemote(parent: string) {
+  const dir = fs.mkdtempSync(path.join(parent, "citadel-remote-"));
+  const remotePath = path.join(dir, "remote.git");
+  const repoPath = path.join(dir, "repo");
+  execFileSync("git", ["init", "--bare", remotePath], { stdio: "pipe" });
+  execFileSync("git", ["clone", remotePath, repoPath], { stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "test@example.test"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Citadel Test"], { cwd: repoPath, stdio: "pipe" });
+  fs.writeFileSync(path.join(repoPath, "README.md"), "# fixture\n");
+  execFileSync("git", ["add", "README.md"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["branch", "-M", "main"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], {
+    cwd: repoPath,
+    stdio: "pipe",
+  });
+  return { repoPath };
 }
 
 function createGitRepo(dir: string) {

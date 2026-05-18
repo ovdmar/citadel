@@ -357,6 +357,8 @@ export const CreateWorkspaceInputSchema = z.object({
   issueKey: z.string().min(2).optional(),
   issueTitle: z.string().min(1).optional(),
   prUrl: z.string().url().optional(),
+  baseBranch: z.string().min(1).optional(),
+  existingBranch: z.string().min(1).optional(),
 });
 
 export const CreateAgentSessionInputSchema = z.object({

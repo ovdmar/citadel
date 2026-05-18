@@ -8,6 +8,7 @@ import type {
   Workspace,
   WorkspaceCockpitSummary,
 } from "@citadel/contracts";
+import { useMutation } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   Activity,
@@ -21,14 +22,18 @@ import {
   PanelLeftClose,
   PanelRightClose,
   Plus,
+  RefreshCcw,
   Search,
   Settings,
+  Square,
   TerminalSquare,
 } from "lucide-react";
 import type React from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ActivityRow } from "./activity-row.js";
+import { api, queryClient } from "./api.js";
 import { useEventRefresh, useStateQuery } from "./app-state.js";
+import { type WorkspaceAttention, nextAction, readinessForWorkspace } from "./cockpit-readiness.js";
 import {
   AppsActionsPanel,
   DiffPanel,
@@ -434,6 +439,7 @@ function StageToolbar(props: {
             <option value="">No sessions</option>
           )}
         </select>
+        <SessionStopButton session={props.activeSession} />
       </div>
       <ReadinessStrip workspace={props.workspace} sessions={props.sessions} summary={props.summary} />
     </div>
@@ -552,10 +558,61 @@ function InspectorHeader(props: { onCollapse: () => void }) {
     <div className="inspector-header">
       <HeartPulse size={16} />
       <strong>Inspector</strong>
+      <ReconcileButton />
       <Button type="button" variant="ghost" size="icon" onClick={props.onCollapse} aria-label="Collapse inspector">
         <PanelRightClose size={16} />
       </Button>
     </div>
+  );
+}
+
+function ReconcileButton() {
+  const mutation = useMutation({
+    mutationFn: () =>
+      api<{ sessions: number; workspaces: number; repos: number }>("/api/reconcile", { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+    },
+  });
+  const result = mutation.data;
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      onClick={() => mutation.mutate()}
+      disabled={mutation.isPending}
+      aria-label="Reconcile local state"
+      title={
+        result
+          ? `Reconciled: ${result.sessions} sessions, ${result.workspaces} workspaces, ${result.repos} repos`
+          : "Reconcile local state with disk"
+      }
+    >
+      <RefreshCcw size={15} />
+    </Button>
+  );
+}
+
+function SessionStopButton(props: { session: AgentSession | null }) {
+  const stop = useMutation({
+    mutationFn: () => api(`/api/agent-sessions/${props.session?.id}`, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+  });
+  if (!props.session) return null;
+  const disabled = stop.isPending || ["stopped", "failed", "orphaned"].includes(props.session.status);
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label="Stop session"
+      title="Stop session"
+      onClick={() => stop.mutate()}
+      disabled={disabled}
+    >
+      <Square size={14} />
+    </Button>
   );
 }
 
@@ -718,53 +775,4 @@ function useLocalStorageRecord(key: string) {
   });
   useEffect(() => localStorage.setItem(key, JSON.stringify(value)), [key, value]);
   return [value, setValue] as const;
-}
-
-type WorkspaceAttention = {
-  section: string;
-  label: string;
-  nextAction: string;
-  tone: "neutral" | "info" | "success" | "warning" | "danger";
-};
-
-function readinessForWorkspace(
-  workspace: Workspace,
-  input: { sessions: AgentSession[]; operations: Operation[]; summary: WorkspaceCockpitSummary | undefined },
-): WorkspaceAttention {
-  if (input.summary) {
-    return {
-      section: readinessSection(input.summary.readiness.state),
-      label: formatLabel(input.summary.readiness.state),
-      nextAction: input.summary.readiness.nextAction,
-      tone: input.summary.readiness.tone,
-    };
-  }
-  const failedOperation = input.operations.some((operation) => operation.status === "failed");
-  const activeSession = input.sessions.some((session) => ["running", "waiting"].includes(session.status));
-  const failedSession = input.sessions.some((session) => ["failed", "orphaned"].includes(session.status));
-  if (workspace.lifecycle === "failed" || failedOperation || failedSession) {
-    return { section: "blocked", label: "Blocked", nextAction: "Inspect failure output", tone: "danger" };
-  }
-  if (workspace.lifecycle === "archived" || workspace.lifecycle === "removed") {
-    return { section: "done", label: "Done", nextAction: "Archived", tone: "neutral" };
-  }
-  if (workspace.dirty) return { section: "dirty", label: "Dirty", nextAction: "Review diff", tone: "warning" };
-  if (activeSession) return { section: "working", label: "Working", nextAction: "Continue session", tone: "info" };
-  return { section: "idle", label: "Idle", nextAction: "Start runtime", tone: "neutral" };
-}
-
-function readinessSection(state: string) {
-  if (["blocked", "checks-failing", "conflicts", "action-failed", "waiting-provider"].includes(state)) return "blocked";
-  if (["needs-review", "ready-to-merge"].includes(state)) return "needs-review";
-  if (["dirty"].includes(state)) return "dirty";
-  if (state === "working") return "working";
-  return "idle";
-}
-
-function nextAction(workspace: Workspace, sessions: AgentSession[]) {
-  if (workspace.lifecycle === "creating") return "Workspace is being created. Watch the operation status bar.";
-  if (workspace.lifecycle === "failed") return "Inspect setup output and provider warnings before retrying.";
-  if (!sessions.length) return "Start an agent or shell runtime to begin work in this workspace.";
-  if (workspace.dirty) return "Review the diff, run checks, then prepare the PR or archive safely.";
-  return "Continue from the active terminal session or open the diff for the next review pass.";
 }

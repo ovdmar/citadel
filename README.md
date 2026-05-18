@@ -9,10 +9,14 @@ pnpm install
 make dev
 ```
 
-- Web UI: `http://127.0.0.1:5173`
-- Daemon API: `http://127.0.0.1:4337`
+- Daemon (REST/SSE/WebSocket, serves built web): `http://127.0.0.1:4010`
+- Vite dev server for the web app (optional in dev): `http://127.0.0.1:5173`
 - Default config: `~/.local/share/citadel/citadel.config.json`
 - Default SQLite DB: `~/.local/share/citadel/citadel.sqlite`
+
+The daemon binds `127.0.0.1` by default for local-first use.
+`CITADEL_BASE_URL` and `CITADEL_WEB_URL` override the API and web URLs
+used by `make smoke`, `make e2e`, and `make performance`.
 
 ## Checks
 

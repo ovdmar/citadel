@@ -26,7 +26,11 @@ export type McpToolName =
   | "list_workspace_links"
   | "create_workspace"
   | "start_agent_session"
-  | "archive_workspace";
+  | "stop_agent_session"
+  | "archive_workspace"
+  | "remove_workspace"
+  | "reconcile"
+  | "inspect_readiness";
 
 export type McpToolDefinition = {
   name: McpToolName;
@@ -147,6 +151,50 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       },
       destructive: false,
     },
+    {
+      name: "stop_agent_session",
+      description: "Stop a running agent session via the operation service.",
+      inputSchema: {
+        type: "object",
+        required: ["sessionId"],
+        properties: { sessionId: { type: "string" } },
+        additionalProperties: false,
+      },
+      destructive: true,
+    },
+    {
+      name: "remove_workspace",
+      description:
+        "Remove a workspace through the operation service. Set archiveOnly to keep the worktree, force to override dirty/teardown protection.",
+      inputSchema: {
+        type: "object",
+        required: ["workspaceId"],
+        properties: {
+          workspaceId: { type: "string" },
+          archiveOnly: { type: "boolean" },
+          force: { type: "boolean" },
+        },
+        additionalProperties: false,
+      },
+      destructive: true,
+    },
+    {
+      name: "reconcile",
+      description: "Reconcile local state with reality: cleanup orphan sessions, ghost repos, and missing worktrees.",
+      inputSchema: { type: "object", additionalProperties: false },
+      destructive: true,
+    },
+    {
+      name: "inspect_readiness",
+      description: "Return the readiness state and next-action hint for a workspace.",
+      inputSchema: {
+        type: "object",
+        required: ["workspaceId"],
+        properties: { workspaceId: { type: "string" } },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
   ];
 }
 
@@ -176,9 +224,25 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
       return { runtimes: context.runtimes };
     case "list_workspace_links":
       return listWorkspaceLinks(context.activity, call.arguments?.workspaceId);
+    case "inspect_readiness": {
+      const workspaceId = typeof call.arguments?.workspaceId === "string" ? (call.arguments.workspaceId as string) : "";
+      const workspace = context.workspaces.find((candidate) => candidate.id === workspaceId);
+      if (!workspace) return { error: "workspace_not_found", workspaceId };
+      return {
+        workspaceId,
+        lifecycle: workspace.lifecycle,
+        sessions: context.sessions
+          .filter((session) => session.workspaceId === workspaceId)
+          .map((session) => ({ id: session.id, status: session.status, runtimeId: session.runtimeId })),
+        operations: context.operations.filter((operation) => operation.workspaceId === workspaceId).slice(0, 5),
+      };
+    }
     case "create_workspace":
     case "start_agent_session":
+    case "stop_agent_session":
     case "archive_workspace":
+    case "remove_workspace":
+    case "reconcile":
       return { error: "mutating_tool_requires_daemon" };
     default:
       return assertNever(call.name);

@@ -221,6 +221,86 @@ describe("OperationService", () => {
     });
   });
 
+  it("stops a session, marks it stopped, and records activity", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "stop-target", source: "scratch" });
+    const session = await service.createAgentSession(
+      { workspaceId: created.workspaceId, runtimeId: "shell" },
+      { command: "bash", args: ["-l"], displayName: "Shell" },
+    );
+    expect(session.status).toBe("running");
+    const result = service.stopAgentSession({ sessionId: session.id });
+    expect(result.stopped).toBe(true);
+    expect(store.listSessions().find((candidate) => candidate.id === session.id)?.status).toBe("stopped");
+    expect(store.listActivity().find((event) => event.type === "agent.stopped")).toBeTruthy();
+  });
+
+  it("creates a workspace from an existing branch", async () => {
+    const fixture = createGitFixture();
+    // Seed an additional branch on the origin remote.
+    run("git", ["checkout", "-b", "feature/import-me"], fixture.repoPath);
+    fs.writeFileSync(path.join(fixture.repoPath, "imported.txt"), "imported\n");
+    run("git", ["add", "imported.txt"], fixture.repoPath);
+    run("git", ["commit", "-m", "feature commit"], fixture.repoPath);
+    run("git", ["push", "-u", "origin", "feature/import-me"], fixture.repoPath);
+    run("git", ["checkout", "main"], fixture.repoPath);
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({
+      repoId: repo.id,
+      name: "imported-ws",
+      source: "imported",
+      existingBranch: "feature/import-me",
+    });
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === created.workspaceId);
+    expect(workspace?.lifecycle).toBe("ready");
+    expect(workspace?.branch).toBe("feature/import-me");
+    expect(fs.existsSync(path.join(workspace?.path ?? "", "imported.txt"))).toBe(true);
+  });
+
+  it("reconcile archives repos whose rootPath is gone and removes orphan sessions", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({
+      repoId: repo.id,
+      name: "reaper-target",
+      source: "scratch",
+    });
+    const session = await service.createAgentSession(
+      { workspaceId: created.workspaceId, runtimeId: "shell" },
+      { command: "bash", args: ["-l"], displayName: "Shell" },
+    );
+    // Kill the underlying tmux session out-of-band and remove the repo from disk.
+    if (session.tmuxSessionName) execFileSync("tmux", ["kill-session", "-t", session.tmuxSessionName]);
+    fs.rmSync(fixture.repoPath, { recursive: true, force: true });
+    const result = service.reconcile();
+    expect(result.sessions).toBeGreaterThan(0);
+    expect(result.repos).toBeGreaterThan(0);
+    const reconciledRepo = store.listRepos().find((candidate) => candidate.id === repo.id);
+    expect(reconciledRepo).toBeUndefined();
+  });
+
   it("records hook-provided workspace links and actions", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));

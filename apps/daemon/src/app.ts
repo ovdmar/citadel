@@ -12,7 +12,6 @@ import {
   HookActionSchema,
   TransitionIssueInputSchema,
   type WorkspaceCockpitSummary,
-  type WorkspaceReadiness,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, mcpStatus, mcpToolDefinitions, serializeWorkspaceResource } from "@citadel/mcp";
@@ -24,6 +23,8 @@ import {
   collectJiraIssueSummary,
   collectProviderHealth,
   collectRuntimeUsage,
+  setGithubCommand,
+  setJiraCommand,
   transitionJiraIssue,
 } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
@@ -31,6 +32,8 @@ import { attachTerminalWebSocket } from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
+import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
+import { rpcError, rpcJsonContent, rpcResourceContent, rpcResult } from "./rpc.js";
 import { readWorkspaceDiff, readWorkspaceGitStatus } from "./workspace-diff.js";
 
 export type DaemonApp = {
@@ -55,6 +58,8 @@ export function createDaemonApp(input: {
   providers?: Partial<ProviderCollectors>;
 }): DaemonApp {
   const { config, configPath, store } = input;
+  setGithubCommand(config.providers.github.command);
+  setJiraCommand(config.providers.jira.command);
   const operations = input.operations ?? new OperationService(store, config);
   const providers: ProviderCollectors = {
     collectGitHubVersionControlSummary,
@@ -129,6 +134,8 @@ export function createDaemonApp(input: {
     const nextConfig = mergeConfigPatch(config, req.body);
     const saved = saveConfig(nextConfig, configPath);
     Object.assign(config, saved);
+    setGithubCommand(saved.providers.github.command);
+    setJiraCommand(saved.providers.jira.command);
     providerCache.clear();
     store.addActivity({
       id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
@@ -150,6 +157,52 @@ export function createDaemonApp(input: {
     emit("repo.updated", { repoId: repo.id, repo });
     res.status(201).json({ repo });
   });
+
+  app.post(
+    "/api/repos/inspect",
+    asyncRoute(async (req, res) => {
+      const inputPath = typeof req.body?.rootPath === "string" ? req.body.rootPath : "";
+      if (!inputPath) return res.status(400).json({ error: "root_path_required" });
+      const resolved = path.resolve(inputPath);
+      const exists = fs.existsSync(resolved);
+      const isGit = exists && fs.existsSync(path.join(resolved, ".git"));
+      let defaultBranch: string | null = null;
+      let remotes: string[] = [];
+      if (isGit) {
+        try {
+          const { execFile: execFileCb } = await import("node:child_process");
+          const { promisify } = await import("node:util");
+          const exec = promisify(execFileCb);
+          const headRef = await exec("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
+            cwd: resolved,
+            timeout: 6000,
+          }).catch(() => ({ stdout: "" }));
+          defaultBranch = (headRef.stdout || "").trim().replace("refs/remotes/origin/", "").trim() || "main";
+          const remoteList = await exec("git", ["remote"], { cwd: resolved, timeout: 6000 }).catch(() => ({
+            stdout: "",
+          }));
+          remotes = remoteList.stdout
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean);
+        } catch {
+          defaultBranch = "main";
+        }
+      }
+      res.json({
+        rootPath: resolved,
+        exists,
+        isGit,
+        defaultBranch,
+        remotes,
+        suggestedWorktreeParent: path.join(path.dirname(resolved), `${path.basename(resolved)}-worktrees`),
+        providerCandidates: [
+          { id: "github-gh", displayName: "GitHub CLI", enabled: config.providers.github.enabled },
+          { id: "jira-jtk", displayName: "Jira CLI", enabled: config.providers.jira.enabled },
+        ],
+      });
+    }),
+  );
 
   app.get("/api/repos", (_req, res) => {
     res.json({ repos: store.listRepos() });
@@ -216,6 +269,49 @@ export function createDaemonApp(input: {
   app.get("/api/workspaces", (_req, res) => {
     res.json({ workspaces: store.listWorkspaces() });
   });
+
+  app.get(
+    "/api/repos/:repoId/branches",
+    asyncRoute(async (req, res) => {
+      const repo = store.listRepos().find((candidate) => candidate.id === req.params.repoId);
+      if (!repo) return res.status(404).json({ error: "repo_not_found" });
+      try {
+        const { execFile: execFileCb } = await import("node:child_process");
+        const { promisify } = await import("node:util");
+        const exec = promisify(execFileCb);
+        const local = await exec("git", ["branch", "--list", "--format=%(refname:short)"], {
+          cwd: repo.rootPath,
+          timeout: 6000,
+        });
+        const remote = await exec("git", ["branch", "--remotes", "--list", "--format=%(refname:short)"], {
+          cwd: repo.rootPath,
+          timeout: 6000,
+        });
+        const localBranches = local.stdout
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const remoteBranches = remote.stdout
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .filter((line) => !line.endsWith("/HEAD"))
+          .map((line) => (line.includes("/") ? line.split("/").slice(1).join("/") : line));
+        return res.json({
+          defaultBranch: repo.defaultBranch,
+          local: localBranches,
+          remote: Array.from(new Set(remoteBranches)),
+        });
+      } catch (error) {
+        return res.json({
+          defaultBranch: repo.defaultBranch,
+          local: [],
+          remote: [],
+          error: error instanceof Error ? error.message : "git_branches_failed",
+        });
+      }
+    }),
+  );
 
   app.get(
     "/api/workspaces/:workspaceId/issue-summary",
@@ -361,9 +457,71 @@ export function createDaemonApp(input: {
       const input = CreateAgentSessionInputSchema.parse(req.body);
       const runtime = config.runtimes.find((candidate) => candidate.id === input.runtimeId);
       if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
-      const session = await operations.createAgentSession(input, runtime);
+      const session = await operations.createAgentSession(input, {
+        command: runtime.command,
+        args: runtime.args,
+        displayName: runtime.displayName,
+        promptArg: runtime.promptArg ?? null,
+      });
       emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
       res.status(202).json({ session });
+    }),
+  );
+
+  app.delete(
+    "/api/agent-sessions/:sessionId",
+    asyncRoute(async (req, res) => {
+      const sessionId = req.params.sessionId;
+      if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
+      const result = operations.stopAgentSession({ sessionId });
+      if (!result.stopped) return res.status(404).json(result);
+      emit("agent.updated", { sessionId });
+      res.status(202).json(result);
+    }),
+  );
+
+  app.post(
+    "/api/reconcile",
+    asyncRoute(async (_req, res) => {
+      const result = operations.reconcile();
+      providerCache.clear();
+      emit("state.reconciled", result);
+      res.json(result);
+    }),
+  );
+
+  app.post(
+    "/api/workspaces/:workspaceId/refresh",
+    asyncRoute(async (req, res) => {
+      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
+      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
+      // Bust everything that hangs off this workspace identity.
+      const prefixes = [
+        `git:${workspace.id}`,
+        `vc:${workspace.id}`,
+        `ci:${workspace.id}`,
+        `apps:${workspace.id}`,
+        workspace.issueKey ? `issue:${workspace.issueKey}` : null,
+      ].filter(Boolean) as string[];
+      for (const key of Array.from(providerCache.keys())) {
+        if (prefixes.some((prefix) => key.startsWith(prefix))) providerCache.delete(key);
+      }
+      emit("workspace.refreshed", { workspaceId: workspace.id });
+      res.json({ refreshed: prefixes });
+    }),
+  );
+
+  app.post(
+    "/api/repos/:repoId/refresh",
+    asyncRoute(async (req, res) => {
+      const repo = store.listRepos().find((candidate) => candidate.id === req.params.repoId);
+      if (!repo) return res.status(404).json({ error: "repo_not_found" });
+      const prefixes = [`vc:${repo.id}`, `ci:${repo.id}`];
+      for (const key of Array.from(providerCache.keys())) {
+        if (prefixes.some((prefix) => key.startsWith(prefix))) providerCache.delete(key);
+      }
+      emit("repo.refreshed", { repoId: repo.id });
+      res.json({ refreshed: prefixes });
     }),
   );
 
@@ -522,6 +680,23 @@ export function createDaemonApp(input: {
     return session?.tmuxSessionName ?? null;
   });
 
+  // Reap orphan tmux sessions / ghost worktrees on a slow interval.
+  // Skipped in tests by setting CITADEL_DISABLE_REAPER=1.
+  if (process.env.CITADEL_DISABLE_REAPER !== "1") {
+    const reaper = setInterval(() => {
+      try {
+        const before = JSON.stringify(operations.reconcile());
+        if (before !== '{"sessions":0,"workspaces":0,"repos":0,"deletedSessions":0}') {
+          emit("state.reconciled", JSON.parse(before));
+        }
+      } catch {
+        // Reaper failures are non-fatal.
+      }
+    }, 30_000);
+    reaper.unref();
+    server.on("close", () => clearInterval(reaper));
+  }
+
   return { app, server, emit };
 
   async function callDaemonMcpTool(call: McpToolCall) {
@@ -534,9 +709,34 @@ export function createDaemonApp(input: {
       const input = CreateAgentSessionInputSchema.parse(call.arguments ?? {});
       const runtime = config.runtimes.find((candidate) => candidate.id === input.runtimeId);
       if (!runtime) throw new Error(`Unknown runtime: ${input.runtimeId}`);
-      const session = await operations.createAgentSession(input, runtime);
+      const session = await operations.createAgentSession(input, {
+        command: runtime.command,
+        args: runtime.args,
+        displayName: runtime.displayName,
+        promptArg: runtime.promptArg ?? null,
+      });
       emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
       return { session };
+    }
+    if (call.name === "stop_agent_session") {
+      const sessionId = typeof call.arguments?.sessionId === "string" ? (call.arguments.sessionId as string) : "";
+      const result = operations.stopAgentSession({ sessionId });
+      emit("agent.updated", { sessionId });
+      return result;
+    }
+    if (call.name === "remove_workspace") {
+      const workspaceId = typeof call.arguments?.workspaceId === "string" ? (call.arguments.workspaceId as string) : "";
+      const force = call.arguments?.force === true;
+      const archiveOnly = call.arguments?.archiveOnly === true;
+      const result = await operations.removeWorkspace({ workspaceId, force, archiveOnly });
+      emit("workspace.updated", result);
+      return result;
+    }
+    if (call.name === "reconcile") {
+      const result = operations.reconcile();
+      providerCache.clear();
+      emit("state.reconciled", result);
+      return result;
     }
     if (call.name === "archive_workspace") {
       const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";
@@ -580,176 +780,6 @@ export function createDaemonApp(input: {
     providerCache.set(key, { expiresAt: now + ttlMs, value });
     return value;
   }
-}
-
-function rpcResult(id: string | number | null | undefined, result: unknown) {
-  return { jsonrpc: "2.0", id: id ?? null, result };
-}
-
-function rpcError(id: string | number | null | undefined, code: number, message: string) {
-  return { jsonrpc: "2.0", id: id ?? null, error: { code, message } };
-}
-
-function rpcJsonContent(value: unknown) {
-  return {
-    content: [{ type: "text", text: JSON.stringify(value) }],
-    structuredContent: value,
-  };
-}
-
-function rpcResourceContent(uri: string, value: unknown) {
-  return {
-    uri,
-    mimeType: "application/json",
-    text: JSON.stringify(value),
-  };
-}
-
-function deriveReadiness(input: {
-  workspace: { lifecycle: string; dirty: boolean };
-  sessions: Array<{ status: string }>;
-  operations: Array<{ status: string; type: string; error: string | null }>;
-  providerHealth: Array<{ status: string; reason: string | null }>;
-  git: { clean: boolean; conflicted: number; modified: number; staged: number; untracked: number; checkedAt: string };
-  versionControl: {
-    status: string;
-    reason: string | null;
-    pullRequest: {
-      draft: boolean;
-      reviewDecision: string | null;
-      checks: Array<{ status: string; conclusion: string | null }>;
-    } | null;
-    checkedAt: string;
-  };
-  ci: {
-    status: string;
-    reason: string | null;
-    runs: Array<{ conclusion: string | null; status: string }>;
-    checkedAt: string;
-  };
-  apps: { status: string; reason: string | null; actions: unknown[] };
-}): WorkspaceReadiness {
-  const checkedAt = new Date().toISOString();
-  const failedOperation = input.operations.find((operation) => operation.status === "failed");
-  const failingCheck = input.versionControl.pullRequest?.checks.some((check) =>
-    ["failure", "cancelled", "timed_out", "action_required"].includes(String(check.conclusion ?? "").toLowerCase()),
-  );
-  const pendingCheck = input.versionControl.pullRequest?.checks.some((check) =>
-    ["queued", "in_progress", "pending"].includes(String(check.status).toLowerCase()),
-  );
-  const degraded =
-    input.versionControl.status !== "healthy" || input.ci.status !== "healthy" || input.apps.status !== "healthy";
-  const activeSession = input.sessions.some((session) => ["running", "waiting"].includes(session.status));
-  const failedSession = input.sessions.some((session) => ["failed", "orphaned"].includes(session.status));
-  const reasons = [
-    input.workspace.lifecycle === "failed" ? "Workspace lifecycle failed" : null,
-    failedSession ? "A terminal or agent session needs attention" : null,
-    failedOperation ? failedOperation.error || `${failedOperation.type} failed` : null,
-    input.git.conflicted ? `${input.git.conflicted} conflicted files` : null,
-    failingCheck ? "One or more PR checks are failing" : null,
-    pendingCheck ? "PR checks are still running" : null,
-    degraded ? "Provider, hook, or app data is degraded" : null,
-    !input.git.clean ? "Working tree has local changes" : null,
-    activeSession ? "An agent/session is active" : null,
-  ].filter((reason): reason is string => Boolean(reason));
-
-  if (input.workspace.lifecycle === "failed" || failedSession || failedOperation) {
-    return readiness(
-      "blocked",
-      "danger",
-      "Open failure output and decide whether to retry or archive",
-      reasons,
-      checkedAt,
-      degraded,
-    );
-  }
-  if (input.git.conflicted) {
-    return readiness(
-      "conflicts",
-      "danger",
-      "Resolve conflicts before reviewing or deploying",
-      reasons,
-      checkedAt,
-      degraded,
-    );
-  }
-  if (failingCheck)
-    return readiness(
-      "checks-failing",
-      "danger",
-      "Inspect failing checks and fix the branch",
-      reasons,
-      checkedAt,
-      degraded,
-    );
-  if (degraded)
-    return readiness(
-      "waiting-provider",
-      "warning",
-      "Refresh providers or inspect hook diagnostics",
-      reasons,
-      checkedAt,
-      true,
-    );
-  if (!input.git.clean)
-    return readiness("dirty", "warning", "Review the diff and prepare the PR", reasons, checkedAt, false);
-  if (input.versionControl.pullRequest?.reviewDecision === "APPROVED" && !pendingCheck) {
-    return readiness(
-      "ready-to-merge",
-      "success",
-      "Review final context and merge outside Citadel",
-      reasons,
-      checkedAt,
-      false,
-    );
-  }
-  if (input.versionControl.pullRequest)
-    return readiness("needs-review", "info", "Review PR, checks, and latest diff", reasons, checkedAt, false);
-  if (activeSession)
-    return readiness("working", "info", "Continue from the active terminal session", reasons, checkedAt, false);
-  return readiness("idle", "neutral", "Start a runtime or open the workspace actions", reasons, checkedAt, false);
-}
-
-function readiness(
-  state: WorkspaceReadiness["state"],
-  tone: WorkspaceReadiness["tone"],
-  nextAction: string,
-  reasons: string[],
-  checkedAt: string,
-  degraded: boolean,
-): WorkspaceReadiness {
-  return { state, tone, nextAction, reasons, freshness: { checkedAt, stale: false, degraded } };
-}
-
-function workspaceAppHookSample() {
-  return {
-    applications: [
-      {
-        id: "preview",
-        label: "Preview",
-        kind: "preview",
-        url: "https://preview.example.internal",
-        environment: "dev",
-        status: "healthy",
-        version: "optional version",
-        commit: "optional commit",
-        updatedAt: new Date().toISOString(),
-        metadata: {},
-      },
-    ],
-    links: [{ label: "Runbook", url: "https://docs.example.internal", kind: "docs" }],
-    actions: [
-      {
-        id: "redeploy",
-        label: "Redeploy",
-        kind: "redeploy",
-        safety: "confirm",
-        executable: true,
-        metadata: {},
-      },
-    ],
-    metadata: {},
-  };
 }
 
 function asyncRoute(

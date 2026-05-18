@@ -5,6 +5,9 @@ import { createDaemonApp } from "./app.js";
 
 const configPath = defaultConfigPath();
 const config = loadConfig(configPath);
+const portOverride = Number.parseInt(process.env.CITADEL_PORT ?? "", 10);
+if (Number.isFinite(portOverride) && portOverride > 0 && portOverride < 65536) config.port = portOverride;
+if (process.env.CITADEL_BIND_HOST) config.bindHost = process.env.CITADEL_BIND_HOST;
 const store = new SqliteStore(config.databasePath);
 store.migrate();
 const operations = new OperationService(store, config);

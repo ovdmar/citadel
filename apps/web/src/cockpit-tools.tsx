@@ -1,6 +1,5 @@
 import type {
   AgentRuntime,
-  AgentSession,
   CiProviderSummary,
   HookAction,
   HookDiagnostic,
@@ -12,14 +11,11 @@ import type {
   Workspace,
   WorkspaceAppsSummary,
   WorkspaceCockpitSummary,
-  WorkspaceDiff,
 } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { FitAddon } from "@xterm/addon-fit";
-import { Terminal } from "@xterm/xterm";
-import { Archive, ExternalLink, Play, RefreshCcw, Rocket, ShieldCheck } from "lucide-react";
+import { ExternalLink, Play, RefreshCcw, Rocket, ShieldCheck } from "lucide-react";
 import type React from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
 import { formatLabel } from "./labels.js";
@@ -126,6 +122,12 @@ export function WorkspaceCockpitPanel(props: {
   summary: WorkspaceCockpitSummary | undefined;
   loading: boolean | undefined;
 }) {
+  const refresh = useMutation({
+    mutationFn: () => api(`/api/workspaces/${props.summary?.workspaceId}/refresh`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["workspace-cockpit", props.summary?.workspaceId] });
+    },
+  });
   if (props.loading) return <Empty text="Loading cockpit context" />;
   const summary = props.summary;
   if (!summary) return <Empty text="Cockpit context is unavailable" />;
@@ -133,6 +135,22 @@ export function WorkspaceCockpitPanel(props: {
   const checks = pr?.checks ?? [];
   return (
     <div className="cockpit-detail-stack">
+      <div className="refresh-bar">
+        <small>
+          Updated: {new Date(summary.readiness.freshness.checkedAt).toLocaleTimeString()}{" "}
+          {summary.readiness.freshness.degraded ? "· degraded" : ""}
+        </small>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label="Refresh providers"
+          onClick={() => refresh.mutate()}
+          disabled={refresh.isPending}
+        >
+          <RefreshCcw size={14} />
+        </Button>
+      </div>
       <section className="detail-panel">
         <div className="detail-title">
           <ShieldCheck size={16} />
@@ -297,66 +315,164 @@ export function HealthRow(props: { provider: ProviderHealth }) {
   );
 }
 
+type RepoInspectResult = {
+  rootPath: string;
+  exists: boolean;
+  isGit: boolean;
+  defaultBranch: string | null;
+  remotes: string[];
+  suggestedWorktreeParent: string;
+  providerCandidates: Array<{ id: string; displayName: string; enabled: boolean }>;
+};
+
 export function RepoForm() {
   const [rootPath, setRootPath] = useState("");
   const [name, setName] = useState("");
+  const [worktreeParent, setWorktreeParent] = useState("");
+  const inspect = useMutation({
+    mutationFn: () =>
+      api<RepoInspectResult>("/api/repos/inspect", {
+        method: "POST",
+        body: JSON.stringify({ rootPath }),
+      }),
+    onSuccess: (result) => {
+      if (result.isGit && !worktreeParent) setWorktreeParent(result.suggestedWorktreeParent);
+    },
+  });
   const mutation = useMutation({
     mutationFn: () =>
-      api("/api/repos", { method: "POST", body: JSON.stringify({ rootPath, name: name || undefined }) }),
+      api("/api/repos", {
+        method: "POST",
+        body: JSON.stringify({
+          rootPath,
+          name: name || undefined,
+          worktreeParent: worktreeParent || undefined,
+        }),
+      }),
     onSuccess: () => {
       setRootPath("");
       setName("");
+      setWorktreeParent("");
+      inspect.reset();
       queryClient.invalidateQueries({ queryKey: ["state"] });
     },
   });
+  const inspected = inspect.data;
+  const canRegister = inspected?.isGit ?? false;
   return (
     <form
       className="stack-form"
       onSubmit={(event) => {
         event.preventDefault();
+        if (!inspected || inspected.rootPath !== rootPath) {
+          inspect.mutate();
+          return;
+        }
+        if (!canRegister) return;
         mutation.mutate();
       }}
     >
       <label>
         Repo path
-        <input value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="/home/me/project" />
+        <input
+          value={rootPath}
+          onChange={(event) => {
+            setRootPath(event.target.value);
+            inspect.reset();
+          }}
+          placeholder="/home/me/project"
+        />
       </label>
+      {inspected ? (
+        <div className={`repo-inspect ${inspected.isGit ? "ok" : "warn"}`}>
+          {inspected.isGit ? (
+            <>
+              <small>
+                default branch: <code>{inspected.defaultBranch ?? "?"}</code>
+              </small>
+              <small>remotes: {inspected.remotes.join(", ") || "(none)"}</small>
+              <small>
+                providers:{" "}
+                {inspected.providerCandidates
+                  .filter((candidate) => candidate.enabled)
+                  .map((candidate) => candidate.displayName)
+                  .join(", ") || "(none)"}
+              </small>
+            </>
+          ) : (
+            <small>{inspected.exists ? "Not a git repository (.git missing)" : "Path does not exist"}</small>
+          )}
+        </div>
+      ) : null}
       <label>
         Name
         <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Optional display name" />
       </label>
-      <Button type="submit" disabled={!rootPath || mutation.isPending}>
-        Register repo
+      <label>
+        Worktree parent
+        <input
+          value={worktreeParent}
+          onChange={(event) => setWorktreeParent(event.target.value)}
+          placeholder={inspected?.suggestedWorktreeParent ?? "/path/to/worktree-parent"}
+        />
+      </label>
+      <Button type="submit" disabled={!rootPath || mutation.isPending || inspect.isPending}>
+        {!inspected || inspected.rootPath !== rootPath
+          ? "Inspect path"
+          : canRegister
+            ? "Register repo"
+            : "Path invalid"}
       </Button>
       {mutation.error ? <p>{String(mutation.error)}</p> : null}
+      {inspect.error ? <p>{String(inspect.error)}</p> : null}
     </form>
   );
 }
 
+type WorkspaceSource = "scratch" | "issue" | "imported" | "pr";
+
 export function WorkspaceForm(props: { repo: Repo }) {
   const [name, setName] = useState("");
-  const [source, setSource] = useState<"scratch" | "issue">("scratch");
+  const [source, setSource] = useState<WorkspaceSource>("scratch");
   const [issueKey, setIssueKey] = useState("");
   const [issueTitle, setIssueTitle] = useState("");
+  const [prUrl, setPrUrl] = useState("");
+  const [baseBranch, setBaseBranch] = useState("");
+  const [existingBranch, setExistingBranch] = useState("");
+  const branches = useQuery({
+    queryKey: ["repo-branches", props.repo.id],
+    queryFn: () =>
+      api<{ defaultBranch: string; local: string[]; remote: string[]; error?: string }>(
+        `/api/repos/${props.repo.id}/branches`,
+      ),
+    staleTime: 30_000,
+  });
   const mutation = useMutation({
     mutationFn: () =>
       api("/api/workspaces", {
         method: "POST",
         body: JSON.stringify({
           repoId: props.repo.id,
-          name,
+          name: name || (source === "imported" ? existingBranch : name),
           source,
           issueKey: issueKey || undefined,
           issueTitle: issueTitle || undefined,
+          prUrl: prUrl || undefined,
+          baseBranch: baseBranch || undefined,
+          existingBranch: source === "imported" && existingBranch ? existingBranch : undefined,
         }),
       }),
     onSuccess: () => {
       setName("");
       setIssueKey("");
       setIssueTitle("");
+      setPrUrl("");
+      setExistingBranch("");
       queryClient.invalidateQueries({ queryKey: ["state"] });
     },
   });
+  const previewBranch = source === "imported" && existingBranch ? existingBranch : name || "(branch from name)";
+  const previewBase = baseBranch || branches.data?.defaultBranch || props.repo.defaultBranch;
   return (
     <form
       className="stack-form"
@@ -371,11 +487,44 @@ export function WorkspaceForm(props: { repo: Repo }) {
       </label>
       <label>
         Source
-        <select value={source} onChange={(event) => setSource(event.target.value as "scratch" | "issue")}>
-          <option value="scratch">Scratch</option>
-          <option value="issue">Issue</option>
+        <select value={source} onChange={(event) => setSource(event.target.value as WorkspaceSource)}>
+          <option value="scratch">Scratch (new branch)</option>
+          <option value="imported">From existing branch</option>
+          <option value="issue">From Jira issue</option>
+          <option value="pr">From pull request</option>
         </select>
       </label>
+      {source !== "imported" ? (
+        <label>
+          Base branch
+          <select value={baseBranch} onChange={(event) => setBaseBranch(event.target.value)}>
+            <option value="">{branches.data?.defaultBranch || props.repo.defaultBranch}</option>
+            {(branches.data?.remote ?? []).map((branch) => (
+              <option key={`rb-${branch}`} value={branch}>
+                {branch}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      {source === "imported" ? (
+        <label>
+          Existing branch
+          <select value={existingBranch} onChange={(event) => setExistingBranch(event.target.value)}>
+            <option value="">Select a branch</option>
+            {(branches.data?.local ?? []).map((branch) => (
+              <option key={`lb-${branch}`} value={branch}>
+                {branch} (local)
+              </option>
+            ))}
+            {(branches.data?.remote ?? []).map((branch) => (
+              <option key={`rb2-${branch}`} value={branch}>
+                {branch} (remote)
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       {source === "issue" ? (
         <>
           <label>
@@ -392,7 +541,33 @@ export function WorkspaceForm(props: { repo: Repo }) {
           </label>
         </>
       ) : null}
-      <Button type="submit" disabled={!name || mutation.isPending}>
+      {source === "pr" ? (
+        <label>
+          PR URL
+          <input
+            value={prUrl}
+            onChange={(event) => setPrUrl(event.target.value)}
+            placeholder="https://github.com/org/repo/pull/123"
+          />
+        </label>
+      ) : null}
+      <div className="workspace-preview">
+        <small>
+          branch: <code>{previewBranch}</code>
+        </small>
+        <small>
+          base: <code>{previewBase}</code>
+        </small>
+      </div>
+      <Button
+        type="submit"
+        disabled={
+          mutation.isPending ||
+          (source === "imported" ? !existingBranch : !name) ||
+          (source === "issue" && !issueKey) ||
+          (source === "pr" && !prUrl)
+        }
+      >
         Create workspace
       </Button>
       {mutation.error ? <p>{String(mutation.error)}</p> : null}
@@ -435,136 +610,7 @@ export function RuntimeLauncher(props: { workspace: Workspace; runtimes: AgentRu
   );
 }
 
-export function DiffPanel(props: { workspace: Workspace }) {
-  const diff = useQuery({
-    queryKey: ["diff", props.workspace.id],
-    queryFn: () => api<WorkspaceDiff>(`/api/workspaces/${props.workspace.id}/diff`),
-  });
-  const archive = useMutation({
-    mutationFn: () => api(`/api/workspaces/${props.workspace.id}?archiveOnly=true`, { method: "DELETE" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
-  });
-  if (diff.isLoading) return <Empty text="Reading git status" />;
-  if (diff.isError) {
-    return (
-      <div className="diff-empty">
-        <Empty text="Diff is unavailable" />
-        <Button type="button" variant="secondary" onClick={() => diff.refetch()} disabled={diff.isFetching}>
-          <RefreshCcw size={15} /> Retry
-        </Button>
-      </div>
-    );
-  }
-  if (diff.data?.clean) {
-    return (
-      <div className="diff-empty">
-        <Empty text="Workspace is clean" />
-        <div className="diff-actions">
-          <Button type="button" variant="secondary" onClick={() => diff.refetch()} disabled={diff.isFetching}>
-            <RefreshCcw size={15} /> Refresh
-          </Button>
-          <Button type="button" variant="secondary" onClick={() => archive.mutate()} disabled={archive.isPending}>
-            <Archive size={15} /> Archive metadata
-          </Button>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="diff-panel">
-      <div className="diff-toolbar">
-        <span>{diff.data?.files.length ?? 0} changed files</span>
-        <span className="diff-add">+{diff.data?.addedLines ?? 0}</span>
-        <span className="diff-del">-{diff.data?.deletedLines ?? 0}</span>
-        {diff.data?.truncated ? <strong>Large diff bounded</strong> : null}
-        <Button type="button" variant="secondary" onClick={() => diff.refetch()} disabled={diff.isFetching}>
-          <RefreshCcw size={15} /> Refresh
-        </Button>
-      </div>
-      <div className="diff-list">
-        {diff.data?.files.map((file, index) => (
-          <details key={file.path} className="diff-file" open={index < 2}>
-            <summary>
-              <span className="diff-state">{formatDiffStatus(file.status)}</span>
-              <strong>{file.path}</strong>
-              {file.binary ? <em>Binary</em> : null}
-              {file.truncated ? <em>Truncated</em> : null}
-            </summary>
-            <DiffBody file={file} />
-          </details>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-export function TerminalPane(props: { session: AgentSession }) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const [state, setState] = useState<"connecting" | "connected" | "closed">("connecting");
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const terminal = new Terminal({
-      cursorBlink: true,
-      convertEol: true,
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-      fontSize: 12,
-      scrollback: 8000,
-      theme: { background: "#101318", foreground: "#f8fafc" },
-    });
-    const fit = new FitAddon();
-    terminal.loadAddon(fit);
-    terminal.open(containerRef.current);
-    fit.fit();
-    const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-    const socket = new WebSocket(`${protocol}://${window.location.host}/terminal/${props.session.id}`);
-    const sendTerminalMessage = (message: unknown) => {
-      if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
-    };
-    const resize = () => {
-      fit.fit();
-      sendTerminalMessage({ type: "resize", cols: terminal.cols, rows: terminal.rows });
-    };
-    const resizeObserver = new ResizeObserver(resize);
-    resizeObserver.observe(containerRef.current);
-    const inputDisposable = terminal.onData((data) => sendTerminalMessage({ type: "input", data }));
-    const pasteListener = (event: ClipboardEvent) => {
-      const text = event.clipboardData?.getData("text/plain");
-      if (!text) return;
-      event.preventDefault();
-      sendTerminalMessage({ type: "paste", data: text });
-    };
-    terminal.element?.addEventListener("paste", pasteListener);
-    socket.addEventListener("open", () => {
-      setState("connected");
-      resize();
-    });
-    socket.addEventListener("message", (event) => {
-      const message = JSON.parse(String(event.data)) as { type: string; data?: string };
-      if (message.type === "output" && typeof message.data === "string") {
-        terminal.reset();
-        terminal.write(message.data);
-      }
-      if (message.type === "outputChunk" && typeof message.data === "string") terminal.write(message.data);
-    });
-    socket.addEventListener("close", () => setState("closed"));
-    return () => {
-      resizeObserver.disconnect();
-      inputDisposable.dispose();
-      terminal.element?.removeEventListener("paste", pasteListener);
-      socket.close();
-      terminal.dispose();
-    };
-  }, [props.session.id]);
-  return (
-    <div className="terminal-shell">
-      <div className="terminal-status">
-        <span>{props.session.displayName}</span>
-        <strong>{state}</strong>
-      </div>
-      <div ref={containerRef} className="terminal-surface" data-testid="terminal-surface" />
-    </div>
-  );
-}
+export { DiffPanel, TerminalPane } from "./terminal-pane.js";
 
 function HealthTile(props: {
   title: string;
@@ -637,38 +683,4 @@ function KeyValue(props: { label: string; value: string }) {
 
 function Empty(props: { text: string }) {
   return <div className="empty">{props.text}</div>;
-}
-
-function DiffBody(props: { file: WorkspaceDiff["files"][number] }) {
-  if (props.file.binary) return <div className="diff-message">Binary file changed. Text preview is not available.</div>;
-  if (!props.file.diff && props.file.status.includes("D")) {
-    return <div className="diff-message">File was deleted. No text preview is available.</div>;
-  }
-  if (!props.file.diff) return <div className="diff-message">No textual diff available.</div>;
-  return (
-    <pre className="diff-code">
-      {props.file.diff.split("\n").map((line, index) => (
-        <span key={`${index}-${line.slice(0, 16)}`} className={diffLineClass(line)}>
-          {line || " "}
-          {"\n"}
-        </span>
-      ))}
-    </pre>
-  );
-}
-
-function formatDiffStatus(status: string) {
-  if (status.includes("R")) return "Renamed";
-  if (status === "??") return "Untracked";
-  if (status.includes("D")) return "Deleted";
-  if (status.includes("A")) return "Added";
-  if (status.includes("M")) return "Modified";
-  return "Changed";
-}
-
-function diffLineClass(line: string) {
-  if (line.startsWith("+") && !line.startsWith("+++")) return "diff-line diff-line-add";
-  if (line.startsWith("-") && !line.startsWith("---")) return "diff-line diff-line-remove";
-  if (line.startsWith("@@")) return "diff-line diff-line-hunk";
-  return "diff-line";
 }
