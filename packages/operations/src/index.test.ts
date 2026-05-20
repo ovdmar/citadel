@@ -258,7 +258,7 @@ describe("OperationService", () => {
     expect(retry.reason).toBe("not_retriable");
   });
 
-  it("stops a session, marks it stopped, and records activity", async () => {
+  it("stops a session, removes it from the cockpit, and records activity", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
@@ -276,7 +276,7 @@ describe("OperationService", () => {
     expect(session.status).toBe("running");
     const result = service.stopAgentSession({ sessionId: session.id });
     expect(result.stopped).toBe(true);
-    expect(store.listSessions().find((candidate) => candidate.id === session.id)?.status).toBe("stopped");
+    expect(store.listSessions().find((candidate) => candidate.id === session.id)).toBeUndefined();
     expect(store.listActivity().find((event) => event.type === "agent.stopped")).toBeTruthy();
   });
 

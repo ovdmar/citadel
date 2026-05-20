@@ -549,7 +549,7 @@ describe("createDaemonApp", () => {
     }
   });
 
-  it("stops an agent session through DELETE /api/agent-sessions/:id", async () => {
+  it("stops and removes an agent session through DELETE /api/agent-sessions/:id", async () => {
     const fixture = createFixture();
     const { repoPath } = createGitFixtureWithRemote(fixture.config.dataDir);
     const { server } = createDaemonApp(fixture);
@@ -582,7 +582,7 @@ describe("createDaemonApp", () => {
       expect(stop.status).toBe(202);
       const state = await getJson<{ sessions: Array<{ id: string; status: string }> }>(`${baseUrl}/api/state`);
       const updated = state.sessions.find((s) => s.id === sessionResp.session.id);
-      expect(updated?.status).toBe("stopped");
+      expect(updated).toBeUndefined();
     } finally {
       await closeServer(server);
     }

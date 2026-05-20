@@ -219,7 +219,7 @@ export class OperationService {
     const session = this.store.listSessions().find((candidate) => candidate.id === input.sessionId);
     if (!session) return { stopped: false, reason: "session_not_found" as const };
     if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
-    this.store.updateSessionStatus(session.id, "stopped");
+    this.store.deleteSession(session.id);
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     this.activity(
       "agent.stopped",
@@ -229,7 +229,7 @@ export class OperationService {
       session.workspaceId,
       null,
     );
-    return { stopped: true, reason: "ok" as const };
+    return { stopped: true, removed: true, reason: "ok" as const };
   }
 
   cancelOperation(operationId: string) {
