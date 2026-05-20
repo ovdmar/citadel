@@ -7,7 +7,9 @@ pnpm install
 make dev
 ```
 
-The daemon listens on `http://127.0.0.1:4337` by default. The Vite web app listens on `http://127.0.0.1:5173` and proxies API, SSE, and terminal WebSocket traffic to the daemon.
+The daemon listens on `http://127.0.0.1:4337` by default (operations install: `4010`). The Vite web app listens on `http://127.0.0.1:5173` (operations install: `5175`) and proxies `/api`, `/events`, `/terminals`, and the diagnostic `/terminal` WebSocket to the daemon.
+
+> Port `3000` is reserved for Grafana on operator machines. Do not bind any Citadel surface to it.
 
 ## State
 
@@ -52,3 +54,40 @@ curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
 ```
 
 This surface is for trusted local/internal deployments. Do not bind it to a public interface without adding an explicit authorization layer and network controls.
+
+## Terminal Runbook (ttyd)
+
+Interactive terminals in the cockpit are rendered by per-session `ttyd` processes that the daemon spawns, supervises, and reverse-proxies.
+
+**Required tools:** `tmux`, `ttyd`. The daemon resolves `ttyd` via `TTYD_BIN` (default `/home/linuxbrew/.linuxbrew/bin/ttyd`).
+
+**How it works:**
+- The cockpit calls `POST /api/agent-sessions/:sessionId/terminal` to ensure a ttyd is running for that session. The daemon allocates a free TCP port in `CITADEL_TTYD_PORT_BASE..CITADEL_TTYD_PORT_MAX` (default `7681..7720`), binds ttyd to `127.0.0.1:<port>` with `-b /terminals/<sessionId>` so it knows its proxied base path, and runs `bash -lc 'tmux attach -t <session>'` inside.
+- The daemon proxies all HTTP and WebSocket traffic at `/terminals/:sessionId/*` to the matching ttyd. The cockpit renders `<iframe src="/terminals/:sessionId/">`.
+- On daemon startup, any orphaned `ttyd` listening inside the configured port range is reaped (via `lsof -nP -iTCP -sTCP:LISTEN`).
+- Stopping a Citadel session (`DELETE /api/agent-sessions/:id`) releases its ttyd. `DELETE /api/agent-sessions/:id/terminal` releases the ttyd without stopping the tmux session.
+
+**Diagnostics:**
+
+```bash
+# List active ttyd records the daemon is aware of
+curl -sS http://127.0.0.1:4010/api/terminals | jq
+
+# Ask the daemon to ensure a ttyd for a known session
+curl -sS -X POST http://127.0.0.1:4010/api/agent-sessions/<sessionId>/terminal | jq
+
+# Forcefully release a stuck ttyd for a session
+curl -sS -X DELETE http://127.0.0.1:4010/api/agent-sessions/<sessionId>/terminal
+```
+
+**Error codes** surfaced to the cockpit:
+- `ttyd_missing` — `TTYD_BIN` does not point at an executable ttyd. Install ttyd or update the path.
+- `no_free_port` — every port in the configured range is busy. Release stale terminals or widen the range.
+- `ttyd_start_timeout` — ttyd was spawned but never listened. Inspect daemon logs and verify the shell command exits cleanly.
+- `tmux_session_missing` — the underlying tmux session is gone (agent exited). Reconcile or recreate the session.
+- `spawn_failed` — Node could not spawn ttyd. Check permissions and shell binary.
+- `session_not_found` — Citadel does not know that session id. Refresh the cockpit.
+
+**Diagnostic xterm gateway:** `/terminal/:sessionId` still exposes the legacy xterm/WebSocket bridge for tooling and tests. It is not used by the cockpit and is not the default renderer.
+
+**Trade-offs accepted:** one external ttyd process per active terminal, dynamic loopback ports, and a proxy hop, in exchange for unmodified terminal fidelity (alt-screen TUIs like Claude Code, full colour, cursor, shortcut passthrough, paste).

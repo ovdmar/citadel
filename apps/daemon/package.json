@@ -21,6 +21,10 @@
     "@citadel/terminal": "workspace:*",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "http-proxy": "^1.18.1",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/http-proxy": "^1.17.16"
   }
 }

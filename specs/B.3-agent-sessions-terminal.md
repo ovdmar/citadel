@@ -33,16 +33,15 @@
 [~] 1. Terminal output renders real data.
 [ ] 2. Terminal layout has stable bounds inside the cockpit.
 [ ] 3. Terminal sessions are backed by durable tmux sessions.
-[ ] 4. Browser terminal rendering uses xterm.js.
-[ ] 5. Terminal input/output uses WebSocket.
+[ ] 4. The primary browser terminal renderer is `ttyd` served through a Citadel-owned reverse proxy. Each session runs its own ttyd instance bound to `127.0.0.1` and attached to the session's tmux. The cockpit renders it via `<iframe src="/terminals/<sessionId>/">`.
+[ ] 5. Terminal input/output happens inside the ttyd-served xterm and rides ttyd's own WebSocket — proxied through the daemon (so the only external port is the daemon's) and never goes to a 3rd-party host.
 [ ] 6. App state, operations, events, and provider health use REST/SSE.
-[ ] 7. Citadel owns attach, reconnect, visible snapshot, live streaming, input routing, and terminal permissions.
-[ ] 8. Long terminal buffers stay responsive.
-[ ] 9. Terminal scrollback is bounded or virtualized.
-[ ] 10. Terminal state explains disconnected, reconnecting, attached, read-only, and failed states.
-[ ] 11. The terminal renderer ships a built-in dark-blue palette (Citadel theme) for the 16 ANSI colors, cursor, and selection — independent of the user's shell profile.
-[ ] 12. The initial reattach snapshot uses tmux's visible viewport with escape sequences (`capture-pane -p -e`) and restores the recorded cursor cell, so cursor and text always land in the same place after reconnect.
-[ ] 13. When the underlying tmux session exits or the snapshot fails, the cockpit writes a visible inline message in the terminal pane (e.g. `[session exited: …]`, `[snapshot error: …]`, `[connection refused: …]`) and flips the status badge to `closed`; the cockpit never leaves a blank black surface without context.
+[ ] 7. Citadel still owns session creation, metadata, workspace/runtime association, tmux lifecycle, terminal permissions, ttyd spawn/cleanup, and proxy routing. ttyd is only the renderer.
+[ ] 8. Long terminal buffers stay responsive; ttyd's xterm is the renderer and its scrollback bound is enforced by the embedded xterm.
+[ ] 9. ttyd ports come from a configurable loopback-only range (default `7681..7720`); the daemon scans for stale `ttyd` processes inside that range on startup and reaps them.
+[ ] 10. Terminal pane state explains starting, attached (`ttyd`), error, and closed states. When ttyd cannot be started (`ttyd_missing`, `no_free_port`, `ttyd_start_timeout`, `tmux_session_missing`, `spawn_failed`) the cockpit shows an inline error with the code, detail, settings/runbook links, and a Retry button — never a blank black pane.
+[ ] 11. The Citadel daemon exposes a diagnostic xterm/WebSocket gateway (`/terminal/:sessionId`) for tooling and tests; it is *not* the default cockpit renderer.
+[ ] 12. Trade-offs of the ttyd-as-renderer choice are accepted: one external ttyd process per active terminal, dynamic local ports, an additional proxy hop. The benefit is unmodified terminal fidelity (alt-screen, true colour, cursor, key passthrough, paste) without Citadel having to re-implement an xterm gateway.
 
 ## Future Terminal Surfaces
 

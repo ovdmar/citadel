@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "./api.js";
 
 export { RuntimeLauncher, WorkspaceForm } from "./workspace-forms.js";
-export { DiffPanel, TerminalPane } from "./terminal-pane.js";
+export { TerminalPane } from "./terminal-pane.js";
 
 export function useWorkspaceCockpitSummary(workspace: Workspace | null) {
   return useQuery({

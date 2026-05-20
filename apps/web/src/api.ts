@@ -11,6 +11,8 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly issues: ApiValidationIssue[] = [],
+    readonly detail?: string,
+    readonly status?: number,
   ) {
     super(message);
   }
@@ -28,9 +30,14 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 async function parseApiError(response: Response) {
   const text = await response.text();
   try {
-    const body = JSON.parse(text) as { error?: string; issues?: ApiValidationIssue[] };
-    return new ApiError(body.error || response.statusText, Array.isArray(body.issues) ? body.issues : []);
+    const body = JSON.parse(text) as { error?: string; issues?: ApiValidationIssue[]; detail?: string };
+    return new ApiError(
+      body.error || response.statusText,
+      Array.isArray(body.issues) ? body.issues : [],
+      typeof body.detail === "string" ? body.detail : undefined,
+      response.status,
+    );
   } catch {
-    return new ApiError(text || response.statusText);
+    return new ApiError(text || response.statusText, [], undefined, response.status);
   }
 }

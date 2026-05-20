@@ -12,7 +12,6 @@ import { Link, Outlet, RouterProvider, createRootRoute, createRoute, createRoute
 import { Cable, CheckCircle2, HeartPulse, Settings, TerminalSquare, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import "@xterm/xterm/css/xterm.css";
 import { api, queryClient } from "./api.js";
 import { type StateResponse, useStateQuery } from "./app-state.js";
 import { Cockpit } from "./cockpit.js";
@@ -26,6 +25,7 @@ import { OperationsView } from "./routes/operations.js";
 import { RepoSettingsView } from "./routes/repo-settings.js";
 import { StructuredConfig } from "./structured-config.js";
 import "./styles.css";
+import "./stage-terminal.css";
 import "./cockpit-extras.css";
 import "./cockpit-tools.css";
 import "./modals.css";

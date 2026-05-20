@@ -14,7 +14,7 @@ import {
   type WorkspaceCockpitSummary,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
-import { type McpToolCall, callMcpTool, mcpStatus, mcpToolDefinitions, serializeWorkspaceResource } from "@citadel/mcp";
+import { mcpStatus, mcpToolDefinitions } from "@citadel/mcp";
 import { OperationService } from "@citadel/operations";
 import {
   collectGitHubCiRunLog,
@@ -28,13 +28,15 @@ import {
   transitionJiraIssue,
 } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
-import { attachTerminalWebSocket } from "@citadel/terminal";
+import { attachTerminalWebSocket, createTtydManager } from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
+import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
+import { registerTerminalRoutes } from "./terminal-routes.js";
 import { readWorkspaceDiff, readWorkspaceGitStatus } from "./workspace-diff.js";
 
 export type DaemonApp = {
@@ -74,6 +76,7 @@ export function createDaemonApp(input: {
   const server = http.createServer(app);
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
+  const ttyd = createTtydManager();
 
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
@@ -88,6 +91,11 @@ export function createDaemonApp(input: {
     };
     for (const client of sseClients) client.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
   };
+
+  // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
+  const initialTerminalCleanup = ttyd.cleanupStale();
+  if (initialTerminalCleanup.killed > 0) emit("terminal.cleanup", initialTerminalCleanup);
+  registerTerminalRoutes({ app, server, store, ttyd, emit });
 
   const cachedProviderHealth = () =>
     cachedProvider("provider-health", () => collectProviderHealth(config.providers), 15_000);
@@ -479,6 +487,7 @@ export function createDaemonApp(input: {
       if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
       const result = operations.stopAgentSession({ sessionId });
       if (!result.stopped) return res.status(404).json(result);
+      ttyd.release(sessionId);
       emit("agent.updated", { sessionId });
       res.status(202).json(result);
     }),
@@ -636,11 +645,12 @@ export function createDaemonApp(input: {
     }),
   );
 
+  const mcpDeps = { config, store, operations, ttyd, providerCache, emit };
   registerMcpRoutes(app, asyncRoute, {
     config,
     store,
-    callDaemonMcpTool,
-    readMcpResource,
+    callDaemonMcpTool: (call) => callDaemonMcpTool(mcpDeps, call),
+    readMcpResource: (uri) => readMcpResource(store, config, uri),
   });
 
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute });
@@ -685,6 +695,7 @@ export function createDaemonApp(input: {
     res.status(400).json({ error: message });
   });
 
+  // Diagnostic xterm.js gateway. The cockpit uses ttyd via /terminals/* instead; this stays for tooling.
   attachTerminalWebSocket(server, (sessionId) => {
     const session = store.listSessions().find((candidate) => candidate.id === sessionId);
     return session?.tmuxSessionName ?? null;
@@ -706,79 +717,6 @@ export function createDaemonApp(input: {
   }
 
   return { app, server, emit };
-
-  async function callDaemonMcpTool(call: McpToolCall) {
-    if (call.name === "create_workspace") {
-      const result = await operations.createWorkspace(CreateWorkspaceInputSchema.parse(call.arguments ?? {}));
-      emit("workspace.updated", result);
-      return result;
-    }
-    if (call.name === "start_agent_session") {
-      const input = CreateAgentSessionInputSchema.parse(call.arguments ?? {});
-      const runtime = config.runtimes.find((candidate) => candidate.id === input.runtimeId);
-      if (!runtime) throw new Error(`Unknown runtime: ${input.runtimeId}`);
-      const session = await operations.createAgentSession(input, {
-        command: runtime.command,
-        args: runtime.args,
-        displayName: runtime.displayName,
-        promptArg: runtime.promptArg ?? null,
-      });
-      emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
-      return { session };
-    }
-    if (call.name === "stop_agent_session") {
-      const sessionId = typeof call.arguments?.sessionId === "string" ? (call.arguments.sessionId as string) : "";
-      const result = operations.stopAgentSession({ sessionId });
-      emit("agent.updated", { sessionId });
-      return result;
-    }
-    if (call.name === "remove_workspace") {
-      const workspaceId = typeof call.arguments?.workspaceId === "string" ? (call.arguments.workspaceId as string) : "";
-      const force = call.arguments?.force === true;
-      const archiveOnly = call.arguments?.archiveOnly === true;
-      const result = await operations.removeWorkspace({ workspaceId, force, archiveOnly });
-      emit("workspace.updated", result);
-      return result;
-    }
-    if (call.name === "reconcile") {
-      const result = operations.reconcile();
-      providerCache.clear();
-      emit("state.reconciled", result);
-      return result;
-    }
-    if (call.name === "archive_workspace") {
-      const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";
-      const result = await operations.removeWorkspace({ workspaceId, archiveOnly: true });
-      emit("workspace.updated", result);
-      return result;
-    }
-    const providerHealth = await collectProviderHealth(config.providers);
-    return callMcpTool(call, {
-      repos: store.listRepos(),
-      workspaces: store.listWorkspaces(),
-      sessions: store.listSessions(),
-      operations: store.listOperations(),
-      activity: store.listActivity(),
-      providerHealth,
-      runtimes: listRuntimeHealth(config.runtimes),
-    });
-  }
-
-  function workspaceResource() {
-    return serializeWorkspaceResource({
-      repos: store.listRepos(),
-      workspaces: store.listWorkspaces(),
-      sessions: store.listSessions(),
-    });
-  }
-
-  async function readMcpResource(uri: string) {
-    if (uri === "citadel://repos") return { repos: store.listRepos() };
-    if (uri === "citadel://workspaces") return workspaceResource();
-    if (uri === "citadel://provider-health") return { providerHealth: await collectProviderHealth(config.providers) };
-    if (uri === "citadel://activity") return { activity: store.listActivity() };
-    return null;
-  }
 
   async function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000) {
     const cached = providerCache.get(key);

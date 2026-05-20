@@ -141,13 +141,28 @@ Resources:
 
 Tools include read-only state inspection plus daemon-handled workspace creation, agent launch, metadata archive, and workspace link listing. See [runbook.md](./runbook.md) for curl examples.
 
-## Terminal Gateway
+## Terminal Renderer (ttyd)
 
-Shell-backed sessions are tmux sessions. Browser terminal attach uses a WebSocket:
+Shell-backed sessions are tmux sessions. The cockpit's interactive renderer is `ttyd`, run as a per-session child process and reverse-proxied through the daemon at `/terminals/:sessionId/*`.
+
+Environment variables:
+
+- `TTYD_BIN` — absolute path to the ttyd binary (default `/home/linuxbrew/.linuxbrew/bin/ttyd`).
+- `CITADEL_SHELL_BIN` — shell used to wrap `tmux attach` (default `$SHELL` then `/bin/bash`).
+- `CITADEL_TTYD_PORT_BASE`, `CITADEL_TTYD_PORT_MAX` — inclusive port range used for ttyd allocation (default `7681..7720`). All ports are bound to `127.0.0.1`.
+
+Lifecycle:
+
+- A ttyd process is spawned the first time the cockpit hits `POST /api/agent-sessions/:sessionId/terminal`. ttyd is launched with `-W --check-origin=false -i 127.0.0.1 -b /terminals/<sessionId>` and runs `bash -lc 'tmux attach -t <session>'`.
+- Stopping a session releases its ttyd. `DELETE /api/agent-sessions/:id/terminal` releases without stopping tmux.
+- On daemon startup, stale `ttyd` processes that listen inside the configured port range are reaped.
+
+## Diagnostic Terminal Gateway
+
+A separate xterm/WebSocket gateway is still exposed at `/terminal/:sessionId` for tooling and tests:
 
 - reconnect sends a bounded visible-screen snapshot,
 - live output streams from tmux control mode as incremental chunks,
-- input, paste, and resize are relayed to tmux,
-- interaction-triggered snapshots cover short commands that finish before control-mode attach is fully ready.
+- input, paste, and resize are relayed to tmux.
 
-The terminal gateway is intended for local Linux host usage with tmux installed.
+This gateway is *not* the cockpit's default renderer. Use it for scripted tests or remote debugging only.
