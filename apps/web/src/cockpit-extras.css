@@ -411,6 +411,11 @@
   color: var(--muted);
 }
 
+.pr-summary {
+  display: grid;
+  gap: 4px;
+}
+
 .app-chip-grid {
   display: flex;
   flex-wrap: wrap;

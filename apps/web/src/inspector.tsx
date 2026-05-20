@@ -8,7 +8,7 @@ import { Button } from "./components/ui/button.js";
 import { formatLabel } from "./labels.js";
 import { type ApprovalTone, approvalToneFor, prToneFor } from "./workspace-card.js";
 
-type InspectorTab = "stats" | "git";
+type InspectorTab = "stats" | "diff";
 
 export function Inspector(props: {
   workspace: Workspace;
@@ -39,24 +39,24 @@ export function Inspector(props: {
           type="button"
           className={`inspector-tab ${tab === "stats" ? "active" : ""}`}
           onClick={() => setTab("stats")}
-          title="PR, deploys, and session stats"
+          title="PR and check stats"
         >
           Stats
         </button>
         <button
           type="button"
-          className={`inspector-tab ${tab === "git" ? "active" : ""}`}
-          onClick={() => setTab("git")}
-          title="Working tree and changed files"
+          className={`inspector-tab ${tab === "diff" ? "active" : ""}`}
+          onClick={() => setTab("diff")}
+          title="Changed files and working tree diff"
         >
-          Git
+          Diff
         </button>
       </div>
       <div className="column-body">
         {tab === "stats" ? (
           <StatsTab workspace={props.workspace} repo={props.repo} summary={props.summary} />
         ) : (
-          <GitTab workspace={props.workspace} summary={props.summary} />
+          <DiffTab workspace={props.workspace} summary={props.summary} />
         )}
       </div>
     </>
@@ -92,13 +92,63 @@ function StatsTab(props: {
 
   return (
     <div className="inspector-body">
-      <section className="inspector-identity">
-        <h3>{props.workspace.name}</h3>
-        <span className="branch">{props.workspace.branch}</span>
-        <span className="command-result-meta">
-          {props.workspace.dirty ? "dirty" : "clean"} ·{" "}
-          {props.summary ? formatLabel(props.summary.readiness.state) : formatLabel(props.workspace.lifecycle)}
-        </span>
+      <section className="inspector-block">
+        <h4>PR</h4>
+        {pr ? (
+          <div className="pr-summary">
+            <a
+              href={pr.url}
+              target="_blank"
+              rel="noreferrer"
+              className={`attach-button attached tone-${approvalTone === "approved" ? "success" : approvalTone === "changes" ? "danger" : "warning"}`}
+              title={`PR #${pr.number}: ${pr.title}`}
+            >
+              <GitPullRequest size={12} /> #{pr.number}
+            </a>
+            <div className="command-result-meta">
+              <span className="diff-add">+{additions}</span>
+              <span className="diff-del"> −{deletions}</span>
+              {" · "}
+              <span
+                className={`tone-${prTone === "passing" ? "success" : prTone === "failing" ? "failure" : "pending"}`}
+              >
+                {formatLabel(prTone)}
+              </span>
+              {" · "}
+              <strong>{approvalTone}</strong>
+            </div>
+          </div>
+        ) : (
+          <div className="empty compact">
+            <GitPullRequest size={12} /> No PR for this branch yet.
+          </div>
+        )}
+      </section>
+
+      <section className="inspector-block">
+        <h4>PR checks</h4>
+        {pr ? (
+          <div className="check-list">
+            {checks.length ? (
+              checks.map((check) => (
+                <a
+                  key={`${check.name}-${check.conclusion ?? check.status}`}
+                  className="check-row"
+                  href={check.url ?? undefined}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <strong>{check.name}</strong>
+                  <span className={`tone-${checkTone(check)}`}>{formatLabel(check.conclusion ?? check.status)}</span>
+                </a>
+              ))
+            ) : (
+              <div className="empty compact">PR exists but no checks reported yet.</div>
+            )}
+          </div>
+        ) : (
+          <div className="empty compact">No PR yet, nothing to check.</div>
+        )}
       </section>
 
       <section className="inspector-block">
@@ -120,21 +170,6 @@ function StatsTab(props: {
           >
             <Hash size={12} /> {props.workspace.issueKey ?? "Issue"}
           </button>
-          {pr ? (
-            <a
-              href={pr.url}
-              target="_blank"
-              rel="noreferrer"
-              className={`attach-button attached tone-${approvalTone === "approved" ? "success" : approvalTone === "changes" ? "danger" : "warning"}`}
-              title={`PR #${pr.number}: ${pr.title}`}
-            >
-              <GitPullRequest size={12} /> PR #{pr.number}
-            </a>
-          ) : (
-            <span className="attach-button" title="No PR detected for this branch yet">
-              <GitPullRequest size={12} /> No PR
-            </span>
-          )}
         </div>
         {showSlackAttach ? (
           <div className="modal-form">
@@ -177,15 +212,6 @@ function StatsTab(props: {
             </Button>
           </div>
         ) : null}
-        {pr ? (
-          <div className="command-result-meta">
-            <span className="diff-add">+{additions}</span> / <span className="diff-del">-{deletions}</span> ·{" "}
-            <span className={`tone-${prTone === "passing" ? "success" : prTone === "failing" ? "failure" : "pending"}`}>
-              {formatLabel(prTone)}
-            </span>{" "}
-            · approval <strong>{approvalTone}</strong>
-          </div>
-        ) : null}
       </section>
 
       <section className="inspector-block">
@@ -220,37 +246,11 @@ function StatsTab(props: {
           </div>
         ) : null}
       </section>
-
-      <section className="inspector-block">
-        <h4>PR checks</h4>
-        {pr ? (
-          <div className="check-list">
-            {checks.length ? (
-              checks.map((check) => (
-                <a
-                  key={`${check.name}-${check.conclusion ?? check.status}`}
-                  className="check-row"
-                  href={check.url ?? undefined}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <strong>{check.name}</strong>
-                  <span className={`tone-${checkTone(check)}`}>{formatLabel(check.conclusion ?? check.status)}</span>
-                </a>
-              ))
-            ) : (
-              <div className="empty compact">PR exists but no checks reported yet.</div>
-            )}
-          </div>
-        ) : (
-          <div className="empty compact">No PR yet, nothing to check.</div>
-        )}
-      </section>
     </div>
   );
 }
 
-function GitTab(props: { workspace: Workspace; summary: WorkspaceCockpitSummary | undefined }) {
+function DiffTab(props: { workspace: Workspace; summary: WorkspaceCockpitSummary | undefined }) {
   const diff = useQuery<WorkspaceDiff>({
     queryKey: ["diff", props.workspace.id],
     queryFn: () => api<WorkspaceDiff>(`/api/workspaces/${props.workspace.id}/diff`),

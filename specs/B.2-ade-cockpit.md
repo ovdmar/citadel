@@ -43,17 +43,17 @@
 
 ## Inspector Tabs
 
-[ ] 1. The inspector has at least two tabs: `Stats` and `Git`. The tab strip is a compact pill-style picker that occupies only its own content width — never a half-panel-sized control.
-[ ] 2. The `Stats` tab shows workspace identity, PR size, and dual-state Slack/Issue/PR provider icons.
+[ ] 1. The inspector has at least two tabs: `Stats` and `Diff`. The tab strip is a compact pill-style picker that occupies only its own content width — never a half-panel-sized control.
+[ ] 2. The `Stats` tab focuses on PR stats and PR check stats. It does **not** repeat workspace identity (name, branch) or workspace lifecycle/dirty state — those are already visible on the workspace card and stage header.
 [ ] 3. The Slack icon is grey when no thread is attached; clicking allows attaching a Slack conversation by URL when the Slack provider is healthy.
 [ ] 4. The Issue (Jira-style) icon is grey when no issue is attached; clicking allows attaching an issue when the issue provider is healthy. If safe, attaching an issue can rename the workspace branch to `<issue-key>-<title-dashified>`.
-[ ] 5. The PR/GitHub icon cannot be manually attached. It is auto-detected from workspace git state and cycles through lifecycle colors (grey → yellow → green → red as appropriate).
+[ ] 5. The PR pill in the Stats tab is auto-detected from workspace git state and cycles through lifecycle colors (grey → yellow → green → red as appropriate). It is not manually attachable.
 [ ] 6. The `Stats` tab shows the list of locally deployed apps for the current namespace, sourced from repo hooks. App chips show name, status colour, and clickable link.
 [ ] 6a. When no apps hook is configured, the Deployed apps panel renders an explicit mock preview of how chips will appear and links directly to the repo settings where the hook is configured. It must never show a blank or non-actionable empty panel.
 [ ] 7. Repo hooks must dynamically provide the list of services so monorepos with many services only show the subset touched by the workspace.
-[ ] 8. Below deployed apps, the `Stats` tab shows the full PR check list with name and status, sourced from the version control provider.
-[ ] 9. The `Git` tab shows the changed files in the current workspace/PR with additions/deletions per file.
-[ ] 10. The `Git` tab is structured so a future full-screen *Human Review* mode (GitHub-style code review with comments visible to the agent) can be added without redesigning the panel.
+[ ] 8. The `Stats` tab surfaces the full PR check list with name and status, sourced from the version control provider, near the top of the tab.
+[ ] 9. The `Diff` tab shows the changed files in the current workspace/PR with additions/deletions per file. Changed files are accessed here, not in Stats.
+[ ] 10. The `Diff` tab is structured so a future full-screen *Human Review* mode (GitHub-style code review with comments visible to the agent) can be added without redesigning the panel.
 [ ] 11. The Stats tab does not duplicate the per-session list — sessions live in the center column's tab strip only.
 
 ## Readiness

@@ -140,16 +140,21 @@ test("desktop repo settings page renders identity and provider toggles", async (
   }
 });
 
-test("settings renders runtime and MCP visibility", async ({ page }, testInfo) => {
+test("settings renders sidebar IA with provider and runtime sections", async ({ page }, testInfo) => {
   await page.goto("/settings");
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
-  await expect(page.locator(".panel-title").getByRole("heading", { name: "Local Config" })).toBeVisible();
-  await expect(page.locator(".panel-title").getByRole("heading", { name: "Setup Status" })).toBeVisible();
-  await expect(page.locator(".panel-title").getByRole("heading", { name: "Providers" })).toBeVisible();
-  await expect(page.locator(".panel-title").getByRole("heading", { name: "Runtimes" })).toBeVisible();
-  await expect(page.locator(".panel-title").getByRole("heading", { name: "MCP" })).toBeVisible();
-  await expect(page.locator(".panel-title").getByRole("heading", { name: "Repositories" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Save config" }).or(page.getByText("Loading config"))).toBeVisible();
+  const sidebar = page.locator(".settings-sidebar");
+  await expect(sidebar.getByRole("button", { name: "Overview" })).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: "Providers" })).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: "Runtimes" })).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: "Repositories" })).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: "MCP" })).toBeVisible();
+  await expect(sidebar.getByRole("button", { name: "Advanced" })).toBeVisible();
+  await sidebar.getByRole("button", { name: "Providers" }).click();
+  await expect(page.getByRole("heading", { name: "Tickets" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Git server / PR / CI" })).toBeVisible();
+  await sidebar.getByRole("button", { name: "Runtimes" }).click();
+  await expect(page.getByRole("heading", { name: "Platform runtimes" })).toBeVisible();
   await page.screenshot({ path: `docs/campaigns/screenshot-${testInfo.project.name}-settings.png`, fullPage: true });
 });
 
@@ -168,6 +173,7 @@ test("desktop settings removes repository tracking with active-work confirmation
     await startSession(request, workspaceId, "Remove Shell");
 
     await page.goto("/settings");
+    await page.locator(".settings-sidebar").getByRole("button", { name: "Repositories" }).click();
     const repoRow = page.locator(".repo-row").filter({ hasText: repoName });
     await expect(repoRow).toContainText("1 active sessions");
     await repoRow.getByRole("button", { name: "Remove tracking" }).click();

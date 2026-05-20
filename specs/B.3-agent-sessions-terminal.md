@@ -27,6 +27,8 @@
 [ ] 3. Runtime health is visible before session start.
 [ ] 4. Unavailable runtime adapters explain the missing binary, auth, config, or health issue.
 [ ] 5. Runtime adapter configuration lives in Citadel settings/config.
+[ ] 6. Settings distinguishes **platform runtimes** (shipped with Citadel: `claude-code`, `cursor-agent`, `pi`, and the built-in `shell`/Plain Terminal) from operator-defined **custom runtimes**. The platform group exists even when the binary is missing — Citadel surfaces it as `unavailable` and explains how to install it. Custom runtimes only appear when present in config.
+[ ] 7. The built-in shell runtime (`shell`) is treated as a Plain Terminal, not an agent runtime — it never appears in agent counts, but it is a first-class option when starting a session.
 
 ## Terminal
 

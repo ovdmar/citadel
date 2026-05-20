@@ -63,6 +63,14 @@
 [ ] 11. Release checks include format, typecheck, lint, test, e2e, production build, and performance smoke.
 [ ] 12. Coverage targets are meaningful and behavior-oriented.
 
+## Test Isolation (source of truth)
+
+[~] 1. Tests must never write into the operator's working Citadel state.
+[~] 2. Vitest tests must allocate temporary directories via `fs.mkdtempSync(path.join(os.tmpdir(), ...))` instead of relying on the default `CITADEL_DATA_DIR`.
+[~] 3. Playwright tests must run against a daemon started with an isolated `CITADEL_DATA_DIR` and ports that cannot collide with the operator's dev daemon (4010) or web (5175).
+[~] 4. Citadel provides `pnpm test:isolated` and `pnpm e2e:isolated` wrappers (see `scripts/dev/test-isolated.ts`). They allocate a fresh `CITADEL_DATA_DIR` under `os.tmpdir()`, randomise Playwright ports out of the dev range, and clean up after the run unless `CITADEL_TEST_KEEP=1`.
+[ ] 5. **Future:** a containerised e2e runner that pins Node, pnpm, `gh`, `git`, and `ttyd` versions for fully reproducible CI. For now, the isolated scripts above are the documented entry point.
+
 ---
 
 keywords: ui, shadcn, cockpit, navigation, performance, mobile, screenshots, e2e, release quality

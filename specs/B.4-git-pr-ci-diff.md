@@ -48,11 +48,11 @@
 [ ] 8. Diff panel handles conflicted files.
 [ ] 9. Diff summary is connected to readiness and PR/check state.
 [ ] 10. The diff/review surface is read-only.
-[ ] 11. The inspector `Git` tab shows the changed files list with additions/deletions per file in a compact list.
+[ ] 11. The inspector `Diff` tab shows the changed files list with additions/deletions per file in a compact list.
 
 ## Human Review (Planned)
 
-[ ] 1. A future full-screen *Human Review* mode is reachable from the inspector `Git` tab.
+[ ] 1. A future full-screen *Human Review* mode is reachable from the inspector `Diff` tab.
 [ ] 2. Human Review presents files in a GitHub-style review surface.
 [ ] 3. Human Review allows leaving file/line comments.
 [ ] 4. Comments are visible to the active agent session as structured input.

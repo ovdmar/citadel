@@ -11,10 +11,31 @@
 [ ] 3. GitHub provider uses gh for auth, health, PR, review, checks, and URLs where practical.
 [ ] 4. Jira provider uses shell-backed tools such as acli/jtk for auth, health, issue state, and transitions where practical.
 [ ] 5. Usage provider is provider/hook based.
-[ ] 6. Provider health is visible.
+[ ] 6. Provider health is visible per provider AND per interaction method.
 [ ] 7. Provider degraded state explains missing/stale data.
 [ ] 8. Provider data includes refresh age.
 [ ] 9. Citadel prefers existing external tool auth for the first production baseline.
+
+## Provider Category Model (source of truth)
+
+Citadel organises providers by **service category**, not by tool name. Each category has one active provider; each provider has one active interaction method. The UI in `apps/web/src/settings-providers.tsx` is the source-of-truth presentation of this model.
+
+Categories (current):
+
+- **Tickets** — issue tracking and transitions. Providers: `jira` (supported). Future: Linear, ClickUp.
+- **Git server / PR / CI** — pull requests, reviews, status checks, CI runs. Providers: `github` (supported). Future: GitLab, Gitea, Bitbucket.
+
+Each provider declares one or more interaction methods. Today's wired methods:
+
+- Jira → `jtk` (shell-backed). Planned: `acli`, direct REST + API token.
+- GitHub → `gh` (shell-backed). Planned: direct REST + API token.
+
+Rules:
+
+- User picks **category → provider → method**. The UI must surface unsupported methods as "Planned" without letting them be selected.
+- Citadel must never ask the operator to type raw GitHub/Jira commands as "the provider" — that conflates transport with capability.
+- Health is reported per method; the existing per-provider health record stays valid but should be read as "health for the active method".
+- New providers/methods are added by extending `CATEGORIES` in `settings-providers.tsx` and (when wired) the corresponding `@citadel/providers` collector.
 
 ## Provider Setup
 
@@ -47,6 +68,22 @@
 [ ] 5. Settings can validate a repository configuration before it is used by workspace flows.
 [ ] 6. Settings can export or reveal the config source for advanced users.
 [ ] 7. Future API-backed providers can manage API keys through provider-specific settings.
+
+## Settings IA (source of truth)
+
+Settings is a single page with a left sidebar that splits configuration into discrete sections, not a giant scroll of forms. The router still exposes `/settings`; the route renders `apps/web/src/routes/settings.tsx`.
+
+Sections:
+
+- **Overview** — readiness counters (providers, runtimes, repos, MCP).
+- **Providers** — see Provider Category Model above.
+- **Runtimes** — built-in/platform runtimes (`claude-code`, `cursor-agent`, `pi`, `shell`/Plain Terminal) separated from operator-defined custom runtimes.
+- **Repositories** — registered repos with deep-link to per-repo settings.
+- **Hooks** — overview + pointer to per-repo configuration.
+- **MCP** — local-first MCP toggle visibility.
+- **Advanced** — raw `StructuredConfig` editor for power users.
+
+The structured-config form is intentionally retained as the escape hatch for fields the curated sections do not yet cover.
 
 ---
 
