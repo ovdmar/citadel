@@ -10,13 +10,14 @@ import type {
 } from "@citadel/contracts";
 import { Link } from "@tanstack/react-router";
 import {
-  Activity,
   Boxes,
   Cable,
   ChevronsLeft,
   ChevronsRight,
   Command,
+  ExternalLink,
   GitBranch,
+  GitPullRequest,
   HeartPulse,
   PanelLeftClose,
   PanelRightClose,
@@ -29,7 +30,7 @@ import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { ActivityRow } from "./activity-row.js";
 import { useEventRefresh, useStateQuery } from "./app-state.js";
-import { type WorkspaceAttention, nextAction, readinessForWorkspace } from "./cockpit-readiness.js";
+import { nextAction, readinessForWorkspace } from "./cockpit-readiness.js";
 import {
   CommandPalette,
   MobileMonitor,
@@ -50,6 +51,7 @@ import {
 } from "./cockpit-tools.js";
 import { Button } from "./components/ui/button.js";
 import { formatLabel } from "./labels.js";
+import { WorkspaceCard } from "./workspace-card.js";
 
 type StageMode = ShellStageMode;
 type MobileView = "monitor" | "navigator" | "stage" | "inspector";
@@ -185,7 +187,7 @@ export function Cockpit() {
             onSelect={focusWorkspace}
           />
         ) : (
-          <CreateWorkspaceStart repo={selectedRepo ?? null} />
+          <CreateWorkspaceStart repo={selectedRepo ?? null} runtimes={data?.runtimes ?? []} />
         )}
       </aside>
 
@@ -225,7 +227,7 @@ export function Cockpit() {
             />
           </>
         ) : (
-          <EmptyWorkspaceFlow repo={selectedRepo ?? null} />
+          <EmptyWorkspaceFlow repo={selectedRepo ?? null} runtimes={data?.runtimes ?? []} />
         )}
       </main>
 
@@ -244,7 +246,7 @@ export function Cockpit() {
             summaryLoading={cockpitSummary.isLoading}
           />
         ) : (
-          <CreateWorkspaceStart repo={selectedRepo ?? null} compact />
+          <CreateWorkspaceStart repo={selectedRepo ?? null} runtimes={data?.runtimes ?? []} compact />
         )}
       </aside>
 
@@ -362,23 +364,31 @@ function WorkspaceNavigator(props: {
             return sectionWorkspaces.length ? (
               <div key={section} className="workspace-group">
                 <h3>{formatLabel(section)}</h3>
-                {sectionWorkspaces.map((workspace) => {
-                  const attention = readinessForWorkspace(workspace, {
-                    sessions: props.sessions.filter((session) => session.workspaceId === workspace.id),
-                    operations: props.operations.filter((operation) => operation.workspaceId === workspace.id),
-                    summary: workspace.id === props.activeSummary?.workspaceId ? props.activeSummary : undefined,
-                  });
-                  return (
-                    <WorkspaceNavRow
-                      key={workspace.id}
-                      workspace={workspace}
-                      sessions={props.sessions.filter((session) => session.workspaceId === workspace.id)}
-                      attention={attention}
-                      active={workspace.id === props.activeWorkspaceId}
-                      onSelect={() => props.onSelect(workspace)}
-                    />
-                  );
-                })}
+                {[...sectionWorkspaces]
+                  .sort((a, b) => Number(b.pinned) - Number(a.pinned))
+                  .map((workspace) => {
+                    const workspaceSessions = props.sessions.filter((session) => session.workspaceId === workspace.id);
+                    const workspaceOperations = props.operations.filter(
+                      (operation) => operation.workspaceId === workspace.id,
+                    );
+                    const summary = workspace.id === props.activeSummary?.workspaceId ? props.activeSummary : undefined;
+                    const attention = readinessForWorkspace(workspace, {
+                      sessions: workspaceSessions,
+                      operations: workspaceOperations,
+                      summary,
+                    });
+                    return (
+                      <WorkspaceCard
+                        key={workspace.id}
+                        workspace={workspace}
+                        sessions={workspaceSessions}
+                        attention={attention}
+                        active={workspace.id === props.activeWorkspaceId}
+                        pullRequest={summary?.versionControl.pullRequest ?? null}
+                        onSelect={() => props.onSelect(workspace)}
+                      />
+                    );
+                  })}
               </div>
             ) : null;
           })}
@@ -386,33 +396,6 @@ function WorkspaceNavigator(props: {
       ))}
       {!filtered.length ? <div className="empty compact">No matching workspaces</div> : null}
     </div>
-  );
-}
-
-function WorkspaceNavRow(props: {
-  workspace: Workspace;
-  sessions: AgentSession[];
-  attention: WorkspaceAttention;
-  active: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button type="button" className={`workspace-nav-row ${props.active ? "active" : ""}`} onClick={props.onSelect}>
-      <span className={`status-dot ${props.attention.tone}`} />
-      <span className="workspace-row-main">
-        <strong>{props.workspace.name}</strong>
-        <small>
-          {props.attention.label} - {props.attention.nextAction}
-        </small>
-      </span>
-      <span className="workspace-row-badges">
-        {props.workspace.pinned ? <em>Pin</em> : null}
-        {props.workspace.issueKey ? <em>{props.workspace.issueKey}</em> : null}
-        {props.workspace.prUrl ? <em>PR</em> : null}
-        {props.workspace.dirty ? <em>Dirty</em> : null}
-        <em>{props.sessions.filter((session) => ["running", "waiting"].includes(session.status)).length} active</em>
-      </span>
-    </button>
   );
 }
 
@@ -426,6 +409,7 @@ function StageToolbar(props: {
   onSession: (sessionId: string) => void;
 }) {
   const readiness = props.summary?.readiness;
+  const pr = props.summary?.versionControl.pullRequest;
   return (
     <div className="stage-header">
       <div className="stage-toolbar">
@@ -433,6 +417,7 @@ function StageToolbar(props: {
           <GitBranch size={16} />
           <span>{props.workspace.branch}</span>
           <strong>{readiness ? formatLabel(readiness.state) : formatLabel(props.workspace.lifecycle)}</strong>
+          {pr ? <PrIdentityChip pr={pr} /> : null}
         </div>
         <div className="stage-tabs" role="tablist" aria-label="Agent stage modes">
           {(["terminal", "diff", "review"] as StageMode[]).map((mode) => (
@@ -519,6 +504,8 @@ function WorkspaceInspector(props: {
   const failedOperation = props.operations.find(
     (operation) => operation.workspaceId === props.workspace.id && operation.status === "failed",
   );
+  const pr = props.summary?.versionControl.pullRequest;
+  const ciRuns = props.summary?.ci.runs ?? [];
   return (
     <div className="inspector-stack">
       <section className="inspector-section">
@@ -535,6 +522,7 @@ function WorkspaceInspector(props: {
           <RuntimeLauncher workspace={props.workspace} runtimes={props.runtimes} />
         </div>
       </section>
+      {pr ? <ReviewInspectorSection pr={pr} ciRuns={ciRuns} /> : null}
       {failedOperation ? (
         <section className="inspector-section danger">
           <h2>Failed operation</h2>
@@ -576,6 +564,82 @@ function WorkspaceInspector(props: {
   );
 }
 
+function PrIdentityChip(props: { pr: NonNullable<WorkspaceCockpitSummary["versionControl"]["pullRequest"]> }) {
+  const checks = props.pr.checks ?? [];
+  const failed = checks.filter((check) =>
+    ["failure", "cancelled", "timed_out", "action_required"].includes(String(check.conclusion ?? "").toLowerCase()),
+  ).length;
+  const pending = checks.filter((check) =>
+    ["queued", "in_progress", "pending"].includes(String(check.status).toLowerCase()),
+  ).length;
+  const tone = failed ? "failing" : pending ? "pending" : checks.length ? "passing" : "open";
+  return (
+    <a className={`pr-identity pr-${tone}`} href={props.pr.url} target="_blank" rel="noreferrer" title={props.pr.title}>
+      <GitPullRequest size={13} />
+      <span>#{props.pr.number}</span>
+      {props.pr.draft ? <em>draft</em> : null}
+      {failed ? <em className="bad">{failed} failing</em> : null}
+      {pending && !failed ? <em className="warn">{pending} pending</em> : null}
+      {!failed && !pending && checks.length ? <em className="ok">{checks.length} passing</em> : null}
+      {typeof props.pr.additions === "number" || typeof props.pr.deletions === "number" ? (
+        <>
+          <span className="diff-add">+{props.pr.additions ?? 0}</span>
+          <span className="diff-del">-{props.pr.deletions ?? 0}</span>
+        </>
+      ) : null}
+    </a>
+  );
+}
+
+function ReviewInspectorSection(props: {
+  pr: NonNullable<WorkspaceCockpitSummary["versionControl"]["pullRequest"]>;
+  ciRuns: WorkspaceCockpitSummary["ci"]["runs"];
+}) {
+  const failed = props.pr.checks.filter((check) =>
+    ["failure", "cancelled", "timed_out", "action_required"].includes(String(check.conclusion ?? "").toLowerCase()),
+  );
+  return (
+    <section className="inspector-section">
+      <h2>Review</h2>
+      <a className="pr-summary-link" href={props.pr.url} target="_blank" rel="noreferrer">
+        <GitPullRequest size={14} />
+        <strong>
+          PR #{props.pr.number}: {props.pr.title}
+        </strong>
+        <ExternalLink size={12} />
+      </a>
+      <div className="pr-meta">
+        <span>{formatLabel(props.pr.state)}</span>
+        {props.pr.draft ? <span>Draft</span> : null}
+        {props.pr.reviewDecision ? <span>{formatLabel(props.pr.reviewDecision)}</span> : null}
+        <span className="diff-add">+{props.pr.additions ?? 0}</span>
+        <span className="diff-del">-{props.pr.deletions ?? 0}</span>
+      </div>
+      {failed.length ? (
+        <ul className="failed-check-list">
+          {failed.slice(0, 4).map((check) => (
+            <li key={`${check.name}-${check.conclusion ?? ""}`}>
+              {check.url ? (
+                <a href={check.url} target="_blank" rel="noreferrer">
+                  {check.name}
+                </a>
+              ) : (
+                <span>{check.name}</span>
+              )}
+              <em>{formatLabel(check.conclusion ?? check.status)}</em>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {props.ciRuns[0] ? (
+        <small className="ci-line">
+          Latest CI: {props.ciRuns[0].name} - {formatLabel(props.ciRuns[0].conclusion ?? props.ciRuns[0].status)}
+        </small>
+      ) : null}
+    </section>
+  );
+}
+
 function InspectorHeader(props: { onCollapse: () => void }) {
   return (
     <div className="inspector-header">
@@ -591,21 +655,34 @@ function InspectorHeader(props: { onCollapse: () => void }) {
 
 function HealthStrip(props: { providerHealth: ProviderHealth[]; mcpEnabled: boolean }) {
   const blockers = props.providerHealth.filter((provider) => provider.status !== "healthy");
+  const blockerTitle = blockers.length
+    ? blockers.map((provider) => `${provider.displayName} (${provider.status})`).join(" - ")
+    : undefined;
   return (
-    <div className={`health-strip ${blockers.length ? "warn" : "ok"}`}>
+    <div className={`health-strip ${blockers.length ? "warn" : "ok"}`} title={blockerTitle}>
       <Cable size={15} />
-      <span>{blockers.length ? `${blockers.length} provider warnings` : "Providers ready"}</span>
+      {blockers.length ? (
+        <Link to="/settings" className="health-strip-link">
+          {blockers
+            .slice(0, 2)
+            .map((provider) => provider.displayName)
+            .join(", ")}
+          {blockers.length > 2 ? ` +${blockers.length - 2}` : ""}
+        </Link>
+      ) : (
+        <span>Providers ready</span>
+      )}
       <span>MCP {props.mcpEnabled ? "on" : "off"}</span>
     </div>
   );
 }
 
-function CreateWorkspaceStart(props: { repo: Repo | null; compact?: boolean }) {
+function CreateWorkspaceStart(props: { repo: Repo | null; runtimes?: AgentRuntime[]; compact?: boolean }) {
   return (
     <div className={props.compact ? "create-start compact" : "create-start"}>
       <RepoForm />
       {props.repo ? (
-        <WorkspaceForm repo={props.repo} />
+        <WorkspaceForm repo={props.repo} runtimes={props.runtimes ?? []} />
       ) : (
         <div className="empty compact">Register a repo before creating workspaces</div>
       )}
@@ -613,12 +690,12 @@ function CreateWorkspaceStart(props: { repo: Repo | null; compact?: boolean }) {
   );
 }
 
-function EmptyWorkspaceFlow(props: { repo: Repo | null }) {
+function EmptyWorkspaceFlow(props: { repo: Repo | null; runtimes: AgentRuntime[] }) {
   return (
     <div className="empty-workspace-flow">
       <Plus size={24} />
       <h2>Start with a workspace</h2>
-      <CreateWorkspaceStart repo={props.repo} />
+      <CreateWorkspaceStart repo={props.repo} runtimes={props.runtimes} />
     </div>
   );
 }
@@ -631,10 +708,6 @@ function StagePlaceholder(props: { icon: React.ReactNode; title: string; body: s
       <p>{props.body}</p>
     </div>
   );
-}
-
-function Empty(props: { text: string }) {
-  return <div className="empty">{props.text}</div>;
 }
 
 function KeyValue(props: { label: string; value: string }) {

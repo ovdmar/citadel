@@ -379,3 +379,314 @@
 .ade-loading {
   padding: 24px;
 }
+
+.workspace-card {
+  width: 100%;
+  min-height: 60px;
+  padding: 7px 9px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: start;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: CanvasText;
+  cursor: pointer;
+}
+
+.workspace-card:hover,
+.workspace-card.active {
+  border-color: color-mix(in srgb, var(--color-action) 36%, transparent);
+  background: color-mix(in srgb, var(--color-action) 9%, Canvas);
+}
+
+.attention-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.attention-dot.tone-success {
+  background: var(--color-success);
+}
+
+.attention-dot.tone-info {
+  background: var(--color-action);
+}
+
+.attention-dot.tone-warning {
+  background: #b54708;
+}
+
+.attention-dot.tone-danger {
+  background: var(--color-danger);
+}
+
+.workspace-card-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.workspace-card-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.workspace-card-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-card-pin {
+  color: var(--muted);
+}
+
+.workspace-card-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.workspace-card-branch span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-card-attention {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-card-icons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.workspace-card-issue {
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, CanvasText 8%, transparent);
+  color: var(--muted);
+}
+
+.workspace-card-pr {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+}
+
+.workspace-card-pr.pr-missing,
+.pr-identity.pr-missing {
+  color: var(--muted);
+}
+
+.workspace-card-pr.pr-open,
+.workspace-card-pr.pr-draft,
+.pr-identity.pr-open {
+  color: var(--muted);
+}
+
+.workspace-card-pr.pr-pending,
+.pr-identity.pr-pending {
+  color: #b54708;
+}
+
+.workspace-card-pr.pr-passing,
+.pr-identity.pr-passing {
+  color: var(--color-success);
+}
+
+.workspace-card-pr.pr-failing,
+.pr-identity.pr-failing {
+  color: var(--color-danger);
+}
+
+.workspace-card-pr.pr-merged,
+.pr-identity.pr-merged {
+  color: #6f42c1;
+}
+
+.workspace-card-diff {
+  font-style: normal;
+  display: inline-flex;
+  gap: 3px;
+  font-size: 10px;
+}
+
+.workspace-card-dirty {
+  color: #b54708;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.workspace-card-sessions {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--color-action);
+}
+
+.workspace-card-sessions.inactive {
+  color: var(--muted);
+}
+
+.workspace-card-sessions.empty {
+  color: var(--muted);
+}
+
+.workspace-card-failed {
+  color: var(--color-danger);
+  font-weight: 700;
+  padding: 0 4px;
+}
+
+.health-strip-link {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.pr-identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  font-size: 12px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.pr-identity em {
+  font-style: normal;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.pr-identity em.bad {
+  color: var(--color-danger);
+}
+
+.pr-identity em.warn {
+  color: #b54708;
+}
+
+.pr-identity em.ok {
+  color: var(--color-success);
+}
+
+.pr-summary-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  color: CanvasText;
+}
+
+.pr-summary-link strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.pr-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pr-meta span {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, CanvasText 8%, transparent);
+}
+
+.pr-meta .diff-add {
+  color: var(--color-success);
+  background: color-mix(in srgb, var(--color-success) 12%, transparent);
+}
+
+.pr-meta .diff-del {
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+}
+
+.failed-check-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.failed-check-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-danger) 7%, transparent);
+}
+
+.failed-check-list li em {
+  color: var(--color-danger);
+  font-style: normal;
+  font-size: 11px;
+}
+
+.failed-check-list a {
+  color: CanvasText;
+  text-decoration: underline;
+}
+
+.ci-line {
+  color: var(--muted);
+}
+
+.runtime-launcher-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.runtime-prompt {
+  min-height: 56px;
+  resize: vertical;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: Canvas;
+  color: CanvasText;
+  font-family: inherit;
+  font-size: 12px;
+}
