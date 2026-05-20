@@ -26,8 +26,8 @@
 [ ] 2. Capability examples include start, resume, prompt injection, transcript discovery, model selection, status detection, and plan/review modes.
 [ ] 3. Runtime health is visible before session start.
 [ ] 4. Unavailable runtime adapters explain the missing binary, auth, config, or health issue.
-[ ] 5. Runtime adapter configuration lives in Citadel settings/config.
-[ ] 6. Settings distinguishes **platform runtimes** (shipped with Citadel: `claude-code`, `cursor-agent`, `pi`, and the built-in `shell`/Plain Terminal) from operator-defined **custom runtimes**. The platform group exists even when the binary is missing — Citadel surfaces it as `unavailable` and explains how to install it. Custom runtimes only appear when present in config.
+[ ] 5. Agent adapter configuration lives in Citadel settings/config.
+[ ] 6. Settings uses the operator-facing name **Agents**, not Runtimes. It distinguishes **platform agents** (shipped with Citadel: `claude-code`, `cursor-agent`, `pi`, and the built-in `shell`/Plain Terminal) from operator-defined **custom agents**. The platform group exists even when the binary is missing — Citadel surfaces it as `unavailable` and explains how to install it. Custom agents can be added from the Agents settings panel without using Advanced.
 [ ] 7. The built-in shell runtime (`shell`) is treated as a Plain Terminal, not an agent runtime — it never appears in agent counts, but it is a first-class option when starting a session.
 
 ## Terminal

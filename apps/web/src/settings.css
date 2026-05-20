@@ -330,6 +330,9 @@
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   height: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .onboarding-page > .header {
@@ -344,6 +347,7 @@
   gap: 6px;
   background: var(--panel-strong);
   border-bottom: 1px solid var(--line);
+  overflow-x: auto;
 }
 
 .onboarding-step {
@@ -399,6 +403,7 @@
   display: grid;
   gap: 8px;
   overflow: auto;
+  align-self: start;
 }
 
 .onboarding-card-title {

@@ -1,17 +1,34 @@
 import type { AgentRuntime, RuntimeUsageSummary } from "@citadel/contracts";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "./api.js";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { Plus, Save, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { api, queryClient } from "./api.js";
+import { Button } from "./components/ui/button.js";
 import { formatLabel } from "./labels.js";
 
-const PLATFORM_RUNTIMES: Record<string, { label: string; blurb: string; kind: "agent" | "terminal" }> = {
+type RuntimeConfig = {
+  id: string;
+  displayName: string;
+  command: string;
+  args: string[];
+  promptArg?: string;
+  resumeArg?: string;
+  supportsResume?: boolean;
+  supportsPrompt?: boolean;
+  supportsModelSelection?: boolean;
+};
+
+type ConfigResponse = { config: { runtimes: RuntimeConfig[] } };
+
+const PLATFORM_AGENTS: Record<string, { label: string; blurb: string; kind: "agent" | "terminal" }> = {
   "claude-code": {
     label: "Claude Code",
-    blurb: "Anthropic's official CLI. Primary agent runtime. Supports resume, prompt, and usage reporting.",
+    blurb: "Anthropic's official CLI. Primary long-running coding agent.",
     kind: "agent",
   },
   "cursor-agent": {
     label: "Cursor Agent",
-    blurb: "Cursor's headless agent runtime. Prompt-driven, non-interactive friendly.",
+    blurb: "Cursor's headless agent runtime. Prompt-driven and non-interactive friendly.",
     kind: "agent",
   },
   pi: {
@@ -21,34 +38,91 @@ const PLATFORM_RUNTIMES: Record<string, { label: string; blurb: string; kind: "a
   },
   shell: {
     label: "Plain Terminal",
-    blurb: "Built-in shell terminal. Not an agent — useful when you just need a TTY in the workspace.",
+    blurb: "Built-in shell terminal. Useful when you need a TTY but should not count as agent work.",
     kind: "terminal",
   },
 };
 
-const PLATFORM_IDS = Object.keys(PLATFORM_RUNTIMES);
+const PLATFORM_IDS = Object.keys(PLATFORM_AGENTS);
 
-export function RuntimesPanel(props: { runtimes: AgentRuntime[] }) {
+export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
+  const configQuery = useQuery({
+    queryKey: ["config"],
+    queryFn: () => api<ConfigResponse>("/api/config"),
+  });
+  const [drafts, setDrafts] = useState<RuntimeConfig[]>([]);
+  const [newAgent, setNewAgent] = useState<RuntimeConfig>({
+    id: "",
+    displayName: "",
+    command: "",
+    args: [],
+    supportsPrompt: true,
+  });
+
+  useEffect(() => {
+    if (configQuery.data?.config.runtimes) setDrafts(configQuery.data.config.runtimes);
+  }, [configQuery.data?.config.runtimes]);
+
+  const save = useMutation({
+    mutationFn: (runtimes: RuntimeConfig[]) =>
+      api("/api/config", {
+        method: "PUT",
+        body: JSON.stringify({ runtimes }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["config"] });
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+    },
+  });
+
   const platform = props.runtimes.filter((runtime) => PLATFORM_IDS.includes(runtime.id));
   const custom = props.runtimes.filter((runtime) => !PLATFORM_IDS.includes(runtime.id));
   const missingPlatform = PLATFORM_IDS.filter((id) => !platform.some((entry) => entry.id === id));
+
+  const updateDraft = (id: string, patch: Partial<RuntimeConfig>) => {
+    setDrafts((current) => current.map((runtime) => (runtime.id === id ? { ...runtime, ...patch } : runtime)));
+  };
+
+  const removeDraft = (id: string) => {
+    setDrafts((current) => current.filter((runtime) => runtime.id !== id));
+  };
+
+  const addNewAgent = () => {
+    const id = newAgent.id.trim();
+    const displayName = newAgent.displayName.trim();
+    const command = newAgent.command.trim();
+    if (!id || !displayName || !command || drafts.some((runtime) => runtime.id === id)) return;
+    setDrafts((current) => [
+      ...current,
+      {
+        ...newAgent,
+        id,
+        displayName,
+        command,
+        args: newAgent.args,
+        supportsPrompt: true,
+      },
+    ]);
+    setNewAgent({ id: "", displayName: "", command: "", args: [], supportsPrompt: true });
+  };
+
   return (
     <div className="settings-stack">
       <p className="settings-hint">
-        Platform runtimes ship with Citadel. Custom runtimes come from your <code>citadel.config.json</code>; edit them
-        in the Advanced tab.
+        Agents are the CLIs Citadel can launch in a workspace. Platform agents are first-class presets; custom agents
+        can be added here without going through Advanced settings.
       </p>
       <section className="settings-card">
         <header className="settings-card-header">
-          <h3>Platform runtimes</h3>
-          <p>Citadel knows how to launch these out of the box. Health is checked via PATH lookup.</p>
+          <h3>Platform agents</h3>
+          <p>Citadel knows these names and shows their health from PATH/auth checks.</p>
         </header>
         <div className="runtime-grid">
           {platform.map((runtime) => (
             <RuntimeRow key={runtime.id} runtime={runtime} platform />
           ))}
           {missingPlatform.map((id) => {
-            const meta = PLATFORM_RUNTIMES[id];
+            const meta = PLATFORM_AGENTS[id];
             if (!meta) return null;
             return (
               <div key={id} className="runtime-card missing">
@@ -57,7 +131,7 @@ export function RuntimesPanel(props: { runtimes: AgentRuntime[] }) {
                   <span className={`runtime-kind ${meta.kind}`}>{formatLabel(meta.kind)}</span>
                 </header>
                 <p>{meta.blurb}</p>
-                <small>Not registered in config — add via Advanced or re-init the config.</small>
+                <small>Not registered. Add it below with the expected command to enable it.</small>
               </div>
             );
           })}
@@ -65,28 +139,104 @@ export function RuntimesPanel(props: { runtimes: AgentRuntime[] }) {
       </section>
       <section className="settings-card">
         <header className="settings-card-header">
-          <h3>Custom runtimes</h3>
-          <p>Operator-defined runtimes from your config file. Citadel only enforces health and basic capabilities.</p>
+          <h3>Agent config</h3>
+          <p>Edit commands and add custom agents directly here. Plain Terminal stays available as a terminal option.</p>
         </header>
-        {custom.length ? (
+        {configQuery.isLoading ? <div className="empty compact">Loading agents...</div> : null}
+        <div className="agent-config-list">
+          {drafts.map((runtime) => (
+            <div key={runtime.id} className="agent-config-row">
+              <input
+                value={runtime.displayName}
+                onChange={(event) => updateDraft(runtime.id, { displayName: event.target.value })}
+                aria-label={`Display name for ${runtime.id}`}
+              />
+              <input
+                value={runtime.command}
+                onChange={(event) => updateDraft(runtime.id, { command: event.target.value })}
+                aria-label={`Command for ${runtime.id}`}
+              />
+              <input
+                value={runtime.args.join(" ")}
+                onChange={(event) =>
+                  updateDraft(runtime.id, {
+                    args: event.target.value
+                      .split(" ")
+                      .map((part) => part.trim())
+                      .filter(Boolean),
+                  })
+                }
+                aria-label={`Arguments for ${runtime.id}`}
+                placeholder="args"
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={() => removeDraft(runtime.id)}
+                title="Remove agent"
+              >
+                <Trash2 size={13} />
+              </Button>
+            </div>
+          ))}
+          <div className="agent-config-row new">
+            <input
+              value={newAgent.id}
+              onChange={(event) =>
+                setNewAgent((current) => ({
+                  ...current,
+                  id: event.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, "-"),
+                }))
+              }
+              placeholder="agent-id"
+              aria-label="New agent id"
+            />
+            <input
+              value={newAgent.displayName}
+              onChange={(event) => setNewAgent((current) => ({ ...current, displayName: event.target.value }))}
+              placeholder="Display name"
+              aria-label="New agent display name"
+            />
+            <input
+              value={newAgent.command}
+              onChange={(event) => setNewAgent((current) => ({ ...current, command: event.target.value }))}
+              placeholder="command"
+              aria-label="New agent command"
+            />
+            <Button type="button" variant="secondary" onClick={addNewAgent} title="Add custom agent">
+              <Plus size={13} /> Add
+            </Button>
+          </div>
+        </div>
+        <div className="settings-actions">
+          <Button type="button" onClick={() => save.mutate(drafts)} disabled={save.isPending || !drafts.length}>
+            <Save size={14} /> Save agents
+          </Button>
+          {save.error ? <p className="form-error">{String(save.error)}</p> : null}
+        </div>
+      </section>
+      {custom.length ? (
+        <section className="settings-card">
+          <header className="settings-card-header">
+            <h3>Custom agent health</h3>
+            <p>Health for non-platform commands currently registered in config.</p>
+          </header>
           <div className="runtime-grid">
             {custom.map((runtime) => (
               <RuntimeRow key={runtime.id} runtime={runtime} platform={false} />
             ))}
           </div>
-        ) : (
-          <div className="empty compact">
-            No custom runtimes configured. Add them in the Advanced tab if you need bespoke commands.
-          </div>
-        )}
-      </section>
-      <p className="settings-hint">Need to add or edit a custom runtime? Use the Advanced tab in the sidebar.</p>
+        </section>
+      ) : null}
     </div>
   );
 }
 
+export const RuntimesPanel = AgentsPanel;
+
 function RuntimeRow(props: { runtime: AgentRuntime; platform: boolean }) {
-  const platformMeta = props.platform ? PLATFORM_RUNTIMES[props.runtime.id] : undefined;
+  const platformMeta = props.platform ? PLATFORM_AGENTS[props.runtime.id] : undefined;
   const kindLabel = platformMeta?.kind ?? (props.runtime.capabilities.supportsPrompt ? "agent" : "terminal");
   return (
     <div className={`runtime-card ${props.runtime.health}`}>

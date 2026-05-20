@@ -1,7 +1,7 @@
 import type { ProviderHealth } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowRight, CheckCircle2, Folder, ShieldCheck, TerminalSquare } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, Folder, ShieldCheck, TerminalSquare } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, queryClient } from "../api.js";
 import { useStateQuery } from "../app-state.js";
@@ -34,12 +34,17 @@ export function OnboardingView() {
     <div className="page onboarding-page">
       <header className="header">
         <div>
-          <h1>Welcome to Citadel</h1>
-          <p>Let’s get you to a workspace.</p>
+          <h1>Onboarding</h1>
+          <p>Provider check, repository, workspace. Nothing else.</p>
         </div>
-        <Link className="settings-link" to="/">
-          Skip
-        </Link>
+        <div className="settings-header-actions">
+          <Link className="settings-link" to="/">
+            <ArrowLeft size={14} /> Back
+          </Link>
+          <Link className="settings-link" to="/settings">
+            Settings
+          </Link>
+        </div>
       </header>
       <ol className="onboarding-steps">
         <StepHeader index={1} title="Verify providers" active={step === "providers"} done={step !== "providers"} />
@@ -93,9 +98,8 @@ function ProvidersStep(props: { providerHealth: ProviderHealth[]; onNext: () => 
         <h2>Providers</h2>
       </div>
       <p>
-        Citadel uses local CLIs as the first production baseline. Your provider health is checked below. You can skip
-        and configure them later in Settings, or open Settings now to point Citadel at your local <code>gh</code> /{" "}
-        <code>jtk</code> binaries.
+        Citadel uses provider presets and checks their health from the selected method. Configure details in Settings;
+        continue when the local baseline is good enough for this repo.
       </p>
       <ul className="onboarding-provider-list">
         {props.providerHealth.map((provider) => (

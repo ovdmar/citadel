@@ -62,7 +62,7 @@ Rules:
 ## Config And Settings
 
 [ ] 1. Citadel has a first-run config/init surface.
-[ ] 2. Settings can manage providers, runtimes, repos, hooks, health checks, and UI preferences.
+[ ] 2. Settings can manage providers, agents, repos, health checks, MCP, and UI preferences.
 [ ] 3. Settings show missing external tools and unauthenticated providers.
 [ ] 4. Settings show unhealthy provider/hook states.
 [ ] 5. Settings can validate a repository configuration before it is used by workspace flows.
@@ -75,15 +75,14 @@ Settings is a single page with a left sidebar that splits configuration into dis
 
 Sections:
 
-- **Overview** — readiness counters (providers, runtimes, repos, MCP).
+- **Overview** — readiness counters (providers, agents, repos, MCP).
 - **Providers** — see Provider Category Model above.
-- **Runtimes** — built-in/platform runtimes (`claude-code`, `cursor-agent`, `pi`, `shell`/Plain Terminal) separated from operator-defined custom runtimes.
-- **Repositories** — registered repos with deep-link to per-repo settings.
-- **Hooks** — overview + pointer to per-repo configuration.
-- **MCP** — local-first MCP toggle visibility.
+- **Agents** — built-in/platform agents (`claude-code`, `cursor-agent`, `pi`) plus custom agents; the built-in `shell` remains visible as Plain Terminal.
+- **Repositories** — register repos, remove tracking, and deep-link to per-repo settings.
+- **MCP** — local-first MCP toggle visibility plus a JSON client configuration example.
 - **Advanced** — raw `StructuredConfig` editor for power users.
 
-The structured-config form is intentionally retained as the escape hatch for fields the curated sections do not yet cover.
+Hooks are edited from repository settings, because hook bindings are repo-specific. The structured-config form is intentionally retained as the escape hatch for fields the curated sections do not yet cover.
 
 ---
 

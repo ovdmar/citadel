@@ -3,11 +3,10 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeft } from "lucide-react";
 import { useMemo } from "react";
 import { useEventRefresh, useStateQuery } from "../app-state.js";
-import { readinessForWorkspace } from "../cockpit-readiness.js";
 import { formatLabel } from "../labels.js";
 import { WorkspaceCard } from "../workspace-card.js";
 
-const COLUMNS = ["blocked", "needs-review", "working", "dirty", "idle", "done"] as const;
+const COLUMNS = ["backlog", "working", "needs-review", "blocked", "done"] as const;
 
 export function DashboardView() {
   const state = useStateQuery();
@@ -19,10 +18,7 @@ export function DashboardView() {
     for (const column of COLUMNS) buckets[column] = [];
     if (!data) return buckets;
     for (const workspace of data.workspaces) {
-      const sessions = data.sessions.filter((session) => session.workspaceId === workspace.id);
-      const operations = data.operations.filter((operation) => operation.workspaceId === workspace.id);
-      const attention = readinessForWorkspace(workspace, { sessions, operations, summary: undefined });
-      const key = (COLUMNS as readonly string[]).includes(attention.section) ? attention.section : "idle";
+      const key = (COLUMNS as readonly string[]).includes(workspace.section) ? workspace.section : "backlog";
       buckets[key]?.push(workspace);
     }
     return buckets;

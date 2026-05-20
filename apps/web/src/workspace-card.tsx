@@ -163,7 +163,7 @@ function deriveAgentState(sessions: AgentSession[]): {
   const agentSessions = sessions.filter((session) => session.runtimeId !== "shell");
   if (agentSessions.some((session) => session.status === "starting"))
     return { tone: "starting", label: "Agent starting" };
-  if (agentSessions.some((session) => session.status === "running")) return { tone: "running", label: "Agent running" };
+  if (agentSessions.some((session) => session.status === "waiting")) return { tone: "running", label: "Agent working" };
   if (agentSessions.some((session) => ["failed", "orphaned"].includes(session.status))) {
     return { tone: "failed", label: "Agent needs attention" };
   }

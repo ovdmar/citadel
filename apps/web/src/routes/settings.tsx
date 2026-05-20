@@ -1,15 +1,15 @@
 import type { AgentRuntime, ProviderHealth } from "@citadel/contracts";
 import { Link } from "@tanstack/react-router";
-import { Cable, CheckCircle2, FolderGit2, HeartPulse, Server, Settings as SettingsIcon, Webhook } from "lucide-react";
+import { ArrowLeft, Cable, CheckCircle2, FolderGit2, HeartPulse, Server, Settings as SettingsIcon } from "lucide-react";
 import { useState } from "react";
 import { useStateQuery } from "../app-state.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
-import { RuntimesPanel } from "../settings-runtimes.js";
+import { AgentsPanel } from "../settings-runtimes.js";
 import { StructuredConfig } from "../structured-config.js";
 import { ThemeControls } from "../theme-controls.js";
 
-type SectionId = "overview" | "providers" | "runtimes" | "repositories" | "hooks" | "mcp" | "advanced";
+type SectionId = "overview" | "providers" | "agents" | "repositories" | "mcp" | "advanced";
 
 type Section = {
   id: SectionId;
@@ -26,14 +26,13 @@ const SECTIONS: Section[] = [
     icon: <CheckCircle2 size={14} />,
   },
   { id: "providers", label: "Providers", description: "Tickets, Git server, CI", icon: <HeartPulse size={14} /> },
-  { id: "runtimes", label: "Runtimes", description: "Agent and terminal runtimes", icon: <Server size={14} /> },
+  { id: "agents", label: "Agents", description: "Platform and custom agents", icon: <Server size={14} /> },
   {
     id: "repositories",
     label: "Repositories",
     description: "Registered repos and tracking",
     icon: <FolderGit2 size={14} />,
   },
-  { id: "hooks", label: "Hooks", description: "Workspace lifecycle hooks", icon: <Webhook size={14} /> },
   { id: "mcp", label: "MCP", description: "Model Context Protocol toggle", icon: <Cable size={14} /> },
   {
     id: "advanced",
@@ -56,6 +55,9 @@ export function SettingsView() {
           <p>{current.description}</p>
         </div>
         <div className="settings-header-actions">
+          <Link className="settings-link" to="/">
+            <ArrowLeft size={14} /> Back
+          </Link>
           <ThemeControls />
           <Link className="settings-link" to="/onboarding">
             Onboarding
@@ -97,9 +99,8 @@ export function SettingsView() {
             />
           ) : null}
           {section === "providers" ? <ProvidersPanel providerHealth={state.data?.providerHealth ?? []} /> : null}
-          {section === "runtimes" ? <RuntimesPanel runtimes={state.data?.runtimes ?? []} /> : null}
+          {section === "agents" ? <AgentsPanel runtimes={state.data?.runtimes ?? []} /> : null}
           {section === "repositories" ? <RepositoriesPanel state={state.data} /> : null}
-          {section === "hooks" ? <HooksSection /> : null}
           {section === "mcp" ? <McpSection mcpEnabled={Boolean(state.data?.mcp.enabled)} /> : null}
           {section === "advanced" ? <StructuredConfig /> : null}
         </section>
@@ -125,7 +126,7 @@ function OverviewSection(props: {
           value={`${healthyProviders}/${totalProviders} healthy`}
           ready={healthyProviders > 0}
         />
-        <OverviewCard label="Runtimes" value={`${healthyRuntimes} available`} ready={healthyRuntimes > 0} />
+        <OverviewCard label="Agents" value={`${healthyRuntimes} available`} ready={healthyRuntimes > 0} />
         <OverviewCard label="Repositories" value={`${props.repoCount} registered`} ready={props.repoCount > 0} />
         <OverviewCard label="MCP" value={props.mcpEnabled ? "Enabled" : "Disabled"} ready={props.mcpEnabled} />
       </div>
@@ -145,20 +146,18 @@ function OverviewCard(props: { label: string; value: string; ready: boolean }) {
   );
 }
 
-function HooksSection() {
-  return (
-    <div className="settings-stack">
-      <p className="settings-hint">
-        Hooks are configured in the Advanced tab today. Per-repo bindings live on each repository's settings page.
-      </p>
-      <Link to="/" className="settings-link">
-        Pick a repository from the navigator to configure its hooks
-      </Link>
-    </div>
-  );
-}
-
 function McpSection(props: { mcpEnabled: boolean }) {
+  const example = JSON.stringify(
+    {
+      mcpServers: {
+        citadel: {
+          url: "http://127.0.0.1:4010/mcp",
+        },
+      },
+    },
+    null,
+    2,
+  );
   return (
     <div className="settings-stack">
       <div className={`overview-card ${props.mcpEnabled ? "ready" : "pending"}`}>
@@ -169,6 +168,13 @@ function McpSection(props: { mcpEnabled: boolean }) {
         Toggle MCP in the Advanced tab. Citadel uses MCP for internal tool wiring; it is not required for the core
         cockpit.
       </p>
+      <section className="settings-card">
+        <header className="settings-card-header">
+          <h3>Client config example</h3>
+          <p>Use this shape in MCP clients that accept JSON server definitions.</p>
+        </header>
+        <pre className="settings-code-example">{example}</pre>
+      </section>
     </div>
   );
 }

@@ -179,7 +179,7 @@ export function Stage(props: {
                 ))}
               {props.runtimes.filter((runtime) => runtime.id !== "shell").length === 0 ? (
                 <div className="stage-add-empty">
-                  No agent runtimes configured. <a href="/settings">Open settings</a> to add one.
+                  No agents configured. <a href="/settings">Open settings</a> to add one.
                 </div>
               ) : null}
             </div>

@@ -2,7 +2,7 @@ import type { WorkspaceReadiness } from "@citadel/contracts";
 
 export function deriveReadiness(input: {
   workspace: { lifecycle: string; dirty: boolean };
-  sessions: Array<{ status: string }>;
+  sessions: Array<{ status: string; runtimeId?: string }>;
   operations: Array<{ status: string; type: string; error: string | null }>;
   providerHealth: Array<{ status: string; reason: string | null }>;
   git: { clean: boolean; conflicted: number; modified: number; staged: number; untracked: number; checkedAt: string };
@@ -34,7 +34,10 @@ export function deriveReadiness(input: {
   );
   const degraded =
     input.versionControl.status !== "healthy" || input.ci.status !== "healthy" || input.apps.status !== "healthy";
-  const activeSession = input.sessions.some((session) => ["running", "waiting"].includes(session.status));
+  const runningOperation = input.operations.some((operation) => ["queued", "running"].includes(operation.status));
+  const activeAgentSession = input.sessions.some(
+    (session) => session.runtimeId !== "shell" && ["starting", "waiting"].includes(session.status),
+  );
   const failedSession = input.sessions.some((session) => ["failed", "orphaned"].includes(session.status));
   const reasons = [
     input.workspace.lifecycle === "failed" ? "Workspace lifecycle failed" : null,
@@ -45,7 +48,7 @@ export function deriveReadiness(input: {
     pendingCheck ? "PR checks are still running" : null,
     degraded ? "Provider, hook, or app data is degraded" : null,
     !input.git.clean ? "Working tree has local changes" : null,
-    activeSession ? "An agent/session is active" : null,
+    runningOperation || activeAgentSession ? "An agent or operation is actively working" : null,
   ].filter((reason): reason is string => Boolean(reason));
 
   if (input.workspace.lifecycle === "failed" || failedSession || failedOperation) {
@@ -100,8 +103,8 @@ export function deriveReadiness(input: {
   }
   if (input.versionControl.pullRequest)
     return readiness("needs-review", "info", "Review PR, checks, and latest diff", reasons, checkedAt, false);
-  if (activeSession)
-    return readiness("working", "info", "Continue from the active terminal session", reasons, checkedAt, false);
+  if (runningOperation || activeAgentSession)
+    return readiness("working", "info", "Follow the active agent or operation", reasons, checkedAt, false);
   return readiness("idle", "neutral", "Start a runtime or open the workspace actions", reasons, checkedAt, false);
 }
 

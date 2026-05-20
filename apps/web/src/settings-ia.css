@@ -118,6 +118,47 @@
   gap: 8px;
 }
 
+.settings-code-example {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-strong);
+  color: CanvasText;
+  overflow: auto;
+  font-size: 11.5px;
+}
+
+.agent-config-list {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-config-row,
+.repo-add-form {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) minmax(120px, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.agent-config-row input,
+.repo-add-form input {
+  min-height: 28px;
+  min-width: 0;
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+  color: CanvasText;
+  font-size: 12px;
+}
+
+.agent-config-row.new {
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+}
+
 /* Overview cards */
 
 .overview-grid {
@@ -485,5 +526,10 @@
     border-right: 0;
     border-bottom: 1px solid var(--line);
     overflow-x: auto;
+  }
+
+  .agent-config-row,
+  .repo-add-form {
+    grid-template-columns: 1fr;
   }
 }

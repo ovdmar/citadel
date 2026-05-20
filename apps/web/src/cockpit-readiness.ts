@@ -21,7 +21,10 @@ export function readinessForWorkspace(
     };
   }
   const failedOperation = input.operations.some((operation) => operation.status === "failed");
-  const activeSession = input.sessions.some((session) => ["running", "waiting"].includes(session.status));
+  const runningOperation = input.operations.some((operation) => ["queued", "running"].includes(operation.status));
+  const activeAgentSession = input.sessions.some(
+    (session) => session.runtimeId !== "shell" && ["starting", "waiting"].includes(session.status),
+  );
   const failedSession = input.sessions.some((session) => ["failed", "orphaned"].includes(session.status));
   if (workspace.lifecycle === "failed" || failedOperation || failedSession) {
     return { section: "blocked", label: "Blocked", nextAction: "Inspect failure output", tone: "danger" };
@@ -30,7 +33,9 @@ export function readinessForWorkspace(
     return { section: "done", label: "Done", nextAction: "Archived", tone: "neutral" };
   }
   if (workspace.dirty) return { section: "dirty", label: "Dirty", nextAction: "Review diff", tone: "warning" };
-  if (activeSession) return { section: "working", label: "Working", nextAction: "Continue session", tone: "info" };
+  if (runningOperation || activeAgentSession) {
+    return { section: "working", label: "Working", nextAction: "Follow the active agent or operation", tone: "info" };
+  }
   return { section: "idle", label: "Idle", nextAction: "Start runtime", tone: "neutral" };
 }
 

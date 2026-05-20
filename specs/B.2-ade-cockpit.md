@@ -31,6 +31,12 @@
 [ ] 13. Icon-only controls expose a native tooltip (title) and accessible label that describes their action or target.
 [ ] 14. Top-layer modals and overlays (command palette, create workspace, add repo) are centred both horizontally and vertically in the viewport; backdrop dismissal and `Esc` close them.
 
+## Dashboard
+
+[ ] 1. Dashboard groups workspaces by the same operator-facing workspace section/status used by workspace cards, not derived labels such as dirty.
+[ ] 2. Dashboard workspace cards have fixed compact height and never stretch to fill the entire column.
+[ ] 3. Working/in-progress state is reserved for active operations or explicit active agent statuses. A plain terminal or an idle open agent tab must not mark the workspace as working.
+
 ## Center Stage Sessions
 
 [ ] 1. The center column shows the workspace's sessions/chats as tabs along the top.

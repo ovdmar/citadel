@@ -323,9 +323,15 @@
 
 .kanban-list {
   display: grid;
+  grid-auto-rows: min-content;
   gap: 6px;
   overflow: auto;
   min-height: 0;
+  align-content: start;
+}
+
+.kanban-list .workspace-card {
+  height: 52px;
 }
 
 .history-table {
