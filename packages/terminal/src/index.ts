@@ -69,6 +69,52 @@ export function captureTmux(sessionName: string, lines = 200) {
   }
 }
 
+export type TerminalTranscript = {
+  ok: true;
+  sessionName: string;
+  lines: number;
+  charCount: number;
+  text: string;
+};
+
+export type TerminalTranscriptError = {
+  ok: false;
+  error: string;
+};
+
+// Bounded transcript capture for non-interactive callers (MCP, scripts).
+// `lines` is the maximum scrollback depth pulled from tmux; the returned text is
+// additionally truncated to `maxChars` to avoid streaming a megabyte of output
+// when an agent has scrolled for a long time.
+export function captureTranscript(
+  sessionName: string,
+  options: { lines?: number; maxChars?: number } = {},
+): TerminalTranscript | TerminalTranscriptError {
+  const requestedLines = Math.min(2000, Math.max(1, options.lines ?? 200));
+  const maxChars = Math.min(200_000, Math.max(256, options.maxChars ?? 16_000));
+  if (!tmuxSessionExists(sessionName)) {
+    return { ok: false, error: "tmux_session_missing" };
+  }
+  let raw: string;
+  try {
+    raw = execFileSync("tmux", ["capture-pane", "-p", "-J", "-S", `-${requestedLines}`, "-t", sessionName], {
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+    });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "tmux_capture_failed" };
+  }
+  const trimmed = raw.replace(/\s+$/, "");
+  const text = trimmed.length > maxChars ? trimmed.slice(-maxChars) : trimmed;
+  return {
+    ok: true,
+    sessionName,
+    lines: text.length === 0 ? 0 : text.split("\n").length,
+    charCount: text.length,
+    text,
+  };
+}
+
 export function captureTmuxVisibleScreen(sessionName: string, lines = 200) {
   try {
     return execFileSync("tmux", ["capture-pane", "-a", "-p", "-S", `-${lines}`, "-t", sessionName], {
@@ -112,6 +158,71 @@ export function captureTmuxSnapshot(sessionName: string) {
   const clear = "\x1b[H\x1b[2J\x1b[3J";
   const placeCursor = `\x1b[${cursorRow + 1};${cursorCol + 1}H`;
   return { ok: true as const, data: `${clear}${text}\n${placeCursor}` };
+}
+
+// Wait for the tmux pane to "settle" before injecting input. Interactive TUIs
+// like Claude Code repaint repeatedly during startup; if we send keys while the
+// splash screen is still drawing the input either gets eaten or interleaved
+// with the prompt placeholder. We sample the visible screen until it stops
+// changing or the deadline expires. Best-effort — never throws.
+export async function waitForTerminalIdle(
+  sessionName: string,
+  options: { timeoutMs?: number; idleMs?: number; pollMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 1500;
+  const idleMs = options.idleMs ?? 250;
+  const pollMs = options.pollMs ?? 80;
+  const deadline = Date.now() + Math.max(idleMs + pollMs, timeoutMs);
+  let last = safeCapture(sessionName);
+  let stableSince = Date.now();
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    const current = safeCapture(sessionName);
+    if (current === last) {
+      if (Date.now() - stableSince >= idleMs) return;
+      continue;
+    }
+    last = current;
+    stableSince = Date.now();
+  }
+}
+
+function safeCapture(sessionName: string): string {
+  try {
+    return execFileSync("tmux", ["capture-pane", "-p", "-t", sessionName], {
+      encoding: "utf8",
+      maxBuffer: 256 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return "";
+  }
+}
+
+// Submit a prompt or follow-up message into a tmux-backed runtime. Robust
+// against interactive TUIs (Claude Code, Codex, Cursor) because it:
+//   1. waits for the pane to stop repainting (post-splash),
+//   2. delivers the text via a tmux paste-buffer instead of typing chars one
+//      at a time (avoids dropped keystrokes and is recognized as a bracketed
+//      paste by readline-style prompts),
+//   3. waits briefly for the paste to land, then sends Enter to submit.
+// Returns whether the underlying tmux calls succeeded. Errors are non-fatal
+// at the caller level so the session is still tracked.
+export async function submitPrompt(
+  sessionName: string,
+  prompt: string,
+  options: { waitForReadyMs?: number; submitDelayMs?: number; submitKey?: string } = {},
+): Promise<{ ok: boolean; error?: string }> {
+  if (!tmuxSessionExists(sessionName)) return { ok: false, error: "tmux_session_missing" };
+  try {
+    await waitForTerminalIdle(sessionName, { timeoutMs: options.waitForReadyMs ?? 1500 });
+    if (prompt.length > 0) pasteText(sessionName, prompt);
+    await new Promise((resolve) => setTimeout(resolve, options.submitDelayMs ?? 120));
+    execFileSync("tmux", ["send-keys", "-t", sessionName, options.submitKey ?? "Enter"]);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "submit_prompt_failed" };
+  }
 }
 
 export function sendKeys(sessionName: string, data: string) {

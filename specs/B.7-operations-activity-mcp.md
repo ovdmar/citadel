@@ -38,10 +38,26 @@
 [ ] 4. Agents can inspect workspaces through MCP.
 [ ] 5. Agents can create workspaces through MCP.
 [ ] 6. Agents can start or inspect agent sessions through MCP.
-[ ] 7. Agents can inspect operation status through MCP.
-[ ] 8. Agents can inspect readiness and next-action state through MCP.
-[ ] 9. MCP actions follow the same operation, provider, hook, and safety model as the UI.
-[ ] 10. MCP presents product contracts as its primary surface.
+[~] 7. Agents can read the latest terminal output of a specific session through MCP (`read_agent_output`, bounded by `lines` and `maxChars`).
+[~] 8. Agents can submit a follow-up message/prompt to a specific session through MCP (`send_agent_message`, paste + Enter into the backing tmux pane). Sessions without a tmux backing return `session_has_no_terminal`; sessions not in an active status return `session_not_accepting_input`.
+[ ] 9. Agents can inspect operation status through MCP.
+[ ] 10. Agents can inspect readiness and next-action state through MCP.
+[ ] 11. MCP actions follow the same operation, provider, hook, and safety model as the UI.
+[ ] 12. MCP presents product contracts as its primary surface.
+
+### MCP tool inventory
+
+Read-only:
+- `inspect_status`, `list_repos`, `list_workspaces`, `list_agent_sessions`,
+  `list_provider_health`, `list_runtimes`, `list_workspace_links`,
+  `inspect_readiness`, `read_agent_output`.
+
+Daemon-mediated (run through the operation service so they obey the same hook, activity, and safety model as the UI):
+- `create_workspace`, `start_agent_session`, `send_agent_message`,
+  `stop_agent_session` (destructive), `archive_workspace`,
+  `remove_workspace` (destructive), `reconcile` (destructive).
+
+For interactive runtimes like Claude Code, both `start_agent_session` (with a `prompt`) and `send_agent_message` deliver text into the backing tmux pane via a paste buffer followed by Enter. This guarantees the agent actually receives and processes the prompt — it is not just typed into the input box.
 
 ---
 

@@ -8,12 +8,14 @@ import {
   attachTerminalWebSocket,
   captureTmux,
   captureTmuxVisibleScreen,
+  captureTranscript,
   ensureTmuxSession,
   killTmuxSession,
   parseTmuxControlOutput,
   pasteText,
   resizePane,
   sendKeys,
+  submitPrompt,
   tmuxSessionExists,
 } from "./index.js";
 
@@ -63,6 +65,66 @@ describe("tmux terminal gateway helpers", () => {
 
     killTmuxSession(sessionName);
     expect(tmuxSessionExists(sessionName)).toBe(false);
+  });
+
+  it("submitPrompt pastes the prompt and presses Enter so the runtime actually executes it", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
+    dirs.push(cwd);
+    const sessionName = `citadel_submit_prompt_${Date.now().toString(36)}`;
+    sessions.push(sessionName);
+    await ensureTmuxSession({
+      sessionName,
+      cwd,
+      command: "bash",
+      args: ["--noprofile", "--norc"],
+    });
+
+    // Simulates Claude Code's input box: a `read` waits for an entire line. If
+    // submitPrompt only typed characters, the read would never resolve. We
+    // assert the read DID resolve, proving Enter was submitted.
+    sendKeys(sessionName, "read line && printf 'GOT:%s\\n' \"$line\"");
+    sendKeys(sessionName, "\r");
+    await waitForCapture(sessionName, "$");
+
+    const result = await submitPrompt(sessionName, "hello-claude", { waitForReadyMs: 200, submitDelayMs: 50 });
+    expect(result.ok).toBe(true);
+    await waitForCapture(sessionName, "GOT:hello-claude");
+  });
+
+  it("submitPrompt reports tmux_session_missing when the session has gone away", async () => {
+    const result = await submitPrompt("citadel_nonexistent_session", "test");
+    expect(result).toEqual({ ok: false, error: "tmux_session_missing" });
+  });
+
+  it("captureTranscript returns bounded text plus session metadata", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
+    dirs.push(cwd);
+    const sessionName = `citadel_transcript_${Date.now().toString(36)}`;
+    sessions.push(sessionName);
+    await ensureTmuxSession({
+      sessionName,
+      cwd,
+      command: "bash",
+      args: ["--noprofile", "--norc"],
+    });
+    sendKeys(sessionName, "printf 'transcript-line\\n'");
+    sendKeys(sessionName, "\r");
+    await waitForCapture(sessionName, "transcript-line");
+
+    const transcript = captureTranscript(sessionName, { lines: 50, maxChars: 4000 });
+    expect(transcript.ok).toBe(true);
+    if (transcript.ok) {
+      expect(transcript.text).toContain("transcript-line");
+      expect(transcript.charCount).toBeLessThanOrEqual(4000);
+      expect(transcript.sessionName).toBe(sessionName);
+    }
+
+    const truncated = captureTranscript(sessionName, { maxChars: 256 });
+    expect(truncated.ok).toBe(true);
+    if (truncated.ok) expect(truncated.text.length).toBeLessThanOrEqual(256);
+
+    const missing = captureTranscript("citadel_missing_session_xyz");
+    expect(missing).toEqual({ ok: false, error: "tmux_session_missing" });
   });
 
   it("supports control input and multi-line paste through tmux", async () => {

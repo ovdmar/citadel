@@ -139,7 +139,9 @@ Resources:
 - `citadel://provider-health`
 - `citadel://activity`
 
-Tools include read-only state inspection plus daemon-handled workspace creation, agent launch, metadata archive, and workspace link listing. See [runbook.md](./runbook.md) for curl examples.
+Tools include read-only state inspection (including `read_agent_output`, which returns the latest tmux pane content for a specific agent session, bounded by `lines` and `maxChars`) plus daemon-handled workspace creation, agent launch, follow-up agent messaging (`send_agent_message`), metadata archive, and workspace link listing. See [runbook.md](./runbook.md) for curl examples.
+
+For interactive runtimes like Claude Code, an initial `prompt` passed to `start_agent_session` and every `send_agent_message` are delivered into the tmux pane via paste-buffer + Enter, so the prompt is actually submitted to the agent and not just left in the input box. Citadel ships `claude-code` without `promptArg` for this reason — `-p` is Claude Code's non-interactive print mode, which exits after responding and is not what an interactive Citadel session needs.
 
 ## Terminal Renderer (ttyd)
 

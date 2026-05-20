@@ -30,7 +30,9 @@ export type McpToolName =
   | "archive_workspace"
   | "remove_workspace"
   | "reconcile"
-  | "inspect_readiness";
+  | "inspect_readiness"
+  | "read_agent_output"
+  | "send_agent_message";
 
 export type McpToolDefinition = {
   name: McpToolName;
@@ -84,8 +86,40 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     },
     {
       name: "list_agent_sessions",
-      description: "List agent sessions, optionally filtered by workspaceId.",
+      description:
+        "List agent sessions with status, runtime, and tmux session metadata. Optionally filter by workspaceId.",
       inputSchema: { type: "object", properties: { workspaceId: { type: "string" } }, additionalProperties: false },
+      destructive: false,
+    },
+    {
+      name: "read_agent_output",
+      description:
+        "Read the latest terminal output (transcript) of a specific agent session. Bounded by lines and maxChars to avoid unbounded scrollback. Returns plain text captured from the backing tmux pane.",
+      inputSchema: {
+        type: "object",
+        required: ["sessionId"],
+        properties: {
+          sessionId: { type: "string" },
+          lines: { type: "integer", minimum: 1, maximum: 2000, default: 200 },
+          maxChars: { type: "integer", minimum: 256, maximum: 200000, default: 16000 },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "send_agent_message",
+      description:
+        "Send a follow-up message/prompt to an existing agent session. Targets the session id and submits the text into the backing tmux pane (paste + Enter), so it works for Claude Code and other interactive runtimes. Returns an error if the session has no terminal or is not accepting input.",
+      inputSchema: {
+        type: "object",
+        required: ["sessionId", "message"],
+        properties: {
+          sessionId: { type: "string" },
+          message: { type: "string", minLength: 1 },
+        },
+        additionalProperties: false,
+      },
       destructive: false,
     },
     {
@@ -244,6 +278,13 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "remove_workspace":
     case "reconcile":
       return { error: "mutating_tool_requires_daemon" };
+    case "read_agent_output":
+    case "send_agent_message":
+      // These read or write the live tmux pane backing an agent session, so
+      // they cannot run from the in-memory snapshot — only the daemon owns the
+      // tmux/terminal manager. Return a stable sentinel so MCP transports can
+      // route these to the daemon path explicitly.
+      return { error: "session_tool_requires_daemon" };
     default:
       return assertNever(call.name);
   }

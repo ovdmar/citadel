@@ -79,6 +79,22 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     emit("workspace.updated", result);
     return result;
   }
+  if (call.name === "read_agent_output") {
+    const sessionId = typeof call.arguments?.sessionId === "string" ? call.arguments.sessionId : "";
+    const input: { sessionId: string; lines?: number; maxChars?: number } = { sessionId };
+    if (typeof call.arguments?.lines === "number") input.lines = call.arguments.lines;
+    if (typeof call.arguments?.maxChars === "number") input.maxChars = call.arguments.maxChars;
+    return operations.readAgentTranscript(input);
+  }
+  if (call.name === "send_agent_message") {
+    const sessionId = typeof call.arguments?.sessionId === "string" ? call.arguments.sessionId : "";
+    const message = typeof call.arguments?.message === "string" ? call.arguments.message : "";
+    if (!sessionId) return { ok: false, error: "session_id_required" };
+    if (!message) return { ok: false, error: "message_required" };
+    const result = await operations.sendAgentMessage({ sessionId, message });
+    if (result.ok) emit("agent.updated", { sessionId });
+    return result;
+  }
   const providerHealth = await collectProviderHealth(config.providers);
   return callMcpTool(call, {
     repos: store.listRepos(),

@@ -16,7 +16,9 @@ import type {
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { hookDiagnostic, parseHookOutput, runCommandHook, runCommandHookForDiagnostics } from "@citadel/hooks";
-import { ensureTmuxSession, killTmuxSession, sendKeys } from "@citadel/terminal";
+import { ensureTmuxSession, killTmuxSession, submitPrompt } from "@citadel/terminal";
+import * as agentMessages from "./agent-messages.js";
+export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
 import {
   asObject,
   cancelOperationInStore,
@@ -188,16 +190,9 @@ export class OperationService {
       command: runtime.command,
       args: runtimeArgs,
     });
-    // For runtimes that do not support inline prompt args, type the prompt into the
-    // tmux session after the runtime is up.
-    if (promptForKeys) {
-      try {
-        sendKeys(sessionName, promptForKeys);
-        sendKeys(sessionName, "\r");
-      } catch {
-        // best-effort: prompt injection failures are surfaced via activity below
-      }
-    }
+    // Paste + Enter the prompt into the tmux pane once the runtime is ready.
+    // Critical for Claude Code, which drops input typed before its TUI paints.
+    if (promptForKeys) await submitPrompt(sessionName, promptForKeys);
     const session: AgentSession = {
       id: createId("sess"),
       workspaceId: workspace.id,
@@ -216,6 +211,12 @@ export class OperationService {
     if (repo) await this.runNotificationHooks("agent.started", repo, workspace, null, { repo, workspace, session });
     return session;
   }
+
+  // See ./agent-messages.ts for the implementations.
+  readAgentTranscript = (input: { sessionId: string; lines?: number; maxChars?: number }) =>
+    agentMessages.readAgentTranscript(this.store, input);
+  sendAgentMessage = (input: { sessionId: string; message: string }) =>
+    agentMessages.sendAgentMessage(this.store, input);
 
   stopAgentSession(input: { sessionId: string }) {
     const session = this.store.listSessions().find((candidate) => candidate.id === input.sessionId);

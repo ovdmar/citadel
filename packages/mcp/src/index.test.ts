@@ -10,9 +10,18 @@ describe("mcp helpers", () => {
     expect(status.tools).toContain("inspect_status");
     expect(status.tools).toContain("start_agent_session");
     expect(status.tools).toContain("list_workspace_links");
+    expect(status.tools).toContain("read_agent_output");
+    expect(status.tools).toContain("send_agent_message");
     expect(status.resources).toContain("citadel://activity");
     expect(mcpToolDefinitions().find((tool) => tool.name === "archive_workspace")).toMatchObject({
       destructive: false,
+    });
+    const sendMessage = mcpToolDefinitions().find((tool) => tool.name === "send_agent_message");
+    expect(sendMessage).toBeDefined();
+    expect(sendMessage?.destructive).toBe(false);
+    expect(sendMessage?.inputSchema).toMatchObject({ required: ["sessionId", "message"] });
+    expect(mcpToolDefinitions().find((tool) => tool.name === "read_agent_output")?.inputSchema).toMatchObject({
+      required: ["sessionId"],
     });
   });
 
@@ -190,6 +199,14 @@ describe("mcp helpers", () => {
       callMcpTool({ name: "start_agent_session", arguments: { workspaceId: "ws_test", runtimeId: "shell" } }, context),
     ).toEqual({
       error: "mutating_tool_requires_daemon",
+    });
+    expect(callMcpTool({ name: "read_agent_output", arguments: { sessionId: "sess_test" } }, context)).toEqual({
+      error: "session_tool_requires_daemon",
+    });
+    expect(
+      callMcpTool({ name: "send_agent_message", arguments: { sessionId: "sess_test", message: "hi" } }, context),
+    ).toEqual({
+      error: "session_tool_requires_daemon",
     });
   });
 });

@@ -45,12 +45,43 @@ curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-Mutating tools are handled by the daemon. `create_workspace`, `start_agent_session`, and `archive_workspace` use normalized Citadel concepts:
+Mutating tools are handled by the daemon. `create_workspace`, `start_agent_session`, `send_agent_message`, and `archive_workspace` use normalized Citadel concepts:
 
 ```bash
 curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"start_agent_session","arguments":{"workspaceId":"ws_example","runtimeId":"shell","displayName":"Shell"}}}'
+```
+
+### Reading agent output and sending follow-ups
+
+```bash
+# List agent sessions and their status / runtime / tmux session id.
+curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_agent_sessions","arguments":{}}}'
+
+# Read the latest terminal output (transcript) of a specific session,
+# bounded by lines and maxChars so the response stays small.
+curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"read_agent_output","arguments":{"sessionId":"sess_example","lines":200,"maxChars":16000}}}'
+
+# Submit a follow-up message to a Claude Code (or any tmux-backed) session.
+# The message is delivered into the pane as a paste buffer followed by Enter,
+# so the agent actually processes it instead of just seeing it in the input box.
+curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
+  -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"send_agent_message","arguments":{"sessionId":"sess_example","message":"Please also add a test for the empty state."}}}'
+```
+
+The same operations are exposed as REST mirrors for non-MCP clients:
+
+```bash
+curl -sS http://127.0.0.1:4337/api/agent-sessions/<sessionId>/output?lines=200&maxChars=16000
+curl -sS -X POST http://127.0.0.1:4337/api/agent-sessions/<sessionId>/messages \
+  -H 'content-type: application/json' \
+  -d '{"message":"Please also add a test for the empty state."}'
 ```
 
 This surface is for trusted local/internal deployments. Do not bind it to a public interface without adding an explicit authorization layer and network controls.

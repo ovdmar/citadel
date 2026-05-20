@@ -258,6 +258,77 @@ describe("OperationService", () => {
     expect(retry.reason).toBe("not_retriable");
   });
 
+  it("reads bounded transcript and submits follow-up messages into the backing tmux pane", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "mcp-output", source: "scratch" });
+    // Use bash with `read` to verify Enter is actually submitted by sendAgentMessage.
+    const session = await service.createAgentSession(
+      {
+        workspaceId: created.workspaceId,
+        runtimeId: "shell",
+        prompt: undefined,
+      },
+      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+    );
+    try {
+      // Drive the session into a read loop the same way Claude Code waits for
+      // chat input. If our follow-up does not press Enter, the loop never
+      // resolves and the assertion below times out.
+      execFileSync("tmux", [
+        "send-keys",
+        "-t",
+        session.tmuxSessionName ?? "",
+        "while read line; do printf 'ECHO:%s\\n' \"$line\"; done",
+        "Enter",
+      ]);
+      const sendResult = await service.sendAgentMessage({ sessionId: session.id, message: "hello world" });
+      expect(sendResult).toMatchObject({ ok: true, sessionId: session.id });
+      // Poll the transcript until we see the echoed line.
+      const deadline = Date.now() + 3000;
+      let transcript = service.readAgentTranscript({ sessionId: session.id, lines: 50, maxChars: 4000 });
+      while (Date.now() < deadline) {
+        transcript = service.readAgentTranscript({ sessionId: session.id, lines: 50, maxChars: 4000 });
+        if (transcript.ok && transcript.text.includes("ECHO:hello world")) break;
+        await new Promise((resolve) => setTimeout(resolve, 80));
+      }
+      expect(transcript.ok).toBe(true);
+      if (transcript.ok) {
+        expect(transcript.text).toContain("ECHO:hello world");
+        expect(transcript.charCount).toBeLessThanOrEqual(4000);
+      }
+      expect(store.listActivity().some((event) => event.type === "agent.message")).toBe(true);
+    } finally {
+      service.stopAgentSession({ sessionId: session.id });
+    }
+  });
+
+  it("rejects transcript/message calls for unknown sessions", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    expect(service.readAgentTranscript({ sessionId: "sess_missing" })).toEqual({
+      ok: false,
+      error: "session_not_found",
+    });
+    expect(await service.sendAgentMessage({ sessionId: "sess_missing", message: "hi" })).toEqual({
+      ok: false,
+      error: "session_not_found",
+    });
+  });
+
   it("stops a session, removes it from the cockpit, and records activity", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));

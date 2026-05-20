@@ -89,7 +89,10 @@ export const CitadelConfigSchema = z
         displayName: "Claude Code",
         command: "claude",
         args: [],
-        promptArg: "-p",
+        // No promptArg: Claude Code's `-p` is non-interactive print mode and
+        // exits after responding, which is not what Citadel agent sessions
+        // want. Interactive prompts are injected into the tmux pane after the
+        // runtime is ready (see operations.createAgentSession).
         resumeArg: "--resume",
         supportsResume: true,
         supportsPrompt: true,
