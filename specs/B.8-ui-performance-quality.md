@@ -16,7 +16,7 @@
 [ ] 8. Primary actions, secondary actions, links, statuses, and metadata have distinct visual treatment.
 [ ] 9. Desktop key views have screenshot review before release.
 [ ] 10. Mobile key views have screenshot review before release.
-[ ] 11. Mobile supports monitoring and light actions.
+[~] 11. Mobile supports monitoring and light actions. The mobile shell stays fixed at the viewport (`100dvh`); the mobile switcher chooses Navigator/Stage/Inspector; the Stage column owns its own scroll and the ttyd iframe receives a definite height so it never collapses or page-scrolls.
 [ ] 12. The default theme is a dark-blue v1-inspired palette: deep navy/slate background, lighter slate panels, cyan/sky accent for selection and primary actions.
 [ ] 13. The three-column cockpit shell has independently resizable side columns with drag handles between columns.
 [ ] 14. The three-column cockpit shell has independently collapsible side columns; the collapse control sits at the top-right of the left navigator and the top-left of the right inspector.
