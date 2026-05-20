@@ -72,80 +72,91 @@ export function Stage(props: {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
 
+  const startError = startSession.error instanceof Error ? startSession.error.message : null;
   return (
     <>
-      <div className="stage-tabs">
-        {tabs.map((tab) => {
-          const isActive = tab.session.id === activeSession?.session.id;
-          return (
-            <div key={tab.session.id} className={`stage-tab ${isActive ? "active" : ""}`}>
-              <button
-                type="button"
-                onClick={() => props.onActiveSession(tab.session.id)}
-                onDoubleClick={() => {
-                  setEditingId(tab.session.id);
-                  setDraft(tab.label);
-                }}
-                aria-label={`Switch to ${tab.label}`}
-                style={{ background: "transparent", border: 0, color: "inherit", cursor: "pointer", padding: 0 }}
-              >
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                  <TerminalSquare size={12} />
-                  {editingId === tab.session.id ? (
-                    <input
-                      ref={(node) => {
-                        if (node && editingId === tab.session.id && document.activeElement !== node) {
-                          node.focus();
-                          node.select();
-                        }
-                      }}
-                      value={draft}
-                      onChange={(event) => setDraft(event.target.value)}
-                      onBlur={() => {
-                        if (draft.trim() && draft.trim() !== tab.label) {
-                          renameSession.mutate({ sessionId: tab.session.id, name: draft.trim() });
-                        }
-                        setEditingId(null);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") (event.target as HTMLInputElement).blur();
-                        if (event.key === "Escape") setEditingId(null);
-                      }}
-                    />
-                  ) : (
-                    <span>{tab.label}</span>
-                  )}
-                </span>
-              </button>
-              <button
-                type="button"
-                className="close-tab"
-                aria-label="Stop session"
-                onClick={() => stopSession.mutate(tab.session.id)}
-                title="Stop session"
-              >
-                <X size={11} />
-              </button>
-            </div>
-          );
-        })}
+      <div className="stage-tabbar">
+        <div className="stage-tabs">
+          {tabs.map((tab) => {
+            const isActive = tab.session.id === activeSession?.session.id;
+            return (
+              <div key={tab.session.id} className={`stage-tab ${isActive ? "active" : ""}`}>
+                <button
+                  type="button"
+                  onClick={() => props.onActiveSession(tab.session.id)}
+                  onDoubleClick={() => {
+                    setEditingId(tab.session.id);
+                    setDraft(tab.label);
+                  }}
+                  aria-label={`Switch to ${tab.label}`}
+                  title={`Switch to ${tab.label} (double-click to rename)`}
+                  style={{ background: "transparent", border: 0, color: "inherit", cursor: "pointer", padding: 0 }}
+                >
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <TerminalSquare size={12} />
+                    {editingId === tab.session.id ? (
+                      <input
+                        ref={(node) => {
+                          if (node && editingId === tab.session.id && document.activeElement !== node) {
+                            node.focus();
+                            node.select();
+                          }
+                        }}
+                        value={draft}
+                        onChange={(event) => setDraft(event.target.value)}
+                        onBlur={() => {
+                          if (draft.trim() && draft.trim() !== tab.label) {
+                            renameSession.mutate({ sessionId: tab.session.id, name: draft.trim() });
+                          }
+                          setEditingId(null);
+                        }}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+                          if (event.key === "Escape") setEditingId(null);
+                        }}
+                      />
+                    ) : (
+                      <span>{tab.label}</span>
+                    )}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="close-tab"
+                  aria-label="Stop session"
+                  onClick={() => stopSession.mutate(tab.session.id)}
+                  title="Stop session"
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
         <div className="stage-add-wrapper" ref={addMenuRef}>
           <button
             type="button"
             className="stage-add"
             onClick={() => setAddMenuOpen((v) => !v)}
             aria-label="Add session"
+            aria-haspopup="menu"
+            aria-expanded={addMenuOpen}
             title="Add session"
+            disabled={startSession.isPending}
           >
             <Plus size={14} />
           </button>
           {addMenuOpen ? (
             <div className="stage-add-menu" role="menu">
+              <div className="stage-add-menu-label">New session</div>
               <button
                 type="button"
+                role="menuitem"
+                title="Start a shell terminal in this workspace"
                 onClick={() => startSession.mutate({ runtimeId: "shell", displayName: "Terminal" })}
+                disabled={startSession.isPending}
               >
-                Plain Terminal
+                <TerminalSquare size={12} /> Plain Terminal
               </button>
               {props.runtimes
                 .filter((runtime) => runtime.id !== "shell")
@@ -153,16 +164,33 @@ export function Stage(props: {
                   <button
                     key={runtime.id}
                     type="button"
-                    disabled={runtime.health !== "healthy"}
+                    role="menuitem"
+                    disabled={runtime.health !== "healthy" || startSession.isPending}
+                    title={
+                      runtime.health === "healthy"
+                        ? `Start ${runtime.displayName}`
+                        : `${runtime.displayName} is ${runtime.health}${runtime.healthReason ? ` · ${runtime.healthReason}` : ""}`
+                    }
                     onClick={() => startSession.mutate({ runtimeId: runtime.id, displayName: runtime.displayName })}
                   >
-                    {runtime.displayName} · {runtime.health}
+                    {runtime.displayName} ·{" "}
+                    <span className={`stage-add-health ${runtime.health}`}>{runtime.health}</span>
                   </button>
                 ))}
+              {props.runtimes.filter((runtime) => runtime.id !== "shell").length === 0 ? (
+                <div className="stage-add-empty">
+                  No agent runtimes configured. <a href="/settings">Open settings</a> to add one.
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
       </div>
+      {startError ? (
+        <div className="stage-error" role="alert">
+          Failed to start session: {startError}
+        </div>
+      ) : null}
       <div className="stage-body">
         {tabs.length ? (
           tabs.map((tab) => (

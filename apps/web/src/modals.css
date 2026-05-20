@@ -3,8 +3,8 @@
   inset: 0;
   z-index: 30;
   display: grid;
-  place-items: start center;
-  padding-top: 10vh;
+  place-items: center;
+  padding: 20px;
   background: rgba(7, 16, 31, 0.55);
   backdrop-filter: blur(4px);
 }
@@ -98,14 +98,19 @@
 }
 
 .modal-frame {
+  position: relative;
   width: min(560px, 100%);
   max-height: 90vh;
+  margin: 0;
+  padding: 0;
   overflow: hidden;
   background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: 10px;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
+  color: inherit;
+  box-shadow: 0 28px 80px rgba(7, 16, 31, 0.45);
 }
 
 .modal-header {
@@ -235,6 +240,47 @@
 
 /* Dashboard / history pages */
 
+.dashboard-page {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-strong);
+  min-height: 36px;
+}
+
+.dashboard-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: CanvasText;
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.dashboard-back:hover {
+  border-color: var(--color-action);
+  color: var(--color-action);
+  text-decoration: none;
+}
+
+.dashboard-title {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
 .kanban {
   display: grid;
   grid-auto-flow: column;
@@ -242,7 +288,7 @@
   gap: 12px;
   padding: 12px;
   overflow: auto;
-  height: 100%;
+  min-height: 0;
 }
 
 .kanban-column {

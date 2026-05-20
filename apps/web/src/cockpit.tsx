@@ -235,11 +235,6 @@ export function Cockpit() {
           </aside>
         )}
       </div>
-      <OpsRail
-        operationCount={data?.operations.length ?? 0}
-        recentActivity={data?.activity[0]?.message ?? ""}
-        mcpEnabled={Boolean(data?.mcp.enabled)}
-      />
       {commandOpen ? (
         <CommandPalette
           workspaces={data?.workspaces ?? []}
@@ -267,27 +262,23 @@ function TopBar(props: { onSearch: () => void }) {
         <span className="top-bar-brand-mark">C</span>
         Citadel
       </div>
-      <button type="button" className="top-bar-search" onClick={props.onSearch} aria-label="Search workspaces">
+      <button
+        type="button"
+        className="top-bar-search"
+        onClick={props.onSearch}
+        aria-label="Search workspaces"
+        title="Search workspaces, branches, issues, PRs (Cmd+K)"
+      >
         <SearchIcon size={13} />
         <span>Search workspaces, branches, issues, PRs…</span>
         <span className="top-bar-search-shortcut">⌘K</span>
       </button>
       <div className="top-bar-actions">
-        <Link className="top-bar-icon" to="/settings" aria-label="Settings">
+        <Link className="top-bar-icon" to="/settings" aria-label="Settings" title="Open settings">
           <SettingsIcon size={14} />
         </Link>
       </div>
     </header>
-  );
-}
-
-function OpsRail(props: { operationCount: number; recentActivity: string; mcpEnabled: boolean }) {
-  return (
-    <footer className="ops-rail">
-      <Link to="/operations">{props.operationCount} ops</Link>
-      <span className="ops-rail-message">{props.recentActivity || "No recent activity"}</span>
-      <span>MCP {props.mcpEnabled ? "on" : "off"}</span>
-    </footer>
   );
 }
 
@@ -312,7 +303,13 @@ function EmptyInspector(props: { onCollapse: () => void }) {
   return (
     <>
       <div className="column-header">
-        <button type="button" className="collapse-toggle" onClick={props.onCollapse} aria-label="Collapse inspector">
+        <button
+          type="button"
+          className="collapse-toggle"
+          onClick={props.onCollapse}
+          aria-label="Collapse inspector"
+          title="Collapse inspector"
+        >
           <ChevronsLeft size={14} />
         </button>
         <strong>Workspace</strong>

@@ -34,6 +34,7 @@
 [ ] 7. The command palette fuzzy-matches workspaces by name, title, branch, repo, attached issue key/title, attached PR number/URL, and current attention status.
 [ ] 8. The navigator left column has top-level entries for *Dashboard* (kanban by status) and *History* (archived workspaces with PR snapshot and unarchive control).
 [ ] 9. The navigator separates Dashboard/History from the workspaces list with a subtle divider, and exposes group-by/add-repo/create-workspace icon controls next to the *Workspaces* header.
+[ ] 10. The Dashboard route surfaces the kanban as its primary content, framed by a compact header that contains only a back-to-cockpit link. No oversized page title is rendered.
 
 ## Performance
 

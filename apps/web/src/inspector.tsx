@@ -1,6 +1,7 @@
 import type { AgentSession, Repo, Workspace, WorkspaceCockpitSummary, WorkspaceDiff } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ExternalLink, GitPullRequest, Hash, MessageSquare, PanelRightClose, Slack } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { GitPullRequest, Hash, MessageSquare, PanelRightClose, Settings, Slack } from "lucide-react";
 import { useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
@@ -20,7 +21,14 @@ export function Inspector(props: {
   return (
     <>
       <div className="column-header">
-        <Button type="button" variant="ghost" size="icon" onClick={props.onCollapse} aria-label="Collapse inspector">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={props.onCollapse}
+          aria-label="Collapse inspector"
+          title="Collapse inspector"
+        >
           <PanelRightClose size={14} />
         </Button>
         <strong>Workspace</strong>
@@ -31,6 +39,7 @@ export function Inspector(props: {
           type="button"
           className={`inspector-tab ${tab === "stats" ? "active" : ""}`}
           onClick={() => setTab("stats")}
+          title="PR, deploys, and session stats"
         >
           Stats
         </button>
@@ -38,13 +47,14 @@ export function Inspector(props: {
           type="button"
           className={`inspector-tab ${tab === "git" ? "active" : ""}`}
           onClick={() => setTab("git")}
+          title="Working tree and changed files"
         >
           Git
         </button>
       </div>
       <div className="column-body">
         {tab === "stats" ? (
-          <StatsTab workspace={props.workspace} sessions={props.sessions} summary={props.summary} />
+          <StatsTab workspace={props.workspace} repo={props.repo} sessions={props.sessions} summary={props.summary} />
         ) : (
           <GitTab workspace={props.workspace} summary={props.summary} />
         )}
@@ -55,6 +65,7 @@ export function Inspector(props: {
 
 function StatsTab(props: {
   workspace: Workspace;
+  repo: Repo | null;
   sessions: AgentSession[];
   summary: WorkspaceCockpitSummary | undefined;
 }) {
@@ -189,6 +200,7 @@ function StatsTab(props: {
                 href={app.url ?? undefined}
                 target="_blank"
                 rel="noreferrer"
+                title={`${app.label}${app.environment ? ` · ${app.environment}` : ""} · ${app.status}`}
               >
                 <span className="dot" />
                 <span>{app.label}</span>
@@ -197,7 +209,7 @@ function StatsTab(props: {
             ))}
           </div>
         ) : (
-          <div className="empty compact">{apps?.reason ?? "No app discovery hook configured for this repo."}</div>
+          <DeployedAppsEmpty repo={props.repo} reason={apps?.reason ?? null} />
         )}
         {apps?.actions.length ? (
           <div className="attach-row">
@@ -311,6 +323,51 @@ function GitTab(props: { workspace: Workspace; summary: WorkspaceCockpitSummary 
           Full-screen review with inline comments visible to the agent is planned. Open the PR for now.
         </div>
       </section>
+    </div>
+  );
+}
+
+function DeployedAppsEmpty(props: { repo: Repo | null; reason: string | null }) {
+  return (
+    <div className="empty-state-mock" aria-label="No deployed apps configured">
+      <div className="empty-state-reason">
+        <Settings size={12} />
+        <span>{props.reason ?? "No app discovery hook configured for this repo."}</span>
+      </div>
+      <div className="empty-state-preview" aria-hidden>
+        <div className="app-chip tone-healthy">
+          <span className="dot" />
+          <span>web</span>
+          <span className="command-result-meta">production</span>
+        </div>
+        <div className="app-chip tone-degraded">
+          <span className="dot" />
+          <span>api</span>
+          <span className="command-result-meta">staging</span>
+        </div>
+        <div className="app-chip tone-unavailable">
+          <span className="dot" />
+          <span>worker</span>
+          <span className="command-result-meta">preview</span>
+        </div>
+      </div>
+      <p className="empty-state-hint">
+        Configure an `apps` hook for this repo to surface deploys, URLs, and quick actions.
+      </p>
+      {props.repo ? (
+        <Link
+          to="/repos/$repoId"
+          params={{ repoId: props.repo.id }}
+          className="settings-link"
+          title="Configure deploy hooks for this repo"
+        >
+          Configure hooks
+        </Link>
+      ) : (
+        <Link to="/settings" className="settings-link" title="Open settings">
+          Open settings
+        </Link>
+      )}
     </div>
   );
 }

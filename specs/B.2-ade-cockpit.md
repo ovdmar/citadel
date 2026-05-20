@@ -19,18 +19,22 @@
 [ ] 1. The cockpit shell is a three-column layout: navigator (left), agent stage (center), inspector (right).
 [ ] 2. Both side columns are independently resizable via drag handles between columns.
 [ ] 3. Both side columns are independently collapsible.
-[ ] 4. The left collapse control lives in the top-right corner of the navigator. The right collapse control lives in the top-left corner of the inspector.
+[ ] 4. The left collapse control sits on the same row as the `Dashboard` link inside the navigator's primary nav. The right collapse control lives in the top-left corner of the inspector.
 [ ] 5. When a side column is collapsed, the column disappears entirely but its expand affordance remains visible so it can be reopened.
 [ ] 6. The center column always takes the remaining horizontal space.
 [ ] 7. The application shell never page-scrolls. Each column owns its own scroll context.
 [ ] 8. Terminal scrollback stays inside the terminal renderer, not the column scroll.
-[ ] 9. A slim top bar contains the product mark on the left, a centered search input that opens the command palette via click or Cmd+K, and the settings entry on the right.
+[ ] 9. A slim top bar contains the product mark on the left, a centered search input that opens the command palette via click or Cmd+K, and the settings entry on the right. The product mark appears exactly once across the chrome — the navigator does not duplicate it.
 [ ] 10. Resizable widths and collapse state persist locally between sessions.
+[ ] 11. No bottom status bar is rendered in the cockpit; operations, MCP, and activity counts are surfaced from their dedicated panels and command-palette navigation only.
+[ ] 12. The left navigator devotes its entire vertical space below primary nav to the workspaces list, which scrolls independently when content exceeds the column height.
+[ ] 13. Icon-only controls expose a native tooltip (title) and accessible label that describes their action or target.
+[ ] 14. Top-layer modals and overlays (command palette, create workspace, add repo) are centred both horizontally and vertically in the viewport; backdrop dismissal and `Esc` close them.
 
 ## Center Stage Sessions
 
 [ ] 1. The center column shows the workspace's sessions/chats as tabs along the top.
-[ ] 2. A plus button next to the tabs adds a new session: pick a plain `Terminal` or one of the configured agent runtimes.
+[ ] 2. A plus button next to the tabs adds a new session: pick a plain `Terminal` or one of the configured agent runtimes. The button and its menu sit outside the horizontally scrollable tab strip so the menu is never clipped.
 [ ] 3. Selecting `Terminal` creates an empty shell session in the workspace worktree.
 [ ] 4. Each session tab has an editable title. Default titles are the agent runtime display name or `Terminal`.
 [ ] 5. When a workspace is created with an associated default agent, the cockpit opens that agent automatically in a new session tab.
@@ -45,6 +49,7 @@
 [ ] 4. The Issue (Jira-style) icon is grey when no issue is attached; clicking allows attaching an issue when the issue provider is healthy. If safe, attaching an issue can rename the workspace branch to `<issue-key>-<title-dashified>`.
 [ ] 5. The PR/GitHub icon cannot be manually attached. It is auto-detected from workspace git state and cycles through lifecycle colors (grey → yellow → green → red as appropriate).
 [ ] 6. The `Stats` tab shows the list of locally deployed apps for the current namespace, sourced from repo hooks. App chips show name, status colour, and clickable link.
+[ ] 6a. When no apps hook is configured, the Deployed apps panel renders an explicit mock preview of how chips will appear and links directly to the repo settings where the hook is configured. It must never show a blank or non-actionable empty panel.
 [ ] 7. Repo hooks must dynamically provide the list of services so monorepos with many services only show the subset touched by the workspace.
 [ ] 8. Below deployed apps, the `Stats` tab shows the full PR check list with name and status, sourced from the version control provider.
 [ ] 9. The `Git` tab shows the changed files in the current workspace/PR with additions/deletions per file.

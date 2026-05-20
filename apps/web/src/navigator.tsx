@@ -3,7 +3,6 @@ import { Link, useLocation } from "@tanstack/react-router";
 import { ClipboardList, FolderPlus, LayoutDashboard, PanelLeftClose, Plus, Settings2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { readinessForWorkspace, readinessSection } from "./cockpit-readiness.js";
-import { Button } from "./components/ui/button.js";
 import { formatLabel } from "./labels.js";
 import { AddRepoModal, CreateWorkspaceModal, GroupByOverlay, type GroupKey } from "./modals.js";
 import { WorkspaceCard } from "./workspace-card.js";
@@ -54,19 +53,23 @@ export function Navigator(props: {
 
   return (
     <>
-      <div className="column-header">
-        <strong>Citadel</strong>
-        <span className="header-spacer" />
-        <Button type="button" variant="ghost" size="icon" onClick={props.onCollapse} aria-label="Collapse navigator">
-          <PanelLeftClose size={14} />
-        </Button>
-      </div>
       <div className="column-body">
         <nav className="nav-primary" aria-label="Primary navigation">
-          <Link to="/dashboard" className={path === "/dashboard" ? "active" : ""}>
-            <LayoutDashboard size={13} /> Dashboard
-          </Link>
-          <Link to="/history" className={path === "/history" ? "active" : ""}>
+          <div className="nav-row">
+            <Link to="/dashboard" className={path === "/dashboard" ? "active" : ""} title="Open kanban dashboard">
+              <LayoutDashboard size={13} /> Dashboard
+            </Link>
+            <button
+              type="button"
+              className="nav-collapse"
+              onClick={props.onCollapse}
+              aria-label="Collapse navigator"
+              title="Collapse navigator"
+            >
+              <PanelLeftClose size={14} />
+            </button>
+          </div>
+          <Link to="/history" className={path === "/history" ? "active" : ""} title="Activity & operations history">
             <ClipboardList size={13} /> History
           </Link>
         </nav>
@@ -103,32 +106,34 @@ export function Navigator(props: {
             ) : null}
           </div>
         </div>
-        {grouped.map((section) => (
-          <div key={section.id} className="nav-group">
-            {section.label ? <div className="nav-group-header">{section.label}</div> : null}
-            {section.workspaces.length ? (
-              section.workspaces.map(({ workspace, sessions }) => (
-                <WorkspaceCard
-                  key={workspace.id}
-                  workspace={workspace}
-                  sessions={sessions}
-                  pullRequest={
-                    workspace.id === props.activeSummary?.workspaceId
-                      ? (props.activeSummary.versionControl.pullRequest ?? null)
-                      : null
-                  }
-                  active={workspace.id === props.activeWorkspaceId}
-                  onSelect={() => props.onPickWorkspace(workspace)}
-                />
-              ))
-            ) : (
-              <div className="nav-group-empty">Empty group</div>
-            )}
-          </div>
-        ))}
-        {!props.workspaces.length ? (
-          <div className="empty compact">No workspaces yet. Use the plus button above to create one.</div>
-        ) : null}
+        <div className="nav-groups">
+          {grouped.map((section) => (
+            <div key={section.id} className="nav-group">
+              {section.label ? <div className="nav-group-header">{section.label}</div> : null}
+              {section.workspaces.length ? (
+                section.workspaces.map(({ workspace, sessions }) => (
+                  <WorkspaceCard
+                    key={workspace.id}
+                    workspace={workspace}
+                    sessions={sessions}
+                    pullRequest={
+                      workspace.id === props.activeSummary?.workspaceId
+                        ? (props.activeSummary.versionControl.pullRequest ?? null)
+                        : null
+                    }
+                    active={workspace.id === props.activeWorkspaceId}
+                    onSelect={() => props.onPickWorkspace(workspace)}
+                  />
+                ))
+              ) : (
+                <div className="nav-group-empty">Empty group</div>
+              )}
+            </div>
+          ))}
+          {!props.workspaces.length ? (
+            <div className="empty compact">No workspaces yet. Use the plus button above to create one.</div>
+          ) : null}
+        </div>
       </div>
       {showAddRepo ? <AddRepoModal onClose={() => setShowAddRepo(false)} /> : null}
       {showCreateWorkspace ? (

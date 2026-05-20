@@ -1,5 +1,6 @@
 import type { Workspace } from "@citadel/contracts";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { ArrowLeft } from "lucide-react";
 import { useMemo } from "react";
 import { useEventRefresh, useStateQuery } from "../app-state.js";
 import { readinessForWorkspace } from "../cockpit-readiness.js";
@@ -27,12 +28,12 @@ export function DashboardView() {
     return buckets;
   }, [data]);
   return (
-    <div className="page" style={{ padding: 0 }}>
-      <header className="header" style={{ padding: "12px 16px" }}>
-        <div>
-          <h1>Dashboard</h1>
-          <p className="command-result-meta">Workspaces grouped by current attention.</p>
-        </div>
+    <div className="page dashboard-page" style={{ padding: 0 }}>
+      <header className="dashboard-header" aria-label="Dashboard navigation">
+        <Link to="/" className="dashboard-back" title="Back to cockpit" aria-label="Back to cockpit">
+          <ArrowLeft size={14} /> Cockpit
+        </Link>
+        <span className="dashboard-title">Kanban · attention</span>
       </header>
       <div className="kanban">
         {COLUMNS.map((column) => (

@@ -1,7 +1,7 @@
 import type { AgentRuntime, Repo } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { GripVertical, Search, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
 
@@ -60,6 +60,7 @@ export function GroupByOverlay(props: GroupByOverlayProps) {
             size="icon"
             onClick={() => toggle(key)}
             aria-label={`Remove ${labels[key]} grouping`}
+            title={`Remove ${labels[key]} grouping`}
           >
             <X size={11} />
           </Button>
@@ -574,14 +575,28 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   );
 }
 
-export function Modal(props: { title: string; onClose: () => void; children: React.ReactNode }) {
+export function Modal(props: { title: string; onClose: () => void; children: ReactNode }) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") props.onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [props.onClose]);
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={props.onClose}>
       <dialog open className="modal-frame" aria-label={props.title} onMouseDown={(event) => event.stopPropagation()}>
         <div className="modal-header">
-          <Search size={14} />
+          <Search size={14} aria-hidden />
           <h2>{props.title}</h2>
-          <Button type="button" variant="ghost" size="icon" onClick={props.onClose} aria-label="Close">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            onClick={props.onClose}
+            aria-label="Close"
+            title="Close (Esc)"
+          >
             <X size={14} />
           </Button>
         </div>

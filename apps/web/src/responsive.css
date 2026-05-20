@@ -3,7 +3,7 @@
 @media (max-width: 1180px) {
   .cockpit-body {
     grid-template-columns:
-      var(--col-left, 260px) auto
+      var(--col-left, 260px) 4px minmax(0, 1fr) 4px
       var(--col-right, 280px);
   }
 }
