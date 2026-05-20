@@ -35,6 +35,8 @@
 [ ] 8. The navigator left column has top-level entries for *Dashboard* (kanban by status) and *History* (archived workspaces with PR snapshot and unarchive control).
 [ ] 9. The navigator separates Dashboard/History from the workspaces list with a subtle divider, and exposes group-by/add-repo/create-workspace icon controls next to the *Workspaces* header.
 [ ] 10. The Dashboard route surfaces the kanban as its primary content, framed by a compact header that contains only a back-to-cockpit link. No oversized page title is rendered.
+[ ] 11. The History route also exposes a back-to-cockpit link in its compact header, matching the Dashboard treatment.
+[ ] 12. Settings and onboarding surfaces follow the cockpit's dark-blue dense aesthetic: slim sub-nav, small uppercase panel titles, compact health/setup rows, no wall-of-form layouts.
 
 ## Performance
 

@@ -40,6 +40,9 @@
 [ ] 8. Long terminal buffers stay responsive.
 [ ] 9. Terminal scrollback is bounded or virtualized.
 [ ] 10. Terminal state explains disconnected, reconnecting, attached, read-only, and failed states.
+[ ] 11. The terminal renderer ships a built-in dark-blue palette (Citadel theme) for the 16 ANSI colors, cursor, and selection — independent of the user's shell profile.
+[ ] 12. The initial reattach snapshot uses tmux's visible viewport with escape sequences (`capture-pane -p -e`) and restores the recorded cursor cell, so cursor and text always land in the same place after reconnect.
+[ ] 13. When the underlying tmux session exits or the snapshot fails, the cockpit writes a visible inline message in the terminal pane (e.g. `[session exited: …]`, `[snapshot error: …]`, `[connection refused: …]`) and flips the status badge to `closed`; the cockpit never leaves a blank black surface without context.
 
 ## Future Terminal Surfaces
 

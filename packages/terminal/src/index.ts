@@ -59,6 +59,39 @@ export function captureTmuxVisibleScreen(sessionName: string, lines = 200) {
   }
 }
 
+export function captureTmuxSnapshot(sessionName: string) {
+  let text = "";
+  try {
+    text = execFileSync("tmux", ["capture-pane", "-p", "-e", "-t", sessionName], {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    text = text.replace(/\n+$/, "");
+  } catch (error) {
+    return { ok: false as const, error: error instanceof Error ? error.message : "tmux capture failed" };
+  }
+  let cursorRow = 0;
+  let cursorCol = 0;
+  try {
+    const raw = execFileSync("tmux", ["display-message", "-p", "-t", sessionName, "#{cursor_y},#{cursor_x}"], {
+      encoding: "utf8",
+    }).trim();
+    const [yStr, xStr] = raw.split(",");
+    const y = Number.parseInt(yStr ?? "", 10);
+    const x = Number.parseInt(xStr ?? "", 10);
+    if (Number.isFinite(y)) cursorRow = y as number;
+    if (Number.isFinite(x)) cursorCol = x as number;
+  } catch {
+    // best-effort: leave cursor at 0,0 if tmux didn't answer
+  }
+  // Clear viewport + scrollback, paint the captured pane, then restore the cursor cell so the
+  // user sees the same layout tmux's pane currently has.
+  const clear = "\x1b[H\x1b[2J\x1b[3J";
+  const placeCursor = `\x1b[${cursorRow + 1};${cursorCol + 1}H`;
+  return { ok: true as const, data: `${clear}${text}\n${placeCursor}` };
+}
+
 export function sendKeys(sessionName: string, data: string) {
   for (const token of tokenizeTerminalInput(data)) {
     if (token.literal) {
@@ -100,13 +133,26 @@ export function attachTerminalWebSocket(server: http.Server, resolveSession: (id
     }
     wss.handleUpgrade(request, socket, head, (ws) => {
       const sendSnapshot = () => {
-        if (ws.readyState === ws.OPEN)
-          ws.send(JSON.stringify({ type: "output", data: captureTmuxVisibleScreen(tmuxSession, 1000) }));
+        if (ws.readyState !== ws.OPEN) return;
+        const snapshot = captureTmuxSnapshot(tmuxSession);
+        if (snapshot.ok) {
+          ws.send(JSON.stringify({ type: "output", data: snapshot.data }));
+        } else {
+          ws.send(JSON.stringify({ type: "error", data: snapshot.error }));
+        }
       };
       sendSnapshot();
-      const control = attachTmuxControlStream(tmuxSession, (data) => {
-        if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "outputChunk", data }));
-      });
+      const control = attachTmuxControlStream(
+        tmuxSession,
+        (data) => {
+          if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "outputChunk", data }));
+        },
+        (reason) => {
+          if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify({ type: "exit", data: reason }));
+          }
+        },
+      );
       ws.on("message", (raw) => {
         const message = JSON.parse(raw.toString()) as { type: string; data?: string; cols?: number; rows?: number };
         let shouldCatchUp = false;
@@ -129,11 +175,16 @@ export function attachTerminalWebSocket(server: http.Server, resolveSession: (id
   });
 }
 
-export function attachTmuxControlStream(sessionName: string, onOutput: (data: string) => void) {
+export function attachTmuxControlStream(
+  sessionName: string,
+  onOutput: (data: string) => void,
+  onExit?: (reason: string) => void,
+) {
   const child = spawn("tmux", ["-C", "attach-session", "-t", sessionName], {
     stdio: ["pipe", "pipe", "ignore"],
   });
   let buffered = "";
+  let exited = false;
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk) => {
     buffered += chunk;
@@ -144,8 +195,14 @@ export function attachTmuxControlStream(sessionName: string, onOutput: (data: st
       if (data) onOutput(data);
     }
   });
+  child.on("exit", (code, signal) => {
+    if (exited) return;
+    exited = true;
+    onExit?.(signal ? `signal:${signal}` : `exit:${code ?? "?"}`);
+  });
   return {
     close: () => {
+      exited = true;
       child.stdout.destroy();
       child.stdin.destroy();
       child.kill("SIGTERM");

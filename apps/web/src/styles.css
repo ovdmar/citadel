@@ -431,10 +431,15 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 2px;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
+}
+
+.stage-tabbar-spacer {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .stage-tab {
@@ -512,7 +517,7 @@ a:hover {
 .stage-add-menu {
   position: absolute;
   top: calc(100% + 4px);
-  right: 0;
+  left: 0;
   z-index: 12;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -602,7 +607,7 @@ a:hover {
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  padding: 8px;
+  padding: 6px;
   background: var(--surface);
 }
 
@@ -624,7 +629,7 @@ a:hover {
 .terminal-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  background: #060c1a;
+  background: #0b1220;
   border: 1px solid var(--line);
   border-radius: 7px;
   overflow: hidden;
@@ -632,17 +637,65 @@ a:hover {
 
 .terminal-status {
   display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 6px 10px;
-  color: #cbd5e1;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  color: var(--muted);
+  border-bottom: 1px solid rgba(56, 189, 248, 0.12);
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.08), rgba(56, 189, 248, 0));
   font-size: 11px;
+}
+
+.terminal-status-flex {
+  flex: 1 1 auto;
+}
+
+.terminal-status-state {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+  color: var(--muted);
+}
+
+.terminal-status-state.connected {
+  background: color-mix(in srgb, var(--color-success) 22%, transparent);
+  color: var(--color-success);
+}
+
+.terminal-status-state.closed {
+  background: color-mix(in srgb, var(--color-danger) 22%, transparent);
+  color: var(--color-danger);
+}
+
+.terminal-status-exit,
+.terminal-status-error {
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--color-warning);
+}
+
+.terminal-status-error {
+  color: var(--color-danger);
 }
 
 .terminal-surface {
   height: 100%;
-  padding: 8px;
+  min-height: 0;
+  padding: 4px 0 0 6px;
+  background: #0b1220;
+}
+
+.terminal-surface .xterm,
+.terminal-surface .xterm-viewport,
+.terminal-surface .xterm-screen {
+  height: 100% !important;
+}
+
+.terminal-surface .xterm-viewport {
+  background: transparent !important;
 }
 
 /* Mobile switcher fallback */

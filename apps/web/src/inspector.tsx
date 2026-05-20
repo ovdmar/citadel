@@ -1,7 +1,7 @@
 import type { AgentSession, Repo, Workspace, WorkspaceCockpitSummary, WorkspaceDiff } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { GitPullRequest, Hash, MessageSquare, PanelRightClose, Settings, Slack } from "lucide-react";
+import { GitPullRequest, Hash, PanelRightClose, Settings, Slack } from "lucide-react";
 import { useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
@@ -54,7 +54,7 @@ export function Inspector(props: {
       </div>
       <div className="column-body">
         {tab === "stats" ? (
-          <StatsTab workspace={props.workspace} repo={props.repo} sessions={props.sessions} summary={props.summary} />
+          <StatsTab workspace={props.workspace} repo={props.repo} summary={props.summary} />
         ) : (
           <GitTab workspace={props.workspace} summary={props.summary} />
         )}
@@ -66,7 +66,6 @@ export function Inspector(props: {
 function StatsTab(props: {
   workspace: Workspace;
   repo: Repo | null;
-  sessions: AgentSession[];
   summary: WorkspaceCockpitSummary | undefined;
 }) {
   const pr = props.summary?.versionControl.pullRequest ?? null;
@@ -246,31 +245,6 @@ function StatsTab(props: {
         ) : (
           <div className="empty compact">No PR yet, nothing to check.</div>
         )}
-      </section>
-
-      <section className="inspector-block">
-        <h4>Sessions</h4>
-        <div className="check-list">
-          {props.sessions.length ? (
-            props.sessions.map((session) => (
-              <div key={session.id} className="check-row">
-                <span>
-                  <strong>{session.displayName}</strong>
-                  <span className="command-result-meta">
-                    <MessageSquare size={10} /> {formatLabel(session.status)}
-                  </span>
-                </span>
-                <span
-                  className={`tone-${session.status === "failed" || session.status === "orphaned" ? "failure" : session.status === "running" ? "success" : "pending"}`}
-                >
-                  {formatLabel(session.transport)}
-                </span>
-              </div>
-            ))
-          ) : (
-            <div className="empty compact">No sessions yet.</div>
-          )}
-        </div>
       </section>
     </div>
   );

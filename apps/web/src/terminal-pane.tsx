@@ -7,31 +7,79 @@ import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
 
+const TERMINAL_THEME = {
+  background: "#0b1220",
+  foreground: "#e2e8f0",
+  cursor: "#38bdf8",
+  cursorAccent: "#0b1220",
+  selectionBackground: "rgba(56, 189, 248, 0.32)",
+  black: "#1e293b",
+  red: "#f87171",
+  green: "#34d399",
+  yellow: "#fbbf24",
+  blue: "#60a5fa",
+  magenta: "#c084fc",
+  cyan: "#67e8f9",
+  white: "#e2e8f0",
+  brightBlack: "#475569",
+  brightRed: "#fca5a5",
+  brightGreen: "#86efac",
+  brightYellow: "#fde68a",
+  brightBlue: "#93c5fd",
+  brightMagenta: "#d8b4fe",
+  brightCyan: "#a5f3fc",
+  brightWhite: "#f8fafc",
+} as const;
+
 export function TerminalPane(props: { session: AgentSession }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<"connecting" | "connected" | "closed">("connecting");
+  const [exitReason, setExitReason] = useState<string | null>(null);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+
   useEffect(() => {
     if (!containerRef.current) return;
+    setExitReason(null);
+    setSnapshotError(null);
     const terminal = new Terminal({
       cursorBlink: true,
-      convertEol: true,
+      convertEol: false,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
       fontSize: 12,
+      lineHeight: 1.15,
+      letterSpacing: 0,
       scrollback: 8000,
-      theme: { background: "#101318", foreground: "#f8fafc" },
+      allowProposedApi: true,
+      theme: TERMINAL_THEME,
     });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(containerRef.current);
-    fit.fit();
+    // Initial fit after layout settles so xterm picks the actual container size.
+    requestAnimationFrame(() => {
+      try {
+        fit.fit();
+      } catch {
+        // ignore until the next observer tick
+      }
+    });
     const protocol = window.location.protocol === "https:" ? "wss" : "ws";
     const socket = new WebSocket(`${protocol}://${window.location.host}/terminal/${props.session.id}`);
     const sendTerminalMessage = (message: unknown) => {
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
     };
+    let pendingResize: number | null = null;
     const resize = () => {
-      fit.fit();
-      sendTerminalMessage({ type: "resize", cols: terminal.cols, rows: terminal.rows });
+      if (pendingResize !== null) cancelAnimationFrame(pendingResize);
+      pendingResize = requestAnimationFrame(() => {
+        pendingResize = null;
+        try {
+          fit.fit();
+        } catch {
+          return;
+        }
+        sendTerminalMessage({ type: "resize", cols: terminal.cols, rows: terminal.rows });
+      });
     };
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(containerRef.current);
@@ -43,20 +91,37 @@ export function TerminalPane(props: { session: AgentSession }) {
       sendTerminalMessage({ type: "paste", data: text });
     };
     terminal.element?.addEventListener("paste", pasteListener);
+    let everConnected = false;
     socket.addEventListener("open", () => {
+      everConnected = true;
       setState("connected");
       resize();
+      terminal.focus();
+    });
+    socket.addEventListener("error", () => {
+      if (!everConnected) {
+        terminal.write(
+          "\r\n\x1b[31m[connection refused — the tmux session may have exited before the cockpit could attach]\x1b[0m\r\n",
+        );
+      }
     });
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(String(event.data)) as { type: string; data?: string };
       if (message.type === "output" && typeof message.data === "string") {
-        terminal.reset();
         terminal.write(message.data);
+      } else if (message.type === "outputChunk" && typeof message.data === "string") {
+        terminal.write(message.data);
+      } else if (message.type === "exit" && typeof message.data === "string") {
+        setExitReason(message.data);
+        terminal.write(`\r\n\x1b[33m[session exited: ${message.data}]\x1b[0m\r\n`);
+      } else if (message.type === "error" && typeof message.data === "string") {
+        setSnapshotError(message.data);
+        terminal.write(`\r\n\x1b[31m[snapshot error: ${message.data}]\x1b[0m\r\n`);
       }
-      if (message.type === "outputChunk" && typeof message.data === "string") terminal.write(message.data);
     });
     socket.addEventListener("close", () => setState("closed"));
     return () => {
+      if (pendingResize !== null) cancelAnimationFrame(pendingResize);
       resizeObserver.disconnect();
       inputDisposable.dispose();
       terminal.element?.removeEventListener("paste", pasteListener);
@@ -64,11 +129,15 @@ export function TerminalPane(props: { session: AgentSession }) {
       terminal.dispose();
     };
   }, [props.session.id]);
+
   return (
     <div className="terminal-shell">
-      <div className="terminal-status">
+      <div className="terminal-status" aria-live="polite">
         <span>{props.session.displayName}</span>
-        <strong>{state}</strong>
+        <span className="terminal-status-flex" />
+        {snapshotError ? <em className="terminal-status-error">snapshot: {snapshotError}</em> : null}
+        {exitReason ? <em className="terminal-status-exit">exited · {exitReason}</em> : null}
+        <strong className={`terminal-status-state ${state}`}>{state}</strong>
       </div>
       <div ref={containerRef} className="terminal-surface" data-testid="terminal-surface" />
     </div>

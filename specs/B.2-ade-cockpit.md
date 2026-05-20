@@ -34,7 +34,7 @@
 ## Center Stage Sessions
 
 [ ] 1. The center column shows the workspace's sessions/chats as tabs along the top.
-[ ] 2. A plus button next to the tabs adds a new session: pick a plain `Terminal` or one of the configured agent runtimes. The button and its menu sit outside the horizontally scrollable tab strip so the menu is never clipped.
+[ ] 2. A plus button next to the tabs adds a new session: pick a plain `Terminal` or one of the configured agent runtimes. The button is rendered immediately to the right of the last tab (not pushed to the far edge), and the button + menu sit outside the horizontally scrollable tab strip so the menu is never clipped.
 [ ] 3. Selecting `Terminal` creates an empty shell session in the workspace worktree.
 [ ] 4. Each session tab has an editable title. Default titles are the agent runtime display name or `Terminal`.
 [ ] 5. When a workspace is created with an associated default agent, the cockpit opens that agent automatically in a new session tab.
@@ -43,7 +43,7 @@
 
 ## Inspector Tabs
 
-[ ] 1. The inspector has at least two tabs: `Stats` and `Git`.
+[ ] 1. The inspector has at least two tabs: `Stats` and `Git`. The tab strip is a compact pill-style picker that occupies only its own content width — never a half-panel-sized control.
 [ ] 2. The `Stats` tab shows workspace identity, PR size, and dual-state Slack/Issue/PR provider icons.
 [ ] 3. The Slack icon is grey when no thread is attached; clicking allows attaching a Slack conversation by URL when the Slack provider is healthy.
 [ ] 4. The Issue (Jira-style) icon is grey when no issue is attached; clicking allows attaching an issue when the issue provider is healthy. If safe, attaching an issue can rename the workspace branch to `<issue-key>-<title-dashified>`.
@@ -54,6 +54,7 @@
 [ ] 8. Below deployed apps, the `Stats` tab shows the full PR check list with name and status, sourced from the version control provider.
 [ ] 9. The `Git` tab shows the changed files in the current workspace/PR with additions/deletions per file.
 [ ] 10. The `Git` tab is structured so a future full-screen *Human Review* mode (GitHub-style code review with comments visible to the agent) can be added without redesigning the panel.
+[ ] 11. The Stats tab does not duplicate the per-session list — sessions live in the center column's tab strip only.
 
 ## Readiness
 

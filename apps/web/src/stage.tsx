@@ -185,6 +185,7 @@ export function Stage(props: {
             </div>
           ) : null}
         </div>
+        <div className="stage-tabbar-spacer" aria-hidden />
       </div>
       {startError ? (
         <div className="stage-error" role="alert">

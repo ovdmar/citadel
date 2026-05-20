@@ -160,12 +160,15 @@ function deriveAgentState(sessions: AgentSession[]): {
   tone: "running" | "starting" | "stopped" | "failed";
   label: string;
 } {
-  if (sessions.some((session) => session.status === "starting")) return { tone: "starting", label: "Agent starting" };
-  if (sessions.some((session) => session.status === "running")) return { tone: "running", label: "Agent running" };
-  if (sessions.some((session) => ["failed", "orphaned"].includes(session.status))) {
-    return { tone: "failed", label: "Session needs attention" };
+  const agentSessions = sessions.filter((session) => session.runtimeId !== "shell");
+  if (agentSessions.some((session) => session.status === "starting"))
+    return { tone: "starting", label: "Agent starting" };
+  if (agentSessions.some((session) => session.status === "running")) return { tone: "running", label: "Agent running" };
+  if (agentSessions.some((session) => ["failed", "orphaned"].includes(session.status))) {
+    return { tone: "failed", label: "Agent needs attention" };
   }
-  if (sessions.length) return { tone: "stopped", label: "Sessions stopped" };
+  if (agentSessions.length) return { tone: "stopped", label: "Agent stopped" };
+  if (sessions.length) return { tone: "stopped", label: "Terminal session" };
   return { tone: "stopped", label: "No session" };
 }
 

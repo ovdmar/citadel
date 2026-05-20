@@ -1,5 +1,7 @@
 import type { Workspace } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
+import { ArrowLeft } from "lucide-react";
 import { api, queryClient } from "../api.js";
 import { useEventRefresh, useStateQuery } from "../app-state.js";
 import { Button } from "../components/ui/button.js";
@@ -23,14 +25,12 @@ export function HistoryView() {
   });
   const rows = archived.data?.workspaces ?? [];
   return (
-    <div className="page" style={{ padding: 0 }}>
-      <header className="header" style={{ padding: "12px 16px" }}>
-        <div>
-          <h1>History</h1>
-          <p className="command-result-meta">
-            Archived workspaces with PR snapshot, lifecycle outcome, and unarchive when the worktree is still on disk.
-          </p>
-        </div>
+    <div className="page dashboard-page" style={{ padding: 0 }}>
+      <header className="dashboard-header" aria-label="History navigation">
+        <Link to="/" className="dashboard-back" title="Back to cockpit" aria-label="Back to cockpit">
+          <ArrowLeft size={14} /> Cockpit
+        </Link>
+        <span className="dashboard-title">History · archived workspaces</span>
       </header>
       <div style={{ overflow: "auto" }}>
         {rows.length ? (
