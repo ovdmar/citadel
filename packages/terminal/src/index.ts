@@ -18,7 +18,7 @@ export type TerminalSessionRequest = {
 export async function ensureTmuxSession(input: TerminalSessionRequest) {
   const exists = tmuxSessionExists(input.sessionName);
   if (!exists) {
-    const command = [input.command, ...input.args].join(" ");
+    const command = terminalCommand(input.command, input.args);
     await execFileAsync("tmux", ["new-session", "-d", "-s", input.sessionName, "-c", input.cwd, command], {
       timeout: 10000,
       maxBuffer: 128 * 1024,
@@ -28,6 +28,25 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
     encoding: "utf8",
   }).trim();
   return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
+}
+
+function terminalCommand(command: string, args: string[]) {
+  const argv = [command, ...args].map(shellQuote).join(" ");
+  return [
+    "env",
+    "-u",
+    "NO_COLOR",
+    "TERM=xterm-256color",
+    "COLORTERM=truecolor",
+    "FORCE_COLOR=1",
+    "CLICOLOR_FORCE=1",
+    argv,
+  ].join(" ");
+}
+
+function shellQuote(value: string) {
+  if (/^[A-Za-z0-9_/:=.,+@%-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 export function tmuxSessionExists(sessionName: string) {

@@ -11,6 +11,7 @@
 
 .command-palette {
   width: min(640px, calc(100vw - 28px));
+  margin: 0;
   background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: 10px;
