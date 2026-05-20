@@ -32,6 +32,7 @@ import { attachTerminalWebSocket } from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
+import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { readWorkspaceDiff, readWorkspaceGitStatus } from "./workspace-diff.js";
@@ -642,6 +643,8 @@ export function createDaemonApp(input: {
     readMcpResource,
   });
 
+  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute });
+
   app.get("/api/workspaces/:workspaceId/diff", (req, res) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
     if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
@@ -688,16 +691,14 @@ export function createDaemonApp(input: {
   });
 
   // Reap orphan tmux sessions / ghost worktrees on a slow interval.
-  // Skipped in tests by setting CITADEL_DISABLE_REAPER=1.
   if (process.env.CITADEL_DISABLE_REAPER !== "1") {
     const reaper = setInterval(() => {
       try {
         const before = JSON.stringify(operations.reconcile());
-        if (before !== '{"sessions":0,"workspaces":0,"repos":0,"deletedSessions":0}') {
+        if (before !== '{"sessions":0,"workspaces":0,"repos":0,"deletedSessions":0}')
           emit("state.reconciled", JSON.parse(before));
-        }
       } catch {
-        // Reaper failures are non-fatal.
+        /* non-fatal */
       }
     }, 30_000);
     reaper.unref();

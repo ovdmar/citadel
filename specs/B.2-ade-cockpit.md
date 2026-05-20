@@ -12,6 +12,43 @@
 [ ] 4. Readiness explains blockers, stale data, missing providers, failed hooks, and available next actions.
 [ ] 5. The cockpit combines session, terminal, git, PR, CI, Jira, diff, apps, actions, operations, and activity context.
 [ ] 6. The cockpit makes review/fix/deploy/wait decisions obvious from the selected workspace.
+[ ] 7. The cockpit uses a dark-blue v1-inspired palette and stays dense, with no marketing-style hero areas.
+
+## Shell Layout
+
+[ ] 1. The cockpit shell is a three-column layout: navigator (left), agent stage (center), inspector (right).
+[ ] 2. Both side columns are independently resizable via drag handles between columns.
+[ ] 3. Both side columns are independently collapsible.
+[ ] 4. The left collapse control lives in the top-right corner of the navigator. The right collapse control lives in the top-left corner of the inspector.
+[ ] 5. When a side column is collapsed, the column disappears entirely but its expand affordance remains visible so it can be reopened.
+[ ] 6. The center column always takes the remaining horizontal space.
+[ ] 7. The application shell never page-scrolls. Each column owns its own scroll context.
+[ ] 8. Terminal scrollback stays inside the terminal renderer, not the column scroll.
+[ ] 9. A slim top bar contains the product mark on the left, a centered search input that opens the command palette via click or Cmd+K, and the settings entry on the right.
+[ ] 10. Resizable widths and collapse state persist locally between sessions.
+
+## Center Stage Sessions
+
+[ ] 1. The center column shows the workspace's sessions/chats as tabs along the top.
+[ ] 2. A plus button next to the tabs adds a new session: pick a plain `Terminal` or one of the configured agent runtimes.
+[ ] 3. Selecting `Terminal` creates an empty shell session in the workspace worktree.
+[ ] 4. Each session tab has an editable title. Default titles are the agent runtime display name or `Terminal`.
+[ ] 5. When a workspace is created with an associated default agent, the cockpit opens that agent automatically in a new session tab.
+[ ] 6. The selected session occupies the rest of the column height.
+[ ] 7. Terminal keyboard shortcuts must be passed through to the active terminal correctly.
+
+## Inspector Tabs
+
+[ ] 1. The inspector has at least two tabs: `Stats` and `Git`.
+[ ] 2. The `Stats` tab shows workspace identity, PR size, and dual-state Slack/Issue/PR provider icons.
+[ ] 3. The Slack icon is grey when no thread is attached; clicking allows attaching a Slack conversation by URL when the Slack provider is healthy.
+[ ] 4. The Issue (Jira-style) icon is grey when no issue is attached; clicking allows attaching an issue when the issue provider is healthy. If safe, attaching an issue can rename the workspace branch to `<issue-key>-<title-dashified>`.
+[ ] 5. The PR/GitHub icon cannot be manually attached. It is auto-detected from workspace git state and cycles through lifecycle colors (grey → yellow → green → red as appropriate).
+[ ] 6. The `Stats` tab shows the list of locally deployed apps for the current namespace, sourced from repo hooks. App chips show name, status colour, and clickable link.
+[ ] 7. Repo hooks must dynamically provide the list of services so monorepos with many services only show the subset touched by the workspace.
+[ ] 8. Below deployed apps, the `Stats` tab shows the full PR check list with name and status, sourced from the version control provider.
+[ ] 9. The `Git` tab shows the changed files in the current workspace/PR with additions/deletions per file.
+[ ] 10. The `Git` tab is structured so a future full-screen *Human Review* mode (GitHub-style code review with comments visible to the agent) can be added without redesigning the panel.
 
 ## Readiness
 

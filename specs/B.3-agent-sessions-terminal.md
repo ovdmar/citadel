@@ -16,6 +16,9 @@
 [ ] 8. Session status includes running, waiting, failed, orphaned, completed, and needs-attention states.
 [ ] 9. Session state survives browser refresh/reconnect.
 [ ] 10. Switching sessions preserves useful terminal context.
+[ ] 11. Sessions surface in the center column as a tab strip with a plus button that offers `Terminal` plus every healthy agent runtime.
+[ ] 12. Session tab titles are editable inline. The default title is the runtime display name (`Terminal` for the shell runtime).
+[ ] 13. When a workspace opens for the first time and a default agent runtime is healthy, Citadel opens that agent session automatically.
 
 ## Runtime Adapters
 

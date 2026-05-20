@@ -1,89 +1,176 @@
 import type { AgentSession, PullRequestSummary, Workspace } from "@citadel/contracts";
-import { GitBranch, GitPullRequest, Pin, Sparkles, Square, TerminalSquare } from "lucide-react";
-import type { WorkspaceAttention } from "./cockpit-readiness.js";
+import { useMutation } from "@tanstack/react-query";
+import {
+  Bot,
+  CircleDot,
+  GitPullRequest,
+  Loader2,
+  MessageSquare,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldQuestion,
+} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { api, queryClient } from "./api.js";
 
-type PrTone = "missing" | "draft" | "open" | "pending" | "passing" | "failing" | "merged";
-
-export function WorkspaceCard(props: {
+export type WorkspaceCardData = {
   workspace: Workspace;
   sessions: AgentSession[];
-  attention: WorkspaceAttention;
-  active: boolean;
   pullRequest?: PullRequestSummary | null;
-  onSelect: () => void;
-}) {
-  const { workspace, sessions, attention } = props;
-  const activeSessions = sessions.filter((session) => ["running", "waiting", "idle"].includes(session.status));
-  const failedSession = sessions.some((session) => ["failed", "orphaned"].includes(session.status));
-  const prTone: PrTone = workspace.prUrl ? prToneFor(props.pullRequest) : "missing";
-  const additions = props.pullRequest?.additions ?? null;
-  const deletions = props.pullRequest?.deletions ?? null;
+  approval?: ApprovalTone;
+};
+
+export type PrTone = "missing" | "pending" | "passing" | "failing" | "merged";
+export type ApprovalTone = "none" | "pending" | "changes" | "approved";
+
+export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSelect: () => void }) {
+  const { workspace, sessions, pullRequest } = props;
+  const titleDisplay = workspaceDisplayTitle(workspace);
+  const agentState = deriveAgentState(sessions);
+  const prTone = pullRequest ? prToneFor(pullRequest) : "missing";
+  const approvalTone = props.approval ?? approvalToneFor(pullRequest);
+  const additions = pullRequest?.additions ?? null;
+  const deletions = pullRequest?.deletions ?? null;
+
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(titleDisplay);
+  const editInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (!editing) setDraft(titleDisplay);
+  }, [titleDisplay, editing]);
+  useEffect(() => {
+    if (editing) editInputRef.current?.select();
+  }, [editing]);
+
+  const rename = useMutation({
+    mutationFn: (name: string) =>
+      api(`/api/workspaces/${workspace.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name }),
+      }),
+    onSuccess: () => {
+      setEditing(false);
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+    },
+  });
+
   return (
     <button
       type="button"
       className={`workspace-card ${props.active ? "active" : ""}`}
-      onClick={props.onSelect}
+      onClick={() => {
+        if (!editing) props.onSelect();
+      }}
       aria-label={`Open workspace ${workspace.name}`}
     >
-      <span className={`attention-dot tone-${attention.tone}`} aria-hidden />
+      <span className={`workspace-card-agent ${agentState.tone}`} title={agentState.label}>
+        {agentState.tone === "starting" || agentState.tone === "running" ? (
+          <Loader2 size={14} style={{ animation: "spin 1.4s linear infinite" }} />
+        ) : (
+          <Bot size={14} />
+        )}
+      </span>
       <span className="workspace-card-main">
         <span className="workspace-card-title">
-          {workspace.pinned ? <Pin size={11} className="workspace-card-pin" aria-label="Pinned" /> : null}
-          <strong>{workspace.name}</strong>
+          {editing ? (
+            <input
+              ref={editInputRef}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onClick={(event) => event.stopPropagation()}
+              onBlur={() => {
+                if (draft.trim() && draft.trim() !== titleDisplay) rename.mutate(draft.trim());
+                else setEditing(false);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+                else if (event.key === "Escape") {
+                  setDraft(titleDisplay);
+                  setEditing(false);
+                }
+              }}
+              aria-label="Rename workspace"
+            />
+          ) : (
+            <strong
+              onDoubleClick={(event) => {
+                event.stopPropagation();
+                setEditing(true);
+              }}
+              title={titleDisplay}
+            >
+              {workspace.issueKey ? <span className="workspace-card-issue">{workspace.issueKey}</span> : null}
+              {titleDisplay}
+            </strong>
+          )}
         </span>
-        <span className="workspace-card-branch">
-          <GitBranch size={11} aria-hidden />
-          <span>{workspace.branch}</span>
+        <span className="workspace-card-branch" title={workspace.branch}>
+          {workspace.branch}
         </span>
-        <small className="workspace-card-attention">{attention.nextAction}</small>
       </span>
-      <span className="workspace-card-icons" aria-hidden>
-        {workspace.issueKey ? <span className="workspace-card-issue">{workspace.issueKey}</span> : null}
-        {workspace.prUrl ? (
-          <span className={`workspace-card-pr pr-${prTone}`} title={`PR ${prTone}`}>
-            <GitPullRequest size={12} />
-            {props.pullRequest?.number ? <span>#{props.pullRequest.number}</span> : null}
-            {props.pullRequest?.state ? <span>{props.pullRequest.state}</span> : null}
-            {additions !== null || deletions !== null ? (
-              <em className="workspace-card-diff">
-                <span className="diff-add">+{additions ?? 0}</span>
-                <span className="diff-del">-{deletions ?? 0}</span>
-              </em>
-            ) : null}
+      <span className="workspace-card-right" aria-hidden>
+        {additions !== null || deletions !== null ? (
+          <span className="workspace-card-diff">
+            <span className="diff-add">+{additions ?? 0}</span>
+            <span className="diff-del">-{deletions ?? 0}</span>
           </span>
         ) : null}
-        {workspace.dirty ? (
-          <span className="workspace-card-dirty" title="Uncommitted changes">
-            ●
-          </span>
-        ) : null}
-        {activeSessions.length ? (
-          <span className="workspace-card-sessions" title={`${activeSessions.length} active sessions`}>
-            <Sparkles size={11} />
-            {activeSessions.length}
-          </span>
-        ) : sessions.length ? (
-          <span className="workspace-card-sessions inactive" title={`${sessions.length} sessions, none active`}>
-            <Square size={10} />
-            {sessions.length}
-          </span>
+        {pullRequest ? (
+          <a
+            href={pullRequest.url}
+            target="_blank"
+            rel="noreferrer"
+            className={`pr-pill tone-${prTone}`}
+            title={`PR #${pullRequest.number} · ${prTone}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <GitPullRequest size={11} />
+          </a>
         ) : (
-          <span className="workspace-card-sessions empty" title="No sessions">
-            <TerminalSquare size={11} />
+          <span className="pr-pill" title="No PR yet">
+            <GitPullRequest size={11} />
           </span>
         )}
-        {failedSession ? (
-          <span className="workspace-card-failed" title="Failed session">
-            !
-          </span>
-        ) : null}
+        <span className={`approval-pill tone-${approvalTone}`} title={`Approval: ${approvalTone}`}>
+          {approvalTone === "approved" ? (
+            <ShieldCheck size={11} />
+          ) : approvalTone === "changes" ? (
+            <ShieldAlert size={11} />
+          ) : approvalTone === "pending" ? (
+            <MessageSquare size={11} />
+          ) : (
+            <ShieldQuestion size={11} />
+          )}
+        </span>
+        {workspace.dirty ? <span className="workspace-card-dirty" title="Uncommitted changes" /> : null}
+        {agentState.tone === "failed" ? <CircleDot size={10} color="var(--color-danger)" /> : null}
       </span>
     </button>
   );
 }
 
-function prToneFor(pr: PullRequestSummary | null | undefined): PrTone {
-  if (!pr) return "open";
+export function workspaceDisplayTitle(workspace: Workspace) {
+  if (workspace.issueKey && workspace.issueTitle) {
+    return `${workspace.issueTitle} (${workspace.name})`;
+  }
+  return workspace.name;
+}
+
+function deriveAgentState(sessions: AgentSession[]): {
+  tone: "running" | "starting" | "stopped" | "failed";
+  label: string;
+} {
+  if (sessions.some((session) => session.status === "starting")) return { tone: "starting", label: "Agent starting" };
+  if (sessions.some((session) => session.status === "running")) return { tone: "running", label: "Agent running" };
+  if (sessions.some((session) => ["failed", "orphaned"].includes(session.status))) {
+    return { tone: "failed", label: "Session needs attention" };
+  }
+  if (sessions.length) return { tone: "stopped", label: "Sessions stopped" };
+  return { tone: "stopped", label: "No session" };
+}
+
+export function prToneFor(pr: PullRequestSummary | null | undefined): PrTone {
+  if (!pr) return "missing";
   if (pr.state?.toLowerCase() === "merged") return "merged";
   if (pr.state?.toLowerCase() === "closed") return "missing";
   const failed = pr.checks.some((check) =>
@@ -94,9 +181,17 @@ function prToneFor(pr: PullRequestSummary | null | undefined): PrTone {
     ["queued", "in_progress", "pending"].includes(String(check.status).toLowerCase()),
   );
   if (pending) return "pending";
-  const allPassing =
-    pr.checks.length > 0 && pr.checks.every((check) => String(check.conclusion ?? "").toLowerCase() === "success");
-  if (allPassing) return "passing";
-  if (pr.draft) return "draft";
-  return "open";
+  if (pr.checks.length && pr.checks.every((check) => String(check.conclusion ?? "").toLowerCase() === "success")) {
+    return "passing";
+  }
+  return "pending";
+}
+
+export function approvalToneFor(pr: PullRequestSummary | null | undefined): ApprovalTone {
+  if (!pr) return "none";
+  const decision = pr.reviewDecision?.toLowerCase() ?? "";
+  if (decision.includes("approved")) return "approved";
+  if (decision.includes("changes")) return "changes";
+  if (decision.includes("review_required") || decision.includes("review-required")) return "pending";
+  return "none";
 }

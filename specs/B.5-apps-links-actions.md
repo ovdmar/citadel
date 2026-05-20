@@ -12,6 +12,10 @@
 [ ] 4. Application entries show the source hook/provider and refresh age.
 [ ] 5. Missing app data explains whether the hook is absent, unhealthy, failed, or returned no apps.
 [ ] 6. Application health contributes to workspace readiness when configured.
+[ ] 7. The inspector `Stats` tab renders deployed apps as clickable chips with red/green deploy/status color.
+[ ] 8. App discovery hooks must support monorepos by returning only the subset of services the current workspace actually touches.
+[ ] 9. The list of services is dynamic per workspace; no static list is hardcoded in Citadel.
+[ ] 10. App chips expose a redeploy action when the repo declares one; redeploy runs through Citadel operations.
 
 ## Links
 

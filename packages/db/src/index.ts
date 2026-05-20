@@ -272,11 +272,51 @@ export class SqliteStore {
       .run(lifecycle, dirty ? 1 : 0, new Date().toISOString(), workspaceId);
   }
 
+  updateWorkspace(workspaceId: string, patch: Partial<Pick<Workspace, "name" | "issueKey" | "issueTitle" | "pinned">>) {
+    const fields: string[] = [];
+    const values: unknown[] = [];
+    if (typeof patch.name === "string") {
+      fields.push("name = ?");
+      values.push(patch.name);
+    }
+    if (patch.issueKey !== undefined) {
+      fields.push("issue_key = ?");
+      values.push(patch.issueKey ?? null);
+    }
+    if (patch.issueTitle !== undefined) {
+      fields.push("issue_title = ?");
+      values.push(patch.issueTitle ?? null);
+    }
+    if (patch.pinned !== undefined) {
+      fields.push("pinned = ?");
+      values.push(patch.pinned ? 1 : 0);
+    }
+    if (!fields.length) return;
+    fields.push("updated_at = ?");
+    values.push(new Date().toISOString());
+    values.push(workspaceId);
+    this.database.prepare(`UPDATE workspaces SET ${fields.join(", ")} WHERE id = ?`).run(...(values as unknown[]));
+  }
+
   archiveWorkspace(workspaceId: string, lifecycle: Workspace["lifecycle"], dirty = false) {
     const now = new Date().toISOString();
     this.database
       .prepare("UPDATE workspaces SET lifecycle = ?, dirty = ?, archived_at = ?, updated_at = ? WHERE id = ?")
       .run(lifecycle, dirty ? 1 : 0, now, now, workspaceId);
+  }
+
+  listArchivedWorkspaces(): Workspace[] {
+    const rows = this.database
+      .prepare("SELECT * FROM workspaces WHERE archived_at IS NOT NULL ORDER BY archived_at DESC")
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(workspaceFromRow);
+  }
+
+  unarchiveWorkspace(workspaceId: string) {
+    const now = new Date().toISOString();
+    this.database
+      .prepare("UPDATE workspaces SET archived_at = NULL, lifecycle = 'ready', updated_at = ? WHERE id = ?")
+      .run(now, workspaceId);
   }
 
   archiveRepo(repoId: string) {
@@ -322,6 +362,12 @@ export class SqliteStore {
     this.database
       .prepare("UPDATE agent_sessions SET status = ?, updated_at = ? WHERE id = ?")
       .run(status, new Date().toISOString(), sessionId);
+  }
+
+  updateSessionDisplayName(sessionId: string, displayName: string) {
+    this.database
+      .prepare("UPDATE agent_sessions SET display_name = ?, updated_at = ? WHERE id = ?")
+      .run(displayName, new Date().toISOString(), sessionId);
   }
 
   deleteSession(sessionId: string) {

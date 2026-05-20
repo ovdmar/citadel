@@ -19,6 +19,8 @@ import { Cockpit } from "./cockpit.js";
 import { Badge } from "./components/ui/badge.js";
 import { Button } from "./components/ui/button.js";
 import { formatLabel } from "./labels.js";
+import { DashboardView } from "./routes/dashboard.js";
+import { HistoryView } from "./routes/history.js";
 import { OnboardingView } from "./routes/onboarding.js";
 import { OperationsView } from "./routes/operations.js";
 import { RepoSettingsView } from "./routes/repo-settings.js";
@@ -26,6 +28,7 @@ import { StructuredConfig } from "./structured-config.js";
 import "./styles.css";
 import "./cockpit-extras.css";
 import "./cockpit-tools.css";
+import "./modals.css";
 import "./settings.css";
 import "./responsive.css";
 import { ThemeControls } from "./theme-controls.js";
@@ -64,8 +67,28 @@ const onboardingRoute = createRoute({
   component: OnboardingView,
 });
 
+const dashboardRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/dashboard",
+  component: DashboardView,
+});
+
+const historyRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/history",
+  component: HistoryView,
+});
+
 const router = createRouter({
-  routeTree: rootRoute.addChildren([indexRoute, settingsRoute, repoSettingsRoute, operationsRoute, onboardingRoute]),
+  routeTree: rootRoute.addChildren([
+    indexRoute,
+    settingsRoute,
+    repoSettingsRoute,
+    operationsRoute,
+    onboardingRoute,
+    dashboardRoute,
+    historyRoute,
+  ]),
 });
 
 declare module "@tanstack/react-router" {

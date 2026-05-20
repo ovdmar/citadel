@@ -23,6 +23,9 @@
 [ ] 4. Workspace details show PR title, author, branch, target branch, labels, and mergeability when available.
 [ ] 5. Workspace details show PR review requests and approval/blocking review state when available.
 [ ] 6. PR state contributes to readiness and next action.
+[ ] 7. Workspace cards render the PR icon with lifecycle color: grey when no PR exists, yellow when the PR exists and checks are pending, green when checks pass, red when any check fails.
+[ ] 8. The PR icon on a workspace card links directly to the provider PR URL.
+[ ] 9. Workspace cards render a separate approval icon to the right of the PR icon: grey when no reviewer is requested, yellow when reviewers are pending, red when changes are requested or comments are unresolved, green check when at least one approval exists.
 
 ## Checks And CI
 
@@ -45,6 +48,15 @@
 [ ] 8. Diff panel handles conflicted files.
 [ ] 9. Diff summary is connected to readiness and PR/check state.
 [ ] 10. The diff/review surface is read-only.
+[ ] 11. The inspector `Git` tab shows the changed files list with additions/deletions per file in a compact list.
+
+## Human Review (Planned)
+
+[ ] 1. A future full-screen *Human Review* mode is reachable from the inspector `Git` tab.
+[ ] 2. Human Review presents files in a GitHub-style review surface.
+[ ] 3. Human Review allows leaving file/line comments.
+[ ] 4. Comments are visible to the active agent session as structured input.
+[ ] 5. Human Review remains scoped to the selected workspace.
 
 ---
 

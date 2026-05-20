@@ -50,19 +50,16 @@ The UI hierarchy should reflect how often each flow happens:
 
 ## Workspace Card Requirements
 
-Workspace cards/rows are the highest-frequency scanning surface.
+Workspace cards/rows are the highest-frequency scanning surface. They must stay slim - ideally two lines.
 
-Each card should stay compact and show:
+Each card shows:
 
-1. Workspace name/branch.
-2. Agent/session state through a lightweight indicator.
-3. Whether attention is needed.
-4. Dirty/worktree status.
-5. PR presence when a PR exists.
-6. PR number, PR state, and diff size when available.
-7. Preview availability when a worktree app link exists.
-
-Use compact icons and color/state treatment instead of verbose labels where the meaning is familiar. For example, a PR icon can indicate that a PR exists, with color reflecting draft/open/review-needed/checks-failed/ready state. Text should appear on hover, focus, or expanded detail, not as permanent clutter.
+1. **Left:** an agent state icon. Spinner while an agent session is starting or actively working, static icon when no session is running, dimmed when sessions exist but are stopped or idle.
+2. **First line:** editable workspace title. The default title is the worktree name; when an issue is attached the default becomes `<issue-key> · <issue-title> · <workspace-name>`. Edits persist on the workspace record.
+3. **Second line:** branch name in a smaller, lighter monospace style.
+4. **Right side, PR group:** a PR icon plus diff size (`+adds/-dels`). The PR icon colors map to lifecycle: grey when no PR exists, yellow when the PR exists and checks are pending, green when checks pass, red when any check fails. Clicking the PR icon opens the provider PR URL.
+5. **Right side, approval group:** a separate approval icon to the right of the PR icon. Grey when no reviewer is requested, yellow when reviewers are requested but no answer yet, red when changes are requested or comments are unresolved, green check when at least one approval exists.
+6. **Inline indicators:** dirty/worktree status, attention dot, issue chip when attached. Extra detail (last activity, full status reason) appears on hover or in the inspector, not as permanent clutter.
 
 ## V1 UX Cross-Check
 
@@ -98,12 +95,17 @@ Ovidiu was happy with Citadel v1's UX shape. The v1 problem was coupling to one 
 
 The target should be close to v1's proven interaction model:
 
-1. **Left rail:** repositories and compact workspace cards.
-2. **Center stage:** active workspace terminal/session, with tabs or mode controls for agent terminal, empty terminal, diff/review, and possibly transcript.
-3. **Right inspector:** collapsed/contextual stats, PR/checks, preview links, worktree status, actions, activity, and diagnostics.
-4. **Top/command layer:** create workspace, switch/search, notifications, settings, and rare setup entry points.
+1. **Slim top bar:** logo/title on the left, centered fuzzy search input that doubles as the Cmd+K target, settings icon on the right. The top bar is intentionally thin and never the visual focus.
+2. **Left navigator:** primary entries are *Dashboard* (kanban grouped by attention/status) and *History* (archived workspaces with PR snapshot and unarchive). A subtle divider separates those entries from the *Workspaces* group, which carries three small icon controls on its right edge: group-by overlay, add repository overlay, and create workspace.
+3. **Center stage:** the active workspace terminal/session column. A tabbed bar lists the workspace's sessions (agent chats and plain terminals) and exposes a plus button to add another agent session or a plain terminal. The selected session occupies the rest of the column. The center column owns its own scrolling; terminal output stays inside xterm.js.
+4. **Right inspector:** workspace stats with two tabs - *Stats* (workspace identity, attached threads/issue/PR icons with dual state, deploy hook chips, CI checks) and *Git* (changed files with additions/deletions, structured to grow into a full-screen human review surface).
+5. **Resizable + collapsible columns:** both side columns are independently resizable and collapsible. When collapsed they disappear entirely; only the persistent expand affordance remains. The app itself never page-scrolls.
 
-The redesign should not invent a new dashboard-first UX. It should take v1's cockpit muscle memory and make it generic, compact, and less coupled to the old implementation lane.
+The redesign should not invent a new dashboard-first UX. It should take v1's dark-blue cockpit muscle memory and make it generic, compact, and less coupled to the old implementation lane.
+
+### Visual System
+
+The cockpit uses a dark-blue v1-inspired surface palette. Color carries information density (status colors on PR/check/approval icons, accent on selection), not decoration. Headers are short, controls are dense, and there are no marketing-style hero areas or oversized cards. The top bar is the only horizontal landmark above the workbench.
 
 ## Journey 1: First Run And Setup Check
 
@@ -468,23 +470,52 @@ The redesign should not invent a new dashboard-first UX. It should take v1's coc
 
 **User goal:** I want fast access to common cockpit actions without navigating every panel.
 
-**Trigger:** The user opens command/search access.
+**Trigger:** The user clicks the centered search input in the slim top bar, or presses Cmd+K (Ctrl+K on Linux/Windows).
 
 **Flow:**
 
-1. The user searches repositories, workspaces, sessions, links, and common actions.
-2. Results show state and scope: repository, workspace, session, action, setting, or operation.
-3. The user opens a result or runs a valid action.
-4. Actions obey the same safety and operation model as the normal UI.
+1. A modal opens with a focused fuzzy search input.
+2. The query is matched against workspace name/title, branch name, attached issue key/title, attached PR number and URL, repository name, and current attention status.
+3. Results show matching workspaces with enough context to identify them (repo, branch, attention).
+4. Selecting a result focuses that workspace in the cockpit and closes the modal.
+5. The same input also exposes runnable commands (open Settings, open Operations, open Onboarding, reconcile, stop active session, refresh active workspace) when no workspace matches or when typed explicitly.
+6. Actions obey the same safety and operation model as the normal UI.
 
 **UI requirements:**
 
-- Search should be keyboard-friendly.
-- Results must include enough context to avoid acting on the wrong workspace.
+- Search is keyboard-friendly: arrow keys move between matches, Enter selects, Escape closes.
+- Results must include enough context (repo, branch, PR, attention) to avoid acting on the wrong workspace.
 - Destructive commands still require confirmation.
 - Unavailable actions should explain why.
+- The modal trigger lives in the top bar so it is reachable from every cockpit state.
 
-**Done when:** Frequent cockpit actions are reachable quickly without bypassing safety.
+**Done when:** Frequent cockpit actions and the right workspace are reachable with one shortcut without bypassing safety.
+
+## Journey 18: Browse The Dashboard And History
+
+**User goal:** I want a higher-level view of active workspaces by status, and a way to recover archived workspaces.
+
+**Trigger:** The user clicks *Dashboard* or *History* in the left navigator.
+
+**Flow (Dashboard):**
+
+1. The dashboard groups active workspaces into kanban-style columns by attention/lifecycle state (working, needs review, blocked, dirty, idle).
+2. Each column lists the workspaces in that state with the same slim card affordances used in the navigator.
+3. Selecting a card focuses that workspace in the cockpit.
+
+**Flow (History):**
+
+1. The history view lists archived/removed workspaces in a table.
+2. Each row shows workspace name, repo, branch, archive timestamp, lifecycle outcome (fully removed vs. worktree still present), the PR snapshot at archive time (state, size, link), and an unarchive control.
+3. Unarchive restores the workspace to active lifecycle when its worktree is still present.
+
+**UI requirements:**
+
+- Dashboard columns must remain readable with 10-12 active workspaces.
+- History must distinguish worktree-still-present from fully-removed cases so unarchive is only offered when safe.
+- Both views must not introduce extra scroll axes; column/table scrolling lives inside the view, not the page.
+
+**Done when:** The user can scan workspace state at a glance and recover useful archived work.
 
 ## Journey 17: Recover From Bad Or Missing External State
 

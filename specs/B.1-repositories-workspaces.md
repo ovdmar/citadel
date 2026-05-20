@@ -24,6 +24,10 @@
 [ ] 6. The add repository flow validates configured hooks before saving.
 [ ] 7. A successfully added repository appears immediately in the repository/workspace navigator.
 [ ] 8. A failed add repository flow shows the exact validation issue and keeps entered values editable.
+[ ] 9. The add repository entry point is the small icon button next to the *Workspaces* header in the navigator.
+[ ] 10. The add repository overlay supports three input modes: local filesystem path, GitHub repo URL, and GitHub repo search (via `gh repo list`/`gh search repos` when the GitHub provider is healthy).
+[ ] 11. When the chosen repository is not yet cloned locally, the overlay clones it under `~/Workspace/<repo>` (or the configured workspace root) before registering it with Citadel.
+[ ] 12. The clone step runs as an operation with progress and explicit failure surface.
 
 ## Repository Settings
 
@@ -54,6 +58,11 @@
 [ ] 5. Workspace rows show branch, readiness, active session count, dirty state, PR/check state, and blocking operations.
 [ ] 6. The navigator remains scannable with 10-12 active workspaces across 2-3 repositories.
 [ ] 7. The navigator is the primary left-side operating surface.
+[ ] 8. Workspace rows are slim (two lines): left agent state icon, first line workspace title, second line branch name in lighter monospace.
+[ ] 9. Workspace title is editable inline. Default is the worktree name; when an issue is attached the default is `<issue-key> · <issue-title> · <workspace-name>`.
+[ ] 10. The agent state icon shows a spinner while a session is starting or actively running, and a static icon when no sessions are running.
+[ ] 11. The navigator exposes a group-by overlay with checkboxes for `Repository` and `Status`. Both are reorderable to control grouping order. Default: both on, Repository first.
+[ ] 12. Group-by preferences persist locally.
 
 ## Create Workspace
 
@@ -65,6 +74,13 @@
 [ ] 6. Create workspace previews branch name, path, base branch, linked PR/issue, and setup hooks before creation.
 [ ] 7. Create workspace executes repo setup hooks through operations.
 [ ] 8. A created workspace appears in the navigator with readiness, git state, and session affordances.
+[ ] 9. The create workspace entry point is the plus icon button next to the *Workspaces* header in the navigator. It opens a centered modal.
+[ ] 10. The modal requires repository selection first. The most recently used repository is pre-selected, and a search input is available when many repositories are registered.
+[ ] 11. The modal exposes workspace source as tabs: `From scratch`, `From issue`, `From branch`.
+[ ] 12. The `From issue` tab queries the active issue provider for issues assigned to or created by the current user, sorted by most recent activity.
+[ ] 13. The `From branch` tab lists recent local and remote branches with an inline branch search.
+[ ] 14. The modal supports an optional initial agent task that auto-launches a chosen runtime when the workspace is created.
+[ ] 15. When the workspace is created from this modal and a default agent runtime exists for the repo, Citadel opens that agent in the center column immediately.
 
 ## Archive And Remove Workspace
 
@@ -74,6 +90,10 @@
 [ ] 4. Remove workspace can run repo teardown hooks.
 [ ] 5. Remove workspace can preserve the worktree on disk when selected.
 [ ] 6. Workspace lifecycle is tracked separately from agent session, terminal, git, PR, and deployment state.
+[ ] 7. Archived/removed workspaces remain visible from the *History* navigator entry.
+[ ] 8. The history view distinguishes fully-removed workspaces from archived workspaces whose worktree is still present on disk.
+[ ] 9. The history view records the PR snapshot at archive time (state, additions/deletions, link) so it remains visible even after the PR provider stops returning it.
+[ ] 10. The history view offers an unarchive control when the worktree is still present and the workspace can be safely returned to active lifecycle.
 
 ---
 

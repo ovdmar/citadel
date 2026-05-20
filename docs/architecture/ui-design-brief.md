@@ -23,6 +23,10 @@ Settings starts with local config and setup status, then provider health, runtim
 
 Citadel should feel like a compact operations console. Use short headings, stable panels, compact rows, and dense controls. Avoid landing-page composition, oversized hero areas, marketing copy, ornamental gradients, and nested cards. Navigation is shallow: cockpit and settings first, with workspace detail embedded in the cockpit until the model genuinely requires deeper routing.
 
+The cockpit is a three-column layout: navigator (left), agent stage (center), inspector (right). Both side columns are independently resizable via drag handles and independently collapsible. Collapsing hides the column entirely while keeping the expand affordance visible. The center column always takes the remaining width. The application shell never page-scrolls; each column owns its own scroll context and the terminal scrolls inside xterm.js.
+
+A slim top bar sits above the cockpit. It contains the product mark on the left, a centered search input that opens the command palette (Cmd+K / Ctrl+K), and the settings entry on the right. The top bar is never the dominant visual mass.
+
 ## Interaction Principles
 
 - Prefer direct controls over explanatory text.
@@ -53,6 +57,16 @@ Preferred product terms:
 
 ## Visual System
 
-Use a restrained, local-tool visual language: neutral surfaces, small radius, compact spacing, readable monospace where content is command/diff/terminal oriented, and clear health colors. Icons should support scanning and should come from the configured icon library. Cards are for individual repeated items or framed tools; page sections should stay simple and scannable.
+The cockpit uses a dark-blue v1-inspired palette: deep navy/slate backgrounds, lighter slate surfaces for panels, a high-contrast cyan/sky accent for selection and primary actions, and explicit health colors (success green, pending amber, danger red, neutral grey) on status icons. Light theme keeps a low-saturation off-white background with the same accent. Color carries information density, not decoration.
+
+Use a restrained, local-tool visual language: small radius (4-8px), compact spacing (4/6/8/12px scale), readable monospace where content is command/diff/terminal oriented, and clear health colors. Icons should support scanning and should come from the configured icon library. Cards are for individual repeated items or framed tools; page sections should stay simple and scannable.
 
 The campaign target remains a shadcn/Tailwind component system. Until that migration is complete, CSS variables and local reusable components must follow the same constraints: accessible controls, stable responsive dimensions, no decorative backgrounds, no nested cards, and no hardcoded color usage inside frequently rendered React components.
+
+## Layout Surfaces
+
+- **Top bar:** Slim horizontal strip. Left: product mark. Center: search input that opens the command palette via click or Cmd+K. Right: settings icon. No other entries belong here.
+- **Navigator (left column):** Two primary entries (*Dashboard*, *History*), a subtle divider, then a *Workspaces* header with three icon controls on its right edge - group-by overlay, add-repository overlay, and create-workspace button. Below the header, workspaces appear as slim two-line cards, optionally grouped by repository and/or status (configurable in group-by).
+- **Stage (center column):** A workspace's session/chat tabs along the top with a plus button to add a session. The plus button offers `Terminal` plus every healthy agent runtime. Session tabs have editable titles. The selected session takes the rest of the height.
+- **Inspector (right column):** Two tabs. *Stats* shows workspace identity, attached Slack/Issue/PR provider icons with dual state, deployed-app chips from repo hooks, and CI/check status. *Git* shows the changed file list with additions/deletions, structured so a future *Human Review* mode can grow inside it.
+- **Operations rail (bottom):** Compact footer summarizing operations count and recent activity link.

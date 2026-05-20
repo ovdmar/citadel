@@ -17,14 +17,23 @@
 [ ] 9. Desktop key views have screenshot review before release.
 [ ] 10. Mobile key views have screenshot review before release.
 [ ] 11. Mobile supports monitoring and light actions.
+[ ] 12. The default theme is a dark-blue v1-inspired palette: deep navy/slate background, lighter slate panels, cyan/sky accent for selection and primary actions.
+[ ] 13. The three-column cockpit shell has independently resizable side columns with drag handles between columns.
+[ ] 14. The three-column cockpit shell has independently collapsible side columns; the collapse control sits at the top-right of the left navigator and the top-left of the right inspector.
+[ ] 15. A collapsed side column shows only its expand affordance, not the column body.
+[ ] 16. The app shell never page-scrolls; each column owns its own scroll context.
 
 ## Navigation
 
 [ ] 1. The workspace navigator is always easy to reach from the main cockpit.
-[ ] 2. Settings are accessible through a secondary control.
+[ ] 2. Settings are accessible through a secondary control in the slim top bar.
 [ ] 3. Repository settings are reachable from repository rows and workspace context.
 [ ] 4. Global activity/operations are reachable while preserving cockpit context.
 [ ] 5. Keyboard-friendly search or command access exists for common cockpit actions.
+[ ] 6. The slim top bar exposes a centered search input that opens the command palette modal on click or Cmd+K.
+[ ] 7. The command palette fuzzy-matches workspaces by name, title, branch, repo, attached issue key/title, attached PR number/URL, and current attention status.
+[ ] 8. The navigator left column has top-level entries for *Dashboard* (kanban by status) and *History* (archived workspaces with PR snapshot and unarchive control).
+[ ] 9. The navigator separates Dashboard/History from the workspaces list with a subtle divider, and exposes group-by/add-repo/create-workspace icon controls next to the *Workspaces* header.
 
 ## Performance
 
