@@ -75,6 +75,8 @@ describe("mcp helpers", () => {
           prUrl: null,
           issueKey: null,
           issueTitle: null,
+          issueUrl: null,
+          slackThreadUrl: null,
           section: "backlog",
           pinned: false,
           lifecycle: "ready",

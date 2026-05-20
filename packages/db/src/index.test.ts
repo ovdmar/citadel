@@ -37,6 +37,7 @@ describe("SqliteStore", () => {
       { version: 1 },
       { version: 2 },
       { version: 3 },
+      { version: 4 },
     ]);
   });
 
@@ -71,6 +72,8 @@ describe("SqliteStore", () => {
       prUrl: null,
       issueKey: "MS-123",
       issueTitle: "John's task",
+      issueUrl: "https://jira.example.test/browse/MS-123",
+      slackThreadUrl: "https://meshstudio.slack.com/archives/C123/p456",
       section: "backlog",
       pinned: true,
       lifecycle: "creating",
@@ -144,6 +147,8 @@ describe("SqliteStore", () => {
         id: "ws_test",
         name: "John's task",
         issueKey: "MS-123",
+        issueUrl: "https://jira.example.test/browse/MS-123",
+        slackThreadUrl: "https://meshstudio.slack.com/archives/C123/p456",
         pinned: true,
         lifecycle: "ready",
         dirty: true,
@@ -194,6 +199,8 @@ describe("SqliteStore", () => {
       prUrl: null,
       issueKey: null,
       issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
       section: "backlog",
       pinned: false,
       lifecycle: "ready",

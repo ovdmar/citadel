@@ -86,6 +86,8 @@ export class OperationService {
       prUrl: input.prUrl ?? null,
       issueKey: input.issueKey ?? null,
       issueTitle: input.issueTitle ?? null,
+      issueUrl: input.issueUrl ?? null,
+      slackThreadUrl: input.slackThreadUrl ?? null,
       section: "backlog",
       pinned: false,
       lifecycle: "creating",

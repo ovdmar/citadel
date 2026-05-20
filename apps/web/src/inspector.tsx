@@ -76,16 +76,35 @@ function StatsTab(props: {
   const apps = props.summary?.apps;
   const checks = pr?.checks ?? [];
 
+  const issueUrl = props.workspace.issueUrl ?? props.summary?.issueTracker?.url ?? null;
+  const slackThreadUrl = props.workspace.slackThreadUrl;
+
   const attachIssue = useMutation({
-    mutationFn: (input: { issueKey: string; issueTitle?: string }) =>
+    mutationFn: (input: { issueKey: string; issueTitle?: string; issueUrl?: string }) =>
       api(`/api/workspaces/${props.workspace.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ issueKey: input.issueKey, issueTitle: input.issueTitle ?? null }),
+        body: JSON.stringify({
+          issueKey: input.issueKey,
+          issueTitle: input.issueTitle ?? null,
+          issueUrl: input.issueUrl || null,
+        }),
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
+  const attachSlack = useMutation({
+    mutationFn: (slackThreadUrl: string) =>
+      api(`/api/workspaces/${props.workspace.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ slackThreadUrl }),
+      }),
+    onSuccess: () => {
+      setShowSlackAttach(false);
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+    },
+  });
 
   const [issueDraft, setIssueDraft] = useState("");
+  const [issueUrlDraft, setIssueUrlDraft] = useState("");
   const [showIssueAttach, setShowIssueAttach] = useState(false);
   const [slackDraft, setSlackDraft] = useState("");
   const [showSlackAttach, setShowSlackAttach] = useState(false);
@@ -154,22 +173,46 @@ function StatsTab(props: {
       <section className="inspector-block">
         <h4>Attached</h4>
         <div className="attach-row">
-          <button
-            type="button"
-            className={`attach-button ${showSlackAttach ? "tone-warning" : ""}`}
-            onClick={() => setShowSlackAttach((v) => !v)}
-            title="Attach Slack conversation"
-          >
-            <Slack size={12} /> {showSlackAttach ? "Cancel" : "Slack"}
-          </button>
-          <button
-            type="button"
-            className={`attach-button ${props.workspace.issueKey ? "attached" : ""}`}
-            onClick={() => setShowIssueAttach((v) => !v)}
-            title={props.workspace.issueKey ? `Attached ${props.workspace.issueKey}` : "Attach issue"}
-          >
-            <Hash size={12} /> {props.workspace.issueKey ?? "Issue"}
-          </button>
+          {slackThreadUrl ? (
+            <a
+              className="attach-button attached"
+              href={slackThreadUrl}
+              target="_blank"
+              rel="noreferrer"
+              title="Open linked Slack thread"
+            >
+              <Slack size={12} /> Slack
+            </a>
+          ) : (
+            <button
+              type="button"
+              className={`attach-button ${showSlackAttach ? "tone-warning" : ""}`}
+              onClick={() => setShowSlackAttach((v) => !v)}
+              title="Attach Slack conversation"
+            >
+              <Slack size={12} /> {showSlackAttach ? "Cancel" : "Slack"}
+            </button>
+          )}
+          {issueUrl ? (
+            <a
+              className="attach-button attached"
+              href={issueUrl}
+              target="_blank"
+              rel="noreferrer"
+              title={props.workspace.issueKey ? `Open ${props.workspace.issueKey}` : "Open linked issue"}
+            >
+              <Hash size={12} /> {props.workspace.issueKey ?? "Issue"}
+            </a>
+          ) : (
+            <button
+              type="button"
+              className={`attach-button ${props.workspace.issueKey ? "attached" : ""}`}
+              onClick={() => setShowIssueAttach((v) => !v)}
+              title={props.workspace.issueKey ? `Attached ${props.workspace.issueKey}; add URL` : "Attach issue"}
+            >
+              <Hash size={12} /> {props.workspace.issueKey ?? "Issue"}
+            </button>
+          )}
         </div>
         {showSlackAttach ? (
           <div className="modal-form">
@@ -184,17 +227,11 @@ function StatsTab(props: {
             <Button
               type="button"
               variant="secondary"
-              onClick={() => {
-                /* TODO: persist via repo/workspace hook payload once Slack provider exposes it */
-                setShowSlackAttach(false);
-              }}
-              disabled={!slackDraft.trim()}
+              onClick={() => attachSlack.mutate(slackDraft.trim())}
+              disabled={!slackDraft.trim() || attachSlack.isPending}
             >
-              Attach Slack
+              {attachSlack.isPending ? "Attaching…" : "Attach Slack"}
             </Button>
-            <small className="command-result-meta">
-              Slack attach requires a Slack provider hook. Citadel keeps the link locally until the provider lands.
-            </small>
           </div>
         ) : null}
         {showIssueAttach ? (
@@ -203,10 +240,18 @@ function StatsTab(props: {
               Issue key
               <input value={issueDraft} onChange={(event) => setIssueDraft(event.target.value)} placeholder="ABC-123" />
             </label>
+            <label>
+              Issue URL
+              <input
+                value={issueUrlDraft}
+                onChange={(event) => setIssueUrlDraft(event.target.value)}
+                placeholder="https://jira.example/browse/ABC-123"
+              />
+            </label>
             <Button
               type="button"
               disabled={!issueDraft.trim() || attachIssue.isPending}
-              onClick={() => attachIssue.mutate({ issueKey: issueDraft.trim() })}
+              onClick={() => attachIssue.mutate({ issueKey: issueDraft.trim(), issueUrl: issueUrlDraft.trim() })}
             >
               {attachIssue.isPending ? "Attaching…" : "Attach issue"}
             </Button>

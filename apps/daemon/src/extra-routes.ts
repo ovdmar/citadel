@@ -34,6 +34,10 @@ export function registerWorkspaceExtraRoutes(input: {
         allowed.issueKey = patch.issueKey as string | null;
       if (typeof patch.issueTitle === "string" || patch.issueTitle === null)
         allowed.issueTitle = patch.issueTitle as string | null;
+      if (typeof patch.issueUrl === "string" || patch.issueUrl === null)
+        allowed.issueUrl = patch.issueUrl as string | null;
+      if (typeof patch.slackThreadUrl === "string" || patch.slackThreadUrl === null)
+        allowed.slackThreadUrl = patch.slackThreadUrl as string | null;
       if (typeof patch.pinned === "boolean") allowed.pinned = patch.pinned;
       store.updateWorkspace(workspace.id, allowed);
       const next = store.listWorkspaces().find((candidate) => candidate.id === workspace.id);

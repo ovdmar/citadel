@@ -147,11 +147,15 @@ export class SqliteStore {
     this.ensureColumn("operations", "logs", "TEXT");
     this.ensureColumn("operations", "retriable", "INTEGER NOT NULL DEFAULT 0");
     this.ensureColumn("operations", "retry_input", "TEXT");
+    this.ensureColumn("workspaces", "issue_url", "TEXT");
+    this.ensureColumn("workspaces", "slack_thread_url", "TEXT");
     db.exec(`
       INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
       VALUES (2, 'activity-hook-output', datetime('now'));
       INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
       VALUES (3, 'operation-logs-retry', datetime('now'));
+      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+      VALUES (4, 'workspace-linked-urls', datetime('now'));
     `);
   }
 
@@ -242,8 +246,8 @@ export class SqliteStore {
     this.database
       .prepare(
         `INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, pr_url,
-          issue_key, issue_title, section, pinned, lifecycle, dirty, created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          issue_key, issue_title, issue_url, slack_thread_url, section, pinned, lifecycle, dirty, created_at, updated_at, archived_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         workspace.id,
@@ -256,6 +260,8 @@ export class SqliteStore {
         workspace.prUrl ?? null,
         workspace.issueKey ?? null,
         workspace.issueTitle ?? null,
+        workspace.issueUrl ?? null,
+        workspace.slackThreadUrl ?? null,
         workspace.section,
         workspace.pinned ? 1 : 0,
         workspace.lifecycle,
@@ -272,7 +278,10 @@ export class SqliteStore {
       .run(lifecycle, dirty ? 1 : 0, new Date().toISOString(), workspaceId);
   }
 
-  updateWorkspace(workspaceId: string, patch: Partial<Pick<Workspace, "name" | "issueKey" | "issueTitle" | "pinned">>) {
+  updateWorkspace(
+    workspaceId: string,
+    patch: Partial<Pick<Workspace, "name" | "issueKey" | "issueTitle" | "issueUrl" | "slackThreadUrl" | "pinned">>,
+  ) {
     const fields: string[] = [];
     const values: unknown[] = [];
     if (typeof patch.name === "string") {
@@ -286,6 +295,14 @@ export class SqliteStore {
     if (patch.issueTitle !== undefined) {
       fields.push("issue_title = ?");
       values.push(patch.issueTitle ?? null);
+    }
+    if (patch.issueUrl !== undefined) {
+      fields.push("issue_url = ?");
+      values.push(patch.issueUrl ?? null);
+    }
+    if (patch.slackThreadUrl !== undefined) {
+      fields.push("slack_thread_url = ?");
+      values.push(patch.slackThreadUrl ?? null);
     }
     if (patch.pinned !== undefined) {
       fields.push("pinned = ?");
@@ -502,6 +519,8 @@ function workspaceFromRow(row: Record<string, unknown>): Workspace {
     prUrl: row.pr_url ? asString(row, "pr_url") : null,
     issueKey: row.issue_key ? asString(row, "issue_key") : null,
     issueTitle: row.issue_title ? asString(row, "issue_title") : null,
+    issueUrl: row.issue_url ? asString(row, "issue_url") : null,
+    slackThreadUrl: row.slack_thread_url ? asString(row, "slack_thread_url") : null,
     section: asString(row, "section"),
     pinned: Number(row.pinned) === 1,
     lifecycle: asString(row, "lifecycle") as Workspace["lifecycle"],

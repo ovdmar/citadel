@@ -228,6 +228,22 @@
   gap: 2px;
 }
 
+.linked-pill {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 1px solid color-mix(in srgb, var(--color-action) 32%, transparent);
+  color: var(--color-action);
+  background: color-mix(in srgb, var(--color-action) 10%, transparent);
+  text-decoration: none;
+}
+
+.linked-pill:hover {
+  border-color: var(--color-action);
+}
+
 .diff-add {
   color: var(--color-success);
 }

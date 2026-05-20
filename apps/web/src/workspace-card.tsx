@@ -3,7 +3,9 @@ import { useMutation } from "@tanstack/react-query";
 import {
   Bot,
   CircleDot,
+  ExternalLink,
   GitPullRequest,
+  Hash,
   Loader2,
   MessageSquare,
   ShieldAlert,
@@ -109,6 +111,30 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
         </span>
       </span>
       <span className="workspace-card-right" aria-hidden>
+        {workspace.slackThreadUrl ? (
+          <a
+            href={workspace.slackThreadUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="linked-pill"
+            title="Open linked Slack thread"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <MessageSquare size={11} />
+          </a>
+        ) : null}
+        {workspace.issueUrl ? (
+          <a
+            href={workspace.issueUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="linked-pill"
+            title={workspace.issueKey ? `Open ${workspace.issueKey}` : "Open linked issue"}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {workspace.issueKey ? <Hash size={11} /> : <ExternalLink size={11} />}
+          </a>
+        ) : null}
         {additions !== null || deletions !== null ? (
           <span className="workspace-card-diff">
             <span className="diff-add">+{additions ?? 0}</span>
