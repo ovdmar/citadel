@@ -36,7 +36,34 @@ export function workspaceIsDirty(workspacePath: string) {
     encoding: "utf8",
     maxBuffer: 512 * 1024,
   });
-  return output.trim().length > 0;
+  if (output.trim().length > 0) return true;
+  return workspaceHasUnpushedCommits(workspacePath);
+}
+
+export function workspaceHasUnpushedCommits(workspacePath: string) {
+  if (!fs.existsSync(workspacePath)) return false;
+  try {
+    execFileSync("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], {
+      cwd: workspacePath,
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+    const aheadOutput = execFileSync("git", ["rev-list", "--count", "@{u}..HEAD"], {
+      cwd: workspacePath,
+      encoding: "utf8",
+    });
+    return Number(aheadOutput.trim()) > 0;
+  } catch {
+    try {
+      const unreachable = execFileSync("git", ["rev-list", "HEAD", "--not", "--remotes", "--max-count=1"], {
+        cwd: workspacePath,
+        encoding: "utf8",
+      });
+      return unreachable.trim().length > 0;
+    } catch {
+      return false;
+    }
+  }
 }
 
 export function withActionHookIds(output: HookOutput, hookId: string): HookOutput {

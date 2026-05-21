@@ -20,6 +20,9 @@ export function Navigator(props: {
   activeWorkspaceId: string;
   runtimes: import("@citadel/contracts").AgentRuntime[];
   lastRepoId: string | undefined;
+  createWorkspaceOpen: boolean;
+  onOpenCreateWorkspace: () => void;
+  onCloseCreateWorkspace: () => void;
   onCollapse: () => void;
   onPickWorkspace: (workspace: Workspace) => void;
 }) {
@@ -44,7 +47,6 @@ export function Navigator(props: {
 
   const [showGroupBy, setShowGroupBy] = useState(false);
   const [showAddRepo, setShowAddRepo] = useState(false);
-  const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
 
   const grouped = useMemo(
     () => buildGroups(props.workspaces, props.repos, props.sessions, props.operations, props.activeSummary, grouping),
@@ -95,9 +97,9 @@ export function Navigator(props: {
             </button>
             <button
               type="button"
-              onClick={() => setShowCreateWorkspace(true)}
+              onClick={props.onOpenCreateWorkspace}
               aria-label="Create workspace"
-              title="New workspace"
+              title="New workspace (Cmd+N)"
             >
               <Plus size={12} />
             </button>
@@ -136,14 +138,14 @@ export function Navigator(props: {
         </div>
       </div>
       {showAddRepo ? <AddRepoModal onClose={() => setShowAddRepo(false)} /> : null}
-      {showCreateWorkspace ? (
+      {props.createWorkspaceOpen ? (
         <CreateWorkspaceModal
           repos={props.repos}
           {...(props.lastRepoId ? { lastRepoId: props.lastRepoId } : {})}
           runtimes={props.runtimes}
-          onClose={() => setShowCreateWorkspace(false)}
+          onClose={props.onCloseCreateWorkspace}
           onCreated={(workspaceId) => {
-            setShowCreateWorkspace(false);
+            props.onCloseCreateWorkspace();
             const created = props.workspaces.find((workspace) => workspace.id === workspaceId);
             if (created) props.onPickWorkspace(created);
           }}

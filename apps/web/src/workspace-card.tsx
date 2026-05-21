@@ -11,6 +11,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   ShieldQuestion,
+  X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
@@ -36,6 +37,7 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(titleDisplay);
+  const [confirmDrop, setConfirmDrop] = useState(false);
   const editInputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     if (!editing) setDraft(titleDisplay);
@@ -57,121 +59,203 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
   });
 
   return (
-    <button
-      type="button"
-      className={`workspace-card ${props.active ? "active" : ""}`}
-      onClick={() => {
-        if (!editing) props.onSelect();
-      }}
-      aria-label={`Open workspace ${workspace.name}`}
-    >
-      <span className={`workspace-card-agent ${agentState.tone}`} title={agentState.label}>
-        {agentState.tone === "starting" || agentState.tone === "running" ? (
-          <Loader2 size={14} style={{ animation: "spin 1.4s linear infinite" }} />
-        ) : (
-          <Bot size={14} />
-        )}
-      </span>
-      <span className="workspace-card-main">
-        <span className="workspace-card-title">
-          {editing ? (
-            <input
-              ref={editInputRef}
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
+    <div className="workspace-card-wrap">
+      <button
+        type="button"
+        className={`workspace-card ${props.active ? "active" : ""}`}
+        onClick={() => {
+          if (!editing) props.onSelect();
+        }}
+        aria-label={`Open workspace ${workspace.name}`}
+      >
+        <span className={`workspace-card-agent ${agentState.tone}`} title={agentState.label}>
+          {agentState.tone === "starting" || agentState.tone === "running" ? (
+            <Loader2 size={14} style={{ animation: "spin 1.4s linear infinite" }} />
+          ) : (
+            <Bot size={14} />
+          )}
+        </span>
+        <span className="workspace-card-main">
+          <span className="workspace-card-title">
+            {editing ? (
+              <input
+                ref={editInputRef}
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                onClick={(event) => event.stopPropagation()}
+                onBlur={() => {
+                  if (draft.trim() && draft.trim() !== titleDisplay) rename.mutate(draft.trim());
+                  else setEditing(false);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") (event.target as HTMLInputElement).blur();
+                  else if (event.key === "Escape") {
+                    setDraft(titleDisplay);
+                    setEditing(false);
+                  }
+                }}
+                aria-label="Rename workspace"
+              />
+            ) : (
+              <strong
+                onDoubleClick={(event) => {
+                  event.stopPropagation();
+                  setEditing(true);
+                }}
+                title={titleDisplay}
+              >
+                {workspace.issueKey ? <span className="workspace-card-issue">{workspace.issueKey}</span> : null}
+                {titleDisplay}
+              </strong>
+            )}
+          </span>
+          <span className="workspace-card-branch" title={workspace.branch}>
+            {workspace.branch}
+          </span>
+        </span>
+        <span className="workspace-card-right" aria-hidden>
+          {workspace.slackThreadUrl ? (
+            <a
+              href={workspace.slackThreadUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="linked-pill"
+              title="Open linked Slack thread"
               onClick={(event) => event.stopPropagation()}
-              onBlur={() => {
-                if (draft.trim() && draft.trim() !== titleDisplay) rename.mutate(draft.trim());
-                else setEditing(false);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") (event.target as HTMLInputElement).blur();
-                else if (event.key === "Escape") {
-                  setDraft(titleDisplay);
-                  setEditing(false);
-                }
-              }}
-              aria-label="Rename workspace"
-            />
-          ) : (
-            <strong
-              onDoubleClick={(event) => {
-                event.stopPropagation();
-                setEditing(true);
-              }}
-              title={titleDisplay}
             >
-              {workspace.issueKey ? <span className="workspace-card-issue">{workspace.issueKey}</span> : null}
-              {titleDisplay}
-            </strong>
-          )}
-        </span>
-        <span className="workspace-card-branch" title={workspace.branch}>
-          {workspace.branch}
-        </span>
-      </span>
-      <span className="workspace-card-right" aria-hidden>
-        {workspace.slackThreadUrl ? (
-          <a
-            href={workspace.slackThreadUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="linked-pill"
-            title="Open linked Slack thread"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <MessageSquare size={11} />
-          </a>
-        ) : null}
-        {workspace.issueUrl ? (
-          <a
-            href={workspace.issueUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="linked-pill"
-            title={workspace.issueKey ? `Open ${workspace.issueKey}` : "Open linked issue"}
-            onClick={(event) => event.stopPropagation()}
-          >
-            {workspace.issueKey ? <Hash size={11} /> : <ExternalLink size={11} />}
-          </a>
-        ) : null}
-        {additions !== null || deletions !== null ? (
-          <span className="workspace-card-diff">
-            <span className="diff-add">+{additions ?? 0}</span>
-            <span className="diff-del">-{deletions ?? 0}</span>
-          </span>
-        ) : null}
-        {pullRequest ? (
-          <a
-            href={pullRequest.url}
-            target="_blank"
-            rel="noreferrer"
-            className={`pr-pill tone-${prTone}`}
-            title={`PR #${pullRequest.number} · ${prTone}`}
-            onClick={(event) => event.stopPropagation()}
-          >
-            <GitPullRequest size={11} />
-          </a>
-        ) : (
-          <span className="pr-pill" title="No PR yet">
-            <GitPullRequest size={11} />
-          </span>
-        )}
-        <span className={`approval-pill tone-${approvalTone}`} title={`Approval: ${approvalTone}`}>
-          {approvalTone === "approved" ? (
-            <ShieldCheck size={11} />
-          ) : approvalTone === "changes" ? (
-            <ShieldAlert size={11} />
-          ) : approvalTone === "pending" ? (
-            <MessageSquare size={11} />
+              <MessageSquare size={11} />
+            </a>
+          ) : null}
+          {workspace.issueUrl ? (
+            <a
+              href={workspace.issueUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="linked-pill"
+              title={workspace.issueKey ? `Open ${workspace.issueKey}` : "Open linked issue"}
+              onClick={(event) => event.stopPropagation()}
+            >
+              {workspace.issueKey ? <Hash size={11} /> : <ExternalLink size={11} />}
+            </a>
+          ) : null}
+          {additions !== null || deletions !== null ? (
+            <span className="workspace-card-diff">
+              <span className="diff-add">+{additions ?? 0}</span>
+              <span className="diff-del">-{deletions ?? 0}</span>
+            </span>
+          ) : null}
+          {pullRequest ? (
+            <a
+              href={pullRequest.url}
+              target="_blank"
+              rel="noreferrer"
+              className={`pr-pill tone-${prTone}`}
+              title={`PR #${pullRequest.number} · ${prTone}`}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <GitPullRequest size={11} />
+            </a>
           ) : (
-            <ShieldQuestion size={11} />
+            <span className="pr-pill" title="No PR yet">
+              <GitPullRequest size={11} />
+            </span>
           )}
+          <span className={`approval-pill tone-${approvalTone}`} title={`Approval: ${approvalTone}`}>
+            {approvalTone === "approved" ? (
+              <ShieldCheck size={11} />
+            ) : approvalTone === "changes" ? (
+              <ShieldAlert size={11} />
+            ) : approvalTone === "pending" ? (
+              <MessageSquare size={11} />
+            ) : (
+              <ShieldQuestion size={11} />
+            )}
+          </span>
+          {workspace.dirty ? <span className="workspace-card-dirty" title="Uncommitted changes" /> : null}
+          {agentState.tone === "failed" ? <CircleDot size={10} color="var(--color-danger)" /> : null}
         </span>
-        {workspace.dirty ? <span className="workspace-card-dirty" title="Uncommitted changes" /> : null}
-        {agentState.tone === "failed" ? <CircleDot size={10} color="var(--color-danger)" /> : null}
-      </span>
-    </button>
+      </button>
+      <button
+        type="button"
+        className="workspace-card-drop"
+        aria-label={`Drop workspace ${workspace.name}`}
+        title="Drop workspace"
+        onClick={() => setConfirmDrop(true)}
+      >
+        <X size={12} />
+      </button>
+      {confirmDrop ? <DropWorkspaceDialog workspace={workspace} onClose={() => setConfirmDrop(false)} /> : null}
+    </div>
+  );
+}
+
+type DropResult = {
+  removed: boolean;
+  archived: boolean;
+  dirty: boolean;
+  error?: string | null;
+};
+
+function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void }) {
+  const drop = useMutation({
+    mutationFn: async (): Promise<DropResult> => {
+      const response = await fetch(`/api/workspaces/${props.workspace.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+      });
+      const body = (await response.json().catch(() => ({}))) as Partial<DropResult> & { error?: string };
+      return {
+        removed: Boolean(body.removed),
+        archived: Boolean(body.archived),
+        dirty: Boolean(body.dirty),
+        error: body.error ?? null,
+      };
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      if (result.removed) props.onClose();
+    },
+  });
+  const result = drop.data;
+  const dirtyBlocked = Boolean(result && !result.removed && result.dirty);
+  const teardownBlocked = Boolean(result && !result.removed && !result.dirty);
+  return (
+    <div className="drop-workspace-backdrop" onMouseDown={props.onClose}>
+      <dialog
+        className="drop-workspace-dialog"
+        aria-label={`Drop workspace ${props.workspace.name}`}
+        open
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <strong>Drop "{props.workspace.name}"?</strong>
+        <p>
+          This runs the repo's teardown hook (if any) and removes the git worktree. Deletion is blocked if the worktree
+          has uncommitted changes or unpushed commits.
+        </p>
+        {dirtyBlocked ? (
+          <p className="drop-workspace-error">
+            Workspace has uncommitted changes or unpushed commits. Commit and push before dropping.
+          </p>
+        ) : null}
+        {teardownBlocked ? (
+          <p className="drop-workspace-error">Teardown hook failed{result?.error ? `: ${result.error}` : "."}</p>
+        ) : null}
+        {drop.error instanceof Error ? <p className="drop-workspace-error">{drop.error.message}</p> : null}
+        <div className="drop-workspace-actions">
+          <button type="button" className="drop-workspace-cancel" onClick={props.onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="drop-workspace-confirm"
+            onClick={() => drop.mutate()}
+            disabled={drop.isPending || dirtyBlocked}
+          >
+            {drop.isPending ? "Dropping..." : "Drop workspace"}
+          </button>
+        </div>
+      </dialog>
+    </div>
   );
 }
 

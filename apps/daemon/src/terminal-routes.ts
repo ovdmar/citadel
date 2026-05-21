@@ -62,6 +62,28 @@ export function registerTerminalRoutes(input: {
     return { entry, target: `http://127.0.0.1:${entry.port}`, sessionId };
   };
 
+  // Self-heal: if the ttyd entry for a known session is missing (daemon restart,
+  // orphan kill, etc.) re-spawn it on demand so a stale iframe URL recovers
+  // instead of dead-ending on terminal_not_found.
+  const reviveProxyTarget = async (urlPath: string) => {
+    const match = /^\/terminals\/([^/]+)(\/.*)?$/.exec(urlPath);
+    if (!match) return null;
+    const sessionId = decodeURIComponent(match[1] ?? "");
+    const session = resolveSession(sessionId);
+    if (!session) return null;
+    try {
+      const entry = await ttyd.ensure({
+        key: session.sessionId,
+        tmuxSession: session.tmuxSession,
+        worktreePath: session.worktreePath,
+      });
+      input.emit?.("terminal.ready", { sessionId: session.sessionId, port: entry.port });
+      return { entry, target: `http://127.0.0.1:${entry.port}`, sessionId };
+    } catch {
+      return null;
+    }
+  };
+
   app.post("/api/agent-sessions/:sessionId/terminal", async (req, res) => {
     const sessionId = String(req.params.sessionId ?? "");
     const session = resolveSession(sessionId);
@@ -100,9 +122,10 @@ export function registerTerminalRoutes(input: {
   // HTTP proxy: forward /terminals/:key/* to the matching ttyd instance.
   // We register at the root and inspect the path ourselves so the full `/terminals/...` prefix
   // is preserved when proxying (ttyd is launched with -b /terminals/<key> and expects the prefix).
-  app.use((req, res, next) => {
+  app.use(async (req, res, next) => {
     if (!req.url.startsWith(TERMINAL_PROXY_PREFIX)) return next();
-    const resolved = resolveProxyTarget(req.url);
+    let resolved = resolveProxyTarget(req.url);
+    if (!resolved) resolved = await reviveProxyTarget(req.url);
     if (!resolved) {
       res.status(404).type("text/plain").send("terminal_not_found");
       return;

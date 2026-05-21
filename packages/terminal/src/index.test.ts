@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -9,6 +10,7 @@ import {
   captureTmux,
   captureTmuxVisibleScreen,
   captureTranscript,
+  ensureTmuxExtendedKeys,
   ensureTmuxSession,
   killTmuxSession,
   parseTmuxControlOutput,
@@ -65,6 +67,26 @@ describe("tmux terminal gateway helpers", () => {
 
     killTmuxSession(sessionName);
     expect(tmuxSessionExists(sessionName)).toBe(false);
+  });
+
+  it("enables tmux extended keys for modified terminal shortcuts", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
+    dirs.push(cwd);
+    const sessionName = `citadel_extkeys_${Date.now().toString(36)}`;
+    sessions.push(sessionName);
+    await ensureTmuxSession({
+      sessionName,
+      cwd,
+      command: "bash",
+      args: ["--noprofile", "--norc"],
+    });
+
+    ensureTmuxExtendedKeys();
+
+    const extendedKeys = execTmux(["show-options", "-s", "-g", "extended-keys"]);
+    const terminalFeatures = execTmux(["show-options", "-s", "-g", "terminal-features"]);
+    expect(extendedKeys).toContain("extended-keys on");
+    expect(terminalFeatures).toMatch(/xterm\*.*extkeys/);
   });
 
   it("submitPrompt pastes the prompt and presses Enter so the runtime actually executes it", async () => {
@@ -376,4 +398,8 @@ function waitForWebSocketOutput(ws: WebSocket, expected: string, type?: string) 
     ws.on("message", onMessage);
     ws.once("error", onError);
   });
+}
+
+function execTmux(args: string[]) {
+  return execFileSync("tmux", args, { encoding: "utf8" });
 }

@@ -24,6 +24,7 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
       maxBuffer: 128 * 1024,
     });
   }
+  ensureTmuxExtendedKeys();
   const id = execFileSync("tmux", ["display-message", "-p", "-t", input.sessionName, "#{session_id}"], {
     encoding: "utf8",
   }).trim();
@@ -55,6 +56,17 @@ export function tmuxSessionExists(sessionName: string) {
     return true;
   } catch {
     return false;
+  }
+}
+
+export function ensureTmuxExtendedKeys() {
+  execFileSync("tmux", ["set-option", "-s", "extended-keys", "on"], { stdio: "ignore" });
+  const features = execFileSync("tmux", ["show-options", "-s", "-g", "terminal-features"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (!/xterm\*[^\n]*\bextkeys\b/.test(features)) {
+    execFileSync("tmux", ["set-option", "-as", "terminal-features", ",xterm*:extkeys"], { stdio: "ignore" });
   }
 }
 

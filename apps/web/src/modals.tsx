@@ -1,7 +1,7 @@
 import type { AgentRuntime, Repo } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { GripVertical, Search, X } from "lucide-react";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
 
@@ -298,72 +298,112 @@ type CreateWorkspaceModalProps = {
   onCreated: (workspaceId: string) => void;
 };
 
-type RecentIssue = { key: string; title: string; updated?: string };
-type Branch = { name: string; remote: boolean };
+type LinkedContext = {
+  source: "scratch" | "issue" | "pr";
+  issueKey?: string;
+  issueUrl?: string;
+  prUrl?: string;
+  slackThreadUrl?: string;
+};
+
+const JIRA_KEY_FROM_URL = /\/browse\/([A-Z][A-Z0-9]+-\d+)/i;
+const JIRA_KEY_BARE = /^[A-Z][A-Z0-9]+-\d+$/;
+const GITHUB_PR_URL = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/i;
+const SLACK_URL = /^https?:\/\/[a-z0-9.-]*slack\.com\//i;
+
+// Parse the freeform "link" field — Jira issue, GitHub PR, or Slack thread —
+// into the structured fields the workspace API expects. Returning a `source`
+// here is what flips workspaceBranchName into JIRA-style branch generation.
+function parseLinkedContext(input: string): LinkedContext {
+  const value = input.trim();
+  if (!value) return { source: "scratch" };
+  const jiraUrl = value.match(JIRA_KEY_FROM_URL);
+  if (jiraUrl?.[1]) return { source: "issue", issueKey: jiraUrl[1].toUpperCase(), issueUrl: value };
+  if (JIRA_KEY_BARE.test(value)) return { source: "issue", issueKey: value.toUpperCase() };
+  if (GITHUB_PR_URL.test(value)) return { source: "pr", prUrl: value };
+  if (SLACK_URL.test(value)) return { source: "scratch", slackThreadUrl: value };
+  return { source: "scratch" };
+}
+
+function slugify(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72);
+}
+
+// Mirror packages/core's workspaceBranchName so we can preview the branch the
+// daemon will create without round-tripping. Keep in sync if that helper moves.
+function defaultBranchPreview(linked: LinkedContext, name: string): string {
+  if (linked.source === "issue" && linked.issueKey) return linked.issueKey;
+  const slug = slugify(name);
+  return slug || "workspace";
+}
+
+function defaultNamePreview(linked: LinkedContext): string {
+  if (linked.source === "issue" && linked.issueKey) return linked.issueKey.toLowerCase();
+  return "workspace";
+}
 
 export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   const initialRepo = props.repos.find((repo) => repo.id === props.lastRepoId)?.id ?? props.repos[0]?.id ?? "";
   const [repoId, setRepoId] = useState(initialRepo);
-  const [repoFilter, setRepoFilter] = useState("");
-  const [tab, setTab] = useState<"scratch" | "issue" | "branch">("scratch");
+  const [prompt, setPrompt] = useState("");
+  const [linkInput, setLinkInput] = useState("");
   const [name, setName] = useState("");
-  const [task, setTask] = useState("");
-  const [runtimeId, setRuntimeId] = useState(
-    props.runtimes.find((runtime) => runtime.id !== "shell" && runtime.health === "healthy")?.id ?? "",
-  );
-  const [issueKey, setIssueKey] = useState("");
-  const [issueTitle, setIssueTitle] = useState("");
-  const [branchFilter, setBranchFilter] = useState("");
-  const [existingBranch, setExistingBranch] = useState("");
+  const [branch, setBranch] = useState("");
   const [error, setError] = useState("");
 
-  const filteredRepos = props.repos.filter(
-    (repo) =>
-      repo.name.toLowerCase().includes(repoFilter.toLowerCase()) ||
-      repo.rootPath.toLowerCase().includes(repoFilter.toLowerCase()),
+  const launchableRuntimes = useMemo(
+    () => props.runtimes.filter((runtime) => runtime.id !== "shell" && runtime.health === "healthy"),
+    [props.runtimes],
   );
+  const defaultRuntimeId = useMemo(() => {
+    if (launchableRuntimes.some((runtime) => runtime.id === "claude-code")) return "claude-code";
+    return launchableRuntimes[0]?.id ?? "";
+  }, [launchableRuntimes]);
+  const [runtimeId, setRuntimeId] = useState(defaultRuntimeId);
+  useEffect(() => {
+    if (!runtimeId && defaultRuntimeId) setRuntimeId(defaultRuntimeId);
+  }, [defaultRuntimeId, runtimeId]);
 
-  const branches = useQuery<{ defaultBranch: string; local: string[]; remote: string[] }>({
-    queryKey: ["repo-branches", repoId],
-    enabled: Boolean(repoId),
-    queryFn: () => api<{ defaultBranch: string; local: string[]; remote: string[] }>(`/api/repos/${repoId}/branches`),
-  });
+  const linked = useMemo(() => parseLinkedContext(linkInput), [linkInput]);
+  const namePreview = defaultNamePreview(linked);
+  const branchPreview = defaultBranchPreview(linked, name || namePreview);
 
-  const issues = useQuery<{ issues: RecentIssue[]; error?: string }>({
-    queryKey: ["issue-suggestions", repoId, tab],
-    enabled: tab === "issue" && Boolean(repoId),
-    queryFn: () =>
-      api<{ issues: RecentIssue[]; error?: string }>(`/api/integrations/issues/recent?repoId=${repoId}`).catch(
-        (error_) => ({ issues: [], error: error_ instanceof Error ? error_.message : "issues_failed" }),
-      ),
-  });
+  const promptRef = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    promptRef.current?.focus();
+  }, []);
 
   const create = useMutation({
     mutationFn: async () => {
+      const effectiveName = name.trim() || namePreview;
       const payload: Record<string, unknown> = {
         repoId,
-        name: name || existingBranch || issueKey || "workspace",
-        source: tab === "scratch" ? "scratch" : tab === "branch" ? "imported" : "issue",
+        name: effectiveName,
+        source: linked.source,
       };
-      if (tab === "issue") {
-        if (!issueKey) throw new Error("issue_required");
-        payload.issueKey = issueKey;
-        if (issueTitle) payload.issueTitle = issueTitle;
-        payload.name = name || issueKey.toLowerCase();
-      }
-      if (tab === "branch") {
-        if (!existingBranch) throw new Error("branch_required");
-        payload.existingBranch = existingBranch;
-        payload.name = name || existingBranch;
-      }
+      if (linked.issueKey) payload.issueKey = linked.issueKey;
+      if (linked.issueUrl) payload.issueUrl = linked.issueUrl;
+      if (linked.prUrl) payload.prUrl = linked.prUrl;
+      if (linked.slackThreadUrl) payload.slackThreadUrl = linked.slackThreadUrl;
+      const customBranch = branch.trim();
+      if (customBranch) payload.existingBranch = customBranch;
       const result = await api<{ workspaceId: string }>("/api/workspaces", {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      if (task.trim() && runtimeId) {
+      if (runtimeId) {
+        const sessionPayload: Record<string, unknown> = {
+          workspaceId: result.workspaceId,
+          runtimeId,
+        };
+        if (prompt.trim()) sessionPayload.prompt = prompt.trim();
         await api("/api/agent-sessions", {
           method: "POST",
-          body: JSON.stringify({ workspaceId: result.workspaceId, runtimeId, prompt: task.trim() }),
+          body: JSON.stringify(sessionPayload),
         }).catch(() => {});
       }
       return result;
@@ -375,177 +415,85 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
     onError: (err) => setError(err instanceof Error ? err.message : "create_failed"),
   });
 
-  const branchList: Branch[] = useMemo(() => {
-    const data = branches.data;
-    if (!data) return [];
-    const merged: Branch[] = [];
-    for (const branch of data.local) merged.push({ name: branch, remote: false });
-    for (const branch of data.remote) {
-      if (!merged.some((entry) => entry.name === branch)) merged.push({ name: branch, remote: true });
-    }
-    if (!branchFilter) return merged.slice(0, 24);
-    return merged.filter((branch) => branch.name.toLowerCase().includes(branchFilter.toLowerCase())).slice(0, 24);
-  }, [branches.data, branchFilter]);
-
-  useEffect(() => {
-    if (!repoId && initialRepo) setRepoId(initialRepo);
-  }, [initialRepo, repoId]);
+  const linkBadge =
+    linked.source === "issue"
+      ? `Linked Jira: ${linked.issueKey}`
+      : linked.source === "pr"
+        ? "Linked GitHub PR"
+        : linked.slackThreadUrl
+          ? "Linked Slack thread"
+          : "";
 
   return (
-    <Modal title="Create workspace" onClose={props.onClose}>
-      <div className="modal-form">
-        <label>
-          Repository
-          <input
-            value={repoFilter}
-            onChange={(event) => setRepoFilter(event.target.value)}
-            placeholder="Filter repositories"
+    <Modal title="New workspace" onClose={props.onClose}>
+      <div className="modal-form workspace-modal">
+        <label className="workspace-modal-prompt">
+          Initial prompt
+          <textarea
+            ref={promptRef}
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+            placeholder="What should the agent do? (optional — leave empty to start the agent with no instructions)"
+            rows={4}
           />
         </label>
-        <div className="check-list">
-          {filteredRepos.map((repo) => (
-            <button
-              key={repo.id}
-              type="button"
-              className={`check-row ${repo.id === repoId ? "tone-success" : ""}`}
-              onClick={() => setRepoId(repo.id)}
-            >
-              <span>
-                <strong>{repo.name}</strong>
-                <span className="command-result-meta">{repo.rootPath}</span>
-              </span>
-              {repo.id === repoId ? (
-                <span className="tone-success">Selected</span>
-              ) : (
-                <span className="tone-pending">Pick</span>
-              )}
-            </button>
-          ))}
-          {!filteredRepos.length ? <div className="empty compact">No repositories match.</div> : null}
-        </div>
-        <div className="tab-strip" role="tablist">
-          <button type="button" className={tab === "scratch" ? "active" : ""} onClick={() => setTab("scratch")}>
-            From scratch
-          </button>
-          <button type="button" className={tab === "issue" ? "active" : ""} onClick={() => setTab("issue")}>
-            From issue
-          </button>
-          <button type="button" className={tab === "branch" ? "active" : ""} onClick={() => setTab("branch")}>
-            From branch
-          </button>
-        </div>
-        {tab === "scratch" ? (
+        <div className="workspace-modal-row">
           <label>
-            Workspace name
-            <input value={name} onChange={(event) => setName(event.target.value)} placeholder="short-task-name" />
+            Agent
+            <select value={runtimeId} onChange={(event) => setRuntimeId(event.target.value)}>
+              <option value="">No agent — workspace only</option>
+              {launchableRuntimes.map((runtime) => (
+                <option key={runtime.id} value={runtime.id}>
+                  {runtime.displayName}
+                </option>
+              ))}
+            </select>
           </label>
-        ) : null}
-        {tab === "issue" ? (
-          <>
-            <label>
-              Issue key
-              <input value={issueKey} onChange={(event) => setIssueKey(event.target.value)} placeholder="ABC-123" />
-            </label>
-            <label>
-              Issue title
-              <input
-                value={issueTitle}
-                onChange={(event) => setIssueTitle(event.target.value)}
-                placeholder="Optional title"
-              />
-            </label>
+          <label>
+            Repository
+            <select value={repoId} onChange={(event) => setRepoId(event.target.value)}>
+              {props.repos.map((repo) => (
+                <option key={repo.id} value={repo.id}>
+                  {repo.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <details className="workspace-modal-advanced">
+          <summary>Optional: link, name, branch</summary>
+          <label>
+            Link Jira / GitHub PR / Slack URL
+            <input
+              value={linkInput}
+              onChange={(event) => setLinkInput(event.target.value)}
+              placeholder="ABC-123, https://…/browse/ABC-123, github.com/x/y/pull/42, or slack.com/…"
+            />
+            {linkBadge ? <span className="workspace-modal-badge">{linkBadge}</span> : null}
+          </label>
+          <div className="workspace-modal-row">
             <label>
               Workspace name
               <input
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                placeholder="Defaults to issue key"
+                placeholder={`Defaults to ${namePreview}`}
               />
             </label>
-            {issues.data?.error ? <div className="empty compact">{issues.data.error}</div> : null}
-            <div className="check-list">
-              {(issues.data?.issues ?? []).slice(0, 8).map((issue) => (
-                <button
-                  key={issue.key}
-                  type="button"
-                  className="check-row"
-                  onClick={() => {
-                    setIssueKey(issue.key);
-                    setIssueTitle(issue.title);
-                  }}
-                >
-                  <span>
-                    <strong>{issue.key}</strong>
-                    <span className="command-result-meta">{issue.title}</span>
-                  </span>
-                  {issue.updated ? <span className="command-result-hint">{issue.updated}</span> : null}
-                </button>
-              ))}
-              {!issues.data?.issues?.length && !issues.isLoading ? (
-                <div className="empty compact">
-                  No issue suggestions. Configure an issue provider to see assigned/created issues.
-                </div>
-              ) : null}
-            </div>
-          </>
-        ) : null}
-        {tab === "branch" ? (
-          <>
             <label>
-              Branch filter
+              Branch
               <input
-                value={branchFilter}
-                onChange={(event) => setBranchFilter(event.target.value)}
-                placeholder="Search recent branches"
+                value={branch}
+                onChange={(event) => setBranch(event.target.value)}
+                placeholder={`Defaults to ${branchPreview}`}
               />
             </label>
-            <div className="check-list">
-              {branchList.map((branch) => (
-                <button
-                  key={`${branch.name}-${branch.remote ? "r" : "l"}`}
-                  type="button"
-                  className={`check-row ${branch.name === existingBranch ? "tone-success" : ""}`}
-                  onClick={() => setExistingBranch(branch.name)}
-                >
-                  <span>
-                    <strong>{branch.name}</strong>
-                    <span className="command-result-meta">{branch.remote ? "remote" : "local"}</span>
-                  </span>
-                  {branch.name === existingBranch ? <span className="tone-success">Selected</span> : null}
-                </button>
-              ))}
-              {!branchList.length && !branches.isLoading ? (
-                <div className="empty compact">No branches found for this repository.</div>
-              ) : null}
-            </div>
-          </>
-        ) : null}
-        {props.runtimes.length ? (
-          <>
-            <label>
-              Agent task (optional)
-              <textarea
-                value={task}
-                onChange={(event) => setTask(event.target.value)}
-                placeholder="Describe what the agent should do on launch. Leave empty to start without an agent."
-                rows={2}
-              />
-            </label>
-            {task.trim() ? (
-              <label>
-                Launch with
-                <select value={runtimeId} onChange={(event) => setRuntimeId(event.target.value)}>
-                  {props.runtimes
-                    .filter((runtime) => runtime.id !== "shell")
-                    .map((runtime) => (
-                      <option key={runtime.id} value={runtime.id} disabled={runtime.health !== "healthy"}>
-                        {runtime.displayName} ({runtime.health})
-                      </option>
-                    ))}
-                </select>
-              </label>
-            ) : null}
-          </>
+          </div>
+        </details>
+        {!launchableRuntimes.length ? (
+          <div className="empty compact">
+            No healthy agents configured. The workspace will be created without launching one.
+          </div>
         ) : null}
         {error ? (
           <div className="empty compact" style={{ color: "var(--color-danger)" }}>
@@ -557,18 +505,8 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
         <Button type="button" variant="secondary" onClick={props.onClose}>
           Cancel
         </Button>
-        <Button
-          type="button"
-          disabled={
-            !repoId ||
-            create.isPending ||
-            (tab === "issue" && !issueKey) ||
-            (tab === "branch" && !existingBranch) ||
-            (tab === "scratch" && !name)
-          }
-          onClick={() => create.mutate()}
-        >
-          {create.isPending ? "Creating…" : task.trim() ? "Create & launch" : "Create workspace"}
+        <Button type="button" disabled={!repoId || create.isPending} onClick={() => create.mutate()}>
+          {create.isPending ? "Creating…" : runtimeId ? "Create & launch agent" : "Create workspace"}
         </Button>
       </div>
     </Modal>

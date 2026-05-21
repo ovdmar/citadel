@@ -31,6 +31,7 @@ export function Cockpit() {
   const [lastRepoId, setLastRepoId] = useLocalStorage(STORAGE_LAST_REPO, "");
   const [activeSessionByWorkspace, setActiveSessionByWorkspace] = useLocalStorageRecord(STORAGE_SESSION_BY_WORKSPACE);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [mobileView, setMobileView] = useState<MobileView>("stage");
 
   // Re-route search-param-driven workspace selection (used from dashboard/history)
@@ -68,6 +69,18 @@ export function Cockpit() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setCommandOpen((open) => !open);
+      } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
+        // Skip when the user is in a text-input context: Cmd+N would otherwise
+        // hijack ordinary typing in form fields and textareas.
+        const target = event.target as HTMLElement | null;
+        const inEditable =
+          target?.isContentEditable ||
+          target?.tagName === "INPUT" ||
+          target?.tagName === "TEXTAREA" ||
+          target?.tagName === "SELECT";
+        if (inEditable) return;
+        event.preventDefault();
+        setCreateWorkspaceOpen(true);
       } else if (event.key === "Escape") {
         setCommandOpen(false);
       }
@@ -166,6 +179,9 @@ export function Cockpit() {
               activeWorkspaceId={activeWorkspace?.id ?? ""}
               runtimes={data?.runtimes ?? []}
               lastRepoId={lastRepoId || undefined}
+              createWorkspaceOpen={createWorkspaceOpen}
+              onOpenCreateWorkspace={() => setCreateWorkspaceOpen(true)}
+              onCloseCreateWorkspace={() => setCreateWorkspaceOpen(false)}
               onCollapse={layout.toggleLeft}
               onPickWorkspace={focusWorkspace}
             />

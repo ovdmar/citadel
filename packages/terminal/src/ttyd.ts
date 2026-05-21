@@ -220,7 +220,11 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
 
 function buildAttachCommand(tmuxSession: string) {
   const safe = tmuxSession.replace(/"/g, '\\"');
-  return `tmux attach -t "${safe}"`;
+  return [
+    "tmux set-option -s extended-keys on >/dev/null 2>&1 || true",
+    "tmux show-options -s -g terminal-features 2>/dev/null | grep -q 'xterm\\*.*extkeys' || tmux set-option -as terminal-features ',xterm*:extkeys' >/dev/null 2>&1 || true",
+    `exec tmux attach -t "${safe}"`,
+  ].join("; ");
 }
 
 function tmuxSessionAlive(name: string) {

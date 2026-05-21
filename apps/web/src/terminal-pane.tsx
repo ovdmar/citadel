@@ -31,25 +31,29 @@ export function TerminalPane(props: { session: AgentSession }) {
   const [iframeKey, setIframeKey] = useState(0);
   const requestSeqRef = useRef(0);
 
-  const ensure = useCallback(async () => {
-    const seq = ++requestSeqRef.current;
-    setPending(true);
-    setError(null);
-    try {
-      const response = await api<EnsureResponse>(`/api/agent-sessions/${sessionId}/terminal`, {
-        method: "POST",
-      });
-      if (requestSeqRef.current !== seq) return;
-      setUrl(response.terminal.url);
+  const ensure = useCallback(
+    async (options: { bumpFrame?: boolean } = {}) => {
+      const seq = ++requestSeqRef.current;
+      setPending(true);
       setError(null);
-    } catch (raw) {
-      if (requestSeqRef.current !== seq) return;
-      setUrl(null);
-      setError(parseEnsureError(raw instanceof Error ? raw : new Error(String(raw))));
-    } finally {
-      if (requestSeqRef.current === seq) setPending(false);
-    }
-  }, [sessionId]);
+      try {
+        const response = await api<EnsureResponse>(`/api/agent-sessions/${sessionId}/terminal`, {
+          method: "POST",
+        });
+        if (requestSeqRef.current !== seq) return;
+        setUrl(response.terminal.url);
+        setError(null);
+        if (options.bumpFrame) setIframeKey((value) => value + 1);
+      } catch (raw) {
+        if (requestSeqRef.current !== seq) return;
+        setUrl(null);
+        setError(parseEnsureError(raw instanceof Error ? raw : new Error(String(raw))));
+      } finally {
+        if (requestSeqRef.current === seq) setPending(false);
+      }
+    },
+    [sessionId],
+  );
 
   useEffect(() => {
     setUrl(null);
@@ -62,7 +66,12 @@ export function TerminalPane(props: { session: AgentSession }) {
     void ensure();
   }, [ensure]);
 
-  const reload = useCallback(() => setIframeKey((value) => value + 1), []);
+  // Reload re-runs ensure() so a stale entry (daemon restart, orphan kill, etc.)
+  // self-heals before the iframe re-fetches the URL. Bumping the iframe key
+  // forces React to remount the iframe even if the URL is unchanged.
+  const reload = useCallback(() => {
+    void ensure({ bumpFrame: true });
+  }, [ensure]);
 
   return (
     <div className="terminal-shell">

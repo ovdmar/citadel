@@ -10,6 +10,7 @@
 }
 
 .command-palette {
+  position: relative;
   width: min(640px, calc(100vw - 28px));
   margin: 0;
   background: var(--panel);
@@ -192,6 +193,65 @@
 .modal-form textarea {
   min-height: 60px;
   padding: 6px 8px;
+}
+
+.workspace-modal {
+  gap: 12px;
+}
+
+.workspace-modal-prompt textarea {
+  min-height: 88px;
+  font-size: 13px;
+}
+
+.workspace-modal-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.workspace-modal-advanced {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 10px 10px;
+  background: var(--panel-strong);
+}
+
+.workspace-modal-advanced > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 4px 0;
+  list-style: none;
+}
+
+.workspace-modal-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.workspace-modal-advanced > summary::before {
+  content: "▸ ";
+  margin-right: 4px;
+}
+
+.workspace-modal-advanced[open] > summary::before {
+  content: "▾ ";
+}
+
+.workspace-modal-advanced > label,
+.workspace-modal-advanced > .workspace-modal-row {
+  margin-top: 8px;
+}
+
+.workspace-modal-badge {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-action) 18%, transparent);
+  color: var(--color-action);
+  font-size: 11px;
+  width: max-content;
 }
 
 .group-by-overlay {
