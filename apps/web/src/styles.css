@@ -296,6 +296,10 @@ input {
   letter-spacing: 0;
 }
 
+.workspace-nav-row-wrap {
+  position: relative;
+}
+
 .workspace-nav-row {
   width: 100%;
   min-height: 58px;
@@ -315,6 +319,42 @@ input {
 .workspace-nav-row.active {
   border-color: color-mix(in srgb, var(--color-action) 36%, transparent);
   background: color-mix(in srgb, var(--color-action) 9%, Canvas);
+}
+
+.workspace-row-drop {
+  display: none;
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  border-radius: 999px;
+  background: Canvas;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.workspace-row-drop:hover,
+.workspace-row-drop:focus-visible {
+  border-color: var(--color-danger, #b42318);
+  color: var(--color-danger, #b42318);
+  background: color-mix(in srgb, var(--color-danger, #b42318) 9%, Canvas);
+  outline: none;
+}
+
+.workspace-nav-row-wrap:hover .workspace-row-drop,
+.workspace-nav-row-wrap:focus-within .workspace-row-drop {
+  display: inline-flex;
+}
+
+.workspace-nav-row-wrap:hover .workspace-row-badges,
+.workspace-nav-row-wrap:focus-within .workspace-row-badges {
+  visibility: hidden;
 }
 
 .status-dot {

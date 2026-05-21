@@ -8,6 +8,7 @@ import type {
   Workspace,
   WorkspaceCockpitSummary,
 } from "@citadel/contracts";
+import { useMutation } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   Activity,
@@ -24,10 +25,12 @@ import {
   Search,
   Settings,
   TerminalSquare,
+  X,
 } from "lucide-react";
 import type React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { ActivityRow } from "./activity-row.js";
+import { queryClient } from "./api.js";
 import { useEventRefresh, useStateQuery } from "./app-state.js";
 import { type WorkspaceAttention, nextAction, readinessForWorkspace } from "./cockpit-readiness.js";
 import {
@@ -396,23 +399,105 @@ function WorkspaceNavRow(props: {
   active: boolean;
   onSelect: () => void;
 }) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
   return (
-    <button type="button" className={`workspace-nav-row ${props.active ? "active" : ""}`} onClick={props.onSelect}>
-      <span className={`status-dot ${props.attention.tone}`} />
-      <span className="workspace-row-main">
-        <strong>{props.workspace.name}</strong>
-        <small>
-          {props.attention.label} - {props.attention.nextAction}
-        </small>
-      </span>
-      <span className="workspace-row-badges">
-        {props.workspace.pinned ? <em>Pin</em> : null}
-        {props.workspace.issueKey ? <em>{props.workspace.issueKey}</em> : null}
-        {props.workspace.prUrl ? <em>PR</em> : null}
-        {props.workspace.dirty ? <em>Dirty</em> : null}
-        <em>{props.sessions.filter((session) => ["running", "waiting"].includes(session.status)).length} active</em>
-      </span>
-    </button>
+    <div className="workspace-nav-row-wrap">
+      <button type="button" className={`workspace-nav-row ${props.active ? "active" : ""}`} onClick={props.onSelect}>
+        <span className={`status-dot ${props.attention.tone}`} />
+        <span className="workspace-row-main">
+          <strong>{props.workspace.name}</strong>
+          <small>
+            {props.attention.label} - {props.attention.nextAction}
+          </small>
+        </span>
+        <span className="workspace-row-badges">
+          {props.workspace.pinned ? <em>Pin</em> : null}
+          {props.workspace.issueKey ? <em>{props.workspace.issueKey}</em> : null}
+          {props.workspace.prUrl ? <em>PR</em> : null}
+          {props.workspace.dirty ? <em>Dirty</em> : null}
+          <em>{props.sessions.filter((session) => ["running", "waiting"].includes(session.status)).length} active</em>
+        </span>
+      </button>
+      <button
+        type="button"
+        className="workspace-row-drop"
+        aria-label={`Drop workspace ${props.workspace.name}`}
+        onClick={() => setConfirmOpen(true)}
+      >
+        <X size={14} />
+      </button>
+      {confirmOpen ? <DropWorkspaceDialog workspace={props.workspace} onClose={() => setConfirmOpen(false)} /> : null}
+    </div>
+  );
+}
+
+type DropResult = {
+  removed: boolean;
+  archived: boolean;
+  dirty: boolean;
+  error?: string | null;
+};
+
+function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void }) {
+  const drop = useMutation({
+    mutationFn: async (): Promise<DropResult> => {
+      const response = await fetch(`/api/workspaces/${props.workspace.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+      });
+      const body = (await response.json().catch(() => ({}))) as Partial<DropResult> & { error?: string };
+      return {
+        removed: Boolean(body.removed),
+        archived: Boolean(body.archived),
+        dirty: Boolean(body.dirty),
+        error: body.error ?? null,
+      };
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      if (result.removed) props.onClose();
+    },
+  });
+  const result = drop.data;
+  const dirtyBlocked = Boolean(result && !result.removed && result.dirty);
+  const teardownBlocked = Boolean(result && !result.removed && !result.dirty);
+  return (
+    <div className="command-backdrop" onMouseDown={props.onClose}>
+      <dialog
+        className="drop-workspace-dialog"
+        aria-label={`Drop workspace ${props.workspace.name}`}
+        open
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <strong>Drop "{props.workspace.name}"?</strong>
+        <p>
+          This runs the repo's teardown hook (if any) and removes the git worktree. Deletion is blocked if the worktree
+          has uncommitted changes or unpushed commits.
+        </p>
+        {dirtyBlocked ? (
+          <p className="drop-workspace-error">
+            Workspace has uncommitted changes or unpushed commits. Commit and push before dropping.
+          </p>
+        ) : null}
+        {teardownBlocked ? (
+          <p className="drop-workspace-error">Teardown hook failed{result?.error ? `: ${result.error}` : "."}</p>
+        ) : null}
+        {drop.error instanceof Error ? <p className="drop-workspace-error">{drop.error.message}</p> : null}
+        <div className="drop-workspace-actions">
+          <Button type="button" variant="secondary" onClick={props.onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            className="danger-action"
+            onClick={() => drop.mutate()}
+            disabled={drop.isPending || dirtyBlocked}
+          >
+            {drop.isPending ? "Dropping..." : "Drop workspace"}
+          </Button>
+        </div>
+      </dialog>
+    </div>
   );
 }
 

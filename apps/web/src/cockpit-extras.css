@@ -227,6 +227,35 @@
   box-shadow: 0 24px 80px rgba(16, 19, 24, 0.24);
 }
 
+.drop-workspace-dialog {
+  width: min(440px, calc(100vw - 28px));
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: Canvas;
+  color: CanvasText;
+  box-shadow: 0 24px 80px rgba(16, 19, 24, 0.24);
+}
+
+.drop-workspace-dialog p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.drop-workspace-error {
+  color: var(--color-danger, #b42318);
+}
+
+.drop-workspace-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .command-search {
   margin-top: 0;
 }
