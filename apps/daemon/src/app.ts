@@ -28,7 +28,7 @@ import {
   transitionJiraIssue,
 } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
-import { attachTerminalWebSocket, createTtydManager } from "@citadel/terminal";
+import { attachTerminalWebSocket, createTtydManager, ensureTmuxSession } from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
@@ -96,7 +96,29 @@ export function createDaemonApp(input: {
   // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
   const initialTerminalCleanup = ttyd.cleanupStale();
   if (initialTerminalCleanup.killed > 0) emit("terminal.cleanup", initialTerminalCleanup);
-  registerTerminalRoutes({ app, server, store, ttyd, emit });
+  registerTerminalRoutes({
+    app,
+    server,
+    store,
+    ttyd,
+    emit,
+    // Self-heal hook: if the tmux session a terminal points at has gone away
+    // (system restart, manual kill), recreate it from the recorded runtime so
+    // the user gets a fresh shell instead of "terminal_not_found".
+    respawnTmux: async (session) => {
+      const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
+      if (!workspace) return null;
+      const runtime = config.runtimes.find((candidate) => candidate.id === session.runtimeId);
+      if (!runtime) return null;
+      const tmux = await ensureTmuxSession({
+        sessionName: session.tmuxSessionName ?? `citadel_${workspace.id}_${session.id.slice(-8)}`,
+        cwd: workspace.path,
+        command: runtime.command,
+        args: runtime.args,
+      });
+      return tmux;
+    },
+  });
 
   const cachedProviderHealth = () =>
     cachedProvider("provider-health", () => collectProviderHealth(config.providers), 15_000);

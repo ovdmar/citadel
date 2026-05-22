@@ -6,6 +6,7 @@ import {
   ExternalLink,
   GitPullRequest,
   Hash,
+  Home,
   Loader2,
   MessageSquare,
   ShieldAlert,
@@ -68,8 +69,13 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
         }}
         aria-label={`Open workspace ${workspace.name}`}
       >
-        <span className={`workspace-card-agent ${agentState.tone}`} title={agentState.label}>
-          {agentState.tone === "starting" || agentState.tone === "running" ? (
+        <span
+          className={`workspace-card-agent ${agentState.tone} ${workspace.kind === "root" ? "root" : ""}`}
+          title={workspace.kind === "root" ? "Repository root workspace" : agentState.label}
+        >
+          {workspace.kind === "root" ? (
+            <Home size={14} />
+          ) : agentState.tone === "starting" || agentState.tone === "running" ? (
             <Loader2 size={14} style={{ animation: "spin 1.4s linear infinite" }} />
           ) : (
             <Bot size={14} />
@@ -175,15 +181,17 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
           {agentState.tone === "failed" ? <CircleDot size={10} color="var(--color-danger)" /> : null}
         </span>
       </button>
-      <button
-        type="button"
-        className="workspace-card-drop"
-        aria-label={`Drop workspace ${workspace.name}`}
-        title="Drop workspace"
-        onClick={() => setConfirmDrop(true)}
-      >
-        <X size={12} />
-      </button>
+      {workspace.kind === "root" ? null : (
+        <button
+          type="button"
+          className="workspace-card-drop"
+          aria-label={`Drop workspace ${workspace.name}`}
+          title="Drop workspace"
+          onClick={() => setConfirmDrop(true)}
+        >
+          <X size={11} />
+        </button>
+      )}
       {confirmDrop ? <DropWorkspaceDialog workspace={workspace} onClose={() => setConfirmDrop(false)} /> : null}
     </div>
   );

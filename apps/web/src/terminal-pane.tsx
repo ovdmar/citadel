@@ -55,6 +55,25 @@ export function TerminalPane(props: { session: AgentSession }) {
     [sessionId],
   );
 
+  // Some classes of failure (tmux session vanished after daemon restart,
+  // ttyd reaped by an orphan-killer) are transient: a single retry usually
+  // reattaches. Auto-retry once with a short backoff so the user does not see
+  // a flash of "Terminal unavailable" before manual reload.
+  const retryOnceRef = useRef(false);
+  useEffect(() => {
+    if (!error) {
+      retryOnceRef.current = false;
+      return;
+    }
+    if (retryOnceRef.current) return;
+    if (!["tmux_session_missing", "terminal_unavailable", "spawn_failed"].includes(error.code)) return;
+    retryOnceRef.current = true;
+    const timer = window.setTimeout(() => {
+      void ensure({ bumpFrame: true });
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [error, ensure]);
+
   useEffect(() => {
     setUrl(null);
     setError(null);

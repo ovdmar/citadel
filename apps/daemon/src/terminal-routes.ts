@@ -1,5 +1,6 @@
 import type http from "node:http";
 import type { Duplex } from "node:stream";
+import type { AgentSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type TtydEntry, type TtydManager, TtydUnavailableError } from "@citadel/terminal";
 import type express from "express";
@@ -22,6 +23,8 @@ export function registerTerminalRoutes(input: {
   store: SqliteStore;
   ttyd: TtydManager;
   emit?: (type: string, payload: unknown) => void;
+  /** Recreate the tmux session a terminal needs. Returns the live tmux name/id. */
+  respawnTmux?: (session: AgentSession) => Promise<{ tmuxSessionName: string; tmuxSessionId: string } | null>;
 }) {
   const { app, server, store, ttyd } = input;
   const proxy = httpProxy.createProxyServer({ ws: true, xfwd: true, changeOrigin: true });
@@ -72,15 +75,36 @@ export function registerTerminalRoutes(input: {
     const session = resolveSession(sessionId);
     if (!session) return null;
     try {
-      const entry = await ttyd.ensure({
-        key: session.sessionId,
-        tmuxSession: session.tmuxSession,
-        worktreePath: session.worktreePath,
-      });
+      const entry = await ensureWithHeal(session);
       input.emit?.("terminal.ready", { sessionId: session.sessionId, port: entry.port });
       return { entry, target: `http://127.0.0.1:${entry.port}`, sessionId };
     } catch {
       return null;
+    }
+  };
+
+  // Try ensure(); if tmux disappeared (system reboot, manual kill), call the
+  // injected respawnTmux hook to bring the underlying tmux session back, then
+  // retry. Returns null if no self-heal was possible.
+  const ensureWithHeal = async (session: ResolvedSession): Promise<TtydEntry> => {
+    try {
+      return await ttyd.ensure({
+        key: session.sessionId,
+        tmuxSession: session.tmuxSession,
+        worktreePath: session.worktreePath,
+      });
+    } catch (error) {
+      if (!(error instanceof TtydUnavailableError) || error.code !== "tmux_session_missing") throw error;
+      if (!input.respawnTmux) throw error;
+      const dbSession = store.listSessions().find((candidate) => candidate.id === session.sessionId);
+      if (!dbSession) throw error;
+      const respawn = await input.respawnTmux(dbSession);
+      if (!respawn) throw error;
+      return await ttyd.ensure({
+        key: session.sessionId,
+        tmuxSession: respawn.tmuxSessionName,
+        worktreePath: session.worktreePath,
+      });
     }
   };
 
@@ -89,11 +113,7 @@ export function registerTerminalRoutes(input: {
     const session = resolveSession(sessionId);
     if (!session) return res.status(404).json({ error: "session_not_found" });
     try {
-      const entry = await ttyd.ensure({
-        key: session.sessionId,
-        tmuxSession: session.tmuxSession,
-        worktreePath: session.worktreePath,
-      });
+      const entry = await ensureWithHeal(session);
       const url = `${TERMINAL_PROXY_PREFIX}/${encodeURIComponent(session.sessionId)}/`;
       input.emit?.("terminal.ready", { sessionId: session.sessionId, port: entry.port });
       return res.json({ terminal: terminalDto(entry, url) });
@@ -140,14 +160,33 @@ export function registerTerminalRoutes(input: {
     });
   });
 
-  // WebSocket upgrade: ttyd opens /ws under the base path, so /terminals/:key/ws lands here.
+  // WebSocket upgrade: ttyd opens /ws under the base path, so /terminals/:key/ws
+  // lands here. Mirror the HTTP path's self-heal so a stale iframe that opens
+  // a ws after the daemon restarted / ttyd was reaped picks up a freshly
+  // spawned instance instead of hard-failing with terminal_not_found.
   const upgradeHandler = (request: http.IncomingMessage, socket: Duplex, head: Buffer) => {
     const urlPath = request.url || "";
     if (!urlPath.startsWith(TERMINAL_PROXY_PREFIX)) return;
     const resolved = resolveProxyTarget(urlPath);
     if (!resolved) {
-      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
-      socket.destroy();
+      // Hold the socket open while we try to revive ttyd. Browsers retry on
+      // WS failure, but reviving avoids the surface-level error flash entirely.
+      reviveProxyTarget(urlPath)
+        .then((revived) => {
+          if (!revived) {
+            socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+            socket.destroy();
+            return;
+          }
+          proxy.ws(request, socket, head, { target: revived.target });
+        })
+        .catch(() => {
+          try {
+            socket.destroy();
+          } catch {
+            // ignore
+          }
+        });
       return;
     }
     proxy.ws(request, socket, head, { target: resolved.target });

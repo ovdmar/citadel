@@ -11,6 +11,9 @@ if (process.env.CITADEL_BIND_HOST) config.bindHost = process.env.CITADEL_BIND_HO
 const store = new SqliteStore(config.databasePath);
 store.migrate();
 const operations = new OperationService(store, config);
+// Run reconcile() once on boot so backfills (e.g. the root workspace per repo)
+// land for stores registered before the concept existed.
+operations.reconcile();
 const { server } = createDaemonApp({ config, configPath, store, operations });
 
 server.listen(config.port, config.bindHost, () => {

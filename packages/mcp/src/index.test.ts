@@ -81,6 +81,7 @@ describe("mcp helpers", () => {
           branch: "workspace",
           baseBranch: "main",
           source: "scratch",
+          kind: "worktree",
           prUrl: null,
           issueKey: null,
           issueTitle: null,

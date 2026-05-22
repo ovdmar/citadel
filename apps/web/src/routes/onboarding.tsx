@@ -1,8 +1,8 @@
 import type { ProviderHealth } from "@citadel/contracts";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeft, ArrowRight, CheckCircle2, Folder, ShieldCheck, TerminalSquare } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api, queryClient } from "../api.js";
 import { useStateQuery } from "../app-state.js";
 import { Button } from "../components/ui/button.js";
@@ -22,12 +22,23 @@ type RepoInspectResult = {
 export function OnboardingView() {
   const state = useStateQuery();
   const navigate = useNavigate();
-  const [step, setStep] = useState<Step>("providers");
-  const [registeredRepoId, setRegisteredRepoId] = useState("");
+  const providerHealth = state.data?.providerHealth ?? [];
+  const repos = state.data?.repos ?? [];
+  const workspaces = state.data?.workspaces ?? [];
 
-  useEffect(() => {
-    if (state.data?.repos.length && step === "providers") setStep("repo");
-  }, [state.data?.repos.length, step]);
+  // Derive step health from current state — each step "passes" once its
+  // requirement is met. Users can revisit any step (healthy or not), which is
+  // useful for re-running the provider check or adding another repo.
+  const providersOk = providerHealth.length > 0 && providerHealth.every((p) => p.status === "healthy");
+  const repoOk = repos.length > 0;
+  // We consider the "workspace" step done once any non-root workspace exists,
+  // since the root workspace is auto-created when a repo is registered.
+  const workspaceOk = workspaces.some((w) => w.kind !== "root");
+
+  // Default to the first incomplete step but allow user to override.
+  const firstIncomplete: Step = !providersOk ? "providers" : !repoOk ? "repo" : !workspaceOk ? "workspace" : "done";
+  const [step, setStep] = useState<Step>(firstIncomplete);
+  const [registeredRepoId, setRegisteredRepoId] = useState("");
 
   if (state.isLoading) return <div className="empty">Loading local state…</div>;
   return (
@@ -35,7 +46,7 @@ export function OnboardingView() {
       <header className="header">
         <div>
           <h1>Onboarding</h1>
-          <p>Provider check, repository, workspace. Nothing else.</p>
+          <p>Provider check, repository, workspace. Click any step to revisit.</p>
         </div>
         <div className="settings-header-actions">
           <Link className="settings-link" to="/">
@@ -47,20 +58,32 @@ export function OnboardingView() {
         </div>
       </header>
       <ol className="onboarding-steps">
-        <StepHeader index={1} title="Verify providers" active={step === "providers"} done={step !== "providers"} />
+        <StepHeader
+          index={1}
+          title="Verify providers"
+          active={step === "providers"}
+          done={providersOk}
+          onSelect={() => setStep("providers")}
+        />
         <StepHeader
           index={2}
           title="Register a repo"
           active={step === "repo"}
-          done={step === "workspace" || step === "done"}
+          done={repoOk}
+          onSelect={() => setStep("repo")}
         />
-        <StepHeader index={3} title="Create a workspace" active={step === "workspace"} done={step === "done"} />
+        <StepHeader
+          index={3}
+          title="Create a workspace"
+          active={step === "workspace"}
+          done={workspaceOk}
+          onSelect={() => setStep("workspace")}
+        />
       </ol>
-      {step === "providers" ? (
-        <ProvidersStep providerHealth={state.data?.providerHealth ?? []} onNext={() => setStep("repo")} />
-      ) : null}
+      {step === "providers" ? <ProvidersStep providerHealth={providerHealth} onNext={() => setStep("repo")} /> : null}
       {step === "repo" ? (
         <RepoStep
+          repos={repos}
           onDone={(repoId) => {
             setRegisteredRepoId(repoId);
             setStep("workspace");
@@ -69,7 +92,8 @@ export function OnboardingView() {
       ) : null}
       {step === "workspace" ? (
         <WorkspaceStep
-          repoId={registeredRepoId || (state.data?.repos[0]?.id ?? "")}
+          repoId={registeredRepoId || (repos[0]?.id ?? "")}
+          existingWorkspaces={workspaces.filter((w) => w.kind !== "root")}
           onDone={() => {
             setStep("done");
             void navigate({ to: "/" });
@@ -81,11 +105,22 @@ export function OnboardingView() {
   );
 }
 
-function StepHeader(props: { index: number; title: string; active: boolean; done: boolean }) {
+function StepHeader(props: {
+  index: number;
+  title: string;
+  active: boolean;
+  done: boolean;
+  onSelect?: () => void;
+}) {
+  // The whole row is clickable — passing items are revisitable so the user
+  // can re-run a provider check or add another workspace at will.
   return (
     <li className={`onboarding-step ${props.active ? "active" : ""} ${props.done ? "done" : ""}`}>
-      <span className="step-index">{props.done ? <CheckCircle2 size={14} /> : props.index}</span>
-      <span>{props.title}</span>
+      <button type="button" className="onboarding-step-button" onClick={props.onSelect}>
+        <span className="step-index">{props.done ? <CheckCircle2 size={14} /> : props.index}</span>
+        <span>{props.title}</span>
+        {props.done ? <span className="step-status">ready · click to revisit</span> : null}
+      </button>
     </li>
   );
 }
@@ -122,7 +157,10 @@ function ProvidersStep(props: { providerHealth: ProviderHealth[]; onNext: () => 
   );
 }
 
-function RepoStep(props: { onDone: (repoId: string) => void }) {
+function RepoStep(props: {
+  repos: { id: string; name: string; rootPath: string }[];
+  onDone: (repoId: string) => void;
+}) {
   const [rootPath, setRootPath] = useState("");
   const [name, setName] = useState("");
   const inspect = useMutation({
@@ -153,6 +191,19 @@ function RepoStep(props: { onDone: (repoId: string) => void }) {
         <Folder size={16} />
         <h2>Register a repository</h2>
       </div>
+      {props.repos.length ? (
+        <div className="onboarding-existing">
+          <small>Already registered:</small>
+          <ul>
+            {props.repos.map((repo) => (
+              <li key={repo.id}>
+                <strong>{repo.name}</strong>
+                <span className="command-result-meta">{repo.rootPath}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       <form
         className="stack-form"
         onSubmit={(event) => {
@@ -202,7 +253,11 @@ function RepoStep(props: { onDone: (repoId: string) => void }) {
   );
 }
 
-function WorkspaceStep(props: { repoId: string; onDone: () => void }) {
+function WorkspaceStep(props: {
+  repoId: string;
+  existingWorkspaces: { id: string; name: string; branch: string }[];
+  onDone: () => void;
+}) {
   const [name, setName] = useState("first-workspace");
   const mutation = useMutation({
     mutationFn: () =>
@@ -221,6 +276,22 @@ function WorkspaceStep(props: { repoId: string; onDone: () => void }) {
         <TerminalSquare size={16} />
         <h2>Create your first workspace</h2>
       </div>
+      {props.existingWorkspaces.length ? (
+        <div className="onboarding-existing">
+          <small>Existing workspaces (open from the cockpit):</small>
+          <ul>
+            {props.existingWorkspaces.map((workspace) => (
+              <li key={workspace.id}>
+                <strong>{workspace.name}</strong>
+                <span className="command-result-meta">{workspace.branch}</span>
+              </li>
+            ))}
+          </ul>
+          <Link to="/" className="settings-link">
+            Open cockpit
+          </Link>
+        </div>
+      ) : null}
       <form
         className="stack-form"
         onSubmit={(event) => {

@@ -110,6 +110,77 @@ function floorToMinute(date: Date) {
   return copy;
 }
 
+/**
+ * Return the next datetime (>= `from`, exclusive of `from` if seconds==0) at which
+ * `spec` will fire. Walks forward minute-by-minute but skips ahead when the month
+ * or day-of-month/week clearly cannot match — bounded to one year ahead so a
+ * pathological cron returns null instead of looping forever.
+ */
+export function nextCronRun(spec: string, from: Date = new Date()): Date | null {
+  let expr: CronExpression;
+  try {
+    expr = parseCronExpression(spec);
+  } catch {
+    return null;
+  }
+  const start = floorToMinute(from);
+  // Walk forward by one minute at a time. Bounded to 366 days so we never spin.
+  const limit = new Date(start.getTime() + 366 * 24 * 60 * 60 * 1000);
+  const cursor = new Date(start.getTime() + 60_000);
+  while (cursor.getTime() <= limit.getTime()) {
+    if (cronMatches(expr, cursor)) return cursor;
+    cursor.setTime(cursor.getTime() + 60_000);
+  }
+  return null;
+}
+
+/**
+ * Plain-English summary of a five-field cron expression. Falls back to the
+ * raw spec when the pattern isn't a known preset so the UI never lies about
+ * unusual schedules.
+ */
+export function describeCron(spec: string): string {
+  const trimmed = spec.trim();
+  let expr: CronExpression;
+  try {
+    expr = parseCronExpression(trimmed);
+  } catch {
+    return trimmed;
+  }
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const formatTime = () => {
+    if (expr.hour.size === 1 && expr.minute.size === 1) {
+      const hour = Array.from(expr.hour)[0] ?? 0;
+      const minute = Array.from(expr.minute)[0] ?? 0;
+      return `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
+    }
+    return null;
+  };
+  const time = formatTime();
+  // every minute
+  if (expr.minute.size > 1 && expr.hour.size === 24) return "Every minute";
+  // every hour at minute N
+  if (expr.minute.size === 1 && expr.hour.size === 24) {
+    const m = Array.from(expr.minute)[0] ?? 0;
+    return m === 0 ? "Every hour" : `Every hour at :${m.toString().padStart(2, "0")}`;
+  }
+  if (time && expr.domWild && expr.dowWild) return `Every day at ${time}`;
+  if (time && expr.domWild && !expr.dowWild) {
+    const list = Array.from(expr.dow)
+      .sort((a, b) => a - b)
+      .map((d) => days[d])
+      .join(", ");
+    return `Every ${list} at ${time}`;
+  }
+  if (time && !expr.domWild && expr.dowWild) {
+    const list = Array.from(expr.dom)
+      .sort((a, b) => a - b)
+      .join(", ");
+    return `On day ${list} of the month at ${time}`;
+  }
+  return trimmed;
+}
+
 function formatRunStamp(date: Date) {
   const pad = (value: number) => value.toString().padStart(2, "0");
   return [

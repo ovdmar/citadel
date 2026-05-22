@@ -94,6 +94,7 @@ export class SqliteStore {
         branch TEXT NOT NULL,
         base_branch TEXT NOT NULL,
         source TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'worktree',
         pr_url TEXT,
         issue_key TEXT,
         issue_title TEXT,
@@ -150,6 +151,7 @@ export class SqliteStore {
     this.ensureColumn("operations", "retry_input", "TEXT");
     this.ensureColumn("workspaces", "issue_url", "TEXT");
     this.ensureColumn("workspaces", "slack_thread_url", "TEXT");
+    this.ensureColumn("workspaces", "kind", "TEXT NOT NULL DEFAULT 'worktree'");
     db.exec(`
       CREATE TABLE IF NOT EXISTS scheduled_agents (
         id TEXT PRIMARY KEY,
@@ -268,9 +270,9 @@ export class SqliteStore {
   insertWorkspace(workspace: Workspace) {
     this.database
       .prepare(
-        `INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, pr_url,
+        `INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, kind, pr_url,
           issue_key, issue_title, issue_url, slack_thread_url, section, pinned, lifecycle, dirty, created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         workspace.id,
@@ -280,6 +282,7 @@ export class SqliteStore {
         workspace.branch,
         workspace.baseBranch,
         workspace.source,
+        workspace.kind ?? "worktree",
         workspace.prUrl ?? null,
         workspace.issueKey ?? null,
         workspace.issueTitle ?? null,
@@ -675,6 +678,7 @@ function workspaceFromRow(row: Record<string, unknown>): Workspace {
     branch: asString(row, "branch"),
     baseBranch: asString(row, "base_branch"),
     source: asString(row, "source") as Workspace["source"],
+    kind: ((row.kind as string) ?? "worktree") as Workspace["kind"],
     prUrl: row.pr_url ? asString(row, "pr_url") : null,
     issueKey: row.issue_key ? asString(row, "issue_key") : null,
     issueTitle: row.issue_title ? asString(row, "issue_title") : null,

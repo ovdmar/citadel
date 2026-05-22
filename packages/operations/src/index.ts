@@ -19,7 +19,13 @@ import { hookDiagnostic, parseHookOutput, runCommandHook, runCommandHookForDiagn
 import { ensureTmuxSession, killTmuxSession, submitPrompt } from "@citadel/terminal";
 import * as agentMessages from "./agent-messages.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
-export { ScheduledAgentRunner, parseCronExpression, cronMatches } from "./scheduled-agents.js";
+export {
+  ScheduledAgentRunner,
+  parseCronExpression,
+  cronMatches,
+  nextCronRun,
+  describeCron,
+} from "./scheduled-agents.js";
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 import {
   asObject,
@@ -67,6 +73,45 @@ export class OperationService {
     };
     this.store.insertRepo(repo);
     this.activity("repo.registered", "user", `Registered ${repo.name}`, repo.id, null, null);
+    // Create the non-removable root workspace pointing at the repo working
+    // copy. Modeled like Superset: registering a repo always exposes its main
+    // checkout as a workspace so users can run agents/terminals against the
+    // canonical clone, not only inside worktrees.
+    const rootWorkspace: Workspace = {
+      id: createId("ws"),
+      repoId: repo.id,
+      name: "main",
+      path: repo.rootPath,
+      branch: repo.defaultBranch,
+      baseBranch: repo.defaultBranch,
+      source: "imported",
+      kind: "root",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
+      section: "backlog",
+      pinned: true,
+      lifecycle: "ready",
+      dirty: false,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    };
+    try {
+      this.store.insertWorkspace(rootWorkspace);
+      this.activity(
+        "workspace.root.created",
+        "system",
+        `Linked root workspace for ${repo.name}`,
+        repo.id,
+        rootWorkspace.id,
+        null,
+      );
+    } catch {
+      // ignore — root already present (re-register or migration backfill)
+    }
     return repo;
   }
 
@@ -87,6 +132,7 @@ export class OperationService {
       branch: existingBranch ?? branch,
       baseBranch,
       source: input.source,
+      kind: "worktree",
       prUrl: input.prUrl ?? null,
       issueKey: input.issueKey ?? null,
       issueTitle: input.issueTitle ?? null,
@@ -101,6 +147,11 @@ export class OperationService {
       archivedAt: null,
     };
     this.store.insertWorkspace(workspace);
+    this.logOp(
+      operation.id,
+      "info",
+      `Created workspace record name=${workspace.name} branch=${workspace.branch} base=${baseBranch} source=${input.source}`,
+    );
     this.store.upsertOperation({
       ...operation,
       workspaceId: workspace.id,
@@ -110,10 +161,12 @@ export class OperationService {
     fs.mkdirSync(repo.worktreeParent, { recursive: true });
     try {
       tryRunGit(repo.rootPath, ["fetch", "--prune", repo.defaultRemote]);
+      this.logOp(operation.id, "info", `Fetched ${repo.defaultRemote} (prune)`);
       if (existingBranch) {
         // Try to add a worktree pointing at the existing branch (local or remote).
         try {
           tryRunGit(repo.rootPath, ["worktree", "add", workspacePath, existingBranch]);
+          this.logOp(operation.id, "info", `Added worktree at ${workspacePath} on branch ${existingBranch}`);
         } catch {
           tryRunGit(repo.rootPath, [
             "worktree",
@@ -123,10 +176,20 @@ export class OperationService {
             workspacePath,
             `${repo.defaultRemote}/${existingBranch}`,
           ]);
+          this.logOp(
+            operation.id,
+            "info",
+            `Added worktree at ${workspacePath} tracking ${repo.defaultRemote}/${existingBranch}`,
+          );
         }
       } else {
         const startPoint = `${repo.defaultRemote}/${baseBranch}`;
         tryRunGit(repo.rootPath, ["worktree", "add", "-b", branch, workspacePath, startPoint]);
+        this.logOp(
+          operation.id,
+          "info",
+          `Added worktree at ${workspacePath} (new branch ${branch} from ${startPoint})`,
+        );
       }
       this.store.upsertOperation({
         ...operation,
@@ -135,6 +198,11 @@ export class OperationService {
         message: "Running workspace setup hooks",
         updatedAt: nowIso(),
       });
+      this.logOp(
+        operation.id,
+        "info",
+        `Running ${repo.setupHookIds.length} setup hook(s): ${repo.setupHookIds.join(", ") || "(none)"}`,
+      );
       await this.runWorkspaceHooks("workspace.setup", repo.setupHookIds, repo, workspace, operation.id);
       this.store.updateWorkspaceLifecycle(workspace.id, "ready");
       this.activity(
@@ -156,12 +224,14 @@ export class OperationService {
       });
     } catch (error) {
       this.store.updateWorkspaceLifecycle(workspace.id, "failed");
+      const errorMessage = error instanceof Error ? error.message : "workspace_create_failed";
+      this.logOp(operation.id, "error", `Workspace create failed: ${errorMessage}`);
       this.store.upsertOperation({
         ...operation,
         workspaceId: workspace.id,
         status: "failed",
         progress: 100,
-        error: error instanceof Error ? error.message : "workspace_create_failed",
+        error: errorMessage,
         updatedAt: nowIso(),
       });
     }
@@ -288,6 +358,24 @@ export class OperationService {
     if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
     const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
     if (!repo) throw new Error(`Workspace repo is missing: ${workspace.repoId}`);
+    if (workspace.kind === "root") {
+      // The root workspace tracks the repo's main checkout; it can only be
+      // removed by removing the repository itself.
+      const operation = this.operation(
+        "workspace.remove",
+        "failed",
+        workspace.repoId,
+        workspace.id,
+        100,
+        "Cannot drop the root workspace",
+      );
+      this.store.upsertOperation({
+        ...operation,
+        error: "Root workspace is non-removable. Remove the repository to drop it.",
+        updatedAt: nowIso(),
+      });
+      return { operationId: operation.id, removed: false, archived: false, dirty: false };
+    }
     const operation = this.operation(
       "workspace.remove",
       "running",
@@ -317,12 +405,21 @@ export class OperationService {
       return { operationId: operation.id, removed: false, archived: false, dirty };
     }
 
-    for (const session of this.store.listSessions(workspace.id)) {
+    const ownedSessions = this.store.listSessions(workspace.id);
+    for (const session of ownedSessions) {
       if (session.tmuxSessionName && !input.archiveOnly) killTmuxSession(session.tmuxSessionName);
+    }
+    if (ownedSessions.length && !input.archiveOnly) {
+      this.logOp(operation.id, "info", `Killed ${ownedSessions.length} tmux session(s) attached to workspace`);
     }
 
     if (!input.archiveOnly) {
       try {
+        this.logOp(
+          operation.id,
+          "info",
+          `Running ${repo.teardownHookIds.length} teardown hook(s): ${repo.teardownHookIds.join(", ") || "(none)"}`,
+        );
         await this.runWorkspaceHooks("workspace.teardown", repo.teardownHookIds, repo, workspace, operation.id);
       } catch (error) {
         if (!input.force) {
@@ -348,8 +445,16 @@ export class OperationService {
 
     if (!input.archiveOnly && fs.existsSync(workspace.path)) {
       tryRunGit(repo.rootPath, ["worktree", "remove", "--force", workspace.path]);
+      this.logOp(operation.id, "info", `Removed worktree at ${workspace.path}`);
     }
     this.store.archiveWorkspace(workspace.id, input.archiveOnly ? "archived" : "removed", dirty);
+    this.logOp(
+      operation.id,
+      "info",
+      input.archiveOnly
+        ? `Marked workspace ${workspace.name} as archived`
+        : `Marked workspace ${workspace.name} as removed`,
+    );
     this.store.upsertOperation({
       ...operation,
       status: "succeeded",
@@ -681,7 +786,7 @@ export class OperationService {
       progress,
       message,
       error: null,
-      logs: [],
+      logs: [{ level: "info", message, at: now }],
       retriable: false,
       retryInput: null,
       createdAt: now,
@@ -689,6 +794,16 @@ export class OperationService {
     };
     this.store.upsertOperation(operation);
     return operation;
+  }
+
+  // Append a structured log entry to an operation. Captures meaningful audit
+  // detail (which path, which branch, which hook) alongside the status updates.
+  private logOp(operationId: string, level: "info" | "warn" | "error", message: string) {
+    this.store.appendOperationLog(operationId, {
+      level,
+      message,
+      at: nowIso(),
+    });
   }
 
   private activity(

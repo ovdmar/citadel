@@ -566,6 +566,27 @@
   gap: 8px;
 }
 
+.scheduled-agent-cron-summary {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--color-action) 7%, transparent);
+  border: 1px solid var(--line);
+}
+
+.scheduled-agent-cron-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.scheduled-agent-cron-summary small {
+  color: var(--muted);
+}
+
 .scheduled-agent-list {
   display: grid;
   gap: 8px;

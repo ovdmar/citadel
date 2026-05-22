@@ -112,6 +112,42 @@ export function reconcileStore(
       store.archiveRepo(repo.id);
       activity(`Auto-archived ${repo.name} (rootPath missing)`, repo.id);
       repoCount += 1;
+      continue;
+    }
+    // Backfill the non-removable root workspace for repos registered before
+    // the root-workspace concept existed.
+    const repoWorkspaces = store.listWorkspaces(repo.id);
+    const hasRoot = repoWorkspaces.some((workspace) => workspace.kind === "root");
+    if (!hasRoot) {
+      const now = new Date().toISOString();
+      try {
+        store.insertWorkspace({
+          id: `ws_root_${repo.id}`,
+          repoId: repo.id,
+          name: "main",
+          path: repo.rootPath,
+          branch: repo.defaultBranch,
+          baseBranch: repo.defaultBranch,
+          source: "imported",
+          kind: "root",
+          prUrl: null,
+          issueKey: null,
+          issueTitle: null,
+          issueUrl: null,
+          slackThreadUrl: null,
+          section: "backlog",
+          pinned: true,
+          lifecycle: "ready",
+          dirty: false,
+          createdAt: now,
+          updatedAt: now,
+          archivedAt: null,
+        });
+        activity(`Linked root workspace for ${repo.name}`, repo.id);
+      } catch {
+        // ignore — collision (path unique) means another workspace already
+        // sits on the repo rootPath; nothing to backfill.
+      }
     }
   }
   return { sessions: sessionCount, workspaces: workspaceCount, repos: repoCount, deletedSessions };
