@@ -45,28 +45,37 @@ try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     await time("web_ade_visible", 2000, async () => {
       await page.goto(webBaseUrl);
-      await page.getByText("Agent Development Environment").waitFor();
-      await page.getByTestId("terminal-stage").waitFor();
+      // The current cockpit identifies itself via the top-bar brand "Citadel"
+      // and the agent-stage main element rather than the old ADE copy.
+      await page.locator(".top-bar-brand").waitFor();
+      await page.locator("main[aria-label='Agent stage']").waitFor();
     });
     await time("workspace_switch_long_buffers", 1000, async () => {
-      await page.getByRole("button", { name: /perf-a-/i }).click();
-      await page.getByRole("heading", { name: /perf-a-/i }).waitFor();
-      await page.getByRole("button", { name: /perf-b-/i }).click();
-      await page.getByRole("heading", { name: /perf-b-/i }).waitFor();
-      await page.getByRole("button", { name: /perf-a-/i }).click();
-      await page.getByRole("heading", { name: /perf-a-/i }).waitFor();
+      const navigator = page.locator("aside[aria-label='Navigator']");
+      await navigator.getByRole("button", { name: /perf-a-/i }).click();
+      await navigator
+        .locator(".workspace-card.active")
+        .filter({ hasText: /perf-a-/i })
+        .waitFor();
+      await navigator.getByRole("button", { name: /perf-b-/i }).click();
+      await navigator
+        .locator(".workspace-card.active")
+        .filter({ hasText: /perf-b-/i })
+        .waitFor();
+      await navigator.getByRole("button", { name: /perf-a-/i }).click();
+      await navigator
+        .locator(".workspace-card.active")
+        .filter({ hasText: /perf-a-/i })
+        .waitFor();
     });
     await time("workspace_settings_switch", 1000, async () => {
-      await page
-        .locator(".ade-topbar-actions")
-        .getByRole("link", { name: /settings/i })
-        .click();
+      await page.getByRole("link", { name: "Settings" }).first().click();
       await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
       await page
         .locator(".settings-header-actions")
         .getByRole("link", { name: /workspaces/i })
         .click();
-      await page.getByText("Agent Development Environment").waitFor();
+      await page.locator("main[aria-label='Agent stage']").waitFor();
     });
   } finally {
     await browser.close();
