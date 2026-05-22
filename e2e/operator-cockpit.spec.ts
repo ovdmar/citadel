@@ -121,11 +121,12 @@ test("settings sidebar exposes all configured sections", async ({ page }, testIn
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   const sidebar = page.locator(".settings-sidebar");
   for (const label of ["Overview", "Providers", "Agents", "Scheduled agents", "Repositories", "MCP", "Advanced"]) {
-    await expect(sidebar.getByRole("button", { name: label })).toBeVisible();
+    // `exact` so "Agents" doesn't also match "Scheduled agents".
+    await expect(sidebar.getByRole("button", { name: label, exact: true })).toBeVisible();
   }
-  await sidebar.getByRole("button", { name: "Providers" }).click();
+  await sidebar.getByRole("button", { name: "Providers", exact: true }).click();
   await expect(page.locator("#settings-section-title")).toContainText("Providers");
-  await sidebar.getByRole("button", { name: "Agents" }).click();
+  await sidebar.getByRole("button", { name: "Agents", exact: true }).click();
   await expect(page.locator("#settings-section-title")).toContainText("Agents");
   await page.screenshot({ path: `docs/campaigns/screenshot-${testInfo.project.name}-settings.png`, fullPage: true });
 });
