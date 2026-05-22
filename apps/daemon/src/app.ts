@@ -36,6 +36,7 @@ import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
+import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
 import { readWorkspaceDiff, readWorkspaceGitStatus } from "./workspace-diff.js";
 
@@ -134,6 +135,7 @@ export function createDaemonApp(input: {
         providerHealth,
         runtimes: listRuntimeHealth(config.runtimes),
         mcp: mcpStatus(config.mcp.enabled),
+        scheduledAgents: scheduledAgents.list(),
       });
     }),
   );
@@ -680,6 +682,16 @@ export function createDaemonApp(input: {
       res.status(result.removed || result.archived ? 202 : 409).json(result);
     }),
   );
+
+  const scheduledAgents = registerScheduledAgentRoutes({
+    app,
+    server,
+    store,
+    operations,
+    config,
+    emit,
+    asyncRoute,
+  });
 
   const mcpDeps = { config, store, operations, ttyd, providerCache, emit };
   registerMcpRoutes(app, asyncRoute, {

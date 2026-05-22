@@ -19,6 +19,8 @@ import { hookDiagnostic, parseHookOutput, runCommandHook, runCommandHookForDiagn
 import { ensureTmuxSession, killTmuxSession, submitPrompt } from "@citadel/terminal";
 import * as agentMessages from "./agent-messages.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
+export { ScheduledAgentRunner, parseCronExpression, cronMatches } from "./scheduled-agents.js";
+export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 import {
   asObject,
   cancelOperationInStore,

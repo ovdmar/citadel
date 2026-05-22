@@ -386,6 +386,45 @@ export const TransitionIssueInputSchema = z.object({
   fields: z.record(z.string()).default({}),
 });
 
+export const ScheduledAgentWorkspaceStrategySchema = z.enum(["new", "existing"]);
+export const ScheduledAgentRunStatusSchema = z.enum(["never", "running", "succeeded", "failed"]);
+
+export const ScheduledAgentSchema = z.object({
+  id: IdSchema,
+  name: z.string().min(1).max(80),
+  description: z.string().max(280).nullable().default(null),
+  cron: z.string().min(1).max(120),
+  repoId: IdSchema,
+  runtimeId: IdSchema,
+  prompt: z.string().max(8000).nullable().default(null),
+  workspaceStrategy: ScheduledAgentWorkspaceStrategySchema,
+  workspaceName: z.string().min(1).max(80),
+  baseBranch: z.string().min(1).max(120).nullable().default(null),
+  enabled: z.boolean().default(true),
+  lastRunAt: z.string().nullable().default(null),
+  lastRunStatus: ScheduledAgentRunStatusSchema.default("never"),
+  lastRunMessage: z.string().nullable().default(null),
+  lastWorkspaceId: IdSchema.nullable().default(null),
+  lastSessionId: IdSchema.nullable().default(null),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export const CreateScheduledAgentInputSchema = z.object({
+  name: z.string().min(1).max(80),
+  description: z.string().max(280).optional(),
+  cron: z.string().min(1).max(120),
+  repoId: IdSchema,
+  runtimeId: IdSchema,
+  prompt: z.string().max(8000).optional(),
+  workspaceStrategy: ScheduledAgentWorkspaceStrategySchema,
+  workspaceName: z.string().min(1).max(80),
+  baseBranch: z.string().min(1).max(120).optional(),
+  enabled: z.boolean().optional(),
+});
+
+export const UpdateScheduledAgentInputSchema = CreateScheduledAgentInputSchema.partial();
+
 export const DiffFileSchema = z.object({
   path: z.string(),
   status: z.string(),
@@ -436,6 +475,11 @@ export type CreateAgentSessionInput = z.infer<typeof CreateAgentSessionInputSche
 export type TransitionIssueInput = z.infer<typeof TransitionIssueInputSchema>;
 export type DiffFile = z.infer<typeof DiffFileSchema>;
 export type WorkspaceDiff = z.infer<typeof WorkspaceDiffSchema>;
+export type ScheduledAgent = z.infer<typeof ScheduledAgentSchema>;
+export type ScheduledAgentWorkspaceStrategy = z.infer<typeof ScheduledAgentWorkspaceStrategySchema>;
+export type ScheduledAgentRunStatus = z.infer<typeof ScheduledAgentRunStatusSchema>;
+export type CreateScheduledAgentInput = z.infer<typeof CreateScheduledAgentInputSchema>;
+export type UpdateScheduledAgentInput = z.infer<typeof UpdateScheduledAgentInputSchema>;
 
 export type ApiError = {
   error: string;

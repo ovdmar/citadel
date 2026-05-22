@@ -16,6 +16,7 @@ afterEach(() => {
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
+process.env.CITADEL_DISABLE_SCHEDULER = "1";
 
 describe("createDaemonApp", () => {
   it("serves config, runtime, MCP, and error endpoints without starting the production listener", async () => {

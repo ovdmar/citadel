@@ -8,6 +8,7 @@ import type {
   Operation,
   OperationLogEntry,
   Repo,
+  ScheduledAgent,
   Workspace,
 } from "@citadel/contracts";
 
@@ -150,12 +151,34 @@ export class SqliteStore {
     this.ensureColumn("workspaces", "issue_url", "TEXT");
     this.ensureColumn("workspaces", "slack_thread_url", "TEXT");
     db.exec(`
+      CREATE TABLE IF NOT EXISTS scheduled_agents (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        cron TEXT NOT NULL,
+        repo_id TEXT NOT NULL,
+        runtime_id TEXT NOT NULL,
+        prompt TEXT,
+        workspace_strategy TEXT NOT NULL,
+        workspace_name TEXT NOT NULL,
+        base_branch TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        last_run_at TEXT,
+        last_run_status TEXT NOT NULL DEFAULT 'never',
+        last_run_message TEXT,
+        last_workspace_id TEXT,
+        last_session_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
       INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
       VALUES (2, 'activity-hook-output', datetime('now'));
       INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
       VALUES (3, 'operation-logs-retry', datetime('now'));
       INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
       VALUES (4, 'workspace-linked-urls', datetime('now'));
+      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+      VALUES (5, 'scheduled-agents', datetime('now'));
     `);
   }
 
@@ -468,6 +491,142 @@ export class SqliteStore {
     return rows.map(activityFromRow);
   }
 
+  listScheduledAgents(): ScheduledAgent[] {
+    const rows = this.database.prepare("SELECT * FROM scheduled_agents ORDER BY created_at DESC").all() as Array<
+      Record<string, unknown>
+    >;
+    return rows.map(scheduledAgentFromRow);
+  }
+
+  findScheduledAgent(id: string): ScheduledAgent | null {
+    const row = this.database.prepare("SELECT * FROM scheduled_agents WHERE id = ?").get(id);
+    if (!row) return null;
+    return scheduledAgentFromRow(row as Record<string, unknown>);
+  }
+
+  insertScheduledAgent(agent: ScheduledAgent) {
+    this.database
+      .prepare(
+        `INSERT INTO scheduled_agents (id, name, description, cron, repo_id, runtime_id, prompt,
+          workspace_strategy, workspace_name, base_branch, enabled, last_run_at, last_run_status,
+          last_run_message, last_workspace_id, last_session_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        agent.id,
+        agent.name,
+        agent.description ?? null,
+        agent.cron,
+        agent.repoId,
+        agent.runtimeId,
+        agent.prompt ?? null,
+        agent.workspaceStrategy,
+        agent.workspaceName,
+        agent.baseBranch ?? null,
+        agent.enabled ? 1 : 0,
+        agent.lastRunAt ?? null,
+        agent.lastRunStatus,
+        agent.lastRunMessage ?? null,
+        agent.lastWorkspaceId ?? null,
+        agent.lastSessionId ?? null,
+        agent.createdAt,
+        agent.updatedAt,
+      );
+  }
+
+  updateScheduledAgent(
+    id: string,
+    patch: Partial<
+      Pick<
+        ScheduledAgent,
+        | "name"
+        | "description"
+        | "cron"
+        | "repoId"
+        | "runtimeId"
+        | "prompt"
+        | "workspaceStrategy"
+        | "workspaceName"
+        | "baseBranch"
+        | "enabled"
+      >
+    >,
+  ): ScheduledAgent | null {
+    const existing = this.findScheduledAgent(id);
+    if (!existing) return null;
+    const next: ScheduledAgent = {
+      ...existing,
+      ...patch,
+      description: patch.description !== undefined ? patch.description : existing.description,
+      prompt: patch.prompt !== undefined ? patch.prompt : existing.prompt,
+      baseBranch: patch.baseBranch !== undefined ? patch.baseBranch : existing.baseBranch,
+      updatedAt: new Date().toISOString(),
+    };
+    this.database
+      .prepare(
+        `UPDATE scheduled_agents SET name = ?, description = ?, cron = ?, repo_id = ?, runtime_id = ?,
+          prompt = ?, workspace_strategy = ?, workspace_name = ?, base_branch = ?, enabled = ?,
+          updated_at = ? WHERE id = ?`,
+      )
+      .run(
+        next.name,
+        next.description ?? null,
+        next.cron,
+        next.repoId,
+        next.runtimeId,
+        next.prompt ?? null,
+        next.workspaceStrategy,
+        next.workspaceName,
+        next.baseBranch ?? null,
+        next.enabled ? 1 : 0,
+        next.updatedAt,
+        id,
+      );
+    return next;
+  }
+
+  recordScheduledAgentRun(
+    id: string,
+    update: {
+      lastRunAt: string;
+      lastRunStatus: ScheduledAgent["lastRunStatus"];
+      lastRunMessage?: string | null;
+      lastWorkspaceId?: string | null;
+      lastSessionId?: string | null;
+    },
+  ): ScheduledAgent | null {
+    const existing = this.findScheduledAgent(id);
+    if (!existing) return null;
+    const next: ScheduledAgent = {
+      ...existing,
+      lastRunAt: update.lastRunAt,
+      lastRunStatus: update.lastRunStatus,
+      lastRunMessage: update.lastRunMessage !== undefined ? update.lastRunMessage : existing.lastRunMessage,
+      lastWorkspaceId: update.lastWorkspaceId !== undefined ? update.lastWorkspaceId : existing.lastWorkspaceId,
+      lastSessionId: update.lastSessionId !== undefined ? update.lastSessionId : existing.lastSessionId,
+      updatedAt: new Date().toISOString(),
+    };
+    this.database
+      .prepare(
+        `UPDATE scheduled_agents SET last_run_at = ?, last_run_status = ?, last_run_message = ?,
+          last_workspace_id = ?, last_session_id = ?, updated_at = ? WHERE id = ?`,
+      )
+      .run(
+        next.lastRunAt,
+        next.lastRunStatus,
+        next.lastRunMessage ?? null,
+        next.lastWorkspaceId ?? null,
+        next.lastSessionId ?? null,
+        next.updatedAt,
+        id,
+      );
+    return next;
+  }
+
+  deleteScheduledAgent(id: string) {
+    this.database.prepare("DELETE FROM scheduled_agents WHERE id = ?").run(id);
+  }
+
   private ensureColumn(table: string, column: string, definition: string) {
     const cols = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (!cols.some((entry) => entry.name === column)) {
@@ -561,6 +720,29 @@ function operationFromRow(row: Record<string, unknown>): Operation {
     logs,
     retriable: Number(row.retriable ?? 0) === 1,
     retryInput,
+    createdAt: asString(row, "created_at"),
+    updatedAt: asString(row, "updated_at"),
+  };
+}
+
+function scheduledAgentFromRow(row: Record<string, unknown>): ScheduledAgent {
+  return {
+    id: asString(row, "id"),
+    name: asString(row, "name"),
+    description: row.description ? asString(row, "description") : null,
+    cron: asString(row, "cron"),
+    repoId: asString(row, "repo_id"),
+    runtimeId: asString(row, "runtime_id"),
+    prompt: row.prompt ? asString(row, "prompt") : null,
+    workspaceStrategy: asString(row, "workspace_strategy") as ScheduledAgent["workspaceStrategy"],
+    workspaceName: asString(row, "workspace_name"),
+    baseBranch: row.base_branch ? asString(row, "base_branch") : null,
+    enabled: Number(row.enabled) === 1,
+    lastRunAt: row.last_run_at ? asString(row, "last_run_at") : null,
+    lastRunStatus: asString(row, "last_run_status") as ScheduledAgent["lastRunStatus"],
+    lastRunMessage: row.last_run_message ? asString(row, "last_run_message") : null,
+    lastWorkspaceId: row.last_workspace_id ? asString(row, "last_workspace_id") : null,
+    lastSessionId: row.last_session_id ? asString(row, "last_session_id") : null,
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
   };

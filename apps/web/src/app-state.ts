@@ -5,6 +5,7 @@ import type {
   Operation,
   ProviderHealth,
   Repo,
+  ScheduledAgent,
   Workspace,
 } from "@citadel/contracts";
 import { useQuery } from "@tanstack/react-query";
@@ -20,6 +21,7 @@ export type StateResponse = {
   providerHealth: ProviderHealth[];
   runtimes: AgentRuntime[];
   mcp: { enabled: boolean; resources: string[]; tools: string[] };
+  scheduledAgents: ScheduledAgent[];
 };
 
 export function useStateQuery() {
@@ -37,6 +39,8 @@ export function useEventRefresh() {
     events.addEventListener("repo.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("workspace.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("agent.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("scheduled-agent.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("scheduled-agent.run", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     return () => events.close();
   }, []);
 }

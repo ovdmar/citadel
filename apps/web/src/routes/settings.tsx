@@ -1,15 +1,25 @@
 import type { AgentRuntime, ProviderHealth } from "@citadel/contracts";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, Cable, CheckCircle2, FolderGit2, HeartPulse, Server, Settings as SettingsIcon } from "lucide-react";
+import {
+  AlarmClock,
+  ArrowLeft,
+  Cable,
+  CheckCircle2,
+  FolderGit2,
+  HeartPulse,
+  Server,
+  Settings as SettingsIcon,
+} from "lucide-react";
 import { useState } from "react";
 import { useStateQuery } from "../app-state.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { AgentsPanel } from "../settings-runtimes.js";
+import { ScheduledAgentsPanel } from "../settings-scheduled-agents.js";
 import { StructuredConfig } from "../structured-config.js";
 import { ThemeControls } from "../theme-controls.js";
 
-type SectionId = "overview" | "providers" | "agents" | "repositories" | "mcp" | "advanced";
+type SectionId = "overview" | "providers" | "agents" | "scheduled-agents" | "repositories" | "mcp" | "advanced";
 
 type Section = {
   id: SectionId;
@@ -27,6 +37,12 @@ const SECTIONS: Section[] = [
   },
   { id: "providers", label: "Providers", description: "Tickets, Git server, CI", icon: <HeartPulse size={14} /> },
   { id: "agents", label: "Agents", description: "Platform and custom agents", icon: <Server size={14} /> },
+  {
+    id: "scheduled-agents",
+    label: "Scheduled agents",
+    description: "Cron-driven agent runs",
+    icon: <AlarmClock size={14} />,
+  },
   {
     id: "repositories",
     label: "Repositories",
@@ -100,6 +116,7 @@ export function SettingsView() {
           ) : null}
           {section === "providers" ? <ProvidersPanel providerHealth={state.data?.providerHealth ?? []} /> : null}
           {section === "agents" ? <AgentsPanel runtimes={state.data?.runtimes ?? []} /> : null}
+          {section === "scheduled-agents" ? <ScheduledAgentsPanel state={state.data} /> : null}
           {section === "repositories" ? <RepositoriesPanel state={state.data} /> : null}
           {section === "mcp" ? <McpSection mcpEnabled={Boolean(state.data?.mcp.enabled)} /> : null}
           {section === "advanced" ? <StructuredConfig /> : null}

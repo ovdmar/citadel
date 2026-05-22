@@ -1,0 +1,163 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import type http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { loadConfig } from "@citadel/config";
+import { SqliteStore } from "@citadel/db";
+import { afterEach, describe, expect, it } from "vitest";
+import { createDaemonApp } from "./app.js";
+
+const dirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+process.env.CITADEL_DISABLE_REAPER = "1";
+process.env.CITADEL_DISABLE_SCHEDULER = "1";
+
+describe("scheduled agent routes", () => {
+  it("manages scheduled agents through CRUD and manual-run endpoints", async () => {
+    const fixture = createFixture();
+    const git = createGitRepo(fixture.config.dataDir);
+    const now = new Date().toISOString();
+    fixture.store.insertRepo({
+      id: "repo_sched",
+      name: "Sched Repo",
+      rootPath: git.repoPath,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const empty = await getJson<{ scheduledAgents: unknown[] }>(`${baseUrl}/api/scheduled-agents`);
+      expect(empty.scheduledAgents).toEqual([]);
+
+      const created = await postJson<{ scheduledAgent: { id: string; enabled: boolean } }>(
+        `${baseUrl}/api/scheduled-agents`,
+        {
+          name: "Daily sweep",
+          cron: "0 9 * * *",
+          repoId: "repo_sched",
+          runtimeId: "shell",
+          workspaceStrategy: "existing",
+          workspaceName: "sched-target",
+        },
+      );
+      expect(created.scheduledAgent.enabled).toBe(true);
+
+      const invalid = await fetch(`${baseUrl}/api/scheduled-agents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Bad",
+          cron: "not-cron",
+          repoId: "repo_sched",
+          runtimeId: "shell",
+          workspaceStrategy: "new",
+          workspaceName: "bad",
+        }),
+      });
+      expect(invalid.status).toBe(400);
+
+      const patched = await fetch(`${baseUrl}/api/scheduled-agents/${created.scheduledAgent.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: false }),
+      });
+      expect(patched.status).toBe(200);
+      expect((await patched.json()) as { scheduledAgent: { enabled: boolean } }).toMatchObject({
+        scheduledAgent: { enabled: false },
+      });
+
+      const runResponse = await fetch(`${baseUrl}/api/scheduled-agents/${created.scheduledAgent.id}/run`, {
+        method: "POST",
+      });
+      expect([202, 424]).toContain(runResponse.status);
+      const runBody = (await runResponse.json()) as { scheduledAgent: { lastRunStatus: string } };
+      expect(["succeeded", "failed"]).toContain(runBody.scheduledAgent.lastRunStatus);
+
+      const removed = await fetch(`${baseUrl}/api/scheduled-agents/${created.scheduledAgent.id}`, {
+        method: "DELETE",
+      });
+      expect(removed.status).toBe(202);
+
+      const missing = await fetch(`${baseUrl}/api/scheduled-agents/missing_id`, { method: "DELETE" });
+      expect(missing.status).toBe(404);
+    } finally {
+      await closeServer(server);
+    }
+  });
+});
+
+function createFixture() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-sched-routes-"));
+  dirs.push(dir);
+  const configPath = path.join(dir, "citadel.config.json");
+  const config = loadConfig(configPath);
+  config.dataDir = dir;
+  config.databasePath = path.join(dir, "citadel.sqlite");
+  config.providers = {
+    github: { enabled: false, command: "gh" },
+    jira: { enabled: false, command: "jtk" },
+  };
+  config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
+  const store = new SqliteStore(config.databasePath);
+  store.migrate();
+  return { config, configPath, store };
+}
+
+function createGitRepo(dir: string) {
+  const repoPath = path.join(dir, `repo-${Date.now().toString(36)}`);
+  fs.mkdirSync(repoPath, { recursive: true });
+  execFileSync("git", ["init"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "test@example.test"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Citadel Test"], { cwd: repoPath, stdio: "pipe" });
+  fs.writeFileSync(path.join(repoPath, "README.md"), "# fixture\n");
+  execFileSync("git", ["add", "README.md"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["branch", "-M", "main"], { cwd: repoPath, stdio: "pipe" });
+  return { repoPath };
+}
+
+function listen(server: http.Server) {
+  return new Promise<string>((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP test server address");
+      resolve(`http://127.0.0.1:${address.port}`);
+    });
+  });
+}
+
+function closeServer(server: http.Server) {
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+async function getJson<T>(url: string) {
+  const response = await fetch(url);
+  expect(response.ok).toBe(true);
+  return response.json() as Promise<T>;
+}
+
+async function postJson<T>(url: string, body: unknown) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const text = await response.clone().text();
+  expect(response.ok, text).toBe(true);
+  return response.json() as Promise<T>;
+}
