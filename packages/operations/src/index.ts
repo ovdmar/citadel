@@ -6,16 +6,14 @@ import type {
   CreateAgentSessionInput,
   CreateWorkspaceInput,
   HookAction,
-  HookDiagnostic,
   HookOutput,
   Operation,
   Repo,
   Workspace,
-  WorkspaceAppsSummary,
 } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
-import { hookDiagnostic, parseHookOutput, runCommandHook, runCommandHookForDiagnostics } from "@citadel/hooks";
+import { parseHookOutput, runCommandHook } from "@citadel/hooks";
 import { ensureTmuxSession, killTmuxSession, submitPrompt } from "@citadel/terminal";
 import * as agentMessages from "./agent-messages.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
@@ -34,9 +32,13 @@ import {
   listHookDiagnostics,
   reconcileStore,
   tryRunGit,
-  withActionHookIds,
   workspaceIsDirty,
 } from "./helpers.js";
+import {
+  type WorkspaceAppsDeps,
+  discoverWorkspaceApps as discoverWorkspaceAppsImpl,
+  runWorkspaceAction as runWorkspaceActionImpl,
+} from "./workspace-apps.js";
 
 export class OperationService {
   constructor(
@@ -602,159 +604,23 @@ export class OperationService {
     };
   }
 
-  async discoverWorkspaceApps(input: { repo: Repo; workspace: Workspace; providerContext?: unknown }) {
-    const checkedAt = nowIso();
-    const hookIds = this.config?.repoDefaults.appHookIds ?? [];
-    const hooks = this.configuredHooks("workspace.apps", hookIds);
-    const diagnostics: HookDiagnostic[] = [];
-    const outputs: HookOutput[] = [];
-
-    for (const hook of hooks) {
-      const commandHook = {
-        id: hook.id,
-        event: hook.event,
-        command: hook.command,
-        args: hook.args,
-        cwd: hook.cwd || input.workspace.path,
-        timeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
-        blocking: hook.blocking,
-      };
-      try {
-        const result = await runCommandHookForDiagnostics(commandHook, {
-          event: "workspace.apps",
-          repo: input.repo,
-          workspace: input.workspace,
-          providerContext: input.providerContext ?? {},
-          environment: process.env.NODE_ENV ?? "development",
-        });
-        const diagnostic = hookDiagnostic({ hook: commandHook, enabled: true, result, lastRunAt: checkedAt });
-        diagnostics.push(diagnostic);
-        if (diagnostic.structuredPayload) {
-          outputs.push(withActionHookIds(diagnostic.structuredPayload, hook.id));
-          this.activity(
-            "hook.workspace.apps",
-            "hook",
-            `Hook ${hook.id} discovered workspace apps/actions`,
-            input.repo.id,
-            input.workspace.id,
-            null,
-            diagnostic.structuredPayload,
-          );
-        } else if (diagnostic.validationErrors.length) {
-          this.activity(
-            "hook.workspace.apps.invalid",
-            "hook",
-            `Hook ${hook.id} returned invalid app/action output`,
-            input.repo.id,
-            input.workspace.id,
-            null,
-          );
-        }
-      } catch (error) {
-        diagnostics.push(hookDiagnostic({ hook: commandHook, enabled: true, error, lastRunAt: checkedAt }));
-        this.activity(
-          "hook.workspace.apps.failed",
-          "hook",
-          `Hook ${hook.id} failed: ${error instanceof Error ? error.message : "hook_failed"}`,
-          input.repo.id,
-          input.workspace.id,
-          null,
-        );
-      }
-    }
-
-    return {
-      workspaceId: input.workspace.id,
-      status: diagnostics.some((diagnostic) => diagnostic.validationStatus === "invalid") ? "degraded" : "healthy",
-      reason: diagnostics.length ? null : "No workspace application discovery hooks configured",
-      hooks: diagnostics,
-      applications: outputs.flatMap((output) => output.applications ?? []),
-      links: outputs.flatMap((output) => output.links),
-      actions: outputs.flatMap((output) => output.actions),
-      checkedAt,
-    } satisfies WorkspaceAppsSummary;
+  discoverWorkspaceApps(input: { repo: Repo; workspace: Workspace; providerContext?: unknown }) {
+    return discoverWorkspaceAppsImpl(this.workspaceAppsDeps(), input);
   }
 
-  async runWorkspaceAction(input: { repo: Repo; workspace: Workspace; action: HookAction }) {
-    const operation = this.operation(
-      `workspace.action.${input.action.kind ?? "custom"}`,
-      "running",
-      input.repo.id,
-      input.workspace.id,
-      10,
-      `Running ${input.action.label}`,
-    );
-    const hookIds = input.action.hookId ? [input.action.hookId] : (this.config?.repoDefaults.actionHookIds ?? []);
-    const hooks = this.configuredHooks("workspace.action", hookIds);
-    if (!hooks.length) {
-      this.store.upsertOperation({
-        ...operation,
-        status: "failed",
-        progress: 100,
-        error: "No workspace action hooks are configured",
-        updatedAt: nowIso(),
-      });
-      return { operationId: operation.id, status: "failed" as const };
-    }
-    try {
-      for (const hook of hooks) {
-        const result = await runCommandHook(
-          {
-            id: hook.id,
-            event: hook.event,
-            command: hook.command,
-            args: hook.args,
-            cwd: hook.cwd || input.workspace.path,
-            timeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
-            blocking: hook.blocking,
-          },
-          {
-            event: "workspace.action",
-            repo: input.repo,
-            workspace: input.workspace,
-            action: input.action,
-            operationId: operation.id,
-          },
-        );
-        this.activity(
-          "hook.workspace.action",
-          "hook",
-          `${input.action.label} completed via hook ${hook.id}${result.stderr ? " with stderr" : ""}`,
-          input.repo.id,
-          input.workspace.id,
-          operation.id,
-          parseHookOutput(result.stdout),
-        );
-      }
-      this.store.upsertOperation({
-        ...operation,
-        status: "succeeded",
-        progress: 100,
-        message: `${input.action.label} completed`,
-        updatedAt: nowIso(),
-      });
-      return { operationId: operation.id, status: "succeeded" as const };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "workspace_action_failed";
-      this.store.upsertOperation({
-        ...operation,
-        status: "failed",
-        progress: 100,
-        error: message,
-        retriable: true,
-        retryInput: { kind: "workspace.action", workspaceId: input.workspace.id, action: input.action },
-        updatedAt: nowIso(),
-      });
-      this.activity(
-        "hook.workspace.action.failed",
-        "hook",
-        `${input.action.label} failed: ${message}`,
-        input.repo.id,
-        input.workspace.id,
-        operation.id,
-      );
-      return { operationId: operation.id, status: "failed" as const };
-    }
+  runWorkspaceAction(input: { repo: Repo; workspace: Workspace; action: HookAction }) {
+    return runWorkspaceActionImpl(this.workspaceAppsDeps(), input);
+  }
+
+  // Bundle the dependencies the workspace-apps module needs without leaking
+  // `this` into another file. Recomputed per call; the surface is tiny.
+  private workspaceAppsDeps(): WorkspaceAppsDeps {
+    return {
+      store: this.store,
+      config: this.config,
+      activity: (...args) => this.activity(...args),
+      newOperation: (...args) => this.operation(...args),
+    };
   }
 
   hookDiagnostics(repo: Repo, workspace?: Workspace | null) {

@@ -14,6 +14,7 @@ import "./stage-terminal.css";
 import "./cockpit-extras.css";
 import "./cockpit-tools.css";
 import "./modals.css";
+import "./operations.css";
 import "./settings.css";
 import "./settings-ia.css";
 import "./responsive.css";
