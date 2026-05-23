@@ -296,18 +296,21 @@ export const DeployedAppStatusSchema = z.enum(["deployed", "stopped", "unknown"]
 export const DeployedAppSchema = z.object({
   workspaceId: IdSchema,
   name: z.string().min(1).max(80),
-  url: z.string().min(1),
+  url: z.string().url(),
   status: DeployedAppStatusSchema,
   lastChecked: z.string(),
 });
 
 // The structured payload the `<hook> list` subcommand must emit on stdout.
+// The 50-app cap is a sanity guard — real repos surface a handful of apps; a
+// runaway hook spewing thousands of entries indicates a bug we'd rather reject
+// than render. Tighten/widen with care.
 export const DeployHookListOutputSchema = z.object({
   apps: z
     .array(
       z.object({
         name: z.string().min(1).max(80),
-        url: z.string().min(1),
+        url: z.string().url(),
       }),
     )
     .max(50),
@@ -319,6 +322,9 @@ export const DeployHookResolutionSchema = z.object({
   source: DeployHookSourceSchema,
   filePath: z.string().nullable().default(null),
   command: z.string().nullable().default(null),
+  // Diagnostic breadcrumb when resolution had to fall back or skip a candidate —
+  // e.g. "<path> exists but is not executable; using repo-config fallback".
+  note: z.string().nullable().default(null),
 });
 
 export const DeployedAppsSummarySchema = z.object({

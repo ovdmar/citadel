@@ -67,6 +67,11 @@ case "${1:-}" in
     if command -v fuser >/dev/null 2>&1; then
       fuser -k -n tcp "$PORT" 2>/dev/null || true
     fi
+    if ! command -v setsid >/dev/null 2>&1; then
+      echo "setsid not found in PATH — required to detach the dev server cleanly" >&2
+      echo "install util-linux (Linux) or coreutils with setsid (macOS via Homebrew)" >&2
+      exit 127
+    fi
     cd "$WORKTREE"
     echo "starting cockpit on ${URL} (worktree=${WORKTREE})"
     : > "$LOG_FILE"

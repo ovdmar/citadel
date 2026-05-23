@@ -41,8 +41,13 @@ export function registerWorkspaceExtraRoutes(input: {
       const workspaceId = req.params.workspaceId;
       if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
       const body = (req.body ?? {}) as { name?: unknown };
-      const appName =
-        typeof body.name === "string" && /^[a-zA-Z0-9_.-]{1,80}$/.test(body.name.trim()) ? body.name.trim() : undefined;
+      let appName: string | undefined;
+      if (body.name !== undefined && body.name !== null && body.name !== "") {
+        if (typeof body.name !== "string" || !/^[a-zA-Z0-9_.-]{1,80}$/.test(body.name.trim())) {
+          return res.status(400).json({ error: "invalid_app_name" });
+        }
+        appName = body.name.trim();
+      }
       try {
         const result = await operations.redeployApp({ workspaceId, appName });
         emit("workspace.deploy.redeploy", { workspaceId, operationId: result.operationId, status: result.status });

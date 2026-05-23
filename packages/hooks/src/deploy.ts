@@ -34,24 +34,36 @@ export type ResolveDeployHookInput = {
 
 export function resolveDeployHook(input: ResolveDeployHookInput): DeployHookResolution {
   const filePath = path.join(input.workspacePath, DEPLOY_HOOK_RELATIVE_PATH);
-  if (isExecutableFile(filePath)) {
-    return { source: "repo-file", filePath, command: null };
+  const status = inspectHookFile(filePath);
+  if (status === "executable") {
+    return { source: "repo-file", filePath, command: null, note: null };
   }
   const cmd = (input.repoDeployCommand ?? "").trim();
+  // Surface a diagnostic so users discover the missing chmod +x instead of
+  // silently seeing the empty-state panel.
+  const skipNote =
+    status === "exists-not-executable" ? `${filePath} exists but is not executable (run: chmod +x ${filePath})` : null;
   if (cmd.length) {
-    return { source: "repo-config", filePath: null, command: cmd };
+    const note = skipNote ? `${skipNote}; using repo-config fallback` : null;
+    return { source: "repo-config", filePath: null, command: cmd, note };
   }
-  return { source: "none", filePath: null, command: null };
+  return { source: "none", filePath: null, command: null, note: skipNote };
 }
 
-function isExecutableFile(filePath: string): boolean {
+type HookFileStatus = "executable" | "exists-not-executable" | "missing";
+
+function inspectHookFile(filePath: string): HookFileStatus {
   try {
     const stat = fs.statSync(filePath);
-    if (!stat.isFile()) return false;
-    fs.accessSync(filePath, fs.constants.X_OK);
-    return true;
+    if (!stat.isFile()) return "missing";
+    try {
+      fs.accessSync(filePath, fs.constants.X_OK);
+      return "executable";
+    } catch {
+      return "exists-not-executable";
+    }
   } catch {
-    return false;
+    return "missing";
   }
 }
 
@@ -142,7 +154,9 @@ export async function runDeployHookList(input: {
 
 export function parseDeployListOutput(stdout: string): DeployHookListOutput {
   const trimmed = stdout.trim();
-  if (!trimmed) return { apps: [] };
+  // Empty stdout is treated as a misconfigured hook — silently returning an
+  // empty list lets typo'd or half-implemented hooks look healthy.
+  if (!trimmed) throw new Error('deploy_hook_list_empty: hook printed nothing (expected `{"apps":[...]}`)');
   let payload: unknown;
   try {
     payload = JSON.parse(trimmed);

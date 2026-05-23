@@ -645,11 +645,21 @@ export class OperationService {
   listDeployedApps = (input: { workspaceId: string }) =>
     listDeployedAppsImpl(this.deployOpsDeps(), this.resolveRepoWorkspace(input.workspaceId));
 
-  redeployApp = (input: { workspaceId: string; appName?: string | undefined }) =>
-    redeployAppImpl(this.deployOpsDeps(), {
+  // Per-workspace inflight guard so a double-click in the cockpit or a
+  // human+MCP overlap doesn't run two redeploys against the same port.
+  private redeployInflight = new Map<string, ReturnType<typeof redeployAppImpl>>();
+  redeployApp = (input: { workspaceId: string; appName?: string | undefined }) => {
+    const existing = this.redeployInflight.get(input.workspaceId);
+    if (existing) return existing;
+    const promise = redeployAppImpl(this.deployOpsDeps(), {
       ...this.resolveRepoWorkspace(input.workspaceId),
       appName: input.appName,
+    }).finally(() => {
+      this.redeployInflight.delete(input.workspaceId);
     });
+    this.redeployInflight.set(input.workspaceId, promise);
+    return promise;
+  };
 
   private resolveRepoWorkspace(workspaceId: string): { repo: Repo; workspace: Workspace } {
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === workspaceId);

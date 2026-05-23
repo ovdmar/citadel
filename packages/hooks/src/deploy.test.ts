@@ -37,12 +37,21 @@ describe("resolveDeployHook", () => {
     expect(resolution.command).toBeNull();
   });
 
-  it("falls back to the repo-config command when the file is not executable", () => {
+  it("falls back to the repo-config command when the file is not executable and surfaces a note", () => {
     const dir = tempWorkspace();
     writeHook(dir, "#!/bin/sh\necho '{\"apps\":[]}'\n", { executable: false });
     const resolution = resolveDeployHook({ workspacePath: dir, repoDeployCommand: "echo fallback" });
     expect(resolution.source).toBe("repo-config");
     expect(resolution.command).toBe("echo fallback");
+    expect(resolution.note).toMatch(/exists but is not executable/);
+  });
+
+  it("returns a note when the file is not executable and no fallback exists", () => {
+    const dir = tempWorkspace();
+    writeHook(dir, "#!/bin/sh\necho '{\"apps\":[]}'\n", { executable: false });
+    const resolution = resolveDeployHook({ workspacePath: dir });
+    expect(resolution.source).toBe("none");
+    expect(resolution.note).toMatch(/chmod \+x/);
   });
 
   it("reports none when neither source is available", () => {
@@ -59,8 +68,12 @@ describe("resolveDeployHook", () => {
 });
 
 describe("parseDeployListOutput", () => {
-  it("returns an empty list for blank stdout", () => {
-    expect(parseDeployListOutput("   \n  ")).toEqual({ apps: [] });
+  it("rejects blank stdout (hook printed nothing)", () => {
+    expect(() => parseDeployListOutput("   \n  ")).toThrow(/deploy_hook_list_empty/);
+  });
+
+  it("parses an explicit empty apps list", () => {
+    expect(parseDeployListOutput('{"apps":[]}')).toEqual({ apps: [] });
   });
 
   it("parses a valid payload", () => {

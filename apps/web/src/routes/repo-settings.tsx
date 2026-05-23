@@ -197,7 +197,7 @@ function RepoDeployHookSection(props: { repo: Repo }) {
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
-  const fileHookPath = `${props.repo.rootPath.replace(/\/$/, "")}/.citadel/hooks/deploy`;
+  const mainExample = `${props.repo.rootPath.replace(/\/$/, "")}/.citadel/hooks/deploy`;
   return (
     <section className="panel wide">
       <h2>Deploy hook</h2>
@@ -227,7 +227,8 @@ function RepoDeployHookSection(props: { repo: Repo }) {
           />
         </label>
         <small>
-          Repo-file path (highest priority, must be executable): <code>{fileHookPath}</code>
+          Highest priority is the file <code>&lt;your-worktree&gt;/.citadel/hooks/deploy</code> (must be executable).
+          For the main checkout, that resolves to <code>{mainExample}</code>; each worktree gets its own copy.
         </small>
         <Button type="submit" disabled={save.isPending}>
           <Save size={14} /> Save deploy command

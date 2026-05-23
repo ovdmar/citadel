@@ -42,6 +42,7 @@ export function DeployedAppsPanel(props: { workspaceId: string; repo: Repo | nul
         ) : null}
       </div>
       {summary.isLoading ? <div className="empty compact">Probing deploy hook…</div> : null}
+      {data?.resolution.note ? <output className="empty compact">{data.resolution.note}</output> : null}
       {data?.error ? <output className="empty compact">{data.error}</output> : null}
       {data?.apps.length ? (
         <div className="app-chip-grid">
