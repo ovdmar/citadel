@@ -241,6 +241,9 @@ importers:
       '@citadel/providers':
         specifier: workspace:*
         version: link:../providers
+      '@citadel/runtimes':
+        specifier: workspace:*
+        version: link:../runtimes
       '@citadel/terminal':
         specifier: workspace:*
         version: link:../terminal
