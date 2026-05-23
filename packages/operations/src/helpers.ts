@@ -7,7 +7,6 @@ import type { SqliteStore } from "@citadel/db";
 import { hookDiagnostic } from "@citadel/hooks";
 import { tmuxSessionExists } from "@citadel/terminal";
 
-
 export function asObject(payload: unknown) {
   return typeof payload === "object" && payload !== null ? payload : {};
 }

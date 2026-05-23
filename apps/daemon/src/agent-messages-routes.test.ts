@@ -314,6 +314,7 @@ describe("agent message MCP + REST routes", () => {
       setupHookIds: [],
       teardownHookIds: [],
       providerIds: [],
+      deployHookCommand: null,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,

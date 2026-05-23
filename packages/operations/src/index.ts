@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 import type {
-  AgentSession,
   CreateAgentSessionInput,
   CreateWorkspaceInput,
   HookAction,
@@ -14,9 +13,10 @@ import type {
 } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
-import { ensureTmuxSession, killTmuxSession, submitPrompt } from "@citadel/terminal";
+import { killTmuxSession } from "@citadel/terminal";
 import * as agentHistory from "./agent-history.js";
 import * as agentMessages from "./agent-messages.js";
+import { createAgentSession as createAgentSessionImpl } from "./create-agent-session.js";
 import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
 export type { LaunchAgentResult } from "./launch-agent.js";
@@ -85,10 +85,7 @@ export class OperationService {
     };
     this.store.insertRepo(repo);
     this.activity("repo.registered", "user", `Registered ${repo.name}`, repo.id, null, null);
-    // Create the non-removable root workspace pointing at the repo working
-    // copy. Modeled like Superset: registering a repo always exposes its main
-    // checkout as a workspace so users can run agents/terminals against the
-    // canonical clone, not only inside worktrees.
+    // Non-removable root workspace exposes the repo's main checkout to agents/terminals (cf. Superset).
     const rootWorkspace: Workspace = {
       id: createId("ws"),
       repoId: repo.id,
@@ -250,59 +247,20 @@ export class OperationService {
     return { operationId: operation.id, workspaceId: workspace.id };
   }
 
-  async createAgentSession(
+  createAgentSession = (
     input: CreateAgentSessionInput,
     runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
-  ) {
-    const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
-    if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
-    const now = nowIso();
-    const sessionName = `citadel_${workspace.id}_${createId("agent").slice(-8)}`;
-    // Build runtime args. If runtime declares a promptArg flag, embed prompt as a CLI flag.
-    const runtimeArgs = [...runtime.args];
-    let promptForKeys: string | null = null;
-    if (input.prompt?.length) {
-      if (runtime.promptArg) {
-        runtimeArgs.push(runtime.promptArg, input.prompt);
-      } else {
-        promptForKeys = input.prompt;
-      }
-    }
-    const tmux = await ensureTmuxSession({
-      sessionName,
-      cwd: workspace.path,
-      command: runtime.command,
-      args: runtimeArgs,
-    });
-    // Paste + Enter the prompt into the tmux pane once the runtime is ready.
-    // Critical for Claude Code, which drops input typed before its TUI paints.
-    if (promptForKeys) await submitPrompt(sessionName, promptForKeys);
-    const session: AgentSession = {
-      id: createId("sess"),
-      workspaceId: workspace.id,
-      runtimeId: input.runtimeId,
-      displayName: input.displayName || runtime.displayName,
-      status: "running",
-      transport: "disconnected",
-      tmuxSessionName: tmux.tmuxSessionName,
-      tmuxSessionId: tmux.tmuxSessionId,
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.store.insertSession(session);
-    if (input.prompt?.length) {
-      agentHistory.recordPrompt(this.store, {
-        sessionId: session.id,
-        source: "initial",
-        text: input.prompt,
-        sentAt: now,
-      });
-    }
-    this.activity("agent.started", "user", `Started ${session.displayName}`, workspace.repoId, workspace.id, null);
-    const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-    if (repo) await this.runNotificationHooks("agent.started", repo, workspace, null, { repo, workspace, session });
-    return session;
-  }
+  ) =>
+    createAgentSessionImpl(
+      {
+        store: this.store,
+        activity: (...args) => this.activity(...args),
+        runNotificationHooks: (event, repo, workspace, operationId, payload) =>
+          this.runNotificationHooks(event, repo, workspace, operationId, payload),
+      },
+      input,
+      runtime,
+    );
 
   launchAgent = (
     input: LaunchAgentInput,
@@ -320,13 +278,11 @@ export class OperationService {
       runtime,
     );
 
-  // See ./agent-messages.ts for the implementations.
-  readAgentTranscript = (input: { sessionId: string; lines?: number; maxChars?: number }) =>
-    agentMessages.readAgentTranscript(this.store, input);
-  sendAgentMessage = (input: { sessionId: string; message: string }) =>
-    agentMessages.sendAgentMessage(this.store, input);
-  readAgentHistory = (input: { sessionId: string; limit?: number; maxChars?: number }) =>
-    agentHistory.readAgentHistory(this.store, input);
+  readAgentTranscript = (i: { sessionId: string; lines?: number; maxChars?: number }) =>
+    agentMessages.readAgentTranscript(this.store, i);
+  sendAgentMessage = (i: { sessionId: string; message: string }) => agentMessages.sendAgentMessage(this.store, i);
+  readAgentHistory = (i: { sessionId: string; limit?: number; maxChars?: number }) =>
+    agentHistory.readAgentHistory(this.store, i);
 
   stopAgentSession(input: { sessionId: string }) {
     const session = this.store.listSessions().find((candidate) => candidate.id === input.sessionId);
