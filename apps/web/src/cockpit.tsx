@@ -76,9 +76,20 @@ export function Cockpit() {
         event.preventDefault();
         setCommandOpen((open) => !open);
       } else if (
-        // GitHub-style: plain `c` ("create") opens the new-workspace modal.
-        // Cmd+N is reserved by browsers (opens a new browser window), so we
-        // don't bind it. Skipped while editing so it doesn't hijack typing.
+        // Ctrl+N opens the new-workspace modal. Cmd+N is reserved by browsers
+        // on macOS (opens a new browser window) so we deliberately bind Ctrl,
+        // not Meta — Ctrl+N is not browser-reserved on any major platform.
+        event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === "n"
+      ) {
+        event.preventDefault();
+        setCreateWorkspaceOpen(true);
+      } else if (
+        // GitHub-style: plain `c` ("create") also opens the new-workspace
+        // modal. Skipped while editing so it doesn't hijack typing.
         !inEditable &&
         !event.metaKey &&
         !event.ctrlKey &&
