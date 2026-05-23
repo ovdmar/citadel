@@ -8,6 +8,7 @@ import { HistoryView } from "./routes/history.js";
 import { OnboardingView } from "./routes/onboarding.js";
 import { OperationsView } from "./routes/operations.js";
 import { RepoSettingsView } from "./routes/repo-settings.js";
+import { ScratchpadView } from "./routes/scratchpad.js";
 import { SettingsView } from "./routes/settings.js";
 import "./styles.css";
 import "./stage-terminal.css";
@@ -65,6 +66,12 @@ const historyRoute = createRoute({
   component: HistoryView,
 });
 
+const scratchpadRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/scratchpad",
+  component: ScratchpadView,
+});
+
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
@@ -74,6 +81,7 @@ const router = createRouter({
     onboardingRoute,
     dashboardRoute,
     historyRoute,
+    scratchpadRoute,
   ]),
 });
 
