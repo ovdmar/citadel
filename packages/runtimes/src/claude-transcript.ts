@@ -88,22 +88,34 @@ export function findClaudeTranscriptForSession(input: {
   if (!fs.existsSync(dir)) return null;
   const startMs = Date.parse(input.sessionStartedAt);
   if (!Number.isFinite(startMs)) return null;
-  let bestPath: string | null = null;
-  let bestScore = Number.POSITIVE_INFINITY;
+  // Stat-first: a transcript whose last write happened before the session
+  // started cannot belong to this session, so skip the full parse. Keeps
+  // history reads bounded even when the project dir has many archived
+  // .jsonl files.
+  type Candidate = { path: string; mtimeMs: number };
+  const candidates: Candidate[] = [];
   for (const name of fs.readdirSync(dir)) {
     if (!name.endsWith(".jsonl")) continue;
     const candidate = path.join(dir, name);
+    let mtimeMs: number;
+    try {
+      mtimeMs = fs.statSync(candidate).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (mtimeMs < startMs - 60_000) continue;
+    candidates.push({ path: candidate, mtimeMs });
+  }
+  let bestPath: string | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
     let firstMs = Number.POSITIVE_INFINITY;
-    const prompts = parseClaudeTranscript(candidate);
+    const prompts = parseClaudeTranscript(candidate.path);
     if (prompts.length > 0) {
       const parsed = Date.parse(prompts[0]?.timestamp ?? "");
       if (Number.isFinite(parsed)) firstMs = parsed;
     } else {
-      try {
-        firstMs = fs.statSync(candidate).mtimeMs;
-      } catch {
-        continue;
-      }
+      firstMs = candidate.mtimeMs;
     }
     // Prefer transcripts whose first event is at-or-after the session start,
     // within a small slack window for clock skew (60s).
@@ -112,7 +124,7 @@ export function findClaudeTranscriptForSession(input: {
     const score = Math.abs(delta);
     if (score < bestScore) {
       bestScore = score;
-      bestPath = candidate;
+      bestPath = candidate.path;
     }
   }
   return bestPath;

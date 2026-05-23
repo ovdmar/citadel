@@ -117,6 +117,37 @@ describe("findClaudeTranscriptForSession", () => {
     expect(found).toBe(matchFile);
   });
 
+  it("skips .jsonl files whose mtime is well before the session started", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-home-"));
+    dirs.push(home);
+    const workspacePath = "/tmp/ws-fixture-stale";
+    const projects = claudeProjectsDir(workspacePath, home);
+    fs.mkdirSync(projects, { recursive: true });
+    const stale = path.join(projects, "stale.jsonl");
+    // Write a transcript whose first user prompt is AFTER session start but
+    // whose mtime is far in the past — the mtime pre-filter should reject it
+    // without parsing.
+    fs.writeFileSync(
+      stale,
+      `${JSON.stringify({
+        type: "user",
+        message: { role: "user", content: "would otherwise score perfectly" },
+        uuid: "stale",
+        timestamp: "2026-05-23T10:00:00.000Z",
+        sessionId: "stale",
+      })}\n`,
+    );
+    const longAgo = new Date("2026-01-01T00:00:00.000Z").getTime();
+    fs.utimesSync(stale, longAgo / 1000, longAgo / 1000);
+
+    const found = findClaudeTranscriptForSession({
+      workspacePath,
+      sessionStartedAt: "2026-05-23T10:00:00.000Z",
+      home,
+    });
+    expect(found).toBeNull();
+  });
+
   it("returns null when the project directory does not exist", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-home-"));
     dirs.push(home);

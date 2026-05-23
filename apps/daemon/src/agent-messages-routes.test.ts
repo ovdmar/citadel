@@ -301,6 +301,100 @@ describe("agent message MCP + REST routes", () => {
     }
   });
 
+  it("populates list_agent_sessions with initialPrompt previews and messageCount via the batched DB summary", async () => {
+    const fixture = createFixture();
+    const now = "2026-05-23T10:00:00.000Z";
+    fixture.store.insertRepo({
+      id: "repo_summary",
+      name: "Repo",
+      rootPath: path.join(fixture.config.dataDir, "repo"),
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "wt"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fixture.store.insertWorkspace({
+      id: "ws_summary",
+      repoId: "repo_summary",
+      name: "ws",
+      path: path.join(fixture.config.dataDir, "ws"),
+      branch: "main",
+      baseBranch: "main",
+      source: "scratch",
+      kind: "worktree",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fixture.store.insertSession({
+      id: "sess_summary",
+      workspaceId: "ws_summary",
+      runtimeId: "shell",
+      displayName: "Shell",
+      status: "running",
+      transport: "disconnected",
+      tmuxSessionName: "citadel_summary",
+      tmuxSessionId: "$2",
+      createdAt: now,
+      updatedAt: now,
+    });
+    fixture.store.insertAgentPrompt({
+      id: "pmt_initial",
+      sessionId: "sess_summary",
+      source: "initial",
+      role: "user",
+      text: "kick off the migration",
+      sentAt: now,
+      externalId: null,
+    });
+    fixture.store.insertAgentPrompt({
+      id: "pmt_followup",
+      sessionId: "sess_summary",
+      source: "send_agent_message",
+      role: "user",
+      text: "also rebase main",
+      sentAt: "2026-05-23T10:05:00.000Z",
+      externalId: null,
+    });
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const response = await postJson<{
+        result: {
+          structuredContent: { sessions: Array<{ id: string; initialPrompt: string | null; messageCount: number }> };
+        };
+      }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "list",
+        method: "tools/call",
+        params: { name: "list_agent_sessions", arguments: { workspaceId: "ws_summary" } },
+      });
+      const sessions = response.result.structuredContent.sessions;
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]).toMatchObject({
+        id: "sess_summary",
+        initialPrompt: "kick off the migration",
+        messageCount: 2,
+      });
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("exposes /api/agent-sessions/:id/output and /messages REST mirrors of the MCP tools", async () => {
     const fixture = createFixture();
     const sent: Array<{ sessionId: string; message: string }> = [];
