@@ -1,5 +1,5 @@
 import type { CitadelConfig } from "@citadel/config";
-import { CreateAgentSessionInputSchema, CreateWorkspaceInputSchema } from "@citadel/contracts";
+import { CreateAgentSessionInputSchema, CreateWorkspaceInputSchema, LaunchAgentInputSchema } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, serializeWorkspaceResource } from "@citadel/mcp";
 import type { OperationService } from "@citadel/operations";
@@ -51,6 +51,20 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     });
     emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
     return { session };
+  }
+  if (call.name === "launch_agent") {
+    const input = LaunchAgentInputSchema.parse(call.arguments ?? {});
+    const runtime = config.runtimes.find((candidate) => candidate.id === input.runtimeId);
+    if (!runtime) throw new Error(`Unknown runtime: ${input.runtimeId}`);
+    const result = await operations.launchAgent(input, {
+      command: runtime.command,
+      args: runtime.args,
+      displayName: runtime.displayName,
+      promptArg: runtime.promptArg ?? null,
+    });
+    emit("workspace.updated", { workspaceId: result.workspaceId, operationId: result.operationId });
+    if (result.sessionId) emit("agent.updated", { workspaceId: result.workspaceId, sessionId: result.sessionId });
+    return result;
   }
   if (call.name === "stop_agent_session") {
     const sessionId = typeof call.arguments?.sessionId === "string" ? (call.arguments.sessionId as string) : "";

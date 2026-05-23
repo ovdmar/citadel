@@ -383,6 +383,26 @@ export const CreateAgentSessionInputSchema = z.object({
   prompt: z.string().optional(),
 });
 
+// High-level one-shot launcher used by MCP orchestrators: create a workspace
+// and start an agent session in it in a single call. Either `repoId` (an
+// internal id) or `repoName` (the configured repo display name) must be
+// provided; everything else is optional with sensible defaults.
+export const LaunchAgentInputSchema = z
+  .object({
+    repoId: IdSchema.optional(),
+    repoName: z.string().min(1).optional(),
+    prompt: z.string().min(1),
+    runtimeId: IdSchema.default("claude-code"),
+    displayName: z.string().min(1).max(80).optional(),
+    workspaceName: z.string().min(1).max(80).optional(),
+    namespaceId: z.string().min(1).max(80).optional(),
+    branchName: z.string().min(1).max(120).optional(),
+  })
+  .refine((data) => Boolean(data.repoId) !== Boolean(data.repoName), {
+    message: "Provide exactly one of repoId or repoName",
+    path: ["repoId"],
+  });
+
 export const TransitionIssueInputSchema = z.object({
   transition: z.string().min(1),
   fields: z.record(z.string()).default({}),
@@ -474,6 +494,7 @@ export type AppEvent = z.infer<typeof AppEventSchema>;
 export type CreateRepoInput = z.infer<typeof CreateRepoInputSchema>;
 export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
 export type CreateAgentSessionInput = z.infer<typeof CreateAgentSessionInputSchema>;
+export type LaunchAgentInput = z.infer<typeof LaunchAgentInputSchema>;
 export type TransitionIssueInput = z.infer<typeof TransitionIssueInputSchema>;
 export type DiffFile = z.infer<typeof DiffFileSchema>;
 export type WorkspaceDiff = z.infer<typeof WorkspaceDiffSchema>;

@@ -113,6 +113,34 @@ describe("tmux terminal gateway helpers", () => {
     await waitForCapture(sessionName, "GOT:hello-claude");
   });
 
+  it("submitPrompt strips trailing newlines so the in-paste LF can't pre-empt the explicit Enter", async () => {
+    // Regression: prompts arriving with trailing whitespace from the MCP layer
+    // would paste an LF into the runtime BEFORE the explicit Enter fired. On
+    // Claude Code that LF was committed as a newline-in-input rather than a
+    // submit, leaving the typed text in the input box waiting for a manual
+    // Enter from the user. With the fix we always strip trailing newlines
+    // before pasting and only ever submit via the separate Enter send-keys.
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
+    dirs.push(cwd);
+    const sessionName = `citadel_submit_prompt_trim_${Date.now().toString(36)}`;
+    sessions.push(sessionName);
+    await ensureTmuxSession({
+      sessionName,
+      cwd,
+      command: "bash",
+      args: ["--noprofile", "--norc"],
+    });
+    sendKeys(sessionName, "read line && printf 'TRIMMED:%s.\\n' \"$line\"");
+    sendKeys(sessionName, "\r");
+    await waitForCapture(sessionName, "$");
+
+    const result = await submitPrompt(sessionName, "trim-me\n\n", { waitForReadyMs: 200, submitDelayMs: 400 });
+    expect(result.ok).toBe(true);
+    // If the trailing LF had been left in the paste it would have been
+    // consumed by `read` and the suffix "." would never appear.
+    await waitForCapture(sessionName, "TRIMMED:trim-me.");
+  });
+
   it("submitPrompt reports tmux_session_missing when the session has gone away", async () => {
     const result = await submitPrompt("citadel_nonexistent_session", "test");
     expect(result).toEqual({ ok: false, error: "tmux_session_missing" });

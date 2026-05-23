@@ -26,6 +26,7 @@ export type McpToolName =
   | "list_workspace_links"
   | "create_workspace"
   | "start_agent_session"
+  | "launch_agent"
   | "stop_agent_session"
   | "archive_workspace"
   | "remove_workspace"
@@ -175,6 +176,27 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       destructive: false,
     },
     {
+      name: "launch_agent",
+      description:
+        "High-level one-shot: create a fresh scratch workspace in a repo and immediately start an agent session in it with the given prompt. Returns { workspaceId, sessionId, branchName, workspacePath, operationId }. Use this instead of chaining create_workspace + start_agent_session when an orchestrator just wants 'run this prompt in repo X'. Pass exactly one of repoId or repoName; runtimeId defaults to claude-code. namespaceId is accepted but currently ignored (namespaces not yet implemented).",
+      inputSchema: {
+        type: "object",
+        required: ["prompt"],
+        properties: {
+          repoId: { type: "string", description: "Internal repo id (provide this OR repoName)." },
+          repoName: { type: "string", description: "Configured repo display name (provide this OR repoId)." },
+          prompt: { type: "string", minLength: 1 },
+          runtimeId: { type: "string", default: "claude-code" },
+          displayName: { type: "string", maxLength: 80 },
+          workspaceName: { type: "string", maxLength: 80 },
+          namespaceId: { type: "string", maxLength: 80 },
+          branchName: { type: "string", maxLength: 120 },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
       name: "archive_workspace",
       description: "Archive workspace metadata without deleting the worktree.",
       inputSchema: {
@@ -273,6 +295,7 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     }
     case "create_workspace":
     case "start_agent_session":
+    case "launch_agent":
     case "stop_agent_session":
     case "archive_workspace":
     case "remove_workspace":

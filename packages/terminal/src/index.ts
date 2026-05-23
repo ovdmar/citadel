@@ -217,7 +217,11 @@ function safeCapture(sessionName: string): string {
 //   2. delivers the text via a tmux paste-buffer instead of typing chars one
 //      at a time (avoids dropped keystrokes and is recognized as a bracketed
 //      paste by readline-style prompts),
-//   3. waits briefly for the paste to land, then sends Enter to submit.
+//   3. waits for the pane to settle so the runtime has committed the pasted
+//      text to its input state,
+//   4. sends Enter as a SEPARATE tmux call so it lands outside the paste
+//      region (Claude Code, Codex etc. interpret a paste-internal LF as a
+//      newline-in-input, and only an Enter outside any paste as "submit").
 // Returns whether the underlying tmux calls succeeded. Errors are non-fatal
 // at the caller level so the session is still tracked.
 export async function submitPrompt(
@@ -228,8 +232,24 @@ export async function submitPrompt(
   if (!tmuxSessionExists(sessionName)) return { ok: false, error: "tmux_session_missing" };
   try {
     await waitForTerminalIdle(sessionName, { timeoutMs: options.waitForReadyMs ?? 1500 });
-    if (prompt.length > 0) pasteText(sessionName, prompt);
-    await new Promise((resolve) => setTimeout(resolve, options.submitDelayMs ?? 120));
+    // Trim trailing newlines so the paste itself never carries an LF the
+    // runtime might treat as the submit keystroke — we always rely on the
+    // explicit Enter that follows.
+    const text = prompt.replace(/[\r\n]+$/u, "");
+    if (text.length > 0) {
+      pasteText(sessionName, text);
+      // Settle after the paste before pressing Enter. Without this, fast
+      // send-keys races the runtime's render cycle: Claude Code receives the
+      // paste-buffer chunk but its React/ink input hasn't committed the new
+      // value to state yet, so the Enter dispatches on an empty (or partial)
+      // input and the typed text just sits in the textarea waiting for the
+      // user to press Enter manually.
+      await waitForTerminalIdle(sessionName, {
+        timeoutMs: options.submitDelayMs ?? 1500,
+        idleMs: 200,
+        pollMs: 60,
+      });
+    }
     execFileSync("tmux", ["send-keys", "-t", sessionName, options.submitKey ?? "Enter"]);
     return { ok: true };
   } catch (error) {
