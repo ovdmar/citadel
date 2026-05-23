@@ -411,6 +411,56 @@ a:hover {
   box-shadow: var(--sh-1);
 }
 
+/* Pulse / dots — shared across sidebar, tabs, deploys, bottom bar */
+
+.cit-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+  flex: 0 0 auto;
+  position: relative;
+}
+.cit-pulse-ok {
+  background: var(--c-ok);
+  box-shadow: 0 0 0 3px var(--c-ok-bg);
+}
+.cit-pulse-run {
+  background: var(--c-warn);
+  box-shadow: 0 0 0 3px var(--c-warn-bg);
+}
+.cit-pulse-bad {
+  background: var(--c-bad);
+  box-shadow: 0 0 0 3px var(--c-bad-bg);
+}
+.cit-pulse-idle {
+  background: var(--c-fg-4);
+}
+.cit-pulse-run::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1px solid var(--c-warn);
+  opacity: 0;
+  animation: cit-ripple 1.8s ease-out infinite;
+}
+@keyframes cit-ripple {
+  0% {
+    transform: scale(0.5);
+    opacity: 0.7;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+
+.cit-pulse-sm {
+  width: 7px;
+  height: 7px;
+}
+
 /* Cockpit shell */
 
 .cockpit-shell {
@@ -572,6 +622,95 @@ a:hover {
 .collapse-toggle:hover {
   background: var(--c-line-1);
   color: var(--c-fg-1);
+}
+
+/* Collapsed left rail — mini nav + workspace stack */
+
+.collapsed-mini-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--c-fg-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.collapsed-mini-btn:hover {
+  background: var(--c-line-1);
+  color: var(--c-fg-1);
+}
+
+.collapsed-mini-btn.is-active {
+  background: var(--c-dark);
+  color: var(--c-on-dark);
+}
+
+.collapsed-mini-divider {
+  width: 24px;
+  height: 1px;
+  background: var(--c-line-2);
+}
+
+.collapsed-mini-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  align-items: center;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.collapsed-mini-stack::-webkit-scrollbar {
+  display: none;
+}
+
+.collapsed-mini-ws {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--c-fg-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.collapsed-mini-ws:hover {
+  background: var(--c-line-1);
+  color: var(--c-fg-1);
+}
+
+.collapsed-mini-ws.is-selected {
+  background: var(--c-dark);
+  color: var(--c-on-dark);
+}
+
+.collapsed-mini-letter {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.collapsed-mini-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c-ok);
+  box-shadow: 0 0 0 1.5px var(--c-canvas);
 }
 
 /* Bottom status bar */

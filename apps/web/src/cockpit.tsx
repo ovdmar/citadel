@@ -179,17 +179,13 @@ export function Cockpit() {
           ))}
         </nav>
         {layout.state.leftCollapsed ? (
-          <div className="collapsed-rail col-left">
-            <button
-              type="button"
-              className="collapse-toggle"
-              onClick={layout.toggleLeft}
-              aria-label="Expand navigator"
-              title="Expand navigator"
-            >
-              <ChevronsRight size={14} />
-            </button>
-          </div>
+          <CollapsedLeftRail
+            workspaces={data?.workspaces ?? []}
+            activeWorkspaceId={activeWorkspace?.id ?? ""}
+            sessions={data?.sessions ?? []}
+            onExpand={layout.toggleLeft}
+            onPickWorkspace={focusWorkspace}
+          />
         ) : (
           <aside
             className={`column col-left ${mobileView === "navigator" ? "" : "mobile-hidden"}`}
@@ -298,6 +294,72 @@ export function Cockpit() {
   );
 }
 
+function CollapsedLeftRail(props: {
+  workspaces: Workspace[];
+  activeWorkspaceId: string;
+  sessions: import("@citadel/contracts").AgentSession[];
+  onExpand: () => void;
+  onPickWorkspace: (workspace: Workspace) => void;
+}) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  // Show up to 8 most-recent workspaces in the rail; rest accessible via Cmd+K
+  // or by expanding the sidebar. Sort by updated desc so live ones surface.
+  const recent = [...props.workspaces].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 8);
+  return (
+    <aside className="collapsed-rail col-left">
+      <button
+        type="button"
+        className="collapsed-mini-btn"
+        onClick={props.onExpand}
+        aria-label="Expand navigator"
+        title="Expand"
+      >
+        <ChevronsRight size={15} />
+      </button>
+      <div className="collapsed-mini-divider" aria-hidden />
+      <button
+        type="button"
+        className={`collapsed-mini-btn ${location.pathname === "/dashboard" ? "is-active" : ""}`}
+        title="Dashboard"
+        onClick={() => navigate({ to: "/dashboard" })}
+      >
+        <SearchIcon size={15} />
+      </button>
+      <button
+        type="button"
+        className={`collapsed-mini-btn ${location.pathname === "/history" ? "is-active" : ""}`}
+        title="History"
+        onClick={() => navigate({ to: "/history" })}
+      >
+        <SettingsIcon size={15} />
+      </button>
+      <div className="collapsed-mini-divider" aria-hidden />
+      <div className="collapsed-mini-stack">
+        {recent.map((workspace) => {
+          const isActive = workspace.id === props.activeWorkspaceId;
+          const running = props.sessions.some(
+            (session) => session.workspaceId === workspace.id && session.status === "running",
+          );
+          const letter = (workspace.name.match(/[A-Za-z0-9]/)?.[0] ?? workspace.name[0] ?? "?").toUpperCase();
+          return (
+            <button
+              key={workspace.id}
+              type="button"
+              className={`collapsed-mini-ws ${isActive ? "is-selected" : ""}`}
+              title={`${workspace.name} · ${workspace.branch}`}
+              onClick={() => props.onPickWorkspace(workspace)}
+            >
+              <span className="collapsed-mini-letter">{letter}</span>
+              {running ? <span className="collapsed-mini-dot" aria-hidden /> : null}
+            </button>
+          );
+        })}
+      </div>
+    </aside>
+  );
+}
+
 function CitadelMark({ size = 14 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 100 100" aria-hidden="true">
@@ -391,7 +453,7 @@ function BottomBar(props: {
     <footer className="bottom-bar" aria-label="Status bar">
       <div className="bottom-bar-left">
         <span className={`bottom-bar-pill ${running ? "tone-running" : "tone-idle"}`}>
-          <span className="bottom-bar-pulse" aria-hidden="true" />
+          <span className={`cit-pulse ${running ? "cit-pulse-run" : "cit-pulse-ok"}`} aria-hidden="true" />
           {running ? "Running" : "Idle"}
         </span>
         {repoName ? (

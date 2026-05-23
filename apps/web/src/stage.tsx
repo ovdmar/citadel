@@ -1,6 +1,6 @@
 import type { AgentRuntime, AgentSession, Workspace } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
-import { Plus, TerminalSquare, X } from "lucide-react";
+import { ExternalLink, GitBranch, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { TerminalPane } from "./terminal-pane.js";
@@ -132,8 +132,9 @@ export function Stage(props: {
     <>
       <div className="stage-tabbar">
         <div className="stage-tabs">
-          {tabs.map((tab) => {
+          {tabs.map((tab, index) => {
             const isActive = tab.session.id === activeSession?.session.id;
+            const isRunning = tab.session.status === "running";
             return (
               <div key={tab.session.id} className={`stage-tab ${isActive ? "active" : ""}`}>
                 <button
@@ -145,10 +146,17 @@ export function Stage(props: {
                   }}
                   aria-label={`Switch to ${tab.label}`}
                   title={`Switch to ${tab.label} (double-click to rename)`}
-                  style={{ background: "transparent", border: 0, color: "inherit", cursor: "pointer", padding: 0 }}
+                  className="stage-tab-button"
                 >
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <TerminalSquare size={12} />
+                  <span className="stage-tab-inner">
+                    {index < 9 ? (
+                      <kbd className="stage-tab-kbd" title={`Shift+${index + 1}`}>
+                        ⇧{index + 1}
+                      </kbd>
+                    ) : null}
+                    <span className="stage-tab-icon" aria-hidden>
+                      <span className={`cit-pulse cit-pulse-sm ${isRunning ? "cit-pulse-run" : "cit-pulse-idle"}`} />
+                    </span>
                     {editingId === tab.session.id ? (
                       <input
                         ref={(node) => {
@@ -171,19 +179,48 @@ export function Stage(props: {
                         }}
                       />
                     ) : (
-                      <span>{tab.label}</span>
+                      <span className="stage-tab-label">{tab.label}</span>
                     )}
                   </span>
                 </button>
-                <button
-                  type="button"
-                  className="close-tab"
-                  aria-label="Stop session"
-                  onClick={() => stopSession.mutate(tab.session.id)}
-                  title="Stop session"
-                >
-                  <X size={11} />
-                </button>
+                <span className="stage-tab-actions">
+                  <button
+                    type="button"
+                    className="stage-tab-act"
+                    aria-label="Restart session"
+                    title="Restart session"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      // Restart not yet wired to backend — surface intent only.
+                    }}
+                  >
+                    <RefreshCw size={11} />
+                  </button>
+                  <button
+                    type="button"
+                    className="stage-tab-act"
+                    aria-label="Open session in new tab"
+                    title="Open in new tab"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      window.open(window.location.href, "_blank");
+                    }}
+                  >
+                    <ExternalLink size={11} />
+                  </button>
+                  <button
+                    type="button"
+                    className="close-tab"
+                    aria-label="Stop session"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      stopSession.mutate(tab.session.id);
+                    }}
+                    title="Stop session"
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
               </div>
             );
           })}
@@ -247,6 +284,40 @@ export function Stage(props: {
           Failed to start session: {startError}
         </div>
       ) : null}
+      <div className="stage-pane-head">
+        <div className="stage-pane-head-left">
+          <span className="stage-pane-tag">
+            <span
+              className={`cit-pulse cit-pulse-sm ${activeSession && activeSession.session.status === "running" ? "cit-pulse-run" : "cit-pulse-idle"}`}
+              aria-hidden
+            />
+            {props.workspace.name}
+          </span>
+          <span className="stage-pane-path">
+            <GitBranch size={11} />
+            <span>{props.workspace.branch}</span>
+          </span>
+          {props.workspace.dirty ? (
+            <span className="stage-pane-meta" title="Working tree has uncommitted changes">
+              · dirty
+            </span>
+          ) : null}
+        </div>
+        <div className="stage-pane-head-right">
+          {props.workspace.prUrl ? (
+            <a
+              className="stage-pane-chip"
+              href={props.workspace.prUrl}
+              target="_blank"
+              rel="noreferrer"
+              title="Open pull request"
+            >
+              <ExternalLink size={11} />
+              <span>Open PR</span>
+            </a>
+          ) : null}
+        </div>
+      </div>
       <div className="stage-body">
         {visitedPanes.map((session) => (
           <div

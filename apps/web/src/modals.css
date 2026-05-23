@@ -272,13 +272,20 @@
 .group-by-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 6px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: var(--panel-strong);
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--c-fg-2);
   font-size: 12px;
+  font-weight: 500;
   cursor: grab;
+}
+
+.group-by-row:hover {
+  background: var(--c-line-1);
+  color: var(--c-fg-1);
 }
 
 .group-by-row.dragging {
@@ -287,6 +294,7 @@
 
 .group-by-row input[type="checkbox"] {
   margin: 0;
+  accent-color: var(--c-fg-1);
 }
 
 .popover {
@@ -294,14 +302,25 @@
   top: calc(100% + 4px);
   right: 0;
   z-index: 7;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 8px;
-  box-shadow: 0 18px 40px rgb(var(--shadow-color) / 0.28);
+  background: var(--c-elev);
+  border: 0.5px solid var(--c-line-3);
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 8px 24px -4px rgba(20, 12, 0, 0.18), 0 2px 6px
+    rgba(20, 12, 0, 0.08);
   min-width: 220px;
-  display: grid;
-  gap: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.popover .command-section-label {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-fg-4);
+  padding: 6px 8px 4px;
 }
 
 .nav-section-icons {

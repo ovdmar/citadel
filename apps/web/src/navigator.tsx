@@ -9,6 +9,10 @@ import { WorkspaceCard } from "./workspace-card.js";
 
 const GROUP_STORAGE = "citadel.navigator-group";
 
+function runningCount(sessions: AgentSession[]): number {
+  return sessions.filter((session) => session.status === "running").length;
+}
+
 const SECTION_ORDER = ["blocked", "needs-review", "working", "dirty", "idle", "done"];
 
 export function Navigator(props: {
@@ -145,6 +149,22 @@ export function Navigator(props: {
           {!props.workspaces.length ? (
             <div className="empty compact">No workspaces yet. Use the plus button above to create one.</div>
           ) : null}
+        </div>
+        <div className="nav-foot">
+          <div className="nav-foot-stat">
+            <div className="nav-foot-stat-label">Workspaces</div>
+            <div className="nav-foot-stat-val">{props.workspaces.length}</div>
+          </div>
+          <div className="nav-foot-stat">
+            <div className="nav-foot-stat-label">Running</div>
+            <div className="nav-foot-stat-val">
+              <span
+                className={`cit-pulse cit-pulse-sm ${runningCount(props.sessions) ? "cit-pulse-run" : "cit-pulse-idle"}`}
+                aria-hidden
+              />
+              {runningCount(props.sessions)}
+            </div>
+          </div>
         </div>
       </div>
       {showAddRepo ? <AddRepoModal onClose={() => setShowAddRepo(false)} /> : null}
