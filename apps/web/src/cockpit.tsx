@@ -77,9 +77,23 @@ export function Cockpit() {
         event.preventDefault();
         setCommandOpen((open) => !open);
       } else if (
-        // GitHub-style: plain `c` ("create") opens the new-workspace modal.
-        // Cmd+N is reserved by browsers (opens a new browser window), so we
-        // don't bind it. Skipped while editing so it doesn't hijack typing.
+        // Ctrl+N opens the new-workspace modal. This works on macOS, where
+        // Ctrl+N is unbound by browsers. On Windows/Linux every major browser
+        // (Chrome, Edge, Firefox) binds Ctrl+N to "open new browser window"
+        // and ignores preventDefault, so the binding is effectively macOS-
+        // only. The plain `c` shortcut below remains as the cross-platform
+        // fallback. Cmd+N is reserved by browsers everywhere.
+        event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === "n"
+      ) {
+        event.preventDefault();
+        setCreateWorkspaceOpen(true);
+      } else if (
+        // GitHub-style: plain `c` ("create") also opens the new-workspace
+        // modal. Skipped while editing so it doesn't hijack typing.
         !inEditable &&
         !event.metaKey &&
         !event.ctrlKey &&

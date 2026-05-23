@@ -10,6 +10,7 @@ import {
   collectJiraIssueSummary,
   collectRuntimeUsage,
   commandHealth,
+  normalizeCheck,
   normalizeCiRun,
   normalizeCiRunList,
   normalizeRuntimeUsage,
@@ -115,6 +116,34 @@ describe("commandHealth", () => {
     const log = await collectGitHubCiRunLog("/definitely/not/a/repo", "123");
     expect(log.status).toBe("degraded");
     expect(log.log).toBe("");
+  });
+
+  it("normalizes GitHub check runs including startedAt/completedAt and tolerates missing timestamps", () => {
+    expect(
+      normalizeCheck({
+        name: "unit",
+        status: "completed",
+        conclusion: "success",
+        detailsUrl: "https://example.test/check",
+        startedAt: "2026-05-17T00:00:00Z",
+        completedAt: "2026-05-17T00:01:30Z",
+      }),
+    ).toEqual({
+      name: "unit",
+      status: "completed",
+      conclusion: "success",
+      url: "https://example.test/check",
+      startedAt: "2026-05-17T00:00:00Z",
+      completedAt: "2026-05-17T00:01:30Z",
+    });
+    expect(normalizeCheck({ context: "legacy-status", state: "PENDING" })).toEqual({
+      name: "legacy-status",
+      status: "PENDING",
+      conclusion: null,
+      url: null,
+      startedAt: null,
+      completedAt: null,
+    });
   });
 
   it("parses Jira issue details and workflow transitions", () => {

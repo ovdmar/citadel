@@ -227,6 +227,188 @@ describe("agent message MCP + REST routes", () => {
     }
   });
 
+  it("returns user prompt history through the read_agent_history MCP tool and REST mirror", async () => {
+    const fixture = createFixture();
+    const history = {
+      ok: true as const,
+      sessionId: "sess_hist",
+      workspaceId: "ws_hist",
+      runtimeId: "claude-code",
+      status: "running",
+      total: 2,
+      truncated: false,
+      prompts: [
+        {
+          id: "pmt_1",
+          sessionId: "sess_hist",
+          source: "initial" as const,
+          role: "user" as const,
+          text: "do the audit",
+          sentAt: "2026-05-23T10:00:00.000Z",
+          externalId: null,
+        },
+        {
+          id: "pmt_2",
+          sessionId: "sess_hist",
+          source: "send_agent_message" as const,
+          role: "user" as const,
+          text: "focus on usability",
+          sentAt: "2026-05-23T10:05:00.000Z",
+          externalId: null,
+        },
+      ],
+    };
+    const calls: Array<{ sessionId: string; limit?: number; maxChars?: number }> = [];
+    const operations = {
+      readAgentHistory: (input: { sessionId: string; limit?: number; maxChars?: number }) => {
+        calls.push(input);
+        if (input.sessionId === "missing") return { ok: false as const, error: "session_not_found" as const };
+        return history;
+      },
+    } as unknown as OperationService;
+    const { server } = createDaemonApp({ ...fixture, operations });
+    const baseUrl = await listen(server);
+    try {
+      const list = await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "list",
+        method: "tools/list",
+      });
+      expect(list.result.tools.map((tool) => tool.name)).toContain("read_agent_history");
+
+      const call = await postJson<{
+        result: { structuredContent: typeof history };
+      }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "history",
+        method: "tools/call",
+        params: { name: "read_agent_history", arguments: { sessionId: "sess_hist", limit: 50, maxChars: 5000 } },
+      });
+      expect(call.result.structuredContent).toMatchObject({ ok: true, total: 2 });
+      expect(call.result.structuredContent.prompts).toHaveLength(2);
+      expect(calls).toContainEqual({ sessionId: "sess_hist", limit: 50, maxChars: 5000 });
+
+      const rest = await fetch(`${baseUrl}/api/agent-sessions/sess_hist/history?limit=50`);
+      expect(rest.ok).toBe(true);
+      const restBody = (await rest.json()) as typeof history;
+      expect(restBody.total).toBe(2);
+      expect(restBody.prompts[0]?.text).toBe("do the audit");
+
+      const missing = await fetch(`${baseUrl}/api/agent-sessions/missing/history`);
+      expect(missing.status).toBe(404);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("populates list_agent_sessions with initialPrompt + messageCount from the runtime transcript adapter", async () => {
+    const fixture = createFixture();
+    const now = "2026-05-23T10:00:00.000Z";
+    const workspacePath = path.join(fixture.config.dataDir, "ws");
+    fs.mkdirSync(workspacePath, { recursive: true });
+    fixture.store.insertRepo({
+      id: "repo_summary",
+      name: "Repo",
+      rootPath: path.join(fixture.config.dataDir, "repo"),
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "wt"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      deployHookCommand: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fixture.store.insertWorkspace({
+      id: "ws_summary",
+      repoId: "repo_summary",
+      name: "ws",
+      path: workspacePath,
+      branch: "main",
+      baseBranch: "main",
+      source: "scratch",
+      kind: "worktree",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      namespaceId: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fixture.store.insertSession({
+      id: "sess_summary",
+      workspaceId: "ws_summary",
+      runtimeId: "claude-code",
+      displayName: "Claude",
+      status: "running",
+      transport: "disconnected",
+      tmuxSessionName: "citadel_summary",
+      tmuxSessionId: "$2",
+      createdAt: now,
+      updatedAt: now,
+    });
+    // Seed a Claude Code transcript under a fake HOME so the adapter resolves it.
+    const home = path.join(fixture.config.dataDir, "home");
+    const projects = path.join(home, ".claude", "projects", workspacePath.replace(/[^A-Za-z0-9]/g, "-"));
+    fs.mkdirSync(projects, { recursive: true });
+    fs.writeFileSync(
+      path.join(projects, "session.jsonl"),
+      [
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: "kick off the migration" },
+          uuid: "u1",
+          timestamp: "2026-05-23T10:00:01.000Z",
+          sessionId: "claude-1",
+        }),
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: "also rebase main" },
+          uuid: "u2",
+          timestamp: "2026-05-23T10:05:00.000Z",
+          sessionId: "claude-1",
+        }),
+      ].join("\n"),
+    );
+
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    const originalHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const response = await postJson<{
+        result: {
+          structuredContent: { sessions: Array<{ id: string; initialPrompt: string | null; messageCount: number }> };
+        };
+      }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "list",
+        method: "tools/call",
+        params: { name: "list_agent_sessions", arguments: { workspaceId: "ws_summary" } },
+      });
+      const sessions = response.result.structuredContent.sessions;
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]).toMatchObject({
+        id: "sess_summary",
+        initialPrompt: "kick off the migration",
+        messageCount: 2,
+      });
+    } finally {
+      if (originalHome === undefined) Reflect.deleteProperty(process.env, "HOME");
+      else process.env.HOME = originalHome;
+      await closeServer(server);
+    }
+  });
+
   it("exposes /api/agent-sessions/:id/output and /messages REST mirrors of the MCP tools", async () => {
     const fixture = createFixture();
     const sent: Array<{ sessionId: string; message: string }> = [];

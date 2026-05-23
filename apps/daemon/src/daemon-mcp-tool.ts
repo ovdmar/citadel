@@ -13,6 +13,7 @@ import type { OperationService } from "@citadel/operations";
 import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import type { TtydManager } from "@citadel/terminal";
+import { ScratchpadTooLargeError, appendScratchpad, readScratchpad, writeScratchpad } from "./scratchpad.js";
 
 export type DaemonMcpDeps = {
   config: CitadelConfig;
@@ -132,6 +133,33 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     const includeArchived = call.arguments?.includeArchived === true;
     return { namespaces: store.listNamespaces(includeArchived) };
   }
+  if (call.name === "read_scratchpad") {
+    return readScratchpad(config.dataDir);
+  }
+  if (call.name === "write_scratchpad") {
+    if (typeof call.arguments?.content !== "string") return { error: "content_required" };
+    try {
+      const snapshot = writeScratchpad(config.dataDir, call.arguments.content);
+      emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
+      return snapshot;
+    } catch (error) {
+      if (error instanceof ScratchpadTooLargeError) return { error: error.message, limit: error.limit };
+      throw error;
+    }
+  }
+  if (call.name === "append_scratchpad") {
+    if (typeof call.arguments?.content !== "string" || call.arguments.content === "") {
+      return { error: "content_required" };
+    }
+    try {
+      const snapshot = appendScratchpad(config.dataDir, call.arguments.content);
+      emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
+      return snapshot;
+    } catch (error) {
+      if (error instanceof ScratchpadTooLargeError) return { error: error.message, limit: error.limit };
+      throw error;
+    }
+  }
   if (call.name === "list_deployed_apps") {
     const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";
     if (!workspaceId) return { error: "workspace_id_required" };
@@ -154,6 +182,14 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     if (result.ok) emit("agent.updated", { sessionId });
     return result;
   }
+  if (call.name === "read_agent_history") {
+    const sessionId = typeof call.arguments?.sessionId === "string" ? call.arguments.sessionId : "";
+    if (!sessionId) return { ok: false, error: "session_id_required" };
+    const input: { sessionId: string; limit?: number; maxChars?: number } = { sessionId };
+    if (typeof call.arguments?.limit === "number") input.limit = call.arguments.limit;
+    if (typeof call.arguments?.maxChars === "number") input.maxChars = call.arguments.maxChars;
+    return operations.readAgentHistory(input);
+  }
   const providerHealth = await collectProviderHealth(config.providers);
   return callMcpTool(call, {
     repos: store.listRepos(),
@@ -164,5 +200,6 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     providerHealth,
     runtimes: listRuntimeHealth(config.runtimes),
     namespaces: store.listNamespaces(),
+    sessionPromptSummary: (sessionId) => operations.getSessionPromptSummary(sessionId),
   });
 }

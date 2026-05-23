@@ -670,10 +670,10 @@
 }
 
 .check-row {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   padding: 4px 6px;
   border-radius: 5px;
   border: 1px solid var(--line);
@@ -681,6 +681,24 @@
   font-size: 11.5px;
   text-decoration: none;
   color: CanvasText;
+}
+
+.check-row .check-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.check-row .check-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.check-row .check-duration {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .check-row .tone-pending {
@@ -693,6 +711,16 @@
 
 .check-row .tone-failure {
   color: var(--color-danger);
+}
+
+.check-row .spin {
+  animation: check-spin 1s linear infinite;
+}
+
+@keyframes check-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .diff-file {

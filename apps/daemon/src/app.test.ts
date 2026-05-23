@@ -426,7 +426,16 @@ describe("createDaemonApp", () => {
             reviewDecision: "REVIEW_REQUIRED",
             additions: 9,
             deletions: 2,
-            checks: [{ name: "unit", status: "COMPLETED", conclusion: "SUCCESS", url: "https://example.test/check" }],
+            checks: [
+              {
+                name: "unit",
+                status: "COMPLETED",
+                conclusion: "SUCCESS",
+                url: "https://example.test/check",
+                startedAt: null,
+                completedAt: null,
+              },
+            ],
           },
           checkedAt: now,
         }),

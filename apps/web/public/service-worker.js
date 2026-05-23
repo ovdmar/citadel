@@ -1,8 +1,16 @@
 // Minimal service worker so the browser exposes "Install Citadel" in the
 // address bar. We deliberately keep caching minimal: Citadel is a local-first
 // daemon UI, so dynamic API responses must always hit the network.
-const VERSION = "citadel-v1";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg", "/icon-maskable.svg"];
+const VERSION = "citadel-v2";
+const APP_SHELL = [
+  "/",
+  "/manifest.webmanifest",
+  "/icon.svg",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/icon-maskable-512.png",
+  "/apple-touch-icon.png",
+];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(VERSION).then((cache) => cache.addAll(APP_SHELL).catch(() => undefined)));

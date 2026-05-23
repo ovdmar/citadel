@@ -7,7 +7,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node -e \"require('node:fs').copyFileSync('src/terminal-key-shim.client.js','dist/terminal-key-shim.client.js')\"",
     "start": "node dist/index.js"
   },
   "dependencies": {

@@ -11,6 +11,13 @@ import type {
   Workspace,
 } from "@citadel/contracts";
 
+export type AgentSessionSummary = AgentSession & {
+  namespaceId: string | null;
+  namespaceName: string | null;
+  initialPrompt: string | null;
+  messageCount: number;
+};
+
 export type McpStatusSnapshot = {
   enabled: boolean;
   resources: string[];
@@ -39,8 +46,12 @@ export type McpToolName =
   | "list_namespaces"
   | "create_namespace"
   | "assign_workspace_to_namespace"
+  | "read_scratchpad"
+  | "write_scratchpad"
+  | "append_scratchpad"
   | "list_deployed_apps"
-  | "redeploy_app";
+  | "redeploy_app"
+  | "read_agent_history";
 
 export type McpToolDefinition = {
   name: McpToolName;
@@ -58,7 +69,10 @@ export type McpToolContext = {
   providerHealth: ProviderHealth[];
   runtimes: AgentRuntime[];
   namespaces: Namespace[];
+  sessionPromptSummary?: (sessionId: string) => { initialPrompt: string | null; messageCount: number };
 };
+
+const INITIAL_PROMPT_PREVIEW_CHARS = 200;
 
 export type McpToolCall = {
   name: McpToolName;
@@ -107,7 +121,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     {
       name: "list_agent_sessions",
       description:
-        "List agent sessions with status, runtime, namespace info (derived from the workspace), and tmux session metadata. Optionally filter by workspaceId or namespaceId.",
+        "List agent sessions with status, runtime, namespace info (derived from the workspace), and tmux session metadata. Each entry includes a truncated initialPrompt and a messageCount so callers can see what the agent was asked to do and how much follow-up steering it has received. Use read_agent_history for the full text. Optionally filter by workspaceId or namespaceId.",
       inputSchema: {
         type: "object",
         properties: { workspaceId: { type: "string" }, namespaceId: { type: "string" } },
@@ -126,6 +140,22 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
           sessionId: { type: "string" },
           lines: { type: "integer", minimum: 1, maximum: 2000, default: 200 },
           maxChars: { type: "integer", minimum: 256, maximum: 200000, default: 16000 },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "read_agent_history",
+      description:
+        "Read the ordered list of user-authored prompts sent to an agent session: the initial prompt that started it plus every follow-up sent via send_agent_message. For Claude Code sessions, the .jsonl transcript is parsed on demand and merged in so messages typed directly in the terminal are included. Limit and maxChars cap the returned slice; older messages are dropped first.",
+      inputSchema: {
+        type: "object",
+        required: ["sessionId"],
+        properties: {
+          sessionId: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 2000, default: 200 },
+          maxChars: { type: "integer", minimum: 256, maximum: 1000000, default: 64000 },
         },
         additionalProperties: false,
       },
@@ -325,6 +355,37 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       destructive: true,
     },
     {
+      name: "read_scratchpad",
+      description:
+        "Read the user's scratchpad. The user notes thoughts and TODOs here for orchestrator agents to pick up. Returns { content, updatedAt }.",
+      inputSchema: { type: "object", additionalProperties: false },
+      destructive: false,
+    },
+    {
+      name: "write_scratchpad",
+      description:
+        "Overwrite the scratchpad. Replaces all existing content. Returns the new { content, updatedAt }. Prefer append_scratchpad to add notes without clobbering.",
+      inputSchema: {
+        type: "object",
+        required: ["content"],
+        properties: { content: { type: "string" } },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "append_scratchpad",
+      description:
+        "Append to the scratchpad without losing existing content. Inserts a blank-line separator before the new chunk. Returns { content, updatedAt }.",
+      inputSchema: {
+        type: "object",
+        required: ["content"],
+        properties: { content: { type: "string", minLength: 1 } },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
       name: "list_deployed_apps",
       description:
         "List the deployed apps for a workspace by invoking its deploy hook (`<hook> list`) and probing each app's URL for reachability. Resolves the hook in this order: `<workspacePath>/.citadel/hooks/deploy` (if executable) > the repo's deployHookCommand. Returns { workspaceId, resolution: { source, filePath?, command? }, apps: [{ name, url, status: 'deployed'|'stopped'|'unknown', lastChecked }], error?, checkedAt }. `source` is 'none' when no deploy hook is configured.",
@@ -394,7 +455,16 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
         typeof call.arguments?.namespaceId === "string"
           ? enriched.filter((session) => session.namespaceId === call.arguments?.namespaceId)
           : enriched;
-      return { sessions: byNamespace };
+      const summarize = context.sessionPromptSummary;
+      const sessions: AgentSessionSummary[] = byNamespace.map((session) => {
+        const summary = summarize?.(session.id) ?? { initialPrompt: null, messageCount: 0 };
+        return {
+          ...session,
+          initialPrompt: truncatePrompt(summary.initialPrompt),
+          messageCount: summary.messageCount,
+        };
+      });
+      return { sessions };
     }
     case "list_provider_health":
       return { providerHealth: context.providerHealth };
@@ -434,16 +504,23 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "reconcile":
     case "create_namespace":
     case "assign_workspace_to_namespace":
+    case "write_scratchpad":
+    case "append_scratchpad":
     case "list_deployed_apps":
     case "redeploy_app":
       return { error: "mutating_tool_requires_daemon" };
     case "read_agent_output":
     case "send_agent_message":
+    case "read_agent_history":
       // These read or write the live tmux pane backing an agent session, so
       // they cannot run from the in-memory snapshot — only the daemon owns the
       // tmux/terminal manager. Return a stable sentinel so MCP transports can
       // route these to the daemon path explicitly.
       return { error: "session_tool_requires_daemon" };
+    case "read_scratchpad":
+      // The scratchpad lives on disk under the daemon's data dir; the snapshot
+      // path has no fs access, so route through the daemon explicitly.
+      return { error: "scratchpad_tool_requires_daemon" };
     default:
       return assertNever(call.name);
   }
@@ -503,6 +580,12 @@ export function listWorkspaceLinks(activity: ActivityEvent[], workspaceId: unkno
     );
   }
   return { links, actions };
+}
+
+function truncatePrompt(text: string | null) {
+  if (!text) return null;
+  if (text.length <= INITIAL_PROMPT_PREVIEW_CHARS) return text;
+  return `${text.slice(0, INITIAL_PROMPT_PREVIEW_CHARS)}…`;
 }
 
 function filterByRepo(workspaces: Workspace[], repoId: unknown) {

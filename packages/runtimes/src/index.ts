@@ -2,6 +2,21 @@ import { execFileSync } from "node:child_process";
 import type { RuntimeConfig } from "@citadel/config";
 import type { AgentRuntime } from "@citadel/contracts";
 
+export {
+  claudeProjectsDir,
+  parseClaudeTranscript,
+  findClaudeTranscriptForSession,
+  claudeCodeAdapter,
+  codexAdapter,
+  cursorAgentAdapter,
+  getTranscriptAdapter,
+  getUserPromptsForSession,
+  parseCodexRollout,
+  findCodexRolloutForSession,
+  codexSessionsRoot,
+} from "./transcripts/index.js";
+export type { RuntimeUserPrompt, RuntimeTranscriptAdapter, GetUserPromptsInput } from "./transcripts/index.js";
+
 const baseCapabilities = {
   supportsPrompt: false,
   supportsResume: false,

@@ -32,12 +32,14 @@ import { attachTerminalWebSocket, createTtydManager, ensureTmuxSession } from "@
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
+import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
+import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
 import { readWorkspaceDiff, readWorkspaceGitStatus } from "./workspace-diff.js";
 
@@ -504,41 +506,7 @@ export function createDaemonApp(input: {
     }),
   );
 
-  app.get(
-    "/api/agent-sessions/:sessionId/output",
-    asyncRoute(async (req, res) => {
-      const sessionId = req.params.sessionId;
-      if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
-      const lines = typeof req.query.lines === "string" ? Number.parseInt(req.query.lines, 10) : Number.NaN;
-      const maxChars = typeof req.query.maxChars === "string" ? Number.parseInt(req.query.maxChars, 10) : Number.NaN;
-      const transcriptInput: { sessionId: string; lines?: number; maxChars?: number } = { sessionId };
-      if (Number.isFinite(lines)) transcriptInput.lines = lines;
-      if (Number.isFinite(maxChars)) transcriptInput.maxChars = maxChars;
-      const result = operations.readAgentTranscript(transcriptInput);
-      if (!result.ok) {
-        const status = result.error === "session_not_found" ? 404 : 409;
-        return res.status(status).json(result);
-      }
-      res.json(result);
-    }),
-  );
-
-  app.post(
-    "/api/agent-sessions/:sessionId/messages",
-    asyncRoute(async (req, res) => {
-      const sessionId = req.params.sessionId;
-      if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
-      const message = typeof req.body?.message === "string" ? (req.body.message as string) : "";
-      if (!message) return res.status(400).json({ error: "message_required" });
-      const result = await operations.sendAgentMessage({ sessionId, message });
-      if (!result.ok) {
-        const status = result.error === "session_not_found" ? 404 : 409;
-        return res.status(status).json(result);
-      }
-      emit("agent.updated", { sessionId });
-      res.status(202).json(result);
-    }),
-  );
+  registerAgentSessionRoutes(app, { operations, emit, asyncRoute });
 
   app.post(
     "/api/reconcile",
@@ -695,15 +663,7 @@ export function createDaemonApp(input: {
     }),
   );
 
-  const scheduledAgents = registerScheduledAgentRoutes({
-    app,
-    server,
-    store,
-    operations,
-    config,
-    emit,
-    asyncRoute,
-  });
+  const scheduledAgents = registerScheduledAgentRoutes({ app, server, store, operations, config, emit, asyncRoute });
 
   const mcpDeps = { config, store, operations, ttyd, providerCache, emit };
   registerMcpRoutes(app, asyncRoute, {
@@ -715,6 +675,7 @@ export function createDaemonApp(input: {
 
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
+  registerScratchpadRoutes({ app, config, emit });
 
   app.get("/api/workspaces/:workspaceId/diff", (req, res) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);

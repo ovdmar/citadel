@@ -1,3 +1,17 @@
+/* Neutralize UA <dialog> styles (position: absolute; inset-inline: 0; margin: auto)
+ * so the dialog participates in the backdrop's `place-items: center` grid and
+ * lands at the viewport center both axes. Without this reset a <dialog open>
+ * inside a centered backdrop renders pinned to the top of the backdrop's
+ * containing block — the "dialog appears top-center / top-right" bug the
+ * user keeps re-reporting. */
+.command-backdrop dialog[open],
+.modal-backdrop dialog[open],
+.drop-workspace-backdrop dialog[open] {
+  position: relative;
+  inset: auto;
+  margin: 0;
+}
+
 .command-backdrop {
   position: fixed;
   inset: 0;
@@ -10,9 +24,7 @@
 }
 
 .command-palette {
-  position: relative;
   width: min(640px, calc(100vw - 28px));
-  margin: 0;
   background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: 10px;
@@ -101,10 +113,8 @@
 }
 
 .modal-frame {
-  position: relative;
   width: min(560px, 100%);
   max-height: 90vh;
-  margin: 0;
   padding: 0;
   overflow: hidden;
   background: var(--panel);

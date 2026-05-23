@@ -191,7 +191,13 @@ describe("mcp helpers", () => {
       workspaces: context.workspaces.map((workspace) => ({ ...workspace, namespaceName: null })),
     });
     expect(callMcpTool({ name: "list_agent_sessions", arguments: { workspaceId: "ws_test" } }, context)).toEqual({
-      sessions: context.sessions.map((session) => ({ ...session, namespaceId: null, namespaceName: null })),
+      sessions: context.sessions.map((session) => ({
+        ...session,
+        namespaceId: null,
+        namespaceName: null,
+        initialPrompt: null,
+        messageCount: 0,
+      })),
     });
     expect(callMcpTool({ name: "list_provider_health" }, context)).toEqual({
       providerHealth: context.providerHealth,
