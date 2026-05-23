@@ -196,4 +196,59 @@
   // both `window` and `document` would double-fire each shortcut, because
   // stopImmediatePropagation only stops same-target same-phase listeners.
   document.addEventListener("keydown", onKeydown, true);
+
+  // OSC 52 bridge: when tmux runs with `set-clipboard on` (we enable that in
+  // buildAttachCommand), every copy-mode/mouse selection inside tmux is
+  // forwarded to the terminal as `ESC ] 52 ; c ; <base64> BEL`. xterm.js
+  // does not write OSC 52 payloads to the system clipboard by default, so
+  // we register our own OSC 52 handler that decodes the base64 and writes
+  // via navigator.clipboard. This is what makes "select inside Claude Code
+  // / vim / any TUI" actually land on the macOS clipboard, even though the
+  // selection lives inside tmux and never reaches xterm's own selection
+  // model. The terminal is polled with retries because window.term is
+  // assigned by ttyd asynchronously after the page boots.
+  const registerOsc52 = () => {
+    const term = window.term;
+    if (!term?.parser?.registerOscHandler) return false;
+    try {
+      term.parser.registerOscHandler(52, (data) => {
+        if (typeof data !== "string") return false;
+        // Format: "<clipboard-id>;<base64>" — clipboard-id is c/p/s/etc.
+        // Empty base64 means "the source app is asking for the clipboard
+        // contents" (read request). We ignore reads (security) and only
+        // honor writes.
+        const semi = data.indexOf(";");
+        if (semi < 0) return false;
+        const b64 = data.slice(semi + 1);
+        if (!b64) return true;
+        let text = "";
+        try {
+          text = atob(b64);
+          // OSC 52 payloads are bytes; treat as UTF-8 if possible.
+          try {
+            text = new TextDecoder().decode(Uint8Array.from(text, (c) => c.charCodeAt(0)));
+          } catch (_err) {
+            // best-effort: keep the raw atob output
+          }
+        } catch (_err) {
+          return false;
+        }
+        if (!text) return true;
+        try {
+          if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).catch(() => {});
+        } catch (_err) {
+          // ignore — clipboard requires secure context + iframe allow
+        }
+        return true;
+      });
+      return true;
+    } catch (_err) {
+      return false;
+    }
+  };
+  let osc52Tries = 0;
+  const osc52Timer = setInterval(() => {
+    osc52Tries += 1;
+    if (registerOsc52() || osc52Tries > 40) clearInterval(osc52Timer);
+  }, 250);
 })();
