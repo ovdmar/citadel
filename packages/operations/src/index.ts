@@ -17,7 +17,6 @@ import type { SqliteStore } from "@citadel/db";
 import { ensureTmuxSession, killTmuxSession, submitPrompt } from "@citadel/terminal";
 import * as agentHistory from "./agent-history.js";
 import * as agentMessages from "./agent-messages.js";
-import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
 import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
 export type { LaunchAgentResult } from "./launch-agent.js";
@@ -43,6 +42,7 @@ import {
   tryRunGit,
   workspaceIsDirty,
 } from "./helpers.js";
+import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
 import {
   type WorkspaceAppsDeps,
   discoverWorkspaceApps as discoverWorkspaceAppsImpl,
@@ -291,14 +291,11 @@ export class OperationService {
     };
     this.store.insertSession(session);
     if (input.prompt?.length) {
-      this.store.insertAgentPrompt({
-        id: createId("pmt"),
+      agentHistory.recordPrompt(this.store, {
         sessionId: session.id,
         source: "initial",
-        role: "user",
         text: input.prompt,
         sentAt: now,
-        externalId: null,
       });
     }
     this.activity("agent.started", "user", `Started ${session.displayName}`, workspace.repoId, workspace.id, null);

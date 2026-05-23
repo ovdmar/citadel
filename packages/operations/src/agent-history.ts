@@ -1,7 +1,23 @@
-import type { AgentPrompt } from "@citadel/contracts";
+import type { AgentPrompt, AgentPromptSource } from "@citadel/contracts";
 import { createId } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { findClaudeTranscriptForSession, parseClaudeTranscript } from "@citadel/runtimes";
+
+/** Persist a user-authored prompt as part of a session's history. */
+export function recordPrompt(
+  store: SqliteStore,
+  args: { sessionId: string; source: AgentPromptSource; text: string; sentAt: string },
+) {
+  store.insertAgentPrompt({
+    id: createId("pmt"),
+    sessionId: args.sessionId,
+    source: args.source,
+    role: "user",
+    text: args.text,
+    sentAt: args.sentAt,
+    externalId: null,
+  });
+}
 
 export type AgentHistoryResult = {
   ok: true;

@@ -2,6 +2,7 @@ import type { ActivityEvent } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { captureTranscript, submitPrompt } from "@citadel/terminal";
+import { recordPrompt } from "./agent-history.js";
 
 export type TranscriptResult = {
   ok: true;
@@ -72,15 +73,7 @@ export async function sendAgentMessage(
   const result = await submitPrompt(session.tmuxSessionName, input.message);
   if (result.ok) {
     const now = nowIso();
-    store.insertAgentPrompt({
-      id: createId("pmt"),
-      sessionId: session.id,
-      source: "send_agent_message",
-      role: "user",
-      text: input.message,
-      sentAt: now,
-      externalId: null,
-    });
+    recordPrompt(store, { sessionId: session.id, source: "send_agent_message", text: input.message, sentAt: now });
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     const event: ActivityEvent = {
       id: createId("evt"),
