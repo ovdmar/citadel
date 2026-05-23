@@ -5,6 +5,7 @@ import { GitPullRequest, Hash, PanelRightClose, Settings, Slack } from "lucide-r
 import { useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
+import { DeployedAppsPanel } from "./deployed-apps.js";
 import { formatLabel } from "./labels.js";
 import { type ApprovalTone, approvalToneFor, prToneFor } from "./workspace-card.js";
 
@@ -291,6 +292,8 @@ function StatsTab(props: {
           </div>
         ) : null}
       </section>
+
+      <DeployedAppsPanel workspaceId={props.workspace.id} repo={props.repo} />
     </div>
   );
 }

@@ -34,7 +34,9 @@ export type McpToolName =
   | "reconcile"
   | "inspect_readiness"
   | "read_agent_output"
-  | "send_agent_message";
+  | "send_agent_message"
+  | "list_deployed_apps"
+  | "redeploy_app";
 
 export type McpToolDefinition = {
   name: McpToolName;
@@ -258,6 +260,37 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       destructive: true,
     },
     {
+      name: "list_deployed_apps",
+      description:
+        "List the deployed apps for a workspace by invoking its deploy hook (`<hook> list`) and probing each app's URL for reachability. Resolves the hook in this order: `<workspacePath>/.citadel/hooks/deploy` (if executable) > the repo's deployHookCommand. Returns { workspaceId, resolution: { source, filePath?, command? }, apps: [{ name, url, status: 'deployed'|'stopped'|'unknown', lastChecked }], error?, checkedAt }. `source` is 'none' when no deploy hook is configured.",
+      inputSchema: {
+        type: "object",
+        required: ["workspaceId"],
+        properties: { workspaceId: { type: "string" } },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "redeploy_app",
+      description:
+        "Invoke the workspace's deploy hook with `redeploy [name]`. Omitting `name` redeploys all apps. The hook runs with cwd = workspace path and env CITADEL_WORKSPACE_ID/CITADEL_WORKSPACE_PATH/CITADEL_WORKSPACE_BRANCH/CITADEL_REPO_ID set. Returns { operationId, status, exitStatus } — stream the operation log via /api/operations/:id for live output.",
+      inputSchema: {
+        type: "object",
+        required: ["workspaceId"],
+        properties: {
+          workspaceId: { type: "string" },
+          name: {
+            type: "string",
+            maxLength: 80,
+            description: "App name from list_deployed_apps. Omit to redeploy all.",
+          },
+        },
+        additionalProperties: false,
+      },
+      destructive: true,
+    },
+    {
       name: "inspect_readiness",
       description: "Return the readiness state and next-action hint for a workspace.",
       inputSchema: {
@@ -318,6 +351,8 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "archive_workspace":
     case "remove_workspace":
     case "reconcile":
+    case "list_deployed_apps":
+    case "redeploy_app":
       return { error: "mutating_tool_requires_daemon" };
     case "read_agent_output":
     case "send_agent_message":

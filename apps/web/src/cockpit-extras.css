@@ -626,6 +626,32 @@
   background: var(--color-danger);
 }
 
+.app-chip .app-chip-link {
+  color: inherit;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.app-chip .icon-button {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: inherit;
+  padding: 0 2px;
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.75;
+}
+
+.app-chip .icon-button:hover:not(:disabled) {
+  opacity: 1;
+}
+
+.app-chip .icon-button:disabled {
+  cursor: progress;
+  opacity: 0.4;
+}
+
 .check-list {
   display: grid;
   gap: 4px;
