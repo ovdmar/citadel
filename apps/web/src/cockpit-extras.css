@@ -401,8 +401,8 @@
 }
 
 .pr-pill.tone-merged {
-  background: color-mix(in srgb, var(--color-purple) 18%, transparent);
-  color: var(--color-purple);
+  background: color-mix(in srgb, var(--color-merged) 22%, transparent);
+  color: var(--color-merged);
 }
 
 .workspace-card-dirty {
