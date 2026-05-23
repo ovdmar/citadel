@@ -34,7 +34,10 @@ export type McpToolName =
   | "reconcile"
   | "inspect_readiness"
   | "read_agent_output"
-  | "send_agent_message";
+  | "send_agent_message"
+  | "read_scratchpad"
+  | "write_scratchpad"
+  | "append_scratchpad";
 
 export type McpToolDefinition = {
   name: McpToolName;
@@ -258,6 +261,37 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       destructive: true,
     },
     {
+      name: "read_scratchpad",
+      description:
+        "Read the user's scratchpad. The user notes thoughts and TODOs here for orchestrator agents to pick up. Returns { content, updatedAt }.",
+      inputSchema: { type: "object", additionalProperties: false },
+      destructive: false,
+    },
+    {
+      name: "write_scratchpad",
+      description:
+        "Overwrite the scratchpad. Replaces all existing content. Returns the new { content, updatedAt }. Prefer append_scratchpad to add notes without clobbering.",
+      inputSchema: {
+        type: "object",
+        required: ["content"],
+        properties: { content: { type: "string" } },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "append_scratchpad",
+      description:
+        "Append to the scratchpad without losing existing content. Inserts a blank-line separator before the new chunk. Returns { content, updatedAt }.",
+      inputSchema: {
+        type: "object",
+        required: ["content"],
+        properties: { content: { type: "string", minLength: 1 } },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
       name: "inspect_readiness",
       description: "Return the readiness state and next-action hint for a workspace.",
       inputSchema: {
@@ -318,6 +352,8 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "archive_workspace":
     case "remove_workspace":
     case "reconcile":
+    case "write_scratchpad":
+    case "append_scratchpad":
       return { error: "mutating_tool_requires_daemon" };
     case "read_agent_output":
     case "send_agent_message":
@@ -326,6 +362,10 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
       // tmux/terminal manager. Return a stable sentinel so MCP transports can
       // route these to the daemon path explicitly.
       return { error: "session_tool_requires_daemon" };
+    case "read_scratchpad":
+      // The scratchpad lives on disk under the daemon's data dir; the snapshot
+      // path has no fs access, so route through the daemon explicitly.
+      return { error: "scratchpad_tool_requires_daemon" };
     default:
       return assertNever(call.name);
   }

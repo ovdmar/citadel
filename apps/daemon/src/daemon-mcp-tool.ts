@@ -11,6 +11,7 @@ import type { OperationService } from "@citadel/operations";
 import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import type { TtydManager } from "@citadel/terminal";
+import { appendScratchpad, readScratchpad, writeScratchpad } from "./scratchpad.js";
 
 export type DaemonMcpDeps = {
   config: CitadelConfig;
@@ -110,6 +111,22 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     if (typeof call.arguments?.lines === "number") input.lines = call.arguments.lines;
     if (typeof call.arguments?.maxChars === "number") input.maxChars = call.arguments.maxChars;
     return operations.readAgentTranscript(input);
+  }
+  if (call.name === "read_scratchpad") {
+    return readScratchpad(config.dataDir);
+  }
+  if (call.name === "write_scratchpad") {
+    const content = typeof call.arguments?.content === "string" ? call.arguments.content : "";
+    const snapshot = writeScratchpad(config.dataDir, content);
+    emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
+    return snapshot;
+  }
+  if (call.name === "append_scratchpad") {
+    const content = typeof call.arguments?.content === "string" ? call.arguments.content : "";
+    if (!content) return { error: "content_required" };
+    const snapshot = appendScratchpad(config.dataDir, content);
+    emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
+    return snapshot;
   }
   if (call.name === "send_agent_message") {
     const sessionId = typeof call.arguments?.sessionId === "string" ? call.arguments.sessionId : "";
