@@ -1,6 +1,6 @@
 import type { Workspace } from "@citadel/contracts";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
-import { ChevronsLeft, ChevronsRight, Search as SearchIcon, Settings as SettingsIcon } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useEventRefresh, useStateQuery } from "./app-state.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
@@ -10,6 +10,7 @@ import { Inspector } from "./inspector.js";
 import { Navigator } from "./navigator.js";
 import { Stage } from "./stage.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
+import { useResolvedTheme } from "./use-resolved-theme.js";
 import { prToneFor } from "./workspace-card.js";
 
 const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";
@@ -153,7 +154,7 @@ export function Cockpit() {
 
   return (
     <div className="cockpit-shell">
-      <TopBar onSearch={() => setCommandOpen(true)} />
+      <TopBar onSearch={() => setCommandOpen(true)} activeWorkspace={activeWorkspace} repo={selectedRepo} />
       <div
         className={`cockpit-body ${layout.state.leftCollapsed ? "left-collapsed" : ""} ${
           layout.state.rightCollapsed ? "right-collapsed" : ""
@@ -276,6 +277,7 @@ export function Cockpit() {
           </aside>
         )}
       </div>
+      <BottomBar activeWorkspace={activeWorkspace} repo={selectedRepo} sessions={activeWorkspaceSessions} />
       {commandOpen ? (
         <CommandPalette
           workspaces={data?.workspaces ?? []}
@@ -296,31 +298,124 @@ export function Cockpit() {
   );
 }
 
-function TopBar(props: { onSearch: () => void }) {
+function CitadelMark({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100" aria-hidden="true">
+      <rect width="100" height="100" rx="22" fill="currentColor" />
+      <path d="M22 22h6v6h-6zM36 22h6v6h-6zM50 22h6v6h-6zM64 22h6v6h-6z" fill="var(--c-on-dark)" />
+      <path d="M70 48a16 16 0 100 14" stroke="var(--c-on-dark)" strokeWidth="6" fill="none" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function TopBar(props: {
+  onSearch: () => void;
+  activeWorkspace: Workspace | null;
+  repo: import("@citadel/contracts").Repo | null;
+}) {
   return (
     <header className="top-bar">
       <div className="top-bar-brand">
-        <span className="top-bar-brand-mark">C</span>
-        Citadel
+        <span className="top-bar-brand-mark" aria-hidden="true">
+          <CitadelMark size={14} />
+        </span>
+        <span className="top-bar-brand-text">
+          <span className="top-bar-brand-name">Citadel</span>
+          <span className="top-bar-brand-org">{props.repo?.name ?? "local"}</span>
+        </span>
       </div>
-      <button
-        type="button"
-        className="top-bar-search"
-        onClick={props.onSearch}
-        aria-label="Search workspaces"
-        title="Search workspaces, branches, issues, PRs (Cmd+K)"
-      >
-        <SearchIcon size={13} />
-        <span>Search workspaces, branches, issues, PRs…</span>
-        <span className="top-bar-search-shortcut">⌘K</span>
-      </button>
+      <div className="top-bar-search-wrap">
+        <button
+          type="button"
+          className="top-bar-search"
+          onClick={props.onSearch}
+          aria-label="Search workspaces"
+          title="Search workspaces, branches, issues, PRs (Cmd+K)"
+        >
+          <SearchIcon size={13} />
+          <span>Search workspaces, branches, issues, PRs…</span>
+          <span className="top-bar-search-shortcut">⌘K</span>
+        </button>
+      </div>
       <div className="top-bar-actions">
+        <ThemeToggle />
         <Link className="top-bar-icon" to="/settings" aria-label="Settings" title="Open settings">
           <SettingsIcon size={14} />
         </Link>
       </div>
     </header>
   );
+}
+
+function ThemeToggle() {
+  const resolved = useResolvedTheme();
+  const isDark = resolved === "dark";
+  const toggle = () => {
+    const next = isDark ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try {
+      localStorage.setItem("citadel.theme", next);
+    } catch {
+      // localStorage is best-effort
+    }
+  };
+  return (
+    <button
+      type="button"
+      className="top-bar-icon"
+      onClick={toggle}
+      aria-label="Toggle theme"
+      title={isDark ? "Switch to light theme" : "Switch to dark theme"}
+    >
+      {isDark ? <Sun size={14} /> : <Moon size={14} />}
+    </button>
+  );
+}
+
+function BottomBar(props: {
+  activeWorkspace: Workspace | null;
+  repo: import("@citadel/contracts").Repo | null;
+  sessions: import("@citadel/contracts").AgentSession[];
+}) {
+  const [now, setNow] = useState(() => formatClock(new Date()));
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(formatClock(new Date())), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const running = props.sessions.some((s) => s.status === "running");
+  const branch = props.activeWorkspace?.branch ?? "";
+  const repoName = props.repo?.name ?? "";
+
+  return (
+    <footer className="bottom-bar" aria-label="Status bar">
+      <div className="bottom-bar-left">
+        <span className={`bottom-bar-pill ${running ? "tone-running" : "tone-idle"}`}>
+          <span className="bottom-bar-pulse" aria-hidden="true" />
+          {running ? "Running" : "Idle"}
+        </span>
+        {repoName ? (
+          <>
+            <span className="bottom-bar-divider" aria-hidden="true" />
+            <span className="bottom-bar-item bottom-bar-mono">{repoName}</span>
+          </>
+        ) : null}
+        {branch ? (
+          <>
+            <span className="bottom-bar-divider" aria-hidden="true" />
+            <span className="bottom-bar-item bottom-bar-branch">{branch}</span>
+          </>
+        ) : null}
+      </div>
+      <div className="bottom-bar-right">
+        <span className="bottom-bar-item bottom-bar-muted">{now}</span>
+      </div>
+    </footer>
+  );
+}
+
+function formatClock(d: Date) {
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 function EmptyStage(props: { hasRepos: boolean }) {

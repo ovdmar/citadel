@@ -20,7 +20,11 @@ export function Inspector(props: {
   const [tab, setTab] = useState<InspectorTab>("stats");
   return (
     <>
-      <div className="column-header">
+      <div className="column-header inspector-head">
+        <div className="inspector-head-title">
+          <span className="inspector-eyebrow">Workspace</span>
+          <span className="inspector-head-name">{props.workspace.name}</span>
+        </div>
         <Button
           type="button"
           variant="ghost"
@@ -31,8 +35,6 @@ export function Inspector(props: {
         >
           <PanelRightClose size={14} />
         </Button>
-        <strong>Workspace</strong>
-        <span className="header-spacer" />
       </div>
       <div className="inspector-tabs">
         <button

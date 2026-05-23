@@ -2,17 +2,18 @@
 
 .stage-tabbar {
   display: flex;
-  align-items: stretch;
-  gap: 4px;
-  padding: 6px 6px 0 6px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel-strong);
+  align-items: flex-end;
+  gap: 0;
+  padding: 0;
+  border-bottom: 0;
+  background: transparent;
   position: relative;
+  z-index: 1;
 }
 
 .stage-tabs {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 2px;
   flex: 0 1 auto;
   min-width: 0;
@@ -30,25 +31,38 @@
 .stage-tab {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 9px;
-  border-top-left-radius: 6px;
-  border-top-right-radius: 6px;
-  border: 1px solid transparent;
+  gap: 8px;
+  max-width: 200px;
+  min-width: 0;
+  height: auto;
+  padding: 7px 8px 7px 12px;
+  border-top-left-radius: 9px;
+  border-top-right-radius: 9px;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border: 0;
   background: transparent;
-  color: var(--muted);
+  color: var(--c-fg-3);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 12.5px;
+  font-weight: 500;
   flex-shrink: 0;
+  position: relative;
+}
+
+.stage-tab:hover {
+  color: var(--c-fg-1);
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .stage-tab.active {
-  background: var(--surface);
-  color: CanvasText;
-  border-color: var(--line);
-  border-bottom-color: var(--surface);
-  margin-bottom: -1px;
+  background: var(--c-elev);
+  color: var(--c-fg-1);
+  border: 0.5px solid var(--c-line-2);
+  border-bottom-color: transparent;
+  padding: 6.5px 7.5px 7.5px 11.5px;
+  margin-bottom: -0.5px;
+  z-index: 2;
 }
 
 .stage-tab input {
@@ -60,43 +74,45 @@
   max-width: 180px;
   padding: 0;
   outline: none;
+  font: inherit;
 }
 
 .stage-tab .close-tab {
   border: 0;
   background: transparent;
-  color: inherit;
+  color: var(--c-fg-4);
   opacity: 0.6;
   cursor: pointer;
   display: inline-grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
 }
 
 .stage-tab .close-tab:hover {
   opacity: 1;
-  background: color-mix(in srgb, CanvasText 8%, transparent);
+  background: var(--c-line-2);
+  color: var(--c-fg-1);
 }
 
 .stage-add {
   display: inline-grid;
   place-items: center;
-  height: 24px;
-  width: 24px;
-  margin: 0 4px 2px;
-  border-radius: 5px;
+  height: 26px;
+  width: 26px;
+  margin: 0 4px 4px;
+  border-radius: 6px;
   background: transparent;
-  color: var(--muted);
-  border: 1px dashed var(--line);
+  color: var(--c-fg-4);
+  border: 0;
   cursor: pointer;
+  align-self: center;
 }
 
 .stage-add:hover {
-  border-style: solid;
-  color: var(--color-action);
-  border-color: var(--color-action);
+  background: var(--c-line-1);
+  color: var(--c-fg-1);
 }
 
 .stage-add-menu {
@@ -192,8 +208,11 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  padding: 6px;
-  background: var(--surface);
+  padding: 0;
+  background: var(--c-elev);
+  border: 0.5px solid var(--c-line-2);
+  border-radius: 0 9px 12px 12px;
+  box-shadow: var(--sh-card);
 }
 
 .terminal-stage {
@@ -214,21 +233,22 @@
 .terminal-shell {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  background: var(--surface-strong);
-  border: 1px solid var(--line);
-  border-radius: 7px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   overflow: hidden;
+  height: 100%;
 }
 
 .terminal-status {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 10px;
-  color: var(--muted);
-  border-bottom: 1px solid var(--line);
-  background: var(--panel-strong);
-  font-size: 11px;
+  padding: 9px 14px 8px;
+  color: var(--c-fg-2);
+  border-bottom: 0.5px solid var(--c-line-2);
+  background: var(--c-elev);
+  font-size: 11.5px;
 }
 
 .terminal-status-flex {
@@ -270,7 +290,7 @@
   height: 100%;
   min-height: 0;
   padding: 4px 0 0 6px;
-  background: var(--surface-strong);
+  background: var(--c-elev);
 }
 
 .terminal-surface .xterm,
@@ -292,7 +312,7 @@
   width: 100%;
   height: 100%;
   border: 0;
-  background: var(--surface-strong);
+  background: var(--c-elev);
 }
 
 .terminal-pending {
