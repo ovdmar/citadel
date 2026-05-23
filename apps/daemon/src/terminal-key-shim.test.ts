@@ -47,9 +47,13 @@ describe("injectKeyShim", () => {
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain('sendInput("\\x05")');
     // Mac gating
     expect(TERMINAL_KEY_SHIM_SOURCE).toMatch(/isMac/);
-    // Cmd+C routing: navigator.clipboard + synthetic Ctrl+Shift+C dispatch
+    // Cmd+C routing: read xterm's internal selection (via window.term) and
+    // write it through navigator.clipboard. The mirrored lastTermSelection
+    // cache covers TUIs that re-render between mouseup and Cmd+C.
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain("navigator.clipboard");
-    expect(TERMINAL_KEY_SHIM_SOURCE).toContain(".xterm-helper-textarea");
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain("term.getSelection");
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain("onSelectionChange");
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain("lastTermSelection");
     // Cmd+V bracketed paste
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain("\\x1b[200~");
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain("\\x1b[201~");
@@ -202,7 +206,11 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
       clipboardWrites?: string[];
       clipboardReadText?: string | (() => Promise<string>);
       xtermHelper?: { dispatchEvent: (event: FakeSyntheticEvent) => boolean };
-      term?: { selectAll?: () => void };
+      term?: {
+        selectAll?: () => void;
+        getSelection?: () => string;
+        onSelectionChange?: (handler: (...args: unknown[]) => void) => void;
+      };
       xtermScreen?: object;
       xtermElement?: object;
       selectionState?: SelectionState;
@@ -390,25 +398,22 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     expect(clipboardWrites).toEqual(["highlighted text"]);
   });
 
-  it("Cmd+C falls back to dispatching Ctrl+Shift+C on xterm's helper textarea when there is no DOM selection", () => {
+  it("Cmd+C reads xterm's internal selection through window.term when the DOM selection is empty", () => {
+    // Canvas-renderer xterm doesn't produce a real DOM selection, so the
+    // shim has to ask the xterm instance directly. The previous mechanism
+    // (synthetic Ctrl+Shift+C dispatch on .xterm-helper-textarea) silently
+    // dropped the copy inside Claude Code's TUI; the current path reads
+    // term.getSelection() and writes it to navigator.clipboard.
     const clipboardWrites: string[] = [];
-    const dispatched: FakeSyntheticEvent[] = [];
-    const helper = {
-      dispatchEvent: (event: FakeSyntheticEvent) => {
-        dispatched.push(event);
-        return true;
-      },
+    const term = {
+      getSelection: () => "xterm-internal selection",
+      onSelectionChange: () => {},
     };
-    const harness = setup("MacIntel", { getSelection: () => "", clipboardWrites, xtermHelper: helper });
+    const harness = setup("MacIntel", { getSelection: () => "", clipboardWrites, term });
     harness.activate();
-    dispatch(harness, makeEvent({ key: "c", metaKey: true }));
-    expect(clipboardWrites).toEqual([]);
-    expect(dispatched).toHaveLength(1);
-    const first = dispatched[0];
-    expect(first?.type).toBe("keydown");
-    expect(first?.init.code).toBe("KeyC");
-    expect(first?.init.ctrlKey).toBe(true);
-    expect(first?.init.shiftKey).toBe(true);
+    const event = dispatch(harness, makeEvent({ key: "c", metaKey: true }));
+    expect(event.defaultPrevented).toBe(true);
+    expect(clipboardWrites).toEqual(["xterm-internal selection"]);
   });
 
   it("Cmd+C is a no-op on non-mac platforms", () => {
