@@ -244,6 +244,11 @@ function ttydThemeArgs(theme: TtydTheme): string[] {
     `theme=${JSON.stringify(palette)}`,
     "-t",
     "fontFamily=ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+    // Auto-reconnect 3s after the websocket drops (laptop sleep, network
+    // blip). Without this, ttyd's xterm shows "Press any key to reconnect"
+    // and waits for a manual key press.
+    "-t",
+    "reconnect=3",
   ];
 }
 
