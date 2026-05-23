@@ -54,6 +54,56 @@
     if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
   }
 
+  // Read the clipboard and inject it into the PTY wrapped in bracketed-paste
+  // escapes (\x1b[200~ ... \x1b[201~). Every modern shell (bash >=4.4, zsh,
+  // fish) and TUI (Claude Code, Codex, vim, etc.) understands bracketed
+  // paste, and it prevents multi-line pastes from auto-submitting between
+  // lines. Async by necessity — clipboard.readText is a Promise — but the
+  // caller calls consume() synchronously so the browser's default paste
+  // never fires alongside.
+  function pasteFromClipboard() {
+    if (!navigator.clipboard?.readText) return false;
+    navigator.clipboard
+      .readText()
+      .then((text) => {
+        if (text) sendInput(`\x1b[200~${text}\x1b[201~`);
+      })
+      .catch(() => {});
+    return true;
+  }
+
+  // Cmd+A in the iframe currently selects the entire iframe body (including
+  // the surrounding cockpit chrome), which is rarely what the user wants.
+  // We can't reliably "select only the current prompt" without OSC 133
+  // shell-integration markers, so we match Mac Terminal.app's convention:
+  // select all visible terminal content. If ttyd's build exposes the xterm
+  // Terminal instance on window.term we use its selectAll(); otherwise we
+  // fall back to a DOM Range scoped to .xterm-screen so at minimum the
+  // selection is terminal-scoped, not iframe-scoped.
+  function selectAllInTerminal() {
+    const term = window.term;
+    if (term && typeof term.selectAll === "function") {
+      try {
+        term.selectAll();
+        return true;
+      } catch (_err) {
+        // fall through to DOM-range path
+      }
+    }
+    const screen = document.querySelector(".xterm-screen") || document.querySelector(".xterm");
+    const selection = window.getSelection?.();
+    if (!screen || !selection || typeof document.createRange !== "function") return false;
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(screen);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return true;
+    } catch (_err) {
+      return false;
+    }
+  }
+
   // Cmd+C path: xterm's canvas renderer doesn't produce a real DOM selection,
   // so the browser's native copy event has nothing to copy. We first try the
   // DOM selection (in case a DOM-renderer build is in use), then fall back to
@@ -120,6 +170,14 @@
       }
       if (key === "c" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
         if (copySelection()) consume(event);
+        return;
+      }
+      if (key === "v" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+        if (pasteFromClipboard()) consume(event);
+        return;
+      }
+      if (key === "a" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+        if (selectAllInTerminal()) consume(event);
         return;
       }
     }

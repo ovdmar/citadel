@@ -15,6 +15,13 @@ import { fileURLToPath } from "node:url";
 //   - Cmd+C     (mac)     -> route through ttyd's Ctrl+Shift+C copy handler
 //                             so xterm's selection (no DOM selection in canvas
 //                             renderer) actually reaches the clipboard
+//   - Cmd+V     (mac)     -> read system clipboard, send to PTY wrapped in
+//                             bracketed-paste escapes so multi-line pastes
+//                             don't auto-submit between lines
+//   - Cmd+A     (mac)     -> select all visible terminal content (matches
+//                             Mac Terminal.app); falls back to a DOM Range
+//                             scoped to .xterm-screen so the selection is
+//                             terminal-scoped instead of iframe-chrome-scoped
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 export const TERMINAL_KEY_SHIM_SOURCE = fs.readFileSync(resolve(__dirname, "terminal-key-shim.client.js"), "utf8");

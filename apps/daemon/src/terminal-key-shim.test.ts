@@ -50,6 +50,13 @@ describe("injectKeyShim", () => {
     // Cmd+C routing: navigator.clipboard + synthetic Ctrl+Shift+C dispatch
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain("navigator.clipboard");
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain(".xterm-helper-textarea");
+    // Cmd+V bracketed paste
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain("\\x1b[200~");
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain("\\x1b[201~");
+    expect(TERMINAL_KEY_SHIM_SOURCE).toMatch(/navigator\.clipboard\??\.readText/);
+    // Cmd+A terminal-scoped select-all
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain("selectAllInTerminal");
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain(".xterm-screen");
     // Single listener registration — only document, not window (avoids
     // duplicate sends since stopImmediatePropagation only stops same-target
     // listeners).
@@ -182,12 +189,24 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     ) {}
   }
 
+  type SelectionState = {
+    selected: object[];
+    cleared: number;
+  };
+  type RangeState = { contents: object[] };
+
   function setup(
     platform: string,
     extras: {
       getSelection?: () => string;
       clipboardWrites?: string[];
+      clipboardReadText?: string | (() => Promise<string>);
       xtermHelper?: { dispatchEvent: (event: FakeSyntheticEvent) => boolean };
+      term?: { selectAll?: () => void };
+      xtermScreen?: object;
+      xtermElement?: object;
+      selectionState?: SelectionState;
+      rangeState?: RangeState;
     } = {},
   ): ShimHarness {
     const listeners: ShimHarness["listeners"] = [];
@@ -195,6 +214,8 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     const clipboardWrites = extras.clipboardWrites ?? [];
     let windowKeydownListeners = 0;
     let documentKeydownListeners = 0;
+    const selectionState = extras.selectionState;
+    const rangeState = extras.rangeState;
     const runtime: ShimHarness["runtime"] = {
       window: {
         WebSocket: FakeWebSocket,
@@ -204,8 +225,21 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
             listeners.push(handler);
           }
         }) as unknown as Window["addEventListener"],
-        getSelection: extras.getSelection ? () => ({ toString: () => extras.getSelection?.() ?? "" }) : undefined,
+        getSelection: extras.getSelection
+          ? () => ({ toString: () => extras.getSelection?.() ?? "" })
+          : selectionState
+            ? () => ({
+                toString: () => "",
+                removeAllRanges: () => {
+                  selectionState.cleared += 1;
+                },
+                addRange: (range: object) => {
+                  selectionState.selected.push(range);
+                },
+              })
+            : undefined,
         KeyboardEvent: FakeSyntheticEvent as unknown as typeof KeyboardEvent,
+        term: extras.term,
       } as ShimHarness["runtime"]["window"],
       document: {
         addEventListener: ((type: string, handler: (event: FakeKeyboardEvent) => void) => {
@@ -216,8 +250,17 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
         }) as unknown as Document["addEventListener"],
         querySelector: ((selector: string) => {
           if (selector === ".xterm-helper-textarea") return extras.xtermHelper ?? null;
+          if (selector === ".xterm-screen") return extras.xtermScreen ?? null;
+          if (selector === ".xterm") return extras.xtermElement ?? null;
           return null;
         }) as Document["querySelector"],
+        createRange: rangeState
+          ? () => ({
+              selectNodeContents: (node: object) => {
+                rangeState.contents.push(node);
+              },
+            })
+          : undefined,
       } as unknown as ShimHarness["runtime"]["document"],
       navigator: {
         platform,
@@ -227,6 +270,12 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
             clipboardWrites.push(text);
             return Promise.resolve();
           },
+          readText:
+            extras.clipboardReadText === undefined
+              ? undefined
+              : typeof extras.clipboardReadText === "function"
+                ? extras.clipboardReadText
+                : () => Promise.resolve(extras.clipboardReadText as string),
         },
       } as ShimHarness["runtime"]["navigator"],
       TextEncoder,
@@ -377,5 +426,91 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     dispatch(harness, makeEvent({ key: "A", ctrlKey: true }));
     expect(harness.sent).toHaveLength(1);
     expect(decode(harness.sent[0]).text).toBe("\x01");
+  });
+
+  it("Cmd+V reads the clipboard and sends the text wrapped in bracketed-paste escapes", async () => {
+    const harness = setup("MacIntel", { clipboardReadText: "echo hello\nls\n" });
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "v", metaKey: true }));
+    expect(event.defaultPrevented).toBe(true);
+    // clipboard.readText is async — flush the microtask queue once.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(harness.sent).toHaveLength(1);
+    expect(decode(harness.sent[0]).text).toBe("\x1b[200~echo hello\nls\n\x1b[201~");
+  });
+
+  it("Cmd+V is a no-op when the clipboard API is unavailable", () => {
+    const harness = setup("MacIntel"); // no clipboardReadText -> readText: undefined
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "v", metaKey: true }));
+    expect(event.defaultPrevented).toBe(false);
+    expect(harness.sent).toEqual([]);
+  });
+
+  it("Cmd+V swallows clipboard rejections (e.g. permission denied) without sending anything", async () => {
+    const harness = setup("MacIntel", {
+      clipboardReadText: () => Promise.reject(new Error("clipboard blocked")),
+    });
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "v", metaKey: true }));
+    expect(event.defaultPrevented).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(harness.sent).toEqual([]);
+  });
+
+  it("Cmd+V is a no-op on non-mac platforms", () => {
+    const harness = setup("Linux x86_64", { clipboardReadText: "anything" });
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "v", metaKey: true }));
+    expect(event.defaultPrevented).toBe(false);
+    expect(harness.sent).toEqual([]);
+  });
+
+  it("Cmd+A delegates to window.term.selectAll when xterm exposes the Terminal instance", () => {
+    const calls: string[] = [];
+    const harness = setup("MacIntel", {
+      term: {
+        selectAll: () => {
+          calls.push("selectAll");
+        },
+      },
+    });
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "a", metaKey: true }));
+    expect(event.defaultPrevented).toBe(true);
+    expect(calls).toEqual(["selectAll"]);
+  });
+
+  it("Cmd+A falls back to a DOM Range scoped to .xterm-screen when window.term is absent", () => {
+    const screen = { __id: "xterm-screen-element" };
+    const selectionState: SelectionState = { selected: [], cleared: 0 };
+    const rangeState: RangeState = { contents: [] };
+    const harness = setup("MacIntel", { xtermScreen: screen, selectionState, rangeState });
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "a", metaKey: true }));
+    expect(event.defaultPrevented).toBe(true);
+    expect(rangeState.contents).toEqual([screen]);
+    expect(selectionState.cleared).toBe(1);
+    expect(selectionState.selected).toHaveLength(1);
+  });
+
+  it("Cmd+A is a no-op when neither window.term nor .xterm-screen is available", () => {
+    const harness = setup("MacIntel");
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "a", metaKey: true }));
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("Cmd+A is a no-op on non-mac platforms (Ctrl+A continues to send SOH to the PTY)", () => {
+    const harness = setup("Linux x86_64", {
+      term: {
+        selectAll: () => {
+          throw new Error("should not be called on linux");
+        },
+      },
+    });
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "a", metaKey: true }));
+    expect(event.defaultPrevented).toBe(false);
   });
 });
