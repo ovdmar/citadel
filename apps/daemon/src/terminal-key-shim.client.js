@@ -23,6 +23,20 @@
       ws.addEventListener("close", () => {
         if (activeWs === ws) activeWs = null;
       });
+      // ttyd's WebSocket frames look like: 1-byte command + payload. Output
+      // frames start with '0' (0x30) and the payload is the raw PTY byte
+      // stream — every terminal escape, including OSC 52 from tmux when
+      // set-clipboard is on. Sniff for OSC 52 here as a fallback to the
+      // xterm.parser path below, because ttyd's bundled xterm does NOT
+      // enable allowProposedApi, so term.parser.registerOscHandler often
+      // silently does nothing.
+      ws.addEventListener("message", (event) => {
+        try {
+          extractOsc52(event.data);
+        } catch (_err) {
+          // never let clipboard handling break terminal IO
+        }
+      });
     }
     return ws;
   }
@@ -32,6 +46,122 @@
   CitadelWebSocket.CLOSING = OriginalWebSocket.CLOSING;
   CitadelWebSocket.CLOSED = OriginalWebSocket.CLOSED;
   window.WebSocket = CitadelWebSocket;
+
+  // Accumulator for OSC 52 sequences that may span multiple WS frames.
+  // Reset whenever an unrelated byte appears mid-collection so we don't grow
+  // unbounded if the sniffer is wrong about where a sequence ends.
+  let osc52Buf = "";
+  let osc52Active = false;
+  const OSC52_PREFIX = "\x1b]52;";
+  const OSC52_BEL = "\x07";
+  const OSC52_ST = "\x1b\\";
+
+  // Dedupe rapid duplicate writes — both the WS sniff and the xterm OSC
+  // handler may extract the same payload from the same emit, and Cmd+C may
+  // also re-write the same selection. We skip if the same text was written
+  // within the last 500ms.
+  let lastClipboardText = "";
+  let lastClipboardAt = 0;
+  function writeClipboard(text) {
+    if (!text || !navigator.clipboard?.writeText) return;
+    const now = Date.now();
+    if (text === lastClipboardText && now - lastClipboardAt < 500) return;
+    lastClipboardText = text;
+    lastClipboardAt = now;
+    navigator.clipboard.writeText(text).catch(() => {});
+  }
+
+  function decodeOsc52Payload(payload) {
+    // payload looks like "<targets>;<base64>" where targets is e.g. "c", "p",
+    // "s", or empty. We ignore reads (empty base64 == read request).
+    const semi = payload.indexOf(";");
+    if (semi < 0) return "";
+    const b64 = payload.slice(semi + 1).replace(/\s+/g, "");
+    if (!b64) return "";
+    try {
+      const raw = atob(b64);
+      try {
+        return new TextDecoder().decode(Uint8Array.from(raw, (c) => c.charCodeAt(0)));
+      } catch (_err) {
+        return raw;
+      }
+    } catch (_err) {
+      return "";
+    }
+  }
+
+  function flushOsc52(payload) {
+    osc52Active = false;
+    osc52Buf = "";
+    const text = decodeOsc52Payload(payload);
+    if (text) writeClipboard(text);
+  }
+
+  function consumeOsc52(text) {
+    let i = 0;
+    while (i < text.length) {
+      if (!osc52Active) {
+        const start = text.indexOf(OSC52_PREFIX, i);
+        if (start < 0) return;
+        osc52Active = true;
+        osc52Buf = "";
+        i = start + OSC52_PREFIX.length;
+        continue;
+      }
+      // Collect until BEL or ST.
+      const belAt = text.indexOf(OSC52_BEL, i);
+      const stAt = text.indexOf(OSC52_ST, i);
+      let end = -1;
+      let endLen = 0;
+      if (belAt >= 0 && (stAt < 0 || belAt < stAt)) {
+        end = belAt;
+        endLen = 1;
+      } else if (stAt >= 0) {
+        end = stAt;
+        endLen = 2;
+      }
+      if (end < 0) {
+        osc52Buf += text.slice(i);
+        if (osc52Buf.length > 8_000_000) {
+          // 8 MB ceiling — if we never see a terminator something is wrong.
+          osc52Active = false;
+          osc52Buf = "";
+        }
+        return;
+      }
+      osc52Buf += text.slice(i, end);
+      const payload = osc52Buf;
+      flushOsc52(payload);
+      i = end + endLen;
+    }
+  }
+
+  function extractOsc52(data) {
+    if (typeof data === "string") {
+      // ttyd may use binary frames, but be defensive.
+      if (data.length > 0 && data.charCodeAt(0) === 48) consumeOsc52(data.slice(1));
+      return;
+    }
+    let bytes;
+    if (data instanceof ArrayBuffer) {
+      bytes = new Uint8Array(data);
+    } else if (ArrayBuffer.isView(data)) {
+      bytes = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+    } else if (typeof Blob !== "undefined" && data instanceof Blob) {
+      data
+        .arrayBuffer()
+        .then((ab) => extractOsc52(ab))
+        .catch(() => {});
+      return;
+    } else {
+      return;
+    }
+    if (bytes.byteLength === 0 || bytes[0] !== 48) return; // not an OUTPUT frame
+    // Decode the payload as Latin-1 so escape bytes stay 1:1 with chars.
+    let text = "";
+    for (let k = 1; k < bytes.byteLength; k += 1) text += String.fromCharCode(bytes[k]);
+    consumeOsc52(text);
+  }
 
   function sendInput(text) {
     const ws = activeWs;
