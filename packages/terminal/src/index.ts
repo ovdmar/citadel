@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import { WebSocketServer } from "ws";
 
 export { createTtydManager, TtydUnavailableError } from "./ttyd.js";
-export type { TtydEntry, TtydManager, TtydManagerConfig } from "./ttyd.js";
+export type { TtydEntry, TtydManager, TtydManagerConfig, TtydTheme } from "./ttyd.js";
 
 const execFileAsync = promisify(execFile);
 

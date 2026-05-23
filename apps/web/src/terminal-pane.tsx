@@ -3,6 +3,7 @@ import { ExternalLink, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "./api.js";
 import { Button } from "./components/ui/button.js";
+import { useResolvedTheme } from "./use-resolved-theme.js";
 
 type EnsureResponse = {
   terminal: {
@@ -25,6 +26,7 @@ const RUNBOOK_URL = "/docs/operations/terminal-runbook";
 
 export function TerminalPane(props: { session: AgentSession }) {
   const sessionId = props.session.id;
+  const theme = useResolvedTheme();
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<EnsureError | null>(null);
   const [pending, setPending] = useState(true);
@@ -37,9 +39,10 @@ export function TerminalPane(props: { session: AgentSession }) {
       setPending(true);
       setError(null);
       try {
-        const response = await api<EnsureResponse>(`/api/agent-sessions/${sessionId}/terminal`, {
-          method: "POST",
-        });
+        const response = await api<EnsureResponse>(
+          `/api/agent-sessions/${sessionId}/terminal?theme=${encodeURIComponent(theme)}`,
+          { method: "POST" },
+        );
         if (requestSeqRef.current !== seq) return;
         setUrl(response.terminal.url);
         setError(null);
@@ -52,7 +55,7 @@ export function TerminalPane(props: { session: AgentSession }) {
         if (requestSeqRef.current === seq) setPending(false);
       }
     },
-    [sessionId],
+    [sessionId, theme],
   );
 
   // Some classes of failure (tmux session vanished after daemon restart,
@@ -80,6 +83,17 @@ export function TerminalPane(props: { session: AgentSession }) {
     setIframeKey(0);
     void ensure();
   }, [ensure]);
+
+  // When the user toggles cockpit theme, ensure() reruns with the new theme.
+  // The daemon respawns ttyd with the matched xterm palette if it differs
+  // from the running entry; bumping the iframe key forces a reload so the
+  // user sees the new colors immediately rather than on the next session.
+  const lastThemeRef = useRef(theme);
+  useEffect(() => {
+    if (lastThemeRef.current === theme) return;
+    lastThemeRef.current = theme;
+    void ensure({ bumpFrame: true });
+  }, [theme, ensure]);
 
   const retry = useCallback(() => {
     void ensure();
