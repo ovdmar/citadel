@@ -1,4 +1,4 @@
-import type { AgentSession, Operation, Repo, Workspace, WorkspaceCockpitSummary } from "@citadel/contracts";
+import type { AgentSession, Namespace, Operation, Repo, Workspace, WorkspaceCockpitSummary } from "@citadel/contracts";
 import { Link, useLocation } from "@tanstack/react-router";
 import { ClipboardList, FolderPlus, LayoutDashboard, PanelLeftClose, Plus, Settings2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -19,6 +19,7 @@ export function Navigator(props: {
   activeSummary: WorkspaceCockpitSummary | undefined;
   activeWorkspaceId: string;
   runtimes: import("@citadel/contracts").AgentRuntime[];
+  namespaces: Namespace[];
   lastRepoId: string | undefined;
   createWorkspaceOpen: boolean;
   onOpenCreateWorkspace: () => void;
@@ -143,6 +144,7 @@ export function Navigator(props: {
           repos={props.repos}
           {...(props.lastRepoId ? { lastRepoId: props.lastRepoId } : {})}
           runtimes={props.runtimes}
+          namespaces={props.namespaces}
           onClose={props.onCloseCreateWorkspace}
           onCreated={(workspaceId) => {
             props.onCloseCreateWorkspace();

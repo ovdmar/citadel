@@ -1,4 +1,4 @@
-import type { AgentRuntime, Repo } from "@citadel/contracts";
+import type { AgentRuntime, Namespace, Repo } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { GripVertical, Search, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
@@ -294,6 +294,7 @@ type CreateWorkspaceModalProps = {
   repos: Repo[];
   lastRepoId?: string;
   runtimes: AgentRuntime[];
+  namespaces?: Namespace[];
   onClose: () => void;
   onCreated: (workspaceId: string) => void;
 };
@@ -353,6 +354,7 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   const [linkInput, setLinkInput] = useState("");
   const [name, setName] = useState("");
   const [branch, setBranch] = useState("");
+  const [namespaceId, setNamespaceId] = useState("");
   const [error, setError] = useState("");
 
   const launchableRuntimes = useMemo(
@@ -391,6 +393,7 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
       if (linked.slackThreadUrl) payload.slackThreadUrl = linked.slackThreadUrl;
       const customBranch = branch.trim();
       if (customBranch) payload.existingBranch = customBranch;
+      if (namespaceId) payload.namespaceId = namespaceId;
       const result = await api<{ workspaceId: string }>("/api/workspaces", {
         method: "POST",
         body: JSON.stringify(payload),
@@ -460,6 +463,19 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
             </select>
           </label>
         </div>
+        {props.namespaces?.length ? (
+          <label>
+            Namespace
+            <select value={namespaceId} onChange={(event) => setNamespaceId(event.target.value)}>
+              <option value="">Uncategorized</option>
+              {props.namespaces.map((namespace) => (
+                <option key={namespace.id} value={namespace.id}>
+                  {namespace.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <details className="workspace-modal-advanced">
           <summary>Optional: link, name, branch</summary>
           <label>

@@ -1,9 +1,10 @@
-import type { AgentSession, PullRequestSummary, Workspace } from "@citadel/contracts";
+import type { AgentSession, Namespace, PullRequestSummary, Workspace } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
 import {
   Bot,
   CircleDot,
   ExternalLink,
+  Folder,
   GitPullRequest,
   Hash,
   Home,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
+import { useStateQuery } from "./app-state.js";
 
 export type WorkspaceCardData = {
   workspace: Workspace;
@@ -35,10 +37,15 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
   const additions = pullRequest?.additions ?? null;
   const deletions = pullRequest?.deletions ?? null;
+  const state = useStateQuery();
+  const namespace = workspace.namespaceId
+    ? (state.data?.namespaces.find((entry) => entry.id === workspace.namespaceId) ?? null)
+    : null;
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(titleDisplay);
   const [confirmDrop, setConfirmDrop] = useState(false);
+  const [showNamespaceMenu, setShowNamespaceMenu] = useState(false);
   const editInputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     if (!editing) setDraft(titleDisplay);
@@ -66,6 +73,10 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
         className={`workspace-card ${props.active ? "active" : ""}`}
         onClick={() => {
           if (!editing) props.onSelect();
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          setShowNamespaceMenu(true);
         }}
         aria-label={`Open workspace ${workspace.name}`}
       >
@@ -120,6 +131,15 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
           </span>
         </span>
         <span className="workspace-card-right" aria-hidden>
+          {namespace ? (
+            <span
+              className="namespace-pill"
+              title={`Namespace: ${namespace.name}`}
+              style={namespace.color ? { background: namespace.color, color: "#fff" } : undefined}
+            >
+              <Folder size={10} /> {namespace.name}
+            </span>
+          ) : null}
           {workspace.slackThreadUrl ? (
             <a
               href={workspace.slackThreadUrl}
@@ -193,6 +213,68 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
         </button>
       )}
       {confirmDrop ? <DropWorkspaceDialog workspace={workspace} onClose={() => setConfirmDrop(false)} /> : null}
+      {showNamespaceMenu ? (
+        <NamespacePickerDialog
+          workspace={workspace}
+          namespaces={state.data?.namespaces ?? []}
+          onClose={() => setShowNamespaceMenu(false)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function NamespacePickerDialog(props: { workspace: Workspace; namespaces: Namespace[]; onClose: () => void }) {
+  const assign = useMutation({
+    mutationFn: (namespaceId: string | null) =>
+      api("/api/namespaces/assign", {
+        method: "POST",
+        body: JSON.stringify({ workspaceId: props.workspace.id, namespaceId }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      props.onClose();
+    },
+  });
+  return (
+    <div className="drop-workspace-backdrop" onMouseDown={props.onClose}>
+      <dialog
+        className="drop-workspace-dialog"
+        aria-label="Move workspace to namespace"
+        open
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <strong>Move "{props.workspace.name}" to…</strong>
+        <div className="namespace-picker-list">
+          <button
+            type="button"
+            className="check-row"
+            onClick={() => assign.mutate(null)}
+            disabled={!props.workspace.namespaceId || assign.isPending}
+          >
+            Uncategorized
+          </button>
+          {props.namespaces.map((namespace) => (
+            <button
+              key={namespace.id}
+              type="button"
+              className="check-row"
+              onClick={() => assign.mutate(namespace.id)}
+              disabled={props.workspace.namespaceId === namespace.id || assign.isPending}
+            >
+              {namespace.name}
+            </button>
+          ))}
+          {!props.namespaces.length ? (
+            <div className="empty compact">No namespaces yet. Create one from the dashboard.</div>
+          ) : null}
+        </div>
+        <div className="drop-workspace-actions">
+          <button type="button" className="drop-workspace-cancel" onClick={props.onClose}>
+            Cancel
+          </button>
+        </div>
+      </dialog>
     </div>
   );
 }

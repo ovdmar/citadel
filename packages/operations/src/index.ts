@@ -4,11 +4,14 @@ import type { CitadelConfig, HookConfig } from "@citadel/config";
 import type {
   AgentSession,
   CreateAgentSessionInput,
+  CreateNamespaceInput,
   CreateWorkspaceInput,
   HookAction,
   HookOutput,
+  Namespace,
   Operation,
   Repo,
+  UpdateNamespaceInput,
   Workspace,
 } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
@@ -16,7 +19,9 @@ import type { SqliteStore } from "@citadel/db";
 import { parseHookOutput, runCommandHook } from "@citadel/hooks";
 import { ensureTmuxSession, killTmuxSession, submitPrompt } from "@citadel/terminal";
 import * as agentMessages from "./agent-messages.js";
+import * as namespaceOps from "./namespaces.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
+export type { AssignWorkspaceResult } from "./namespaces.js";
 export {
   ScheduledAgentRunner,
   parseCronExpression,
@@ -97,6 +102,7 @@ export class OperationService {
       pinned: true,
       lifecycle: "ready",
       dirty: false,
+      namespaceId: null,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
@@ -120,6 +126,12 @@ export class OperationService {
   async createWorkspace(input: CreateWorkspaceInput) {
     const repo = this.store.listRepos().find((candidate) => candidate.id === input.repoId);
     if (!repo) throw new Error(`Unknown repo: ${input.repoId}`);
+    const namespaceId = input.namespaceId ?? null;
+    if (namespaceId) {
+      const namespace = this.store.findNamespace(namespaceId);
+      if (!namespace) throw new Error(`Unknown namespace: ${namespaceId}`);
+      if (namespace.archivedAt) throw new Error(`Namespace is archived: ${namespaceId}`);
+    }
     const now = nowIso();
     const operation = this.operation("workspace.create", "running", repo.id, null, 5, "Validating workspace request");
     const branch = workspaceBranchName(input);
@@ -144,6 +156,7 @@ export class OperationService {
       pinned: false,
       lifecycle: "creating",
       dirty: false,
+      namespaceId,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
@@ -246,6 +259,9 @@ export class OperationService {
   ) {
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
     if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+    if (input.namespaceId && input.namespaceId !== workspace.namespaceId) {
+      this.assignWorkspaceToNamespace({ workspaceId: workspace.id, namespaceId: input.namespaceId });
+    }
     const now = nowIso();
     const sessionName = `citadel_${workspace.id}_${createId("agent").slice(-8)}`;
     // Build runtime args. If runtime declares a promptArg flag, embed prompt as a CLI flag.
@@ -623,6 +639,17 @@ export class OperationService {
     };
   }
 
+  listNamespaces = (includeArchived = false): Namespace[] => this.store.listNamespaces(includeArchived);
+  createNamespace = (input: CreateNamespaceInput) => namespaceOps.createNamespace(this.nsDeps(), input);
+  renameNamespace = (id: string, patch: UpdateNamespaceInput) => namespaceOps.renameNamespace(this.nsDeps(), id, patch);
+  archiveNamespace = (id: string) => namespaceOps.archiveNamespace(this.nsDeps(), id);
+  assignWorkspaceToNamespace = (input: { workspaceId: string; namespaceId: string | null }) =>
+    namespaceOps.assignWorkspaceToNamespace(this.nsDeps(), input);
+  private nsDeps = (): namespaceOps.NamespaceServiceDeps => ({
+    store: this.store,
+    activity: (type, message) => this.activity(type, "user", message, null, null, null),
+  });
+
   hookDiagnostics(repo: Repo, workspace?: Workspace | null) {
     return listHookDiagnostics({
       repo,
@@ -662,14 +689,8 @@ export class OperationService {
     return operation;
   }
 
-  // Append a structured log entry to an operation. Captures meaningful audit
-  // detail (which path, which branch, which hook) alongside the status updates.
   private logOp(operationId: string, level: "info" | "warn" | "error", message: string) {
-    this.store.appendOperationLog(operationId, {
-      level,
-      message,
-      at: nowIso(),
-    });
+    this.store.appendOperationLog(operationId, { level, message, at: nowIso() });
   }
 
   private activity(
@@ -771,10 +792,5 @@ export class OperationService {
         );
       }
     }
-  }
-
-  private configuredHooks(event: HookConfig["event"], hookIds: string[]) {
-    const hooks = (this.config?.hooks ?? []).filter((hook) => hook.event === event);
-    return hookIds.length ? hooks.filter((hook) => hookIds.includes(hook.id)) : hooks;
   }
 }

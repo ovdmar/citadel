@@ -51,6 +51,10 @@ export function registerMcpRoutes(
     res.json({ activity: store.listActivity() });
   });
 
+  app.get("/api/mcp/resources/namespaces", (_req, res) => {
+    res.json({ namespaces: store.listNamespaces() });
+  });
+
   app.post(
     "/api/mcp/tools/call",
     asyncRoute(async (req, res) => {

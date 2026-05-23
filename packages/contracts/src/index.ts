@@ -55,9 +55,47 @@ export const WorkspaceSchema = z.object({
   pinned: z.boolean().default(false),
   lifecycle: WorkspaceLifecycleSchema,
   dirty: z.boolean().default(false),
+  namespaceId: IdSchema.nullable().default(null),
   createdAt: z.string(),
   updatedAt: z.string(),
   archivedAt: z.string().nullable().default(null),
+});
+
+export const NamespaceColorSchema = z
+  .string()
+  .regex(/^#[0-9a-fA-F]{6}$/)
+  .nullable()
+  .default(null);
+
+export const NamespaceSchema = z.object({
+  id: IdSchema,
+  name: z.string().min(1).max(80),
+  color: NamespaceColorSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  archivedAt: z.string().nullable().default(null),
+});
+
+export const CreateNamespaceInputSchema = z.object({
+  name: z.string().min(1).max(80),
+  color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .optional(),
+});
+
+export const UpdateNamespaceInputSchema = z.object({
+  name: z.string().min(1).max(80).optional(),
+  color: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/)
+    .nullable()
+    .optional(),
+});
+
+export const AssignWorkspaceToNamespaceInputSchema = z.object({
+  workspaceId: IdSchema,
+  namespaceId: IdSchema.nullable(),
 });
 
 export const RuntimeCapabilitySchema = z.object({
@@ -374,6 +412,7 @@ export const CreateWorkspaceInputSchema = z.object({
   prUrl: z.string().url().optional(),
   baseBranch: z.string().min(1).optional(),
   existingBranch: z.string().min(1).optional(),
+  namespaceId: IdSchema.optional(),
 });
 
 export const CreateAgentSessionInputSchema = z.object({
@@ -381,6 +420,7 @@ export const CreateAgentSessionInputSchema = z.object({
   runtimeId: IdSchema,
   displayName: z.string().min(1).optional(),
   prompt: z.string().optional(),
+  namespaceId: IdSchema.optional(),
 });
 
 export const TransitionIssueInputSchema = z.object({
@@ -475,6 +515,10 @@ export type CreateRepoInput = z.infer<typeof CreateRepoInputSchema>;
 export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
 export type CreateAgentSessionInput = z.infer<typeof CreateAgentSessionInputSchema>;
 export type TransitionIssueInput = z.infer<typeof TransitionIssueInputSchema>;
+export type Namespace = z.infer<typeof NamespaceSchema>;
+export type CreateNamespaceInput = z.infer<typeof CreateNamespaceInputSchema>;
+export type UpdateNamespaceInput = z.infer<typeof UpdateNamespaceInputSchema>;
+export type AssignWorkspaceToNamespaceInput = z.infer<typeof AssignWorkspaceToNamespaceInputSchema>;
 export type DiffFile = z.infer<typeof DiffFileSchema>;
 export type WorkspaceDiff = z.infer<typeof WorkspaceDiffSchema>;
 export type ScheduledAgent = z.infer<typeof ScheduledAgentSchema>;

@@ -39,6 +39,7 @@ describe("SqliteStore", () => {
       { version: 3 },
       { version: 4 },
       { version: 5 },
+      { version: 6 },
     ]);
   });
 
@@ -80,6 +81,7 @@ describe("SqliteStore", () => {
       pinned: true,
       lifecycle: "creating",
       dirty: false,
+      namespaceId: null,
       createdAt: "2026-05-17T00:01:00.000Z",
       updatedAt: "2026-05-17T00:01:00.000Z",
       archivedAt: null,
@@ -208,6 +210,7 @@ describe("SqliteStore", () => {
       pinned: false,
       lifecycle: "ready",
       dirty: false,
+      namespaceId: null,
       createdAt: "2026-05-17T00:01:00.000Z",
       updatedAt: "2026-05-17T00:01:00.000Z",
       archivedAt: null,

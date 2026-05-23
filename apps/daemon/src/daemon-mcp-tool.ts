@@ -1,5 +1,10 @@
 import type { CitadelConfig } from "@citadel/config";
-import { CreateAgentSessionInputSchema, CreateWorkspaceInputSchema } from "@citadel/contracts";
+import {
+  AssignWorkspaceToNamespaceInputSchema,
+  CreateAgentSessionInputSchema,
+  CreateNamespaceInputSchema,
+  CreateWorkspaceInputSchema,
+} from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, serializeWorkspaceResource } from "@citadel/mcp";
 import type { OperationService } from "@citadel/operations";
@@ -29,6 +34,7 @@ export async function readMcpResource(store: SqliteStore, config: CitadelConfig,
   if (uri === "citadel://workspaces") return workspaceResource(store);
   if (uri === "citadel://provider-health") return { providerHealth: await collectProviderHealth(config.providers) };
   if (uri === "citadel://activity") return { activity: store.listActivity() };
+  if (uri === "citadel://namespaces") return { namespaces: store.listNamespaces() };
   return null;
 }
 
@@ -86,6 +92,17 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     if (typeof call.arguments?.maxChars === "number") input.maxChars = call.arguments.maxChars;
     return operations.readAgentTranscript(input);
   }
+  if (call.name === "create_namespace") {
+    const namespace = operations.createNamespace(CreateNamespaceInputSchema.parse(call.arguments ?? {}));
+    emit("namespace.updated", { namespaceId: namespace.id });
+    return { namespace };
+  }
+  if (call.name === "assign_workspace_to_namespace") {
+    const input = AssignWorkspaceToNamespaceInputSchema.parse(call.arguments ?? {});
+    const result = operations.assignWorkspaceToNamespace(input);
+    emit("namespace.updated", { workspaceId: input.workspaceId });
+    return result;
+  }
   if (call.name === "send_agent_message") {
     const sessionId = typeof call.arguments?.sessionId === "string" ? call.arguments.sessionId : "";
     const message = typeof call.arguments?.message === "string" ? call.arguments.message : "";
@@ -104,5 +121,6 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     activity: store.listActivity(),
     providerHealth,
     runtimes: listRuntimeHealth(config.runtimes),
+    namespaces: store.listNamespaces(),
   });
 }
