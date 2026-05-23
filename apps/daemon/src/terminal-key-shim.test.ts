@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { TERMINAL_KEY_SHIM_SOURCE, injectKeyShim } from "./terminal-key-shim.js";
+import { TERMINAL_KEY_SHIM_SOURCE, injectKeyShim, shouldInjectShim } from "./terminal-key-shim.js";
 
 describe("injectKeyShim", () => {
   it("injects the shim before the first <script> tag so it runs before ttyd's bundle", () => {
-    const html = `<!doctype html><html><head><title>ttyd</title></head><body><div id="terminal"></div><script src="main.js"></script></body></html>`;
+    const html =
+      '<!doctype html><html><head><title>ttyd</title></head><body><div id="terminal"></div><script src="main.js"></script></body></html>';
     const result = injectKeyShim(html);
     const shimIdx = result.indexOf("__citadelTerminalShim");
     const bundleIdx = result.indexOf('src="main.js"');
@@ -20,7 +21,7 @@ describe("injectKeyShim", () => {
   });
 
   it("is idempotent — does not double-inject", () => {
-    const html = `<html><head></head><body><script src="x.js"></script></body></html>`;
+    const html = '<html><head></head><body><script src="x.js"></script></body></html>';
     const once = injectKeyShim(html);
     const twice = injectKeyShim(once);
     expect(twice).toEqual(once);
@@ -32,23 +33,63 @@ describe("injectKeyShim", () => {
 
   it("covers every advertised shortcut so behavioural regressions surface in source", () => {
     // Shift+Enter -> LF
-    expect(TERMINAL_KEY_SHIM_SOURCE).toMatch(/"Enter"[\s\S]*shiftKey/);
+    expect(TERMINAL_KEY_SHIM_SOURCE).toMatch(/key === "enter"[\s\S]*shiftKey/);
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain('sendInput("\\n")');
     // Ctrl+A -> SOH
-    expect(TERMINAL_KEY_SHIM_SOURCE).toMatch(/"a" \|\| event\.key === "A"/);
+    expect(TERMINAL_KEY_SHIM_SOURCE).toMatch(/key === "a" && event\.ctrlKey/);
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain('sendInput("\\x01")');
     // Cmd+Backspace -> Ctrl+U on Mac only
-    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"Backspace"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"backspace"');
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain('sendInput("\\x15")');
     // Cmd+Left/Right -> Ctrl+A/E
-    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"ArrowLeft"');
-    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"ArrowRight"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"arrowleft"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"arrowright"');
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain('sendInput("\\x05")');
     // Mac gating
     expect(TERMINAL_KEY_SHIM_SOURCE).toMatch(/isMac/);
     // Cmd+C routing: navigator.clipboard + synthetic Ctrl+Shift+C dispatch
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain("navigator.clipboard");
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain(".xterm-helper-textarea");
+    // Single listener registration — only document, not window (avoids
+    // duplicate sends since stopImmediatePropagation only stops same-target
+    // listeners).
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('document.addEventListener("keydown"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain('window.addEventListener("keydown"');
+  });
+});
+
+describe("shouldInjectShim", () => {
+  it("returns true for 200 text/html with no content-encoding", () => {
+    expect(shouldInjectShim({ "content-type": "text/html; charset=utf-8" }, 200)).toBe(true);
+  });
+
+  it("returns true for 200 text/html with identity content-encoding", () => {
+    expect(shouldInjectShim({ "content-type": "text/html", "content-encoding": "identity" }, 200)).toBe(true);
+  });
+
+  it("returns false for non-200 status (e.g. 304 Not Modified, 204 No Content, 500)", () => {
+    const headers = { "content-type": "text/html" };
+    expect(shouldInjectShim(headers, 304)).toBe(false);
+    expect(shouldInjectShim(headers, 204)).toBe(false);
+    expect(shouldInjectShim(headers, 500)).toBe(false);
+  });
+
+  it("returns false for non-html content types", () => {
+    expect(shouldInjectShim({ "content-type": "application/javascript" }, 200)).toBe(false);
+    expect(shouldInjectShim({ "content-type": "text/css" }, 200)).toBe(false);
+    expect(shouldInjectShim({ "content-type": "image/png" }, 200)).toBe(false);
+  });
+
+  it("returns false when the response is transport-compressed (gzip/deflate/br)", () => {
+    expect(shouldInjectShim({ "content-type": "text/html", "content-encoding": "gzip" }, 200)).toBe(false);
+    expect(shouldInjectShim({ "content-type": "text/html", "content-encoding": "deflate" }, 200)).toBe(false);
+    expect(shouldInjectShim({ "content-type": "text/html", "content-encoding": "br" }, 200)).toBe(false);
+  });
+
+  it("handles missing or array-valued headers gracefully", () => {
+    expect(shouldInjectShim({}, 200)).toBe(false);
+    expect(shouldInjectShim({ "content-type": ["text/html"] }, 200)).toBe(true);
+    expect(shouldInjectShim({ "content-type": "text/html", "content-encoding": [""] }, 200)).toBe(true);
   });
 });
 
@@ -64,6 +105,8 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
       TextEncoder: typeof TextEncoder;
     };
     listeners: Array<(event: FakeKeyboardEvent) => void>;
+    windowKeydownListeners: number;
+    documentKeydownListeners: number;
     sent: Uint8Array[];
     activate: () => void;
   };
@@ -150,18 +193,26 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     const listeners: ShimHarness["listeners"] = [];
     const sent: Uint8Array[] = [];
     const clipboardWrites = extras.clipboardWrites ?? [];
+    let windowKeydownListeners = 0;
+    let documentKeydownListeners = 0;
     const runtime: ShimHarness["runtime"] = {
       window: {
         WebSocket: FakeWebSocket,
         addEventListener: ((type: string, handler: (event: FakeKeyboardEvent) => void) => {
-          if (type === "keydown") listeners.push(handler);
+          if (type === "keydown") {
+            windowKeydownListeners += 1;
+            listeners.push(handler);
+          }
         }) as unknown as Window["addEventListener"],
         getSelection: extras.getSelection ? () => ({ toString: () => extras.getSelection?.() ?? "" }) : undefined,
         KeyboardEvent: FakeSyntheticEvent as unknown as typeof KeyboardEvent,
       } as ShimHarness["runtime"]["window"],
       document: {
         addEventListener: ((type: string, handler: (event: FakeKeyboardEvent) => void) => {
-          if (type === "keydown") listeners.push(handler);
+          if (type === "keydown") {
+            documentKeydownListeners += 1;
+            listeners.push(handler);
+          }
         }) as unknown as Document["addEventListener"],
         querySelector: ((selector: string) => {
           if (selector === ".xterm-helper-textarea") return extras.xtermHelper ?? null;
@@ -189,12 +240,17 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     return {
       runtime,
       listeners,
+      get windowKeydownListeners() {
+        return windowKeydownListeners;
+      },
+      get documentKeydownListeners() {
+        return documentKeydownListeners;
+      },
       sent,
       activate: () => {
         const PatchedWS = runtime.window.WebSocket;
         const ws = new PatchedWS("ws://localhost/terminals/x/ws");
         const fakeWs = FakeWebSocket.instances[FakeWebSocket.instances.length - 1] as FakeWebSocket;
-        // Re-route fakeWs.send into our captured `sent` array for easy assertions.
         const originalSend = fakeWs.send.bind(fakeWs);
         fakeWs.send = (payload: Uint8Array) => {
           sent.push(payload);
@@ -218,23 +274,29 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     return event;
   }
 
-  it("forwards Shift+Enter as a literal LF byte", () => {
+  it("registers exactly one keydown listener on document (not on window) so shortcuts fire once", () => {
+    const harness = setup("MacIntel");
+    expect(harness.documentKeydownListeners).toBe(1);
+    expect(harness.windowKeydownListeners).toBe(0);
+  });
+
+  it("forwards Shift+Enter as a single LF byte", () => {
     const harness = setup("MacIntel");
     harness.activate();
     const event = dispatch(harness, makeEvent({ key: "Enter", shiftKey: true }));
     expect(event.defaultPrevented).toBe(true);
-    // One listener fires on window and one on document — both forward.
-    expect(harness.sent.length).toBeGreaterThanOrEqual(1);
+    expect(harness.sent).toHaveLength(1);
     const decoded = decode(harness.sent[0]);
     expect(decoded.command).toBe(48); // '0'
     expect(decoded.text).toBe("\n");
   });
 
-  it("forwards Ctrl+A as SOH on any platform", () => {
+  it("forwards Ctrl+A as a single SOH byte on any platform", () => {
     const harness = setup("Linux x86_64");
     harness.activate();
     const event = dispatch(harness, makeEvent({ key: "a", ctrlKey: true }));
     expect(event.defaultPrevented).toBe(true);
+    expect(harness.sent).toHaveLength(1);
     expect(decode(harness.sent[0]).text).toBe("\x01");
   });
 
@@ -242,6 +304,7 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     const mac = setup("MacIntel");
     mac.activate();
     dispatch(mac, makeEvent({ key: "Backspace", metaKey: true }));
+    expect(mac.sent).toHaveLength(1);
     expect(decode(mac.sent[0]).text).toBe("\x15");
 
     const linux = setup("Linux x86_64");
@@ -256,10 +319,9 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     mac.activate();
     dispatch(mac, makeEvent({ key: "ArrowLeft", metaKey: true }));
     dispatch(mac, makeEvent({ key: "ArrowRight", metaKey: true }));
-    // First handler fires twice (window+document) per event; index 0 = Left, index 2 = Right.
-    const texts = mac.sent.map((payload) => decode(payload).text);
-    expect(texts).toContain("\x01");
-    expect(texts).toContain("\x05");
+    expect(mac.sent).toHaveLength(2);
+    expect(decode(mac.sent[0]).text).toBe("\x01");
+    expect(decode(mac.sent[1]).text).toBe("\x05");
   });
 
   it("ignores keystrokes while IME composition is active", () => {
@@ -270,15 +332,13 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     expect(harness.sent).toEqual([]);
   });
 
-  it("Cmd+C copies the DOM selection through navigator.clipboard when one exists", () => {
+  it("Cmd+C copies the DOM selection through navigator.clipboard exactly once", () => {
     const clipboardWrites: string[] = [];
     const harness = setup("MacIntel", { getSelection: () => "highlighted text", clipboardWrites });
     harness.activate();
     const event = dispatch(harness, makeEvent({ key: "c", metaKey: true }));
     expect(event.defaultPrevented).toBe(true);
-    expect(clipboardWrites).toEqual(["highlighted text", "highlighted text"]);
-    // Window + document listeners both fire — both attempts succeed; that's fine,
-    // clipboard.writeText is idempotent. The synthetic textarea fallback was NOT used.
+    expect(clipboardWrites).toEqual(["highlighted text"]);
   });
 
   it("Cmd+C falls back to dispatching Ctrl+Shift+C on xterm's helper textarea when there is no DOM selection", () => {
@@ -294,9 +354,8 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     harness.activate();
     dispatch(harness, makeEvent({ key: "c", metaKey: true }));
     expect(clipboardWrites).toEqual([]);
-    expect(dispatched.length).toBeGreaterThanOrEqual(1);
+    expect(dispatched).toHaveLength(1);
     const first = dispatched[0];
-    expect(first).toBeDefined();
     expect(first?.type).toBe("keydown");
     expect(first?.init.code).toBe("KeyC");
     expect(first?.init.ctrlKey).toBe(true);
@@ -310,5 +369,13 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     const event = dispatch(harness, makeEvent({ key: "c", metaKey: true }));
     expect(event.defaultPrevented).toBe(false);
     expect(clipboardWrites).toEqual([]);
+  });
+
+  it("accepts uppercase key values from keyboards with CapsLock/Shift", () => {
+    const harness = setup("Linux x86_64");
+    harness.activate();
+    dispatch(harness, makeEvent({ key: "A", ctrlKey: true }));
+    expect(harness.sent).toHaveLength(1);
+    expect(decode(harness.sent[0]).text).toBe("\x01");
   });
 });

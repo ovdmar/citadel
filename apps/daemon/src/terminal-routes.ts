@@ -5,7 +5,7 @@ import type { SqliteStore } from "@citadel/db";
 import { type TtydEntry, type TtydManager, TtydUnavailableError } from "@citadel/terminal";
 import type express from "express";
 import httpProxyImport from "http-proxy";
-import { injectKeyShim } from "./terminal-key-shim.js";
+import { injectKeyShim, shouldInjectShim } from "./terminal-key-shim.js";
 
 type HttpProxyModule = typeof httpProxyImport;
 const httpProxy = (httpProxyImport as unknown as { default?: HttpProxyModule }).default ?? httpProxyImport;
@@ -37,15 +37,16 @@ export function registerTerminalRoutes(input: {
 
   // ttyd's HTML page boots its WebSocket as soon as its bundle runs, so we
   // inject our keyboard-shortcut shim before any other <script> tag. For
-  // everything else (JS bundles, CSS, fonts, WebSocket frames) we just pipe
-  // the upstream response through untouched.
+  // everything else (JS bundles, CSS, fonts, 304/204 responses, gzipped
+  // payloads, WebSocket frames) we just pipe the upstream response through
+  // untouched — shouldInjectShim() gates the rewriting path so we never
+  // corrupt compressed or bodyless responses.
   proxy.on("proxyRes", (proxyRes, _req, target) => {
     const httpRes = target as express.Response;
-    const contentType = String(proxyRes.headers["content-type"] ?? "");
-    const isHtml = contentType.toLowerCase().includes("text/html");
     httpRes.statusCode = proxyRes.statusCode ?? 200;
+    const injectable = shouldInjectShim(proxyRes.headers, proxyRes.statusCode ?? 0);
 
-    if (!isHtml) {
+    if (!injectable) {
       for (const [name, value] of Object.entries(proxyRes.headers)) {
         if (value === undefined) continue;
         httpRes.setHeader(name, value as string | string[]);

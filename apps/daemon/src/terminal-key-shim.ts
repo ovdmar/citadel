@@ -1,7 +1,10 @@
-// Injected into ttyd's HTML so it executes before ttyd's bundle. We wrap
-// `window.WebSocket` to capture the input channel ttyd opens at `/ws`, then
-// translate the keyboard shortcuts ttyd/xterm.js do not handle the way users
-// expect inside Citadel's embedded terminal:
+import fs from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+// The shim itself lives in `terminal-key-shim.client.js` so editors lint and
+// highlight it as real JavaScript. We slurp it once at module-init time. See
+// the client file for the actual translation logic; documented mappings:
 //
 //   - Shift+Enter  -> send LF (newline, soft break) instead of CR (submit)
 //   - Ctrl+A       -> send SOH (start of line) even when the browser would
@@ -12,129 +15,9 @@
 //   - Cmd+C     (mac)     -> route through ttyd's Ctrl+Shift+C copy handler
 //                             so xterm's selection (no DOM selection in canvas
 //                             renderer) actually reaches the clipboard
-//
-// ttyd frames input as a binary message: byte 0 is `0` (Command.INPUT),
-// followed by the UTF-8 encoded payload.
-export const TERMINAL_KEY_SHIM_SOURCE = `(function () {
-  if (window.__citadelTerminalShim) return;
-  window.__citadelTerminalShim = true;
-
-  var isMac = /Mac|iPhone|iPad/i.test(navigator.platform || "") || /Macintosh/i.test(navigator.userAgent || "");
-  var activeWs = null;
-  var textEncoder = new TextEncoder();
-
-  var OriginalWebSocket = window.WebSocket;
-  function CitadelWebSocket(url, protocols) {
-    var ws = protocols === undefined ? new OriginalWebSocket(url) : new OriginalWebSocket(url, protocols);
-    if (typeof url === "string" && /\\/ws(\\?|$)/.test(url)) {
-      activeWs = ws;
-      ws.addEventListener("close", function () {
-        if (activeWs === ws) activeWs = null;
-      });
-    }
-    return ws;
-  }
-  CitadelWebSocket.prototype = OriginalWebSocket.prototype;
-  CitadelWebSocket.CONNECTING = OriginalWebSocket.CONNECTING;
-  CitadelWebSocket.OPEN = OriginalWebSocket.OPEN;
-  CitadelWebSocket.CLOSING = OriginalWebSocket.CLOSING;
-  CitadelWebSocket.CLOSED = OriginalWebSocket.CLOSED;
-  window.WebSocket = CitadelWebSocket;
-
-  function sendInput(text) {
-    var ws = activeWs;
-    if (!ws || ws.readyState !== 1) return false;
-    var encoded = textEncoder.encode(text);
-    var payload = new Uint8Array(encoded.length + 1);
-    payload[0] = 48; // '0' === Command.INPUT in ttyd's protocol
-    payload.set(encoded, 1);
-    try {
-      ws.send(payload);
-    } catch (_err) {
-      return false;
-    }
-    return true;
-  }
-
-  function consume(event) {
-    event.preventDefault();
-    event.stopPropagation();
-    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-  }
-
-  function onKeydown(event) {
-    if (event.isComposing) return;
-    if (event.key === "Enter" && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
-      if (sendInput("\\n")) consume(event);
-      return;
-    }
-    if ((event.key === "a" || event.key === "A") && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey) {
-      if (sendInput("\\x01")) consume(event);
-      return;
-    }
-    if (isMac) {
-      if (event.key === "Backspace" && event.metaKey && !event.ctrlKey && !event.altKey) {
-        if (sendInput("\\x15")) consume(event);
-        return;
-      }
-      if (event.key === "ArrowLeft" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-        if (sendInput("\\x01")) consume(event);
-        return;
-      }
-      if (event.key === "ArrowRight" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-        if (sendInput("\\x05")) consume(event);
-        return;
-      }
-      if ((event.key === "c" || event.key === "C") && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-        if (copySelection()) consume(event);
-        return;
-      }
-    }
-  }
-
-  // Cmd+C path: xterm's canvas renderer doesn't produce a real DOM selection,
-  // so the browser's native copy event has nothing to copy. We first try the
-  // DOM selection (in case a DOM-renderer build is in use), then fall back to
-  // dispatching the synthetic Ctrl+Shift+C event that ttyd's own xterm
-  // attachCustomKeyEventHandler already wires up for copy.
-  function copySelection() {
-    var domSelection = "";
-    try {
-      var sel = window.getSelection && window.getSelection();
-      domSelection = sel ? String(sel) : "";
-    } catch (_err) {
-      domSelection = "";
-    }
-    if (domSelection) {
-      try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(domSelection).catch(function () {});
-          return true;
-        }
-      } catch (_err) {
-        // fall through to synthetic-event path
-      }
-    }
-    var helper = document.querySelector(".xterm-helper-textarea");
-    if (!helper) return false;
-    var Ctor = window.KeyboardEvent;
-    if (typeof Ctor !== "function") return false;
-    var synthetic = new Ctor("keydown", {
-      key: "C",
-      code: "KeyC",
-      keyCode: 67,
-      ctrlKey: true,
-      shiftKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    helper.dispatchEvent(synthetic);
-    return true;
-  }
-
-  window.addEventListener("keydown", onKeydown, true);
-  document.addEventListener("keydown", onKeydown, true);
-})();`;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+export const TERMINAL_KEY_SHIM_SOURCE = fs.readFileSync(resolve(__dirname, "terminal-key-shim.client.js"), "utf8");
 
 // Inject the shim into ttyd's index page so it runs before any other script
 // tag (ttyd's bundle opens its WebSocket as soon as it executes).
@@ -150,4 +33,21 @@ export function injectKeyShim(html: string): string {
     return html.slice(0, headClose) + inject + html.slice(headClose);
   }
   return inject + html;
+}
+
+// Decide whether a proxied response is a candidate for HTML rewriting. We
+// only mutate 200 responses whose content-type is text/html AND that are
+// not transport-compressed; mutating a gzipped body without re-encoding (or
+// silently producing a body for 204/304 responses) would corrupt the stream.
+export function shouldInjectShim(headers: Record<string, string | string[] | undefined>, statusCode: number): boolean {
+  if (statusCode !== 200) return false;
+  const rawType = headers["content-type"];
+  const contentType = String(Array.isArray(rawType) ? rawType[0] : (rawType ?? ""));
+  if (!contentType.toLowerCase().includes("text/html")) return false;
+  const rawEncoding = headers["content-encoding"];
+  const encoding = String(Array.isArray(rawEncoding) ? rawEncoding[0] : (rawEncoding ?? ""))
+    .trim()
+    .toLowerCase();
+  if (encoding && encoding !== "identity") return false;
+  return true;
 }
