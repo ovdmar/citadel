@@ -413,7 +413,7 @@ async function currentPullRequest(rootPath: string) {
   }
 }
 
-function normalizeCheck(input: Record<string, unknown>): CheckSummary {
+export function normalizeCheck(input: Record<string, unknown>): CheckSummary {
   return {
     name: String(input.name ?? input.context ?? "check"),
     status: String(input.status ?? input.state ?? "unknown"),

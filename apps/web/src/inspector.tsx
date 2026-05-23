@@ -401,10 +401,11 @@ function CheckRow(props: {
 }) {
   const { check } = props;
   const tone = checkTone(check);
-  const isRunning = tone === "pending";
+  const isRunning = isCheckRunning(check);
   const now = useNow(isRunning ? 1000 : null);
-  const duration = formatCheckDuration(check, now);
+  const duration = formatCheckDuration(check, isRunning, now);
   const label = formatLabel(check.conclusion ?? check.status);
+  const iconTone = isRunning ? "pending" : tone === "failure" ? "failure" : "success";
   return (
     <a
       className={`check-row ${tone}`}
@@ -414,13 +415,13 @@ function CheckRow(props: {
       aria-label={`${check.name} — ${label}${duration ? ` — ${duration}` : ""}`}
       title={`${check.name} — ${label}`}
     >
-      <span className={`check-icon tone-${tone}`} aria-hidden>
-        {tone === "success" ? (
-          <Check size={14} />
+      <span className={`check-icon tone-${iconTone}`} aria-hidden>
+        {isRunning ? (
+          <Loader2 size={14} className="spin" />
         ) : tone === "failure" ? (
           <X size={14} />
         ) : (
-          <Loader2 size={14} className="spin" />
+          <Check size={14} />
         )}
       </span>
       <span className="check-name" title={check.name}>
@@ -429,6 +430,12 @@ function CheckRow(props: {
       <span className="check-duration command-result-meta">{duration || "—"}</span>
     </a>
   );
+}
+
+function isCheckRunning(check: { status: string; conclusion: string | null }) {
+  if (check.conclusion) return false;
+  const status = check.status.toLowerCase();
+  return status !== "completed" && status !== "success" && status !== "failure";
 }
 
 function useNow(intervalMs: number | null) {
@@ -442,12 +449,13 @@ function useNow(intervalMs: number | null) {
 }
 
 function formatCheckDuration(
-  check: { startedAt: string | null; completedAt: string | null; conclusion: string | null },
+  check: { startedAt: string | null; completedAt: string | null },
+  isRunning: boolean,
   nowMs: number,
 ) {
   const started = parseTime(check.startedAt);
   if (started == null) return "";
-  const finished = check.conclusion ? (parseTime(check.completedAt) ?? nowMs) : nowMs;
+  const finished = isRunning ? nowMs : (parseTime(check.completedAt) ?? nowMs);
   const ms = Math.max(0, finished - started);
   return formatDurationMs(ms);
 }
