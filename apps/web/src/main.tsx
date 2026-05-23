@@ -10,6 +10,7 @@ import { HistoryView } from "./routes/history.js";
 import { OnboardingView } from "./routes/onboarding.js";
 import { OperationsView } from "./routes/operations.js";
 import { RepoSettingsView } from "./routes/repo-settings.js";
+import { ScratchpadView } from "./routes/scratchpad.js";
 import { SettingsView } from "./routes/settings.js";
 import "./styles.css";
 import "./stage-terminal.css";
@@ -19,6 +20,7 @@ import "./modals.css";
 import "./operations.css";
 import "./settings.css";
 import "./settings-ia.css";
+import "./scratchpad.css";
 import "./responsive.css";
 
 // Seed data-theme on <html> BEFORE React renders so any component that
@@ -78,6 +80,12 @@ const historyRoute = createRoute({
   component: HistoryView,
 });
 
+const scratchpadRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/scratchpad",
+  component: ScratchpadView,
+});
+
 function Shell() {
   return (
     <div className="app-root">
@@ -120,6 +128,7 @@ const router = createRouter({
     onboardingRoute,
     dashboardRoute,
     historyRoute,
+    scratchpadRoute,
   ]),
   defaultNotFoundComponent: NotFoundView,
 });

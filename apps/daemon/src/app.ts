@@ -37,6 +37,7 @@ import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
+import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
 import { readWorkspaceDiff, readWorkspaceGitStatus } from "./workspace-diff.js";
 
@@ -694,15 +695,7 @@ export function createDaemonApp(input: {
     }),
   );
 
-  const scheduledAgents = registerScheduledAgentRoutes({
-    app,
-    server,
-    store,
-    operations,
-    config,
-    emit,
-    asyncRoute,
-  });
+  const scheduledAgents = registerScheduledAgentRoutes({ app, server, store, operations, config, emit, asyncRoute });
 
   const mcpDeps = { config, store, operations, ttyd, providerCache, emit };
   registerMcpRoutes(app, asyncRoute, {
@@ -713,6 +706,7 @@ export function createDaemonApp(input: {
   });
 
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations });
+  registerScratchpadRoutes({ app, config, emit });
 
   app.get("/api/workspaces/:workspaceId/diff", (req, res) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
