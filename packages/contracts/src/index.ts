@@ -32,6 +32,7 @@ export const RepoSchema = z.object({
   setupHookIds: z.array(z.string()).default([]),
   teardownHookIds: z.array(z.string()).default([]),
   providerIds: z.array(z.string()).default([]),
+  deployHookCommand: z.string().max(4000).nullable().default(null),
   createdAt: z.string(),
   updatedAt: z.string(),
   archivedAt: z.string().nullable().default(null),
@@ -290,6 +291,44 @@ export const HookDiagnosticSchema = z.object({
   structuredPayload: HookOutputSchema.nullable().default(null),
 });
 
+export const DeployedAppStatusSchema = z.enum(["deployed", "stopped", "unknown"]);
+
+export const DeployedAppSchema = z.object({
+  workspaceId: IdSchema,
+  name: z.string().min(1).max(80),
+  url: z.string().min(1),
+  status: DeployedAppStatusSchema,
+  lastChecked: z.string(),
+});
+
+// The structured payload the `<hook> list` subcommand must emit on stdout.
+export const DeployHookListOutputSchema = z.object({
+  apps: z
+    .array(
+      z.object({
+        name: z.string().min(1).max(80),
+        url: z.string().min(1),
+      }),
+    )
+    .max(50),
+});
+
+export const DeployHookSourceSchema = z.enum(["repo-file", "repo-config", "none"]);
+
+export const DeployHookResolutionSchema = z.object({
+  source: DeployHookSourceSchema,
+  filePath: z.string().nullable().default(null),
+  command: z.string().nullable().default(null),
+});
+
+export const DeployedAppsSummarySchema = z.object({
+  workspaceId: IdSchema,
+  resolution: DeployHookResolutionSchema,
+  apps: z.array(DeployedAppSchema),
+  error: z.string().nullable().default(null),
+  checkedAt: z.string(),
+});
+
 export const WorkspaceReadinessSchema = z.object({
   state: z.enum([
     "working",
@@ -489,6 +528,12 @@ export type HookDiagnostic = z.infer<typeof HookDiagnosticSchema>;
 export type WorkspaceReadiness = z.infer<typeof WorkspaceReadinessSchema>;
 export type WorkspaceAppsSummary = z.infer<typeof WorkspaceAppsSummarySchema>;
 export type WorkspaceCockpitSummary = z.infer<typeof WorkspaceCockpitSummarySchema>;
+export type DeployedApp = z.infer<typeof DeployedAppSchema>;
+export type DeployedAppStatus = z.infer<typeof DeployedAppStatusSchema>;
+export type DeployHookListOutput = z.infer<typeof DeployHookListOutputSchema>;
+export type DeployHookResolution = z.infer<typeof DeployHookResolutionSchema>;
+export type DeployHookSource = z.infer<typeof DeployHookSourceSchema>;
+export type DeployedAppsSummary = z.infer<typeof DeployedAppsSummarySchema>;
 export type ActivityEvent = z.infer<typeof ActivityEventSchema>;
 export type AppEvent = z.infer<typeof AppEventSchema>;
 export type CreateRepoInput = z.infer<typeof CreateRepoInputSchema>;

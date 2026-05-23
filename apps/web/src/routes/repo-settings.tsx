@@ -44,6 +44,7 @@ export function RepoSettingsView() {
       <div className="grid">
         <RepoIdentitySection repo={repo} />
         <RepoHooksSection repo={repo} />
+        <RepoDeployHookSection repo={repo} />
         <RepoProvidersSection repo={repo} />
         <RepoActionsSection repo={repo} />
       </div>
@@ -181,6 +182,58 @@ function RepoHooksSection(props: { repo: Repo }) {
           <div className="empty compact">No hooks bound to this repo</div>
         ) : null}
       </div>
+    </section>
+  );
+}
+
+function RepoDeployHookSection(props: { repo: Repo }) {
+  const [command, setCommand] = useState(props.repo.deployHookCommand ?? "");
+  useEffect(() => setCommand(props.repo.deployHookCommand ?? ""), [props.repo.deployHookCommand]);
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/api/repos/${props.repo.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ deployHookCommand: command.trim() ? command : null }),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+  });
+  const fileHookPath = `${props.repo.rootPath.replace(/\/$/, "")}/.citadel/hooks/deploy`;
+  return (
+    <section className="panel wide">
+      <h2>Deploy hook</h2>
+      <form
+        className="stack-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          save.mutate();
+        }}
+      >
+        <p className="settings-hint">
+          Citadel resolves the deploy hook per-worktree. The repo-static file at <code>.citadel/hooks/deploy</code>{" "}
+          takes priority; this command runs as a fallback. The hook is invoked with <code>$1=list|redeploy</code> and{" "}
+          <code>$2=app-name</code>, cwd = the worktree path, and env <code>CITADEL_WORKSPACE_ID</code>,{" "}
+          <code>CITADEL_WORKSPACE_PATH</code>, <code>CITADEL_WORKSPACE_BRANCH</code>, <code>CITADEL_REPO_ID</code>.
+        </p>
+        <label>
+          Deploy command (bash)
+          <textarea
+            rows={6}
+            value={command}
+            onChange={(event) => setCommand(event.target.value)}
+            placeholder={
+              'case "$1" in\n  list) jq -n \'{apps:[{name:"web",url:"http://localhost:3000"}]}\' ;;\n  redeploy) make dev-deploy "$2" ;;\nesac'
+            }
+            spellCheck={false}
+          />
+        </label>
+        <small>
+          Repo-file path (highest priority, must be executable): <code>{fileHookPath}</code>
+        </small>
+        <Button type="submit" disabled={save.isPending}>
+          <Save size={14} /> Save deploy command
+        </Button>
+        {save.error ? <p className="form-error">{String(save.error)}</p> : null}
+      </form>
     </section>
   );
 }

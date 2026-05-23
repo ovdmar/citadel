@@ -602,6 +602,9 @@ export function createDaemonApp(input: {
         allowed.teardownHookIds = patch.teardownHookIds.filter((id: unknown) => typeof id === "string");
       if (Array.isArray(patch.providerIds))
         allowed.providerIds = patch.providerIds.filter((id: unknown) => typeof id === "string");
+      if (typeof patch.deployHookCommand === "string")
+        allowed.deployHookCommand = patch.deployHookCommand.trim() || null;
+      else if (patch.deployHookCommand === null) allowed.deployHookCommand = null;
       const next = store.updateRepo(repoId, allowed);
       if (!next) return res.status(404).json({ error: "repo_not_found" });
       emit("repo.updated", { repoId: next.id, repo: next });
@@ -715,7 +718,7 @@ export function createDaemonApp(input: {
     readMcpResource: (uri) => readMcpResource(store, config, uri),
   });
 
-  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute });
+  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations });
 
   app.get("/api/workspaces/:workspaceId/diff", (req, res) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
