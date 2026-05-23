@@ -5,6 +5,7 @@ import type { SqliteStore } from "@citadel/db";
 import { type TtydEntry, type TtydManager, TtydUnavailableError } from "@citadel/terminal";
 import type express from "express";
 import httpProxyImport from "http-proxy";
+import { injectKeyShim, shouldInjectShim } from "./terminal-key-shim.js";
 
 type HttpProxyModule = typeof httpProxyImport;
 const httpProxy = (httpProxyImport as unknown as { default?: HttpProxyModule }).default ?? httpProxyImport;
@@ -33,7 +34,56 @@ export function registerTerminalRoutes(input: {
   respawnTmux?: (session: AgentSession) => Promise<{ tmuxSessionName: string; tmuxSessionId: string } | null>;
 }) {
   const { app, server, store, ttyd } = input;
-  const proxy = httpProxy.createProxyServer({ ws: true, xfwd: true, changeOrigin: true });
+  const proxy = httpProxy.createProxyServer({
+    ws: true,
+    xfwd: true,
+    changeOrigin: true,
+    selfHandleResponse: true,
+  });
+
+  // ttyd's HTML page boots its WebSocket as soon as its bundle runs, so we
+  // inject our keyboard-shortcut shim before any other <script> tag. For
+  // everything else (JS bundles, CSS, fonts, 304/204 responses, gzipped
+  // payloads, WebSocket frames) we just pipe the upstream response through
+  // untouched — shouldInjectShim() gates the rewriting path so we never
+  // corrupt compressed or bodyless responses.
+  proxy.on("proxyRes", (proxyRes, _req, target) => {
+    const httpRes = target as express.Response;
+    httpRes.statusCode = proxyRes.statusCode ?? 200;
+    const injectable = shouldInjectShim(proxyRes.headers, proxyRes.statusCode ?? 0);
+
+    if (!injectable) {
+      for (const [name, value] of Object.entries(proxyRes.headers)) {
+        if (value === undefined) continue;
+        httpRes.setHeader(name, value as string | string[]);
+      }
+      proxyRes.pipe(httpRes);
+      return;
+    }
+
+    const chunks: Buffer[] = [];
+    proxyRes.on("data", (chunk: Buffer) => chunks.push(chunk));
+    proxyRes.on("end", () => {
+      const original = Buffer.concat(chunks).toString("utf8");
+      const modified = injectKeyShim(original);
+      for (const [name, value] of Object.entries(proxyRes.headers)) {
+        if (value === undefined) continue;
+        const lower = name.toLowerCase();
+        if (lower === "content-length" || lower === "content-encoding" || lower === "transfer-encoding") continue;
+        httpRes.setHeader(name, value as string | string[]);
+      }
+      const buffer = Buffer.from(modified, "utf8");
+      httpRes.setHeader("content-length", String(buffer.length));
+      httpRes.end(buffer);
+    });
+    proxyRes.on("error", () => {
+      try {
+        httpRes.end();
+      } catch {
+        // ignore
+      }
+    });
+  });
 
   // Remember the last theme the cockpit asked for, per sessionId. When a
   // websocket auto-reconnect (e.g. laptop wake) hits the daemon AFTER the
@@ -166,6 +216,10 @@ export function registerTerminalRoutes(input: {
       res.status(404).type("text/plain").send("terminal_not_found");
       return;
     }
+    // Force identity encoding so the HTML response stays plain text and our
+    // shim injection can operate on the raw bytes. ttyd's other assets are
+    // small enough that the bandwidth loss is negligible.
+    req.headers["accept-encoding"] = "identity";
     proxy.web(req, res, { target: resolved.target }, (error?: Error) => {
       if (!res.headersSent) {
         res
