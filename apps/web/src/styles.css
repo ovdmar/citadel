@@ -35,6 +35,12 @@
   --topbar-bg: #fffefa;
   --topbar-fg: #1a2030;
   --topbar-line: rgba(148, 152, 164, 0.2);
+  /* Shadow + overlay tokens are RGB triplets so callers can supply their own
+   * alpha via rgb(var(--shadow-color) / N). Light theme uses a deep slate; dark
+   * theme falls back to true black so shadows still register against the dark
+   * surface. */
+  --shadow-color: 16 24 40;
+  --overlay-bg: rgba(7, 16, 31, 0.45);
 }
 
 :root[data-theme="dark"],
@@ -59,6 +65,8 @@
   --topbar-bg: #07101f;
   --topbar-fg: #d8dce4;
   --topbar-line: rgba(80, 100, 128, 0.2);
+  --shadow-color: 0 0 0;
+  --overlay-bg: rgba(0, 0, 0, 0.55);
 }
 
 @media (prefers-color-scheme: light) {
@@ -83,6 +91,8 @@
     --topbar-bg: #fffefa;
     --topbar-fg: #1a2030;
     --topbar-line: rgba(148, 152, 164, 0.2);
+    --shadow-color: 16 24 40;
+    --overlay-bg: rgba(7, 16, 31, 0.45);
   }
 }
 
