@@ -1,5 +1,8 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
+import fs from "node:fs";
 import type http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 import { WebSocketServer } from "ws";
 
@@ -18,7 +21,14 @@ export type TerminalSessionRequest = {
 export async function ensureTmuxSession(input: TerminalSessionRequest) {
   const exists = tmuxSessionExists(input.sessionName);
   if (!exists) {
-    const command = terminalCommand(input.command, input.args);
+    // Pre-create the live sentinel so reconciliation between tmux launch and
+    // the wrapper's own `touch` cannot race into a spurious "stopped".
+    try {
+      fs.writeFileSync(agentLiveSentinelPath(input.sessionName), "");
+    } catch {
+      // best-effort: status detection degrades gracefully if tmpdir is read-only
+    }
+    const command = terminalCommand(input.sessionName, input.command, input.args);
     await execFileAsync("tmux", ["new-session", "-d", "-s", input.sessionName, "-c", input.cwd, command], {
       timeout: 10000,
       maxBuffer: 128 * 1024,
@@ -31,18 +41,43 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
   return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
 }
 
-function terminalCommand(command: string, args: string[]) {
+// Path of the "agent still running" sentinel file for a given tmux session.
+// The wrapper script touches this before exec'ing the agent and removes it
+// after the agent exits. The reconciler reads it to distinguish "agent
+// running" from "agent exited but pane still alive in fallback shell".
+export function agentLiveSentinelPath(sessionName: string) {
+  return path.join(os.tmpdir(), `citadel-agent-${sessionName}.live`);
+}
+
+export function isAgentLive(sessionName: string) {
+  return fs.existsSync(agentLiveSentinelPath(sessionName));
+}
+
+// Wrap the agent invocation so the tmux pane survives the agent's exit.
+//
+// Today the user reports that pressing Ctrl+C inside a running agent (e.g.
+// Claude Code) leaves an unusable terminal: the pane becomes dead because the
+// agent process was PID 1 of the pane. The wrapper drops the user back into a
+// fresh interactive login shell rooted at the workspace cwd so they can run
+// any command, including `claude resume <sessionId>`.
+//
+// A sentinel file under tmpdir marks "agent currently live"; the reconciler
+// consults it to flip the session status to "stopped" without killing the
+// pane.
+function terminalCommand(sessionName: string, command: string, args: string[]) {
   const argv = [command, ...args].map(shellQuote).join(" ");
-  return [
-    "env",
-    "-u",
-    "NO_COLOR",
-    "TERM=xterm-256color",
-    "COLORTERM=truecolor",
-    "FORCE_COLOR=1",
-    "CLICOLOR_FORCE=1",
-    argv,
-  ].join(" ");
+  const envPrefix = "env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor FORCE_COLOR=1 CLICOLOR_FORCE=1";
+  const sentinel = shellQuote(agentLiveSentinelPath(sessionName));
+  const exitHint = "[citadel] Agent exited. Run any command, or restart the agent (e.g. `claude resume <sessionId>`).";
+  const script = [
+    `touch ${sentinel}`,
+    `trap 'rm -f ${sentinel}' EXIT`,
+    `${envPrefix} ${argv}`,
+    `rm -f ${sentinel}`,
+    `printf '\\n%s\\n' ${shellQuote(exitHint)}`,
+    "exec bash -l",
+  ].join("; ");
+  return `bash -lc ${shellQuote(script)}`;
 }
 
 function shellQuote(value: string) {
@@ -260,8 +295,14 @@ export function resizePane(sessionName: string, cols: number, rows: number) {
 }
 
 export function killTmuxSession(sessionName: string) {
-  if (!tmuxSessionExists(sessionName)) return;
-  execFileSync("tmux", ["kill-session", "-t", sessionName]);
+  if (tmuxSessionExists(sessionName)) {
+    execFileSync("tmux", ["kill-session", "-t", sessionName]);
+  }
+  try {
+    fs.rmSync(agentLiveSentinelPath(sessionName), { force: true });
+  } catch {
+    // best-effort
+  }
 }
 
 export function attachTerminalWebSocket(server: http.Server, resolveSession: (id: string) => string | null) {

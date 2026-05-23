@@ -5,7 +5,7 @@ import type { HookConfig } from "@citadel/config";
 import type { HookDiagnostic, HookOutput, Operation, Repo, Workspace } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { hookDiagnostic } from "@citadel/hooks";
-import { tmuxSessionExists } from "@citadel/terminal";
+import { isAgentLive, tmuxSessionExists } from "@citadel/terminal";
 
 export function asObject(payload: unknown) {
   return typeof payload === "object" && payload !== null ? payload : {};
@@ -98,6 +98,15 @@ export function reconcileStore(
       } else {
         store.updateSessionStatus(session.id, "orphaned");
       }
+      sessionCount += 1;
+      continue;
+    }
+    // Pane is still alive but the agent process inside the wrapper script has
+    // exited (the wrapper drops the user into a fallback shell). Flip status
+    // to "stopped" so the cockpit accurately reflects that the agent is gone,
+    // while leaving the tmux session intact for the user to keep working in.
+    if (!isAgentLive(session.tmuxSessionName)) {
+      store.updateSessionStatus(session.id, "stopped");
       sessionCount += 1;
     }
   }
