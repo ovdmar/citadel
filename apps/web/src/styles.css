@@ -26,13 +26,17 @@
   --color-danger: #8a3030;
   --color-purple: #5a4a52;
   --surface: #f4f2ee;
-  --surface-strong: #e4e2dc;
-  --panel: #fffefa;
-  --panel-strong: #dcd8cc;
+  --surface-strong: #ece9e2;
+  /* Panels and the topbar live in the same warm beige family as --surface so
+   * the light theme reads as one palette instead of "white cards on beige".
+   * --panel is barely elevated above --surface; --panel-strong is the
+   * deepest beige used for column headers and separator strips. */
+  --panel: #faf7f0;
+  --panel-strong: #e6e2d8;
   --line: rgba(148, 152, 164, 0.2);
   --line-strong: rgba(148, 152, 164, 0.35);
   --muted: #6a7080;
-  --topbar-bg: #fffefa;
+  --topbar-bg: #faf7f0;
   --topbar-fg: #1a2030;
   --topbar-line: rgba(148, 152, 164, 0.2);
   /* --shadow-color is an RGB triplet (no commas) so callers can supply alpha
@@ -82,13 +86,13 @@
     --color-danger: #8a3030;
     --color-purple: #5a4a52;
     --surface: #f4f2ee;
-    --surface-strong: #e4e2dc;
-    --panel: #fffefa;
-    --panel-strong: #dcd8cc;
+    --surface-strong: #ece9e2;
+    --panel: #faf7f0;
+    --panel-strong: #e6e2d8;
     --line: rgba(148, 152, 164, 0.2);
     --line-strong: rgba(148, 152, 164, 0.35);
     --muted: #6a7080;
-    --topbar-bg: #fffefa;
+    --topbar-bg: #faf7f0;
     --topbar-fg: #1a2030;
     --topbar-line: rgba(148, 152, 164, 0.2);
     --shadow-color: 7 16 31;
