@@ -270,10 +270,11 @@ describe("tmux terminal gateway helpers", () => {
   });
 
   // Regression test for the Ctrl+C-leaves-unusable-terminal complaint.
-  // We stand in for a real agent with a tiny `bash -c 'sleep 30'` so we can kill
-  // it cleanly with C-c. After it dies, the pane must drop back to an
-  // interactive login shell rooted at the workspace cwd, and the sentinel that
-  // gates session status detection must be cleared.
+  // We stand in for a real agent with a loop that traps SIGINT and exits 0,
+  // so we can "kill" it via Ctrl+C the way a user would Ctrl+C Claude Code.
+  // After it dies, the pane must drop back to an interactive login shell
+  // rooted at the workspace cwd, and the sentinel that gates session status
+  // detection must be cleared.
   it("pane survives the agent exiting and drops back into a usable shell", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
     dirs.push(cwd);
@@ -287,11 +288,11 @@ describe("tmux terminal gateway helpers", () => {
       args: ["-c", "trap 'echo AGENT-DEAD; exit 0' INT; while true; do sleep 1; done"],
     });
 
-    // Wait for the wrapper's `touch sentinel` to land before sending Ctrl+C.
-    await waitFor(() => isAgentLive(sessionName), 2000);
+    // ensureTmuxSession now waits for the pane to settle, so the wrapper's
+    // sentinel must be present and the inner agent must be reading stdin.
     expect(isAgentLive(sessionName)).toBe(true);
 
-    sendKeys(sessionName, ""); // Ctrl+C → mock agent traps, exits 0.
+    sendKeys(sessionName, "\u0003"); // Ctrl+C → mock agent traps, exits 0.
     await waitForCapture(sessionName, "AGENT-DEAD");
     await waitForCapture(sessionName, "[citadel] Agent exited");
     await waitFor(() => !isAgentLive(sessionName), 2000);
@@ -366,8 +367,8 @@ async function waitFor(predicate: () => boolean, timeoutMs: number) {
 }
 
 async function waitForCapture(sessionName: string, expected: string) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const output = captureTmux(sessionName, 20);
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const output = captureTmux(sessionName, 200);
     if (output.includes(expected)) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -375,8 +376,8 @@ async function waitForCapture(sessionName: string, expected: string) {
 }
 
 async function waitForVisibleScreen(sessionName: string, expected: string) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const output = captureTmuxVisibleScreen(sessionName, 20);
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const output = captureTmuxVisibleScreen(sessionName, 200);
     if (output.includes(expected)) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }

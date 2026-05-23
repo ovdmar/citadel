@@ -20,6 +20,7 @@ export type TerminalSessionRequest = {
 
 export async function ensureTmuxSession(input: TerminalSessionRequest) {
   const exists = tmuxSessionExists(input.sessionName);
+  const freshlyCreated = !exists;
   if (!exists) {
     // Pre-create the live sentinel so reconciliation between tmux launch and
     // the wrapper's own `touch` cannot race into a spurious "stopped".
@@ -38,6 +39,13 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
   const id = execFileSync("tmux", ["display-message", "-p", "-t", input.sessionName, "#{session_id}"], {
     encoding: "utf8",
   }).trim();
+  // After freshly spawning the wrapper there is a brief window where the outer
+  // `bash -c` is still running the script and the inner interactive shell
+  // hasn't yet taken over the PTY foreground. Keystrokes (and crucially,
+  // Ctrl+C) delivered during that window can reach the wrong process. Wait
+  // for the pane to settle so callers can rely on "ensureTmuxSession returned
+  // → keys are safe to send."
+  if (freshlyCreated) await waitForTerminalIdle(input.sessionName, { timeoutMs: 1500, idleMs: 200 });
   return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
 }
 
@@ -55,15 +63,22 @@ export function isAgentLive(sessionName: string) {
 
 // Wrap the agent invocation so the tmux pane survives the agent's exit.
 //
-// Today the user reports that pressing Ctrl+C inside a running agent (e.g.
-// Claude Code) leaves an unusable terminal: the pane becomes dead because the
-// agent process was PID 1 of the pane. The wrapper drops the user back into a
-// fresh interactive login shell rooted at the workspace cwd so they can run
-// any command, including `claude resume <sessionId>`.
+// Today pressing Ctrl+C inside a running agent (e.g. Claude Code) leaves an
+// unusable terminal: the pane becomes dead because the agent process was PID 1
+// of the pane. The wrapper drops the user back into a fresh interactive login
+// shell rooted at the workspace cwd so they can run any command, including
+// `claude resume <sessionId>`.
 //
 // A sentinel file under tmpdir marks "agent currently live"; the reconciler
 // consults it to flip the session status to "stopped" without killing the
 // pane.
+//
+// Outer shell is intentionally non-login (`bash -c`, not `bash -lc`) so the
+// agent's environment matches what tmux delivered before this wrapper
+// existed — we don't want to silently start sourcing `~/.bash_profile` for
+// every agent. The *fallback* shell the user sees after the agent exits IS a
+// login shell (so they get their normal interactive setup) and respects
+// `$SHELL` so zsh/fish users aren't forced into bash.
 function terminalCommand(sessionName: string, command: string, args: string[]) {
   const argv = [command, ...args].map(shellQuote).join(" ");
   const envPrefix = "env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor FORCE_COLOR=1 CLICOLOR_FORCE=1";
@@ -75,9 +90,9 @@ function terminalCommand(sessionName: string, command: string, args: string[]) {
     `${envPrefix} ${argv}`,
     `rm -f ${sentinel}`,
     `printf '\\n%s\\n' ${shellQuote(exitHint)}`,
-    "exec bash -l",
+    'exec "${SHELL:-/bin/bash}" -l',
   ].join("; ");
-  return `bash -lc ${shellQuote(script)}`;
+  return `bash -c ${shellQuote(script)}`;
 }
 
 function shellQuote(value: string) {

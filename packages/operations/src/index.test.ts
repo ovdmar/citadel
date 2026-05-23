@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SqliteStore } from "@citadel/db";
+import { agentLiveSentinelPath, killTmuxSession, tmuxSessionExists } from "@citadel/terminal";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperationService } from "./index.js";
 
@@ -409,6 +410,42 @@ describe("OperationService", () => {
     expect(result.repos).toBeGreaterThan(0);
     const reconciledRepo = store.listRepos().find((candidate) => candidate.id === repo.id);
     expect(reconciledRepo).toBeUndefined();
+  });
+
+  it("reconcile flips session to 'stopped' when agent exited but tmux pane is still alive", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "agent-exit-target", source: "scratch" });
+    const session = await service.createAgentSession(
+      { workspaceId: created.workspaceId, runtimeId: "shell" },
+      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+    );
+
+    try {
+      expect(session.tmuxSessionName).toBeTruthy();
+      const sessionName = session.tmuxSessionName as string;
+      // Simulate the wrapper's "agent exited" cleanup: the inner agent has
+      // died, the wrapper has removed the sentinel, but the tmux pane is
+      // still alive (showing the fallback login shell).
+      fs.rmSync(agentLiveSentinelPath(sessionName), { force: true });
+
+      const result = service.reconcile();
+      expect(result.sessions).toBeGreaterThan(0);
+
+      const reconciled = store.listSessions().find((candidate) => candidate.id === session.id);
+      expect(reconciled?.status).toBe("stopped");
+      // Pane must remain alive — the user can keep working in the shell.
+      expect(tmuxSessionExists(sessionName)).toBe(true);
+    } finally {
+      if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
+    }
   });
 
   it("records hook-provided workspace links and actions", async () => {
