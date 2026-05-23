@@ -96,19 +96,13 @@ export function createDaemonApp(input: {
   // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
   const initialTerminalCleanup = ttyd.cleanupStale();
   if (initialTerminalCleanup.killed > 0) emit("terminal.cleanup", initialTerminalCleanup);
-  // Self-heal hook: if the tmux session a terminal points at has gone away
-  // (system restart, manual kill), recreate it from the recorded runtime so
-  // the user gets a fresh shell instead of "terminal_not_found".
+  // Self-heal: when a terminal's tmux session is gone (restart, manual kill), recreate it from the recorded runtime.
   const respawnTmux = async (session: import("@citadel/contracts").AgentSession) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     const runtime = config.runtimes.find((candidate) => candidate.id === session.runtimeId);
     if (!workspace || !runtime) return null;
-    return ensureTmuxSession({
-      sessionName: session.tmuxSessionName ?? `citadel_${workspace.id}_${session.id.slice(-8)}`,
-      cwd: workspace.path,
-      command: runtime.command,
-      args: runtime.args,
-    });
+    const sessionName = session.tmuxSessionName ?? `citadel_${workspace.id}_${session.id.slice(-8)}`;
+    return ensureTmuxSession({ sessionName, cwd: workspace.path, command: runtime.command, args: runtime.args });
   };
   registerTerminalRoutes({ app, server, store, ttyd, emit, respawnTmux });
 
