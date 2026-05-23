@@ -2,7 +2,7 @@ import type { AgentSession, Namespace, Operation, Repo, Workspace, WorkspaceCock
 import { Link, useLocation } from "@tanstack/react-router";
 import { ClipboardList, FolderPlus, LayoutDashboard, PanelLeftClose, Plus, Settings2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { readinessForWorkspace, readinessSection } from "./cockpit-readiness.js";
+import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { formatLabel } from "./labels.js";
 import { AddRepoModal, CreateWorkspaceModal, GroupByOverlay, type GroupKey } from "./modals.js";
 import { WorkspaceCard } from "./workspace-card.js";
@@ -49,9 +49,12 @@ export function Navigator(props: {
   const [showGroupBy, setShowGroupBy] = useState(false);
   const [showAddRepo, setShowAddRepo] = useState(false);
 
+  // Intentionally exclude props.activeSummary from buildGroups: status sections
+  // are derived from /api/state only, so the active workspace doesn't drift
+  // between sections each time the per-workspace cockpit-summary refetches.
   const grouped = useMemo(
-    () => buildGroups(props.workspaces, props.repos, props.sessions, props.operations, props.activeSummary, grouping),
-    [props.workspaces, props.repos, props.sessions, props.operations, props.activeSummary, grouping],
+    () => buildGroups(props.workspaces, props.repos, props.sessions, props.operations, grouping),
+    [props.workspaces, props.repos, props.sessions, props.operations, grouping],
   );
   const namespacesById = useMemo(() => {
     const map = new Map<string, import("@citadel/contracts").Namespace>();
@@ -175,7 +178,6 @@ function buildGroups(
   repos: Repo[],
   sessions: AgentSession[],
   operations: Operation[],
-  activeSummary: WorkspaceCockpitSummary | undefined,
   grouping: GroupKey[],
 ): GroupedSection[] {
   if (!grouping.length) {
@@ -193,15 +195,12 @@ function buildGroups(
   const enriched = workspaces.map((workspace) => {
     const workspaceSessions = sessions.filter((session) => session.workspaceId === workspace.id);
     const workspaceOps = operations.filter((operation) => operation.workspaceId === workspace.id);
-    const summary = workspace.id === activeSummary?.workspaceId ? activeSummary : undefined;
     const attention = readinessForWorkspace(workspace, {
       sessions: workspaceSessions,
       operations: workspaceOps,
-      summary,
     });
-    const section = summary ? readinessSection(summary.readiness.state) : attention.section;
     const repo = repos.find((entry) => entry.id === workspace.repoId);
-    return { workspace, sessions: workspaceSessions, repo, section };
+    return { workspace, sessions: workspaceSessions, repo, section: attention.section };
   });
 
   const compose = (entries: typeof enriched, levels: GroupKey[]): GroupedSection[] => {

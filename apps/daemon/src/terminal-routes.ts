@@ -17,6 +17,12 @@ type ResolvedSession = {
   worktreePath: string | null;
 };
 
+type Theme = "light" | "dark";
+
+function parseTheme(value: unknown): Theme | undefined {
+  return value === "light" || value === "dark" ? value : undefined;
+}
+
 export function registerTerminalRoutes(input: {
   app: express.Express;
   server: http.Server;
@@ -28,6 +34,13 @@ export function registerTerminalRoutes(input: {
 }) {
   const { app, server, store, ttyd } = input;
   const proxy = httpProxy.createProxyServer({ ws: true, xfwd: true, changeOrigin: true });
+
+  // Remember the last theme the cockpit asked for, per sessionId. When a
+  // websocket auto-reconnect (e.g. laptop wake) hits the daemon AFTER the
+  // entry has been reaped — daemon restart, ttyd crash — `reviveProxyTarget`
+  // calls ensure() without a request body, so without this map it would
+  // default to "dark" and silently respawn ttyd with the wrong palette.
+  const themePreferences = new Map<string, Theme>();
 
   proxy.on("error", (error, _req, target) => {
     const message = error instanceof Error ? error.message : "terminal_proxy_failed";
@@ -75,7 +88,7 @@ export function registerTerminalRoutes(input: {
     const session = resolveSession(sessionId);
     if (!session) return null;
     try {
-      const entry = await ensureWithHeal(session);
+      const entry = await ensureWithHeal(session, themePreferences.get(sessionId));
       input.emit?.("terminal.ready", { sessionId: session.sessionId, port: entry.port });
       return { entry, target: `http://127.0.0.1:${entry.port}`, sessionId };
     } catch {
@@ -86,13 +99,15 @@ export function registerTerminalRoutes(input: {
   // Try ensure(); if tmux disappeared (system reboot, manual kill), call the
   // injected respawnTmux hook to bring the underlying tmux session back, then
   // retry. Returns null if no self-heal was possible.
-  const ensureWithHeal = async (session: ResolvedSession): Promise<TtydEntry> => {
+  const ensureWithHeal = async (session: ResolvedSession, theme?: Theme): Promise<TtydEntry> => {
+    const base = {
+      key: session.sessionId,
+      tmuxSession: session.tmuxSession,
+      worktreePath: session.worktreePath,
+    };
+    const ensureArgs = theme ? { ...base, theme } : base;
     try {
-      return await ttyd.ensure({
-        key: session.sessionId,
-        tmuxSession: session.tmuxSession,
-        worktreePath: session.worktreePath,
-      });
+      return await ttyd.ensure(ensureArgs);
     } catch (error) {
       if (!(error instanceof TtydUnavailableError) || error.code !== "tmux_session_missing") throw error;
       if (!input.respawnTmux) throw error;
@@ -100,11 +115,10 @@ export function registerTerminalRoutes(input: {
       if (!dbSession) throw error;
       const respawn = await input.respawnTmux(dbSession);
       if (!respawn) throw error;
-      return await ttyd.ensure({
-        key: session.sessionId,
-        tmuxSession: respawn.tmuxSessionName,
-        worktreePath: session.worktreePath,
-      });
+      const healArgs = theme
+        ? { key: session.sessionId, tmuxSession: respawn.tmuxSessionName, worktreePath: session.worktreePath, theme }
+        : { key: session.sessionId, tmuxSession: respawn.tmuxSessionName, worktreePath: session.worktreePath };
+      return await ttyd.ensure(healArgs);
     }
   };
 
@@ -112,8 +126,10 @@ export function registerTerminalRoutes(input: {
     const sessionId = String(req.params.sessionId ?? "");
     const session = resolveSession(sessionId);
     if (!session) return res.status(404).json({ error: "session_not_found" });
+    const theme = parseTheme(req.query.theme) ?? parseTheme((req.body as { theme?: unknown } | undefined)?.theme);
+    if (theme) themePreferences.set(sessionId, theme);
     try {
-      const entry = await ensureWithHeal(session);
+      const entry = await ensureWithHeal(session, theme ?? themePreferences.get(sessionId));
       const url = `${TERMINAL_PROXY_PREFIX}/${encodeURIComponent(session.sessionId)}/`;
       input.emit?.("terminal.ready", { sessionId: session.sessionId, port: entry.port });
       return res.json({ terminal: terminalDto(entry, url) });
@@ -209,5 +225,6 @@ function terminalDto(entry: TtydEntry, url: string) {
     tmuxSession: entry.tmuxSession,
     worktreePath: entry.worktreePath,
     startedAt: entry.startedAt,
+    theme: entry.theme,
   };
 }

@@ -2,13 +2,22 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { LaunchAgentInputSchema } from "@citadel/contracts";
 import { SqliteStore } from "@citadel/db";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperationService } from "./index.js";
 
 const dirs: string[] = [];
+const tmuxSessions: string[] = [];
 
 afterEach(() => {
+  for (const session of tmuxSessions.splice(0)) {
+    try {
+      execFileSync("tmux", ["kill-session", "-t", session], { stdio: "ignore" });
+    } catch {
+      /* already gone */
+    }
+  }
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -444,6 +453,114 @@ describe("OperationService", () => {
         actions: [{ id: "redeploy", label: "Redeploy" }],
       },
     });
+  });
+
+  describe("launchAgent input validation", () => {
+    it("requires exactly one of repoId or repoName", () => {
+      expect(() => LaunchAgentInputSchema.parse({ prompt: "hello" })).toThrow(/repoId or repoName/);
+      expect(() => LaunchAgentInputSchema.parse({ prompt: "hello", repoId: "repo_test", repoName: "fixture" })).toThrow(
+        /repoId or repoName/,
+      );
+    });
+
+    it("requires a non-empty prompt", () => {
+      expect(() => LaunchAgentInputSchema.parse({ repoId: "repo_test" })).toThrow();
+      expect(() => LaunchAgentInputSchema.parse({ repoId: "repo_test", prompt: "" })).toThrow();
+    });
+
+    it("defaults runtimeId to claude-code", () => {
+      const parsed = LaunchAgentInputSchema.parse({ repoName: "fixture", prompt: "do a thing" });
+      expect(parsed.runtimeId).toBe("claude-code");
+    });
+  });
+
+  it("launchAgent bundles workspace creation and agent session start in one call", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath, name: "launch-fixture" });
+
+    const result = await service.launchAgent(
+      { repoName: "launch-fixture", prompt: "describe the repo in one sentence", runtimeId: "shell" },
+      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+    );
+    const session = store.listSessions().find((candidate) => candidate.id === result.sessionId);
+    if (session?.tmuxSessionName) tmuxSessions.push(session.tmuxSessionName);
+
+    expect(result.error).toBeUndefined();
+    expect(result.sessionId).toBeTruthy();
+    expect(result.workspaceId).toBeTruthy();
+    expect(result.branchName).toBeTruthy();
+    expect(result.workspacePath).toContain(fixture.dir);
+
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === result.workspaceId);
+    expect(workspace?.lifecycle).toBe("ready");
+    expect(workspace?.source).toBe("scratch");
+    expect(workspace?.repoId).toBe(repo.id);
+    expect(session?.runtimeId).toBe("shell");
+    expect(session?.workspaceId).toBe(result.workspaceId);
+    // Display name is derived from the prompt's first ~40 chars when caller didn't pass one.
+    expect(session?.displayName).toBe("describe the repo in one sentence");
+  });
+
+  it("launchAgent resolves repo by id and accepts namespaceId as a pass-through warning", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+
+    const result = await service.launchAgent(
+      {
+        repoId: repo.id,
+        prompt: "investigate the failing build",
+        runtimeId: "shell",
+        namespaceId: "team-a",
+        workspaceName: "investigate-build",
+        displayName: "Build Triage",
+      },
+      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+    );
+    const session = store.listSessions().find((candidate) => candidate.id === result.sessionId);
+    if (session?.tmuxSessionName) tmuxSessions.push(session.tmuxSessionName);
+
+    expect(result.error).toBeUndefined();
+    expect(session?.displayName).toBe("Build Triage");
+    expect(store.listWorkspaces().find((candidate) => candidate.id === result.workspaceId)?.name).toBe(
+      "investigate-build",
+    );
+    // namespaceId is accepted but ignored — we surface it as an activity event
+    // so orchestrators can see it didn't take effect.
+    expect(store.listActivity().some((event) => event.type === "launch_agent.namespace_ignored")).toBe(true);
+  });
+
+  it("launchAgent throws when the named repo doesn't exist (no workspace gets created)", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    service.registerRepo({ rootPath: fixture.repoPath, name: "launch-fixture" });
+
+    await expect(
+      service.launchAgent(
+        { repoName: "does-not-exist", prompt: "x", runtimeId: "shell" },
+        { command: "bash", args: [], displayName: "Shell" },
+      ),
+    ).rejects.toThrow(/Unknown repo/);
+    expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
 });
 

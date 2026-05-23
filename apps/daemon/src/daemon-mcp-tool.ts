@@ -3,7 +3,9 @@ import {
   AssignWorkspaceToNamespaceInputSchema,
   CreateAgentSessionInputSchema,
   CreateNamespaceInputSchema,
+  CreateRepoInputSchema,
   CreateWorkspaceInputSchema,
+  LaunchAgentInputSchema,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, serializeWorkspaceResource } from "@citadel/mcp";
@@ -40,6 +42,12 @@ export async function readMcpResource(store: SqliteStore, config: CitadelConfig,
 
 export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) {
   const { config, store, operations, ttyd, providerCache, emit } = deps;
+  if (call.name === "register_repo") {
+    const input = CreateRepoInputSchema.parse(call.arguments ?? {});
+    const repo = operations.registerRepo(input);
+    emit("repo.updated", { repoId: repo.id, repo });
+    return { repo };
+  }
   if (call.name === "create_workspace") {
     const result = await operations.createWorkspace(CreateWorkspaceInputSchema.parse(call.arguments ?? {}));
     emit("workspace.updated", result);
@@ -57,6 +65,20 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     });
     emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
     return { session };
+  }
+  if (call.name === "launch_agent") {
+    const input = LaunchAgentInputSchema.parse(call.arguments ?? {});
+    const runtime = config.runtimes.find((candidate) => candidate.id === input.runtimeId);
+    if (!runtime) throw new Error(`Unknown runtime: ${input.runtimeId}`);
+    const result = await operations.launchAgent(input, {
+      command: runtime.command,
+      args: runtime.args,
+      displayName: runtime.displayName,
+      promptArg: runtime.promptArg ?? null,
+    });
+    emit("workspace.updated", { workspaceId: result.workspaceId, operationId: result.operationId });
+    if (result.sessionId) emit("agent.updated", { workspaceId: result.workspaceId, sessionId: result.sessionId });
+    return result;
   }
   if (call.name === "stop_agent_session") {
     const sessionId = typeof call.arguments?.sessionId === "string" ? (call.arguments.sessionId as string) : "";
@@ -109,6 +131,19 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
   if (call.name === "list_namespaces") {
     const includeArchived = call.arguments?.includeArchived === true;
     return { namespaces: store.listNamespaces(includeArchived) };
+  }
+  if (call.name === "list_deployed_apps") {
+    const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";
+    if (!workspaceId) return { error: "workspace_id_required" };
+    return operations.listDeployedApps({ workspaceId });
+  }
+  if (call.name === "redeploy_app") {
+    const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";
+    if (!workspaceId) return { error: "workspace_id_required" };
+    const name = typeof call.arguments?.name === "string" ? call.arguments.name : undefined;
+    const result = await operations.redeployApp({ workspaceId, appName: name });
+    emit("workspace.deploy.redeploy", { workspaceId, operationId: result.operationId, status: result.status });
+    return result;
   }
   if (call.name === "send_agent_message") {
     const sessionId = typeof call.arguments?.sessionId === "string" ? call.arguments.sessionId : "";

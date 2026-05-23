@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { SqliteStore } from "@citadel/db";
+import type { OperationService } from "@citadel/operations";
 import type express from "express";
 
 type Emit = (type: string, payload: unknown) => void;
@@ -15,8 +16,48 @@ export function registerWorkspaceExtraRoutes(input: {
   store: SqliteStore;
   emit: Emit;
   asyncRoute: AsyncRoute;
+  operations: OperationService;
 }) {
-  const { app, store, emit, asyncRoute } = input;
+  const { app, store, emit, asyncRoute, operations } = input;
+
+  app.get(
+    "/api/workspaces/:workspaceId/deployed-apps",
+    asyncRoute(async (req: express.Request, res: express.Response) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      try {
+        const summary = await operations.listDeployedApps({ workspaceId });
+        res.json(summary);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "deploy_hook_list_failed";
+        res.status(404).json({ error: message });
+      }
+    }),
+  );
+
+  app.post(
+    "/api/workspaces/:workspaceId/deployed-apps/redeploy",
+    asyncRoute(async (req: express.Request, res: express.Response) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      const body = (req.body ?? {}) as { name?: unknown };
+      let appName: string | undefined;
+      if (body.name !== undefined && body.name !== null && body.name !== "") {
+        if (typeof body.name !== "string" || !/^[a-zA-Z0-9_.-]{1,80}$/.test(body.name.trim())) {
+          return res.status(400).json({ error: "invalid_app_name" });
+        }
+        appName = body.name.trim();
+      }
+      try {
+        const result = await operations.redeployApp({ workspaceId, appName });
+        emit("workspace.deploy.redeploy", { workspaceId, operationId: result.operationId, status: result.status });
+        res.status(result.status === "succeeded" ? 202 : 424).json(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "deploy_hook_redeploy_failed";
+        res.status(404).json({ error: message });
+      }
+    }),
+  );
 
   app.get("/api/workspaces/archived", (_req, res) => {
     res.json({ workspaces: store.listArchivedWorkspaces() });

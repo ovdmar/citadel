@@ -160,7 +160,7 @@
   padding: 0;
   border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
   border-radius: 999px;
-  background: Canvas;
+  background: var(--panel);
   color: var(--muted);
   cursor: pointer;
   z-index: 1;
@@ -168,9 +168,9 @@
 
 .workspace-card-drop:hover,
 .workspace-card-drop:focus-visible {
-  border-color: var(--color-danger, #b42318);
-  color: var(--color-danger, #b42318);
-  background: color-mix(in srgb, var(--color-danger, #b42318) 9%, Canvas);
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 9%, var(--panel));
   outline: none;
 }
 
@@ -191,7 +191,7 @@
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgba(7, 16, 31, 0.55);
+  background: var(--overlay-bg);
   backdrop-filter: blur(4px);
 }
 
@@ -202,9 +202,9 @@
   padding: 16px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: Canvas;
+  background: var(--panel);
   color: CanvasText;
-  box-shadow: 0 24px 80px rgba(16, 19, 24, 0.24);
+  box-shadow: 0 24px 80px rgb(var(--shadow-color) / 0.24);
 }
 
 .drop-workspace-dialog p {
@@ -215,7 +215,7 @@
 }
 
 .drop-workspace-error {
-  color: var(--color-danger, #b42318);
+  color: var(--color-danger);
 }
 
 .drop-workspace-actions {
@@ -241,7 +241,7 @@
 
 .drop-workspace-confirm {
   border: 1px solid transparent;
-  background: var(--color-danger, #b42318);
+  background: var(--color-danger);
   color: white;
 }
 
@@ -401,8 +401,8 @@
 }
 
 .pr-pill.tone-merged {
-  background: color-mix(in srgb, var(--color-purple) 18%, transparent);
-  color: var(--color-purple);
+  background: color-mix(in srgb, var(--color-merged) 22%, transparent);
+  color: var(--color-merged);
 }
 
 .workspace-card-dirty {
@@ -624,6 +624,44 @@
 
 .app-chip.tone-unavailable .dot {
   background: var(--color-danger);
+}
+
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.panel-title-row > h4,
+.panel-title-row > h2 {
+  margin: 0;
+}
+
+.app-chip .app-chip-link {
+  color: inherit;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.app-chip .icon-button {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: inherit;
+  padding: 0 2px;
+  display: inline-flex;
+  align-items: center;
+  opacity: 0.75;
+}
+
+.app-chip .icon-button:hover:not(:disabled) {
+  opacity: 1;
+}
+
+.app-chip .icon-button:disabled {
+  cursor: progress;
+  opacity: 0.4;
 }
 
 .check-list {

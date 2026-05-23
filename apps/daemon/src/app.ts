@@ -101,12 +101,8 @@ export function createDaemonApp(input: {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     const runtime = config.runtimes.find((candidate) => candidate.id === session.runtimeId);
     if (!workspace || !runtime) return null;
-    return ensureTmuxSession({
-      sessionName: session.tmuxSessionName ?? `citadel_${workspace.id}_${session.id.slice(-8)}`,
-      cwd: workspace.path,
-      command: runtime.command,
-      args: runtime.args,
-    });
+    const sessionName = session.tmuxSessionName ?? `citadel_${workspace.id}_${session.id.slice(-8)}`;
+    return ensureTmuxSession({ sessionName, cwd: workspace.path, command: runtime.command, args: runtime.args });
   };
   registerTerminalRoutes({ app, server, store, ttyd, emit, respawnTmux });
 
@@ -601,6 +597,9 @@ export function createDaemonApp(input: {
         allowed.teardownHookIds = patch.teardownHookIds.filter((id: unknown) => typeof id === "string");
       if (Array.isArray(patch.providerIds))
         allowed.providerIds = patch.providerIds.filter((id: unknown) => typeof id === "string");
+      if (typeof patch.deployHookCommand === "string")
+        allowed.deployHookCommand = patch.deployHookCommand.trim() || null;
+      else if (patch.deployHookCommand === null) allowed.deployHookCommand = null;
       const next = store.updateRepo(repoId, allowed);
       if (!next) return res.status(404).json({ error: "repo_not_found" });
       emit("repo.updated", { repoId: next.id, repo: next });
@@ -714,7 +713,7 @@ export function createDaemonApp(input: {
     readMcpResource: (uri) => readMcpResource(store, config, uri),
   });
 
-  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute });
+  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
 
   app.get("/api/workspaces/:workspaceId/diff", (req, res) => {

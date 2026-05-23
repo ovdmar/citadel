@@ -84,6 +84,149 @@ describe("agent message MCP + REST routes", () => {
     }
   });
 
+  it("exposes launch_agent through MCP and routes it to OperationService.launchAgent", async () => {
+    const fixture = createFixture();
+    const launches: Array<{
+      input: { repoId?: string; repoName?: string; prompt: string; runtimeId: string };
+      runtime: { command: string; displayName: string };
+    }> = [];
+    const operations = {
+      launchAgent: async (
+        input: { repoId?: string; repoName?: string; prompt: string; runtimeId: string },
+        runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
+      ) => {
+        launches.push({ input, runtime: { command: runtime.command, displayName: runtime.displayName } });
+        return {
+          workspaceId: "ws_launched",
+          sessionId: "sess_launched",
+          branchName: "agent-abcdef",
+          workspacePath: "/tmp/agent-abcdef",
+          operationId: "op_launched",
+        };
+      },
+    } as unknown as OperationService;
+    const { server } = createDaemonApp({ ...fixture, operations });
+    const baseUrl = await listen(server);
+    try {
+      const list = await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "list",
+        method: "tools/list",
+      });
+      expect(list.result.tools.map((tool) => tool.name)).toContain("launch_agent");
+
+      const launch = await postJson<{
+        result: { structuredContent: { workspaceId: string; sessionId: string; branchName: string } };
+      }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "launch",
+        method: "tools/call",
+        params: {
+          name: "launch_agent",
+          arguments: { repoName: "fixture-repo", prompt: "do the thing", runtimeId: "shell" },
+        },
+      });
+      expect(launch.result.structuredContent).toMatchObject({
+        workspaceId: "ws_launched",
+        sessionId: "sess_launched",
+        branchName: "agent-abcdef",
+      });
+      expect(launches).toHaveLength(1);
+      expect(launches[0]?.input).toMatchObject({
+        repoName: "fixture-repo",
+        prompt: "do the thing",
+        runtimeId: "shell",
+      });
+      expect(launches[0]?.runtime.command).toBe("bash");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("launch_agent rejects when both repoId and repoName are missing", async () => {
+    const fixture = createFixture();
+    const operations = {
+      launchAgent: async () => {
+        throw new Error("should not be called");
+      },
+    } as unknown as OperationService;
+    const { server } = createDaemonApp({ ...fixture, operations });
+    const baseUrl = await listen(server);
+    try {
+      const response = await fetch(`${baseUrl}/api/mcp/rpc`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: "bad",
+          method: "tools/call",
+          params: { name: "launch_agent", arguments: { prompt: "x", runtimeId: "shell" } },
+        }),
+      });
+      const body = (await response.json()) as { error?: { message: string }; result?: { isError?: boolean } };
+      // Either JSON-RPC error envelope or the tool-call error path is acceptable;
+      // both prove the schema rejected the input rather than calling launchAgent.
+      const failed = Boolean(body.error) || Boolean(body.result?.isError);
+      expect(failed).toBe(true);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("exposes register_repo through MCP and routes it to OperationService.registerRepo", async () => {
+    const fixture = createFixture();
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-mcp-repo-"));
+    dirs.push(repoDir);
+    fs.mkdirSync(path.join(repoDir, ".git"));
+    const registered: Array<{ rootPath: string; name: string | undefined }> = [];
+    const operations = {
+      registerRepo: (input: { rootPath: string; name?: string; worktreeParent?: string }) => {
+        registered.push({ rootPath: input.rootPath, name: input.name });
+        return {
+          id: "repo_mcp_registered",
+          name: input.name ?? "fixture",
+          rootPath: input.rootPath,
+          defaultBranch: "main",
+          defaultRemote: "origin",
+          worktreeParent: input.worktreeParent ?? `${input.rootPath}-worktrees`,
+          setupHookIds: [],
+          teardownHookIds: [],
+          providerIds: [],
+          createdAt: "2026-05-23T00:00:00.000Z",
+          updatedAt: "2026-05-23T00:00:00.000Z",
+          archivedAt: null,
+        };
+      },
+    } as unknown as OperationService;
+    const { server } = createDaemonApp({ ...fixture, operations });
+    const baseUrl = await listen(server);
+    try {
+      const list = await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "list",
+        method: "tools/list",
+      });
+      expect(list.result.tools.map((tool) => tool.name)).toContain("register_repo");
+
+      const register = await postJson<{
+        result: { structuredContent: { repo: { id: string; name: string; rootPath: string } } };
+      }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "register",
+        method: "tools/call",
+        params: { name: "register_repo", arguments: { rootPath: repoDir, name: "skills" } },
+      });
+      expect(register.result.structuredContent.repo).toMatchObject({
+        id: "repo_mcp_registered",
+        name: "skills",
+        rootPath: repoDir,
+      });
+      expect(registered).toEqual([{ rootPath: repoDir, name: "skills" }]);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("exposes /api/agent-sessions/:id/output and /messages REST mirrors of the MCP tools", async () => {
     const fixture = createFixture();
     const sent: Array<{ sessionId: string; message: string }> = [];

@@ -8,6 +8,7 @@ import type {
   CreateWorkspaceInput,
   HookAction,
   HookOutput,
+  LaunchAgentInput,
   Namespace,
   Operation,
   Repo,
@@ -16,11 +17,13 @@ import type {
 } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
-import { parseHookOutput, runCommandHook } from "@citadel/hooks";
 import { ensureTmuxSession, killTmuxSession, submitPrompt } from "@citadel/terminal";
 import * as agentMessages from "./agent-messages.js";
+import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
+import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 import * as namespaceOps from "./namespaces.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
+export type { LaunchAgentResult } from "./launch-agent.js";
 export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
 export {
   ScheduledAgentRunner,
@@ -31,7 +34,11 @@ export {
 } from "./scheduled-agents.js";
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 import {
-  asObject,
+  type DeployOpsDeps,
+  listDeployedApps as listDeployedAppsImpl,
+  redeployApp as redeployAppImpl,
+} from "./deploy.js";
+import {
   cancelOperationInStore,
   discoverDefaultBranch,
   listHookDiagnostics,
@@ -74,16 +81,14 @@ export class OperationService {
       setupHookIds: this.config?.repoDefaults.setupHookIds ?? [],
       teardownHookIds: this.config?.repoDefaults.teardownHookIds ?? [],
       providerIds: ["github-gh", "jira-jtk"],
+      deployHookCommand: null,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
     };
     this.store.insertRepo(repo);
     this.activity("repo.registered", "user", `Registered ${repo.name}`, repo.id, null, null);
-    // Create the non-removable root workspace pointing at the repo working
-    // copy. Modeled like Superset: registering a repo always exposes its main
-    // checkout as a workspace so users can run agents/terminals against the
-    // canonical clone, not only inside worktrees.
+    // Always expose the repo's main checkout as a non-removable root workspace.
     const rootWorkspace: Workspace = {
       id: createId("ws"),
       repoId: repo.id,
@@ -117,9 +122,7 @@ export class OperationService {
         rootWorkspace.id,
         null,
       );
-    } catch {
-      // ignore — root already present (re-register or migration backfill)
-    }
+    } catch {} // root already present (re-register or migration backfill)
     return repo;
   }
 
@@ -178,7 +181,6 @@ export class OperationService {
       tryRunGit(repo.rootPath, ["fetch", "--prune", repo.defaultRemote]);
       this.logOp(operation.id, "info", `Fetched ${repo.defaultRemote} (prune)`);
       if (existingBranch) {
-        // Try to add a worktree pointing at the existing branch (local or remote).
         try {
           tryRunGit(repo.rootPath, ["worktree", "add", workspacePath, existingBranch]);
           this.logOp(operation.id, "info", `Added worktree at ${workspacePath} on branch ${existingBranch}`);
@@ -264,15 +266,12 @@ export class OperationService {
     }
     const now = nowIso();
     const sessionName = `citadel_${workspace.id}_${createId("agent").slice(-8)}`;
-    // Build runtime args. If runtime declares a promptArg flag, embed prompt as a CLI flag.
+    // Embed prompt as a CLI flag if the runtime declares one; otherwise paste it later.
     const runtimeArgs = [...runtime.args];
     let promptForKeys: string | null = null;
     if (input.prompt?.length) {
-      if (runtime.promptArg) {
-        runtimeArgs.push(runtime.promptArg, input.prompt);
-      } else {
-        promptForKeys = input.prompt;
-      }
+      if (runtime.promptArg) runtimeArgs.push(runtime.promptArg, input.prompt);
+      else promptForKeys = input.prompt;
     }
     const tmux = await ensureTmuxSession({
       sessionName,
@@ -280,8 +279,7 @@ export class OperationService {
       command: runtime.command,
       args: runtimeArgs,
     });
-    // Paste + Enter the prompt into the tmux pane once the runtime is ready.
-    // Critical for Claude Code, which drops input typed before its TUI paints.
+    // Paste + Enter once the runtime is ready (Claude Code drops pre-TUI input).
     if (promptForKeys) await submitPrompt(sessionName, promptForKeys);
     const session: AgentSession = {
       id: createId("sess"),
@@ -301,6 +299,22 @@ export class OperationService {
     if (repo) await this.runNotificationHooks("agent.started", repo, workspace, null, { repo, workspace, session });
     return session;
   }
+
+  launchAgent = (
+    input: LaunchAgentInput,
+    runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
+  ) =>
+    launchAgentImpl(
+      {
+        store: this.store,
+        createWorkspace: (workspaceInput) => this.createWorkspace(workspaceInput),
+        createAgentSession: (sessionInput, sessionRuntime) => this.createAgentSession(sessionInput, sessionRuntime),
+        activity: ({ type, source, message, repoId, workspaceId, operationId }) =>
+          this.activity(type, source, message, repoId, workspaceId, operationId),
+      },
+      input,
+      runtime,
+    );
 
   // See ./agent-messages.ts for the implementations.
   readAgentTranscript = (input: { sessionId: string; lines?: number; maxChars?: number }) =>
@@ -352,6 +366,12 @@ export class OperationService {
       const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
       if (!repo) return { retried: false, reason: "repo_missing" as const };
       const result = await this.runWorkspaceAction({ repo, workspace, action });
+      return { retried: true, operationId: result.operationId, status: result.status };
+    }
+    if (kind === "deploy.redeploy") {
+      const workspaceId = operation.retryInput.workspaceId as string;
+      const appName = (operation.retryInput.appName as string | null) ?? undefined;
+      const result = await this.redeployApp({ workspaceId, appName });
       return { retried: true, operationId: result.operationId, status: result.status };
     }
     return { retried: false, reason: "unknown_kind" as const };
@@ -465,14 +485,9 @@ export class OperationService {
       tryRunGit(repo.rootPath, ["worktree", "remove", "--force", workspace.path]);
       this.logOp(operation.id, "info", `Removed worktree at ${workspace.path}`);
     }
-    this.store.archiveWorkspace(workspace.id, input.archiveOnly ? "archived" : "removed", dirty);
-    this.logOp(
-      operation.id,
-      "info",
-      input.archiveOnly
-        ? `Marked workspace ${workspace.name} as archived`
-        : `Marked workspace ${workspace.name} as removed`,
-    );
+    const lifecycle = input.archiveOnly ? "archived" : "removed";
+    this.store.archiveWorkspace(workspace.id, lifecycle, dirty);
+    this.logOp(operation.id, "info", `Marked workspace ${workspace.name} as ${lifecycle}`);
     this.store.upsertOperation({
       ...operation,
       status: "succeeded",
@@ -628,16 +643,45 @@ export class OperationService {
     return runWorkspaceActionImpl(this.workspaceAppsDeps(), input);
   }
 
-  // Bundle the dependencies the workspace-apps module needs without leaking
-  // `this` into another file. Recomputed per call; the surface is tiny.
-  private workspaceAppsDeps(): WorkspaceAppsDeps {
-    return {
-      store: this.store,
-      config: this.config,
-      activity: (...args) => this.activity(...args),
-      newOperation: (...args) => this.operation(...args),
-    };
+  listDeployedApps = (input: { workspaceId: string }) =>
+    listDeployedAppsImpl(this.deployOpsDeps(), this.resolveRepoWorkspace(input.workspaceId));
+
+  // Per-workspace inflight guard so a double-click in the cockpit or a
+  // human+MCP overlap doesn't run two redeploys against the same port.
+  private redeployInflight = new Map<string, ReturnType<typeof redeployAppImpl>>();
+  redeployApp = (input: { workspaceId: string; appName?: string | undefined }) => {
+    const existing = this.redeployInflight.get(input.workspaceId);
+    if (existing) return existing;
+    const promise = redeployAppImpl(this.deployOpsDeps(), {
+      ...this.resolveRepoWorkspace(input.workspaceId),
+      appName: input.appName,
+    }).finally(() => {
+      this.redeployInflight.delete(input.workspaceId);
+    });
+    this.redeployInflight.set(input.workspaceId, promise);
+    return promise;
+  };
+
+  private resolveRepoWorkspace(workspaceId: string): { repo: Repo; workspace: Workspace } {
+    const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+    if (!workspace) throw new Error(`Unknown workspace: ${workspaceId}`);
+    const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+    if (!repo) throw new Error(`Workspace repo is missing: ${workspace.repoId}`);
+    return { repo, workspace };
   }
+
+  private deployOpsDeps = (): DeployOpsDeps => ({
+    store: this.store,
+    activity: (...args) => this.activity(...args),
+    newOperation: (...args) => this.operation(...args),
+  });
+
+  private workspaceAppsDeps = (): WorkspaceAppsDeps => ({
+    store: this.store,
+    config: this.config,
+    activity: (...args) => this.activity(...args),
+    newOperation: (...args) => this.operation(...args),
+  });
 
   listNamespaces = (includeArchived = false): Namespace[] => this.store.listNamespaces(includeArchived);
   createNamespace = (input: CreateNamespaceInput) => namespaceOps.createNamespace(this.nsDeps(), input);
@@ -651,8 +695,8 @@ export class OperationService {
     activity: (type, message) => this.activity(type, "user", message, null, null, null),
   });
 
-  hookDiagnostics(repo: Repo, workspace?: Workspace | null) {
-    return listHookDiagnostics({
+  hookDiagnostics = (repo: Repo, workspace?: Workspace | null) =>
+    listHookDiagnostics({
       repo,
       workspace,
       hooks: this.config?.hooks ?? [],
@@ -660,7 +704,6 @@ export class OperationService {
       actionHookIds: this.config?.repoDefaults.actionHookIds ?? [],
       hookTimeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
     });
-  }
 
   private operation(
     type: string,
@@ -716,82 +759,37 @@ export class OperationService {
     });
   }
 
-  private async runWorkspaceHooks(
+  private runWorkspaceHooks = (
     event: HookConfig["event"],
     hookIds: string[],
     repo: Repo,
     workspace: Workspace,
     operationId: string,
-  ) {
-    const hooks = (this.config?.hooks ?? []).filter((hook) => hook.event === event && hookIds.includes(hook.id));
-    for (const hook of hooks) {
-      const result = await runCommandHook(
-        {
-          id: hook.id,
-          event,
-          command: hook.command,
-          args: hook.args,
-          cwd: hook.cwd || workspace.path,
-          timeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
-          blocking: hook.blocking,
-        },
-        { event, repo, workspace, operationId },
-      );
-      const hookOutput = parseHookOutput(result.stdout);
-      this.activity(
-        `hook.${event}`,
-        "hook",
-        `Hook ${hook.id} completed${result.stderr ? " with stderr" : ""}`,
-        repo.id,
-        workspace.id,
-        operationId,
-        hookOutput,
-      );
-    }
-  }
+  ) =>
+    runWorkspaceHooks({
+      config: this.config,
+      activity: (...args) => this.activity(...args),
+      event,
+      hookIds,
+      repo,
+      workspace,
+      operationId,
+    });
 
-  private async runNotificationHooks(
+  private runNotificationHooks = (
     event: HookConfig["event"],
     repo: Repo,
     workspace: Workspace,
     operationId: string | null,
     payload: unknown,
-  ) {
-    const hooks = (this.config?.hooks ?? []).filter((hook) => hook.event === event);
-    for (const hook of hooks) {
-      try {
-        const result = await runCommandHook(
-          {
-            id: hook.id,
-            event,
-            command: hook.command,
-            args: hook.args,
-            cwd: hook.cwd || workspace.path,
-            timeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
-            blocking: hook.blocking,
-          },
-          { event, ...asObject(payload), operationId },
-        );
-        const hookOutput = parseHookOutput(result.stdout);
-        this.activity(
-          `hook.${event}`,
-          "hook",
-          `Hook ${hook.id} completed${result.stderr ? " with stderr" : ""}`,
-          repo.id,
-          workspace.id,
-          operationId,
-          hookOutput,
-        );
-      } catch (error) {
-        this.activity(
-          `hook.${event}.failed`,
-          "hook",
-          `Hook ${hook.id} failed: ${error instanceof Error ? error.message : "hook_failed"}`,
-          repo.id,
-          workspace.id,
-          operationId,
-        );
-      }
-    }
-  }
+  ) =>
+    runNotificationHooks({
+      config: this.config,
+      activity: (...args) => this.activity(...args),
+      event,
+      repo,
+      workspace,
+      operationId,
+      payload,
+    });
 }

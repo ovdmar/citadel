@@ -3,6 +3,7 @@ import { ExternalLink, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "./api.js";
 import { Button } from "./components/ui/button.js";
+import { useResolvedTheme } from "./use-resolved-theme.js";
 
 type EnsureResponse = {
   terminal: {
@@ -25,6 +26,14 @@ const RUNBOOK_URL = "/docs/operations/terminal-runbook";
 
 export function TerminalPane(props: { session: AgentSession }) {
   const sessionId = props.session.id;
+  const theme = useResolvedTheme();
+  // Capture the theme in a ref so ensure() reads the current value without
+  // re-creating its identity on every theme change. We deliberately do NOT
+  // re-issue ensure on theme change — ttyd bakes the xterm palette at spawn
+  // time, so changing it would require respawning, which causes reconnect
+  // storms. Terminal palette updates on the next page reload instead.
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<EnsureError | null>(null);
   const [pending, setPending] = useState(true);
@@ -37,9 +46,10 @@ export function TerminalPane(props: { session: AgentSession }) {
       setPending(true);
       setError(null);
       try {
-        const response = await api<EnsureResponse>(`/api/agent-sessions/${sessionId}/terminal`, {
-          method: "POST",
-        });
+        const response = await api<EnsureResponse>(
+          `/api/agent-sessions/${sessionId}/terminal?theme=${encodeURIComponent(themeRef.current)}`,
+          { method: "POST" },
+        );
         if (requestSeqRef.current !== seq) return;
         setUrl(response.terminal.url);
         setError(null);

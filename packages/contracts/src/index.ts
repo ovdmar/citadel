@@ -32,6 +32,7 @@ export const RepoSchema = z.object({
   setupHookIds: z.array(z.string()).default([]),
   teardownHookIds: z.array(z.string()).default([]),
   providerIds: z.array(z.string()).default([]),
+  deployHookCommand: z.string().max(4000).nullable().default(null),
   createdAt: z.string(),
   updatedAt: z.string(),
   archivedAt: z.string().nullable().default(null),
@@ -328,6 +329,50 @@ export const HookDiagnosticSchema = z.object({
   structuredPayload: HookOutputSchema.nullable().default(null),
 });
 
+export const DeployedAppStatusSchema = z.enum(["deployed", "stopped", "unknown"]);
+
+export const DeployedAppSchema = z.object({
+  workspaceId: IdSchema,
+  name: z.string().min(1).max(80),
+  url: z.string().url(),
+  status: DeployedAppStatusSchema,
+  lastChecked: z.string(),
+});
+
+// The structured payload the `<hook> list` subcommand must emit on stdout.
+// The 50-app cap is a sanity guard — real repos surface a handful of apps; a
+// runaway hook spewing thousands of entries indicates a bug we'd rather reject
+// than render. Tighten/widen with care.
+export const DeployHookListOutputSchema = z.object({
+  apps: z
+    .array(
+      z.object({
+        name: z.string().min(1).max(80),
+        url: z.string().url(),
+      }),
+    )
+    .max(50),
+});
+
+export const DeployHookSourceSchema = z.enum(["repo-file", "repo-config", "none"]);
+
+export const DeployHookResolutionSchema = z.object({
+  source: DeployHookSourceSchema,
+  filePath: z.string().nullable().default(null),
+  command: z.string().nullable().default(null),
+  // Diagnostic breadcrumb when resolution had to fall back or skip a candidate —
+  // e.g. "<path> exists but is not executable; using repo-config fallback".
+  note: z.string().nullable().default(null),
+});
+
+export const DeployedAppsSummarySchema = z.object({
+  workspaceId: IdSchema,
+  resolution: DeployHookResolutionSchema,
+  apps: z.array(DeployedAppSchema),
+  error: z.string().nullable().default(null),
+  checkedAt: z.string(),
+});
+
 export const WorkspaceReadinessSchema = z.object({
   state: z.enum([
     "working",
@@ -423,6 +468,26 @@ export const CreateAgentSessionInputSchema = z.object({
   namespaceId: IdSchema.optional(),
 });
 
+// High-level one-shot launcher used by MCP orchestrators: create a workspace
+// and start an agent session in it in a single call. Either `repoId` (an
+// internal id) or `repoName` (the configured repo display name) must be
+// provided; everything else is optional with sensible defaults.
+export const LaunchAgentInputSchema = z
+  .object({
+    repoId: IdSchema.optional(),
+    repoName: z.string().min(1).optional(),
+    prompt: z.string().min(1),
+    runtimeId: IdSchema.default("claude-code"),
+    displayName: z.string().min(1).max(80).optional(),
+    workspaceName: z.string().min(1).max(80).optional(),
+    namespaceId: z.string().min(1).max(80).optional(),
+    branchName: z.string().min(1).max(120).optional(),
+  })
+  .refine((data) => Boolean(data.repoId) !== Boolean(data.repoName), {
+    message: "Provide exactly one of repoId or repoName",
+    path: ["repoId"],
+  });
+
 export const TransitionIssueInputSchema = z.object({
   transition: z.string().min(1),
   fields: z.record(z.string()).default({}),
@@ -509,11 +574,18 @@ export type HookDiagnostic = z.infer<typeof HookDiagnosticSchema>;
 export type WorkspaceReadiness = z.infer<typeof WorkspaceReadinessSchema>;
 export type WorkspaceAppsSummary = z.infer<typeof WorkspaceAppsSummarySchema>;
 export type WorkspaceCockpitSummary = z.infer<typeof WorkspaceCockpitSummarySchema>;
+export type DeployedApp = z.infer<typeof DeployedAppSchema>;
+export type DeployedAppStatus = z.infer<typeof DeployedAppStatusSchema>;
+export type DeployHookListOutput = z.infer<typeof DeployHookListOutputSchema>;
+export type DeployHookResolution = z.infer<typeof DeployHookResolutionSchema>;
+export type DeployHookSource = z.infer<typeof DeployHookSourceSchema>;
+export type DeployedAppsSummary = z.infer<typeof DeployedAppsSummarySchema>;
 export type ActivityEvent = z.infer<typeof ActivityEventSchema>;
 export type AppEvent = z.infer<typeof AppEventSchema>;
 export type CreateRepoInput = z.infer<typeof CreateRepoInputSchema>;
 export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
 export type CreateAgentSessionInput = z.infer<typeof CreateAgentSessionInputSchema>;
+export type LaunchAgentInput = z.infer<typeof LaunchAgentInputSchema>;
 export type TransitionIssueInput = z.infer<typeof TransitionIssueInputSchema>;
 export type Namespace = z.infer<typeof NamespaceSchema>;
 export type CreateNamespaceInput = z.infer<typeof CreateNamespaceInputSchema>;
