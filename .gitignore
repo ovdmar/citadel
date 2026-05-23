@@ -4,7 +4,7 @@ coverage/
 test-results/
 playwright-report/
 .DS_Store
-.claude/
+.claude/scheduled_tasks.lock
 *.log
 *.tsbuildinfo
 *.js.map
