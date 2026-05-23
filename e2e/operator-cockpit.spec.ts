@@ -131,6 +131,78 @@ test("settings sidebar exposes all configured sections", async ({ page }, testIn
   await page.screenshot({ path: `docs/campaigns/screenshot-${testInfo.project.name}-settings.png`, fullPage: true });
 });
 
+test("dialogs render centered on the viewport (no top-right / top-center drift)", async ({
+  page,
+  request,
+}, testInfo) => {
+  // Mobile viewports collapse the navigator into a column switcher, so the
+  // "Create workspace" trigger sits behind an extra tap; the centering math is
+  // identical, so we cover this regression once on desktop.
+  test.skip(testInfo.project.name !== "desktop", "centering regression runs once on desktop");
+
+  const fixture = createGitFixture();
+  const workspaceIds: string[] = [];
+  try {
+    const repo = await registerRepo(request, fixture, `Centering ${Date.now().toString(36)}`);
+    const workspaceName = `centering-${Date.now().toString(36)}`;
+    const created = await createWorkspace(request, repo.id, workspaceName);
+    workspaceIds.push(created.workspaceId);
+    await waitForWorkspace(request, created.workspaceId, "ready");
+
+    await page.goto("/");
+    const viewport = page.viewportSize();
+    if (!viewport) throw new Error("viewport size missing");
+    const viewportCenterX = viewport.width / 2;
+    const viewportCenterY = viewport.height / 2;
+    // 16px of horizontal slack covers scrollbar gutter on Chromium; vertical
+    // slack is wider because dialog heights vary with content and `max-height:
+    // 90vh` can shift the centerpoint slightly inside the backdrop padding.
+    const horizontalSlack = 16;
+    const verticalSlack = 48;
+
+    const assertCentered = async (locator: import("@playwright/test").Locator, label: string) => {
+      await expect(locator, `${label} should be visible`).toBeVisible();
+      const box = await locator.boundingBox();
+      if (!box) throw new Error(`${label} has no bounding box`);
+      const centerX = box.x + box.width / 2;
+      const centerY = box.y + box.height / 2;
+      expect(
+        Math.abs(centerX - viewportCenterX),
+        `${label} should be horizontally centered (got centerX=${centerX}, viewportCenterX=${viewportCenterX})`,
+      ).toBeLessThanOrEqual(horizontalSlack);
+      expect(
+        Math.abs(centerY - viewportCenterY),
+        `${label} should be near vertical center (got centerY=${centerY}, viewportCenterY=${viewportCenterY})`,
+      ).toBeLessThanOrEqual(verticalSlack);
+    };
+
+    // 1. Command palette (Search workspaces button in the top bar).
+    await page.getByRole("button", { name: "Search workspaces" }).click();
+    await assertCentered(page.locator("dialog.command-palette"), "command palette");
+    await page.keyboard.press("Escape");
+    await expect(page.locator("dialog.command-palette")).toHaveCount(0);
+
+    // 2. Create-workspace modal (Plus button in navigator).
+    await page.getByRole("button", { name: "Create workspace" }).click();
+    await assertCentered(page.locator("dialog.modal-frame"), "create-workspace modal");
+    await page.keyboard.press("Escape");
+    await expect(page.locator("dialog.modal-frame")).toHaveCount(0);
+
+    // 3. Drop-workspace confirmation. The trash button only appears on hover,
+    // so we force the hover state on the wrapping element first.
+    const card = page.locator(".workspace-card-wrap").filter({ hasText: workspaceName }).first();
+    await card.hover();
+    await card.getByRole("button", { name: new RegExp(`Drop workspace ${workspaceName}`, "i") }).click();
+    await assertCentered(page.locator("dialog.drop-workspace-dialog"), "drop-workspace dialog");
+    await page.keyboard.press("Escape").catch(() => {});
+  } finally {
+    for (const workspaceId of workspaceIds) {
+      await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`).catch(() => {});
+    }
+    fs.rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
 test("desktop session stop endpoint removes the session", async ({ request }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "session lifecycle coverage runs once against the shared daemon");
   const fixture = createGitFixture();
