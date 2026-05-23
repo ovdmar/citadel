@@ -1,6 +1,15 @@
 import type { AgentSession, Operation, Repo, Workspace, WorkspaceCockpitSummary } from "@citadel/contracts";
 import { Link, useLocation } from "@tanstack/react-router";
-import { ClipboardList, FolderPlus, LayoutDashboard, NotebookPen, PanelLeftClose, Plus, Settings2 } from "lucide-react";
+import {
+  AlarmClock,
+  ClipboardList,
+  FolderPlus,
+  LayoutDashboard,
+  NotebookPen,
+  PanelLeftClose,
+  Plus,
+  Settings2,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { formatLabel } from "./labels.js";
@@ -80,6 +89,13 @@ export function Navigator(props: {
             title="Scratchpad — markdown notes orchestrator agents can read via MCP"
           >
             <NotebookPen size={13} /> Scratchpad
+          </Link>
+          <Link
+            to="/scheduled-agents"
+            className={path === "/scheduled-agents" ? "active" : ""}
+            title="Scheduled agents — cron-driven agent runs"
+          >
+            <AlarmClock size={13} /> Scheduled agents
           </Link>
           <Link to="/history" className={path === "/history" ? "active" : ""} title="Activity & operations history">
             <ClipboardList size={13} /> History

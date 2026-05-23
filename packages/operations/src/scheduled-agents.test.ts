@@ -165,6 +165,155 @@ describe("ScheduledAgentRunner", () => {
     expect(stored?.lastRunMessage).toContain("Runtime");
   });
 
+  it("fires one-shot agents only after their runAt and auto-disables them", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const operations = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = operations.registerRepo({ rootPath: fixture.repoPath });
+    let runtimeAvailable = true;
+    const runner = new ScheduledAgentRunner({
+      store,
+      operations,
+      getRuntime: () =>
+        runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+    });
+
+    const runAt = new Date(2030, 0, 1, 9, 0, 0);
+    const agent = runner.create({
+      name: "One-shot",
+      scheduleType: "once",
+      runAt: runAt.toISOString(),
+      repoId: repo.id,
+      runtimeId: "shell",
+      workspaceStrategy: "existing",
+      workspaceName: "one-shot",
+    });
+    expect(agent.scheduleType).toBe("once");
+    expect(agent.cron).toBeNull();
+    expect(agent.runAt).toBe(runAt.toISOString());
+
+    // Before runAt: nothing fires.
+    runtimeAvailable = false;
+    const before = await runner.tick(new Date(runAt.getTime() - 60_000));
+    expect(before).toEqual([]);
+
+    // After runAt: it fires exactly once and the runner disables it.
+    const fired = await runner.tick(new Date(runAt.getTime() + 60_000));
+    expect(fired).toEqual([agent.id]);
+    const afterFire = runner.find(agent.id);
+    expect(afterFire?.enabled).toBe(false);
+    expect(afterFire?.lastRunStatus).toBe("failed");
+
+    const repeat = await runner.tick(new Date(runAt.getTime() + 120_000));
+    expect(repeat).toEqual([]);
+  });
+
+  it("flips scheduleType, clears the unused field, and re-arms lastRunStatus", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const operations = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = operations.registerRepo({ rootPath: fixture.repoPath });
+    const runner = new ScheduledAgentRunner({
+      store,
+      operations,
+      getRuntime: () => ({ id: "shell", displayName: "Shell", command: "bash", args: [] }),
+    });
+
+    // Start recurring.
+    const recurring = runner.create({
+      name: "Recurring",
+      cron: "0 9 * * *",
+      repoId: repo.id,
+      runtimeId: "shell",
+      workspaceStrategy: "existing",
+      workspaceName: "ws",
+    });
+    expect(recurring.cron).toBe("0 9 * * *");
+
+    // Flip to one-shot.
+    const future = new Date(2030, 0, 1, 9, 0, 0).toISOString();
+    const asOnce = runner.update(recurring.id, { scheduleType: "once", runAt: future });
+    expect(asOnce).toMatchObject({ scheduleType: "once", runAt: future, cron: null });
+
+    // Flip back to recurring with a fresh cron.
+    const backToRecurring = runner.update(recurring.id, {
+      scheduleType: "recurring",
+      cron: "*/30 * * * *",
+    });
+    expect(backToRecurring).toMatchObject({ scheduleType: "recurring", cron: "*/30 * * * *", runAt: null });
+
+    // Switching scheduleType without supplying the matching field throws.
+    expect(() => runner.update(recurring.id, { scheduleType: "once" })).toThrow(/runAt/);
+
+    // Re-arm: simulate a fired one-shot, then PATCH a new runAt and confirm
+    // lastRunStatus rewinds to 'never' so the next tick can fire again.
+    const oneShot = runner.create({
+      name: "One",
+      scheduleType: "once",
+      runAt: new Date(2030, 0, 1, 9, 0, 0).toISOString(),
+      repoId: repo.id,
+      runtimeId: "shell",
+      workspaceStrategy: "existing",
+      workspaceName: "ws-once",
+    });
+    store.recordScheduledAgentRun(oneShot.id, {
+      lastRunAt: new Date().toISOString(),
+      lastRunStatus: "succeeded",
+      lastRunMessage: "done",
+    });
+    const rearmed = runner.update(oneShot.id, { runAt: new Date(2030, 5, 1, 9, 0, 0).toISOString() });
+    expect(rearmed).toMatchObject({ lastRunStatus: "never", lastRunMessage: null });
+  });
+
+  it("rejects one-shot creation without a runAt and recurring creation without a cron", () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const operations = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = operations.registerRepo({ rootPath: fixture.repoPath });
+    const runner = new ScheduledAgentRunner({
+      store,
+      operations,
+      getRuntime: () => ({ id: "shell", displayName: "Shell", command: "bash", args: [] }),
+    });
+
+    expect(() =>
+      runner.create({
+        name: "Missing runAt",
+        scheduleType: "once",
+        repoId: repo.id,
+        runtimeId: "shell",
+        workspaceStrategy: "new",
+        workspaceName: "noop",
+      }),
+    ).toThrow(/runAt/);
+
+    expect(() =>
+      runner.create({
+        name: "Missing cron",
+        scheduleType: "recurring",
+        repoId: repo.id,
+        runtimeId: "shell",
+        workspaceStrategy: "new",
+        workspaceName: "noop",
+      }),
+    ).toThrow(/cron/);
+  });
+
   it("skips ticks that already fired in the current minute", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));

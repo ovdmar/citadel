@@ -102,11 +102,19 @@ export function operationFromRow(row: Record<string, unknown>): Operation {
 }
 
 export function scheduledAgentFromRow(row: Record<string, unknown>): ScheduledAgent {
+  const scheduleType = (
+    row.schedule_type ? asString(row, "schedule_type") : "recurring"
+  ) as ScheduledAgent["scheduleType"];
+  // cron is NOT NULL in the table; one-shot rows store a placeholder there and
+  // we surface it as null on the typed object so callers don't act on it.
+  const cronRaw = row.cron ? asString(row, "cron") : null;
   return {
     id: asString(row, "id"),
     name: asString(row, "name"),
     description: row.description ? asString(row, "description") : null,
-    cron: asString(row, "cron"),
+    scheduleType,
+    cron: scheduleType === "once" ? null : cronRaw,
+    runAt: row.run_at ? asString(row, "run_at") : null,
     repoId: asString(row, "repo_id"),
     runtimeId: asString(row, "runtime_id"),
     prompt: row.prompt ? asString(row, "prompt") : null,

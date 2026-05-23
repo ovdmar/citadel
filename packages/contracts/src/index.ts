@@ -469,12 +469,15 @@ export const TransitionIssueInputSchema = z.object({
 
 export const ScheduledAgentWorkspaceStrategySchema = z.enum(["new", "existing"]);
 export const ScheduledAgentRunStatusSchema = z.enum(["never", "running", "succeeded", "failed"]);
+export const ScheduledAgentScheduleTypeSchema = z.enum(["recurring", "once"]);
 
 export const ScheduledAgentSchema = z.object({
   id: IdSchema,
   name: z.string().min(1).max(80),
   description: z.string().max(280).nullable().default(null),
-  cron: z.string().min(1).max(120),
+  scheduleType: ScheduledAgentScheduleTypeSchema.default("recurring"),
+  cron: z.string().min(1).max(120).nullable().default(null),
+  runAt: z.string().nullable().default(null),
   repoId: IdSchema,
   runtimeId: IdSchema,
   prompt: z.string().max(8000).nullable().default(null),
@@ -491,20 +494,57 @@ export const ScheduledAgentSchema = z.object({
   updatedAt: z.string(),
 });
 
-export const CreateScheduledAgentInputSchema = z.object({
-  name: z.string().min(1).max(80),
+// Recurring needs a cron; one-shot needs a runAt timestamp. The runner stores a
+// placeholder cron for one-shots so the DB column can stay NOT NULL.
+export const CreateScheduledAgentInputSchema = z
+  .object({
+    name: z.string().min(1).max(80),
+    description: z.string().max(280).optional(),
+    scheduleType: ScheduledAgentScheduleTypeSchema.optional(),
+    cron: z.string().min(1).max(120).optional(),
+    runAt: z.string().datetime({ offset: true }).optional(),
+    repoId: IdSchema,
+    runtimeId: IdSchema,
+    prompt: z.string().max(8000).optional(),
+    workspaceStrategy: ScheduledAgentWorkspaceStrategySchema,
+    workspaceName: z.string().min(1).max(80),
+    baseBranch: z.string().min(1).max(120).optional(),
+    enabled: z.boolean().optional(),
+  })
+  .superRefine((value, ctx) => {
+    const type = value.scheduleType ?? "recurring";
+    if (type === "recurring" && !value.cron) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "cron is required for recurring schedules",
+        path: ["cron"],
+      });
+    }
+    if (type === "once" && !value.runAt) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "runAt is required for one-shot schedules",
+        path: ["runAt"],
+      });
+    }
+  });
+
+// Partial form for PATCH: build it from the raw object (skip the refinement so a
+// PATCH that only touches `enabled` doesn't fail the cron/runAt presence check).
+export const UpdateScheduledAgentInputSchema = z.object({
+  name: z.string().min(1).max(80).optional(),
   description: z.string().max(280).optional(),
-  cron: z.string().min(1).max(120),
-  repoId: IdSchema,
-  runtimeId: IdSchema,
+  scheduleType: ScheduledAgentScheduleTypeSchema.optional(),
+  cron: z.string().min(1).max(120).optional(),
+  runAt: z.string().datetime({ offset: true }).optional(),
+  repoId: IdSchema.optional(),
+  runtimeId: IdSchema.optional(),
   prompt: z.string().max(8000).optional(),
-  workspaceStrategy: ScheduledAgentWorkspaceStrategySchema,
-  workspaceName: z.string().min(1).max(80),
+  workspaceStrategy: ScheduledAgentWorkspaceStrategySchema.optional(),
+  workspaceName: z.string().min(1).max(80).optional(),
   baseBranch: z.string().min(1).max(120).optional(),
   enabled: z.boolean().optional(),
 });
-
-export const UpdateScheduledAgentInputSchema = CreateScheduledAgentInputSchema.partial();
 
 export const DiffFileSchema = z.object({
   path: z.string(),
@@ -567,6 +607,7 @@ export type WorkspaceDiff = z.infer<typeof WorkspaceDiffSchema>;
 export type ScheduledAgent = z.infer<typeof ScheduledAgentSchema>;
 export type ScheduledAgentWorkspaceStrategy = z.infer<typeof ScheduledAgentWorkspaceStrategySchema>;
 export type ScheduledAgentRunStatus = z.infer<typeof ScheduledAgentRunStatusSchema>;
+export type ScheduledAgentScheduleType = z.infer<typeof ScheduledAgentScheduleTypeSchema>;
 export type CreateScheduledAgentInput = z.infer<typeof CreateScheduledAgentInputSchema>;
 export type UpdateScheduledAgentInput = z.infer<typeof UpdateScheduledAgentInputSchema>;
 

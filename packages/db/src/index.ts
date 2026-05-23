@@ -34,6 +34,12 @@ type SqliteStatement = {
   run(...params: unknown[]): { changes: number };
 };
 
+// Sentinel cron written for one-shot rows. Must never match a real minute:
+// dom=31 + mon=2 with dow wild yields cronMatches() === false for every date
+// (Feb has no 31st). Earlier "0 0 31 2 0" was unsafe because dom/dow
+// non-wild use OR semantics and would fire every Sunday in February.
+const ONE_SHOT_CRON_PLACEHOLDER = "0 0 31 2 *";
+
 let DatabaseSyncCtor: DatabaseSyncCtor | null = null;
 function loadDatabaseSync(): DatabaseSyncCtor {
   if (DatabaseSyncCtor) return DatabaseSyncCtor;
@@ -191,6 +197,8 @@ export class SqliteStore {
       INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
       VALUES (5, 'scheduled-agents', datetime('now'));
     `);
+    this.ensureColumn("scheduled_agents", "schedule_type", "TEXT NOT NULL DEFAULT 'recurring'");
+    this.ensureColumn("scheduled_agents", "run_at", "TEXT");
   }
 
   exec(sql: string) {
@@ -522,18 +530,23 @@ export class SqliteStore {
   }
 
   insertScheduledAgent(agent: ScheduledAgent) {
+    // cron is NOT NULL at the DB level. One-shot rows store a sentinel that
+    // never matches a real minute so the recurring tick is a no-op for them.
+    const cronColumn = agent.cron ?? ONE_SHOT_CRON_PLACEHOLDER;
     this.database
       .prepare(
-        `INSERT INTO scheduled_agents (id, name, description, cron, repo_id, runtime_id, prompt,
+        `INSERT INTO scheduled_agents (id, name, description, cron, schedule_type, run_at, repo_id, runtime_id, prompt,
           workspace_strategy, workspace_name, base_branch, enabled, last_run_at, last_run_status,
           last_run_message, last_workspace_id, last_session_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
         agent.name,
         agent.description ?? null,
-        agent.cron,
+        cronColumn,
+        agent.scheduleType,
+        agent.runAt ?? null,
         agent.repoId,
         agent.runtimeId,
         agent.prompt ?? null,
@@ -558,7 +571,9 @@ export class SqliteStore {
         ScheduledAgent,
         | "name"
         | "description"
+        | "scheduleType"
         | "cron"
+        | "runAt"
         | "repoId"
         | "runtimeId"
         | "prompt"
@@ -577,18 +592,23 @@ export class SqliteStore {
       description: patch.description !== undefined ? patch.description : existing.description,
       prompt: patch.prompt !== undefined ? patch.prompt : existing.prompt,
       baseBranch: patch.baseBranch !== undefined ? patch.baseBranch : existing.baseBranch,
+      runAt: patch.runAt !== undefined ? patch.runAt : existing.runAt,
+      cron: patch.cron !== undefined ? patch.cron : existing.cron,
       updatedAt: new Date().toISOString(),
     };
+    const cronColumn = next.cron ?? ONE_SHOT_CRON_PLACEHOLDER;
     this.database
       .prepare(
-        `UPDATE scheduled_agents SET name = ?, description = ?, cron = ?, repo_id = ?, runtime_id = ?,
-          prompt = ?, workspace_strategy = ?, workspace_name = ?, base_branch = ?, enabled = ?,
-          updated_at = ? WHERE id = ?`,
+        `UPDATE scheduled_agents SET name = ?, description = ?, cron = ?, schedule_type = ?, run_at = ?,
+          repo_id = ?, runtime_id = ?, prompt = ?, workspace_strategy = ?, workspace_name = ?,
+          base_branch = ?, enabled = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         next.name,
         next.description ?? null,
-        next.cron,
+        cronColumn,
+        next.scheduleType,
+        next.runAt ?? null,
         next.repoId,
         next.runtimeId,
         next.prompt ?? null,
@@ -642,6 +662,32 @@ export class SqliteStore {
 
   deleteScheduledAgent(id: string) {
     this.database.prepare("DELETE FROM scheduled_agents WHERE id = ?").run(id);
+  }
+
+  /**
+   * Reset the run tracking on a scheduled agent without recording a new run.
+   * Used when the user PATCHes a one-shot's schedule and we need the tick
+   * guard to treat the agent as un-fired again.
+   */
+  resetScheduledAgentRun(id: string): ScheduledAgent | null {
+    const existing = this.findScheduledAgent(id);
+    if (!existing) return null;
+    const next: ScheduledAgent = {
+      ...existing,
+      lastRunAt: null,
+      lastRunStatus: "never",
+      lastRunMessage: null,
+      lastWorkspaceId: null,
+      lastSessionId: null,
+      updatedAt: new Date().toISOString(),
+    };
+    this.database
+      .prepare(
+        `UPDATE scheduled_agents SET last_run_at = NULL, last_run_status = 'never', last_run_message = NULL,
+          last_workspace_id = NULL, last_session_id = NULL, updated_at = ? WHERE id = ?`,
+      )
+      .run(next.updatedAt, id);
+    return next;
   }
 
   private ensureColumn(table: string, column: string, definition: string) {

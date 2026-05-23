@@ -216,14 +216,28 @@ export class ScheduledAgentRunner {
   }
 
   create(input: CreateScheduledAgentInput): ScheduledAgent {
-    parseCronExpression(input.cron);
+    const scheduleType: ScheduledAgent["scheduleType"] = input.scheduleType ?? "recurring";
+    let cron: string | null = null;
+    let runAt: string | null = null;
+    if (scheduleType === "recurring") {
+      if (!input.cron) throw new Error("cron is required for recurring schedules");
+      parseCronExpression(input.cron);
+      cron = input.cron;
+    } else {
+      if (!input.runAt) throw new Error("runAt is required for one-shot schedules");
+      const parsed = new Date(input.runAt);
+      if (Number.isNaN(parsed.getTime())) throw new Error("runAt must be a valid ISO timestamp");
+      runAt = parsed.toISOString();
+    }
     this.assertRepoAndRuntime(input.repoId, input.runtimeId);
     const now = nowIso();
     const agent: ScheduledAgent = {
       id: createId("sched"),
       name: input.name,
       description: input.description ?? null,
-      cron: input.cron,
+      scheduleType,
+      cron,
+      runAt,
       repoId: input.repoId,
       runtimeId: input.runtimeId,
       prompt: input.prompt ?? null,
@@ -242,7 +256,10 @@ export class ScheduledAgentRunner {
     this.deps.store.insertScheduledAgent(agent);
     this.deps.recordActivity?.({
       type: "scheduled-agent.created",
-      message: `Scheduled agent ${agent.name} (${agent.cron})`,
+      message:
+        scheduleType === "recurring"
+          ? `Scheduled agent ${agent.name} (${agent.cron})`
+          : `Scheduled agent ${agent.name} (once at ${agent.runAt})`,
       repoId: agent.repoId,
       workspaceId: null,
     });
@@ -250,16 +267,29 @@ export class ScheduledAgentRunner {
   }
 
   update(id: string, input: UpdateScheduledAgentInput): ScheduledAgent | null {
-    if (input.cron) parseCronExpression(input.cron);
+    const existing = this.deps.store.findScheduledAgent(id);
+    if (!existing) return null;
+    const nextScheduleType = input.scheduleType ?? existing.scheduleType;
+    if (input.cron !== undefined && input.cron !== null) parseCronExpression(input.cron);
+    if (nextScheduleType === "recurring") {
+      const effectiveCron = input.cron !== undefined ? input.cron : existing.cron;
+      if (!effectiveCron) throw new Error("cron is required for recurring schedules");
+    }
+    if (nextScheduleType === "once") {
+      const effectiveRunAt = input.runAt !== undefined ? input.runAt : existing.runAt;
+      if (!effectiveRunAt) throw new Error("runAt is required for one-shot schedules");
+      const parsed = new Date(effectiveRunAt);
+      if (Number.isNaN(parsed.getTime())) throw new Error("runAt must be a valid ISO timestamp");
+    }
     if (input.repoId || input.runtimeId) {
-      const existing = this.deps.store.findScheduledAgent(id);
-      if (!existing) return null;
       this.assertRepoAndRuntime(input.repoId ?? existing.repoId, input.runtimeId ?? existing.runtimeId);
     }
     const patch: Parameters<SqliteStore["updateScheduledAgent"]>[1] = {};
     if (input.name !== undefined) patch.name = input.name;
     if (input.description !== undefined) patch.description = input.description ?? null;
+    if (input.scheduleType !== undefined) patch.scheduleType = input.scheduleType;
     if (input.cron !== undefined) patch.cron = input.cron;
+    if (input.runAt !== undefined) patch.runAt = input.runAt ?? null;
     if (input.repoId !== undefined) patch.repoId = input.repoId;
     if (input.runtimeId !== undefined) patch.runtimeId = input.runtimeId;
     if (input.prompt !== undefined) patch.prompt = input.prompt ?? null;
@@ -267,7 +297,18 @@ export class ScheduledAgentRunner {
     if (input.workspaceName !== undefined) patch.workspaceName = input.workspaceName;
     if (input.baseBranch !== undefined) patch.baseBranch = input.baseBranch ?? null;
     if (input.enabled !== undefined) patch.enabled = input.enabled;
-    return this.deps.store.updateScheduledAgent(id, patch);
+    // When switching to recurring, drop the stored runAt so it doesn't get
+    // re-applied if the user toggles back. Same for cron when switching to once.
+    if (input.scheduleType === "recurring" && input.runAt === undefined) patch.runAt = null;
+    if (input.scheduleType === "once" && input.cron === undefined) patch.cron = null;
+    // Re-arm: if the user changes the schedule definition (cron / runAt /
+    // scheduleType) the previous run is no longer "the latest" — reset
+    // lastRunStatus so the tick guard treats the agent as un-fired. Without
+    // this a one-shot that succeeded can never be PATCHed with a new runAt.
+    const scheduleChanged = input.cron !== undefined || input.runAt !== undefined || input.scheduleType !== undefined;
+    const updated = this.deps.store.updateScheduledAgent(id, patch);
+    if (!updated || !scheduleChanged) return updated;
+    return this.deps.store.resetScheduledAgentRun(id);
   }
 
   delete(id: string): boolean {
@@ -284,14 +325,36 @@ export class ScheduledAgentRunner {
   }
 
   /**
-   * Run all enabled agents whose cron matches the current minute and whose last run
-   * was not in this same minute. Returns the agent ids that fired.
+   * Recurring: fire any enabled agent whose cron matches the current minute and
+   * whose last run wasn't already in this same minute.
+   * One-shot: fire any enabled agent whose runAt has passed and that has never
+   * succeeded — then disable it so the tick doesn't keep re-firing.
    */
   async tick(now: Date = new Date()): Promise<string[]> {
     const minuteFloor = floorToMinute(now);
     const fired: string[] = [];
     for (const agent of this.deps.store.listScheduledAgents()) {
       if (!agent.enabled) continue;
+      if (agent.scheduleType === "once") {
+        if (!agent.runAt) continue;
+        const runAt = new Date(agent.runAt).getTime();
+        if (Number.isNaN(runAt) || runAt > now.getTime()) continue;
+        // Skip anything not "never" — a "running" row means a previous tick is
+        // still mid-flight (execute() exceeded the tick interval) and we must
+        // not start a second concurrent run. "succeeded"/"failed" are terminal.
+        if (agent.lastRunStatus !== "never") continue;
+        // Disable BEFORE awaiting runOnce so a slow execute() can't be picked
+        // up by the next tick. try/finally guards against runOnce throwing —
+        // we must never leave an enabled one-shot whose execute() crashed.
+        this.deps.store.updateScheduledAgent(agent.id, { enabled: false });
+        try {
+          await this.runOnce(agent.id, now);
+        } finally {
+          fired.push(agent.id);
+        }
+        continue;
+      }
+      if (!agent.cron) continue;
       let expr: CronExpression;
       try {
         expr = parseCronExpression(agent.cron);

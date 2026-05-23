@@ -6,6 +6,7 @@ import {
   CiProviderSummarySchema,
   CreateAgentSessionInputSchema,
   CreateRepoInputSchema,
+  CreateScheduledAgentInputSchema,
   CreateWorkspaceInputSchema,
   HookOutputSchema,
   IssueTrackerSummarySchema,
@@ -14,6 +15,7 @@ import {
   ProviderHealthSchema,
   RepoSchema,
   RuntimeUsageSummarySchema,
+  UpdateScheduledAgentInputSchema,
   VersionControlSummarySchema,
   WorkspaceDiffSchema,
   WorkspaceSchema,
@@ -199,5 +201,49 @@ describe("contract schemas", () => {
         checkedAt: timestamp,
       }).transition,
     ).toBe("31");
+  });
+
+  it("requires cron for recurring scheduled agents and runAt for one-shots", () => {
+    const base = {
+      name: "Sweep",
+      repoId: "repo_test",
+      runtimeId: "shell",
+      workspaceStrategy: "new" as const,
+      workspaceName: "sweep",
+    };
+
+    // Recurring (default) needs cron.
+    const missingCron = CreateScheduledAgentInputSchema.safeParse(base);
+    expect(missingCron.success).toBe(false);
+    if (!missingCron.success) {
+      const issue = missingCron.error.issues.find((entry) => entry.path[0] === "cron");
+      expect(issue?.message).toMatch(/cron/);
+    }
+
+    // One-shot needs runAt.
+    const missingRunAt = CreateScheduledAgentInputSchema.safeParse({ ...base, scheduleType: "once" });
+    expect(missingRunAt.success).toBe(false);
+    if (!missingRunAt.success) {
+      const issue = missingRunAt.error.issues.find((entry) => entry.path[0] === "runAt");
+      expect(issue?.message).toMatch(/runAt/);
+    }
+
+    // Recurring with cron is accepted.
+    expect(CreateScheduledAgentInputSchema.safeParse({ ...base, cron: "0 9 * * *" }).success).toBe(true);
+
+    // One-shot with runAt is accepted.
+    expect(
+      CreateScheduledAgentInputSchema.safeParse({
+        ...base,
+        scheduleType: "once",
+        runAt: "2030-01-01T09:00:00.000Z",
+      }).success,
+    ).toBe(true);
+
+    // PATCH schema is partial and skips the refinement so a single-field
+    // toggle (e.g. enabled) is always valid.
+    expect(UpdateScheduledAgentInputSchema.safeParse({ enabled: false }).success).toBe(true);
+    // PATCH still rejects a malformed runAt.
+    expect(UpdateScheduledAgentInputSchema.safeParse({ runAt: "not-a-date" }).success).toBe(false);
   });
 });

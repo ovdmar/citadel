@@ -4,10 +4,16 @@ import { CreateScheduledAgentInputSchema, UpdateScheduledAgentInputSchema } from
 import type { SqliteStore } from "@citadel/db";
 import { type OperationService, ScheduledAgentRunner } from "@citadel/operations";
 import type express from "express";
+import { ScheduledAgentService } from "./scheduled-agent-service.js";
 
 type AsyncRoute = (
   handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>,
 ) => (req: express.Request, res: express.Response, next: express.NextFunction) => void;
+
+export type ScheduledAgentBundle = {
+  runner: ScheduledAgentRunner;
+  service: ScheduledAgentService;
+};
 
 export function registerScheduledAgentRoutes(input: {
   app: express.Express;
@@ -17,7 +23,7 @@ export function registerScheduledAgentRoutes(input: {
   config: CitadelConfig;
   emit: (type: string, payload: unknown) => void;
   asyncRoute: AsyncRoute;
-}): ScheduledAgentRunner {
+}): ScheduledAgentBundle {
   const { app, server, store, operations, config, emit, asyncRoute } = input;
   const scheduledAgents = new ScheduledAgentRunner({
     store,
@@ -55,17 +61,15 @@ export function registerScheduledAgentRoutes(input: {
     res.json({ scheduledAgents: scheduledAgents.list() });
   });
 
+  const service = new ScheduledAgentService(scheduledAgents, emit);
+
   app.post(
     "/api/scheduled-agents",
     asyncRoute(async (req, res) => {
       const parsed = CreateScheduledAgentInputSchema.parse(req.body);
-      try {
-        const agent = scheduledAgents.create(parsed);
-        emit("scheduled-agent.updated", { id: agent.id, agent });
-        res.status(201).json({ scheduledAgent: agent });
-      } catch (error) {
-        res.status(400).json({ error: error instanceof Error ? error.message : "scheduled_agent_create_failed" });
-      }
+      const result = service.create(parsed);
+      if (!result.ok) return res.status(400).json({ error: result.error });
+      res.status(201).json({ scheduledAgent: result.value });
     }),
   );
 
@@ -74,22 +78,19 @@ export function registerScheduledAgentRoutes(input: {
     asyncRoute(async (req, res) => {
       const id = String(req.params.id);
       const parsed = UpdateScheduledAgentInputSchema.parse(req.body);
-      try {
-        const agent = scheduledAgents.update(id, parsed);
-        if (!agent) return res.status(404).json({ error: "scheduled_agent_not_found" });
-        emit("scheduled-agent.updated", { id: agent.id, agent });
-        res.json({ scheduledAgent: agent });
-      } catch (error) {
-        res.status(400).json({ error: error instanceof Error ? error.message : "scheduled_agent_update_failed" });
+      const result = service.update(id, parsed);
+      if (!result.ok) {
+        const status = result.error === "scheduled_agent_not_found" ? 404 : 400;
+        return res.status(status).json({ error: result.error });
       }
+      res.json({ scheduledAgent: result.value });
     }),
   );
 
   app.delete("/api/scheduled-agents/:id", (req, res) => {
     const id = String(req.params.id);
-    const removed = scheduledAgents.delete(id);
-    if (!removed) return res.status(404).json({ error: "scheduled_agent_not_found" });
-    emit("scheduled-agent.updated", { id, removed: true });
+    const result = service.delete(id);
+    if (!result.ok) return res.status(404).json({ error: result.error });
     res.status(202).json({ removed: true });
   });
 
@@ -97,19 +98,18 @@ export function registerScheduledAgentRoutes(input: {
     "/api/scheduled-agents/:id/run",
     asyncRoute(async (req, res) => {
       const id = String(req.params.id);
-      const agent = scheduledAgents.find(id);
-      if (!agent) return res.status(404).json({ error: "scheduled_agent_not_found" });
-      const result = await scheduledAgents.runOnce(id);
-      emit("scheduled-agent.run", { id, status: result.status });
-      res.status(result.status === "succeeded" ? 202 : 424).json({
-        status: result.status,
-        message: result.message,
-        workspaceId: result.workspaceId,
-        sessionId: result.sessionId,
-        scheduledAgent: scheduledAgents.find(id),
+      const result = await service.runNow(id);
+      if (!result.ok) return res.status(404).json({ error: result.error });
+      const { status, message, workspaceId, sessionId, scheduledAgent } = result.value;
+      res.status(status === "succeeded" ? 202 : 424).json({
+        status,
+        message,
+        workspaceId,
+        sessionId,
+        scheduledAgent,
       });
     }),
   );
 
-  return scheduledAgents;
+  return { runner: scheduledAgents, service };
 }

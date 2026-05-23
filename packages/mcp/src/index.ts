@@ -7,6 +7,7 @@ import type {
   Operation,
   ProviderHealth,
   Repo,
+  ScheduledAgent,
   Workspace,
 } from "@citadel/contracts";
 
@@ -45,7 +46,12 @@ export type McpToolName =
   | "append_scratchpad"
   | "list_deployed_apps"
   | "redeploy_app"
-  | "read_agent_history";
+  | "read_agent_history"
+  | "list_scheduled_agents"
+  | "create_scheduled_agent"
+  | "update_scheduled_agent"
+  | "delete_scheduled_agent"
+  | "run_scheduled_agent_now";
 
 export type McpToolDefinition = {
   name: McpToolName;
@@ -62,6 +68,7 @@ export type McpToolContext = {
   activity: ActivityEvent[];
   providerHealth: ProviderHealth[];
   runtimes: AgentRuntime[];
+  scheduledAgents?: ScheduledAgent[];
   sessionPromptSummary?: (sessionId: string) => { initialPrompt: string | null; messageCount: number };
 };
 
@@ -350,6 +357,87 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       destructive: true,
     },
     {
+      name: "list_scheduled_agents",
+      description:
+        "List all configured scheduled agents. Each entry includes cron, repo, runtime, workspace strategy, enabled flag, and the last run status/timestamp.",
+      inputSchema: { type: "object", additionalProperties: false },
+      destructive: false,
+    },
+    {
+      name: "create_scheduled_agent",
+      description:
+        "Create a scheduled agent. scheduleType='recurring' (default) requires a 5-field cron expression. scheduleType='once' requires runAt (ISO 8601 datetime with offset, e.g. 2026-05-23T09:00:00Z). For one-shots, the agent auto-disables itself after the run so it never repeats. workspaceStrategy='new' creates a fresh workspace per run (workspaceName becomes a prefix; a timestamp is appended). workspaceStrategy='existing' reuses the workspace with the exact name. Returns { scheduledAgent }.",
+      inputSchema: {
+        type: "object",
+        required: ["name", "repoId", "runtimeId", "workspaceStrategy", "workspaceName"],
+        properties: {
+          name: { type: "string", minLength: 1, maxLength: 80 },
+          description: { type: "string", maxLength: 280 },
+          scheduleType: { type: "string", enum: ["recurring", "once"], default: "recurring" },
+          cron: { type: "string", minLength: 1, maxLength: 120, description: "Five-field cron (recurring only)." },
+          runAt: { type: "string", format: "date-time", description: "ISO 8601 timestamp (one-shot only)." },
+          repoId: { type: "string" },
+          runtimeId: { type: "string" },
+          prompt: { type: "string", maxLength: 8000 },
+          workspaceStrategy: { type: "string", enum: ["new", "existing"] },
+          workspaceName: { type: "string", minLength: 1, maxLength: 80 },
+          baseBranch: { type: "string", minLength: 1, maxLength: 120 },
+          enabled: { type: "boolean" },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "update_scheduled_agent",
+      description:
+        "Patch fields of an existing scheduled agent. All non-id fields are optional; only those provided are changed. To convert a recurring agent into a one-shot, set scheduleType='once' and runAt; the previous cron is cleared. Same in reverse for cron/recurring. Returns { scheduledAgent } or { error: 'scheduled_agent_not_found' }.",
+      inputSchema: {
+        type: "object",
+        required: ["id"],
+        properties: {
+          id: { type: "string" },
+          name: { type: "string", minLength: 1, maxLength: 80 },
+          description: { type: "string", maxLength: 280 },
+          scheduleType: { type: "string", enum: ["recurring", "once"] },
+          cron: { type: "string", minLength: 1, maxLength: 120 },
+          runAt: { type: "string", format: "date-time" },
+          repoId: { type: "string" },
+          runtimeId: { type: "string" },
+          prompt: { type: "string", maxLength: 8000 },
+          workspaceStrategy: { type: "string", enum: ["new", "existing"] },
+          workspaceName: { type: "string", minLength: 1, maxLength: 80 },
+          baseBranch: { type: "string", minLength: 1, maxLength: 120 },
+          enabled: { type: "boolean" },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "delete_scheduled_agent",
+      description: "Delete a scheduled agent. Returns { removed: true } or { error: 'scheduled_agent_not_found' }.",
+      inputSchema: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string" } },
+        additionalProperties: false,
+      },
+      destructive: true,
+    },
+    {
+      name: "run_scheduled_agent_now",
+      description:
+        "Trigger a single run of a scheduled agent immediately, regardless of cron. Returns { status, message, workspaceId, sessionId, scheduledAgent }.",
+      inputSchema: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string" } },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
       name: "inspect_readiness",
       description: "Return the readiness state and next-action hint for a workspace.",
       inputSchema: {
@@ -394,6 +482,8 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     }
     case "list_provider_health":
       return { providerHealth: context.providerHealth };
+    case "list_scheduled_agents":
+      return { scheduledAgents: context.scheduledAgents ?? [] };
     case "list_runtimes":
       return { runtimes: context.runtimes };
     case "list_workspace_links":
@@ -423,6 +513,10 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "append_scratchpad":
     case "list_deployed_apps":
     case "redeploy_app":
+    case "create_scheduled_agent":
+    case "update_scheduled_agent":
+    case "delete_scheduled_agent":
+    case "run_scheduled_agent_now":
       return { error: "mutating_tool_requires_daemon" };
     case "read_agent_output":
     case "send_agent_message":

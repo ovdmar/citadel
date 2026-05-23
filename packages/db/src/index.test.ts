@@ -227,4 +227,108 @@ describe("SqliteStore", () => {
       expect.objectContaining({ lifecycle: "archived", archived_at: expect.any(String) }),
     );
   });
+
+  it("round-trips scheduled agents and writes the one-shot cron placeholder", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
+    dirs.push(dir);
+    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    store.migrate();
+
+    const baseRepo = {
+      id: "repo_sched",
+      name: "Sched repo",
+      rootPath: path.join(dir, "repo"),
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(dir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      deployHookCommand: null,
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+      archivedAt: null,
+    };
+    store.insertRepo(baseRepo);
+
+    const recurring = {
+      id: "sched_recur",
+      name: "Recurring",
+      description: null,
+      scheduleType: "recurring" as const,
+      cron: "0 9 * * *",
+      runAt: null,
+      repoId: "repo_sched",
+      runtimeId: "shell",
+      prompt: null,
+      workspaceStrategy: "new" as const,
+      workspaceName: "recur",
+      baseBranch: null,
+      enabled: true,
+      lastRunAt: null,
+      lastRunStatus: "never" as const,
+      lastRunMessage: null,
+      lastWorkspaceId: null,
+      lastSessionId: null,
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+    };
+    store.insertScheduledAgent(recurring);
+    expect(store.findScheduledAgent("sched_recur")).toMatchObject({
+      scheduleType: "recurring",
+      cron: "0 9 * * *",
+      runAt: null,
+    });
+
+    const once = {
+      ...recurring,
+      id: "sched_once",
+      scheduleType: "once" as const,
+      cron: null,
+      runAt: "2030-01-01T09:00:00.000Z",
+      workspaceName: "once",
+    };
+    store.insertScheduledAgent(once);
+
+    // Public API returns cron=null for one-shots.
+    expect(store.findScheduledAgent("sched_once")).toMatchObject({
+      scheduleType: "once",
+      cron: null,
+      runAt: "2030-01-01T09:00:00.000Z",
+    });
+    // Storage column holds the never-matching sentinel — must not be the
+    // unsafe "0 0 31 2 0" form that would fire every Sunday in February.
+    expect(store.query<{ cron: string }>("SELECT cron FROM scheduled_agents WHERE id = 'sched_once'")[0]?.cron).toBe(
+      "0 0 31 2 *",
+    );
+
+    // Flipping a one-shot to recurring clears run_at and writes the new cron.
+    store.updateScheduledAgent("sched_once", { scheduleType: "recurring", cron: "*/15 * * * *", runAt: null });
+    expect(store.findScheduledAgent("sched_once")).toMatchObject({
+      scheduleType: "recurring",
+      cron: "*/15 * * * *",
+      runAt: null,
+    });
+
+    // Flipping a recurring agent to one-shot writes the sentinel back at the
+    // column level and surfaces cron=null again.
+    store.updateScheduledAgent("sched_recur", {
+      scheduleType: "once",
+      cron: null,
+      runAt: "2030-02-01T09:00:00.000Z",
+    });
+    expect(store.findScheduledAgent("sched_recur")).toMatchObject({ scheduleType: "once", cron: null });
+    expect(store.query<{ cron: string }>("SELECT cron FROM scheduled_agents WHERE id = 'sched_recur'")[0]?.cron).toBe(
+      "0 0 31 2 *",
+    );
+
+    // resetScheduledAgentRun blanks the run tracking without touching schedule.
+    store.recordScheduledAgentRun("sched_once", {
+      lastRunAt: "2026-05-17T01:00:00.000Z",
+      lastRunStatus: "succeeded",
+      lastRunMessage: "ok",
+    });
+    const reset = store.resetScheduledAgentRun("sched_once");
+    expect(reset).toMatchObject({ lastRunStatus: "never", lastRunMessage: null, lastRunAt: null });
+  });
 });

@@ -1,4 +1,4 @@
-import type { AgentRuntime, Repo, ScheduledAgent, Workspace } from "@citadel/contracts";
+import type { AgentRuntime, Repo, ScheduledAgent, ScheduledAgentScheduleType, Workspace } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
 import { Play, Plus, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -8,11 +8,17 @@ import { Button } from "./components/ui/button.js";
 import { formatLabel } from "./labels.js";
 
 type Strategy = "new" | "existing";
+type ScheduleType = ScheduledAgentScheduleType;
+type OnceMode = "relative" | "absolute";
 
 type Draft = {
   name: string;
   description: string;
+  scheduleType: ScheduleType;
   cron: string;
+  onceMode: OnceMode;
+  onceRelativeMinutes: number;
+  onceAbsoluteLocal: string;
   repoId: string;
   runtimeId: string;
   prompt: string;
@@ -28,21 +34,44 @@ type CronPreset = {
   cron: string;
 };
 
+type RelativePreset = {
+  id: string;
+  label: string;
+  minutes: number;
+};
+
 // Human-friendly presets. "custom" keeps the raw input field visible so
 // power users still have the full five-field syntax available.
 const CRON_PRESETS: CronPreset[] = [
-  { id: "hourly", label: "Every hour, on the hour", cron: "0 * * * *" },
+  { id: "every-5m", label: "Every 5 minutes", cron: "*/5 * * * *" },
   { id: "every-15m", label: "Every 15 minutes", cron: "*/15 * * * *" },
+  { id: "every-30m", label: "Every 30 minutes", cron: "*/30 * * * *" },
+  { id: "hourly", label: "Every hour, on the hour", cron: "0 * * * *" },
+  { id: "every-2h", label: "Every 2 hours", cron: "0 */2 * * *" },
+  { id: "every-6h", label: "Every 6 hours", cron: "0 */6 * * *" },
   { id: "daily-9", label: "Every day at 9:00", cron: "0 9 * * *" },
   { id: "weekdays-9", label: "Weekdays at 9:00", cron: "0 9 * * 1-5" },
   { id: "mondays-9", label: "Mondays at 9:00", cron: "0 9 * * 1" },
   { id: "monthly-1st", label: "First of the month at 9:00", cron: "0 9 1 * *" },
 ];
 
+const RELATIVE_PRESETS: RelativePreset[] = [
+  { id: "5m", label: "In 5 minutes", minutes: 5 },
+  { id: "15m", label: "In 15 minutes", minutes: 15 },
+  { id: "30m", label: "In 30 minutes", minutes: 30 },
+  { id: "1h", label: "In 1 hour", minutes: 60 },
+  { id: "3h", label: "In 3 hours", minutes: 180 },
+  { id: "24h", label: "In 24 hours", minutes: 60 * 24 },
+];
+
 const EMPTY_DRAFT: Draft = {
   name: "",
   description: "",
+  scheduleType: "recurring",
   cron: "0 9 * * *",
+  onceMode: "relative",
+  onceRelativeMinutes: 15,
+  onceAbsoluteLocal: defaultAbsoluteLocal(),
   repoId: "",
   runtimeId: "",
   prompt: "",
@@ -51,6 +80,30 @@ const EMPTY_DRAFT: Draft = {
   baseBranch: "",
   enabled: true,
 };
+
+function defaultAbsoluteLocal(): string {
+  const target = new Date(Date.now() + 60 * 60 * 1000);
+  target.setSeconds(0, 0);
+  return formatLocalDatetimeInput(target);
+}
+
+function formatLocalDatetimeInput(date: Date): string {
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function resolveRunAt(draft: Draft): { iso: string; date: Date } | null {
+  if (draft.onceMode === "relative") {
+    const minutes = Number(draft.onceRelativeMinutes);
+    if (!Number.isFinite(minutes) || minutes <= 0) return null;
+    const date = new Date(Date.now() + minutes * 60 * 1000);
+    return { iso: date.toISOString(), date };
+  }
+  if (!draft.onceAbsoluteLocal) return null;
+  const date = new Date(draft.onceAbsoluteLocal);
+  if (Number.isNaN(date.getTime())) return null;
+  return { iso: date.toISOString(), date };
+}
 
 export function ScheduledAgentsPanel(props: { state: StateResponse | undefined }) {
   const repos = props.state?.repos ?? [];
@@ -116,38 +169,55 @@ function CreateScheduledAgentCard(props: { repos: Repo[]; runtimes: AgentRuntime
     [props.workspaces, draft.repoId],
   );
 
+  const resolvedRunAt = draft.scheduleType === "once" ? resolveRunAt(draft) : null;
+
   const create = useMutation({
-    mutationFn: () =>
-      api<{ scheduledAgent: ScheduledAgent }>("/api/scheduled-agents", {
+    mutationFn: () => {
+      const body: Record<string, unknown> = {
+        name: draft.name.trim(),
+        description: draft.description.trim() || undefined,
+        scheduleType: draft.scheduleType,
+        repoId: draft.repoId,
+        runtimeId: draft.runtimeId,
+        prompt: draft.prompt.trim() || undefined,
+        workspaceStrategy: draft.workspaceStrategy,
+        workspaceName: draft.workspaceName.trim(),
+        baseBranch: draft.baseBranch.trim() || undefined,
+        enabled: draft.enabled,
+      };
+      if (draft.scheduleType === "recurring") {
+        body.cron = draft.cron.trim();
+      } else if (resolvedRunAt) {
+        body.runAt = resolvedRunAt.iso;
+      }
+      return api<{ scheduledAgent: ScheduledAgent }>("/api/scheduled-agents", {
         method: "POST",
-        body: JSON.stringify({
-          name: draft.name.trim(),
-          description: draft.description.trim() || undefined,
-          cron: draft.cron.trim(),
-          repoId: draft.repoId,
-          runtimeId: draft.runtimeId,
-          prompt: draft.prompt.trim() || undefined,
-          workspaceStrategy: draft.workspaceStrategy,
-          workspaceName: draft.workspaceName.trim(),
-          baseBranch: draft.baseBranch.trim() || undefined,
-          enabled: draft.enabled,
-        }),
-      }),
+        body: JSON.stringify(body),
+      });
+    },
     onSuccess: () => {
-      setDraft({ ...EMPTY_DRAFT, repoId: props.repos[0]?.id ?? "", runtimeId: props.runtimes[0]?.id ?? "" });
+      setDraft({
+        ...EMPTY_DRAFT,
+        onceAbsoluteLocal: defaultAbsoluteLocal(),
+        repoId: props.repos[0]?.id ?? "",
+        runtimeId: props.runtimes[0]?.id ?? "",
+      });
       queryClient.invalidateQueries({ queryKey: ["state"] });
     },
   });
 
+  const recurringValid = draft.scheduleType === "recurring" && draft.cron.trim().length > 0;
+  const onceValid =
+    draft.scheduleType === "once" && resolvedRunAt !== null && resolvedRunAt.date.getTime() > Date.now();
   const canSubmit =
     draft.name.trim().length > 0 &&
-    draft.cron.trim().length > 0 &&
+    (recurringValid || onceValid) &&
     draft.repoId.length > 0 &&
     draft.runtimeId.length > 0 &&
     draft.workspaceName.trim().length > 0;
 
   const cronSummary = describeCronClient(draft.cron);
-  const nextRun = nextCronRunClient(draft.cron);
+  const nextRun = draft.scheduleType === "recurring" ? nextCronRunClient(draft.cron) : (resolvedRunAt?.date ?? null);
 
   const onPresetChange = (next: string) => {
     setPresetId(next);
@@ -159,7 +229,7 @@ function CreateScheduledAgentCard(props: { repos: Repo[]; runtimes: AgentRuntime
     <section className="settings-card">
       <header className="settings-card-header">
         <h3>New scheduled agent</h3>
-        <p>Pick a schedule preset or write a five-field cron expression.</p>
+        <p>Pick a recurring preset, write a cron expression, or schedule a one-shot run.</p>
       </header>
       <form
         className="scheduled-agent-form"
@@ -173,35 +243,101 @@ function CreateScheduledAgentCard(props: { repos: Repo[]; runtimes: AgentRuntime
           <input value={draft.name} onChange={(event) => update({ name: event.target.value })} required />
         </label>
         <label className="scheduled-agent-field">
-          <span>Schedule</span>
-          <select value={presetId} onChange={(event) => onPresetChange(event.target.value)}>
-            {CRON_PRESETS.map((preset) => (
-              <option key={preset.id} value={preset.id}>
-                {preset.label}
-              </option>
-            ))}
-            <option value="custom">Custom (cron expression)</option>
+          <span>Type</span>
+          <select
+            value={draft.scheduleType}
+            onChange={(event) => update({ scheduleType: event.target.value as ScheduleType })}
+          >
+            <option value="recurring">Recurring</option>
+            <option value="once">One-shot</option>
           </select>
         </label>
-        {presetId === "custom" ? (
-          <label className="scheduled-agent-field">
-            <span>Cron</span>
-            <input
-              value={draft.cron}
-              onChange={(event) => update({ cron: event.target.value })}
-              placeholder="0 9 * * *"
-              required
-            />
-          </label>
-        ) : null}
-        <div className="scheduled-agent-field wide scheduled-agent-cron-summary" aria-live="polite">
-          <span>When</span>
-          <div>
-            <strong>{cronSummary}</strong>
-            {nextRun ? (
-              <small>Next run: {nextRun.toLocaleString()}</small>
+        {draft.scheduleType === "recurring" ? (
+          <>
+            <label className="scheduled-agent-field">
+              <span>Schedule</span>
+              <select value={presetId} onChange={(event) => onPresetChange(event.target.value)}>
+                {CRON_PRESETS.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </option>
+                ))}
+                <option value="custom">Custom (cron expression)</option>
+              </select>
+            </label>
+            {presetId === "custom" ? (
+              <label className="scheduled-agent-field">
+                <span>Cron</span>
+                <input
+                  value={draft.cron}
+                  onChange={(event) => update({ cron: event.target.value })}
+                  placeholder="0 9 * * *"
+                  required
+                />
+              </label>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <label className="scheduled-agent-field">
+              <span>When</span>
+              <select value={draft.onceMode} onChange={(event) => update({ onceMode: event.target.value as OnceMode })}>
+                <option value="relative">Relative (in N minutes/hours)</option>
+                <option value="absolute">Absolute (pick a date/time)</option>
+              </select>
+            </label>
+            {draft.onceMode === "relative" ? (
+              <label className="scheduled-agent-field">
+                <span>In</span>
+                <select
+                  value={String(draft.onceRelativeMinutes)}
+                  onChange={(event) => update({ onceRelativeMinutes: Number(event.target.value) })}
+                >
+                  {RELATIVE_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.minutes}>
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
             ) : (
-              <small className="form-error">Cron expression is not valid yet.</small>
+              <label className="scheduled-agent-field">
+                <span>At</span>
+                <input
+                  type="datetime-local"
+                  value={draft.onceAbsoluteLocal}
+                  onChange={(event) => update({ onceAbsoluteLocal: event.target.value })}
+                  required
+                />
+              </label>
+            )}
+          </>
+        )}
+        <div className="scheduled-agent-field wide scheduled-agent-cron-summary" aria-live="polite">
+          <span>Fires</span>
+          <div>
+            {draft.scheduleType === "recurring" ? (
+              <>
+                <strong>{cronSummary}</strong>
+                {nextRun ? (
+                  <small>Next run: {nextRun.toLocaleString()}</small>
+                ) : (
+                  <small className="form-error">Cron expression is not valid yet.</small>
+                )}
+              </>
+            ) : (
+              <>
+                <strong>One-shot run</strong>
+                {nextRun ? (
+                  onceValid ? (
+                    <small>At: {nextRun.toLocaleString()}</small>
+                  ) : (
+                    <small className="form-error">That time is already in the past.</small>
+                  )
+                ) : (
+                  <small className="form-error">Pick a future time.</small>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -337,15 +473,34 @@ function ScheduledAgentRow(props: {
     },
   });
 
-  const summary = describeCronClient(props.agent.cron);
-  const nextRun = props.agent.enabled ? nextCronRunClient(props.agent.cron) : null;
+  const isOnce = props.agent.scheduleType === "once";
+  let summary: string;
+  let nextRun: Date | null = null;
+  if (isOnce) {
+    summary = props.agent.runAt ? `Once at ${new Date(props.agent.runAt).toLocaleString()}` : "Once (no time set)";
+    if (props.agent.enabled && props.agent.runAt && props.agent.lastRunStatus === "never") {
+      nextRun = new Date(props.agent.runAt);
+    }
+  } else if (props.agent.cron) {
+    summary = describeCronClient(props.agent.cron);
+    if (props.agent.enabled) nextRun = nextCronRunClient(props.agent.cron);
+  } else {
+    // Recurring agent with no cron is a data invariant violation — surface it
+    // instead of silently coercing to "" and parsing nothing.
+    summary = "Recurring (no cron configured)";
+  }
 
   return (
     <div className={`scheduled-agent-row ${props.agent.lastRunStatus}`}>
       <div className="scheduled-agent-row-main">
         <div className="scheduled-agent-row-title">
           <strong>{props.agent.name}</strong>
-          <span className="scheduled-agent-cron" title={`Cron: ${props.agent.cron}`}>
+          <span
+            className="scheduled-agent-cron"
+            title={
+              isOnce ? `One-shot: ${props.agent.runAt ?? "unscheduled"}` : `Cron: ${props.agent.cron ?? "(missing)"}`
+            }
+          >
             {summary}
           </span>
           {props.agent.enabled ? null : <span className="scheduled-agent-paused">paused</span>}

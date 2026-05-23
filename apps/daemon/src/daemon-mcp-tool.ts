@@ -2,15 +2,18 @@ import type { CitadelConfig } from "@citadel/config";
 import {
   CreateAgentSessionInputSchema,
   CreateRepoInputSchema,
+  CreateScheduledAgentInputSchema,
   CreateWorkspaceInputSchema,
   LaunchAgentInputSchema,
+  UpdateScheduledAgentInputSchema,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, serializeWorkspaceResource } from "@citadel/mcp";
-import type { OperationService } from "@citadel/operations";
+import type { OperationService, ScheduledAgentRunner } from "@citadel/operations";
 import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import type { TtydManager } from "@citadel/terminal";
+import type { ScheduledAgentService } from "./scheduled-agent-service.js";
 import { ScratchpadTooLargeError, appendScratchpad, readScratchpad, writeScratchpad } from "./scratchpad.js";
 
 export type DaemonMcpDeps = {
@@ -18,6 +21,8 @@ export type DaemonMcpDeps = {
   store: SqliteStore;
   operations: OperationService;
   ttyd: TtydManager;
+  scheduledAgents: ScheduledAgentRunner;
+  scheduledAgentService: ScheduledAgentService;
   providerCache: Map<string, { expiresAt: number; value: unknown }>;
   emit: (type: string, payload: unknown) => void;
 };
@@ -39,7 +44,7 @@ export async function readMcpResource(store: SqliteStore, config: CitadelConfig,
 }
 
 export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) {
-  const { config, store, operations, ttyd, providerCache, emit } = deps;
+  const { config, store, operations, ttyd, scheduledAgents, scheduledAgentService, providerCache, emit } = deps;
   if (call.name === "register_repo") {
     const input = CreateRepoInputSchema.parse(call.arguments ?? {});
     const repo = operations.registerRepo(input);
@@ -169,6 +174,31 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     if (typeof call.arguments?.maxChars === "number") input.maxChars = call.arguments.maxChars;
     return operations.readAgentHistory(input);
   }
+  if (call.name === "create_scheduled_agent") {
+    const parsed = CreateScheduledAgentInputSchema.parse(call.arguments ?? {});
+    const result = scheduledAgentService.create(parsed);
+    return result.ok ? { scheduledAgent: result.value } : { error: result.error };
+  }
+  if (call.name === "update_scheduled_agent") {
+    const id = typeof call.arguments?.id === "string" ? call.arguments.id : "";
+    if (!id) return { error: "id_required" };
+    const { id: _ignored, ...rest } = (call.arguments ?? {}) as Record<string, unknown>;
+    const parsed = UpdateScheduledAgentInputSchema.parse(rest);
+    const result = scheduledAgentService.update(id, parsed);
+    return result.ok ? { scheduledAgent: result.value } : { error: result.error };
+  }
+  if (call.name === "delete_scheduled_agent") {
+    const id = typeof call.arguments?.id === "string" ? call.arguments.id : "";
+    if (!id) return { error: "id_required" };
+    const result = scheduledAgentService.delete(id);
+    return result.ok ? { removed: true } : { error: result.error };
+  }
+  if (call.name === "run_scheduled_agent_now") {
+    const id = typeof call.arguments?.id === "string" ? call.arguments.id : "";
+    if (!id) return { error: "id_required" };
+    const result = await scheduledAgentService.runNow(id);
+    return result.ok ? result.value : { error: result.error };
+  }
   const providerHealth = await collectProviderHealth(config.providers);
   return callMcpTool(call, {
     repos: store.listRepos(),
@@ -178,6 +208,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     activity: store.listActivity(),
     providerHealth,
     runtimes: listRuntimeHealth(config.runtimes),
+    scheduledAgents: scheduledAgents.list(),
     // Per-session summary comes from the runtime's own transcript via the
     // adapter dispatcher. mtime pre-filter inside each adapter keeps list
     // calls cheap even on big project dirs.

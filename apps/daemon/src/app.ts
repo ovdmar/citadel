@@ -662,9 +662,17 @@ export function createDaemonApp(input: {
     }),
   );
 
-  const scheduledAgents = registerScheduledAgentRoutes({ app, server, store, operations, config, emit, asyncRoute });
+  const { runner: scheduledAgents, service: scheduledAgentService } = registerScheduledAgentRoutes({
+    app,
+    server,
+    store,
+    operations,
+    config,
+    emit,
+    asyncRoute,
+  });
 
-  const mcpDeps = { config, store, operations, ttyd, providerCache, emit };
+  const mcpDeps = { config, store, operations, ttyd, scheduledAgents, scheduledAgentService, providerCache, emit };
   registerMcpRoutes(app, asyncRoute, {
     config,
     store,
