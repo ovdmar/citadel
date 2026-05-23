@@ -38,6 +38,8 @@ export function appendScratchpad(dataDir: string, chunk: string): ScratchpadSnap
   ensureDataDir(dataDir);
   const filePath = scratchpadPath(dataDir);
   const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
+  // Normalize whatever the file ends with into a blank-line boundary before the
+  // appended chunk, so concurrent agents append clean stanzas instead of run-on text.
   const separator = existing.length === 0 || existing.endsWith("\n\n") ? "" : existing.endsWith("\n") ? "\n" : "\n\n";
   const tail = chunk.endsWith("\n") ? chunk : `${chunk}\n`;
   const next = `${existing}${separator}${tail}`;

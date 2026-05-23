@@ -1,0 +1,37 @@
+.scratchpad-page {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.scratchpad-status {
+  margin-left: auto;
+  padding: 0 16px;
+  font-size: 11px;
+}
+
+.scratchpad-body {
+  flex: 1;
+  display: flex;
+  padding: 16px;
+  min-height: 0;
+}
+
+.scratchpad-textarea {
+  flex: 1;
+  width: 100%;
+  resize: none;
+  background: var(--panel);
+  color: inherit;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  outline: none;
+}
+
+.scratchpad-textarea:focus {
+  border-color: var(--color-action);
+}

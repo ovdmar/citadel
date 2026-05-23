@@ -37,6 +37,25 @@ describe("scratchpad HTTP + MCP routes", () => {
     }
   });
 
+  it("PUTs issued in series leave the last writer's content on disk", async () => {
+    // Mirrors the cockpit's single-flight save loop: even if a client fires
+    // back-to-back PUTs, the final disk state must match the final body —
+    // catches regressions where an out-of-order write would clobber the latest.
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const bodies = ["one", "two", "three", "four", "five"];
+      for (const content of bodies) {
+        await putJson(`${baseUrl}/api/scratchpad`, { content });
+      }
+      const final = await getJson<{ content: string }>(`${baseUrl}/api/scratchpad`);
+      expect(final.content).toBe("five");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("rejects oversize PUT bodies", async () => {
     const fixture = createFixture();
     const { server } = createDaemonApp(fixture);
@@ -93,6 +112,20 @@ describe("scratchpad HTTP + MCP routes", () => {
         },
       );
       expect(appended.result.structuredContent.content).toBe("via mcp\n\nmore\n");
+
+      // Oversize writes return a structured sentinel rather than throwing, so
+      // an orchestrator agent can branch on { error } instead of catching a
+      // JSON-RPC error envelope.
+      const oversize = await postJson<{ result: { structuredContent: { error: string; limit: number } } }>(
+        `${baseUrl}/api/mcp/rpc`,
+        {
+          jsonrpc: "2.0",
+          id: "oversize",
+          method: "tools/call",
+          params: { name: "write_scratchpad", arguments: { content: "x".repeat(1_000_001) } },
+        },
+      );
+      expect(oversize.result.structuredContent).toMatchObject({ error: "scratchpad_too_large", limit: 1_000_000 });
     } finally {
       await closeServer(server);
     }

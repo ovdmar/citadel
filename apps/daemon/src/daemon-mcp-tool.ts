@@ -11,7 +11,7 @@ import type { OperationService } from "@citadel/operations";
 import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import type { TtydManager } from "@citadel/terminal";
-import { appendScratchpad, readScratchpad, writeScratchpad } from "./scratchpad.js";
+import { SCRATCHPAD_MAX_BYTES, appendScratchpad, readScratchpad, writeScratchpad } from "./scratchpad.js";
 
 export type DaemonMcpDeps = {
   config: CitadelConfig;
@@ -116,7 +116,11 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     return readScratchpad(config.dataDir);
   }
   if (call.name === "write_scratchpad") {
-    const content = typeof call.arguments?.content === "string" ? call.arguments.content : "";
+    if (typeof call.arguments?.content !== "string") return { error: "content_required" };
+    const content = call.arguments.content;
+    if (Buffer.byteLength(content, "utf8") > SCRATCHPAD_MAX_BYTES) {
+      return { error: "scratchpad_too_large", limit: SCRATCHPAD_MAX_BYTES };
+    }
     const snapshot = writeScratchpad(config.dataDir, content);
     emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
     return snapshot;
@@ -124,6 +128,13 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
   if (call.name === "append_scratchpad") {
     const content = typeof call.arguments?.content === "string" ? call.arguments.content : "";
     if (!content) return { error: "content_required" };
+    // Pre-check the projected size so agents get a structured sentinel instead
+    // of a thrown error when their append would push the file past the cap.
+    const existing = readScratchpad(config.dataDir).content;
+    const projected = Buffer.byteLength(existing, "utf8") + Buffer.byteLength(content, "utf8") + 4;
+    if (projected > SCRATCHPAD_MAX_BYTES) {
+      return { error: "scratchpad_too_large", limit: SCRATCHPAD_MAX_BYTES };
+    }
     const snapshot = appendScratchpad(config.dataDir, content);
     emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
     return snapshot;
