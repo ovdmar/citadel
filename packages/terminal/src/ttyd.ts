@@ -1,6 +1,8 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import net from "node:net";
 
+export type TtydTheme = "light" | "dark";
+
 export type TtydEntry = {
   key: string;
   port: number;
@@ -9,6 +11,7 @@ export type TtydEntry = {
   tmuxSession: string;
   worktreePath: string | null;
   startedAt: string;
+  theme: TtydTheme;
 };
 
 export type TtydManagerConfig = {
@@ -53,6 +56,8 @@ export type TtydManager = {
     key: string;
     tmuxSession: string;
     worktreePath?: string | null;
+    /** Cockpit-resolved theme used to spawn ttyd with the matching xterm palette. Defaults to "dark". */
+    theme?: TtydTheme;
   }): Promise<TtydEntry>;
   lookup(key: string): TtydEntry | null;
   release(key: string): void;
@@ -82,7 +87,14 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     key: string;
     tmuxSession: string;
     worktreePath?: string | null;
+    theme?: TtydTheme;
   }): Promise<TtydEntry> {
+    // ttyd bakes the xterm palette at spawn time, so the theme passed here
+    // only takes effect when we actually spawn a new ttyd. We deliberately
+    // do NOT respawn when an existing entry's theme differs from desired —
+    // that triggered visible reconnect storms whenever the user toggled
+    // cockpit theme. Terminal palette updates on the next reload instead.
+    const desiredTheme: TtydTheme = args.theme ?? "dark";
     const existing = entries.get(args.key);
     if (existing && existing.child.exitCode === null) {
       if (await portOpen(existing.port)) return toEntry(existing);
@@ -102,6 +114,7 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     const port = await reserveFreePort(config.portBase, config.portMax, reservedPorts);
     const basePath = `/${config.basePathPrefix}/${encodeURIComponent(args.key)}`;
     const attachCommand = buildAttachCommand(args.tmuxSession);
+    const themeOptions = ttydThemeArgs(desiredTheme);
     let child: ChildProcess;
     try {
       child = spawn(
@@ -117,6 +130,7 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
           basePath,
           "-P",
           "10",
+          ...themeOptions,
           config.shellBin,
           "-lc",
           attachCommand,
@@ -136,6 +150,7 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
       tmuxSession: args.tmuxSession,
       worktreePath: args.worktreePath ?? null,
       startedAt,
+      theme: desiredTheme,
       child,
     };
     entries.set(args.key, record);
@@ -217,6 +232,75 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
   };
   return Object.assign(manager, { publicPathFor });
 }
+
+/**
+ * Build the `-t` ttyd client-option flags that paint xterm to match the
+ * cockpit theme. Palette is derived from the meshes-studio design system
+ * (warm beige + navy for light, deep navy + soft white for dark) so the
+ * terminal blends with the rest of the UI.
+ */
+function ttydThemeArgs(theme: TtydTheme): string[] {
+  const palette = theme === "light" ? LIGHT_XTERM_THEME : DARK_XTERM_THEME;
+  return [
+    "-t",
+    `theme=${JSON.stringify(palette)}`,
+    "-t",
+    "fontFamily=ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+    // Auto-reconnect 3s after the websocket drops (laptop sleep, network
+    // blip). Without this, ttyd's xterm shows "Press any key to reconnect"
+    // and waits for a manual key press.
+    "-t",
+    "reconnect=3",
+  ];
+}
+
+const LIGHT_XTERM_THEME = {
+  background: "#f4f2ee",
+  foreground: "#1a2030",
+  cursor: "#1e3a5f",
+  cursorAccent: "#f4f2ee",
+  selectionBackground: "rgba(30, 58, 95, 0.22)",
+  black: "#1a2030",
+  red: "#8a3030",
+  green: "#4a7a5a",
+  yellow: "#b8963c",
+  blue: "#1e3a5f",
+  magenta: "#5a4a52",
+  cyan: "#5a8aae",
+  white: "#dcd8cc",
+  brightBlack: "#6a7080",
+  brightRed: "#c25050",
+  brightGreen: "#6aa080",
+  brightYellow: "#d4b860",
+  brightBlue: "#5a8aae",
+  brightMagenta: "#c0a8b0",
+  brightCyan: "#78a0be",
+  brightWhite: "#fffefa",
+};
+
+const DARK_XTERM_THEME = {
+  background: "#0e1620",
+  foreground: "#d8dce4",
+  cursor: "#8ab4d8",
+  cursorAccent: "#0e1620",
+  selectionBackground: "rgba(138, 180, 216, 0.25)",
+  black: "#0e1620",
+  red: "#d08080",
+  green: "#78b088",
+  yellow: "#d4ba78",
+  blue: "#8ab4d8",
+  magenta: "#c0a8b0",
+  cyan: "#78a0be",
+  white: "#d8dce4",
+  brightBlack: "#4a5468",
+  brightRed: "#e0a0a0",
+  brightGreen: "#98c8a8",
+  brightYellow: "#e8d098",
+  brightBlue: "#a8c8e0",
+  brightMagenta: "#d0b8c0",
+  brightCyan: "#98c0d8",
+  brightWhite: "#f4f2ee",
+};
 
 function buildAttachCommand(tmuxSession: string) {
   const safe = tmuxSession.replace(/"/g, '\\"');

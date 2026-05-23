@@ -59,8 +59,8 @@
 }
 
 .diff-line-hunk {
-  color: #175cd3;
-  background: color-mix(in srgb, #175cd3 10%, transparent);
+  color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
 
 .workspace-repo-group,
@@ -99,7 +99,7 @@
 }
 
 .status-dot.warning {
-  background: #b54708;
+  background: var(--color-warning);
 }
 
 .status-dot.danger {
@@ -137,7 +137,7 @@
 }
 
 .readiness-strip.warning {
-  border-left: 3px solid #b54708;
+  border-left: 3px solid var(--color-warning);
 }
 
 .readiness-strip.success,
@@ -261,7 +261,7 @@
   padding: 7px 8px;
   border: 1px solid var(--line);
   border-radius: 7px;
-  background: Canvas;
+  background: var(--panel);
 }
 
 .check-row.failure,
@@ -298,7 +298,7 @@
   gap: 6px;
   border: 1px solid var(--line);
   border-radius: 7px;
-  background: Canvas;
+  background: var(--panel);
   font-size: 12px;
 }
 
@@ -316,7 +316,7 @@
 .hook-row {
   border: 1px solid var(--line);
   border-radius: 7px;
-  background: Canvas;
+  background: var(--panel);
 }
 
 .hook-row.invalid {

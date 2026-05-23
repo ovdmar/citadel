@@ -72,6 +72,7 @@ describe("mcp helpers", () => {
           setupHookIds: [],
           teardownHookIds: [],
           providerIds: [],
+          deployHookCommand: null,
           createdAt: "2026-05-17T00:00:00.000Z",
           updatedAt: "2026-05-17T00:00:00.000Z",
           archivedAt: null,

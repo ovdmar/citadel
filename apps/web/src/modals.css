@@ -1,3 +1,17 @@
+/* Neutralize UA <dialog> styles (position: absolute; inset-inline: 0; margin: auto)
+ * so the dialog participates in the backdrop's `place-items: center` grid and
+ * lands at the viewport center both axes. Without this reset a <dialog open>
+ * inside a centered backdrop renders pinned to the top of the backdrop's
+ * containing block — the "dialog appears top-center / top-right" bug the
+ * user keeps re-reporting. */
+.command-backdrop dialog[open],
+.modal-backdrop dialog[open],
+.drop-workspace-backdrop dialog[open] {
+  position: relative;
+  inset: auto;
+  margin: 0;
+}
+
 .command-backdrop {
   position: fixed;
   inset: 0;
@@ -5,19 +19,17 @@
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgba(7, 16, 31, 0.55);
+  background: var(--overlay-bg);
   backdrop-filter: blur(4px);
 }
 
 .command-palette {
-  position: relative;
   width: min(640px, calc(100vw - 28px));
-  margin: 0;
   background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: 10px;
   padding: 0;
-  box-shadow: 0 28px 80px rgba(7, 16, 31, 0.45);
+  box-shadow: 0 28px 80px rgb(var(--shadow-color) / 0.45);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   max-height: 70vh;
@@ -96,15 +108,13 @@
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgba(7, 16, 31, 0.55);
+  background: var(--overlay-bg);
   backdrop-filter: blur(4px);
 }
 
 .modal-frame {
-  position: relative;
   width: min(560px, 100%);
   max-height: 90vh;
-  margin: 0;
   padding: 0;
   overflow: hidden;
   background: var(--panel);
@@ -113,7 +123,7 @@
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   color: inherit;
-  box-shadow: 0 28px 80px rgba(7, 16, 31, 0.45);
+  box-shadow: 0 28px 80px rgb(var(--shadow-color) / 0.45);
 }
 
 .modal-header {
@@ -288,7 +298,7 @@
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 8px;
-  box-shadow: 0 18px 40px rgba(7, 16, 31, 0.28);
+  box-shadow: 0 18px 40px rgb(var(--shadow-color) / 0.28);
   min-width: 220px;
   display: grid;
   gap: 6px;

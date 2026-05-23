@@ -152,6 +152,7 @@ export class SqliteStore {
     this.ensureColumn("workspaces", "issue_url", "TEXT");
     this.ensureColumn("workspaces", "slack_thread_url", "TEXT");
     this.ensureColumn("workspaces", "kind", "TEXT NOT NULL DEFAULT 'worktree'");
+    this.ensureColumn("repos", "deploy_hook_command", "TEXT");
     db.exec(`
       CREATE TABLE IF NOT EXISTS scheduled_agents (
         id TEXT PRIMARY KEY,
@@ -203,8 +204,8 @@ export class SqliteStore {
     this.database
       .prepare(
         `INSERT INTO repos (id, name, root_path, default_branch, default_remote, worktree_parent,
-          setup_hook_ids, teardown_hook_ids, provider_ids, created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          setup_hook_ids, teardown_hook_ids, provider_ids, deploy_hook_command, created_at, updated_at, archived_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         repo.id,
@@ -216,6 +217,7 @@ export class SqliteStore {
         JSON.stringify(repo.setupHookIds),
         JSON.stringify(repo.teardownHookIds),
         JSON.stringify(repo.providerIds),
+        repo.deployHookCommand ?? null,
         repo.createdAt,
         repo.updatedAt,
         repo.archivedAt ?? null,
@@ -224,7 +226,9 @@ export class SqliteStore {
 
   updateRepo(
     repoId: string,
-    patch: Partial<Pick<Repo, "name" | "worktreeParent" | "setupHookIds" | "teardownHookIds" | "providerIds">>,
+    patch: Partial<
+      Pick<Repo, "name" | "worktreeParent" | "setupHookIds" | "teardownHookIds" | "providerIds" | "deployHookCommand">
+    >,
   ) {
     const existing = this.database.prepare("SELECT * FROM repos WHERE id = ?").get(repoId) as
       | Record<string, unknown>
@@ -238,12 +242,13 @@ export class SqliteStore {
       setupHookIds: patch.setupHookIds ?? current.setupHookIds,
       teardownHookIds: patch.teardownHookIds ?? current.teardownHookIds,
       providerIds: patch.providerIds ?? current.providerIds,
+      deployHookCommand: patch.deployHookCommand !== undefined ? patch.deployHookCommand : current.deployHookCommand,
       updatedAt: new Date().toISOString(),
     };
     this.database
       .prepare(
         `UPDATE repos SET name = ?, worktree_parent = ?, setup_hook_ids = ?, teardown_hook_ids = ?,
-          provider_ids = ?, updated_at = ? WHERE id = ?`,
+          provider_ids = ?, deploy_hook_command = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         next.name,
@@ -251,6 +256,7 @@ export class SqliteStore {
         JSON.stringify(next.setupHookIds),
         JSON.stringify(next.teardownHookIds),
         JSON.stringify(next.providerIds),
+        next.deployHookCommand ?? null,
         next.updatedAt,
         repoId,
       );
@@ -663,6 +669,7 @@ function repoFromRow(row: Record<string, unknown>): Repo {
     setupHookIds: jsonArray(row, "setup_hook_ids"),
     teardownHookIds: jsonArray(row, "teardown_hook_ids"),
     providerIds: jsonArray(row, "provider_ids"),
+    deployHookCommand: row.deploy_hook_command ? asString(row, "deploy_hook_command") : null,
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
     archivedAt: row.archived_at ? asString(row, "archived_at") : null,

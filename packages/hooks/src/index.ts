@@ -1,6 +1,24 @@
 import { spawn } from "node:child_process";
 import { type HookDiagnostic, type HookOutput, HookOutputSchema } from "@citadel/contracts";
 
+export {
+  DEPLOY_HOOK_RELATIVE_PATH,
+  buildDeployedApps,
+  deployHookEnv,
+  parseDeployListOutput,
+  probeAppStatus,
+  resolveDeployHook,
+  runDeployHookList,
+  runDeployHookRedeploy,
+} from "./deploy.js";
+export type {
+  DeployHookEnv,
+  RedeployStreamHandler,
+  ResolveDeployHookInput,
+  RunDeployListResult,
+  RunDeployRedeployResult,
+} from "./deploy.js";
+
 export type CommandHook = {
   id: string;
   event: string;

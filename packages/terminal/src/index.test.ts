@@ -6,12 +6,14 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import {
+  agentLiveSentinelPath,
   attachTerminalWebSocket,
   captureTmux,
   captureTmuxVisibleScreen,
   captureTranscript,
   ensureTmuxExtendedKeys,
   ensureTmuxSession,
+  isAgentLive,
   killTmuxSession,
   parseTmuxControlOutput,
   pasteText,
@@ -295,6 +297,45 @@ describe("tmux terminal gateway helpers", () => {
     }
   });
 
+  // Regression test for the Ctrl+C-leaves-unusable-terminal complaint.
+  // We stand in for a real agent with a loop that traps SIGINT and exits 0,
+  // so we can "kill" it via Ctrl+C the way a user would Ctrl+C Claude Code.
+  // After it dies, the pane must drop back to an interactive login shell
+  // rooted at the workspace cwd, and the sentinel that gates session status
+  // detection must be cleared.
+  it("pane survives the agent exiting and drops back into a usable shell", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
+    dirs.push(cwd);
+    const sessionName = `citadel_pane_survives_${Date.now().toString(36)}`;
+    sessions.push(sessionName);
+
+    await ensureTmuxSession({
+      sessionName,
+      cwd,
+      command: "bash",
+      args: ["-c", "trap 'echo AGENT-DEAD; exit 0' INT; while true; do sleep 1; done"],
+    });
+
+    // ensureTmuxSession now waits for the pane to settle, so the wrapper's
+    // sentinel must be present and the inner agent must be reading stdin.
+    expect(isAgentLive(sessionName)).toBe(true);
+
+    sendKeys(sessionName, "\u0003"); // Ctrl+C → mock agent traps, exits 0.
+    await waitForCapture(sessionName, "AGENT-DEAD");
+    await waitForCapture(sessionName, "[citadel] Agent exited");
+    await waitFor(() => !isAgentLive(sessionName), 2000);
+    expect(isAgentLive(sessionName)).toBe(false);
+
+    // Pane is still alive; we can run a shell command and see its output.
+    sendKeys(sessionName, "printf 'post-agent-prompt'");
+    sendKeys(sessionName, "\r");
+    await waitForCapture(sessionName, "post-agent-prompt");
+    expect(tmuxSessionExists(sessionName)).toBe(true);
+
+    killTmuxSession(sessionName);
+    expect(fs.existsSync(agentLiveSentinelPath(sessionName))).toBe(false);
+  });
+
   it("keeps WebSocket output isolated across sessions and supports reconnect scrollback", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
     dirs.push(cwd);
@@ -344,9 +385,18 @@ describe("tmux terminal gateway helpers", () => {
   }, 15000);
 });
 
+async function waitFor(predicate: () => boolean, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("waitFor timed out");
+}
+
 async function waitForCapture(sessionName: string, expected: string) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const output = captureTmux(sessionName, 20);
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const output = captureTmux(sessionName, 200);
     if (output.includes(expected)) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -354,8 +404,8 @@ async function waitForCapture(sessionName: string, expected: string) {
 }
 
 async function waitForVisibleScreen(sessionName: string, expected: string) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const output = captureTmuxVisibleScreen(sessionName, 20);
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const output = captureTmuxVisibleScreen(sessionName, 200);
     if (output.includes(expected)) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }

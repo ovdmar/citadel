@@ -13,12 +13,14 @@ type StageTab = {
 export function Stage(props: {
   workspace: Workspace;
   sessions: AgentSession[];
+  allSessions?: AgentSession[];
   runtimes: AgentRuntime[];
   activeSessionId: string | undefined;
   onActiveSession: (id: string) => void;
 }) {
   const sortedSessions = [...props.sessions].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const tabs: StageTab[] = sortedSessions.map((session) => ({ session, label: session.displayName }));
+  const allSessions = props.allSessions ?? props.sessions;
 
   // If the caller just selected a session that hasn't shown up in props.sessions
   // yet (mutation responded, query refetch in flight), keep that ID even though
@@ -47,6 +49,38 @@ export function Stage(props: {
       props.onActiveSession(activeSession.session.id);
     }
   }, [activeSession, keepPending, props]);
+
+  // Keep TerminalPane instances alive across workspace/session switches once
+  // the user has actually opened them. The set grows when a session becomes
+  // active and shrinks when the underlying session goes away. Without this,
+  // every workspace switch unmounts the previously-visible iframe — ttyd
+  // tears down the WebSocket and re-handshakes on remount, which the user
+  // perceives as a grey flash on the main stage.
+  const [visitedIds, setVisitedIds] = useState<Set<string>>(() => {
+    const initial = new Set<string>();
+    if (props.activeSessionId) initial.add(props.activeSessionId);
+    return initial;
+  });
+  useEffect(() => {
+    if (!activeSession) return;
+    const id = activeSession.session.id;
+    setVisitedIds((prev) => {
+      if (prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }, [activeSession]);
+  useEffect(() => {
+    setVisitedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const live = new Set(allSessions.map((session) => session.id));
+      const next = new Set<string>();
+      for (const id of prev) if (live.has(id)) next.add(id);
+      return next.size === prev.size ? prev : next;
+    });
+  }, [allSessions]);
+  const visitedPanes = allSessions.filter((session) => visitedIds.has(session.id));
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -214,20 +248,21 @@ export function Stage(props: {
         </div>
       ) : null}
       <div className="stage-body">
-        {tabs.length ? (
-          tabs.map((tab) => (
-            <div
-              key={tab.session.id}
-              className={tab.session.id === activeSession?.session.id ? "terminal-active" : "terminal-hidden"}
-            >
-              <TerminalPane session={tab.session} />
-            </div>
-          ))
-        ) : keepPending ? (
-          <div className="empty">Starting session…</div>
-        ) : (
-          <div className="empty">No session yet. Click the plus to start a terminal or agent.</div>
-        )}
+        {visitedPanes.map((session) => (
+          <div
+            key={session.id}
+            className={session.id === activeSession?.session.id ? "terminal-active" : "terminal-hidden"}
+          >
+            <TerminalPane session={session} />
+          </div>
+        ))}
+        {tabs.length === 0 ? (
+          keepPending ? (
+            <div className="empty">Starting session…</div>
+          ) : (
+            <div className="empty">No session yet. Click the plus to start a terminal or agent.</div>
+          )
+        ) : null}
       </div>
     </>
   );
