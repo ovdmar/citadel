@@ -604,7 +604,7 @@
 }
 
 .scheduled-agent-row.failed {
-  border-left: 3px solid var(--color-danger, #c0392b);
+  border-left: 3px solid var(--color-danger);
 }
 
 .scheduled-agent-row.succeeded {
@@ -656,7 +656,7 @@
 }
 
 .scheduled-agent-status.failed {
-  color: var(--color-danger, #c0392b);
+  color: var(--color-danger);
 }
 
 .scheduled-agent-status.succeeded {

@@ -24,15 +24,19 @@ export type McpToolName =
   | "list_provider_health"
   | "list_runtimes"
   | "list_workspace_links"
+  | "register_repo"
   | "create_workspace"
   | "start_agent_session"
+  | "launch_agent"
   | "stop_agent_session"
   | "archive_workspace"
   | "remove_workspace"
   | "reconcile"
   | "inspect_readiness"
   | "read_agent_output"
-  | "send_agent_message";
+  | "send_agent_message"
+  | "list_deployed_apps"
+  | "redeploy_app";
 
 export type McpToolDefinition = {
   name: McpToolName;
@@ -141,6 +145,22 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       destructive: false,
     },
     {
+      name: "register_repo",
+      description:
+        "Register an existing local git repository with Citadel so it appears in list_repos and can host workspaces. Provide the absolute rootPath of a directory containing a .git folder. Optionally override the display name and worktreeParent (defaults to <repo>-worktrees next to the repo). Also creates the non-removable root workspace pointing at the repo working copy. Returns { repo }.",
+      inputSchema: {
+        type: "object",
+        required: ["rootPath"],
+        properties: {
+          rootPath: { type: "string", minLength: 1 },
+          name: { type: "string", minLength: 1 },
+          worktreeParent: { type: "string", minLength: 1 },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
       name: "create_workspace",
       description: "Create a workspace through the daemon operation service.",
       inputSchema: {
@@ -169,6 +189,27 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
           runtimeId: { type: "string" },
           displayName: { type: "string" },
           prompt: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "launch_agent",
+      description:
+        "High-level one-shot: create a fresh scratch workspace in a repo and immediately start an agent session in it with the given prompt. Returns { workspaceId, sessionId, branchName, workspacePath, operationId }. Use this instead of chaining create_workspace + start_agent_session when an orchestrator just wants 'run this prompt in repo X'. Pass exactly one of repoId or repoName; runtimeId defaults to claude-code. namespaceId is accepted but currently ignored (namespaces not yet implemented).",
+      inputSchema: {
+        type: "object",
+        required: ["prompt"],
+        properties: {
+          repoId: { type: "string", description: "Internal repo id (provide this OR repoName)." },
+          repoName: { type: "string", description: "Configured repo display name (provide this OR repoId)." },
+          prompt: { type: "string", minLength: 1 },
+          runtimeId: { type: "string", default: "claude-code" },
+          displayName: { type: "string", maxLength: 80 },
+          workspaceName: { type: "string", maxLength: 80 },
+          namespaceId: { type: "string", maxLength: 80 },
+          branchName: { type: "string", maxLength: 120 },
         },
         additionalProperties: false,
       },
@@ -216,6 +257,37 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       name: "reconcile",
       description: "Reconcile local state with reality: cleanup orphan sessions, ghost repos, and missing worktrees.",
       inputSchema: { type: "object", additionalProperties: false },
+      destructive: true,
+    },
+    {
+      name: "list_deployed_apps",
+      description:
+        "List the deployed apps for a workspace by invoking its deploy hook (`<hook> list`) and probing each app's URL for reachability. Resolves the hook in this order: `<workspacePath>/.citadel/hooks/deploy` (if executable) > the repo's deployHookCommand. Returns { workspaceId, resolution: { source, filePath?, command? }, apps: [{ name, url, status: 'deployed'|'stopped'|'unknown', lastChecked }], error?, checkedAt }. `source` is 'none' when no deploy hook is configured.",
+      inputSchema: {
+        type: "object",
+        required: ["workspaceId"],
+        properties: { workspaceId: { type: "string" } },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "redeploy_app",
+      description:
+        "Invoke the workspace's deploy hook with `redeploy [name]`. Omitting `name` redeploys all apps. The hook runs with cwd = workspace path and env CITADEL_WORKSPACE_ID/CITADEL_WORKSPACE_PATH/CITADEL_WORKSPACE_BRANCH/CITADEL_REPO_ID set. Returns { operationId, status, exitStatus } — stream the operation log via /api/operations/:id for live output.",
+      inputSchema: {
+        type: "object",
+        required: ["workspaceId"],
+        properties: {
+          workspaceId: { type: "string" },
+          name: {
+            type: "string",
+            maxLength: 80,
+            description: "App name from list_deployed_apps. Omit to redeploy all.",
+          },
+        },
+        additionalProperties: false,
+      },
       destructive: true,
     },
     {
@@ -271,12 +343,16 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
         operations: context.operations.filter((operation) => operation.workspaceId === workspaceId).slice(0, 5),
       };
     }
+    case "register_repo":
     case "create_workspace":
     case "start_agent_session":
+    case "launch_agent":
     case "stop_agent_session":
     case "archive_workspace":
     case "remove_workspace":
     case "reconcile":
+    case "list_deployed_apps":
+    case "redeploy_app":
       return { error: "mutating_tool_requires_daemon" };
     case "read_agent_output":
     case "send_agent_message":

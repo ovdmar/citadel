@@ -19,6 +19,17 @@ import "./settings.css";
 import "./settings-ia.css";
 import "./responsive.css";
 
+// Seed data-theme on <html> BEFORE React renders so any component that
+// reads it synchronously on first render (e.g. useResolvedTheme used by
+// TerminalPane to spawn ttyd with the matching xterm palette) doesn't
+// race ThemeControls's useEffect that writes the attribute later.
+(() => {
+  const stored = localStorage.getItem("citadel.theme");
+  if (stored === "light" || stored === "dark") {
+    document.documentElement.dataset.theme = stored;
+  }
+})();
+
 const rootRoute = createRootRoute({
   component: () => <Shell />,
 });

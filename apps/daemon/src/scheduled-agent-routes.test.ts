@@ -32,6 +32,7 @@ describe("scheduled agent routes", () => {
       setupHookIds: [],
       teardownHookIds: [],
       providerIds: [],
+      deployHookCommand: null,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,

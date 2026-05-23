@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# Citadel deploy hook for Citadel itself.
+#
+# Contract (subcommands and structured I/O):
+#   $1 = subcommand
+#     list                 → stdout JSON: {"apps":[{"name":"citadel","url":"http://<host>:<port>"}]}
+#                           must complete in ≤10s; no side effects.
+#     redeploy [name]      → (re)starts the named app, or all apps if no name.
+#                           stdout/stderr stream back to the cockpit operation log.
+#
+# Environment provided by Citadel:
+#   CITADEL_WORKSPACE_ID    — opaque workspace id (used for port derivation)
+#   CITADEL_WORKSPACE_PATH  — absolute path to the worktree (same as cwd)
+#   CITADEL_WORKSPACE_BRANCH
+#   CITADEL_REPO_ID
+#
+# Optional override:
+#   CITADEL_PUBLIC_HOST     — host to advertise in the URL (defaults to the
+#                            machine's primary non-loopback IPv4, falling back
+#                            to 127.0.0.1). Set this if your machine has
+#                            multiple NICs and you want a specific one in the
+#                            cockpit chip.
+#
+# Port derivation: 5173 + (cksum(WORKSPACE_ID) mod 100). Stable per worktree, so
+# the same worktree gets the same port across invocations; different worktrees
+# get different ports automatically.
+#
+# State: PID/log files live under .citadel/logs/ inside *this* worktree, so
+# parallel worktrees do not stomp on each other.
+
+set -euo pipefail
+
+APP_NAME="citadel"
+WORKTREE="${CITADEL_WORKSPACE_PATH:-$(pwd)}"
+WORKSPACE_ID="${CITADEL_WORKSPACE_ID:-default}"
+STATE_DIR="${WORKTREE}/.citadel/logs"
+LOG_FILE="${STATE_DIR}/deploy.log"
+PID_FILE="${STATE_DIR}/${APP_NAME}.pid"
+
+derive_port() {
+  local sum
+  sum=$(printf '%s' "$WORKSPACE_ID" | cksum | awk '{print $1}')
+  printf '%d' $(( 5173 + (sum % 100) ))
+}
+
+derive_host() {
+  if [[ -n "${CITADEL_PUBLIC_HOST:-}" ]]; then
+    printf '%s' "$CITADEL_PUBLIC_HOST"
+    return
+  fi
+  # Prefer the machine's first non-loopback IPv4 so the cockpit URL is
+  # reachable from other LAN hosts. Fall back to 127.0.0.1 only if no public
+  # address resolves (e.g. inside a container with only lo).
+  local ip
+  if command -v hostname >/dev/null 2>&1; then
+    ip=$(hostname -I 2>/dev/null | awk '{ for (i=1;i<=NF;i++) if ($i !~ /^127\./ && $i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) { print $i; exit } }')
+  fi
+  if [[ -z "${ip:-}" ]] && command -v ip >/dev/null 2>&1; then
+    ip=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)
+  fi
+  printf '%s' "${ip:-127.0.0.1}"
+}
+
+PORT="$(derive_port)"
+HOST="$(derive_host)"
+URL="http://${HOST}:${PORT}"
+
+mkdir -p "$STATE_DIR"
+
+case "${1:-}" in
+  list)
+    printf '%s\n' "{\"apps\":[{\"name\":\"${APP_NAME}\",\"url\":\"${URL}\"}]}"
+    ;;
+  redeploy)
+    name="${2:-}"
+    if [[ -n "$name" && "$name" != "$APP_NAME" ]]; then
+      echo "unknown app: $name (only '${APP_NAME}' is exposed by this hook)" >&2
+      exit 2
+    fi
+    # Stop any prior server started for this worktree by killing the whole
+    # process group recorded last time (vite is a child of pnpm; killing only
+    # pnpm leaves vite holding the port).
+    if [[ -f "$PID_FILE" ]]; then
+      prev_pgid="$(cat "$PID_FILE" 2>/dev/null || true)"
+      if [[ -n "${prev_pgid:-}" ]] && kill -0 -- "-${prev_pgid}" 2>/dev/null; then
+        echo "stopping previous ${APP_NAME} pgid=${prev_pgid}"
+        kill -TERM -- "-${prev_pgid}" 2>/dev/null || true
+        sleep 1
+        kill -KILL -- "-${prev_pgid}" 2>/dev/null || true
+      fi
+      rm -f "$PID_FILE"
+    fi
+    # Belt-and-braces: free the port if something else holds it.
+    if command -v fuser >/dev/null 2>&1; then
+      fuser -k -n tcp "$PORT" 2>/dev/null || true
+    fi
+    if ! command -v setsid >/dev/null 2>&1; then
+      echo "setsid not found in PATH — required to detach the dev server cleanly" >&2
+      echo "install util-linux (Linux) or coreutils with setsid (macOS via Homebrew)" >&2
+      exit 127
+    fi
+    cd "$WORKTREE"
+    echo "starting ${APP_NAME} on ${URL} (worktree=${WORKTREE})"
+    : > "$LOG_FILE"
+    # setsid + nohup so the dev server runs in its own session/process group;
+    # we record the PGID so the next redeploy can take it down cleanly.
+    setsid nohup env CITADEL_WEB_PORT="$PORT" \
+      pnpm --filter @citadel/web dev >>"$LOG_FILE" 2>&1 &
+    pid=$!
+    disown "$pid" 2>/dev/null || true
+    # With setsid the new process is its own session leader and PGID == PID.
+    echo "$pid" > "$PID_FILE"
+    echo "${APP_NAME} started pgid=${pid} log=${LOG_FILE} url=${URL}"
+    ;;
+  ""|--help|-h|help)
+    cat <<EOF
+usage: $(basename "$0") <list|redeploy [name]>
+  list                emit JSON describing exposed apps
+  redeploy [name]     (re)start an app, or all apps if no name
+EOF
+    ;;
+  *)
+    echo "unknown subcommand: $1" >&2
+    exit 2
+    ;;
+esac

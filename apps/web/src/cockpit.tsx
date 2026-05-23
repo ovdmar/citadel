@@ -59,8 +59,9 @@ export function Cockpit() {
   const selectedRepo = activeWorkspace
     ? (data?.repos.find((repo) => repo.id === activeWorkspace.repoId) ?? null)
     : (data?.repos[0] ?? null);
+  const allSessions = data?.sessions ?? [];
   const activeWorkspaceSessions = activeWorkspace
-    ? (data?.sessions.filter((session) => session.workspaceId === activeWorkspace.id) ?? [])
+    ? allSessions.filter((session) => session.workspaceId === activeWorkspace.id)
     : [];
   const activeSessionId = activeWorkspace ? activeSessionByWorkspace[activeWorkspace.id] : "";
 
@@ -113,9 +114,11 @@ export function Cockpit() {
     for (const workspace of data?.workspaces ?? []) {
       const sessions = data?.sessions.filter((session) => session.workspaceId === workspace.id) ?? [];
       const operations = data?.operations.filter((operation) => operation.workspaceId === workspace.id) ?? [];
-      const summary = workspace.id === cockpitSummary.data?.workspaceId ? cockpitSummary.data : undefined;
-      const attention = readinessForWorkspace(workspace, { sessions, operations, summary });
-      const pr = summary?.versionControl.pullRequest ?? null;
+      const attention = readinessForWorkspace(workspace, { sessions, operations });
+      const pr =
+        workspace.id === cockpitSummary.data?.workspaceId
+          ? (cockpitSummary.data.versionControl.pullRequest ?? null)
+          : null;
       const entry: { readiness?: string; prTone?: string; prNumber?: number | null; attention?: string } = {
         readiness: attention.label,
         attention: attention.tone,
@@ -208,6 +211,7 @@ export function Cockpit() {
             <Stage
               workspace={activeWorkspace}
               sessions={activeWorkspaceSessions}
+              allSessions={allSessions}
               runtimes={data?.runtimes ?? []}
               activeSessionId={activeSessionId}
               onActiveSession={(sessionId) =>

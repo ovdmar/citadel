@@ -1,5 +1,4 @@
-import type { AgentSession, Operation, Workspace, WorkspaceCockpitSummary } from "@citadel/contracts";
-import { formatLabel } from "./labels.js";
+import type { AgentSession, Operation, Workspace } from "@citadel/contracts";
 
 export type WorkspaceAttention = {
   section: string;
@@ -8,18 +7,18 @@ export type WorkspaceAttention = {
   tone: "neutral" | "info" | "success" | "warning" | "danger";
 };
 
+// Section is always derived from data that ships in /api/state (sessions,
+// operations, workspace.lifecycle/dirty) — never from the per-workspace
+// /cockpit-summary readiness. The summary only loads for the active workspace,
+// uses richer inputs (PR checks, git conflicts, provider health), and can
+// classify the same workspace as "blocked" (e.g. checks-failing,
+// waiting-provider) when the local rules would call it "idle". Mixing the two
+// made the active workspace's nav card jump between Blocked and Idle every
+// time the summary refetched or focus moved.
 export function readinessForWorkspace(
   workspace: Workspace,
-  input: { sessions: AgentSession[]; operations: Operation[]; summary: WorkspaceCockpitSummary | undefined },
+  input: { sessions: AgentSession[]; operations: Operation[] },
 ): WorkspaceAttention {
-  if (input.summary) {
-    return {
-      section: readinessSection(input.summary.readiness.state),
-      label: formatLabel(input.summary.readiness.state),
-      nextAction: input.summary.readiness.nextAction,
-      tone: input.summary.readiness.tone,
-    };
-  }
   const failedOperation = input.operations.some((operation) => operation.status === "failed");
   const runningOperation = input.operations.some((operation) => ["queued", "running"].includes(operation.status));
   const activeAgentSession = input.sessions.some(
