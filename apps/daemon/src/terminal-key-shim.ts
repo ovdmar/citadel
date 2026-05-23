@@ -9,6 +9,9 @@
 //   - Cmd+Backspace (mac) -> Ctrl+U (kill line backward)
 //   - Cmd+Left  (mac)     -> Ctrl+A (start of line)
 //   - Cmd+Right (mac)     -> Ctrl+E (end of line)
+//   - Cmd+C     (mac)     -> route through ttyd's Ctrl+Shift+C copy handler
+//                             so xterm's selection (no DOM selection in canvas
+//                             renderer) actually reaches the clipboard
 //
 // ttyd frames input as a binary message: byte 0 is `0` (Command.INPUT),
 // followed by the UTF-8 encoded payload.
@@ -82,7 +85,51 @@ export const TERMINAL_KEY_SHIM_SOURCE = `(function () {
         if (sendInput("\\x05")) consume(event);
         return;
       }
+      if ((event.key === "c" || event.key === "C") && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+        if (copySelection()) consume(event);
+        return;
+      }
     }
+  }
+
+  // Cmd+C path: xterm's canvas renderer doesn't produce a real DOM selection,
+  // so the browser's native copy event has nothing to copy. We first try the
+  // DOM selection (in case a DOM-renderer build is in use), then fall back to
+  // dispatching the synthetic Ctrl+Shift+C event that ttyd's own xterm
+  // attachCustomKeyEventHandler already wires up for copy.
+  function copySelection() {
+    var domSelection = "";
+    try {
+      var sel = window.getSelection && window.getSelection();
+      domSelection = sel ? String(sel) : "";
+    } catch (_err) {
+      domSelection = "";
+    }
+    if (domSelection) {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(domSelection).catch(function () {});
+          return true;
+        }
+      } catch (_err) {
+        // fall through to synthetic-event path
+      }
+    }
+    var helper = document.querySelector(".xterm-helper-textarea");
+    if (!helper) return false;
+    var Ctor = window.KeyboardEvent;
+    if (typeof Ctor !== "function") return false;
+    var synthetic = new Ctor("keydown", {
+      key: "C",
+      code: "KeyC",
+      keyCode: 67,
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    helper.dispatchEvent(synthetic);
+    return true;
   }
 
   window.addEventListener("keydown", onKeydown, true);

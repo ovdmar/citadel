@@ -46,6 +46,9 @@ describe("injectKeyShim", () => {
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain('sendInput("\\x05")');
     // Mac gating
     expect(TERMINAL_KEY_SHIM_SOURCE).toMatch(/isMac/);
+    // Cmd+C routing: navigator.clipboard + synthetic Ctrl+Shift+C dispatch
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain("navigator.clipboard");
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain(".xterm-helper-textarea");
   });
 });
 
@@ -120,22 +123,61 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     } as FakeKeyboardEvent;
   }
 
-  function setup(platform: string): ShimHarness {
+  type FakeKeyboardEventInit = {
+    key: string;
+    code?: string;
+    keyCode?: number;
+    ctrlKey?: boolean;
+    shiftKey?: boolean;
+    bubbles?: boolean;
+    cancelable?: boolean;
+  };
+  class FakeSyntheticEvent {
+    constructor(
+      public type: string,
+      public init: FakeKeyboardEventInit,
+    ) {}
+  }
+
+  function setup(
+    platform: string,
+    extras: {
+      getSelection?: () => string;
+      clipboardWrites?: string[];
+      xtermHelper?: { dispatchEvent: (event: FakeSyntheticEvent) => boolean };
+    } = {},
+  ): ShimHarness {
     const listeners: ShimHarness["listeners"] = [];
     const sent: Uint8Array[] = [];
+    const clipboardWrites = extras.clipboardWrites ?? [];
     const runtime: ShimHarness["runtime"] = {
       window: {
         WebSocket: FakeWebSocket,
         addEventListener: ((type: string, handler: (event: FakeKeyboardEvent) => void) => {
           if (type === "keydown") listeners.push(handler);
         }) as unknown as Window["addEventListener"],
+        getSelection: extras.getSelection ? () => ({ toString: () => extras.getSelection?.() ?? "" }) : undefined,
+        KeyboardEvent: FakeSyntheticEvent as unknown as typeof KeyboardEvent,
       } as ShimHarness["runtime"]["window"],
       document: {
         addEventListener: ((type: string, handler: (event: FakeKeyboardEvent) => void) => {
           if (type === "keydown") listeners.push(handler);
         }) as unknown as Document["addEventListener"],
-      },
-      navigator: { platform, userAgent: platform },
+        querySelector: ((selector: string) => {
+          if (selector === ".xterm-helper-textarea") return extras.xtermHelper ?? null;
+          return null;
+        }) as Document["querySelector"],
+      } as unknown as ShimHarness["runtime"]["document"],
+      navigator: {
+        platform,
+        userAgent: platform,
+        clipboard: {
+          writeText: (text: string) => {
+            clipboardWrites.push(text);
+            return Promise.resolve();
+          },
+        },
+      } as ShimHarness["runtime"]["navigator"],
       TextEncoder,
     };
     new Function("window", "document", "navigator", "TextEncoder", TERMINAL_KEY_SHIM_SOURCE)(
@@ -226,5 +268,47 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     const event = dispatch(harness, makeEvent({ key: "Enter", shiftKey: true, isComposing: true }));
     expect(event.defaultPrevented).toBe(false);
     expect(harness.sent).toEqual([]);
+  });
+
+  it("Cmd+C copies the DOM selection through navigator.clipboard when one exists", () => {
+    const clipboardWrites: string[] = [];
+    const harness = setup("MacIntel", { getSelection: () => "highlighted text", clipboardWrites });
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "c", metaKey: true }));
+    expect(event.defaultPrevented).toBe(true);
+    expect(clipboardWrites).toEqual(["highlighted text", "highlighted text"]);
+    // Window + document listeners both fire — both attempts succeed; that's fine,
+    // clipboard.writeText is idempotent. The synthetic textarea fallback was NOT used.
+  });
+
+  it("Cmd+C falls back to dispatching Ctrl+Shift+C on xterm's helper textarea when there is no DOM selection", () => {
+    const clipboardWrites: string[] = [];
+    const dispatched: FakeSyntheticEvent[] = [];
+    const helper = {
+      dispatchEvent: (event: FakeSyntheticEvent) => {
+        dispatched.push(event);
+        return true;
+      },
+    };
+    const harness = setup("MacIntel", { getSelection: () => "", clipboardWrites, xtermHelper: helper });
+    harness.activate();
+    dispatch(harness, makeEvent({ key: "c", metaKey: true }));
+    expect(clipboardWrites).toEqual([]);
+    expect(dispatched.length).toBeGreaterThanOrEqual(1);
+    const first = dispatched[0];
+    expect(first).toBeDefined();
+    expect(first?.type).toBe("keydown");
+    expect(first?.init.code).toBe("KeyC");
+    expect(first?.init.ctrlKey).toBe(true);
+    expect(first?.init.shiftKey).toBe(true);
+  });
+
+  it("Cmd+C is a no-op on non-mac platforms", () => {
+    const clipboardWrites: string[] = [];
+    const harness = setup("Linux x86_64", { getSelection: () => "anything", clipboardWrites });
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "c", metaKey: true }));
+    expect(event.defaultPrevented).toBe(false);
+    expect(clipboardWrites).toEqual([]);
   });
 });
