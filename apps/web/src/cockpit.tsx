@@ -59,8 +59,9 @@ export function Cockpit() {
   const selectedRepo = activeWorkspace
     ? (data?.repos.find((repo) => repo.id === activeWorkspace.repoId) ?? null)
     : (data?.repos[0] ?? null);
+  const allSessions = data?.sessions ?? [];
   const activeWorkspaceSessions = activeWorkspace
-    ? (data?.sessions.filter((session) => session.workspaceId === activeWorkspace.id) ?? [])
+    ? allSessions.filter((session) => session.workspaceId === activeWorkspace.id)
     : [];
   const activeSessionId = activeWorkspace ? activeSessionByWorkspace[activeWorkspace.id] : "";
 
@@ -210,6 +211,7 @@ export function Cockpit() {
             <Stage
               workspace={activeWorkspace}
               sessions={activeWorkspaceSessions}
+              allSessions={allSessions}
               runtimes={data?.runtimes ?? []}
               activeSessionId={activeSessionId}
               onActiveSession={(sessionId) =>
