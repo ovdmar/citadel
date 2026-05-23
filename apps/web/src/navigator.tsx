@@ -53,6 +53,11 @@ export function Navigator(props: {
     () => buildGroups(props.workspaces, props.repos, props.sessions, props.operations, props.activeSummary, grouping),
     [props.workspaces, props.repos, props.sessions, props.operations, props.activeSummary, grouping],
   );
+  const namespacesById = useMemo(() => {
+    const map = new Map<string, import("@citadel/contracts").Namespace>();
+    for (const namespace of props.namespaces) map.set(namespace.id, namespace);
+    return map;
+  }, [props.namespaces]);
 
   return (
     <>
@@ -124,6 +129,8 @@ export function Navigator(props: {
                         ? (props.activeSummary.versionControl.pullRequest ?? null)
                         : null
                     }
+                    namespace={workspace.namespaceId ? (namespacesById.get(workspace.namespaceId) ?? null) : null}
+                    namespaces={props.namespaces}
                     active={workspace.id === props.activeWorkspaceId}
                     onSelect={() => props.onPickWorkspace(workspace)}
                   />

@@ -29,9 +29,20 @@ export function registerNamespaceRoutes(deps: NamespaceRoutesDeps) {
     "/api/namespaces",
     asyncRoute(async (req, res) => {
       const input = CreateNamespaceInputSchema.parse(req.body);
-      const namespace = operations.createNamespace(input);
-      emit("namespace.updated", { namespaceId: namespace.id });
-      res.status(201).json({ namespace });
+      const result = operations.createNamespace(input);
+      emit("namespace.updated", { namespaceId: result.namespace.id });
+      res.status(result.created ? 201 : 200).json({ namespace: result.namespace, created: result.created });
+    }),
+  );
+
+  app.post(
+    "/api/namespaces/:namespaceId/restore",
+    asyncRoute(async (req, res) => {
+      const namespaceId = String(req.params.namespaceId);
+      const namespace = operations.restoreNamespace(namespaceId);
+      if (!namespace) return res.status(404).json({ error: "namespace_not_found" });
+      emit("namespace.updated", { namespaceId });
+      res.json({ namespace });
     }),
   );
 
@@ -40,6 +51,9 @@ export function registerNamespaceRoutes(deps: NamespaceRoutesDeps) {
     asyncRoute(async (req, res) => {
       const namespaceId = String(req.params.namespaceId);
       const input = UpdateNamespaceInputSchema.parse(req.body);
+      if (input.name === undefined && input.color === undefined) {
+        return res.status(400).json({ error: "empty_patch" });
+      }
       const namespace = operations.renameNamespace(namespaceId, input);
       if (!namespace) return res.status(404).json({ error: "namespace_not_found" });
       emit("namespace.updated", { namespaceId });
@@ -63,7 +77,10 @@ export function registerNamespaceRoutes(deps: NamespaceRoutesDeps) {
     asyncRoute(async (req, res) => {
       const input = AssignWorkspaceToNamespaceInputSchema.parse(req.body);
       const result = operations.assignWorkspaceToNamespace(input);
-      if (!result.assigned) return res.status(404).json(result);
+      if (!result.assigned) {
+        const status = result.reason === "namespace_archived" ? 409 : 404;
+        return res.status(status).json(result);
+      }
       emit("namespace.updated", { workspaceId: input.workspaceId, namespaceId: input.namespaceId });
       emit("workspace.updated", { workspaceId: input.workspaceId });
       res.json(result);

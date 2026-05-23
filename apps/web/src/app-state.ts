@@ -26,11 +26,12 @@ export type StateResponse = {
   namespaces: Namespace[];
 };
 
-export function useStateQuery() {
+export function useStateQuery(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["state"],
     queryFn: () => api<StateResponse>("/api/state"),
     refetchInterval: 5000,
+    enabled: options?.enabled ?? true,
   });
 }
 

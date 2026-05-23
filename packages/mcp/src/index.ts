@@ -227,10 +227,10 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     {
       name: "assign_workspace_to_namespace",
       description:
-        "Move an existing workspace into a namespace (or pass namespaceId=null to unassign). Use after the fact when a workspace should join a topic that did not exist when it was created.",
+        "Move an existing workspace into a namespace (or pass namespaceId=null to unassign). Both arguments are required: pass namespaceId=null explicitly to detach. Use after the fact when a workspace should join a topic that did not exist when it was created.",
       inputSchema: {
         type: "object",
-        required: ["workspaceId"],
+        required: ["workspaceId", "namespaceId"],
         properties: {
           workspaceId: { type: "string" },
           namespaceId: { type: ["string", "null"] },
@@ -330,8 +330,14 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
       return { runtimes: context.runtimes };
     case "list_workspace_links":
       return listWorkspaceLinks(context.activity, call.arguments?.workspaceId);
-    case "list_namespaces":
-      return { namespaces: context.namespaces };
+    case "list_namespaces": {
+      // includeArchived from the daemon path is honored there; here we only
+      // see the active snapshot the daemon serialized into context.namespaces.
+      // When called against the snapshot, archived entries are simply absent.
+      const includeArchived = call.arguments?.includeArchived === true;
+      if (includeArchived) return { namespaces: context.namespaces, includeArchived: true };
+      return { namespaces: context.namespaces.filter((entry) => !entry.archivedAt) };
+    }
     case "inspect_readiness": {
       const workspaceId = typeof call.arguments?.workspaceId === "string" ? (call.arguments.workspaceId as string) : "";
       const workspace = context.workspaces.find((candidate) => candidate.id === workspaceId);

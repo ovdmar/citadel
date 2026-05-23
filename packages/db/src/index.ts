@@ -322,6 +322,8 @@ export class SqliteStore {
   updateNamespace = (id: string, p: Partial<Pick<Namespace, "name" | "color">>) =>
     namespaces.updateNamespace(this.database, id, p);
   archiveNamespace = (id: string) => namespaces.archiveNamespace(this.database, id);
+  restoreNamespace = (id: string, p?: { color?: string | null }) =>
+    namespaces.restoreNamespace(this.database, id, p ?? {});
 
   updateWorkspaceLifecycle(workspaceId: string, lifecycle: Workspace["lifecycle"], dirty = false) {
     this.database

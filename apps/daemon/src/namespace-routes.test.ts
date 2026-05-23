@@ -17,7 +17,7 @@ afterEach(() => {
 process.env.CITADEL_DISABLE_REAPER = "1";
 process.env.CITADEL_DISABLE_SCHEDULER = "1";
 
-type Namespace = { id: string; name: string; archivedAt: string | null };
+type Namespace = { id: string; name: string; archivedAt: string | null; color: string | null };
 type Workspace = { id: string; name: string; namespaceId: string | null };
 
 describe("namespace routes + MCP integration", () => {
@@ -49,7 +49,7 @@ describe("namespace routes + MCP integration", () => {
 
       // 2. Create namespace via MCP RPC (so a main agent could do the same).
       const createRpc = await postJson<{
-        result: { structuredContent: { namespace: Namespace } };
+        result: { structuredContent: { namespace: Namespace; created: boolean } };
       }>(`${baseUrl}/api/mcp/rpc`, {
         jsonrpc: "2.0",
         id: 1,
@@ -58,6 +58,19 @@ describe("namespace routes + MCP integration", () => {
       });
       const namespace = createRpc.result.structuredContent.namespace;
       expect(namespace.name).toBe("MS-100 epic");
+      expect(createRpc.result.structuredContent.created).toBe(true);
+
+      // 2b. Idempotent re-create returns created=false and the same id.
+      const idempotent = await postJson<{
+        result: { structuredContent: { namespace: Namespace; created: boolean } };
+      }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: 11,
+        method: "tools/call",
+        params: { name: "create_namespace", arguments: { name: "MS-100 epic" } },
+      });
+      expect(idempotent.result.structuredContent.created).toBe(false);
+      expect(idempotent.result.structuredContent.namespace.id).toBe(namespace.id);
 
       // 3. list_namespaces via MCP returns the new one.
       const listRpc = await postJson<{
@@ -122,21 +135,124 @@ describe("namespace routes + MCP integration", () => {
     }
   });
 
-  it("rejects archiving an unknown namespace and refuses assigning to an archived one", async () => {
+  it("rejects archiving an unknown namespace, supports restore + MCP includeArchived", async () => {
     const fixture = createFixture();
+    const git = createGitRepo(fixture.config.dataDir);
+    const now = new Date().toISOString();
+    fixture.store.insertRepo({
+      id: "repo_ns2",
+      name: "NS2",
+      rootPath: git.repoPath,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
     const { server } = createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const missing = await fetch(`${baseUrl}/api/namespaces/ns_missing`, { method: "DELETE" });
       expect(missing.status).toBe(404);
 
-      const created = await postJson<{ namespace: Namespace }>(`${baseUrl}/api/namespaces`, { name: "ephemeral" });
+      const created = await postJson<{ namespace: Namespace; created: boolean }>(`${baseUrl}/api/namespaces`, {
+        name: "ephemeral",
+      });
+      expect(created.created).toBe(true);
+
+      // Empty PATCH body is rejected as 400.
+      const emptyPatch = await fetch(`${baseUrl}/api/namespaces/${created.namespace.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(emptyPatch.status).toBe(400);
+
       const archive = await fetch(`${baseUrl}/api/namespaces/${created.namespace.id}`, { method: "DELETE" });
       expect(archive.status).toBe(202);
 
-      // Default list hides it, but includeArchived shows it.
+      // Default REST list hides it, includeArchived shows it.
       const archived = await getJson<{ namespaces: Namespace[] }>(`${baseUrl}/api/namespaces?includeArchived=true`);
       expect(archived.namespaces.find((entry) => entry.id === created.namespace.id)?.archivedAt).not.toBeNull();
+
+      // MCP tool also honors includeArchived now.
+      const mcpArchived = await postJson<{
+        result: { structuredContent: { namespaces: Namespace[] } };
+      }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: 30,
+        method: "tools/call",
+        params: { name: "list_namespaces", arguments: { includeArchived: true } },
+      });
+      expect(
+        mcpArchived.result.structuredContent.namespaces.find((entry) => entry.id === created.namespace.id)?.archivedAt,
+      ).not.toBeNull();
+      const mcpDefault = await postJson<{
+        result: { structuredContent: { namespaces: Namespace[] } };
+      }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: 31,
+        method: "tools/call",
+        params: { name: "list_namespaces" },
+      });
+      expect(
+        mcpDefault.result.structuredContent.namespaces.find((entry) => entry.id === created.namespace.id),
+      ).toBeUndefined();
+
+      // Trying to assign a workspace to the archived namespace returns 409.
+      const workspaceCreate = await postJson<{ workspaceId: string }>(`${baseUrl}/api/workspaces`, {
+        repoId: "repo_ns2",
+        name: "task-d",
+        source: "scratch",
+      });
+      const conflict = await fetch(`${baseUrl}/api/namespaces/assign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaceId: workspaceCreate.workspaceId, namespaceId: created.namespace.id }),
+      });
+      expect(conflict.status).toBe(409);
+      expect(await conflict.json()).toMatchObject({ reason: "namespace_archived" });
+
+      // Restore via REST endpoint.
+      const restore = await postJson<{ namespace: Namespace }>(
+        `${baseUrl}/api/namespaces/${created.namespace.id}/restore`,
+        {},
+      );
+      expect(restore.namespace.archivedAt).toBeNull();
+
+      // Re-creating with the same name reactivates instead of UNIQUE-throwing.
+      await fetch(`${baseUrl}/api/namespaces/${created.namespace.id}`, { method: "DELETE" });
+      const recreate = await postJson<{ namespace: Namespace; created: boolean }>(`${baseUrl}/api/namespaces`, {
+        name: "ephemeral",
+        color: "#445566",
+      });
+      expect(recreate.created).toBe(true);
+      expect(recreate.namespace.id).toBe(created.namespace.id);
+      expect(recreate.namespace.archivedAt).toBeNull();
+      expect(recreate.namespace.color).toBe("#445566");
+
+      // assign_workspace_to_namespace via MCP without namespaceId is rejected
+      // by the daemon (Zod parse), surfacing a validation error to the caller.
+      const missingArgResponse = await fetch(`${baseUrl}/api/mcp/rpc`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 40,
+          method: "tools/call",
+          params: { name: "assign_workspace_to_namespace", arguments: { workspaceId: workspaceCreate.workspaceId } },
+        }),
+      });
+      expect(missingArgResponse.status).toBe(400);
+      const missingArgBody = (await missingArgResponse.json()) as {
+        error?: string;
+        issues?: Array<{ path: string }>;
+      };
+      expect(missingArgBody.issues?.some((issue) => issue.path === "namespaceId")).toBe(true);
     } finally {
       await closeServer(server);
     }

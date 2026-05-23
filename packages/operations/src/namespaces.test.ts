@@ -24,8 +24,16 @@ describe("namespace operations", () => {
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
 
-    const namespace = service.createNamespace({ name: "MS-100 epic", color: "#aabbcc" });
+    const createResult = service.createNamespace({ name: "MS-100 epic", color: "#aabbcc" });
+    expect(createResult.created).toBe(true);
+    const namespace = createResult.namespace;
     expect(service.listNamespaces()).toMatchObject([{ id: namespace.id, name: "MS-100 epic" }]);
+
+    // Idempotency: creating again with the same name returns the existing one
+    // without erroring, and reports created=false so the caller can tell.
+    const idempotent = service.createNamespace({ name: "MS-100 epic" });
+    expect(idempotent.created).toBe(false);
+    expect(idempotent.namespace.id).toBe(namespace.id);
 
     // Workspace created with namespaceId lands in the namespace.
     const created = await service.createWorkspace({
@@ -56,6 +64,65 @@ describe("namespace operations", () => {
     expect(service.listNamespaces()).toEqual([]);
     expect(service.listNamespaces(true)).toHaveLength(1);
     expect(store.listWorkspaces().find((entry) => entry.id === created.workspaceId)?.namespaceId).toBeNull();
+
+    // Re-creating a namespace with a previously-archived name reactivates the
+    // archived row (instead of hitting the UNIQUE(name) constraint).
+    const recreated = service.createNamespace({ name: "MS-100 launch", color: "#112233" });
+    expect(recreated.created).toBe(true);
+    expect(recreated.namespace.id).toBe(namespace.id);
+    expect(recreated.namespace.archivedAt).toBeNull();
+    expect(recreated.namespace.color).toBe("#112233");
+    expect(service.listNamespaces()).toHaveLength(1);
+  });
+
+  it("supports explicit restoreNamespace and skips no-op rename activity", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    service.registerRepo({ rootPath: fixture.repoPath });
+    const namespace = service.createNamespace({ name: "to-restore" }).namespace;
+    service.archiveNamespace(namespace.id);
+    expect(service.listNamespaces()).toEqual([]);
+    const restored = service.restoreNamespace(namespace.id);
+    expect(restored?.archivedAt).toBeNull();
+    expect(service.listNamespaces()).toHaveLength(1);
+
+    // No-op patch (no name or color) should not record activity.
+    const beforeRename = store.listActivity().length;
+    const next = service.renameNamespace(namespace.id, {});
+    expect(next?.id).toBe(namespace.id);
+    expect(store.listActivity().length).toBe(beforeRename);
+  });
+
+  it("createAgentSession reassigns the workspace to the supplied namespaceId", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const namespace = service.createNamespace({ name: "session-target" }).namespace;
+    const created = await service.createWorkspace({ repoId: repo.id, name: "ws-x", source: "scratch" });
+    expect(store.listWorkspaces().find((entry) => entry.id === created.workspaceId)?.namespaceId).toBeNull();
+    const session = await service.createAgentSession(
+      { workspaceId: created.workspaceId, runtimeId: "shell", namespaceId: namespace.id },
+      { command: "bash", args: ["-l"], displayName: "Shell" },
+    );
+    try {
+      expect(session.workspaceId).toBe(created.workspaceId);
+      const after = store.listWorkspaces().find((entry) => entry.id === created.workspaceId);
+      expect(after?.namespaceId).toBe(namespace.id);
+    } finally {
+      service.stopAgentSession({ sessionId: session.id });
+    }
   });
 
   it("rejects assignment to an unknown or archived namespace", async () => {
@@ -74,7 +141,7 @@ describe("namespace operations", () => {
       service.assignWorkspaceToNamespace({ workspaceId: created.workspaceId, namespaceId: "ns_missing" }),
     ).toMatchObject({ assigned: false, reason: "namespace_not_found" });
 
-    const namespace = service.createNamespace({ name: "epic" });
+    const namespace = service.createNamespace({ name: "epic" }).namespace;
     service.archiveNamespace(namespace.id);
     expect(
       service.assignWorkspaceToNamespace({ workspaceId: created.workspaceId, namespaceId: namespace.id }),

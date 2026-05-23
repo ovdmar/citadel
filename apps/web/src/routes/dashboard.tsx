@@ -33,6 +33,11 @@ export function DashboardView() {
     }
     return buckets;
   }, [data]);
+  const namespacesById = useMemo(() => {
+    const map = new Map<string, import("@citadel/contracts").Namespace>();
+    for (const namespace of data?.namespaces ?? []) map.set(namespace.id, namespace);
+    return map;
+  }, [data?.namespaces]);
   return (
     <div className="page dashboard-page" style={{ padding: 0 }}>
       <header className="dashboard-header" aria-label="Dashboard navigation">
@@ -77,6 +82,8 @@ export function DashboardView() {
                       workspace={workspace}
                       sessions={sessions}
                       pullRequest={null}
+                      namespace={workspace.namespaceId ? (namespacesById.get(workspace.namespaceId) ?? null) : null}
+                      namespaces={data?.namespaces ?? []}
                       active={false}
                       onSelect={() =>
                         navigate({

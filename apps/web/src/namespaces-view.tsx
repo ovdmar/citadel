@@ -1,8 +1,8 @@
 import type { Namespace, Workspace } from "@citadel/contracts";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Archive, Check, FolderPlus, Pencil, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { Archive, ArchiveRestore, Check, FolderPlus, Pencil, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import type { StateResponse } from "./app-state.js";
 import { Button } from "./components/ui/button.js";
@@ -13,10 +13,12 @@ export function NamespacesView(props: { data: StateResponse | undefined }) {
   const navigate = useNavigate();
   const [draftName, setDraftName] = useState("");
   const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
+  const [archiveTarget, setArchiveTarget] = useState<Namespace | null>(null);
+  const [showArchived, setShowArchived] = useState(false);
 
   const create = useMutation({
     mutationFn: (name: string) =>
-      api<{ namespace: Namespace }>("/api/namespaces", {
+      api<{ namespace: Namespace; created: boolean }>("/api/namespaces", {
         method: "POST",
         body: JSON.stringify({ name }),
       }),
@@ -40,10 +42,36 @@ export function NamespacesView(props: { data: StateResponse | undefined }) {
 
   const archive = useMutation({
     mutationFn: (id: string) => api(`/api/namespaces/${id}`, { method: "DELETE" }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+    onSuccess: () => {
+      setArchiveTarget(null);
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      queryClient.invalidateQueries({ queryKey: ["namespaces", "archived"] });
+    },
+  });
+
+  const restore = useMutation({
+    mutationFn: (id: string) => api(`/api/namespaces/${id}/restore`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      queryClient.invalidateQueries({ queryKey: ["namespaces", "archived"] });
+    },
+  });
+
+  const archivedQuery = useQuery({
+    queryKey: ["namespaces", "archived"],
+    queryFn: () =>
+      api<{ namespaces: Namespace[] }>("/api/namespaces?includeArchived=true").then((response) =>
+        response.namespaces.filter((entry) => entry.archivedAt),
+      ),
+    enabled: showArchived,
   });
 
   const groups = useMemo(() => buildGroups(data?.workspaces ?? [], data?.namespaces ?? []), [data]);
+  const namespacesById = useMemo(() => {
+    const map = new Map<string, Namespace>();
+    for (const namespace of data?.namespaces ?? []) map.set(namespace.id, namespace);
+    return map;
+  }, [data?.namespaces]);
 
   return (
     <div className="namespaces-view">
@@ -65,31 +93,28 @@ export function NamespacesView(props: { data: StateResponse | undefined }) {
         >
           Create
         </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() => setShowArchived((current) => !current)}
+          aria-pressed={showArchived}
+          title={showArchived ? "Hide archived namespaces" : "Show archived namespaces"}
+        >
+          {showArchived ? "Hide archived" : "Show archived"}
+        </Button>
       </div>
       <div className="namespaces-grid">
         {groups.map((group) => (
           <section key={group.key} className="namespace-card">
             <header className="namespace-card-header">
               {editing && group.namespace && editing.id === group.namespace.id ? (
-                <div className="namespace-card-edit">
-                  <input
-                    ref={(node) => node?.focus()}
-                    value={editing.name}
-                    onChange={(event) =>
-                      setEditing((current) => (current ? { id: current.id, name: event.target.value } : current))
-                    }
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && editing.name.trim()) rename.mutate(editing);
-                      else if (event.key === "Escape") setEditing(null);
-                    }}
-                  />
-                  <Button type="button" size="icon" variant="ghost" onClick={() => rename.mutate(editing)}>
-                    <Check size={12} />
-                  </Button>
-                  <Button type="button" size="icon" variant="ghost" onClick={() => setEditing(null)}>
-                    <X size={12} />
-                  </Button>
-                </div>
+                <RenameInput
+                  initial={editing.name}
+                  onCancel={() => setEditing(null)}
+                  onSave={(value) => {
+                    if (editing) rename.mutate({ id: editing.id, name: value });
+                  }}
+                />
               ) : (
                 <>
                   <strong>{group.label}</strong>
@@ -112,7 +137,7 @@ export function NamespacesView(props: { data: StateResponse | undefined }) {
                         size="icon"
                         variant="ghost"
                         title="Archive namespace"
-                        onClick={() => group.namespace && archive.mutate(group.namespace.id)}
+                        onClick={() => group.namespace && setArchiveTarget(group.namespace)}
                       >
                         <Archive size={11} />
                       </Button>
@@ -131,6 +156,8 @@ export function NamespacesView(props: { data: StateResponse | undefined }) {
                       workspace={workspace}
                       sessions={sessions}
                       pullRequest={null}
+                      namespace={workspace.namespaceId ? (namespacesById.get(workspace.namespaceId) ?? null) : null}
+                      namespaces={data?.namespaces ?? []}
                       active={false}
                       onSelect={() =>
                         navigate({
@@ -148,7 +175,125 @@ export function NamespacesView(props: { data: StateResponse | undefined }) {
           </section>
         ))}
       </div>
+      {showArchived ? (
+        <ArchivedNamespaces
+          namespaces={archivedQuery.data ?? []}
+          loading={archivedQuery.isLoading}
+          onRestore={(id) => restore.mutate(id)}
+          restoringId={restore.isPending ? (restore.variables ?? null) : null}
+        />
+      ) : null}
+      {archiveTarget ? (
+        <ConfirmArchiveDialog
+          namespace={archiveTarget}
+          pending={archive.isPending}
+          error={archive.error instanceof Error ? archive.error.message : null}
+          onConfirm={() => archive.mutate(archiveTarget.id)}
+          onCancel={() => setArchiveTarget(null)}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function RenameInput(props: { initial: string; onSave: (next: string) => void; onCancel: () => void }) {
+  const [value, setValue] = useState(props.initial);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+  return (
+    <div className="namespace-card-edit">
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && value.trim()) props.onSave(value.trim());
+          else if (event.key === "Escape") props.onCancel();
+        }}
+      />
+      <Button type="button" size="icon" variant="ghost" onClick={() => value.trim() && props.onSave(value.trim())}>
+        <Check size={12} />
+      </Button>
+      <Button type="button" size="icon" variant="ghost" onClick={props.onCancel}>
+        <X size={12} />
+      </Button>
+    </div>
+  );
+}
+
+function ConfirmArchiveDialog(props: {
+  namespace: Namespace;
+  pending: boolean;
+  error: string | null;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="drop-workspace-backdrop" onMouseDown={props.onCancel}>
+      <dialog
+        className="drop-workspace-dialog"
+        aria-label={`Archive namespace ${props.namespace.name}`}
+        open
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <strong>Archive "{props.namespace.name}"?</strong>
+        <p>
+          Workspaces currently in this namespace will be detached (moved to Uncategorized). The namespace stays
+          recoverable via "Show archived".
+        </p>
+        {props.error ? <p className="drop-workspace-error">{props.error}</p> : null}
+        <div className="drop-workspace-actions">
+          <button type="button" className="drop-workspace-cancel" onClick={props.onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="drop-workspace-confirm" onClick={props.onConfirm} disabled={props.pending}>
+            {props.pending ? "Archiving…" : "Archive namespace"}
+          </button>
+        </div>
+      </dialog>
+    </div>
+  );
+}
+
+function ArchivedNamespaces(props: {
+  namespaces: Namespace[];
+  loading: boolean;
+  onRestore: (id: string) => void;
+  restoringId: string | null;
+}) {
+  return (
+    <section className="namespaces-archived">
+      <header className="namespaces-archived-header">
+        <strong>Archived</strong>
+        <span className="namespace-card-count">{props.namespaces.length}</span>
+      </header>
+      {props.loading ? (
+        <div className="empty compact">Loading archived namespaces…</div>
+      ) : props.namespaces.length ? (
+        <ul className="namespaces-archived-list">
+          {props.namespaces.map((namespace) => (
+            <li key={namespace.id}>
+              <span>{namespace.name}</span>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                title="Restore namespace"
+                onClick={() => props.onRestore(namespace.id)}
+                disabled={props.restoringId === namespace.id}
+              >
+                <ArchiveRestore size={12} />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="empty compact">No archived namespaces.</div>
+      )}
+    </section>
   );
 }
 

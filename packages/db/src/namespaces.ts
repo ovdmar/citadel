@@ -92,6 +92,19 @@ export function archiveNamespace(db: Database, id: string): Namespace | null {
   return { ...existing, archivedAt: now, updatedAt: now };
 }
 
+export function restoreNamespace(db: Database, id: string, patch: { color?: string | null } = {}): Namespace | null {
+  const existing = findNamespace(db, id);
+  if (!existing) return null;
+  const now = new Date().toISOString();
+  const color = patch.color !== undefined ? patch.color : existing.color;
+  db.prepare("UPDATE namespaces SET archived_at = NULL, color = ?, updated_at = ? WHERE id = ?").run(
+    color ?? null,
+    now,
+    id,
+  );
+  return { ...existing, color, archivedAt: null, updatedAt: now };
+}
+
 export function setWorkspaceNamespace(db: Database, workspaceId: string, namespaceId: string | null): boolean {
   const now = new Date().toISOString();
   const result = db

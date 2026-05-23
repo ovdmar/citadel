@@ -93,15 +93,22 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     return operations.readAgentTranscript(input);
   }
   if (call.name === "create_namespace") {
-    const namespace = operations.createNamespace(CreateNamespaceInputSchema.parse(call.arguments ?? {}));
-    emit("namespace.updated", { namespaceId: namespace.id });
-    return { namespace };
+    const result = operations.createNamespace(CreateNamespaceInputSchema.parse(call.arguments ?? {}));
+    emit("namespace.updated", { namespaceId: result.namespace.id });
+    return { namespace: result.namespace, created: result.created };
   }
   if (call.name === "assign_workspace_to_namespace") {
     const input = AssignWorkspaceToNamespaceInputSchema.parse(call.arguments ?? {});
     const result = operations.assignWorkspaceToNamespace(input);
-    emit("namespace.updated", { workspaceId: input.workspaceId });
+    if (result.assigned) {
+      emit("namespace.updated", { workspaceId: input.workspaceId, namespaceId: input.namespaceId });
+      emit("workspace.updated", { workspaceId: input.workspaceId });
+    }
     return result;
+  }
+  if (call.name === "list_namespaces") {
+    const includeArchived = call.arguments?.includeArchived === true;
+    return { namespaces: store.listNamespaces(includeArchived) };
   }
   if (call.name === "send_agent_message") {
     const sessionId = typeof call.arguments?.sessionId === "string" ? call.arguments.sessionId : "";

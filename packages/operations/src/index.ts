@@ -21,7 +21,7 @@ import { ensureTmuxSession, killTmuxSession, submitPrompt } from "@citadel/termi
 import * as agentMessages from "./agent-messages.js";
 import * as namespaceOps from "./namespaces.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
-export type { AssignWorkspaceResult } from "./namespaces.js";
+export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
 export {
   ScheduledAgentRunner,
   parseCronExpression,
@@ -643,6 +643,7 @@ export class OperationService {
   createNamespace = (input: CreateNamespaceInput) => namespaceOps.createNamespace(this.nsDeps(), input);
   renameNamespace = (id: string, patch: UpdateNamespaceInput) => namespaceOps.renameNamespace(this.nsDeps(), id, patch);
   archiveNamespace = (id: string) => namespaceOps.archiveNamespace(this.nsDeps(), id);
+  restoreNamespace = (id: string) => namespaceOps.restoreNamespace(this.nsDeps(), id);
   assignWorkspaceToNamespace = (input: { workspaceId: string; namespaceId: string | null }) =>
     namespaceOps.assignWorkspaceToNamespace(this.nsDeps(), input);
   private nsDeps = (): namespaceOps.NamespaceServiceDeps => ({

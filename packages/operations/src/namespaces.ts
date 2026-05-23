@@ -11,14 +11,25 @@ export type AssignWorkspaceResult =
   | { assigned: true; workspaceId: string; namespaceId: string | null }
   | { assigned: false; reason: "workspace_not_found" | "namespace_not_found" | "namespace_archived" };
 
+export type CreateNamespaceResult = { namespace: Namespace; created: boolean };
+
 export function listNamespaces(store: SqliteStore, includeArchived = false): Namespace[] {
   return store.listNamespaces(includeArchived);
 }
 
-export function createNamespace(deps: NamespaceServiceDeps, input: CreateNamespaceInput): Namespace {
+export function createNamespace(deps: NamespaceServiceDeps, input: CreateNamespaceInput): CreateNamespaceResult {
   const name = input.name.trim();
+  const colorPatch = input.color !== undefined ? { color: input.color ?? null } : {};
   const existing = deps.store.findNamespaceByName(name);
-  if (existing && !existing.archivedAt) return existing;
+  if (existing) {
+    if (!existing.archivedAt) return { namespace: existing, created: false };
+    // Same name was previously archived; reactivate it instead of hitting the
+    // UNIQUE(name) constraint. Honor any color override the caller supplied.
+    const restored = deps.store.restoreNamespace(existing.id, colorPatch);
+    if (!restored) return { namespace: existing, created: false };
+    deps.activity("namespace.restored", `Restored namespace ${restored.name}`);
+    return { namespace: restored, created: true };
+  }
   const now = nowIso();
   const namespace: Namespace = {
     id: createId("ns"),
@@ -30,13 +41,23 @@ export function createNamespace(deps: NamespaceServiceDeps, input: CreateNamespa
   };
   deps.store.insertNamespace(namespace);
   deps.activity("namespace.created", `Created namespace ${namespace.name}`);
-  return namespace;
+  return { namespace, created: true };
+}
+
+export function restoreNamespace(deps: NamespaceServiceDeps, id: string): Namespace | null {
+  const restored = deps.store.restoreNamespace(id);
+  if (restored) deps.activity("namespace.restored", `Restored namespace ${restored.name}`);
+  return restored;
 }
 
 export function renameNamespace(deps: NamespaceServiceDeps, id: string, patch: UpdateNamespaceInput): Namespace | null {
   const cleanPatch: { name?: string; color?: string | null } = {};
   if (typeof patch.name === "string") cleanPatch.name = patch.name.trim();
   if (patch.color !== undefined) cleanPatch.color = patch.color;
+  if (cleanPatch.name === undefined && cleanPatch.color === undefined) {
+    // No-op patch — return the current state without logging activity.
+    return deps.store.findNamespace(id);
+  }
   const next = deps.store.updateNamespace(id, cleanPatch);
   if (next) deps.activity("namespace.updated", `Updated namespace ${next.name}`);
   return next;

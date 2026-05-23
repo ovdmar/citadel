@@ -24,6 +24,11 @@ export type WorkspaceCardData = {
   sessions: AgentSession[];
   pullRequest?: PullRequestSummary | null;
   approval?: ApprovalTone;
+  // When provided, skip the global state lookup and use this directly. Callers
+  // rendering many cards should build a Map once at the parent and pass the
+  // entry per workspace to avoid O(n*m) lookups across a large list.
+  namespace?: Namespace | null;
+  namespaces?: Namespace[];
 };
 
 export type PrTone = "missing" | "pending" | "passing" | "failing" | "merged";
@@ -37,10 +42,17 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
   const additions = pullRequest?.additions ?? null;
   const deletions = pullRequest?.deletions ?? null;
-  const state = useStateQuery();
-  const namespace = workspace.namespaceId
-    ? (state.data?.namespaces.find((entry) => entry.id === workspace.namespaceId) ?? null)
-    : null;
+  // Only hit the global state query when callers haven't already passed the
+  // resolved namespace / namespace list in via props.
+  const needsFallback = props.namespace === undefined && props.namespaces === undefined;
+  const fallbackState = useStateQuery({ enabled: needsFallback });
+  const namespacesForPicker = props.namespaces ?? fallbackState.data?.namespaces ?? [];
+  const namespace =
+    props.namespace !== undefined
+      ? props.namespace
+      : workspace.namespaceId
+        ? (namespacesForPicker.find((entry) => entry.id === workspace.namespaceId) ?? null)
+        : null;
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(titleDisplay);
@@ -216,7 +228,7 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
       {showNamespaceMenu ? (
         <NamespacePickerDialog
           workspace={workspace}
-          namespaces={state.data?.namespaces ?? []}
+          namespaces={namespacesForPicker}
           onClose={() => setShowNamespaceMenu(false)}
         />
       ) : null}
