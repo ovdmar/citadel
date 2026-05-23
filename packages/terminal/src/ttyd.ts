@@ -307,12 +307,6 @@ function buildAttachCommand(tmuxSession: string) {
   return [
     "tmux set-option -s extended-keys on >/dev/null 2>&1 || true",
     "tmux show-options -s -g terminal-features 2>/dev/null | grep -q 'xterm\\*.*extkeys' || tmux set-option -as terminal-features ',xterm*:extkeys' >/dev/null 2>&1 || true",
-    // Make tmux emit OSC 52 (set-clipboard) whenever something is copied —
-    // mouse drag, copy-mode, vi-keys, anything. tmux 3.x already knows OSC 52
-    // for xterm-compatible terminals via its bundled terminfo, so we only
-    // need to opt in here. The cockpit's iframe shim intercepts OSC 52 and
-    // writes the payload into navigator.clipboard.
-    "tmux set-option -g set-clipboard on >/dev/null 2>&1 || true",
     `exec tmux attach -t "${safe}"`,
   ].join("; ");
 }
