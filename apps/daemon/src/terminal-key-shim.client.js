@@ -105,43 +105,50 @@
   }
 
   // Cmd+C path: xterm's canvas renderer doesn't produce a real DOM selection,
-  // so the browser's native copy event has nothing to copy. We first try the
-  // DOM selection (in case a DOM-renderer build is in use), then fall back to
-  // dispatching the synthetic Ctrl+Shift+C event that ttyd's own xterm
-  // attachCustomKeyEventHandler already wires up for copy.
+  // so window.getSelection() is empty for anything inside the terminal. The
+  // real selection lives in xterm's internal model and is only reachable via
+  // term.getSelection(). ttyd exposes the xterm instance on window.term, so
+  // we read it from there and write directly to the clipboard. We still
+  // check window.getSelection() as a fallback for the (rare) DOM-renderer
+  // xterm build and for selections that span surrounding chrome.
   function copySelection() {
-    let domSelection = "";
-    try {
-      const sel = window.getSelection?.();
-      domSelection = sel ? String(sel) : "";
-    } catch (_err) {
-      domSelection = "";
-    }
-    if (domSelection) {
+    let text = "";
+    const term = window.term;
+    if (term && typeof term.getSelection === "function") {
       try {
-        if (navigator.clipboard?.writeText) {
-          navigator.clipboard.writeText(domSelection).catch(() => {});
-          return true;
-        }
+        text = term.getSelection() || "";
       } catch (_err) {
-        // fall through to synthetic-event path
+        text = "";
       }
     }
-    const helper = document.querySelector(".xterm-helper-textarea");
-    if (!helper) return false;
-    const Ctor = window.KeyboardEvent;
-    if (typeof Ctor !== "function") return false;
-    const synthetic = new Ctor("keydown", {
-      key: "C",
-      code: "KeyC",
-      keyCode: 67,
-      ctrlKey: true,
-      shiftKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    helper.dispatchEvent(synthetic);
-    return true;
+    if (!text) {
+      try {
+        const sel = window.getSelection?.();
+        text = sel ? String(sel) : "";
+      } catch (_err) {
+        text = "";
+      }
+    }
+    if (!text) return false;
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => {});
+      return true;
+    }
+    // Last-resort legacy path for browsers without the async clipboard API.
+    try {
+      const helper = document.createElement("textarea");
+      helper.value = text;
+      helper.setAttribute("readonly", "");
+      helper.style.position = "fixed";
+      helper.style.opacity = "0";
+      document.body.appendChild(helper);
+      helper.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(helper);
+      return ok;
+    } catch (_err) {
+      return false;
+    }
   }
 
   function onKeydown(event) {
