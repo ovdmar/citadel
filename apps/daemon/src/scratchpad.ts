@@ -10,6 +10,13 @@ export type ScratchpadSnapshot = {
   updatedAt: string;
 };
 
+export class ScratchpadTooLargeError extends Error {
+  constructor(readonly limit: number = SCRATCHPAD_MAX_BYTES) {
+    super("scratchpad_too_large");
+    this.name = "ScratchpadTooLargeError";
+  }
+}
+
 export function scratchpadPath(dataDir: string) {
   return path.join(dataDir, SCRATCHPAD_FILENAME);
 }
@@ -38,12 +45,18 @@ export function appendScratchpad(dataDir: string, chunk: string): ScratchpadSnap
   ensureDataDir(dataDir);
   const filePath = scratchpadPath(dataDir);
   const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
+  const next = composeAppend(existing, chunk);
+  return writeScratchpad(dataDir, next);
+}
+
+// Exported so the MCP layer can pre-check the projected size against the cap
+// without doing a second filesystem read.
+export function composeAppend(existing: string, chunk: string) {
   // Normalize whatever the file ends with into a blank-line boundary before the
   // appended chunk, so concurrent agents append clean stanzas instead of run-on text.
   const separator = existing.length === 0 || existing.endsWith("\n\n") ? "" : existing.endsWith("\n") ? "\n" : "\n\n";
   const tail = chunk.endsWith("\n") ? chunk : `${chunk}\n`;
-  const next = `${existing}${separator}${tail}`;
-  return writeScratchpad(dataDir, next);
+  return `${existing}${separator}${tail}`;
 }
 
 function ensureDataDir(dataDir: string) {
@@ -52,6 +65,6 @@ function ensureDataDir(dataDir: string) {
 
 function assertSize(content: string) {
   if (Buffer.byteLength(content, "utf8") > SCRATCHPAD_MAX_BYTES) {
-    throw new Error("scratchpad_too_large");
+    throw new ScratchpadTooLargeError();
   }
 }

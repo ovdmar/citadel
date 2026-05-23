@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   SCRATCHPAD_MAX_BYTES,
+  ScratchpadTooLargeError,
   appendScratchpad,
   readScratchpad,
   scratchpadPath,
@@ -32,16 +33,19 @@ describe("scratchpad storage", () => {
     expect(snapshot.updatedAt).toMatch(/T.*Z$/);
   });
 
-  it("round-trips writes and reports mtime", async () => {
+  it("round-trips writes and reports mtime", () => {
     const dir = tmpDir();
     const first = writeScratchpad(dir, "hello world");
     expect(first.content).toBe("hello world");
-    // Ensure mtime advances on second write so the UI's "Saved" indicator can react.
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Force mtime backward so we can assert the next write strictly advances it
+    // without depending on filesystem clock granularity (some filesystems have
+    // 1-second mtime resolution, which would make a sleep-based test flaky).
+    const earlier = new Date(Date.now() - 60_000);
+    fs.utimesSync(scratchpadPath(dir), earlier, earlier);
     const second = writeScratchpad(dir, "second pass");
     expect(second.content).toBe("second pass");
     expect(readScratchpad(dir).content).toBe("second pass");
-    expect(new Date(second.updatedAt).getTime()).toBeGreaterThanOrEqual(new Date(first.updatedAt).getTime());
+    expect(new Date(second.updatedAt).getTime()).toBeGreaterThan(earlier.getTime());
   });
 
   it("appends with a clean newline boundary", () => {
@@ -61,9 +65,15 @@ describe("scratchpad storage", () => {
     expect(result.content).toBe("note\n");
   });
 
-  it("rejects writes that exceed the size cap", () => {
+  it("rejects writes that exceed the size cap with a typed error", () => {
     const dir = tmpDir();
     const tooLarge = "x".repeat(SCRATCHPAD_MAX_BYTES + 1);
-    expect(() => writeScratchpad(dir, tooLarge)).toThrow(/scratchpad_too_large/);
+    expect(() => writeScratchpad(dir, tooLarge)).toThrow(ScratchpadTooLargeError);
+  });
+
+  it("rejects appends that would push past the cap with a typed error", () => {
+    const dir = tmpDir();
+    writeScratchpad(dir, "x".repeat(SCRATCHPAD_MAX_BYTES - 10));
+    expect(() => appendScratchpad(dir, "y".repeat(100))).toThrow(ScratchpadTooLargeError);
   });
 });

@@ -11,7 +11,7 @@ import type { OperationService } from "@citadel/operations";
 import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import type { TtydManager } from "@citadel/terminal";
-import { SCRATCHPAD_MAX_BYTES, appendScratchpad, readScratchpad, writeScratchpad } from "./scratchpad.js";
+import { ScratchpadTooLargeError, appendScratchpad, readScratchpad, writeScratchpad } from "./scratchpad.js";
 
 export type DaemonMcpDeps = {
   config: CitadelConfig;
@@ -117,27 +117,27 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
   }
   if (call.name === "write_scratchpad") {
     if (typeof call.arguments?.content !== "string") return { error: "content_required" };
-    const content = call.arguments.content;
-    if (Buffer.byteLength(content, "utf8") > SCRATCHPAD_MAX_BYTES) {
-      return { error: "scratchpad_too_large", limit: SCRATCHPAD_MAX_BYTES };
+    try {
+      const snapshot = writeScratchpad(config.dataDir, call.arguments.content);
+      emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
+      return snapshot;
+    } catch (error) {
+      if (error instanceof ScratchpadTooLargeError) return { error: error.message, limit: error.limit };
+      throw error;
     }
-    const snapshot = writeScratchpad(config.dataDir, content);
-    emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
-    return snapshot;
   }
   if (call.name === "append_scratchpad") {
-    const content = typeof call.arguments?.content === "string" ? call.arguments.content : "";
-    if (!content) return { error: "content_required" };
-    // Pre-check the projected size so agents get a structured sentinel instead
-    // of a thrown error when their append would push the file past the cap.
-    const existing = readScratchpad(config.dataDir).content;
-    const projected = Buffer.byteLength(existing, "utf8") + Buffer.byteLength(content, "utf8") + 4;
-    if (projected > SCRATCHPAD_MAX_BYTES) {
-      return { error: "scratchpad_too_large", limit: SCRATCHPAD_MAX_BYTES };
+    if (typeof call.arguments?.content !== "string" || call.arguments.content === "") {
+      return { error: "content_required" };
     }
-    const snapshot = appendScratchpad(config.dataDir, content);
-    emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
-    return snapshot;
+    try {
+      const snapshot = appendScratchpad(config.dataDir, call.arguments.content);
+      emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
+      return snapshot;
+    } catch (error) {
+      if (error instanceof ScratchpadTooLargeError) return { error: error.message, limit: error.limit };
+      throw error;
+    }
   }
   if (call.name === "send_agent_message") {
     const sessionId = typeof call.arguments?.sessionId === "string" ? call.arguments.sessionId : "";

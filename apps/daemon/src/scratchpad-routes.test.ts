@@ -126,6 +126,29 @@ describe("scratchpad HTTP + MCP routes", () => {
         },
       );
       expect(oversize.result.structuredContent).toMatchObject({ error: "scratchpad_too_large", limit: 1_000_000 });
+
+      // write_scratchpad without a content string returns the same structured
+      // sentinel shape rather than triggering a generic JSON-RPC error.
+      const missing = await postJson<{ result: { structuredContent: { error: string } } }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "missing",
+        method: "tools/call",
+        params: { name: "write_scratchpad", arguments: {} },
+      });
+      expect(missing.result.structuredContent).toMatchObject({ error: "content_required" });
+
+      // append_scratchpad with an empty content string is also content_required:
+      // appends with zero bytes are a no-op the agent probably didn't mean to make.
+      const emptyAppend = await postJson<{ result: { structuredContent: { error: string } } }>(
+        `${baseUrl}/api/mcp/rpc`,
+        {
+          jsonrpc: "2.0",
+          id: "empty-append",
+          method: "tools/call",
+          params: { name: "append_scratchpad", arguments: { content: "" } },
+        },
+      );
+      expect(emptyAppend.result.structuredContent).toMatchObject({ error: "content_required" });
     } finally {
       await closeServer(server);
     }

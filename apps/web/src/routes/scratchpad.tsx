@@ -15,10 +15,19 @@ export function ScratchpadView() {
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedRef = useRef<string>("");
   const latestRef = useRef<string>("");
   const savingRef = useRef(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     latestRef.current = content;
@@ -27,6 +36,7 @@ export function ScratchpadView() {
   const loadFromServer = useCallback(async () => {
     try {
       const snapshot = await api<ScratchpadSnapshot>("/api/scratchpad");
+      if (!mountedRef.current) return;
       // Only adopt the server's content when the user has no unsaved local edits;
       // otherwise an SSE-triggered refetch would clobber what they're typing.
       if (latestRef.current === lastSavedRef.current) {
@@ -36,12 +46,18 @@ export function ScratchpadView() {
       lastSavedRef.current = snapshot.content;
       setUpdatedAt(snapshot.updatedAt);
       setErrorMessage(null);
+      setLoadError(null);
+      setLoaded(true);
       if (!savingRef.current) setSaveState("saved");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "load_failed");
+      if (!mountedRef.current) return;
+      const message = error instanceof Error ? error.message : "load_failed";
+      setLoadError(message);
+      setErrorMessage(message);
       setSaveState("error");
-    } finally {
-      setLoaded(true);
+      // Deliberately do NOT set `loaded = true` on failure: leaves the textarea
+      // disabled so the user can't type into an empty buffer and have the next
+      // autosave overwrite the file they failed to load.
     }
   }, []);
 
@@ -59,22 +75,24 @@ export function ScratchpadView() {
     try {
       while (latestRef.current !== lastSavedRef.current) {
         const snapshot = latestRef.current;
-        setSaveState("saving");
+        if (mountedRef.current) setSaveState("saving");
         try {
           const result = await api<ScratchpadSnapshot>("/api/scratchpad", {
             method: "PUT",
             body: JSON.stringify({ content: snapshot }),
           });
           lastSavedRef.current = result.content;
+          if (!mountedRef.current) return;
           setUpdatedAt(result.updatedAt);
           setErrorMessage(null);
         } catch (error) {
+          if (!mountedRef.current) return;
           setErrorMessage(error instanceof Error ? error.message : "save_failed");
           setSaveState("error");
           return;
         }
       }
-      setSaveState("saved");
+      if (mountedRef.current) setSaveState("saved");
     } finally {
       savingRef.current = false;
     }
@@ -94,10 +112,13 @@ export function ScratchpadView() {
   }, [content, loaded, saveLatest]);
 
   // Pick up MCP-driven writes (append_scratchpad etc.) so the cockpit reflects
-  // what other agents have appended without requiring a manual refresh.
+  // what other agents have appended without requiring a manual refresh. Skip
+  // events we triggered ourselves to avoid a save→event→refetch round-trip on
+  // every keystroke.
   useEffect(() => {
     const events = new EventSource("/events");
     const refresh = () => {
+      if (savingRef.current) return;
       void loadFromServer();
     };
     events.addEventListener("scratchpad.updated", refresh);
@@ -105,6 +126,12 @@ export function ScratchpadView() {
       events.removeEventListener("scratchpad.updated", refresh);
       events.close();
     };
+  }, [loadFromServer]);
+
+  const retryLoad = useCallback(() => {
+    setLoadError(null);
+    setSaveState("idle");
+    void loadFromServer();
   }, [loadFromServer]);
 
   return (
@@ -119,15 +146,24 @@ export function ScratchpadView() {
         </span>
       </header>
       <div className="scratchpad-body">
-        <textarea
-          className="scratchpad-textarea"
-          aria-label="Scratchpad markdown"
-          spellCheck={false}
-          value={content}
-          onChange={(event) => setContent(event.target.value)}
-          placeholder="Note things here. Orchestrator agents can read this via MCP and spin up work."
-          disabled={!loaded}
-        />
+        {loadError ? (
+          <div className="scratchpad-load-error" role="alert">
+            <p>Couldn't load the scratchpad: {loadError}</p>
+            <button type="button" onClick={retryLoad}>
+              Retry
+            </button>
+          </div>
+        ) : (
+          <textarea
+            className="scratchpad-textarea"
+            aria-label="Scratchpad markdown"
+            spellCheck={false}
+            value={content}
+            onChange={(event) => setContent(event.target.value)}
+            placeholder="Note things here. Orchestrator agents can read this via MCP and spin up work."
+            disabled={!loaded}
+          />
+        )}
       </div>
     </div>
   );

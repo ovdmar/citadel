@@ -35,3 +35,24 @@
 .scratchpad-textarea:focus {
   border-color: var(--color-action);
 }
+
+.scratchpad-load-error {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 24px;
+  border: 1px dashed var(--color-danger);
+  border-radius: 6px;
+  color: var(--color-danger);
+}
+
+.scratchpad-load-error button {
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  color: inherit;
+  cursor: pointer;
+}
