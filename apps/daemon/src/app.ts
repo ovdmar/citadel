@@ -715,7 +715,7 @@ export function createDaemonApp(input: {
     readMcpResource: (uri) => readMcpResource(store, config, uri),
   });
 
-  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute });
+  registerWorkspaceExtraRoutes({ app, store, config, emit, asyncRoute });
 
   app.get("/api/workspaces/:workspaceId/diff", (req, res) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);

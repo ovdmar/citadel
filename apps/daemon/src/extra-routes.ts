@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { CitadelConfig } from "@citadel/config";
 import type { SqliteStore } from "@citadel/db";
 import type express from "express";
+import { SCRATCHPAD_MAX_BYTES, readScratchpad, writeScratchpad } from "./scratchpad.js";
 
 type Emit = (type: string, payload: unknown) => void;
 type AsyncHandler = (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>;
@@ -13,10 +15,26 @@ type AsyncRoute = (
 export function registerWorkspaceExtraRoutes(input: {
   app: express.Express;
   store: SqliteStore;
+  config: CitadelConfig;
   emit: Emit;
   asyncRoute: AsyncRoute;
 }) {
-  const { app, store, emit, asyncRoute } = input;
+  const { app, store, config, emit, asyncRoute } = input;
+
+  app.get("/api/scratchpad", (_req, res) => {
+    res.json(readScratchpad(config.dataDir));
+  });
+
+  app.put("/api/scratchpad", (req, res) => {
+    const body = (req.body ?? {}) as { content?: unknown };
+    if (typeof body.content !== "string") return res.status(400).json({ error: "content_required" });
+    if (Buffer.byteLength(body.content, "utf8") > SCRATCHPAD_MAX_BYTES) {
+      return res.status(413).json({ error: "scratchpad_too_large", limit: SCRATCHPAD_MAX_BYTES });
+    }
+    const snapshot = writeScratchpad(config.dataDir, body.content);
+    emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
+    res.json(snapshot);
+  });
 
   app.get("/api/workspaces/archived", (_req, res) => {
     res.json({ workspaces: store.listArchivedWorkspaces() });
