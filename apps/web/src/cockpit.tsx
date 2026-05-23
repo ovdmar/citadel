@@ -113,9 +113,11 @@ export function Cockpit() {
     for (const workspace of data?.workspaces ?? []) {
       const sessions = data?.sessions.filter((session) => session.workspaceId === workspace.id) ?? [];
       const operations = data?.operations.filter((operation) => operation.workspaceId === workspace.id) ?? [];
-      const summary = workspace.id === cockpitSummary.data?.workspaceId ? cockpitSummary.data : undefined;
-      const attention = readinessForWorkspace(workspace, { sessions, operations, summary });
-      const pr = summary?.versionControl.pullRequest ?? null;
+      const attention = readinessForWorkspace(workspace, { sessions, operations });
+      const pr =
+        workspace.id === cockpitSummary.data?.workspaceId
+          ? (cockpitSummary.data.versionControl.pullRequest ?? null)
+          : null;
       const entry: { readiness?: string; prTone?: string; prNumber?: number | null; attention?: string } = {
         readiness: attention.label,
         attention: attention.tone,
