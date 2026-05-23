@@ -448,6 +448,18 @@ export const LaunchAgentInputSchema = z
     path: ["repoId"],
   });
 
+export const AgentPromptSourceSchema = z.enum(["initial", "send_agent_message", "transcript"]);
+
+export const AgentPromptSchema = z.object({
+  id: IdSchema,
+  sessionId: IdSchema,
+  source: AgentPromptSourceSchema,
+  role: z.literal("user"),
+  text: z.string(),
+  sentAt: z.string(),
+  externalId: z.string().nullable().default(null),
+});
+
 export const TransitionIssueInputSchema = z.object({
   transition: z.string().min(1),
   fields: z.record(z.string()).default({}),
@@ -512,6 +524,8 @@ export const WorkspaceDiffSchema = z.object({
 export type Repo = z.infer<typeof RepoSchema>;
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 export type AgentSession = z.infer<typeof AgentSessionSchema>;
+export type AgentPrompt = z.infer<typeof AgentPromptSchema>;
+export type AgentPromptSource = z.infer<typeof AgentPromptSourceSchema>;
 export type AgentRuntime = z.infer<typeof AgentRuntimeSchema>;
 export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 export type CheckSummary = z.infer<typeof CheckSummarySchema>;

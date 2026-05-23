@@ -15,11 +15,13 @@ import type {
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { ensureTmuxSession, killTmuxSession, submitPrompt } from "@citadel/terminal";
+import * as agentHistory from "./agent-history.js";
 import * as agentMessages from "./agent-messages.js";
 import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
 import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
 export type { LaunchAgentResult } from "./launch-agent.js";
+export type { AgentHistoryResult, AgentHistoryErrorResult } from "./agent-history.js";
 export {
   ScheduledAgentRunner,
   parseCronExpression,
@@ -288,6 +290,17 @@ export class OperationService {
       updatedAt: now,
     };
     this.store.insertSession(session);
+    if (input.prompt?.length) {
+      this.store.insertAgentPrompt({
+        id: createId("pmt"),
+        sessionId: session.id,
+        source: "initial",
+        role: "user",
+        text: input.prompt,
+        sentAt: now,
+        externalId: null,
+      });
+    }
     this.activity("agent.started", "user", `Started ${session.displayName}`, workspace.repoId, workspace.id, null);
     const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
     if (repo) await this.runNotificationHooks("agent.started", repo, workspace, null, { repo, workspace, session });
@@ -315,6 +328,8 @@ export class OperationService {
     agentMessages.readAgentTranscript(this.store, input);
   sendAgentMessage = (input: { sessionId: string; message: string }) =>
     agentMessages.sendAgentMessage(this.store, input);
+  readAgentHistory = (input: { sessionId: string; limit?: number; maxChars?: number }) =>
+    agentHistory.readAgentHistory(this.store, input);
 
   stopAgentSession(input: { sessionId: string }) {
     const session = this.store.listSessions().find((candidate) => candidate.id === input.sessionId);

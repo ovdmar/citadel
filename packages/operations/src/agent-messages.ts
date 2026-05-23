@@ -71,6 +71,16 @@ export async function sendAgentMessage(
   }
   const result = await submitPrompt(session.tmuxSessionName, input.message);
   if (result.ok) {
+    const now = nowIso();
+    store.insertAgentPrompt({
+      id: createId("pmt"),
+      sessionId: session.id,
+      source: "send_agent_message",
+      role: "user",
+      text: input.message,
+      sentAt: now,
+      externalId: null,
+    });
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     const event: ActivityEvent = {
       id: createId("evt"),
@@ -81,7 +91,7 @@ export async function sendAgentMessage(
       workspaceId: session.workspaceId,
       operationId: null,
       hookOutput: null,
-      createdAt: nowIso(),
+      createdAt: now,
     };
     store.addActivity(event);
   }

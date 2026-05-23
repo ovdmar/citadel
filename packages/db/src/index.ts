@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type {
   ActivityEvent,
+  AgentPrompt,
   AgentSession,
   HookOutput,
   Operation,
@@ -11,6 +12,15 @@ import type {
   ScheduledAgent,
   Workspace,
 } from "@citadel/contracts";
+import {
+  activityFromRow,
+  agentPromptFromRow,
+  operationFromRow,
+  repoFromRow,
+  scheduledAgentFromRow,
+  sessionFromRow,
+  workspaceFromRow,
+} from "./rows.js";
 
 // Avoid a static `import "node:sqlite"` so vite-based test runners do not
 // try to bundle the built-in. Resolved through `createRequire` at runtime.
@@ -182,6 +192,22 @@ export class SqliteStore {
       VALUES (4, 'workspace-linked-urls', datetime('now'));
       INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
       VALUES (5, 'scheduled-agents', datetime('now'));
+    `);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_session_prompts (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+        source TEXT NOT NULL,
+        role TEXT NOT NULL,
+        text TEXT NOT NULL,
+        sent_at TEXT NOT NULL,
+        external_id TEXT,
+        UNIQUE(session_id, external_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_agent_session_prompts_session
+        ON agent_session_prompts(session_id, sent_at);
+      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+      VALUES (6, 'agent-session-prompts', datetime('now'));
     `);
   }
 
@@ -420,7 +446,51 @@ export class SqliteStore {
   }
 
   deleteSession(sessionId: string) {
+    this.database.prepare("DELETE FROM agent_session_prompts WHERE session_id = ?").run(sessionId);
     this.database.prepare("DELETE FROM agent_sessions WHERE id = ?").run(sessionId);
+  }
+
+  insertAgentPrompt(prompt: AgentPrompt): boolean {
+    const result = this.database
+      .prepare(
+        `INSERT OR IGNORE INTO agent_session_prompts (id, session_id, source, role, text, sent_at, external_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        prompt.id,
+        prompt.sessionId,
+        prompt.source,
+        prompt.role,
+        prompt.text,
+        prompt.sentAt,
+        prompt.externalId ?? null,
+      );
+    return result.changes > 0;
+  }
+
+  listAgentPrompts(sessionId: string): AgentPrompt[] {
+    const rows = this.database
+      .prepare("SELECT * FROM agent_session_prompts WHERE session_id = ? ORDER BY sent_at ASC, id ASC")
+      .all(sessionId) as Array<Record<string, unknown>>;
+    return rows.map(agentPromptFromRow);
+  }
+
+  countAgentPrompts(sessionId: string): number {
+    const row = this.database
+      .prepare("SELECT COUNT(*) AS c FROM agent_session_prompts WHERE session_id = ?")
+      .get(sessionId) as { c: number } | undefined;
+    return row ? Number(row.c) : 0;
+  }
+
+  deleteAgentPrompt(id: string) {
+    this.database.prepare("DELETE FROM agent_session_prompts WHERE id = ?").run(id);
+  }
+
+  firstAgentPrompt(sessionId: string): AgentPrompt | null {
+    const row = this.database
+      .prepare("SELECT * FROM agent_session_prompts WHERE session_id = ? ORDER BY sent_at ASC, id ASC LIMIT 1")
+      .get(sessionId) as Record<string, unknown> | undefined;
+    return row ? agentPromptFromRow(row) : null;
   }
 
   upsertOperation(operation: Operation) {
@@ -642,133 +712,4 @@ export class SqliteStore {
       this.database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
   }
-}
-
-function asString(row: Record<string, unknown>, key: string) {
-  return String(row[key] ?? "");
-}
-
-function jsonArray(row: Record<string, unknown>, key: string) {
-  const raw = asString(row, key);
-  return raw ? (JSON.parse(raw) as string[]) : [];
-}
-
-function jsonObject<T>(row: Record<string, unknown>, key: string) {
-  const raw = asString(row, key);
-  return raw ? (JSON.parse(raw) as T) : null;
-}
-
-function repoFromRow(row: Record<string, unknown>): Repo {
-  return {
-    id: asString(row, "id"),
-    name: asString(row, "name"),
-    rootPath: asString(row, "root_path"),
-    defaultBranch: asString(row, "default_branch"),
-    defaultRemote: asString(row, "default_remote"),
-    worktreeParent: asString(row, "worktree_parent"),
-    setupHookIds: jsonArray(row, "setup_hook_ids"),
-    teardownHookIds: jsonArray(row, "teardown_hook_ids"),
-    providerIds: jsonArray(row, "provider_ids"),
-    deployHookCommand: row.deploy_hook_command ? asString(row, "deploy_hook_command") : null,
-    createdAt: asString(row, "created_at"),
-    updatedAt: asString(row, "updated_at"),
-    archivedAt: row.archived_at ? asString(row, "archived_at") : null,
-  };
-}
-
-function workspaceFromRow(row: Record<string, unknown>): Workspace {
-  return {
-    id: asString(row, "id"),
-    repoId: asString(row, "repo_id"),
-    name: asString(row, "name"),
-    path: asString(row, "path"),
-    branch: asString(row, "branch"),
-    baseBranch: asString(row, "base_branch"),
-    source: asString(row, "source") as Workspace["source"],
-    kind: ((row.kind as string) ?? "worktree") as Workspace["kind"],
-    prUrl: row.pr_url ? asString(row, "pr_url") : null,
-    issueKey: row.issue_key ? asString(row, "issue_key") : null,
-    issueTitle: row.issue_title ? asString(row, "issue_title") : null,
-    issueUrl: row.issue_url ? asString(row, "issue_url") : null,
-    slackThreadUrl: row.slack_thread_url ? asString(row, "slack_thread_url") : null,
-    section: asString(row, "section"),
-    pinned: Number(row.pinned) === 1,
-    lifecycle: asString(row, "lifecycle") as Workspace["lifecycle"],
-    dirty: Number(row.dirty) === 1,
-    createdAt: asString(row, "created_at"),
-    updatedAt: asString(row, "updated_at"),
-    archivedAt: row.archived_at ? asString(row, "archived_at") : null,
-  };
-}
-
-function sessionFromRow(row: Record<string, unknown>): AgentSession {
-  return {
-    id: asString(row, "id"),
-    workspaceId: asString(row, "workspace_id"),
-    runtimeId: asString(row, "runtime_id"),
-    displayName: asString(row, "display_name"),
-    status: asString(row, "status") as AgentSession["status"],
-    transport: asString(row, "transport") as AgentSession["transport"],
-    tmuxSessionName: row.tmux_session_name ? asString(row, "tmux_session_name") : null,
-    tmuxSessionId: row.tmux_session_id ? asString(row, "tmux_session_id") : null,
-    createdAt: asString(row, "created_at"),
-    updatedAt: asString(row, "updated_at"),
-  };
-}
-
-function operationFromRow(row: Record<string, unknown>): Operation {
-  const logs = jsonObject<OperationLogEntry[]>(row, "logs") ?? [];
-  const retryInput = jsonObject<Record<string, unknown>>(row, "retry_input");
-  return {
-    id: asString(row, "id"),
-    type: asString(row, "type"),
-    status: asString(row, "status") as Operation["status"],
-    repoId: row.repo_id ? asString(row, "repo_id") : null,
-    workspaceId: row.workspace_id ? asString(row, "workspace_id") : null,
-    progress: Number(row.progress),
-    message: row.message ? asString(row, "message") : null,
-    error: row.error ? asString(row, "error") : null,
-    logs,
-    retriable: Number(row.retriable ?? 0) === 1,
-    retryInput,
-    createdAt: asString(row, "created_at"),
-    updatedAt: asString(row, "updated_at"),
-  };
-}
-
-function scheduledAgentFromRow(row: Record<string, unknown>): ScheduledAgent {
-  return {
-    id: asString(row, "id"),
-    name: asString(row, "name"),
-    description: row.description ? asString(row, "description") : null,
-    cron: asString(row, "cron"),
-    repoId: asString(row, "repo_id"),
-    runtimeId: asString(row, "runtime_id"),
-    prompt: row.prompt ? asString(row, "prompt") : null,
-    workspaceStrategy: asString(row, "workspace_strategy") as ScheduledAgent["workspaceStrategy"],
-    workspaceName: asString(row, "workspace_name"),
-    baseBranch: row.base_branch ? asString(row, "base_branch") : null,
-    enabled: Number(row.enabled) === 1,
-    lastRunAt: row.last_run_at ? asString(row, "last_run_at") : null,
-    lastRunStatus: asString(row, "last_run_status") as ScheduledAgent["lastRunStatus"],
-    lastRunMessage: row.last_run_message ? asString(row, "last_run_message") : null,
-    lastWorkspaceId: row.last_workspace_id ? asString(row, "last_workspace_id") : null,
-    lastSessionId: row.last_session_id ? asString(row, "last_session_id") : null,
-    createdAt: asString(row, "created_at"),
-    updatedAt: asString(row, "updated_at"),
-  };
-}
-
-function activityFromRow(row: Record<string, unknown>): ActivityEvent {
-  return {
-    id: asString(row, "id"),
-    type: asString(row, "type"),
-    source: asString(row, "source") as ActivityEvent["source"],
-    repoId: row.repo_id ? asString(row, "repo_id") : null,
-    workspaceId: row.workspace_id ? asString(row, "workspace_id") : null,
-    operationId: row.operation_id ? asString(row, "operation_id") : null,
-    message: asString(row, "message"),
-    hookOutput: jsonObject<HookOutput>(row, "hook_output"),
-    createdAt: asString(row, "created_at"),
-  };
 }

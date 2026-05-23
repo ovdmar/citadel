@@ -12,6 +12,7 @@
     { "path": "../db" },
     { "path": "../hooks" },
     { "path": "../providers" },
+    { "path": "../runtimes" },
     { "path": "../terminal" }
   ],
   "include": ["src/**/*.ts"]

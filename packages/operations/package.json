@@ -15,6 +15,7 @@
     "@citadel/hooks": "workspace:*",
     "@citadel/config": "workspace:*",
     "@citadel/providers": "workspace:*",
+    "@citadel/runtimes": "workspace:*",
     "@citadel/terminal": "workspace:*"
   },
   "scripts": {

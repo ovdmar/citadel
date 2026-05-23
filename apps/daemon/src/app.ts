@@ -32,6 +32,7 @@ import { attachTerminalWebSocket, createTtydManager, ensureTmuxSession } from "@
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
+import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
@@ -503,41 +504,7 @@ export function createDaemonApp(input: {
     }),
   );
 
-  app.get(
-    "/api/agent-sessions/:sessionId/output",
-    asyncRoute(async (req, res) => {
-      const sessionId = req.params.sessionId;
-      if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
-      const lines = typeof req.query.lines === "string" ? Number.parseInt(req.query.lines, 10) : Number.NaN;
-      const maxChars = typeof req.query.maxChars === "string" ? Number.parseInt(req.query.maxChars, 10) : Number.NaN;
-      const transcriptInput: { sessionId: string; lines?: number; maxChars?: number } = { sessionId };
-      if (Number.isFinite(lines)) transcriptInput.lines = lines;
-      if (Number.isFinite(maxChars)) transcriptInput.maxChars = maxChars;
-      const result = operations.readAgentTranscript(transcriptInput);
-      if (!result.ok) {
-        const status = result.error === "session_not_found" ? 404 : 409;
-        return res.status(status).json(result);
-      }
-      res.json(result);
-    }),
-  );
-
-  app.post(
-    "/api/agent-sessions/:sessionId/messages",
-    asyncRoute(async (req, res) => {
-      const sessionId = req.params.sessionId;
-      if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
-      const message = typeof req.body?.message === "string" ? (req.body.message as string) : "";
-      if (!message) return res.status(400).json({ error: "message_required" });
-      const result = await operations.sendAgentMessage({ sessionId, message });
-      if (!result.ok) {
-        const status = result.error === "session_not_found" ? 404 : 409;
-        return res.status(status).json(result);
-      }
-      emit("agent.updated", { sessionId });
-      res.status(202).json(result);
-    }),
-  );
+  registerAgentSessionRoutes(app, { operations, emit, asyncRoute });
 
   app.post(
     "/api/reconcile",
