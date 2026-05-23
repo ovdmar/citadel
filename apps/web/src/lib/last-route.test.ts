@@ -11,7 +11,6 @@ function memoryStorage() {
     removeItem: (key: string) => {
       data.delete(key);
     },
-    _data: data,
   };
 }
 
@@ -35,6 +34,21 @@ describe("last-route storage", () => {
 
   it("ignores non-absolute hrefs", () => {
     saveLastRoute("https://evil.example/x", storage);
+    expect(loadLastRoute(storage)).toBeNull();
+  });
+
+  it("rejects protocol-relative paths on save", () => {
+    saveLastRoute("//evil.example/x", storage);
+    expect(loadLastRoute(storage)).toBeNull();
+  });
+
+  it("rejects protocol-relative paths on load even if smuggled in", () => {
+    storage.setItem("citadel:lastRoute", "//evil.example/x");
+    expect(loadLastRoute(storage)).toBeNull();
+  });
+
+  it("rejects backslash-prefixed paths", () => {
+    saveLastRoute("/\\evil.example/x", storage);
     expect(loadLastRoute(storage)).toBeNull();
   });
 

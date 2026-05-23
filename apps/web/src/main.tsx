@@ -1,5 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Link, Outlet, RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
 import { Cockpit } from "./cockpit.js";
@@ -112,9 +113,12 @@ function Shell() {
 
 function NotFoundView() {
   // A stale persisted route (e.g. a removed page) would otherwise loop the user
-  // back into 404 on every reload. Wipe the saved value here so the next boot
-  // falls through to the default cockpit view.
-  clearLastRoute();
+  // back into 404 on every reload. Clear the saved value once on mount so the
+  // next boot falls through to the default cockpit view. Done in an effect (not
+  // during render) so we don't fire side effects from a render function.
+  useEffect(() => {
+    clearLastRoute();
+  }, []);
   return (
     <div className="empty">
       <p>That page is no longer available.</p>

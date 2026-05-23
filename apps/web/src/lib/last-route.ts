@@ -23,7 +23,7 @@ export function loadLastRoute(storage: StorageLike | null = getStorage()): strin
   if (!storage) return null;
   try {
     const raw = storage.getItem(STORAGE_KEY);
-    if (!raw || !raw.startsWith("/")) return null;
+    if (!raw || !isSafeAbsolutePath(raw)) return null;
     return raw;
   } catch {
     return null;
@@ -32,7 +32,7 @@ export function loadLastRoute(storage: StorageLike | null = getStorage()): strin
 
 export function saveLastRoute(href: string, storage: StorageLike | null = getStorage()): void {
   if (!storage) return;
-  if (!href.startsWith("/")) return;
+  if (!isSafeAbsolutePath(href)) return;
   if (isExcluded(href)) return;
   try {
     storage.setItem(STORAGE_KEY, href);
@@ -61,4 +61,14 @@ export function isBareRootLanding(loc: Pick<Location, "pathname" | "search" | "h
 function isExcluded(href: string): boolean {
   const path = href.split("?", 1)[0]?.split("#", 1)[0] ?? href;
   return EXCLUDED_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
+// Only accept same-origin absolute paths. Rejects protocol-relative URLs like
+// "//evil.com/x" and backslash variants that some browsers normalize to "/" —
+// a value passed to history.replaceState should never be able to spoof origin.
+function isSafeAbsolutePath(value: string): boolean {
+  if (value.length === 0) return false;
+  if (value[0] !== "/") return false;
+  if (value[1] === "/" || value[1] === "\\") return false;
+  return true;
 }
