@@ -7,6 +7,7 @@ import type {
   CreateWorkspaceInput,
   HookAction,
   HookOutput,
+  LaunchAgentInput,
   Operation,
   Repo,
   Workspace,
@@ -16,7 +17,9 @@ import type { SqliteStore } from "@citadel/db";
 import { parseHookOutput, runCommandHook } from "@citadel/hooks";
 import { ensureTmuxSession, killTmuxSession, submitPrompt } from "@citadel/terminal";
 import * as agentMessages from "./agent-messages.js";
+import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
+export type { LaunchAgentResult } from "./launch-agent.js";
 export {
   ScheduledAgentRunner,
   parseCronExpression,
@@ -285,6 +288,22 @@ export class OperationService {
     if (repo) await this.runNotificationHooks("agent.started", repo, workspace, null, { repo, workspace, session });
     return session;
   }
+
+  launchAgent = (
+    input: LaunchAgentInput,
+    runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
+  ) =>
+    launchAgentImpl(
+      {
+        store: this.store,
+        createWorkspace: (workspaceInput) => this.createWorkspace(workspaceInput),
+        createAgentSession: (sessionInput, sessionRuntime) => this.createAgentSession(sessionInput, sessionRuntime),
+        activity: ({ type, source, message, repoId, workspaceId, operationId }) =>
+          this.activity(type, source, message, repoId, workspaceId, operationId),
+      },
+      input,
+      runtime,
+    );
 
   // See ./agent-messages.ts for the implementations.
   readAgentTranscript = (input: { sessionId: string; lines?: number; maxChars?: number }) =>

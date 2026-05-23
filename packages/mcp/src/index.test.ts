@@ -9,9 +9,14 @@ describe("mcp helpers", () => {
     expect(status.enabled).toBe(true);
     expect(status.tools).toContain("inspect_status");
     expect(status.tools).toContain("start_agent_session");
+    expect(status.tools).toContain("launch_agent");
     expect(status.tools).toContain("list_workspace_links");
     expect(status.tools).toContain("read_agent_output");
     expect(status.tools).toContain("send_agent_message");
+    const launch = mcpToolDefinitions().find((tool) => tool.name === "launch_agent");
+    expect(launch).toBeDefined();
+    expect(launch?.destructive).toBe(false);
+    expect(launch?.inputSchema).toMatchObject({ required: ["prompt"] });
     expect(status.resources).toContain("citadel://activity");
     expect(mcpToolDefinitions().find((tool) => tool.name === "archive_workspace")).toMatchObject({
       destructive: false,
