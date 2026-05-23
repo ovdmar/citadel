@@ -1,15 +1,30 @@
 import type { AgentSession, Operation, Repo, Workspace, WorkspaceCockpitSummary } from "@citadel/contracts";
 import { Link, useLocation } from "@tanstack/react-router";
-import { ClipboardList, FolderPlus, LayoutDashboard, PanelLeftClose, Plus, Settings2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import {
+  ChevronRight,
+  ClipboardList,
+  FolderPlus,
+  LayoutDashboard,
+  PanelLeftClose,
+  Plus,
+  Settings2,
+} from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { readinessForWorkspace, readinessSection } from "./cockpit-readiness.js";
 import { formatLabel } from "./labels.js";
 import { AddRepoModal, CreateWorkspaceModal, GroupByOverlay, type GroupKey } from "./modals.js";
 import { WorkspaceCard } from "./workspace-card.js";
 
 const GROUP_STORAGE = "citadel.navigator-group";
+const COLLAPSE_STORAGE = "citadel.navigator-group-collapsed";
 
 const SECTION_ORDER = ["blocked", "needs-review", "working", "dirty", "idle", "done"];
+
+type WorkspaceEntry = { workspace: Workspace; sessions: AgentSession[] };
+
+type GroupNode =
+  | { kind: "group"; id: string; path: string; label: string; count: number; children: GroupNode[] }
+  | { kind: "leaf"; id: string; path: string; label: string; count: number; workspaces: WorkspaceEntry[] };
 
 export function Navigator(props: {
   repos: Repo[];
@@ -45,12 +60,55 @@ export function Navigator(props: {
     window.localStorage.setItem(GROUP_STORAGE, JSON.stringify(grouping));
   }, [grouping]);
 
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      const raw = window.localStorage.getItem(COLLAPSE_STORAGE);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as Record<string, boolean>;
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(COLLAPSE_STORAGE, JSON.stringify(collapsed));
+  }, [collapsed]);
+  const toggleCollapsed = useCallback((nodePath: string) => {
+    setCollapsed((prev) => {
+      const next = { ...prev };
+      if (next[nodePath]) delete next[nodePath];
+      else next[nodePath] = true;
+      return next;
+    });
+  }, []);
+
   const [showGroupBy, setShowGroupBy] = useState(false);
   const [showAddRepo, setShowAddRepo] = useState(false);
 
-  const grouped = useMemo(
-    () => buildGroups(props.workspaces, props.repos, props.sessions, props.operations, props.activeSummary, grouping),
+  const tree = useMemo(
+    () =>
+      buildGroupTree(props.workspaces, props.repos, props.sessions, props.operations, props.activeSummary, grouping),
     [props.workspaces, props.repos, props.sessions, props.operations, props.activeSummary, grouping],
+  );
+
+  const renderWorkspace = useCallback(
+    ({ workspace, sessions }: WorkspaceEntry) => (
+      <WorkspaceCard
+        key={workspace.id}
+        workspace={workspace}
+        sessions={sessions}
+        pullRequest={
+          workspace.id === props.activeSummary?.workspaceId
+            ? (props.activeSummary.versionControl.pullRequest ?? null)
+            : null
+        }
+        active={workspace.id === props.activeWorkspaceId}
+        onSelect={() => props.onPickWorkspace(workspace)}
+      />
+    ),
+    [props.activeSummary, props.activeWorkspaceId, props.onPickWorkspace],
   );
 
   return (
@@ -109,29 +167,27 @@ export function Navigator(props: {
           </div>
         </div>
         <div className="nav-groups">
-          {grouped.map((section) => (
-            <div key={section.id} className="nav-group">
-              {section.label ? <div className="nav-group-header">{section.label}</div> : null}
-              {section.workspaces.length ? (
-                section.workspaces.map(({ workspace, sessions }) => (
-                  <WorkspaceCard
-                    key={workspace.id}
-                    workspace={workspace}
-                    sessions={sessions}
-                    pullRequest={
-                      workspace.id === props.activeSummary?.workspaceId
-                        ? (props.activeSummary.versionControl.pullRequest ?? null)
-                        : null
-                    }
-                    active={workspace.id === props.activeWorkspaceId}
-                    onSelect={() => props.onPickWorkspace(workspace)}
-                  />
-                ))
-              ) : (
-                <div className="nav-group-empty">Empty group</div>
+          {grouping.length === 0 ? (
+            <div className="nav-group nav-group-flat">
+              {props.workspaces.map((workspace) =>
+                renderWorkspace({
+                  workspace,
+                  sessions: props.sessions.filter((session) => session.workspaceId === workspace.id),
+                }),
               )}
             </div>
-          ))}
+          ) : (
+            tree.map((node) => (
+              <GroupNodeView
+                key={node.id}
+                node={node}
+                depth={0}
+                collapsed={collapsed}
+                onToggle={toggleCollapsed}
+                renderWorkspace={renderWorkspace}
+              />
+            ))
+          )}
           {!props.workspaces.length ? (
             <div className="empty compact">No workspaces yet. Use the plus button above to create one.</div>
           ) : null}
@@ -155,33 +211,64 @@ export function Navigator(props: {
   );
 }
 
-type GroupedSection = {
-  id: string;
-  label: string;
-  workspaces: Array<{ workspace: Workspace; sessions: AgentSession[] }>;
-};
+function GroupNodeView(props: {
+  node: GroupNode;
+  depth: number;
+  collapsed: Record<string, boolean>;
+  onToggle: (path: string) => void;
+  renderWorkspace: (entry: WorkspaceEntry) => React.ReactNode;
+}) {
+  const { node, depth, collapsed, onToggle, renderWorkspace } = props;
+  const isCollapsed = collapsed[node.path] === true;
+  const headerId = `nav-group-${node.path.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+  return (
+    <div className={`nav-group nav-group-depth-${depth}`}>
+      <button
+        type="button"
+        className="nav-group-header"
+        aria-expanded={!isCollapsed}
+        aria-controls={`${headerId}-body`}
+        onClick={() => onToggle(node.path)}
+      >
+        <ChevronRight size={11} className={`nav-group-chevron ${isCollapsed ? "" : "open"}`} aria-hidden="true" />
+        <span className="nav-group-label">{node.label}</span>
+        <span className="nav-group-count" aria-label={`${node.count} workspaces`}>
+          {node.count}
+        </span>
+      </button>
+      {isCollapsed ? null : (
+        <div id={`${headerId}-body`} className="nav-group-body">
+          {node.kind === "group"
+            ? node.children.map((child) => (
+                <GroupNodeView
+                  key={child.id}
+                  node={child}
+                  depth={depth + 1}
+                  collapsed={collapsed}
+                  onToggle={onToggle}
+                  renderWorkspace={renderWorkspace}
+                />
+              ))
+            : node.workspaces.map((entry) => renderWorkspace(entry))}
+        </div>
+      )}
+    </div>
+  );
+}
 
-function buildGroups(
+type EnrichedWorkspace = WorkspaceEntry & { repo: Repo | undefined; section: string };
+
+function buildGroupTree(
   workspaces: Workspace[],
   repos: Repo[],
   sessions: AgentSession[],
   operations: Operation[],
   activeSummary: WorkspaceCockpitSummary | undefined,
   grouping: GroupKey[],
-): GroupedSection[] {
-  if (!grouping.length) {
-    return [
-      {
-        id: "all",
-        label: "",
-        workspaces: workspaces.map((workspace) => ({
-          workspace,
-          sessions: sessions.filter((session) => session.workspaceId === workspace.id),
-        })),
-      },
-    ];
-  }
-  const enriched = workspaces.map((workspace) => {
+): GroupNode[] {
+  if (!grouping.length) return [];
+
+  const enriched: EnrichedWorkspace[] = workspaces.map((workspace) => {
     const workspaceSessions = sessions.filter((session) => session.workspaceId === workspace.id);
     const workspaceOps = operations.filter((operation) => operation.workspaceId === workspace.id);
     const summary = workspace.id === activeSummary?.workspaceId ? activeSummary : undefined;
@@ -195,46 +282,61 @@ function buildGroups(
     return { workspace, sessions: workspaceSessions, repo, section };
   });
 
-  const compose = (entries: typeof enriched, levels: GroupKey[]): GroupedSection[] => {
-    if (!levels.length) {
-      return [
-        { id: "leaf", label: "", workspaces: entries.map(({ workspace, sessions }) => ({ workspace, sessions })) },
-      ];
-    }
-    const [head, ...rest] = levels;
-    const buckets = new Map<string, { label: string; items: typeof enriched }>();
-    for (const entry of entries) {
-      const keyValue = head === "repo" ? (entry.repo?.name ?? "Unknown repo") : formatLabel(entry.section ?? "idle");
-      const bucket = buckets.get(keyValue) ?? { label: keyValue, items: [] };
-      bucket.items.push(entry);
-      buckets.set(keyValue, bucket);
-    }
-    const sortedKeys = Array.from(buckets.keys()).sort((a, b) => {
-      if (head === "status") {
+  const bucketKey = (entry: EnrichedWorkspace, field: GroupKey): string =>
+    field === "repo" ? (entry.repo?.name ?? "Unknown repo") : formatLabel(entry.section ?? "idle");
+
+  const sortKeys = (keys: string[], field: GroupKey): string[] =>
+    keys.sort((a, b) => {
+      if (field === "status") {
         const ai = SECTION_ORDER.indexOf(a.toLowerCase());
         const bi = SECTION_ORDER.indexOf(b.toLowerCase());
         return (ai < 0 ? SECTION_ORDER.length : ai) - (bi < 0 ? SECTION_ORDER.length : bi);
       }
       return a.localeCompare(b);
     });
-    const result: GroupedSection[] = [];
-    for (const key of sortedKeys) {
-      const bucket = buckets.get(key);
-      if (!bucket) continue;
-      const childSections = compose(bucket.items, rest);
+
+  const build = (entries: EnrichedWorkspace[], levels: GroupKey[], parentPath: string): GroupNode[] => {
+    if (!entries.length || !levels.length) return [];
+    const head = levels[0] as GroupKey;
+    const rest = levels.slice(1);
+    const buckets = new Map<string, EnrichedWorkspace[]>();
+    for (const entry of entries) {
+      const key = bucketKey(entry, head);
+      const list = buckets.get(key) ?? [];
+      list.push(entry);
+      buckets.set(key, list);
+    }
+    const ordered = sortKeys(Array.from(buckets.keys()), head);
+    const nodes: GroupNode[] = [];
+    for (const key of ordered) {
+      const items = buckets.get(key);
+      if (!items?.length) continue;
+      const nodePath = parentPath ? `${parentPath}/${head}=${key}` : `${head}=${key}`;
+      const nodeId = nodePath;
       if (rest.length === 0) {
-        result.push({ id: key, label: bucket.label, workspaces: childSections[0]?.workspaces ?? [] });
+        nodes.push({
+          kind: "leaf",
+          id: nodeId,
+          path: nodePath,
+          label: key,
+          count: items.length,
+          workspaces: items.map(({ workspace, sessions: ws }) => ({ workspace, sessions: ws })),
+        });
       } else {
-        for (const child of childSections) {
-          result.push({
-            id: `${key}::${child.id}`,
-            label: child.label ? `${bucket.label} · ${child.label}` : bucket.label,
-            workspaces: child.workspaces,
-          });
-        }
+        const children = build(items, rest, nodePath);
+        if (!children.length) continue;
+        nodes.push({
+          kind: "group",
+          id: nodeId,
+          path: nodePath,
+          label: key,
+          count: items.length,
+          children,
+        });
       }
     }
-    return result;
+    return nodes;
   };
-  return compose(enriched, grouping);
+
+  return build(enriched, grouping, "");
 }
