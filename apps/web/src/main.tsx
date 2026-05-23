@@ -1,8 +1,9 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Outlet, RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import { Link, Outlet, RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
 import { Cockpit } from "./cockpit.js";
+import { clearLastRoute, isBareRootLanding, loadLastRoute, saveLastRoute } from "./lib/last-route.js";
 import { DashboardView } from "./routes/dashboard.js";
 import { HistoryView } from "./routes/history.js";
 import { OnboardingView } from "./routes/onboarding.js";
@@ -65,6 +66,16 @@ const historyRoute = createRoute({
   component: HistoryView,
 });
 
+// Restore the last visited route BEFORE the router boots so it picks the
+// correct initial location off the URL bar. Only fire on a bare-root landing —
+// any explicit deep link (non-root path, or root with query/hash) wins.
+if (typeof window !== "undefined" && isBareRootLanding(window.location)) {
+  const saved = loadLastRoute();
+  if (saved && saved !== "/") {
+    window.history.replaceState(null, "", saved);
+  }
+}
+
 const router = createRouter({
   routeTree: rootRoute.addChildren([
     indexRoute,
@@ -75,6 +86,14 @@ const router = createRouter({
     dashboardRoute,
     historyRoute,
   ]),
+  defaultNotFoundComponent: NotFoundView,
+});
+
+// Persist every resolved navigation. onResolved (vs onBeforeNavigate) ensures
+// only routes the user actually reached enter the store — aborted loads and
+// in-flight navigations are skipped, so we never restore into a broken state.
+router.subscribe("onResolved", (event) => {
+  saveLastRoute(event.toLocation.href);
 });
 
 declare module "@tanstack/react-router" {
@@ -87,6 +106,21 @@ function Shell() {
   return (
     <div className="app-root">
       <Outlet />
+    </div>
+  );
+}
+
+function NotFoundView() {
+  // A stale persisted route (e.g. a removed page) would otherwise loop the user
+  // back into 404 on every reload. Wipe the saved value here so the next boot
+  // falls through to the default cockpit view.
+  clearLastRoute();
+  return (
+    <div className="empty">
+      <p>That page is no longer available.</p>
+      <Link className="settings-link" to="/">
+        Back to cockpit
+      </Link>
     </div>
   );
 }
