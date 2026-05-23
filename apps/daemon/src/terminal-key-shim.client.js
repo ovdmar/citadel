@@ -241,6 +241,48 @@
   // we read it from there and write directly to the clipboard. We still
   // check window.getSelection() as a fallback for the (rare) DOM-renderer
   // xterm build and for selections that span surrounding chrome.
+  // xterm clears its selection on every re-render. TUIs that redraw the
+  // screen frequently — Claude Code's ink/React TUI is the worst offender —
+  // therefore lose the selection between mouseup and the moment the user
+  // presses Cmd+C, so term.getSelection() returns "". We mirror the live
+  // selection into lastTermSelection on every onSelectionChange and fall
+  // back to it (capped at 5 seconds) when the live read is empty.
+  let lastTermSelection = "";
+  let lastTermSelectionAt = 0;
+  const watchTermSelection = () => {
+    const term = window.term;
+    if (!term || typeof term.onSelectionChange !== "function") return false;
+    try {
+      term.onSelectionChange(() => {
+        try {
+          const s = typeof term.getSelection === "function" ? term.getSelection() : "";
+          if (s) {
+            lastTermSelection = s;
+            lastTermSelectionAt = Date.now();
+          }
+        } catch (_err) {
+          /* ignore */
+        }
+      });
+      // While we're here, force Option-drag on Mac to bypass any inner
+      // mouse-event capture so a drag always creates an xterm selection,
+      // even when the TUI has mouse mode enabled.
+      try {
+        if (term.options) term.options.macOptionClickForcesSelection = true;
+      } catch (_err) {
+        /* ignore */
+      }
+      return true;
+    } catch (_err) {
+      return false;
+    }
+  };
+  let watchTries = 0;
+  const watchTimer = setInterval(() => {
+    watchTries += 1;
+    if (watchTermSelection() || watchTries > 40) clearInterval(watchTimer);
+  }, 250);
+
   function copySelection() {
     let text = "";
     const term = window.term;
@@ -250,6 +292,9 @@
       } catch (_err) {
         text = "";
       }
+    }
+    if (!text && lastTermSelection && Date.now() - lastTermSelectionAt < 5000) {
+      text = lastTermSelection;
     }
     if (!text) {
       try {
