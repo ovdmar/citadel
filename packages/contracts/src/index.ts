@@ -109,6 +109,8 @@ export const CheckSummarySchema = z.object({
   status: z.string(),
   conclusion: z.string().nullable(),
   url: z.string().nullable(),
+  startedAt: z.string().nullable().default(null),
+  completedAt: z.string().nullable().default(null),
 });
 
 export const CiRunSummarySchema = z.object({

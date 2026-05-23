@@ -1,7 +1,7 @@
 import type { AgentSession, Repo, Workspace, WorkspaceCockpitSummary, WorkspaceDiff } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { GitPullRequest, Hash, PanelRightClose, Slack } from "lucide-react";
-import { useState } from "react";
+import { Check, GitPullRequest, Hash, Loader2, PanelRightClose, Slack, X } from "lucide-react";
+import { useEffect, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
 import { DeployedAppsPanel } from "./deployed-apps.js";
@@ -150,16 +150,7 @@ function StatsTab(props: {
           <div className="check-list">
             {checks.length ? (
               checks.map((check) => (
-                <a
-                  key={`${check.name}-${check.conclusion ?? check.status}`}
-                  className="check-row"
-                  href={check.url ?? undefined}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <strong>{check.name}</strong>
-                  <span className={`tone-${checkTone(check)}`}>{formatLabel(check.conclusion ?? check.status)}</span>
-                </a>
+                <CheckRow key={`${check.name}-${check.conclusion ?? check.status}`} check={check} />
               ))
             ) : (
               <div className="empty compact">PR exists but no checks reported yet.</div>
@@ -351,6 +342,94 @@ function checkTone(check: { conclusion: string | null; status: string }) {
   if (["failure", "cancelled", "timed_out", "action_required"].includes(conclusion)) return "failure";
   if (conclusion === "success") return "success";
   return "pending";
+}
+
+function CheckRow(props: {
+  check: {
+    name: string;
+    status: string;
+    conclusion: string | null;
+    url: string | null;
+    startedAt: string | null;
+    completedAt: string | null;
+  };
+}) {
+  const { check } = props;
+  const tone = checkTone(check);
+  const isRunning = isCheckRunning(check);
+  const now = useNow(isRunning ? 1000 : null);
+  const duration = formatCheckDuration(check, isRunning, now);
+  const label = formatLabel(check.conclusion ?? check.status);
+  const iconTone = isRunning ? "pending" : tone === "failure" ? "failure" : "success";
+  return (
+    <a
+      className={`check-row ${tone}`}
+      href={check.url ?? undefined}
+      target="_blank"
+      rel="noreferrer"
+      aria-label={`${check.name} — ${label}${duration ? ` — ${duration}` : ""}`}
+      title={`${check.name} — ${label}`}
+    >
+      <span className={`check-icon tone-${iconTone}`} aria-hidden>
+        {isRunning ? (
+          <Loader2 size={14} className="spin" />
+        ) : tone === "failure" ? (
+          <X size={14} />
+        ) : (
+          <Check size={14} />
+        )}
+      </span>
+      <span className="check-name" title={check.name}>
+        {check.name}
+      </span>
+      <span className="check-duration command-result-meta">{duration || "—"}</span>
+    </a>
+  );
+}
+
+function isCheckRunning(check: { status: string; conclusion: string | null }) {
+  if (check.conclusion) return false;
+  const status = check.status.toLowerCase();
+  return status !== "completed" && status !== "success" && status !== "failure";
+}
+
+function useNow(intervalMs: number | null) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (intervalMs == null) return;
+    const id = window.setInterval(() => setNow(Date.now()), intervalMs);
+    return () => window.clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
+function formatCheckDuration(
+  check: { startedAt: string | null; completedAt: string | null },
+  isRunning: boolean,
+  nowMs: number,
+) {
+  const started = parseTime(check.startedAt);
+  if (started == null) return "";
+  const finished = isRunning ? nowMs : (parseTime(check.completedAt) ?? nowMs);
+  const ms = Math.max(0, finished - started);
+  return formatDurationMs(ms);
+}
+
+function parseTime(value: string | null): number | null {
+  if (!value) return null;
+  const t = Date.parse(value);
+  return Number.isFinite(t) ? t : null;
+}
+
+function formatDurationMs(ms: number) {
+  const totalSeconds = Math.floor(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return seconds ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remMin = minutes % 60;
+  return remMin ? `${hours}h ${remMin}m` : `${hours}h`;
 }
 
 function countLines(diff: string, prefix: "+" | "-") {

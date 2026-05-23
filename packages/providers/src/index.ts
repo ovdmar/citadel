@@ -413,12 +413,14 @@ async function currentPullRequest(rootPath: string) {
   }
 }
 
-function normalizeCheck(input: Record<string, unknown>): CheckSummary {
+export function normalizeCheck(input: Record<string, unknown>): CheckSummary {
   return {
     name: String(input.name ?? input.context ?? "check"),
     status: String(input.status ?? input.state ?? "unknown"),
     conclusion: typeof input.conclusion === "string" ? input.conclusion : null,
     url: typeof input.detailsUrl === "string" ? input.detailsUrl : typeof input.url === "string" ? input.url : null,
+    startedAt: typeof input.startedAt === "string" ? input.startedAt : null,
+    completedAt: typeof input.completedAt === "string" ? input.completedAt : null,
   };
 }
 
