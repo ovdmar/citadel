@@ -99,7 +99,7 @@ export function Navigator(props: {
               type="button"
               onClick={props.onOpenCreateWorkspace}
               aria-label="Create workspace"
-              title="New workspace (Cmd+N)"
+              title="New workspace (press c)"
             >
               <Plus size={12} />
             </button>

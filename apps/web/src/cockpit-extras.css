@@ -143,22 +143,27 @@
   text-align: left;
 }
 
+/* X drop button sits to the right of the status icons inside the card. We keep
+ * it absolutely positioned at the card's right edge and reserve room with
+ * padding-right on hover so the status icons shift left rather than being
+ * obscured (preserves their tooltips). */
 .workspace-card-drop {
   display: none;
   position: absolute;
-  right: 6px;
+  right: 4px;
   top: 50%;
   transform: translateY(-50%);
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   padding: 0;
   border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
   border-radius: 999px;
   background: Canvas;
   color: var(--muted);
   cursor: pointer;
+  z-index: 1;
 }
 
 .workspace-card-drop:hover,
@@ -174,19 +179,20 @@
   display: inline-flex;
 }
 
-.workspace-card-wrap:hover .workspace-card-right,
-.workspace-card-wrap:focus-within .workspace-card-right {
-  visibility: hidden;
+.workspace-card-wrap:hover .workspace-card,
+.workspace-card-wrap:focus-within .workspace-card {
+  padding-right: 28px;
 }
 
 .drop-workspace-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 20;
+  z-index: 30;
   display: grid;
-  place-items: start center;
-  padding-top: 14vh;
-  background: rgba(16, 19, 24, 0.44);
+  place-items: center;
+  padding: 20px;
+  background: rgba(7, 16, 31, 0.55);
+  backdrop-filter: blur(4px);
 }
 
 .drop-workspace-dialog {
@@ -272,6 +278,12 @@
 
 .workspace-card-agent.failed {
   color: var(--color-danger);
+}
+
+.workspace-card-agent.root {
+  color: var(--color-action);
+  background: color-mix(in srgb, var(--color-action) 14%, transparent);
+  border-radius: 4px;
 }
 
 .workspace-card-main {

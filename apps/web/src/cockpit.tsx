@@ -66,19 +66,26 @@ export function Cockpit() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const inEditable =
+        target?.isContentEditable ||
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.tagName === "SELECT";
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setCommandOpen((open) => !open);
-      } else if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
-        // Skip when the user is in a text-input context: Cmd+N would otherwise
-        // hijack ordinary typing in form fields and textareas.
-        const target = event.target as HTMLElement | null;
-        const inEditable =
-          target?.isContentEditable ||
-          target?.tagName === "INPUT" ||
-          target?.tagName === "TEXTAREA" ||
-          target?.tagName === "SELECT";
-        if (inEditable) return;
+      } else if (
+        // GitHub-style: plain `c` ("create") opens the new-workspace modal.
+        // Cmd+N is reserved by browsers (opens a new browser window), so we
+        // don't bind it. Skipped while editing so it doesn't hijack typing.
+        !inEditable &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === "c"
+      ) {
         event.preventDefault();
         setCreateWorkspaceOpen(true);
       } else if (event.key === "Escape") {

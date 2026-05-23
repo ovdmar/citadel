@@ -20,12 +20,33 @@ export function Stage(props: {
   const sortedSessions = [...props.sessions].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const tabs: StageTab[] = sortedSessions.map((session) => ({ session, label: session.displayName }));
 
-  const activeSession = tabs.find((tab) => tab.session.id === props.activeSessionId) ?? tabs[0] ?? null;
+  // If the caller just selected a session that hasn't shown up in props.sessions
+  // yet (mutation responded, query refetch in flight), keep that ID even though
+  // it's not in `tabs` — otherwise we'd snap focus back to tabs[0] and clobber
+  // the user's selection (e.g. right after starting a new agent). After a short
+  // grace period (e.g. persisted ID from localStorage that no longer exists),
+  // fall back to the first tab.
+  const pendingActive = Boolean(props.activeSessionId && !tabs.some((tab) => tab.session.id === props.activeSessionId));
+  const [graceExpired, setGraceExpired] = useState(false);
   useEffect(() => {
+    if (!pendingActive) {
+      if (graceExpired) setGraceExpired(false);
+      return;
+    }
+    setGraceExpired(false);
+    const timeout = window.setTimeout(() => setGraceExpired(true), 4000);
+    return () => window.clearTimeout(timeout);
+  }, [pendingActive, graceExpired]);
+  const keepPending = pendingActive && !graceExpired;
+  const activeSession = keepPending
+    ? null
+    : (tabs.find((tab) => tab.session.id === props.activeSessionId) ?? tabs[0] ?? null);
+  useEffect(() => {
+    if (keepPending) return;
     if (activeSession && activeSession.session.id !== props.activeSessionId) {
       props.onActiveSession(activeSession.session.id);
     }
-  }, [activeSession, props]);
+  }, [activeSession, keepPending, props]);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -202,6 +223,8 @@ export function Stage(props: {
               <TerminalPane session={tab.session} />
             </div>
           ))
+        ) : keepPending ? (
+          <div className="empty">Starting session…</div>
         ) : (
           <div className="empty">No session yet. Click the plus to start a terminal or agent.</div>
         )}

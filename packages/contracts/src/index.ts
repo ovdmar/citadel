@@ -9,6 +9,7 @@ export const IdSchema = z
 export const ProviderStatusSchema = z.enum(["healthy", "degraded", "unavailable", "unknown"]);
 export const WorkspaceLifecycleSchema = z.enum(["creating", "ready", "failed", "removing", "archived", "removed"]);
 export const WorkspaceSourceSchema = z.enum(["scratch", "pr", "issue", "imported"]);
+export const WorkspaceKindSchema = z.enum(["worktree", "root"]);
 export const AgentSessionStatusSchema = z.enum([
   "starting",
   "running",
@@ -44,6 +45,7 @@ export const WorkspaceSchema = z.object({
   branch: z.string().min(1),
   baseBranch: z.string().min(1),
   source: WorkspaceSourceSchema,
+  kind: WorkspaceKindSchema.default("worktree"),
   prUrl: z.string().nullable().default(null),
   issueKey: z.string().nullable().default(null),
   issueTitle: z.string().nullable().default(null),

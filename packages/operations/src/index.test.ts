@@ -60,14 +60,15 @@ describe("OperationService", () => {
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "Archive Task", source: "scratch" });
-    const workspace = store.listWorkspaces()[0];
+    const workspace = store.listWorkspaces().find((w) => w.id === created.workspaceId);
     fs.writeFileSync(path.join(workspace?.path ?? "", "dirty.txt"), "dirty\n");
 
     const archived = await service.removeWorkspace({ workspaceId: created.workspaceId, archiveOnly: true });
 
     expect(archived).toMatchObject({ removed: false, archived: true, dirty: true });
     expect(fs.existsSync(workspace?.path ?? "")).toBe(true);
-    expect(store.listWorkspaces()).toHaveLength(0);
+    // The auto-created root workspace stays; only the worktree workspace is archived.
+    expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
 
   it("removes repository tracking while preserving worktrees by default", async () => {
@@ -80,12 +81,13 @@ describe("OperationService", () => {
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
-    await service.createWorkspace({ repoId: repo.id, name: "Repo Remove", source: "scratch" });
-    const workspace = store.listWorkspaces()[0];
+    const created = await service.createWorkspace({ repoId: repo.id, name: "Repo Remove", source: "scratch" });
+    const workspace = store.listWorkspaces().find((w) => w.id === created.workspaceId);
 
     const removed = await service.removeRepo({ repoId: repo.id });
 
-    expect(removed).toMatchObject({ removed: true, archivedWorkspaces: 1, cleanupWorktrees: false });
+    // archivedWorkspaces includes both the auto-created root and the explicit worktree.
+    expect(removed).toMatchObject({ removed: true, archivedWorkspaces: 2, cleanupWorktrees: false });
     expect(store.listRepos()).toEqual([]);
     expect(store.listWorkspaces()).toEqual([]);
     expect(fs.existsSync(workspace?.path ?? "")).toBe(true);
@@ -183,12 +185,12 @@ describe("OperationService", () => {
     const blocked = await service.removeWorkspace({ workspaceId: created.workspaceId });
     expect(blocked).toMatchObject({ removed: false, archived: false, dirty: false });
     expect(fs.existsSync(workspace?.path ?? "")).toBe(true);
-    expect(store.listWorkspaces()).toHaveLength(1);
+    expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(1);
 
     const forced = await service.removeWorkspace({ workspaceId: created.workspaceId, force: true });
     expect(forced).toMatchObject({ removed: true, archived: false, dirty: false });
     expect(fs.existsSync(workspace?.path ?? "")).toBe(false);
-    expect(store.listWorkspaces()).toHaveLength(0);
+    expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
 
   it("records notification hook failures without blocking workspace readiness", async () => {

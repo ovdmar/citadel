@@ -96,7 +96,8 @@
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgba(7, 16, 31, 0.45);
+  background: rgba(7, 16, 31, 0.55);
+  backdrop-filter: blur(4px);
 }
 
 .modal-frame {
@@ -658,40 +659,4 @@
 
 .repo-inspect.warn {
   border-color: var(--color-danger);
-}
-
-.operations-page .operations-list {
-  display: grid;
-  gap: 6px;
-}
-
-.operation-row {
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 8px 10px;
-}
-
-.operation-row.status-failed {
-  border-color: var(--color-danger);
-}
-
-.operation-row summary {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.operation-logs {
-  max-height: 240px;
-  overflow: auto;
-  background: var(--surface-strong);
-  padding: 8px;
-  border-radius: 4px;
-  font-size: 11.5px;
-}
-
-.operation-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
 }
