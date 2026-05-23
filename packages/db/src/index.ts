@@ -486,6 +486,49 @@ export class SqliteStore {
     this.database.prepare("DELETE FROM agent_session_prompts WHERE id = ?").run(id);
   }
 
+  /**
+   * Batched companion to `firstAgentPrompt` + `countAgentPrompts`. Used by
+   * `list_agent_sessions` to avoid 2N round-trips when summarizing every
+   * session's prompt history. Returns one entry per requested sessionId
+   * (with empty defaults when there are no rows).
+   */
+  getAgentPromptSummaries(sessionIds: string[]): Map<string, { initialPrompt: string | null; messageCount: number }> {
+    const out = new Map<string, { initialPrompt: string | null; messageCount: number }>();
+    for (const id of sessionIds) out.set(id, { initialPrompt: null, messageCount: 0 });
+    if (!sessionIds.length) return out;
+    const placeholders = sessionIds.map(() => "?").join(",");
+    const counts = this.database
+      .prepare(
+        `SELECT session_id AS sessionId, COUNT(*) AS c
+         FROM agent_session_prompts
+         WHERE session_id IN (${placeholders})
+         GROUP BY session_id`,
+      )
+      .all(...sessionIds) as Array<{ sessionId: string; c: number }>;
+    for (const row of counts) {
+      const entry = out.get(row.sessionId);
+      if (entry) entry.messageCount = Number(row.c);
+    }
+    const firsts = this.database
+      .prepare(
+        `SELECT session_id AS sessionId, text
+         FROM agent_session_prompts p
+         WHERE session_id IN (${placeholders})
+           AND id = (
+             SELECT id FROM agent_session_prompts
+             WHERE session_id = p.session_id
+             ORDER BY sent_at ASC, id ASC
+             LIMIT 1
+           )`,
+      )
+      .all(...sessionIds) as Array<{ sessionId: string; text: string }>;
+    for (const row of firsts) {
+      const entry = out.get(row.sessionId);
+      if (entry) entry.initialPrompt = row.text;
+    }
+    return out;
+  }
+
   firstAgentPrompt(sessionId: string): AgentPrompt | null {
     const row = this.database
       .prepare("SELECT * FROM agent_session_prompts WHERE session_id = ? ORDER BY sent_at ASC, id ASC LIMIT 1")

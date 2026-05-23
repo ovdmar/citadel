@@ -89,6 +89,10 @@ function refreshFromTranscript(
     if (entry.externalId) existingByExternal.set(entry.externalId, entry);
     else dbCaptured.push(entry);
   }
+  // Early-out when every transcript turn is already ingested. Avoids the
+  // splice/insert work on hot read paths where nothing new has been typed
+  // since the last call.
+  if (prompts.every((prompt) => existingByExternal.has(prompt.uuid))) return;
   for (const prompt of prompts) {
     if (existingByExternal.has(prompt.uuid)) continue;
     // Prefer the transcript record over an earlier DB-captured duplicate

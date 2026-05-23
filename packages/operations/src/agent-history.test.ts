@@ -12,6 +12,11 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+function restoreHome(original: string | undefined) {
+  if (original === undefined) Reflect.deleteProperty(process.env, "HOME");
+  else process.env.HOME = original;
+}
+
 function bootstrap() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-history-"));
   dirs.push(dir);
@@ -107,7 +112,7 @@ describe("readAgentHistory", () => {
       ].join("\n"),
     );
 
-    const originalHome = process.env.HOME ?? "";
+    const originalHome = process.env.HOME;
     process.env.HOME = home;
     try {
       const result = readAgentHistory(store, { sessionId: "sess_h" });
@@ -122,7 +127,7 @@ describe("readAgentHistory", () => {
       expect(initial?.externalId).toBe("claude-initial");
       expect(result.total).toBe(2);
     } finally {
-      process.env.HOME = originalHome;
+      restoreHome(originalHome);
     }
   });
 
@@ -146,7 +151,7 @@ describe("readAgentHistory", () => {
       sentAt: "2026-05-23T10:10:00.000Z",
       externalId: null,
     });
-    const originalHome = process.env.HOME ?? "";
+    const originalHome = process.env.HOME;
     process.env.HOME = "/nonexistent-home";
     try {
       const result = readAgentHistory(store, { sessionId: "sess_h" });
@@ -154,7 +159,7 @@ describe("readAgentHistory", () => {
       expect(result.prompts.map((entry) => entry.text)).toEqual(["kick off", "second steer"]);
       expect(result.total).toBe(2);
     } finally {
-      process.env.HOME = originalHome;
+      restoreHome(originalHome);
     }
   });
 

@@ -142,20 +142,18 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     return operations.readAgentHistory(input);
   }
   const providerHealth = await collectProviderHealth(config.providers);
+  const sessions = store.listSessions();
+  // Batch the prompt-history summary so list_agent_sessions stays at
+  // two SQL round-trips regardless of how many sessions are returned.
+  const promptSummaries = store.getAgentPromptSummaries(sessions.map((session) => session.id));
   return callMcpTool(call, {
     repos: store.listRepos(),
     workspaces: store.listWorkspaces(),
-    sessions: store.listSessions(),
+    sessions,
     operations: store.listOperations(),
     activity: store.listActivity(),
     providerHealth,
     runtimes: listRuntimeHealth(config.runtimes),
-    sessionPromptSummary: (sessionId) => {
-      const first = store.firstAgentPrompt(sessionId);
-      return {
-        initialPrompt: first ? first.text : null,
-        messageCount: store.countAgentPrompts(sessionId),
-      };
-    },
+    sessionPromptSummary: (sessionId) => promptSummaries.get(sessionId) ?? { initialPrompt: null, messageCount: 0 },
   });
 }

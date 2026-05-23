@@ -227,6 +227,80 @@ describe("agent message MCP + REST routes", () => {
     }
   });
 
+  it("returns user prompt history through the read_agent_history MCP tool and REST mirror", async () => {
+    const fixture = createFixture();
+    const history = {
+      ok: true as const,
+      sessionId: "sess_hist",
+      workspaceId: "ws_hist",
+      runtimeId: "claude-code",
+      status: "running",
+      total: 2,
+      truncated: false,
+      prompts: [
+        {
+          id: "pmt_1",
+          sessionId: "sess_hist",
+          source: "initial" as const,
+          role: "user" as const,
+          text: "do the audit",
+          sentAt: "2026-05-23T10:00:00.000Z",
+          externalId: null,
+        },
+        {
+          id: "pmt_2",
+          sessionId: "sess_hist",
+          source: "send_agent_message" as const,
+          role: "user" as const,
+          text: "focus on usability",
+          sentAt: "2026-05-23T10:05:00.000Z",
+          externalId: null,
+        },
+      ],
+    };
+    const calls: Array<{ sessionId: string; limit?: number; maxChars?: number }> = [];
+    const operations = {
+      readAgentHistory: (input: { sessionId: string; limit?: number; maxChars?: number }) => {
+        calls.push(input);
+        if (input.sessionId === "missing") return { ok: false as const, error: "session_not_found" as const };
+        return history;
+      },
+    } as unknown as OperationService;
+    const { server } = createDaemonApp({ ...fixture, operations });
+    const baseUrl = await listen(server);
+    try {
+      const list = await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "list",
+        method: "tools/list",
+      });
+      expect(list.result.tools.map((tool) => tool.name)).toContain("read_agent_history");
+
+      const call = await postJson<{
+        result: { structuredContent: typeof history };
+      }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "history",
+        method: "tools/call",
+        params: { name: "read_agent_history", arguments: { sessionId: "sess_hist", limit: 50, maxChars: 5000 } },
+      });
+      expect(call.result.structuredContent).toMatchObject({ ok: true, total: 2 });
+      expect(call.result.structuredContent.prompts).toHaveLength(2);
+      expect(calls).toContainEqual({ sessionId: "sess_hist", limit: 50, maxChars: 5000 });
+
+      const rest = await fetch(`${baseUrl}/api/agent-sessions/sess_hist/history?limit=50`);
+      expect(rest.ok).toBe(true);
+      const restBody = (await rest.json()) as typeof history;
+      expect(restBody.total).toBe(2);
+      expect(restBody.prompts[0]?.text).toBe("do the audit");
+
+      const missing = await fetch(`${baseUrl}/api/agent-sessions/missing/history`);
+      expect(missing.status).toBe(404);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("exposes /api/agent-sessions/:id/output and /messages REST mirrors of the MCP tools", async () => {
     const fixture = createFixture();
     const sent: Array<{ sessionId: string; message: string }> = [];
