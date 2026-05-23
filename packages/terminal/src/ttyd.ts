@@ -89,13 +89,15 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     worktreePath?: string | null;
     theme?: TtydTheme;
   }): Promise<TtydEntry> {
+    // ttyd bakes the xterm palette at spawn time, so the theme passed here
+    // only takes effect when we actually spawn a new ttyd. We deliberately
+    // do NOT respawn when an existing entry's theme differs from desired —
+    // that triggered visible reconnect storms whenever the user toggled
+    // cockpit theme. Terminal palette updates on the next reload instead.
     const desiredTheme: TtydTheme = args.theme ?? "dark";
     const existing = entries.get(args.key);
     if (existing && existing.child.exitCode === null) {
-      // Reuse the live ttyd only when the cockpit-resolved theme still matches
-      // — ttyd bakes the xterm theme at spawn time, so a theme change requires
-      // a respawn to re-render with the new palette.
-      if (existing.theme === desiredTheme && (await portOpen(existing.port))) return toEntry(existing);
+      if (await portOpen(existing.port)) return toEntry(existing);
       try {
         existing.child.kill("SIGTERM");
       } catch {

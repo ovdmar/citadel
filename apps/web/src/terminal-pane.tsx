@@ -27,6 +27,13 @@ const RUNBOOK_URL = "/docs/operations/terminal-runbook";
 export function TerminalPane(props: { session: AgentSession }) {
   const sessionId = props.session.id;
   const theme = useResolvedTheme();
+  // Capture the theme in a ref so ensure() reads the current value without
+  // re-creating its identity on every theme change. We deliberately do NOT
+  // re-issue ensure on theme change — ttyd bakes the xterm palette at spawn
+  // time, so changing it would require respawning, which causes reconnect
+  // storms. Terminal palette updates on the next page reload instead.
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<EnsureError | null>(null);
   const [pending, setPending] = useState(true);
@@ -40,7 +47,7 @@ export function TerminalPane(props: { session: AgentSession }) {
       setError(null);
       try {
         const response = await api<EnsureResponse>(
-          `/api/agent-sessions/${sessionId}/terminal?theme=${encodeURIComponent(theme)}`,
+          `/api/agent-sessions/${sessionId}/terminal?theme=${encodeURIComponent(themeRef.current)}`,
           { method: "POST" },
         );
         if (requestSeqRef.current !== seq) return;
@@ -55,7 +62,7 @@ export function TerminalPane(props: { session: AgentSession }) {
         if (requestSeqRef.current === seq) setPending(false);
       }
     },
-    [sessionId, theme],
+    [sessionId],
   );
 
   // Some classes of failure (tmux session vanished after daemon restart,
@@ -83,17 +90,6 @@ export function TerminalPane(props: { session: AgentSession }) {
     setIframeKey(0);
     void ensure();
   }, [ensure]);
-
-  // When the user toggles cockpit theme, ensure() reruns with the new theme.
-  // The daemon respawns ttyd with the matched xterm palette if it differs
-  // from the running entry; bumping the iframe key forces a reload so the
-  // user sees the new colors immediately rather than on the next session.
-  const lastThemeRef = useRef(theme);
-  useEffect(() => {
-    if (lastThemeRef.current === theme) return;
-    lastThemeRef.current = theme;
-    void ensure({ bumpFrame: true });
-  }, [theme, ensure]);
 
   const retry = useCallback(() => {
     void ensure();
