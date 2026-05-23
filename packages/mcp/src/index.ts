@@ -24,6 +24,7 @@ export type McpToolName =
   | "list_provider_health"
   | "list_runtimes"
   | "list_workspace_links"
+  | "register_repo"
   | "create_workspace"
   | "start_agent_session"
   | "launch_agent"
@@ -139,6 +140,22 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       name: "list_workspace_links",
       description: "List hook-provided workspace links and actions, optionally filtered by workspaceId.",
       inputSchema: { type: "object", properties: { workspaceId: { type: "string" } }, additionalProperties: false },
+      destructive: false,
+    },
+    {
+      name: "register_repo",
+      description:
+        "Register an existing local git repository with Citadel so it appears in list_repos and can host workspaces. Provide the absolute rootPath of a directory containing a .git folder. Optionally override the display name and worktreeParent (defaults to <repo>-worktrees next to the repo). Also creates the non-removable root workspace pointing at the repo working copy. Returns { repo }.",
+      inputSchema: {
+        type: "object",
+        required: ["rootPath"],
+        properties: {
+          rootPath: { type: "string", minLength: 1 },
+          name: { type: "string", minLength: 1 },
+          worktreeParent: { type: "string", minLength: 1 },
+        },
+        additionalProperties: false,
+      },
       destructive: false,
     },
     {
@@ -293,6 +310,7 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
         operations: context.operations.filter((operation) => operation.workspaceId === workspaceId).slice(0, 5),
       };
     }
+    case "register_repo":
     case "create_workspace":
     case "start_agent_session":
     case "launch_agent":

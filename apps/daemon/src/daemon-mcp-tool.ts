@@ -1,5 +1,10 @@
 import type { CitadelConfig } from "@citadel/config";
-import { CreateAgentSessionInputSchema, CreateWorkspaceInputSchema, LaunchAgentInputSchema } from "@citadel/contracts";
+import {
+  CreateAgentSessionInputSchema,
+  CreateRepoInputSchema,
+  CreateWorkspaceInputSchema,
+  LaunchAgentInputSchema,
+} from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, serializeWorkspaceResource } from "@citadel/mcp";
 import type { OperationService } from "@citadel/operations";
@@ -34,6 +39,12 @@ export async function readMcpResource(store: SqliteStore, config: CitadelConfig,
 
 export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) {
   const { config, store, operations, ttyd, providerCache, emit } = deps;
+  if (call.name === "register_repo") {
+    const input = CreateRepoInputSchema.parse(call.arguments ?? {});
+    const repo = operations.registerRepo(input);
+    emit("repo.updated", { repoId: repo.id, repo });
+    return { repo };
+  }
   if (call.name === "create_workspace") {
     const result = await operations.createWorkspace(CreateWorkspaceInputSchema.parse(call.arguments ?? {}));
     emit("workspace.updated", result);

@@ -173,6 +173,60 @@ describe("agent message MCP + REST routes", () => {
     }
   });
 
+  it("exposes register_repo through MCP and routes it to OperationService.registerRepo", async () => {
+    const fixture = createFixture();
+    const repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-mcp-repo-"));
+    dirs.push(repoDir);
+    fs.mkdirSync(path.join(repoDir, ".git"));
+    const registered: Array<{ rootPath: string; name: string | undefined }> = [];
+    const operations = {
+      registerRepo: (input: { rootPath: string; name?: string; worktreeParent?: string }) => {
+        registered.push({ rootPath: input.rootPath, name: input.name });
+        return {
+          id: "repo_mcp_registered",
+          name: input.name ?? "fixture",
+          rootPath: input.rootPath,
+          defaultBranch: "main",
+          defaultRemote: "origin",
+          worktreeParent: input.worktreeParent ?? `${input.rootPath}-worktrees`,
+          setupHookIds: [],
+          teardownHookIds: [],
+          providerIds: [],
+          createdAt: "2026-05-23T00:00:00.000Z",
+          updatedAt: "2026-05-23T00:00:00.000Z",
+          archivedAt: null,
+        };
+      },
+    } as unknown as OperationService;
+    const { server } = createDaemonApp({ ...fixture, operations });
+    const baseUrl = await listen(server);
+    try {
+      const list = await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "list",
+        method: "tools/list",
+      });
+      expect(list.result.tools.map((tool) => tool.name)).toContain("register_repo");
+
+      const register = await postJson<{
+        result: { structuredContent: { repo: { id: string; name: string; rootPath: string } } };
+      }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "register",
+        method: "tools/call",
+        params: { name: "register_repo", arguments: { rootPath: repoDir, name: "skills" } },
+      });
+      expect(register.result.structuredContent.repo).toMatchObject({
+        id: "repo_mcp_registered",
+        name: "skills",
+        rootPath: repoDir,
+      });
+      expect(registered).toEqual([{ rootPath: repoDir, name: "skills" }]);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("exposes /api/agent-sessions/:id/output and /messages REST mirrors of the MCP tools", async () => {
     const fixture = createFixture();
     const sent: Array<{ sessionId: string; message: string }> = [];
