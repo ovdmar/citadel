@@ -71,10 +71,12 @@ clean:
 # in the unit's Environment=) we just restart that. Otherwise we fall back
 # to a nohup-managed process tracked by $(DAEMON_PID) and $(DAEMON_LOG).
 deploy:
-	@echo "→ Building cockpit (apps/web)…"
-	@pnpm --filter @citadel/web build
-	@echo "→ Building daemon (apps/daemon)…"
-	@pnpm --filter @citadel/daemon build
+	@# Build everything (apps + workspace packages). Filtered builds skip
+	# workspace package dists; when packages/operations or packages/contracts
+	# changes, the daemon's tsc reads stale .d.ts files and either fails or
+	# silently picks up the wrong types. Recursive build keeps dists fresh.
+	@echo "→ Building cockpit + daemon + workspace packages…"
+	@pnpm build
 	@if systemctl --user is-active --quiet citadel.service 2>/dev/null || systemctl --user is-enabled --quiet citadel.service 2>/dev/null; then \
 		echo "→ Restarting systemd user service citadel.service…"; \
 		systemctl --user restart citadel.service; \
