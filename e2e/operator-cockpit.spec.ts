@@ -131,14 +131,12 @@ test("settings sidebar exposes all configured sections", async ({ page }, testIn
   await page.screenshot({ path: `docs/campaigns/screenshot-${testInfo.project.name}-settings.png`, fullPage: true });
 });
 
-test("dialogs render centered on the viewport (no top-right / top-center drift)", async ({
-  page,
-  request,
-}, testInfo) => {
-  // Mobile viewports collapse the navigator into a column switcher, so the
-  // "Create workspace" trigger sits behind an extra tap; the centering math is
-  // identical, so we cover this regression once on desktop.
-  test.skip(testInfo.project.name !== "desktop", "centering regression runs once on desktop");
+test("dialogs render near viewport center on desktop and tablet", async ({ page, request }, testInfo) => {
+  // Mobile collapses the navigator into a column switcher and reorders some
+  // controls behind a tap; the centering math itself is identical on every
+  // viewport, so we cover desktop and tablet (different widths exercise the
+  // `width: min(560px, 100%)` clamp differently) and skip Pixel-7.
+  test.skip(testInfo.project.name === "mobile", "mobile rearranges the trigger buttons; centering math is identical");
 
   const fixture = createGitFixture();
   const workspaceIds: string[] = [];
@@ -154,13 +152,19 @@ test("dialogs render centered on the viewport (no top-right / top-center drift)"
     if (!viewport) throw new Error("viewport size missing");
     const viewportCenterX = viewport.width / 2;
     const viewportCenterY = viewport.height / 2;
-    // 16px of horizontal slack covers scrollbar gutter on Chromium; vertical
-    // slack is wider because dialog heights vary with content and `max-height:
-    // 90vh` can shift the centerpoint slightly inside the backdrop padding.
-    const horizontalSlack = 16;
-    const verticalSlack = 48;
 
-    const assertCentered = async (locator: import("@playwright/test").Locator, label: string) => {
+    // Tolerances: a properly grid-centered dialog lands within ~1px of viewport
+    // center on Chromium, so any value above single-digit pixels means the fix
+    // regressed. Per-dialog overrides cover content that legitimately moves the
+    // centerpoint (e.g. the create-workspace modal is capped at `max-height:
+    // 90vh` and the backdrop has 20px padding on small viewports).
+    const assertCentered = async (
+      locator: import("@playwright/test").Locator,
+      label: string,
+      options: { horizontalSlack?: number; verticalSlack?: number } = {},
+    ) => {
+      const horizontalSlack = options.horizontalSlack ?? 6;
+      const verticalSlack = options.verticalSlack ?? 6;
       await expect(locator, `${label} should be visible`).toBeVisible();
       const box = await locator.boundingBox();
       if (!box) throw new Error(`${label} has no bounding box`);
@@ -176,25 +180,31 @@ test("dialogs render centered on the viewport (no top-right / top-center drift)"
       ).toBeLessThanOrEqual(verticalSlack);
     };
 
-    // 1. Command palette (Search workspaces button in the top bar).
+    // 1. Command palette (Search workspaces button in the top bar). Capped at
+    // `max-height: 70vh`, so vertical center is close but not pixel-perfect.
     await page.getByRole("button", { name: "Search workspaces" }).click();
     await assertCentered(page.locator("dialog.command-palette"), "command palette");
     await page.keyboard.press("Escape");
     await expect(page.locator("dialog.command-palette")).toHaveCount(0);
 
-    // 2. Create-workspace modal (Plus button in navigator).
+    // 2. Create-workspace modal (Plus button in navigator). Has more content
+    // and a 90vh cap, so vertical slack is wider; horizontal must still be
+    // tight to catch the original "drifted right" symptom.
     await page.getByRole("button", { name: "Create workspace" }).click();
-    await assertCentered(page.locator("dialog.modal-frame"), "create-workspace modal");
+    await assertCentered(page.locator("dialog.modal-frame"), "create-workspace modal", { verticalSlack: 32 });
     await page.keyboard.press("Escape");
     await expect(page.locator("dialog.modal-frame")).toHaveCount(0);
 
     // 3. Drop-workspace confirmation. The trash button only appears on hover,
-    // so we force the hover state on the wrapping element first.
+    // so we force the hover state on the wrapping element first. Small fixed-
+    // ish height: tight tolerances on both axes.
     const card = page.locator(".workspace-card-wrap").filter({ hasText: workspaceName }).first();
     await card.hover();
     await card.getByRole("button", { name: new RegExp(`Drop workspace ${workspaceName}`, "i") }).click();
     await assertCentered(page.locator("dialog.drop-workspace-dialog"), "drop-workspace dialog");
-    await page.keyboard.press("Escape").catch(() => {});
+    // Dialog has no Escape handler today (tracked separately) — click the
+    // backdrop to dismiss so the test cleanup isn't blocked by an open dialog.
+    await page.locator(".drop-workspace-backdrop").click({ position: { x: 5, y: 5 } });
   } finally {
     for (const workspaceId of workspaceIds) {
       await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`).catch(() => {});
