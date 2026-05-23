@@ -43,6 +43,10 @@ async function openCommandPalette(page: import("@playwright/test").Page) {
 
 const DARK_SLATE_OFFENDERS = ["rgb(11, 18, 32)", "rgb(15, 23, 42)"];
 const PURE_WHITE_OFFENDER = ["rgb(255, 255, 255)"];
+// Light theme is a warm beige palette; any panel that renders as pure white or
+// the historic cool near-white (#fffefa) clashes with --surface (#f4f2ee) and
+// breaks the unitary look that this audit guards.
+const COOL_WHITE_OFFENDERS_LIGHT = ["rgb(255, 255, 255)", "rgb(255, 254, 250)"];
 
 test.describe("cockpit theme audit", () => {
   test.beforeEach(async ({ page: _page }, testInfo) => {
@@ -62,10 +66,20 @@ test.describe("cockpit theme audit", () => {
 
     // rgb(11, 18, 32) and rgb(15, 23, 42) were the historic slate-900/slate-800
     // hardcodes that would render as a dark patch in light mode.
-    const offenders = await collectOffenders(page, DARK_SLATE_OFFENDERS);
-    expect(offenders, `Dark slate backgrounds leaked into light mode: ${JSON.stringify(offenders, null, 2)}`).toEqual(
-      [],
-    );
+    const darkOffenders = await collectOffenders(page, DARK_SLATE_OFFENDERS);
+    expect(
+      darkOffenders,
+      `Dark slate backgrounds leaked into light mode: ${JSON.stringify(darkOffenders, null, 2)}`,
+    ).toEqual([]);
+
+    // The warm beige palette must not contain pure-white or cool near-white
+    // panels — those clash with --surface and motivated this audit in the
+    // first place.
+    const coolOffenders = await collectOffenders(page, COOL_WHITE_OFFENDERS_LIGHT);
+    expect(
+      coolOffenders,
+      `Cool/white panels leaked into the warm light palette: ${JSON.stringify(coolOffenders, null, 2)}`,
+    ).toEqual([]);
   });
 
   test("dark theme has no pure-white backgrounds inside .app-root", async ({ page }, testInfo) => {
@@ -87,6 +101,7 @@ test.describe("cockpit theme audit", () => {
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
     await page.screenshot({ path: `docs/campaigns/theme-light-${testInfo.project.name}-settings.png`, fullPage: true });
     expect(await collectOffenders(page, DARK_SLATE_OFFENDERS)).toEqual([]);
+    expect(await collectOffenders(page, COOL_WHITE_OFFENDERS_LIGHT)).toEqual([]);
 
     await forceTheme(page, "dark");
     await page.reload();
