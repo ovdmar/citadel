@@ -1,58 +1,88 @@
 # Agent Prompt History
 
-Citadel persists the ordered list of user-authored prompts for every
-agent session so that other agents — or the cockpit UI — can see what
-each session was started with and what steering it received afterward.
+Citadel exposes the ordered list of user-authored prompts for every agent
+session so other agents — or the cockpit UI — can see what each session
+was started with and what steering it received afterward.
 
-## Data model
+## Single source of truth: the runtime's own transcript
 
-Table `agent_session_prompts` (migration `6`):
+We do **not** persist prompts in Citadel's database. Instead, each supported
+runtime writes its own transcript to disk; we read it on demand through a
+per-runtime adapter. Three things follow from this:
 
-| column        | notes                                                                  |
-| ------------- | ---------------------------------------------------------------------- |
-| `id`          | `pmt_…` primary key                                                    |
-| `session_id`  | FK to `agent_sessions(id)`, cascades on delete                         |
-| `source`      | `"initial" \| "send_agent_message" \| "transcript"`                    |
-| `role`        | always `"user"` today (kept for future assistant-side history)         |
-| `text`        | raw message text                                                       |
-| `sent_at`     | ISO timestamp                                                          |
-| `external_id` | runtime-provided id (e.g. Claude Code message uuid), unique per session |
+- **One signal covers every input path.** Whether the user typed in the
+  cockpit terminal, called the MCP `send_agent_message` tool, or passed a
+  prompt via CLI flag at launch, the runtime records it. There's no
+  intercept code that could drift from reality.
+- **Parsing is deterministic and token-free.** Adapters are pure JS — a
+  file read + `JSON.parse` per line + a small filter. No LLM call anywhere.
+- **The cockpit UI doesn't need a special path.** Keystrokes go through
+  ttyd → tmux → runtime; the runtime captures them; the adapter surfaces
+  them.
 
-`UNIQUE(session_id, external_id)` makes transcript ingestion idempotent.
+## Adapters (`packages/runtimes/src/transcripts/`)
 
-## Capture paths
+Each runtime declares a `RuntimeTranscriptAdapter`:
 
-1. **Initial prompt** — `OperationService.createAgentSession` writes a
-   row with `source = "initial"` whenever the start request carries a
-   prompt.
-2. **`send_agent_message`** — every follow-up routed through the MCP
-   tool / REST mirror inserts a `source = "send_agent_message"` row.
-3. **Claude Code transcript** — on-demand. When history is requested
-   for a `claude-code` session, `findClaudeTranscriptForSession` resolves
-   `~/.claude/projects/<dasherized-cwd>/*.jsonl` and `parseClaudeTranscript`
-   extracts every `type: "user"` line whose `message.content` is text
-   (tool-result envelopes are skipped). New entries become rows with
-   `source = "transcript"` keyed by the message uuid.
+```ts
+type RuntimeTranscriptAdapter = {
+  runtimeId: string;
+  getUserPrompts: (input: { workspacePath: string; sessionStartedAt: string; home?: string }) => RuntimeUserPrompt[];
+};
+```
 
-We chose on-demand parsing over a background poller: the .jsonl is
-small (one line per turn) and we already have the read-side
-synchronization point in `readAgentHistory`, so a poller would only
-add operational surface.
+`getUserPromptsForSession({ runtimeId, workspacePath, sessionStartedAt })`
+dispatches to the right adapter. Runtimes without one (e.g. `shell`) return
+an empty array — prompt history is inherently unavailable for them.
 
-### Deduplication
+### claude-code
 
-When a transcript entry matches a previously DB-captured row (same
-text within a 60s window, no `external_id` yet), the DB row is
-deleted and replaced by the transcript record. The transcript wins
-because it has the canonical uuid and timestamp.
+Transcripts live at `~/.claude/projects/<dasherized-cwd>/<uuid>.jsonl`.
+The dasherizer replaces every non-alphanumeric character with `-`.
+
+The parser walks the file, keeps lines where `type === "user"` and
+`message.role === "user"`, and treats `content` as text either when it is
+a string or an array of `{type: "text"}` blocks. Arrays whose blocks are
+`tool_result` envelopes are skipped — they're synthetic tool-output turns.
+
+Session matching uses a stat-first pre-filter (`mtime < sessionStartedAt - 60s` ⇒ reject)
+followed by a closest-first-prompt-timestamp scoring pass.
+
+### codex
+
+Transcripts live at `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<sessionId>.jsonl`.
+Each file opens with a `session_meta` payload carrying `id`, `cwd`, and
+`timestamp`. User input arrives as `response_item` lines with
+`payload.role === "user"` and `content[].type === "input_text"`. We skip
+the synthetic `<environment_context>…</environment_context>` opener.
+
+Session matching requires `meta.cwd === workspacePath` *and* falls inside
+the session-start window. Codex doesn't emit per-message ids, so we
+synthesize `<sessionId>:<userIndex>` for dedup-friendly external ids.
+
+### cursor-agent
+
+Stub adapter — returns an empty array. The Cursor CLI's on-disk format
+wasn't available on the reference machine when this landed. Slot is wired
+so `read_agent_history` and `list_agent_sessions` resolve cleanly for
+cursor-agent sessions; a follow-up will fill in the parser. See #17.
 
 ## MCP / REST surface
 
-- `list_agent_sessions` now returns each session with a truncated
-  `initialPrompt` (200 char preview) and `messageCount` so callers
-  can scan sessions without fetching their full history.
-- `read_agent_history` is a new MCP tool: `{ sessionId, limit?, maxChars? }`
-  → `{ ok, sessionId, workspaceId, runtimeId, status, total, truncated, prompts[] }`.
-  Older messages are dropped first when the response would exceed
-  the limits.
+- `list_agent_sessions` decorates each session with `initialPrompt` (200-char
+  preview) and `messageCount`. Both come from the adapter, evaluated on
+  demand. The mtime pre-filter inside each adapter keeps per-session cost
+  bounded even on big project dirs.
+- `read_agent_history({ sessionId, limit?, maxChars? })` returns the full
+  ordered prompt list. Older prompts are dropped first when limits would be
+  exceeded.
 - REST mirror: `GET /api/agent-sessions/:sessionId/history`.
+
+## What this PR explicitly does NOT do
+
+- No persistence of prompts in `agent_sessions_prompts` or any sibling table.
+  The earlier draft of this feature had a DB-write intercept on
+  `send_agent_message`; that path was removed in favor of trusting the
+  runtime transcript as authoritative.
+- No background polling — adapters run only when an MCP / REST call asks
+  for history.

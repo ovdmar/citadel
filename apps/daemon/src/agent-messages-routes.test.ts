@@ -301,9 +301,11 @@ describe("agent message MCP + REST routes", () => {
     }
   });
 
-  it("populates list_agent_sessions with initialPrompt previews and messageCount via the batched DB summary", async () => {
+  it("populates list_agent_sessions with initialPrompt + messageCount from the runtime transcript adapter", async () => {
     const fixture = createFixture();
     const now = "2026-05-23T10:00:00.000Z";
+    const workspacePath = path.join(fixture.config.dataDir, "ws");
+    fs.mkdirSync(workspacePath, { recursive: true });
     fixture.store.insertRepo({
       id: "repo_summary",
       name: "Repo",
@@ -323,7 +325,7 @@ describe("agent message MCP + REST routes", () => {
       id: "ws_summary",
       repoId: "repo_summary",
       name: "ws",
-      path: path.join(fixture.config.dataDir, "ws"),
+      path: workspacePath,
       branch: "main",
       baseBranch: "main",
       source: "scratch",
@@ -344,8 +346,8 @@ describe("agent message MCP + REST routes", () => {
     fixture.store.insertSession({
       id: "sess_summary",
       workspaceId: "ws_summary",
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "claude-code",
+      displayName: "Claude",
       status: "running",
       transport: "disconnected",
       tmuxSessionName: "citadel_summary",
@@ -353,26 +355,34 @@ describe("agent message MCP + REST routes", () => {
       createdAt: now,
       updatedAt: now,
     });
-    fixture.store.insertAgentPrompt({
-      id: "pmt_initial",
-      sessionId: "sess_summary",
-      source: "initial",
-      role: "user",
-      text: "kick off the migration",
-      sentAt: now,
-      externalId: null,
-    });
-    fixture.store.insertAgentPrompt({
-      id: "pmt_followup",
-      sessionId: "sess_summary",
-      source: "send_agent_message",
-      role: "user",
-      text: "also rebase main",
-      sentAt: "2026-05-23T10:05:00.000Z",
-      externalId: null,
-    });
+    // Seed a Claude Code transcript under a fake HOME so the adapter resolves it.
+    const home = path.join(fixture.config.dataDir, "home");
+    const projects = path.join(home, ".claude", "projects", workspacePath.replace(/[^A-Za-z0-9]/g, "-"));
+    fs.mkdirSync(projects, { recursive: true });
+    fs.writeFileSync(
+      path.join(projects, "session.jsonl"),
+      [
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: "kick off the migration" },
+          uuid: "u1",
+          timestamp: "2026-05-23T10:00:01.000Z",
+          sessionId: "claude-1",
+        }),
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: "also rebase main" },
+          uuid: "u2",
+          timestamp: "2026-05-23T10:05:00.000Z",
+          sessionId: "claude-1",
+        }),
+      ].join("\n"),
+    );
+
     const { server } = createDaemonApp(fixture);
     const baseUrl = await listen(server);
+    const originalHome = process.env.HOME;
+    process.env.HOME = home;
     try {
       const response = await postJson<{
         result: {
@@ -392,6 +402,8 @@ describe("agent message MCP + REST routes", () => {
         messageCount: 2,
       });
     } finally {
+      if (originalHome === undefined) Reflect.deleteProperty(process.env, "HOME");
+      else process.env.HOME = originalHome;
       await closeServer(server);
     }
   });

@@ -6,8 +6,16 @@ export {
   claudeProjectsDir,
   parseClaudeTranscript,
   findClaudeTranscriptForSession,
-} from "./claude-transcript.js";
-export type { ClaudeUserPrompt } from "./claude-transcript.js";
+  claudeCodeAdapter,
+  codexAdapter,
+  cursorAgentAdapter,
+  getTranscriptAdapter,
+  getUserPromptsForSession,
+  parseCodexRollout,
+  findCodexRolloutForSession,
+  codexSessionsRoot,
+} from "./transcripts/index.js";
+export type { RuntimeUserPrompt, RuntimeTranscriptAdapter, GetUserPromptsInput } from "./transcripts/index.js";
 
 const baseCapabilities = {
   supportsPrompt: false,

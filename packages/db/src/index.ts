@@ -3,7 +3,6 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type {
   ActivityEvent,
-  AgentPrompt,
   AgentSession,
   HookOutput,
   Operation,
@@ -14,7 +13,6 @@ import type {
 } from "@citadel/contracts";
 import {
   activityFromRow,
-  agentPromptFromRow,
   operationFromRow,
   repoFromRow,
   scheduledAgentFromRow,
@@ -192,22 +190,6 @@ export class SqliteStore {
       VALUES (4, 'workspace-linked-urls', datetime('now'));
       INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
       VALUES (5, 'scheduled-agents', datetime('now'));
-    `);
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS agent_session_prompts (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
-        source TEXT NOT NULL,
-        role TEXT NOT NULL,
-        text TEXT NOT NULL,
-        sent_at TEXT NOT NULL,
-        external_id TEXT,
-        UNIQUE(session_id, external_id)
-      );
-      CREATE INDEX IF NOT EXISTS idx_agent_session_prompts_session
-        ON agent_session_prompts(session_id, sent_at);
-      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-      VALUES (6, 'agent-session-prompts', datetime('now'));
     `);
   }
 
@@ -446,94 +428,7 @@ export class SqliteStore {
   }
 
   deleteSession(sessionId: string) {
-    this.database.prepare("DELETE FROM agent_session_prompts WHERE session_id = ?").run(sessionId);
     this.database.prepare("DELETE FROM agent_sessions WHERE id = ?").run(sessionId);
-  }
-
-  insertAgentPrompt(prompt: AgentPrompt): boolean {
-    const result = this.database
-      .prepare(
-        `INSERT OR IGNORE INTO agent_session_prompts (id, session_id, source, role, text, sent_at, external_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        prompt.id,
-        prompt.sessionId,
-        prompt.source,
-        prompt.role,
-        prompt.text,
-        prompt.sentAt,
-        prompt.externalId ?? null,
-      );
-    return result.changes > 0;
-  }
-
-  listAgentPrompts(sessionId: string): AgentPrompt[] {
-    const rows = this.database
-      .prepare("SELECT * FROM agent_session_prompts WHERE session_id = ? ORDER BY sent_at ASC, id ASC")
-      .all(sessionId) as Array<Record<string, unknown>>;
-    return rows.map(agentPromptFromRow);
-  }
-
-  countAgentPrompts(sessionId: string): number {
-    const row = this.database
-      .prepare("SELECT COUNT(*) AS c FROM agent_session_prompts WHERE session_id = ?")
-      .get(sessionId) as { c: number } | undefined;
-    return row ? Number(row.c) : 0;
-  }
-
-  deleteAgentPrompt(id: string) {
-    this.database.prepare("DELETE FROM agent_session_prompts WHERE id = ?").run(id);
-  }
-
-  /**
-   * Batched companion to `firstAgentPrompt` + `countAgentPrompts`. Used by
-   * `list_agent_sessions` to avoid 2N round-trips when summarizing every
-   * session's prompt history. Returns one entry per requested sessionId
-   * (with empty defaults when there are no rows).
-   */
-  getAgentPromptSummaries(sessionIds: string[]): Map<string, { initialPrompt: string | null; messageCount: number }> {
-    const out = new Map<string, { initialPrompt: string | null; messageCount: number }>();
-    for (const id of sessionIds) out.set(id, { initialPrompt: null, messageCount: 0 });
-    if (!sessionIds.length) return out;
-    const placeholders = sessionIds.map(() => "?").join(",");
-    const counts = this.database
-      .prepare(
-        `SELECT session_id AS sessionId, COUNT(*) AS c
-         FROM agent_session_prompts
-         WHERE session_id IN (${placeholders})
-         GROUP BY session_id`,
-      )
-      .all(...sessionIds) as Array<{ sessionId: string; c: number }>;
-    for (const row of counts) {
-      const entry = out.get(row.sessionId);
-      if (entry) entry.messageCount = Number(row.c);
-    }
-    const firsts = this.database
-      .prepare(
-        `SELECT session_id AS sessionId, text
-         FROM agent_session_prompts p
-         WHERE session_id IN (${placeholders})
-           AND id = (
-             SELECT id FROM agent_session_prompts
-             WHERE session_id = p.session_id
-             ORDER BY sent_at ASC, id ASC
-             LIMIT 1
-           )`,
-      )
-      .all(...sessionIds) as Array<{ sessionId: string; text: string }>;
-    for (const row of firsts) {
-      const entry = out.get(row.sessionId);
-      if (entry) entry.initialPrompt = row.text;
-    }
-    return out;
-  }
-
-  firstAgentPrompt(sessionId: string): AgentPrompt | null {
-    const row = this.database
-      .prepare("SELECT * FROM agent_session_prompts WHERE session_id = ? ORDER BY sent_at ASC, id ASC LIMIT 1")
-      .get(sessionId) as Record<string, unknown> | undefined;
-    return row ? agentPromptFromRow(row) : null;
   }
 
   upsertOperation(operation: Operation) {

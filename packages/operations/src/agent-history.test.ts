@@ -4,7 +4,7 @@ import path from "node:path";
 import { SqliteStore } from "@citadel/db";
 import { claudeProjectsDir } from "@citadel/runtimes";
 import { afterEach, describe, expect, it } from "vitest";
-import { readAgentHistory } from "./agent-history.js";
+import { getSessionPromptSummary, readAgentHistory } from "./agent-history.js";
 
 const dirs: string[] = [];
 
@@ -12,12 +12,7 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-function restoreHome(original: string | undefined) {
-  if (original === undefined) Reflect.deleteProperty(process.env, "HOME");
-  else process.env.HOME = original;
-}
-
-function bootstrap() {
+function bootstrap(runtimeId = "claude-code") {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-history-"));
   dirs.push(dir);
   const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
@@ -64,8 +59,8 @@ function bootstrap() {
   store.insertSession({
     id: "sess_h",
     workspaceId: "ws_h",
-    runtimeId: "claude-code",
-    displayName: "Claude",
+    runtimeId,
+    displayName: "Agent",
     status: "running",
     transport: "disconnected",
     tmuxSessionName: "citadel_h",
@@ -76,19 +71,14 @@ function bootstrap() {
   return { dir, store, workspacePath };
 }
 
-describe("readAgentHistory", () => {
-  it("returns the initial prompt and merges transcript-derived follow-ups", () => {
-    const { dir, store, workspacePath } = bootstrap();
-    store.insertAgentPrompt({
-      id: "pmt_initial",
-      sessionId: "sess_h",
-      source: "initial",
-      role: "user",
-      text: "start working on the audit",
-      sentAt: "2026-05-23T10:00:00.000Z",
-      externalId: null,
-    });
+function restoreHome(original: string | undefined) {
+  if (original === undefined) Reflect.deleteProperty(process.env, "HOME");
+  else process.env.HOME = original;
+}
 
+describe("readAgentHistory", () => {
+  it("dispatches to the claude-code adapter and surfaces transcript prompts", () => {
+    const { dir, store, workspacePath } = bootstrap("claude-code");
     const home = path.join(dir, "home");
     const projects = claudeProjectsDir(workspacePath, home);
     fs.mkdirSync(projects, { recursive: true });
@@ -97,19 +87,18 @@ describe("readAgentHistory", () => {
       [
         JSON.stringify({
           type: "user",
-          message: { role: "user", content: "start working on the audit" },
-          uuid: "claude-initial",
+          message: { role: "user", content: "start the audit" },
+          uuid: "claude-1",
           timestamp: "2026-05-23T10:00:01.000Z",
           sessionId: "claude-session",
         }),
         JSON.stringify({
           type: "user",
-          message: { role: "user", content: "focus on usability issues" },
-          uuid: "claude-followup",
+          message: { role: "user", content: [{ type: "text", text: "focus on usability" }] },
+          uuid: "claude-2",
           timestamp: "2026-05-23T10:05:00.000Z",
           sessionId: "claude-session",
         }),
-        "",
       ].join("\n"),
     );
 
@@ -118,47 +107,23 @@ describe("readAgentHistory", () => {
     try {
       const result = readAgentHistory(store, { sessionId: "sess_h" });
       if (!result.ok) throw new Error(`unexpected error: ${result.error}`);
-      expect(result.prompts.map((entry) => entry.text)).toEqual([
-        "start working on the audit",
-        "focus on usability issues",
-      ]);
-      // The transcript record should have replaced the DB-captured initial.
-      const initial = result.prompts[0];
-      expect(initial?.source).toBe("transcript");
-      expect(initial?.externalId).toBe("claude-initial");
+      expect(result.prompts.map((entry) => entry.text)).toEqual(["start the audit", "focus on usability"]);
+      expect(result.prompts[0]?.externalId).toBe("claude-1");
       expect(result.total).toBe(2);
     } finally {
       restoreHome(originalHome);
     }
   });
 
-  it("falls back to DB-captured prompts when no transcript exists", () => {
-    const { store } = bootstrap();
-    store.insertAgentPrompt({
-      id: "pmt_a",
-      sessionId: "sess_h",
-      source: "initial",
-      role: "user",
-      text: "kick off",
-      sentAt: "2026-05-23T10:00:00.000Z",
-      externalId: null,
-    });
-    store.insertAgentPrompt({
-      id: "pmt_b",
-      sessionId: "sess_h",
-      source: "send_agent_message",
-      role: "user",
-      text: "second steer",
-      sentAt: "2026-05-23T10:10:00.000Z",
-      externalId: null,
-    });
+  it("returns an empty history when the runtime has no transcript on disk", () => {
+    const { store } = bootstrap("claude-code");
     const originalHome = process.env.HOME;
     process.env.HOME = "/nonexistent-home";
     try {
       const result = readAgentHistory(store, { sessionId: "sess_h" });
       if (!result.ok) throw new Error("expected ok");
-      expect(result.prompts.map((entry) => entry.text)).toEqual(["kick off", "second steer"]);
-      expect(result.total).toBe(2);
+      expect(result.prompts).toEqual([]);
+      expect(result.total).toBe(0);
     } finally {
       restoreHome(originalHome);
     }
@@ -168,5 +133,54 @@ describe("readAgentHistory", () => {
     const { store } = bootstrap();
     const result = readAgentHistory(store, { sessionId: "nope" });
     expect(result).toEqual({ ok: false, error: "session_not_found" });
+  });
+
+  it("returns an empty history for runtimes without an adapter (e.g. shell)", () => {
+    const { store } = bootstrap("shell");
+    const result = readAgentHistory(store, { sessionId: "sess_h" });
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.prompts).toEqual([]);
+    expect(result.total).toBe(0);
+  });
+});
+
+describe("getSessionPromptSummary", () => {
+  it("returns the first transcript prompt as the initial prompt and the total count", () => {
+    const { dir, store, workspacePath } = bootstrap("claude-code");
+    const home = path.join(dir, "home");
+    const projects = claudeProjectsDir(workspacePath, home);
+    fs.mkdirSync(projects, { recursive: true });
+    fs.writeFileSync(
+      path.join(projects, "claude-session.jsonl"),
+      [
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: "kick off the migration" },
+          uuid: "u1",
+          timestamp: "2026-05-23T10:00:01.000Z",
+          sessionId: "claude-session",
+        }),
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: "also rebase" },
+          uuid: "u2",
+          timestamp: "2026-05-23T10:01:00.000Z",
+          sessionId: "claude-session",
+        }),
+      ].join("\n"),
+    );
+    const originalHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      const summary = getSessionPromptSummary(store, "sess_h");
+      expect(summary).toEqual({ initialPrompt: "kick off the migration", messageCount: 2 });
+    } finally {
+      restoreHome(originalHome);
+    }
+  });
+
+  it("returns null/0 when the session is unknown", () => {
+    const { store } = bootstrap();
+    expect(getSessionPromptSummary(store, "missing")).toEqual({ initialPrompt: null, messageCount: 0 });
   });
 });

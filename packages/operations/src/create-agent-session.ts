@@ -2,7 +2,6 @@ import type { AgentSession, CreateAgentSessionInput, Repo, Workspace } from "@ci
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { ensureTmuxSession, submitPrompt } from "@citadel/terminal";
-import { recordPrompt } from "./agent-history.js";
 
 type RuntimeDescriptor = { command: string; args: string[]; displayName: string; promptArg?: string | null };
 
@@ -64,8 +63,10 @@ export async function createAgentSession(
     updatedAt: now,
   };
   store.insertSession(session);
-  if (input.prompt?.length)
-    recordPrompt(store, { sessionId: session.id, source: "initial", text: input.prompt, sentAt: now });
+  // The runtime records the initial prompt in its own transcript — either
+  // because we passed it as a CLI flag (claude-code, codex) or because we
+  // pasted it into the tmux pane. read_agent_history surfaces it via the
+  // transcript adapter, so we don't double-record it here.
   deps.activity("agent.started", "user", `Started ${session.displayName}`, workspace.repoId, workspace.id, null);
   const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
   if (repo) await deps.runNotificationHooks("agent.started", repo, workspace, null, { repo, workspace, session });

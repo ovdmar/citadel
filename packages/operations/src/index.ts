@@ -283,6 +283,7 @@ export class OperationService {
   sendAgentMessage = (i: { sessionId: string; message: string }) => agentMessages.sendAgentMessage(this.store, i);
   readAgentHistory = (i: { sessionId: string; limit?: number; maxChars?: number }) =>
     agentHistory.readAgentHistory(this.store, i);
+  getSessionPromptSummary = (sessionId: string) => agentHistory.getSessionPromptSummary(this.store, sessionId);
 
   stopAgentSession(input: { sessionId: string }) {
     const session = this.store.listSessions().find((candidate) => candidate.id === input.sessionId);

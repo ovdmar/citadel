@@ -2,7 +2,6 @@ import type { ActivityEvent } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { captureTranscript, submitPrompt } from "@citadel/terminal";
-import { recordPrompt } from "./agent-history.js";
 
 export type TranscriptResult = {
   ok: true;
@@ -72,8 +71,10 @@ export async function sendAgentMessage(
   }
   const result = await submitPrompt(session.tmuxSessionName, input.message);
   if (result.ok) {
-    const now = nowIso();
-    recordPrompt(store, { sessionId: session.id, source: "send_agent_message", text: input.message, sentAt: now });
+    // We don't record the message here — the runtime's own transcript
+    // (claude-code .jsonl, codex rollout, …) captures it whether it arrived
+    // through MCP, the cockpit terminal, or a CLI flag. See
+    // packages/runtimes/src/transcripts/* for the single source of truth.
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     const event: ActivityEvent = {
       id: createId("evt"),
@@ -84,7 +85,7 @@ export async function sendAgentMessage(
       workspaceId: session.workspaceId,
       operationId: null,
       hookOutput: null,
-      createdAt: now,
+      createdAt: nowIso(),
     };
     store.addActivity(event);
   }

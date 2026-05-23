@@ -1,6 +1,5 @@
 import type {
   ActivityEvent,
-  AgentPrompt,
   AgentSession,
   HookOutput,
   Operation,
@@ -122,18 +121,6 @@ export function scheduledAgentFromRow(row: Record<string, unknown>): ScheduledAg
     lastSessionId: row.last_session_id ? asString(row, "last_session_id") : null,
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
-  };
-}
-
-export function agentPromptFromRow(row: Record<string, unknown>): AgentPrompt {
-  return {
-    id: asString(row, "id"),
-    sessionId: asString(row, "session_id"),
-    source: asString(row, "source") as AgentPrompt["source"],
-    role: asString(row, "role") as AgentPrompt["role"],
-    text: asString(row, "text"),
-    sentAt: asString(row, "sent_at"),
-    externalId: row.external_id ? asString(row, "external_id") : null,
   };
 }
 

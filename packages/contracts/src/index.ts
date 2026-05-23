@@ -448,16 +448,16 @@ export const LaunchAgentInputSchema = z
     path: ["repoId"],
   });
 
-export const AgentPromptSourceSchema = z.enum(["initial", "send_agent_message", "transcript"]);
-
+/**
+ * A user-authored prompt as recorded by the runtime's own transcript. Citadel
+ * does not persist prompts — they are extracted on demand from per-runtime
+ * adapters (claude-code .jsonl, codex rollout files, etc.) so UI typing,
+ * MCP follow-ups, and CLI-flag initial prompts all surface the same way.
+ */
 export const AgentPromptSchema = z.object({
-  id: IdSchema,
-  sessionId: IdSchema,
-  source: AgentPromptSourceSchema,
-  role: z.literal("user"),
+  externalId: z.string(),
   text: z.string(),
   sentAt: z.string(),
-  externalId: z.string().nullable().default(null),
 });
 
 export const TransitionIssueInputSchema = z.object({
@@ -525,7 +525,6 @@ export type Repo = z.infer<typeof RepoSchema>;
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 export type AgentSession = z.infer<typeof AgentSessionSchema>;
 export type AgentPrompt = z.infer<typeof AgentPromptSchema>;
-export type AgentPromptSource = z.infer<typeof AgentPromptSourceSchema>;
 export type AgentRuntime = z.infer<typeof AgentRuntimeSchema>;
 export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 export type CheckSummary = z.infer<typeof CheckSummarySchema>;

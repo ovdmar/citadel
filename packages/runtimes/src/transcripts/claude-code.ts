@@ -1,13 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-export type ClaudeUserPrompt = {
-  uuid: string;
-  text: string;
-  timestamp: string;
-  sessionId: string;
-};
+import type { GetUserPromptsInput, RuntimeTranscriptAdapter, RuntimeUserPrompt } from "./types.js";
 
 /**
  * Map a working directory to Claude Code's project transcript folder.
@@ -21,17 +15,18 @@ export function claudeProjectsDir(workspacePath: string, home: string = os.homed
 
 /**
  * Parse a single Claude Code .jsonl transcript and return user-authored prompts.
- * Filters out tool_result entries (whose content is an array) — those are
- * synthetic "user" turns that carry tool output, not a user message.
+ * Filters out tool_result entries (whose content is an array of tool_result
+ * blocks) — those are synthetic "user" turns that carry tool output, not a
+ * user message.
  */
-export function parseClaudeTranscript(filePath: string): ClaudeUserPrompt[] {
+export function parseClaudeTranscript(filePath: string): RuntimeUserPrompt[] {
   let raw: string;
   try {
     raw = fs.readFileSync(filePath, "utf8");
   } catch {
     return [];
   }
-  const prompts: ClaudeUserPrompt[] = [];
+  const prompts: RuntimeUserPrompt[] = [];
   for (const line of raw.split("\n")) {
     if (!line) continue;
     let entry: Record<string, unknown>;
@@ -45,11 +40,10 @@ export function parseClaudeTranscript(filePath: string): ClaudeUserPrompt[] {
     if (!message || message.role !== "user") continue;
     const text = extractUserText(message.content);
     if (!text) continue;
-    const uuid = typeof entry.uuid === "string" ? entry.uuid : "";
-    const timestamp = typeof entry.timestamp === "string" ? entry.timestamp : "";
-    const sessionId = typeof entry.sessionId === "string" ? entry.sessionId : "";
-    if (!uuid || !timestamp) continue;
-    prompts.push({ uuid, text, timestamp, sessionId });
+    const externalId = typeof entry.uuid === "string" ? entry.uuid : "";
+    const sentAt = typeof entry.timestamp === "string" ? entry.timestamp : "";
+    if (!externalId || !sentAt) continue;
+    prompts.push({ externalId, text, sentAt });
   }
   return prompts;
 }
@@ -73,25 +67,14 @@ function extractUserText(content: unknown): string | null {
 
 /**
  * Find the most likely Claude Code transcript for a session that started at
- * `sessionStartedAt` (ISO) inside `workspacePath`. We pick the .jsonl whose
- * earliest user prompt timestamp falls within the session window (or whose
- * mtime is closest to the start when no prompts have been written yet).
- *
- * Returns null if no candidate is found or the directory does not exist.
+ * `sessionStartedAt` inside `workspacePath`. Pre-filters by mtime so archived
+ * transcripts that pre-date the session are skipped without parsing.
  */
-export function findClaudeTranscriptForSession(input: {
-  workspacePath: string;
-  sessionStartedAt: string;
-  home?: string;
-}): string | null {
+export function findClaudeTranscriptForSession(input: GetUserPromptsInput): string | null {
   const dir = claudeProjectsDir(input.workspacePath, input.home ?? os.homedir());
   if (!fs.existsSync(dir)) return null;
   const startMs = Date.parse(input.sessionStartedAt);
   if (!Number.isFinite(startMs)) return null;
-  // Stat-first: a transcript whose last write happened before the session
-  // started cannot belong to this session, so skip the full parse. Keeps
-  // history reads bounded even when the project dir has many archived
-  // .jsonl files.
   type Candidate = { path: string; mtimeMs: number };
   const candidates: Candidate[] = [];
   for (const name of fs.readdirSync(dir)) {
@@ -112,13 +95,11 @@ export function findClaudeTranscriptForSession(input: {
     let firstMs = Number.POSITIVE_INFINITY;
     const prompts = parseClaudeTranscript(candidate.path);
     if (prompts.length > 0) {
-      const parsed = Date.parse(prompts[0]?.timestamp ?? "");
+      const parsed = Date.parse(prompts[0]?.sentAt ?? "");
       if (Number.isFinite(parsed)) firstMs = parsed;
     } else {
       firstMs = candidate.mtimeMs;
     }
-    // Prefer transcripts whose first event is at-or-after the session start,
-    // within a small slack window for clock skew (60s).
     const delta = firstMs - startMs;
     if (delta < -60_000) continue;
     const score = Math.abs(delta);
@@ -129,3 +110,11 @@ export function findClaudeTranscriptForSession(input: {
   }
   return bestPath;
 }
+
+export const claudeCodeAdapter: RuntimeTranscriptAdapter = {
+  runtimeId: "claude-code",
+  getUserPrompts(input) {
+    const transcript = findClaudeTranscriptForSession(input);
+    return transcript ? parseClaudeTranscript(transcript) : [];
+  },
+};
