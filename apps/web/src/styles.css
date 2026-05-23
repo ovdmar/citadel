@@ -35,12 +35,12 @@
   --topbar-bg: #fffefa;
   --topbar-fg: #1a2030;
   --topbar-line: rgba(148, 152, 164, 0.2);
-  /* Shadow + overlay tokens are RGB triplets so callers can supply their own
-   * alpha via rgb(var(--shadow-color) / N). Light theme uses a deep slate; dark
-   * theme falls back to true black so shadows still register against the dark
-   * surface. */
-  --shadow-color: 16 24 40;
-  --overlay-bg: rgba(7, 16, 31, 0.45);
+  /* --shadow-color is an RGB triplet (no commas) so callers can supply alpha
+   * via rgb(var(--shadow-color) / N). Light theme keeps the historic deep-
+   * slate shadow; dark theme drops to true black so shadows still register
+   * against the dark surface. */
+  --shadow-color: 7 16 31;
+  --overlay-bg: rgba(7, 16, 31, 0.55);
 }
 
 :root[data-theme="dark"],
@@ -91,8 +91,8 @@
     --topbar-bg: #fffefa;
     --topbar-fg: #1a2030;
     --topbar-line: rgba(148, 152, 164, 0.2);
-    --shadow-color: 16 24 40;
-    --overlay-bg: rgba(7, 16, 31, 0.45);
+    --shadow-color: 7 16 31;
+    --overlay-bg: rgba(7, 16, 31, 0.55);
   }
 }
 

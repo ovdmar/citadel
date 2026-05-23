@@ -311,11 +311,7 @@
   align-content: start;
   color: var(--muted);
   font-size: 12.5px;
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--color-danger) 8%, transparent),
-    color-mix(in srgb, var(--color-danger) 0%, transparent)
-  );
+  background: linear-gradient(180deg, color-mix(in srgb, var(--color-danger) 8%, transparent), transparent);
 }
 
 .terminal-error-state h3 {
