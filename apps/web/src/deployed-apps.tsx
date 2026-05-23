@@ -22,12 +22,15 @@ export function DeployedAppsPanel(props: { workspaceId: string; repo: Repo | nul
 
   const data = summary.data;
   const showEmpty = !data || data.resolution.source === "none";
+  // Single-app panels only need the per-chip redeploy. The panel-level icon
+  // (right-aligned next to the title) earns its place when there are 2+ apps.
+  const showAllRedeploy = !showEmpty && (data?.apps.length ?? 0) >= 2;
 
   return (
     <section className="inspector-block">
       <div className="panel-title-row">
         <h4>Local deploys</h4>
-        {!showEmpty ? (
+        {showAllRedeploy ? (
           <Button
             type="button"
             variant="ghost"
@@ -57,11 +60,6 @@ export function DeployedAppsPanel(props: { workspaceId: string; repo: Repo | nul
         </div>
       ) : null}
       {showEmpty ? <DeployedAppsEmpty repo={props.repo} /> : null}
-      {data && data.resolution.source !== "none" ? (
-        <small className="command-result-meta">
-          Source: {data.resolution.source === "repo-file" ? data.resolution.filePath : "repo config"}
-        </small>
-      ) : null}
     </section>
   );
 }
@@ -74,7 +72,6 @@ function DeployedAppChip(props: { app: DeployedApp; redeploying: boolean; onRede
       <a href={app.url} target="_blank" rel="noreferrer" className="app-chip-link">
         {app.name}
       </a>
-      <span className="command-result-meta">{app.url.replace(/^https?:\/\//, "")}</span>
       <button
         type="button"
         className="icon-button"
@@ -89,10 +86,10 @@ function DeployedAppChip(props: { app: DeployedApp; redeploying: boolean; onRede
   );
 }
 
+// Binary indicator: green only when the probe succeeded, red otherwise (stopped
+// or unknown). Yellow/degraded didn't communicate anything actionable.
 function chipTone(status: DeployedApp["status"]) {
-  if (status === "deployed") return "healthy";
-  if (status === "stopped") return "unavailable";
-  return "degraded";
+  return status === "deployed" ? "healthy" : "unavailable";
 }
 
 function DeployedAppsEmpty(props: { repo: Repo | null }) {

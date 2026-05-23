@@ -1,7 +1,6 @@
 import type { AgentSession, Repo, Workspace, WorkspaceCockpitSummary, WorkspaceDiff } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
-import { GitPullRequest, Hash, PanelRightClose, Settings, Slack } from "lucide-react";
+import { GitPullRequest, Hash, PanelRightClose, Slack } from "lucide-react";
 import { useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
@@ -260,9 +259,9 @@ function StatsTab(props: {
         ) : null}
       </section>
 
-      <section className="inspector-block">
-        <h4>Deployed apps</h4>
-        {apps?.applications.length ? (
+      {apps?.applications.length ? (
+        <section className="inspector-block">
+          <h4>Deployed apps</h4>
           <div className="app-chip-grid">
             {apps.applications.map((app) => (
               <a
@@ -279,19 +278,17 @@ function StatsTab(props: {
               </a>
             ))}
           </div>
-        ) : (
-          <DeployedAppsEmpty repo={props.repo} reason={apps?.reason ?? null} />
-        )}
-        {apps?.actions.length ? (
-          <div className="attach-row">
-            {apps.actions.map((action) => (
-              <span key={action.id} className="attach-button" title={action.description ?? action.label}>
-                {action.label}
-              </span>
-            ))}
-          </div>
-        ) : null}
-      </section>
+          {apps.actions.length ? (
+            <div className="attach-row">
+              {apps.actions.map((action) => (
+                <span key={action.id} className="attach-button" title={action.description ?? action.label}>
+                  {action.label}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <DeployedAppsPanel workspaceId={props.workspace.id} repo={props.repo} />
     </div>
@@ -345,51 +342,6 @@ function DiffTab(props: { workspace: Workspace; summary: WorkspaceCockpitSummary
           Full-screen review with inline comments visible to the agent is planned. Open the PR for now.
         </div>
       </section>
-    </div>
-  );
-}
-
-function DeployedAppsEmpty(props: { repo: Repo | null; reason: string | null }) {
-  return (
-    <div className="empty-state-mock" aria-label="No deployed apps configured">
-      <div className="empty-state-reason">
-        <Settings size={12} />
-        <span>{props.reason ?? "No app discovery hook configured for this repo."}</span>
-      </div>
-      <div className="empty-state-preview" aria-hidden>
-        <div className="app-chip tone-healthy">
-          <span className="dot" />
-          <span>web</span>
-          <span className="command-result-meta">production</span>
-        </div>
-        <div className="app-chip tone-degraded">
-          <span className="dot" />
-          <span>api</span>
-          <span className="command-result-meta">staging</span>
-        </div>
-        <div className="app-chip tone-unavailable">
-          <span className="dot" />
-          <span>worker</span>
-          <span className="command-result-meta">preview</span>
-        </div>
-      </div>
-      <p className="empty-state-hint">
-        Configure an `apps` hook for this repo to surface deploys, URLs, and quick actions.
-      </p>
-      {props.repo ? (
-        <Link
-          to="/repos/$repoId"
-          params={{ repoId: props.repo.id }}
-          className="settings-link"
-          title="Configure deploy hooks for this repo"
-        >
-          Configure hooks
-        </Link>
-      ) : (
-        <Link to="/settings" className="settings-link" title="Open settings">
-          Open settings
-        </Link>
-      )}
     </div>
   );
 }

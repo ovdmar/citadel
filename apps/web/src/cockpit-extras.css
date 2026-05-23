@@ -626,6 +626,18 @@
   background: var(--color-danger);
 }
 
+.panel-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.panel-title-row > h4,
+.panel-title-row > h2 {
+  margin: 0;
+}
+
 .app-chip .app-chip-link {
   color: inherit;
   text-decoration: none;
