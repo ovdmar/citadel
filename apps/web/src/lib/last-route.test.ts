@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
-import { clearLastRoute, isBareRootLanding, loadLastRoute, saveLastRoute } from "./last-route.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { bootstrapLastRoute, clearLastRoute, isBareRootLanding, loadLastRoute, saveLastRoute } from "./last-route.js";
 
 function memoryStorage() {
   const data = new Map<string, string>();
@@ -63,5 +63,50 @@ describe("isBareRootLanding", () => {
     expect(isBareRootLanding({ pathname: "/operations", search: "", hash: "" })).toBe(false);
     expect(isBareRootLanding({ pathname: "/", search: "?x=1", hash: "" })).toBe(false);
     expect(isBareRootLanding({ pathname: "/", search: "", hash: "#a" })).toBe(false);
+  });
+});
+
+describe("bootstrapLastRoute", () => {
+  let storage: ReturnType<typeof memoryStorage>;
+  let replaceState: ReturnType<typeof vi.fn>;
+  const history = () => ({ replaceState });
+
+  beforeEach(() => {
+    storage = memoryStorage();
+    replaceState = vi.fn();
+  });
+
+  it("restores the saved route when landing on bare /", () => {
+    saveLastRoute("/operations?tab=runs", storage);
+    const result = bootstrapLastRoute({ pathname: "/", search: "", hash: "" }, history(), storage);
+    expect(result).toBe("/operations?tab=runs");
+    expect(replaceState).toHaveBeenCalledWith(null, "", "/operations?tab=runs");
+  });
+
+  it("does nothing when no saved route exists", () => {
+    const result = bootstrapLastRoute({ pathname: "/", search: "", hash: "" }, history(), storage);
+    expect(result).toBeNull();
+    expect(replaceState).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when saved route equals /", () => {
+    saveLastRoute("/", storage);
+    const result = bootstrapLastRoute({ pathname: "/", search: "", hash: "" }, history(), storage);
+    expect(result).toBeNull();
+    expect(replaceState).not.toHaveBeenCalled();
+  });
+
+  it("respects a deep-link landing (non-root path)", () => {
+    saveLastRoute("/operations", storage);
+    const result = bootstrapLastRoute({ pathname: "/settings", search: "", hash: "" }, history(), storage);
+    expect(result).toBeNull();
+    expect(replaceState).not.toHaveBeenCalled();
+  });
+
+  it("respects a deep-link landing on / with a query string", () => {
+    saveLastRoute("/operations", storage);
+    const result = bootstrapLastRoute({ pathname: "/", search: "?workspace=foo", hash: "" }, history(), storage);
+    expect(result).toBeNull();
+    expect(replaceState).not.toHaveBeenCalled();
   });
 });

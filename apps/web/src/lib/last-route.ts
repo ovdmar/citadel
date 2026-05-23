@@ -58,6 +58,23 @@ export function isBareRootLanding(loc: Pick<Location, "pathname" | "search" | "h
   return loc.pathname === "/" && loc.search === "" && loc.hash === "";
 }
 
+type HistoryLike = Pick<History, "replaceState">;
+
+// Decide whether to restore the persisted route and, if so, swap it into the
+// URL bar before the router boots. Exported as a pure function so the decision
+// logic (not just the storage layer) is unit-testable.
+export function bootstrapLastRoute(
+  location: Pick<Location, "pathname" | "search" | "hash">,
+  history: HistoryLike,
+  storage: StorageLike | null = getStorage(),
+): string | null {
+  if (!isBareRootLanding(location)) return null;
+  const saved = loadLastRoute(storage);
+  if (!saved || saved === "/") return null;
+  history.replaceState(null, "", saved);
+  return saved;
+}
+
 function isExcluded(href: string): boolean {
   const path = href.split("?", 1)[0]?.split("#", 1)[0] ?? href;
   return EXCLUDED_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));

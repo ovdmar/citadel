@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
 import { Cockpit } from "./cockpit.js";
-import { clearLastRoute, isBareRootLanding, loadLastRoute, saveLastRoute } from "./lib/last-route.js";
+import { bootstrapLastRoute, clearLastRoute, saveLastRoute } from "./lib/last-route.js";
 import { DashboardView } from "./routes/dashboard.js";
 import { HistoryView } from "./routes/history.js";
 import { OnboardingView } from "./routes/onboarding.js";
@@ -67,42 +67,6 @@ const historyRoute = createRoute({
   component: HistoryView,
 });
 
-// Restore the last visited route BEFORE the router boots so it picks the
-// correct initial location off the URL bar. Only fire on a bare-root landing —
-// any explicit deep link (non-root path, or root with query/hash) wins.
-if (typeof window !== "undefined" && isBareRootLanding(window.location)) {
-  const saved = loadLastRoute();
-  if (saved && saved !== "/") {
-    window.history.replaceState(null, "", saved);
-  }
-}
-
-const router = createRouter({
-  routeTree: rootRoute.addChildren([
-    indexRoute,
-    settingsRoute,
-    repoSettingsRoute,
-    operationsRoute,
-    onboardingRoute,
-    dashboardRoute,
-    historyRoute,
-  ]),
-  defaultNotFoundComponent: NotFoundView,
-});
-
-// Persist every resolved navigation. onResolved (vs onBeforeNavigate) ensures
-// only routes the user actually reached enter the store — aborted loads and
-// in-flight navigations are skipped, so we never restore into a broken state.
-router.subscribe("onResolved", (event) => {
-  saveLastRoute(event.toLocation.href);
-});
-
-declare module "@tanstack/react-router" {
-  interface Register {
-    router: typeof router;
-  }
-}
-
 function Shell() {
   return (
     <div className="app-root">
@@ -127,6 +91,43 @@ function NotFoundView() {
       </Link>
     </div>
   );
+}
+
+// Restore the last visited route BEFORE the router boots so it picks the
+// correct initial location off the URL bar. The decision logic lives in
+// bootstrapLastRoute so it can be unit-tested independently.
+if (typeof window !== "undefined") {
+  bootstrapLastRoute(window.location, window.history);
+}
+
+const router = createRouter({
+  routeTree: rootRoute.addChildren([
+    indexRoute,
+    settingsRoute,
+    repoSettingsRoute,
+    operationsRoute,
+    onboardingRoute,
+    dashboardRoute,
+    historyRoute,
+  ]),
+  defaultNotFoundComponent: NotFoundView,
+});
+
+// Persist every resolved navigation. onResolved (vs onBeforeNavigate) ensures
+// only routes the user actually reached enter the store — aborted loads and
+// in-flight navigations are skipped, so we never restore into a broken state.
+// Also skip non-2xx outcomes (404, redirects-in-flight) so a stale route can't
+// briefly write itself back to storage between resolve and NotFoundView mount.
+router.subscribe("onResolved", (event) => {
+  const status = router.state.statusCode;
+  if (status >= 400) return;
+  saveLastRoute(event.toLocation.href);
+});
+
+declare module "@tanstack/react-router" {
+  interface Register {
+    router: typeof router;
+  }
 }
 
 createRoot(document.getElementById("root") as HTMLElement).render(
