@@ -3,6 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 
+export { devStatePath, loadDevState, saveDevState, resolveWorktreeRoot, DevStateSchema } from "./dev-state.js";
+export type { DevState } from "./dev-state.js";
+
 export const RuntimeConfigSchema = z.object({
   id: z.string().min(1),
   displayName: z.string().min(1),

@@ -3,11 +3,13 @@
 ## Local Development
 
 ```bash
-pnpm install
-make dev
+make setup     # pnpm install
+make deploy    # foreground HMR; prints the worktree-scoped cockpit URL
 ```
 
-The daemon listens on `http://127.0.0.1:4337` by default (operations install: `4010`). The Vite web app listens on `http://127.0.0.1:5173` (operations install: `5175`) and proxies `/api`, `/events`, `/terminals`, and the diagnostic `/terminal` WebSocket to the daemon.
+`make deploy` runs the daemon (`tsx watch`) and the Vite cockpit in parallel, scoped to the current checkout. Both bind worktree-derived ports (`4110-4209` for the daemon, `5210-5309` for vite) so multiple worktrees can run side-by-side without colliding with each other or with the systemd-supervised `citadel.service` (port `4010`).
+
+See [worktree-development.md](./worktree-development.md) for the full mental model, port derivation, and troubleshooting.
 
 > Port `3000` is reserved for Grafana on operator machines. Do not bind any Citadel surface to it.
 

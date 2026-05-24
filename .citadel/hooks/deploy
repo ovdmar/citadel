@@ -32,9 +32,10 @@
 #                            multiple NICs and you want a specific one in the
 #                            cockpit chip.
 #
-# Port derivation: 4110 + (cksum($WORKTREE_PATH) mod 100) — same formula the
-# Makefile uses, so `make deploy` and the cockpit's Redeploy land on the same
-# port for a given worktree.
+# Port derivation: prefer the port persisted in .citadel/dev.json (the daemon
+# writes this on boot, including after EADDRINUSE fallback). Fall back to
+# `4110 + (cksum($WORKTREE_PATH) mod 100)` — same formula the Makefile uses —
+# when dev.json is missing (no daemon has booted from this worktree yet).
 
 set -euo pipefail
 
@@ -42,6 +43,15 @@ APP_NAME="citadel"
 WORKTREE="${CITADEL_WORKSPACE_PATH:-$(pwd)}"
 
 derive_port() {
+  local dev_state="$WORKTREE/.citadel/dev.json"
+  if [[ -r "$dev_state" ]] && command -v jq >/dev/null 2>&1; then
+    local persisted
+    persisted=$(jq -r '.port // empty' "$dev_state" 2>/dev/null || true)
+    if [[ -n "$persisted" ]]; then
+      printf '%d' "$persisted"
+      return
+    fi
+  fi
   local sum
   sum=$(printf '%s' "$WORKTREE" | cksum | awk '{print $1}')
   printf '%d' $(( 4110 + (sum % 100) ))
@@ -84,12 +94,13 @@ case "${1:-}" in
       exit 127
     fi
     cd "$WORKTREE"
-    echo "→ Delegating to 'make deploy-worktree' (worktree=${WORKTREE})"
-    # deploy-worktree handles: build, stop prior daemon, free the port, start
-    # the new daemon detached via setsid+nohup, record pgid under .citadel/logs.
-    # Streams progress to this hook's stdout/stderr so the cockpit operation
-    # log shows the live build + boot output.
-    make -s deploy-worktree
+    echo "→ Delegating to 'make serve' (worktree=${WORKTREE})"
+    # `make serve` is the build + detached daemon path. (`make deploy` is
+    # foreground HMR and would hang this hook.) It handles: build, stop prior
+    # daemon, free the port, start the new daemon detached via setsid+nohup,
+    # record pgid under .citadel/logs. Streams progress to this hook's
+    # stdout/stderr so the cockpit operation log shows the live build + boot.
+    make -s serve
     echo "${APP_NAME} reachable at ${URL}"
     ;;
   ""|--help|-h|help)
