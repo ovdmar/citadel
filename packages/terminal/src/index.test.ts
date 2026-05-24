@@ -13,12 +13,16 @@ import {
   captureTranscript,
   ensureTmuxExtendedKeys,
   ensureTmuxSession,
+  ensureTmuxSessionRaw,
   isAgentLive,
   killTmuxSession,
   parseTmuxControlOutput,
   pasteText,
+  pipeBackgroundSessionToLog,
   resizePane,
   sendKeys,
+  shellQuote,
+  stopBackgroundSessionPipe,
   submitPrompt,
   tmuxSessionExists,
 } from "./index.js";
@@ -381,6 +385,55 @@ describe("tmux terminal gateway helpers", () => {
       await Promise.all([waitForClose(reconnectA), waitForClose(wsB)]);
     } finally {
       await closeServer(server);
+    }
+  }, 15000);
+
+  it("ensureTmuxSessionRaw runs the command without injecting the agent wrapper", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-bg-"));
+    dirs.push(dir);
+    const sessionName = `citadel_bg_test_${Date.now().toString(36)}`;
+    sessions.push(sessionName);
+    const sentinel = path.join(dir, "ran.txt");
+    // The command writes a sentinel — proves the command ran. We then capture
+    // the pane and assert it does NOT contain the wrapper's exit hint, which
+    // would prove ensureTmuxSession's fallback-shell wrapper was injected.
+    await ensureTmuxSessionRaw({
+      sessionName,
+      cwd: dir,
+      command: "bash",
+      args: ["-c", `echo started > ${shellQuote(sentinel)}; sleep 0.3`],
+    });
+    await waitFor(() => fs.existsSync(sentinel), 3000);
+    expect(fs.readFileSync(sentinel, "utf8")).toContain("started");
+    // Capture the pane regardless of whether it's still alive (remain-on-exit
+    // tmux config may keep it). The wrapper string is what we don't want.
+    const pane = captureTmux(sessionName, 200);
+    expect(pane).not.toContain("[citadel] Agent exited");
+  }, 10000);
+
+  it("pipeBackgroundSessionToLog shellQuotes paths with spaces and streams pane output past the buffer threshold", async () => {
+    // `head -c N` uses stdio buffering, so very small writes stay in the
+    // 8KB-ish buffer until flush. Production agents emit MBs which is fine
+    // (each ~8KB chunk flushes). The test pushes a >32KB block to verify the
+    // pipe + path-with-spaces handling actually lands bytes on disk.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-pipe with space-"));
+    dirs.push(dir);
+    const sessionName = `citadel_bg_pipe_${Date.now().toString(36)}`;
+    sessions.push(sessionName);
+    const logPath = path.join(dir, "run.log");
+    // 50,000 zeros via head from /dev/zero — over the buffer threshold.
+    await ensureTmuxSessionRaw({
+      sessionName,
+      cwd: dir,
+      command: "bash",
+      args: ["-c", "sleep 0.3; head -c 50000 /dev/zero; sleep 0.5"],
+    });
+    pipeBackgroundSessionToLog(sessionName, logPath);
+    await waitFor(() => fs.existsSync(logPath) && fs.statSync(logPath).size >= 1024, 5000);
+    expect(fs.statSync(logPath).size).toBeGreaterThanOrEqual(1024);
+    // stopBackgroundSessionPipe must not throw even if pane is dead.
+    if (tmuxSessionExists(sessionName)) {
+      expect(() => stopBackgroundSessionPipe(sessionName)).not.toThrow();
     }
   }, 15000);
 });

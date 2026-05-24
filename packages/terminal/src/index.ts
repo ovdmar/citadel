@@ -95,9 +95,71 @@ function terminalCommand(sessionName: string, command: string, args: string[]) {
   return `bash -c ${shellQuote(script)}`;
 }
 
-function shellQuote(value: string) {
+export function shellQuote(value: string) {
   if (/^[A-Za-z0-9_/:=.,+@%-]+$/.test(value)) return value;
   return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Per-run cap on pipe-pane log size. tmux pipe-pane streams the raw PTY bytes
+ * into `head -c LOG_TRUNCATION_BYTES`, which exits on cap and closes the pipe,
+ * after which pipe-pane stops writing. We surface the cap via stat at run-row
+ * close (see scheduledAgents.executeRun).
+ */
+export const LOG_TRUNCATION_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Like ensureTmuxSession but bypasses the agent-wrapper script — runs
+ * `command args` directly under tmux. When the command exits, the pane
+ * terminates. Used by background scheduled-agent runs where:
+ *  - There is no human to "fall back" to a shell for.
+ *  - We do NOT want the wrapper's "[citadel] Agent exited" line + fallback
+ *    shell PS1 to stream into the per-run log file via pipe-pane.
+ *  - We DO want the reconciler to see `tmuxSessionExists === false` on the
+ *    next tick after the agent exits so the run row closes promptly.
+ */
+export async function ensureTmuxSessionRaw(input: TerminalSessionRequest) {
+  if (tmuxSessionExists(input.sessionName)) {
+    const id = execFileSync("tmux", ["display-message", "-p", "-t", input.sessionName, "#{session_id}"], {
+      encoding: "utf8",
+    }).trim();
+    return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
+  }
+  try {
+    fs.writeFileSync(agentLiveSentinelPath(input.sessionName), "");
+  } catch {
+    // best-effort
+  }
+  // tmux new-session takes a single `shell-command` string and hands it to
+  // /bin/sh -c. Build it ourselves with shellQuote so an arg with spaces is
+  // preserved correctly. Compare to ensureTmuxSession which wraps in `bash -c`.
+  const shellCommand = [input.command, ...input.args].map(shellQuote).join(" ");
+  await execFileAsync("tmux", ["new-session", "-d", "-s", input.sessionName, "-c", input.cwd, shellCommand], {
+    timeout: 10000,
+    maxBuffer: 128 * 1024,
+  });
+  ensureTmuxExtendedKeys();
+  const id = execFileSync("tmux", ["display-message", "-p", "-t", input.sessionName, "#{session_id}"], {
+    encoding: "utf8",
+  }).trim();
+  return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
+}
+
+/**
+ * Start streaming a tmux pane to a per-run log file via `tmux pipe-pane -O`.
+ * Bounded by `head -c LOG_TRUNCATION_BYTES` so a runaway agent can't fill
+ * disk. `logFilePath` is shellQuoted; we never hand pipe-pane an unquoted
+ * user-controlled path.
+ */
+export function pipeBackgroundSessionToLog(sessionName: string, logFilePath: string) {
+  const quoted = shellQuote(logFilePath);
+  const command = `head -c ${LOG_TRUNCATION_BYTES} >> ${quoted}`;
+  execFileSync("tmux", ["pipe-pane", "-O", "-t", sessionName, command]);
+}
+
+/** Stop the pipe-pane stream on a session (no command = stop streaming). */
+export function stopBackgroundSessionPipe(sessionName: string) {
+  execFileSync("tmux", ["pipe-pane", "-t", sessionName]);
 }
 
 export function tmuxSessionExists(sessionName: string) {

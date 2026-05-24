@@ -2,7 +2,8 @@ import type http from "node:http";
 import type { CitadelConfig } from "@citadel/config";
 import { CreateScheduledAgentInputSchema, UpdateScheduledAgentInputSchema } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
-import { type OperationService, ScheduledAgentRunner } from "@citadel/operations";
+import { type OperationService, ScheduledAgentRunner, createBackgroundAgentSession } from "@citadel/operations";
+import { killTmuxSession } from "@citadel/terminal";
 import type express from "express";
 import { ScheduledAgentService } from "./scheduled-agent-service.js";
 
@@ -25,28 +26,50 @@ export function registerScheduledAgentRoutes(input: {
   asyncRoute: AsyncRoute;
 }): ScheduledAgentBundle {
   const { app, server, store, operations, config, emit, asyncRoute } = input;
+  const recordActivity = (event: {
+    type: string;
+    message: string;
+    repoId: string | null;
+    workspaceId: string | null;
+  }) => {
+    store.addActivity({
+      id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+      type: event.type,
+      source: "system",
+      repoId: event.repoId,
+      workspaceId: event.workspaceId,
+      operationId: null,
+      message: event.message,
+      hookOutput: null,
+      createdAt: new Date().toISOString(),
+    });
+  };
   const scheduledAgents = new ScheduledAgentRunner({
     store,
     operations,
     getRuntime: (runtimeId) => config.runtimes.find((runtime) => runtime.id === runtimeId),
     dataDir: config.dataDir,
-    // createBackgroundSession + killTmuxSession are injected once step 4 lands
-    // the terminal-side helpers. Until then, background runMode runs fail
-    // gracefully with `background_session_creator_unavailable` and the queue
-    // path is unaffected.
-    recordActivity: (event) => {
-      store.addActivity({
-        id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
-        type: event.type,
-        source: "system",
-        repoId: event.repoId,
-        workspaceId: event.workspaceId,
-        operationId: null,
-        message: event.message,
-        hookOutput: null,
-        createdAt: new Date().toISOString(),
-      });
-    },
+    createBackgroundSession: (input) =>
+      createBackgroundAgentSession(
+        {
+          store,
+          activity: (type, source, message, repoId, workspaceId, operationId) =>
+            store.addActivity({
+              id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+              type,
+              source,
+              repoId,
+              workspaceId,
+              operationId,
+              message,
+              hookOutput: null,
+              createdAt: new Date().toISOString(),
+            }),
+        },
+        input,
+      ),
+    killTmuxSession: (name) => killTmuxSession(name),
+    recordActivity,
   });
 
   if (process.env.CITADEL_DISABLE_SCHEDULER !== "1") {
