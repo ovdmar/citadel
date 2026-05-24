@@ -40,6 +40,7 @@ describe("SqliteStore", () => {
       { version: 3 },
       { version: 4 },
       { version: 5 },
+      { version: 6 },
     ]);
   });
 
@@ -264,6 +265,9 @@ describe("SqliteStore", () => {
       workspaceStrategy: "new" as const,
       workspaceName: "recur",
       baseBranch: null,
+      runMode: "workspace" as const,
+      backgroundCwd: null,
+      overlapPolicy: "skip" as const,
       enabled: true,
       lastRunAt: null,
       lastRunStatus: "never" as const,

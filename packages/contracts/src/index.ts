@@ -70,6 +70,12 @@ export const RuntimeCapabilitySchema = z.object({
   supportsNonInteractiveGoal: z.boolean(),
   supportsShell: z.boolean(),
   supportsUsage: z.boolean(),
+  // Runtimes whose output is a TUI (Claude Code, Codex, anything ncurses).
+  // Background scheduled-agent runs disable themselves for these runtimes
+  // because tmux pipe-pane would capture raw ANSI escapes and produce an
+  // unreadable log file. Optional + defaults to false to preserve back-compat
+  // with shell-only runtimes whose configs do not set it.
+  supportsTui: z.boolean().optional().default(false),
 });
 
 export const AgentRuntimeSchema = z.object({
@@ -468,8 +474,15 @@ export const TransitionIssueInputSchema = z.object({
 });
 
 export const ScheduledAgentWorkspaceStrategySchema = z.enum(["new", "existing"]);
+// Status of the denormalized cache on the agent row — includes "never" for
+// agents that have not yet fired.
 export const ScheduledAgentRunStatusSchema = z.enum(["never", "running", "succeeded", "failed"]);
+// Status of a single run row in scheduled_agent_runs — "never" is not valid
+// here (every row represents an actual fire).
+export const ScheduledAgentRunRowStatusSchema = z.enum(["queued", "running", "succeeded", "failed"]);
 export const ScheduledAgentScheduleTypeSchema = z.enum(["recurring", "once"]);
+export const ScheduledAgentRunModeSchema = z.enum(["workspace", "background"]);
+export const ScheduledAgentOverlapPolicySchema = z.enum(["skip", "queue"]);
 
 export const ScheduledAgentSchema = z.object({
   id: IdSchema,
@@ -484,6 +497,9 @@ export const ScheduledAgentSchema = z.object({
   workspaceStrategy: ScheduledAgentWorkspaceStrategySchema,
   workspaceName: z.string().min(1).max(80),
   baseBranch: z.string().min(1).max(120).nullable().default(null),
+  runMode: ScheduledAgentRunModeSchema.default("workspace"),
+  backgroundCwd: z.string().min(1).max(4000).nullable().default(null),
+  overlapPolicy: ScheduledAgentOverlapPolicySchema.default("skip"),
   enabled: z.boolean().default(true),
   lastRunAt: z.string().nullable().default(null),
   lastRunStatus: ScheduledAgentRunStatusSchema.default("never"),
@@ -494,8 +510,47 @@ export const ScheduledAgentSchema = z.object({
   updatedAt: z.string(),
 });
 
+// One row per fire (cron tick or manual runNow). Lifecycle:
+//   queued    → enqueuedAt = fire time, startedAt = null, logFilePath = null
+//   running   → startedAt = execution-start time (= enqueuedAt for skip-policy),
+//               logFilePath populated, workspace/session ids set per runMode
+//   succeeded / failed → endedAt populated, other fields preserved
+export const ScheduledAgentRunSchema = z.object({
+  id: IdSchema,
+  scheduledAgentId: IdSchema,
+  status: ScheduledAgentRunRowStatusSchema,
+  enqueuedAt: z.string(),
+  startedAt: z.string().nullable().default(null),
+  endedAt: z.string().nullable().default(null),
+  message: z.string().nullable().default(null),
+  workspaceId: IdSchema.nullable().default(null),
+  sessionId: IdSchema.nullable().default(null),
+  backgroundSessionId: IdSchema.nullable().default(null),
+  logFilePath: z.string().nullable().default(null),
+});
+
+// Tmux-backed agent session that is NOT tied to a workspace. Only fields with
+// a documented reader in v1 are surfaced — see plan step 1 for the reader map.
+export const BackgroundAgentSessionStatusSchema = z.enum(["running", "stopped", "failed"]);
+
+export const BackgroundAgentSessionSchema = z.object({
+  id: IdSchema,
+  scheduledAgentId: IdSchema.nullable().default(null),
+  cwd: z.string().min(1).max(4000),
+  logFilePath: z.string().min(1).max(4000),
+  tmuxSessionName: z.string().min(1),
+  tmuxSessionId: z.string().min(1),
+  status: BackgroundAgentSessionStatusSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
 // Recurring needs a cron; one-shot needs a runAt timestamp. The runner stores a
 // placeholder cron for one-shots so the DB column can stay NOT NULL.
+//
+// workspaceStrategy + workspaceName are required for runMode='workspace' (the
+// default) and ignored for runMode='background' (still accepted in the input
+// so the schema doesn't reject a payload that includes them).
 export const CreateScheduledAgentInputSchema = z
   .object({
     name: z.string().min(1).max(80),
@@ -509,6 +564,9 @@ export const CreateScheduledAgentInputSchema = z
     workspaceStrategy: ScheduledAgentWorkspaceStrategySchema,
     workspaceName: z.string().min(1).max(80),
     baseBranch: z.string().min(1).max(120).optional(),
+    runMode: ScheduledAgentRunModeSchema.optional(),
+    backgroundCwd: z.string().min(1).max(4000).optional(),
+    overlapPolicy: ScheduledAgentOverlapPolicySchema.optional(),
     enabled: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
@@ -540,6 +598,9 @@ export const UpdateScheduledAgentInputSchema = z.object({
   repoId: IdSchema.optional(),
   runtimeId: IdSchema.optional(),
   prompt: z.string().max(8000).optional(),
+  runMode: ScheduledAgentRunModeSchema.optional(),
+  backgroundCwd: z.string().min(1).max(4000).optional(),
+  overlapPolicy: ScheduledAgentOverlapPolicySchema.optional(),
   workspaceStrategy: ScheduledAgentWorkspaceStrategySchema.optional(),
   workspaceName: z.string().min(1).max(80).optional(),
   baseBranch: z.string().min(1).max(120).optional(),
@@ -607,7 +668,13 @@ export type WorkspaceDiff = z.infer<typeof WorkspaceDiffSchema>;
 export type ScheduledAgent = z.infer<typeof ScheduledAgentSchema>;
 export type ScheduledAgentWorkspaceStrategy = z.infer<typeof ScheduledAgentWorkspaceStrategySchema>;
 export type ScheduledAgentRunStatus = z.infer<typeof ScheduledAgentRunStatusSchema>;
+export type ScheduledAgentRunRowStatus = z.infer<typeof ScheduledAgentRunRowStatusSchema>;
 export type ScheduledAgentScheduleType = z.infer<typeof ScheduledAgentScheduleTypeSchema>;
+export type ScheduledAgentRunMode = z.infer<typeof ScheduledAgentRunModeSchema>;
+export type ScheduledAgentOverlapPolicy = z.infer<typeof ScheduledAgentOverlapPolicySchema>;
+export type ScheduledAgentRun = z.infer<typeof ScheduledAgentRunSchema>;
+export type BackgroundAgentSession = z.infer<typeof BackgroundAgentSessionSchema>;
+export type BackgroundAgentSessionStatus = z.infer<typeof BackgroundAgentSessionStatusSchema>;
 export type CreateScheduledAgentInput = z.infer<typeof CreateScheduledAgentInputSchema>;
 export type UpdateScheduledAgentInput = z.infer<typeof UpdateScheduledAgentInputSchema>;
 

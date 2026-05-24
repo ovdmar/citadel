@@ -187,6 +187,7 @@ describe("mcp helpers", () => {
             supportsNonInteractiveGoal: false,
             supportsShell: true,
             supportsUsage: false,
+            supportsTui: false,
           },
         },
       ],

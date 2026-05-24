@@ -196,9 +196,44 @@ export class SqliteStore {
       VALUES (4, 'workspace-linked-urls', datetime('now'));
       INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
       VALUES (5, 'scheduled-agents', datetime('now'));
+      CREATE TABLE IF NOT EXISTS scheduled_agent_runs (
+        id TEXT PRIMARY KEY,
+        scheduled_agent_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        enqueued_at TEXT NOT NULL,
+        started_at TEXT,
+        ended_at TEXT,
+        message TEXT,
+        workspace_id TEXT,
+        session_id TEXT,
+        background_session_id TEXT,
+        log_file_path TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_scheduled_agent_runs_agent_enqueued
+        ON scheduled_agent_runs(scheduled_agent_id, enqueued_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_agent_runs_status
+        ON scheduled_agent_runs(scheduled_agent_id, status);
+      CREATE TABLE IF NOT EXISTS background_sessions (
+        id TEXT PRIMARY KEY,
+        scheduled_agent_id TEXT,
+        cwd TEXT NOT NULL,
+        log_file_path TEXT NOT NULL,
+        tmux_session_name TEXT NOT NULL,
+        tmux_session_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_background_sessions_scheduled_agent
+        ON background_sessions(scheduled_agent_id);
+      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+      VALUES (6, 'background-sessions-and-runs', datetime('now'));
     `);
     this.ensureColumn("scheduled_agents", "schedule_type", "TEXT NOT NULL DEFAULT 'recurring'");
     this.ensureColumn("scheduled_agents", "run_at", "TEXT");
+    this.ensureColumn("scheduled_agents", "run_mode", "TEXT NOT NULL DEFAULT 'workspace'");
+    this.ensureColumn("scheduled_agents", "background_cwd", "TEXT");
+    this.ensureColumn("scheduled_agents", "overlap_policy", "TEXT NOT NULL DEFAULT 'skip'");
   }
 
   exec(sql: string) {
@@ -536,9 +571,10 @@ export class SqliteStore {
     this.database
       .prepare(
         `INSERT INTO scheduled_agents (id, name, description, cron, schedule_type, run_at, repo_id, runtime_id, prompt,
-          workspace_strategy, workspace_name, base_branch, enabled, last_run_at, last_run_status,
+          workspace_strategy, workspace_name, base_branch, run_mode, background_cwd, overlap_policy,
+          enabled, last_run_at, last_run_status,
           last_run_message, last_workspace_id, last_session_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
@@ -553,6 +589,9 @@ export class SqliteStore {
         agent.workspaceStrategy,
         agent.workspaceName,
         agent.baseBranch ?? null,
+        agent.runMode,
+        agent.backgroundCwd ?? null,
+        agent.overlapPolicy,
         agent.enabled ? 1 : 0,
         agent.lastRunAt ?? null,
         agent.lastRunStatus,
@@ -580,6 +619,9 @@ export class SqliteStore {
         | "workspaceStrategy"
         | "workspaceName"
         | "baseBranch"
+        | "runMode"
+        | "backgroundCwd"
+        | "overlapPolicy"
         | "enabled"
       >
     >,
@@ -594,6 +636,7 @@ export class SqliteStore {
       baseBranch: patch.baseBranch !== undefined ? patch.baseBranch : existing.baseBranch,
       runAt: patch.runAt !== undefined ? patch.runAt : existing.runAt,
       cron: patch.cron !== undefined ? patch.cron : existing.cron,
+      backgroundCwd: patch.backgroundCwd !== undefined ? patch.backgroundCwd : existing.backgroundCwd,
       updatedAt: new Date().toISOString(),
     };
     const cronColumn = next.cron ?? ONE_SHOT_CRON_PLACEHOLDER;
@@ -601,7 +644,8 @@ export class SqliteStore {
       .prepare(
         `UPDATE scheduled_agents SET name = ?, description = ?, cron = ?, schedule_type = ?, run_at = ?,
           repo_id = ?, runtime_id = ?, prompt = ?, workspace_strategy = ?, workspace_name = ?,
-          base_branch = ?, enabled = ?, updated_at = ? WHERE id = ?`,
+          base_branch = ?, run_mode = ?, background_cwd = ?, overlap_policy = ?, enabled = ?, updated_at = ?
+          WHERE id = ?`,
       )
       .run(
         next.name,
@@ -615,6 +659,9 @@ export class SqliteStore {
         next.workspaceStrategy,
         next.workspaceName,
         next.baseBranch ?? null,
+        next.runMode,
+        next.backgroundCwd ?? null,
+        next.overlapPolicy,
         next.enabled ? 1 : 0,
         next.updatedAt,
         id,

@@ -3,6 +3,7 @@ import {
   AgentRuntimeSchema,
   AgentSessionSchema,
   AppEventSchema,
+  BackgroundAgentSessionSchema,
   CiProviderSummarySchema,
   CreateAgentSessionInputSchema,
   CreateRepoInputSchema,
@@ -15,6 +16,8 @@ import {
   ProviderHealthSchema,
   RepoSchema,
   RuntimeUsageSummarySchema,
+  ScheduledAgentRunSchema,
+  ScheduledAgentSchema,
   UpdateScheduledAgentInputSchema,
   VersionControlSummarySchema,
   WorkspaceDiffSchema,
@@ -245,5 +248,104 @@ describe("contract schemas", () => {
     expect(UpdateScheduledAgentInputSchema.safeParse({ enabled: false }).success).toBe(true);
     // PATCH still rejects a malformed runAt.
     expect(UpdateScheduledAgentInputSchema.safeParse({ runAt: "not-a-date" }).success).toBe(false);
+  });
+
+  it("accepts runMode/backgroundCwd/overlapPolicy with sensible defaults", () => {
+    const base = {
+      name: "BG",
+      cron: "0 9 * * *",
+      repoId: "repo_test",
+      runtimeId: "shell",
+      workspaceStrategy: "new" as const,
+      workspaceName: "bg-prefix",
+    };
+
+    // Defaults: runMode='workspace', overlapPolicy='skip', backgroundCwd=null.
+    const parsed = CreateScheduledAgentInputSchema.parse(base);
+    expect(parsed.runMode).toBeUndefined(); // optional on input — defaults applied at the entity layer
+    expect(parsed.overlapPolicy).toBeUndefined();
+    expect(parsed.backgroundCwd).toBeUndefined();
+
+    // Background runMode with backgroundCwd accepted.
+    expect(
+      CreateScheduledAgentInputSchema.safeParse({
+        ...base,
+        runMode: "background",
+        backgroundCwd: "/tmp/some/dir",
+      }).success,
+    ).toBe(true);
+
+    // overlapPolicy accepted on both runModes.
+    expect(CreateScheduledAgentInputSchema.safeParse({ ...base, overlapPolicy: "queue" }).success).toBe(true);
+    expect(
+      CreateScheduledAgentInputSchema.safeParse({
+        ...base,
+        runMode: "background",
+        overlapPolicy: "queue",
+      }).success,
+    ).toBe(true);
+
+    // PATCH accepts overlapPolicy/runMode/backgroundCwd individually.
+    expect(UpdateScheduledAgentInputSchema.safeParse({ overlapPolicy: "queue" }).success).toBe(true);
+    expect(UpdateScheduledAgentInputSchema.safeParse({ runMode: "background" }).success).toBe(true);
+    expect(UpdateScheduledAgentInputSchema.safeParse({ backgroundCwd: "/elsewhere" }).success).toBe(true);
+
+    // backgroundCwd must be non-empty.
+    expect(CreateScheduledAgentInputSchema.safeParse({ ...base, backgroundCwd: "" }).success).toBe(false);
+    expect(UpdateScheduledAgentInputSchema.safeParse({ backgroundCwd: "" }).success).toBe(false);
+
+    // The entity schema applies the defaults when reconstructing a stored row.
+    const entity = ScheduledAgentSchema.parse({
+      id: "sched_test",
+      name: "Daily",
+      cron: "0 9 * * *",
+      repoId: "repo_test",
+      runtimeId: "shell",
+      workspaceStrategy: "new",
+      workspaceName: "daily",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    expect(entity.runMode).toBe("workspace");
+    expect(entity.overlapPolicy).toBe("skip");
+    expect(entity.backgroundCwd).toBeNull();
+  });
+
+  it("models ScheduledAgentRun rows distinct from the agent's lastRunStatus cache", () => {
+    // The run-row status enum excludes 'never' (every row is an actual fire).
+    const queued = ScheduledAgentRunSchema.parse({
+      id: "run_test",
+      scheduledAgentId: "sched_test",
+      status: "queued",
+      enqueuedAt: timestamp,
+    });
+    expect(queued.startedAt).toBeNull();
+    expect(queued.endedAt).toBeNull();
+    expect(queued.logFilePath).toBeNull();
+
+    expect(
+      ScheduledAgentRunSchema.safeParse({
+        id: "run_x",
+        scheduledAgentId: "sched_x",
+        status: "never", // not a valid row status — only on the agent cache.
+        enqueuedAt: timestamp,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("models BackgroundAgentSession rows with the minimum reader-driven fields", () => {
+    const session = BackgroundAgentSessionSchema.parse({
+      id: "bg_test",
+      scheduledAgentId: "sched_test",
+      cwd: "/tmp/bg",
+      logFilePath: "/tmp/logs/run.log",
+      tmuxSessionName: "citadel_bg_abc",
+      tmuxSessionId: "$1",
+      status: "running",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    expect(session.scheduledAgentId).toBe("sched_test");
+    expect(session.status).toBe("running");
   });
 });
