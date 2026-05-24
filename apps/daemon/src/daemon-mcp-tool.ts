@@ -6,6 +6,7 @@ import {
   CreateRepoInputSchema,
   CreateWorkspaceInputSchema,
   LaunchAgentInputSchema,
+  UpdateNamespaceInputSchema,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, serializeWorkspaceResource } from "@citadel/mcp";
@@ -119,6 +120,32 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     const result = operations.createNamespace(CreateNamespaceInputSchema.parse(call.arguments ?? {}));
     emit("namespace.updated", { namespaceId: result.namespace.id });
     return { namespace: result.namespace, created: result.created };
+  }
+  if (call.name === "update_namespace") {
+    const namespaceId = typeof call.arguments?.namespaceId === "string" ? call.arguments.namespaceId : "";
+    if (!namespaceId) return { error: "namespace_id_required" };
+    const { namespaceId: _ignored, ...rest } = (call.arguments ?? {}) as Record<string, unknown>;
+    const patch = UpdateNamespaceInputSchema.parse(rest);
+    const namespace = operations.renameNamespace(namespaceId, patch);
+    if (!namespace) return { error: "namespace_not_found", namespaceId };
+    emit("namespace.updated", { namespaceId });
+    return { namespace };
+  }
+  if (call.name === "archive_namespace") {
+    const namespaceId = typeof call.arguments?.namespaceId === "string" ? call.arguments.namespaceId : "";
+    if (!namespaceId) return { error: "namespace_id_required" };
+    const namespace = operations.archiveNamespace(namespaceId);
+    if (!namespace) return { error: "namespace_not_found", namespaceId };
+    emit("namespace.updated", { namespaceId });
+    return { namespace };
+  }
+  if (call.name === "restore_namespace") {
+    const namespaceId = typeof call.arguments?.namespaceId === "string" ? call.arguments.namespaceId : "";
+    if (!namespaceId) return { error: "namespace_id_required" };
+    const namespace = operations.restoreNamespace(namespaceId);
+    if (!namespace) return { error: "namespace_not_found", namespaceId };
+    emit("namespace.updated", { namespaceId });
+    return { namespace };
   }
   if (call.name === "assign_workspace_to_namespace") {
     const input = AssignWorkspaceToNamespaceInputSchema.parse(call.arguments ?? {});

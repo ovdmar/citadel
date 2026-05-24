@@ -45,6 +45,9 @@ export type McpToolName =
   | "send_agent_message"
   | "list_namespaces"
   | "create_namespace"
+  | "update_namespace"
+  | "archive_namespace"
+  | "restore_namespace"
   | "assign_workspace_to_namespace"
   | "read_scratchpad"
   | "write_scratchpad"
@@ -290,9 +293,48 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       destructive: false,
     },
     {
+      name: "update_namespace",
+      description:
+        "Rename a namespace and/or change its color. At least one of name/color must be provided. Active namespaces only — to edit an archived one, restore it first.",
+      inputSchema: {
+        type: "object",
+        required: ["namespaceId"],
+        properties: {
+          namespaceId: { type: "string" },
+          name: { type: "string", minLength: 1, maxLength: 80 },
+          color: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "archive_namespace",
+      description:
+        "Soft-archive a namespace. Workspaces stay assigned but the namespace is hidden from the default list_namespaces view. Pass includeArchived=true to list_namespaces to see archived entries. Reversible with restore_namespace.",
+      inputSchema: {
+        type: "object",
+        required: ["namespaceId"],
+        properties: { namespaceId: { type: "string" } },
+        additionalProperties: false,
+      },
+      destructive: true,
+    },
+    {
+      name: "restore_namespace",
+      description: "Unarchive a previously archived namespace. The name UNIQUE constraint reactivates the row.",
+      inputSchema: {
+        type: "object",
+        required: ["namespaceId"],
+        properties: { namespaceId: { type: "string" } },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
       name: "launch_agent",
       description:
-        "High-level one-shot: create a fresh scratch workspace in a repo and immediately start an agent session in it with the given prompt. Returns { workspaceId, sessionId, branchName, workspacePath, operationId }. Use this instead of chaining create_workspace + start_agent_session when an orchestrator just wants 'run this prompt in repo X'. Pass exactly one of repoId or repoName; runtimeId defaults to claude-code. namespaceId is accepted but currently ignored (namespaces not yet implemented).",
+        "High-level one-shot: create a fresh scratch workspace in a repo and immediately start an agent session in it with the given prompt. Returns { workspaceId, sessionId, branchName, workspacePath, operationId }. Use this instead of chaining create_workspace + start_agent_session when an orchestrator just wants 'run this prompt in repo X'. Pass exactly one of repoId or repoName; runtimeId defaults to claude-code. If namespaceId is provided, the new workspace is assigned to that namespace at creation (so it groups with sibling sub-agents under one topic).",
       inputSchema: {
         type: "object",
         required: ["prompt"],
@@ -503,6 +545,9 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "remove_workspace":
     case "reconcile":
     case "create_namespace":
+    case "update_namespace":
+    case "archive_namespace":
+    case "restore_namespace":
     case "assign_workspace_to_namespace":
     case "write_scratchpad":
     case "append_scratchpad":

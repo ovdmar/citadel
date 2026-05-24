@@ -35,7 +35,9 @@ export function Navigator(props: {
       const raw = window.localStorage.getItem(GROUP_STORAGE);
       if (!raw) return ["repo", "status"];
       const parsed = JSON.parse(raw) as GroupKey[];
-      const allowed = parsed.filter((entry) => entry === "repo" || entry === "status");
+      const allowed = parsed.filter(
+        (entry): entry is GroupKey => entry === "repo" || entry === "status" || entry === "namespace",
+      );
       return allowed.length ? allowed : ["repo", "status"];
     } catch {
       return ["repo", "status"];
@@ -53,8 +55,8 @@ export function Navigator(props: {
   // are derived from /api/state only, so the active workspace doesn't drift
   // between sections each time the per-workspace cockpit-summary refetches.
   const grouped = useMemo(
-    () => buildGroups(props.workspaces, props.repos, props.sessions, props.operations, grouping),
-    [props.workspaces, props.repos, props.sessions, props.operations, grouping],
+    () => buildGroups(props.workspaces, props.repos, props.sessions, props.operations, props.namespaces, grouping),
+    [props.workspaces, props.repos, props.sessions, props.operations, props.namespaces, grouping],
   );
   const namespacesById = useMemo(() => {
     const map = new Map<string, import("@citadel/contracts").Namespace>();
@@ -185,6 +187,7 @@ function buildGroups(
   repos: Repo[],
   sessions: AgentSession[],
   operations: Operation[],
+  namespaces: Namespace[],
   grouping: GroupKey[],
 ): GroupedSection[] {
   if (!grouping.length) {
@@ -207,7 +210,10 @@ function buildGroups(
       operations: workspaceOps,
     });
     const repo = repos.find((entry) => entry.id === workspace.repoId);
-    return { workspace, sessions: workspaceSessions, repo, section: attention.section };
+    const namespace = workspace.namespaceId
+      ? (namespaces.find((entry) => entry.id === workspace.namespaceId) ?? null)
+      : null;
+    return { workspace, sessions: workspaceSessions, repo, namespace, section: attention.section };
   });
 
   const compose = (entries: typeof enriched, levels: GroupKey[]): GroupedSection[] => {
@@ -219,7 +225,10 @@ function buildGroups(
     const [head, ...rest] = levels;
     const buckets = new Map<string, { label: string; items: typeof enriched }>();
     for (const entry of entries) {
-      const keyValue = head === "repo" ? (entry.repo?.name ?? "Unknown repo") : formatLabel(entry.section ?? "idle");
+      let keyValue: string;
+      if (head === "repo") keyValue = entry.repo?.name ?? "Unknown repo";
+      else if (head === "namespace") keyValue = entry.namespace?.name ?? "Uncategorized";
+      else keyValue = formatLabel(entry.section ?? "idle");
       const bucket = buckets.get(keyValue) ?? { label: keyValue, items: [] };
       bucket.items.push(entry);
       buckets.set(keyValue, bucket);
@@ -229,6 +238,12 @@ function buildGroups(
         const ai = SECTION_ORDER.indexOf(a.toLowerCase());
         const bi = SECTION_ORDER.indexOf(b.toLowerCase());
         return (ai < 0 ? SECTION_ORDER.length : ai) - (bi < 0 ? SECTION_ORDER.length : bi);
+      }
+      if (head === "namespace") {
+        // Float Uncategorized to the bottom so named namespaces lead the list.
+        if (a === "Uncategorized") return 1;
+        if (b === "Uncategorized") return -1;
+        return a.localeCompare(b);
       }
       return a.localeCompare(b);
     });

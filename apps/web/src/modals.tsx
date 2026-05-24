@@ -5,7 +5,9 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
 
-export type GroupKey = "repo" | "status";
+export type GroupKey = "repo" | "status" | "namespace";
+
+const GROUP_KEYS: GroupKey[] = ["repo", "status", "namespace"];
 
 type GroupByOverlayProps = {
   value: GroupKey[];
@@ -18,9 +20,10 @@ export function GroupByOverlay(props: GroupByOverlayProps) {
   const labels: Record<GroupKey, string> = {
     repo: "Repository",
     status: "Status",
+    namespace: "Namespace",
   };
   const ordered = props.value;
-  const inactive = (["repo", "status"] as GroupKey[]).filter((key) => !ordered.includes(key));
+  const inactive = GROUP_KEYS.filter((key) => !ordered.includes(key));
   const toggle = (key: GroupKey) => {
     if (ordered.includes(key)) props.onChange(ordered.filter((entry) => entry !== key));
     else props.onChange([...ordered, key]);
