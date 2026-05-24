@@ -4,18 +4,22 @@ import path from "node:path";
 import type {
   ActivityEvent,
   AgentSession,
+  BackgroundAgentSession,
   HookOutput,
   Operation,
   OperationLogEntry,
   Repo,
   ScheduledAgent,
+  ScheduledAgentRun,
   Workspace,
 } from "@citadel/contracts";
 import {
   activityFromRow,
+  backgroundSessionFromRow,
   operationFromRow,
   repoFromRow,
   scheduledAgentFromRow,
+  scheduledAgentRunFromRow,
   sessionFromRow,
   workspaceFromRow,
 } from "./rows.js";
@@ -709,6 +713,234 @@ export class SqliteStore {
 
   deleteScheduledAgent(id: string) {
     this.database.prepare("DELETE FROM scheduled_agents WHERE id = ?").run(id);
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // scheduled_agent_runs
+
+  insertScheduledAgentRun(run: ScheduledAgentRun) {
+    this.database
+      .prepare(
+        `INSERT INTO scheduled_agent_runs (id, scheduled_agent_id, status, enqueued_at, started_at, ended_at,
+          message, workspace_id, session_id, background_session_id, log_file_path)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        run.id,
+        run.scheduledAgentId,
+        run.status,
+        run.enqueuedAt,
+        run.startedAt ?? null,
+        run.endedAt ?? null,
+        run.message ?? null,
+        run.workspaceId ?? null,
+        run.sessionId ?? null,
+        run.backgroundSessionId ?? null,
+        run.logFilePath ?? null,
+      );
+  }
+
+  findScheduledAgentRun(id: string): ScheduledAgentRun | null {
+    const row = this.database.prepare("SELECT * FROM scheduled_agent_runs WHERE id = ?").get(id);
+    if (!row) return null;
+    return scheduledAgentRunFromRow(row as Record<string, unknown>);
+  }
+
+  listScheduledAgentRuns(
+    scheduledAgentId: string,
+    options: { limit?: number; offset?: number } = {},
+  ): ScheduledAgentRun[] {
+    // DESC by enqueued_at so the History drawer shows most-recent first;
+    // queued and terminal rows interleave correctly because every row has an
+    // enqueued_at stamped at fire time.
+    const limit = Math.max(1, Math.min(options.limit ?? 50, 500));
+    const offset = Math.max(0, options.offset ?? 0);
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM scheduled_agent_runs
+         WHERE scheduled_agent_id = ?
+         ORDER BY enqueued_at DESC, id DESC
+         LIMIT ? OFFSET ?`,
+      )
+      .all(scheduledAgentId, limit, offset) as Array<Record<string, unknown>>;
+    return rows.map(scheduledAgentRunFromRow);
+  }
+
+  findInFlightScheduledAgentRun(scheduledAgentId: string): ScheduledAgentRun | null {
+    const row = this.database
+      .prepare(
+        `SELECT * FROM scheduled_agent_runs
+         WHERE scheduled_agent_id = ? AND status = 'running'
+         ORDER BY enqueued_at DESC LIMIT 1`,
+      )
+      .get(scheduledAgentId);
+    if (!row) return null;
+    return scheduledAgentRunFromRow(row as Record<string, unknown>);
+  }
+
+  listInFlightScheduledAgentRuns(): ScheduledAgentRun[] {
+    const rows = this.database
+      .prepare("SELECT * FROM scheduled_agent_runs WHERE status = 'running' ORDER BY enqueued_at ASC")
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(scheduledAgentRunFromRow);
+  }
+
+  countQueuedScheduledAgentRuns(scheduledAgentId: string): number {
+    const row = this.database
+      .prepare("SELECT COUNT(*) AS n FROM scheduled_agent_runs WHERE scheduled_agent_id = ? AND status = 'queued'")
+      .get(scheduledAgentId) as { n: number } | undefined;
+    return Number(row?.n ?? 0);
+  }
+
+  findOldestQueuedScheduledAgentRun(scheduledAgentId: string): ScheduledAgentRun | null {
+    const row = this.database
+      .prepare(
+        `SELECT * FROM scheduled_agent_runs
+         WHERE scheduled_agent_id = ? AND status = 'queued'
+         ORDER BY enqueued_at ASC, id ASC LIMIT 1`,
+      )
+      .get(scheduledAgentId);
+    if (!row) return null;
+    return scheduledAgentRunFromRow(row as Record<string, unknown>);
+  }
+
+  promoteScheduledAgentRunToRunning(
+    id: string,
+    update: { startedAt: string; logFilePath: string },
+  ): ScheduledAgentRun | null {
+    this.database
+      .prepare(
+        `UPDATE scheduled_agent_runs SET status = 'running', started_at = ?, log_file_path = ?
+         WHERE id = ? AND status = 'queued'`,
+      )
+      .run(update.startedAt, update.logFilePath, id);
+    return this.findScheduledAgentRun(id);
+  }
+
+  recordScheduledAgentRunOutcome(
+    id: string,
+    update: {
+      status: ScheduledAgentRun["status"];
+      endedAt: string;
+      message?: string | null;
+      workspaceId?: string | null;
+      sessionId?: string | null;
+      backgroundSessionId?: string | null;
+    },
+  ): ScheduledAgentRun | null {
+    const existing = this.findScheduledAgentRun(id);
+    if (!existing) return null;
+    const next: ScheduledAgentRun = {
+      ...existing,
+      status: update.status,
+      endedAt: update.endedAt,
+      message: update.message !== undefined ? update.message : existing.message,
+      workspaceId: update.workspaceId !== undefined ? update.workspaceId : existing.workspaceId,
+      sessionId: update.sessionId !== undefined ? update.sessionId : existing.sessionId,
+      backgroundSessionId:
+        update.backgroundSessionId !== undefined ? update.backgroundSessionId : existing.backgroundSessionId,
+    };
+    this.database
+      .prepare(
+        `UPDATE scheduled_agent_runs SET status = ?, ended_at = ?, message = ?,
+          workspace_id = ?, session_id = ?, background_session_id = ? WHERE id = ?`,
+      )
+      .run(
+        next.status,
+        next.endedAt,
+        next.message ?? null,
+        next.workspaceId ?? null,
+        next.sessionId ?? null,
+        next.backgroundSessionId ?? null,
+        id,
+      );
+    return next;
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // background_sessions
+
+  insertBackgroundSession(session: BackgroundAgentSession) {
+    this.database
+      .prepare(
+        `INSERT INTO background_sessions (id, scheduled_agent_id, cwd, log_file_path,
+          tmux_session_name, tmux_session_id, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        session.id,
+        session.scheduledAgentId ?? null,
+        session.cwd,
+        session.logFilePath,
+        session.tmuxSessionName,
+        session.tmuxSessionId,
+        session.status,
+        session.createdAt,
+        session.updatedAt,
+      );
+  }
+
+  findBackgroundSession(id: string): BackgroundAgentSession | null {
+    const row = this.database.prepare("SELECT * FROM background_sessions WHERE id = ?").get(id);
+    if (!row) return null;
+    return backgroundSessionFromRow(row as Record<string, unknown>);
+  }
+
+  findBackgroundSessionsByScheduledAgent(scheduledAgentId: string): BackgroundAgentSession[] {
+    const rows = this.database
+      .prepare("SELECT * FROM background_sessions WHERE scheduled_agent_id = ? ORDER BY created_at DESC")
+      .all(scheduledAgentId) as Array<Record<string, unknown>>;
+    return rows.map(backgroundSessionFromRow);
+  }
+
+  listRunningBackgroundSessions(): BackgroundAgentSession[] {
+    const rows = this.database
+      .prepare("SELECT * FROM background_sessions WHERE status = 'running' ORDER BY created_at ASC")
+      .all() as Array<Record<string, unknown>>;
+    return rows.map(backgroundSessionFromRow);
+  }
+
+  updateBackgroundSessionStatus(id: string, status: BackgroundAgentSession["status"]): BackgroundAgentSession | null {
+    const updatedAt = new Date().toISOString();
+    this.database
+      .prepare("UPDATE background_sessions SET status = ?, updated_at = ? WHERE id = ?")
+      .run(status, updatedAt, id);
+    return this.findBackgroundSession(id);
+  }
+
+  deleteBackgroundSession(id: string) {
+    this.database.prepare("DELETE FROM background_sessions WHERE id = ?").run(id);
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Cascade delete: returns the cleanup metadata (log paths + tmux session
+  // names) the operations layer needs to perform fs/tmux cleanup. The DB-side
+  // delete runs in one transaction so the data side never races a concurrent
+  // reader. Caller is responsible for the side-effecting cleanup.
+
+  deleteScheduledAgentCascade(id: string): { logFilePaths: string[]; tmuxSessionNames: string[] } | null {
+    const existing = this.findScheduledAgent(id);
+    if (!existing) return null;
+    const runs = this.listScheduledAgentRuns(id, { limit: 500 });
+    const bgSessions = this.findBackgroundSessionsByScheduledAgent(id);
+    const logFilePaths = runs
+      .map((run) => run.logFilePath)
+      .filter((path): path is string => typeof path === "string" && path.length > 0);
+    const tmuxSessionNames = bgSessions.map((row) => row.tmuxSessionName);
+    const tx = this.database.prepare("BEGIN");
+    const commit = this.database.prepare("COMMIT");
+    const rollback = this.database.prepare("ROLLBACK");
+    tx.run();
+    try {
+      this.database.prepare("DELETE FROM scheduled_agent_runs WHERE scheduled_agent_id = ?").run(id);
+      this.database.prepare("DELETE FROM background_sessions WHERE scheduled_agent_id = ?").run(id);
+      this.database.prepare("DELETE FROM scheduled_agents WHERE id = ?").run(id);
+      commit.run();
+    } catch (error) {
+      rollback.run();
+      throw error;
+    }
+    return { logFilePaths, tmuxSessionNames };
   }
 
   /**
