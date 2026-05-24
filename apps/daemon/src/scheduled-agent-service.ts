@@ -37,26 +37,74 @@ export class ScheduledAgentService {
   }
 
   delete(id: string): ScheduledAgentMutationResult<true> {
-    const removed = this.runner.delete(id);
-    if (!removed) return { ok: false, error: "scheduled_agent_not_found" };
+    const result = this.runner.delete(id);
+    if (!result.ok) return { ok: false, error: result.error };
     this.emit("scheduled-agent.updated", { id, removed: true });
     return { ok: true, value: true };
   }
 
-  async runNow(id: string) {
+  /**
+   * Manual "Run now" — surfaces all four outcomes (ran / queued / skipped /
+   * queue_full) plus the not-found case. HTTP routes and MCP handlers map
+   * the discriminated union into their respective envelope shapes.
+   */
+  async runNow(id: string): Promise<
+    | {
+        ok: true;
+        value: {
+          kind: "ran";
+          runId: string;
+          status: "succeeded" | "failed";
+          message: string;
+          workspaceId: string | null;
+          sessionId: string | null;
+          backgroundSessionId: string | null;
+          scheduledAgent: ScheduledAgent | null;
+        };
+      }
+    | {
+        ok: true;
+        value: { kind: "queued"; runId: string; queuePosition: number; scheduledAgent: ScheduledAgent | null };
+      }
+    | { ok: true; value: { kind: "skipped_overlap"; scheduledAgent: ScheduledAgent | null } }
+    | { ok: true; value: { kind: "queue_full"; limit: number; scheduledAgent: ScheduledAgent | null } }
+    | { ok: false; error: "scheduled_agent_not_found" }
+  > {
     const agent = this.runner.find(id);
-    if (!agent) return { ok: false as const, error: "scheduled_agent_not_found" };
-    const result = await this.runner.runOnce(id);
-    this.emit("scheduled-agent.run", { id, status: result.status });
-    return {
-      ok: true as const,
-      value: {
-        status: result.status,
-        message: result.message,
-        workspaceId: result.workspaceId,
-        sessionId: result.sessionId,
-        scheduledAgent: this.runner.find(id),
-      },
-    };
+    if (!agent) return { ok: false, error: "scheduled_agent_not_found" };
+    const result = await this.runner.runNow(id);
+    if (result.kind === "ran") {
+      this.emit("scheduled-agent.run", { id, status: result.status });
+      this.emit("scheduled-agent.run-row", { scheduledAgentId: id, runId: result.runId, status: result.status });
+      return {
+        ok: true,
+        value: {
+          kind: "ran",
+          runId: result.runId,
+          status: result.status,
+          message: result.message,
+          workspaceId: result.workspaceId,
+          sessionId: result.sessionId,
+          backgroundSessionId: result.backgroundSessionId,
+          scheduledAgent: this.runner.find(id),
+        },
+      };
+    }
+    if (result.kind === "queued") {
+      this.emit("scheduled-agent.run-row", { scheduledAgentId: id, runId: result.runId, status: "queued" });
+      return {
+        ok: true,
+        value: {
+          kind: "queued",
+          runId: result.runId,
+          queuePosition: result.queuePosition,
+          scheduledAgent: this.runner.find(id),
+        },
+      };
+    }
+    if (result.kind === "skipped_overlap") {
+      return { ok: true, value: { kind: "skipped_overlap", scheduledAgent: this.runner.find(id) } };
+    }
+    return { ok: true, value: { kind: "queue_full", limit: result.limit, scheduledAgent: this.runner.find(id) } };
   }
 }

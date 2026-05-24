@@ -29,6 +29,11 @@ export function registerScheduledAgentRoutes(input: {
     store,
     operations,
     getRuntime: (runtimeId) => config.runtimes.find((runtime) => runtime.id === runtimeId),
+    dataDir: config.dataDir,
+    // createBackgroundSession + killTmuxSession are injected once step 4 lands
+    // the terminal-side helpers. Until then, background runMode runs fail
+    // gracefully with `background_session_creator_unavailable` and the queue
+    // path is unaffected.
     recordActivity: (event) => {
       store.addActivity({
         id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
@@ -90,7 +95,10 @@ export function registerScheduledAgentRoutes(input: {
   app.delete("/api/scheduled-agents/:id", (req, res) => {
     const id = String(req.params.id);
     const result = service.delete(id);
-    if (!result.ok) return res.status(404).json({ error: result.error });
+    if (!result.ok) {
+      const status = result.error === "in_flight_run" ? 409 : 404;
+      return res.status(status).json({ error: result.error });
+    }
     res.status(202).json({ removed: true });
   });
 
@@ -100,14 +108,32 @@ export function registerScheduledAgentRoutes(input: {
       const id = String(req.params.id);
       const result = await service.runNow(id);
       if (!result.ok) return res.status(404).json({ error: result.error });
-      const { status, message, workspaceId, sessionId, scheduledAgent } = result.value;
-      res.status(status === "succeeded" ? 202 : 424).json({
-        status,
-        message,
-        workspaceId,
-        sessionId,
-        scheduledAgent,
-      });
+      const value = result.value;
+      const scheduledAgent = value.scheduledAgent;
+      if (value.kind === "ran") {
+        return res.status(value.status === "succeeded" ? 202 : 424).json({
+          status: value.status,
+          runId: value.runId,
+          message: value.message,
+          workspaceId: value.workspaceId,
+          sessionId: value.sessionId,
+          backgroundSessionId: value.backgroundSessionId,
+          scheduledAgent,
+        });
+      }
+      if (value.kind === "queued") {
+        return res.status(202).json({
+          queued: true,
+          runId: value.runId,
+          queuePosition: value.queuePosition,
+          scheduledAgent,
+        });
+      }
+      if (value.kind === "skipped_overlap") {
+        return res.status(409).json({ error: "run_already_in_progress", scheduledAgent });
+      }
+      // queue_full
+      res.status(429).json({ error: "queue_full", limit: value.limit, scheduledAgent });
     }),
   );
 

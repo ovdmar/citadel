@@ -104,6 +104,7 @@ function createService() {
     store,
     operations,
     getRuntime: () => ({ id: "shell", displayName: "Shell", command: "bash", args: [] }),
+    dataDir: dir,
   });
   const service = new ScheduledAgentService(runner, (type, payload) => {
     emits.push([type, payload]);

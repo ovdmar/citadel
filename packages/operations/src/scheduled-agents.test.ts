@@ -71,6 +71,7 @@ describe("ScheduledAgentRunner", () => {
       store,
       operations,
       getRuntime: () => ({ id: "shell", displayName: "Shell", command: "bash", args: [] }),
+      dataDir: fixture.dir,
     });
 
     const agent = runner.create({
@@ -88,7 +89,7 @@ describe("ScheduledAgentRunner", () => {
     expect(updated?.enabled).toBe(false);
     expect(updated?.description).toBe("paused while debugging");
 
-    expect(runner.delete(agent.id)).toBe(true);
+    expect(runner.delete(agent.id)).toEqual({ ok: true });
     expect(runner.list()).toHaveLength(0);
   });
 
@@ -106,6 +107,7 @@ describe("ScheduledAgentRunner", () => {
       store,
       operations,
       getRuntime: (id) => (id === "shell" ? { id, displayName: "Shell", command: "bash", args: [] } : undefined),
+      dataDir: fixture.dir,
     });
 
     expect(() =>
@@ -147,6 +149,7 @@ describe("ScheduledAgentRunner", () => {
       operations,
       getRuntime: () =>
         runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+      dataDir: fixture.dir,
     });
     const agent = runner.create({
       name: "Failing run",
@@ -181,6 +184,7 @@ describe("ScheduledAgentRunner", () => {
       operations,
       getRuntime: () =>
         runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+      dataDir: fixture.dir,
     });
 
     const runAt = new Date(2030, 0, 1, 9, 0, 0);
@@ -227,6 +231,7 @@ describe("ScheduledAgentRunner", () => {
       store,
       operations,
       getRuntime: () => ({ id: "shell", displayName: "Shell", command: "bash", args: [] }),
+      dataDir: fixture.dir,
     });
 
     // Start recurring.
@@ -289,6 +294,7 @@ describe("ScheduledAgentRunner", () => {
       store,
       operations,
       getRuntime: () => ({ id: "shell", displayName: "Shell", command: "bash", args: [] }),
+      dataDir: fixture.dir,
     });
 
     expect(() =>
@@ -330,6 +336,7 @@ describe("ScheduledAgentRunner", () => {
       operations,
       getRuntime: () =>
         runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+      dataDir: fixture.dir,
     });
     const agent = runner.create({
       name: "Every minute",
@@ -350,6 +357,386 @@ describe("ScheduledAgentRunner", () => {
     const nextMinute = new Date(2025, 4, 22, 10, 31, 5);
     const firedNext = await runner.tick(nextMinute);
     expect(firedNext).toEqual([agent.id]);
+  });
+
+  it("every runOnce writes a scheduled_agent_runs row with status running→failed and updates the cache", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const operations = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = operations.registerRepo({ rootPath: fixture.repoPath });
+    let runtimeAvailable = true;
+    const runner = new ScheduledAgentRunner({
+      store,
+      operations,
+      dataDir: fixture.dir,
+      getRuntime: () =>
+        runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+    });
+    const agent = runner.create({
+      name: "Runs",
+      cron: "* * * * *",
+      repoId: repo.id,
+      runtimeId: "shell",
+      workspaceStrategy: "existing",
+      workspaceName: "runs",
+    });
+    runtimeAvailable = false; // force the run to fail before tmux spawn
+
+    const result = await runner.runOnce(agent.id);
+    expect(result.status).toBe("failed");
+    expect(result.runId).toMatch(/^run_/);
+    const runs = store.listScheduledAgentRuns(agent.id);
+    expect(runs.map((r) => r.status)).toEqual(["failed"]);
+    expect(runs[0]?.startedAt).not.toBeNull();
+    expect(runs[0]?.endedAt).not.toBeNull();
+    // Denormalized cache mirrors the same outcome.
+    expect(store.findScheduledAgent(agent.id)?.lastRunStatus).toBe("failed");
+  });
+
+  it("tick with overlapPolicy='queue' enqueues a run, drain promotes it after the in-flight completes", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const operations = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = operations.registerRepo({ rootPath: fixture.repoPath });
+    let runtimeAvailable = true;
+    const runner = new ScheduledAgentRunner({
+      store,
+      operations,
+      dataDir: fixture.dir,
+      getRuntime: () =>
+        runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+    });
+    const agent = runner.create({
+      name: "Queue",
+      cron: "* * * * *",
+      repoId: repo.id,
+      runtimeId: "shell",
+      workspaceStrategy: "existing",
+      workspaceName: "queue",
+      overlapPolicy: "queue",
+    });
+    runtimeAvailable = false; // execute() returns failure without spawning tmux
+
+    // Manually insert an in-flight run so the next tick sees overlap.
+    store.insertScheduledAgentRun({
+      id: "run_inflight",
+      scheduledAgentId: agent.id,
+      status: "running",
+      enqueuedAt: new Date().toISOString(),
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      message: null,
+      workspaceId: null,
+      sessionId: null,
+      backgroundSessionId: null,
+      logFilePath: null,
+    });
+
+    const fired = await runner.tick(new Date());
+    // Synchronous tick fires nothing (the in-flight blocks); queued row added.
+    expect(fired).toEqual([]);
+    expect(store.countQueuedScheduledAgentRuns(agent.id)).toBe(1);
+
+    // Complete the in-flight, then drain.
+    store.recordScheduledAgentRunOutcome("run_inflight", {
+      status: "succeeded",
+      endedAt: new Date().toISOString(),
+      message: "ok",
+    });
+    await runner.drainQueue(agent.id);
+    // The queued row promoted, executed (failed because runtime undefined), and terminated.
+    const runs = store.listScheduledAgentRuns(agent.id);
+    // Both rows now terminal — drain consumed the queued one.
+    expect(runs.map((r) => r.status).sort()).toEqual(["failed", "succeeded"]);
+    expect(store.countQueuedScheduledAgentRuns(agent.id)).toBe(0);
+  });
+
+  it("tick with overlapPolicy='skip' and an in-flight run drops the fire and emits skipped_overlap", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const operations = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = operations.registerRepo({ rootPath: fixture.repoPath });
+    const activity: Array<{ type: string }> = [];
+    let runtimeAvailable = true;
+    const runner = new ScheduledAgentRunner({
+      store,
+      operations,
+      dataDir: fixture.dir,
+      getRuntime: () =>
+        runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+      recordActivity: (event) => activity.push({ type: event.type }),
+    });
+    const agent = runner.create({
+      name: "Skip",
+      cron: "* * * * *",
+      repoId: repo.id,
+      runtimeId: "shell",
+      workspaceStrategy: "existing",
+      workspaceName: "skip",
+      // overlapPolicy defaults to 'skip'.
+    });
+    runtimeAvailable = false;
+    store.insertScheduledAgentRun({
+      id: "run_inflight2",
+      scheduledAgentId: agent.id,
+      status: "running",
+      enqueuedAt: new Date().toISOString(),
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      message: null,
+      workspaceId: null,
+      sessionId: null,
+      backgroundSessionId: null,
+      logFilePath: null,
+    });
+    await runner.tick(new Date());
+    expect(activity.some((e) => e.type === "scheduled-agent.skipped_overlap")).toBe(true);
+    // No new row inserted — only the seeded in-flight row exists.
+    expect(store.listScheduledAgentRuns(agent.id).map((r) => r.id)).toEqual(["run_inflight2"]);
+  });
+
+  it("runNow returns the right envelope for ran / queued / skipped / queue_full", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const operations = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = operations.registerRepo({ rootPath: fixture.repoPath });
+    let runtimeAvailable = true;
+    const runner = new ScheduledAgentRunner({
+      store,
+      operations,
+      dataDir: fixture.dir,
+      getRuntime: () =>
+        runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+    });
+    const skipAgent = runner.create({
+      name: "RNskip",
+      cron: "* * * * *",
+      repoId: repo.id,
+      runtimeId: "shell",
+      workspaceStrategy: "existing",
+      workspaceName: "rn-skip",
+    });
+    const queueAgent = runner.create({
+      name: "RNqueue",
+      cron: "* * * * *",
+      repoId: repo.id,
+      runtimeId: "shell",
+      workspaceStrategy: "existing",
+      workspaceName: "rn-queue",
+      overlapPolicy: "queue",
+    });
+    runtimeAvailable = false;
+
+    // Seed in-flight on both.
+    for (const id of [skipAgent.id, queueAgent.id]) {
+      store.insertScheduledAgentRun({
+        id: `inflight_${id}`,
+        scheduledAgentId: id,
+        status: "running",
+        enqueuedAt: new Date().toISOString(),
+        startedAt: new Date().toISOString(),
+        endedAt: null,
+        message: null,
+        workspaceId: null,
+        sessionId: null,
+        backgroundSessionId: null,
+        logFilePath: null,
+      });
+    }
+
+    // skip → kind=skipped_overlap.
+    expect((await runner.runNow(skipAgent.id)).kind).toBe("skipped_overlap");
+
+    // queue → kind=queued.
+    const queued = await runner.runNow(queueAgent.id);
+    expect(queued.kind).toBe("queued");
+    if (queued.kind === "queued") expect(queued.queuePosition).toBe(1);
+
+    // Fill the queue to the cap then test queue_full.
+    for (let i = 0; i < 9; i += 1) {
+      await runner.runNow(queueAgent.id);
+    }
+    expect(store.countQueuedScheduledAgentRuns(queueAgent.id)).toBe(10);
+    const overflow = await runner.runNow(queueAgent.id);
+    expect(overflow.kind).toBe("queue_full");
+    if (overflow.kind === "queue_full") expect(overflow.limit).toBe(10);
+  });
+
+  it("delete returns in_flight_run when a run is executing; cascades on success", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const operations = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = operations.registerRepo({ rootPath: fixture.repoPath });
+    const killedSessions: string[] = [];
+    const runner = new ScheduledAgentRunner({
+      store,
+      operations,
+      dataDir: fixture.dir,
+      getRuntime: () => ({ id: "shell", displayName: "Shell", command: "bash", args: [] }),
+      killTmuxSession: (name) => killedSessions.push(name),
+    });
+    const agent = runner.create({
+      name: "Delete",
+      cron: "0 9 * * *",
+      repoId: repo.id,
+      runtimeId: "shell",
+      workspaceStrategy: "existing",
+      workspaceName: "del",
+    });
+
+    // In-flight → cannot delete.
+    store.insertScheduledAgentRun({
+      id: "del_inflight",
+      scheduledAgentId: agent.id,
+      status: "running",
+      enqueuedAt: new Date().toISOString(),
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      message: null,
+      workspaceId: null,
+      sessionId: null,
+      backgroundSessionId: null,
+      logFilePath: null,
+    });
+    expect(runner.delete(agent.id)).toEqual({ ok: false, error: "in_flight_run" });
+
+    // Close the in-flight; seed a background session + a log file on disk.
+    store.recordScheduledAgentRunOutcome("del_inflight", {
+      status: "failed",
+      endedAt: new Date().toISOString(),
+      message: "stopped",
+    });
+    const logPath = path.join(fixture.dir, "scheduled-runs", agent.id, "del_inflight.log");
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+    fs.writeFileSync(logPath, "stuff");
+    store.recordScheduledAgentRunOutcome("del_inflight", {
+      status: "failed",
+      endedAt: new Date().toISOString(),
+      message: "stopped",
+      backgroundSessionId: "bg_del",
+    });
+    store.insertBackgroundSession({
+      id: "bg_del",
+      scheduledAgentId: agent.id,
+      cwd: fixture.repoPath,
+      logFilePath: logPath,
+      tmuxSessionName: "citadel_bg_del",
+      tmuxSessionId: "$9",
+      status: "stopped",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    // Update the run row to point at the log path so the cascade picks it up.
+    store.recordScheduledAgentRunOutcome("del_inflight", {
+      status: "failed",
+      endedAt: new Date().toISOString(),
+      message: "stopped",
+    });
+    // The run row's logFilePath was set by promoteScheduledAgentRunToRunning
+    // when fireImmediately ran — but our manual insert above did not promote.
+    // Manually set it via a direct query.
+    store.exec(`UPDATE scheduled_agent_runs SET log_file_path = '${logPath}' WHERE id = 'del_inflight'`);
+
+    const deleted = runner.delete(agent.id);
+    expect(deleted).toEqual({ ok: true });
+    expect(fs.existsSync(logPath)).toBe(false);
+    expect(killedSessions).toEqual(["citadel_bg_del"]);
+    expect(store.findScheduledAgent(agent.id)).toBeNull();
+  });
+
+  it("recoverInFlightRuns flips orphaned 'running' rows to 'failed' and drains queued rows", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const operations = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = operations.registerRepo({ rootPath: fixture.repoPath });
+    let runtimeAvailable = true;
+    const runner = new ScheduledAgentRunner({
+      store,
+      operations,
+      dataDir: fixture.dir,
+      getRuntime: () =>
+        runtimeAvailable ? { id: "shell", displayName: "Shell", command: "bash", args: [] } : undefined,
+    });
+    const agent = runner.create({
+      name: "Boot",
+      cron: "* * * * *",
+      repoId: repo.id,
+      runtimeId: "shell",
+      workspaceStrategy: "existing",
+      workspaceName: "boot",
+      overlapPolicy: "queue",
+    });
+    runtimeAvailable = false;
+
+    // Seed an orphan running row + a queued row waiting on it.
+    store.insertScheduledAgentRun({
+      id: "boot_running",
+      scheduledAgentId: agent.id,
+      status: "running",
+      enqueuedAt: new Date(Date.now() - 60_000).toISOString(),
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      endedAt: null,
+      message: null,
+      workspaceId: null,
+      sessionId: null,
+      backgroundSessionId: null,
+      logFilePath: null,
+    });
+    store.insertScheduledAgentRun({
+      id: "boot_queued",
+      scheduledAgentId: agent.id,
+      status: "queued",
+      enqueuedAt: new Date().toISOString(),
+      startedAt: null,
+      endedAt: null,
+      message: null,
+      workspaceId: null,
+      sessionId: null,
+      backgroundSessionId: null,
+      logFilePath: null,
+    });
+
+    await runner.recoverInFlightRuns();
+
+    const running = store.findScheduledAgentRun("boot_running");
+    expect(running?.status).toBe("failed");
+    expect(running?.message).toBe("daemon_restarted_during_run");
+    // Denormalized cache also updated (this run is the most-recent for the agent).
+    expect(store.findScheduledAgent(agent.id)?.lastRunStatus).toBe("failed");
+    // Queue drained — the queued row should be terminal (failed because getRuntime returns undefined).
+    const queued = store.findScheduledAgentRun("boot_queued");
+    expect(queued?.status).toBe("failed");
+    expect(store.countQueuedScheduledAgentRuns(agent.id)).toBe(0);
   });
 });
 

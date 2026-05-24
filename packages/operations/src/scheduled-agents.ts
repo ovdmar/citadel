@@ -1,7 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { RuntimeConfig } from "@citadel/config";
 import type {
+  BackgroundAgentSession,
   CreateScheduledAgentInput,
   ScheduledAgent,
+  ScheduledAgentRun,
   UpdateScheduledAgentInput,
   Workspace,
 } from "@citadel/contracts";
@@ -15,7 +19,52 @@ export type ScheduledAgentRunResult = {
   message: string;
   workspaceId: string | null;
   sessionId: string | null;
+  backgroundSessionId: string | null;
+  runId: string;
 };
+
+/**
+ * Caller-visible result of a manual runNow request. Mirrors the HTTP/MCP
+ * response shape so HTTP routes and MCP handlers can map it 1:1.
+ */
+export type ManualRunResult =
+  | {
+      kind: "ran";
+      runId: string;
+      status: "succeeded" | "failed";
+      message: string;
+      workspaceId: string | null;
+      sessionId: string | null;
+      backgroundSessionId: string | null;
+    }
+  | { kind: "queued"; runId: string; queuePosition: number }
+  | { kind: "skipped_overlap" }
+  | { kind: "queue_full"; limit: number };
+
+/** Bound on the per-agent queue. Beyond this, queue-policy fires fall back to skip. */
+export const MAX_QUEUED_RUNS_PER_AGENT = 10;
+
+/** Filesystem-backed log file naming under dataDir. */
+function buildLogFilePath(dataDir: string, scheduledAgentId: string, runId: string): string {
+  return path.join(dataDir, "scheduled-runs", scheduledAgentId, `${runId}.log`);
+}
+
+/** Side-effect: ensure the parent dir of the run's log file exists. */
+function ensureLogParentDir(logFilePath: string) {
+  fs.mkdirSync(path.dirname(logFilePath), { recursive: true });
+}
+
+/** Background-session creator deps — injected so the operations package can keep
+ *  the tmux + ttyd integration in a sibling module. The runner is happy to call
+ *  through this interface for testability. */
+export type BackgroundSessionCreator = (input: {
+  cwd: string;
+  runtimeId: string;
+  runtime: { command: string; args: string[]; displayName: string; promptArg: string | null };
+  prompt?: string;
+  scheduledAgentId: string;
+  logFilePath: string;
+}) => Promise<BackgroundAgentSession>;
 
 export type CronExpression = {
   minute: Set<number>;
@@ -196,6 +245,12 @@ export type ScheduledAgentDeps = {
   store: SqliteStore;
   operations: OperationService;
   getRuntime: (runtimeId: string) => RuntimeConfig | undefined;
+  /** Absolute path where per-run log files live (`<dataDir>/scheduled-runs/...`). */
+  dataDir: string;
+  /** Injected so the runner doesn't import tmux/terminal. Step 4 wires this in. */
+  createBackgroundSession?: BackgroundSessionCreator;
+  /** Best-effort cleanup hooks invoked by the cascade-on-delete path. */
+  killTmuxSession?: (sessionName: string) => void;
   recordActivity?: (event: {
     type: string;
     message: string;
@@ -314,105 +369,381 @@ export class ScheduledAgentRunner {
     return this.deps.store.resetScheduledAgentRun(id);
   }
 
-  delete(id: string): boolean {
+  /**
+   * Delete a scheduled agent with cascade. Returns a typed error if a run is
+   * currently in flight (HTTP DELETE maps to 409 in_flight_run; MCP returns
+   * the same shape). On success, performs the side-effecting cleanup
+   * (fs.unlink on log files, tmux kill-session on background panes) AFTER
+   * the DB transaction commits.
+   */
+  delete(id: string): { ok: true } | { ok: false; error: "scheduled_agent_not_found" | "in_flight_run" } {
     const existing = this.deps.store.findScheduledAgent(id);
-    if (!existing) return false;
-    this.deps.store.deleteScheduledAgent(id);
+    if (!existing) return { ok: false, error: "scheduled_agent_not_found" };
+    if (this.deps.store.findInFlightScheduledAgentRun(id)) return { ok: false, error: "in_flight_run" };
+    const cleanup = this.deps.store.deleteScheduledAgentCascade(id);
+    if (!cleanup) return { ok: false, error: "scheduled_agent_not_found" };
+    for (const logPath of cleanup.logFilePaths) {
+      try {
+        fs.unlinkSync(logPath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+          // best-effort: a log we can't delete is leaked, not corrupting
+        }
+      }
+    }
+    for (const tmuxName of cleanup.tmuxSessionNames) {
+      try {
+        this.deps.killTmuxSession?.(tmuxName);
+      } catch {
+        // best-effort: tmux may already be gone
+      }
+    }
     this.deps.recordActivity?.({
       type: "scheduled-agent.deleted",
       message: `Deleted scheduled agent ${existing.name}`,
       repoId: existing.repoId,
       workspaceId: null,
     });
-    return true;
+    return { ok: true };
   }
 
   /**
-   * Recurring: fire any enabled agent whose cron matches the current minute and
-   * whose last run wasn't already in this same minute.
-   * One-shot: fire any enabled agent whose runAt has passed and that has never
-   * succeeded — then disable it so the tick doesn't keep re-firing.
+   * Recurring + one-shot tick. Decides per-agent whether to fire, queue, or
+   * skip based on overlapPolicy and any in-flight run.
+   * Returns the agent IDs that fired synchronously (queued enqueues are NOT
+   * counted as fired — they fire later via drain).
    */
   async tick(now: Date = new Date()): Promise<string[]> {
     const minuteFloor = floorToMinute(now);
     const fired: string[] = [];
     for (const agent of this.deps.store.listScheduledAgents()) {
       if (!agent.enabled) continue;
+      // Pre-check: scheduleType-specific eligibility.
       if (agent.scheduleType === "once") {
         if (!agent.runAt) continue;
         const runAt = new Date(agent.runAt).getTime();
         if (Number.isNaN(runAt) || runAt > now.getTime()) continue;
-        // Skip anything not "never" — a "running" row means a previous tick is
-        // still mid-flight (execute() exceeded the tick interval) and we must
-        // not start a second concurrent run. "succeeded"/"failed" are terminal.
+        // Anything past 'never' means the row already fired (or is mid-flight).
+        // Defense in depth: the in-flight + auto-disable below catches the rest.
         if (agent.lastRunStatus !== "never") continue;
-        // Disable BEFORE awaiting runOnce so a slow execute() can't be picked
-        // up by the next tick. try/finally guards against runOnce throwing —
-        // we must never leave an enabled one-shot whose execute() crashed.
-        this.deps.store.updateScheduledAgent(agent.id, { enabled: false });
+      } else {
+        if (!agent.cron) continue;
+        let expr: CronExpression;
         try {
-          await this.runOnce(agent.id, now);
-        } finally {
-          fired.push(agent.id);
+          expr = parseCronExpression(agent.cron);
+        } catch {
+          continue;
+        }
+        if (!cronMatches(expr, minuteFloor)) continue;
+        const lastRunMinute = agent.lastRunAt ? floorToMinute(new Date(agent.lastRunAt)).getTime() : 0;
+        if (lastRunMinute >= minuteFloor.getTime()) continue;
+      }
+
+      // Overlap decision.
+      const inFlight = this.deps.store.findInFlightScheduledAgentRun(agent.id);
+      if (inFlight) {
+        if (agent.overlapPolicy === "queue") {
+          if (this.deps.store.countQueuedScheduledAgentRuns(agent.id) >= MAX_QUEUED_RUNS_PER_AGENT) {
+            this.deps.recordActivity?.({
+              type: "scheduled-agent.queue_full",
+              message: `${agent.name}: queue full (${MAX_QUEUED_RUNS_PER_AGENT}); dropped`,
+              repoId: agent.repoId,
+              workspaceId: null,
+            });
+            continue;
+          }
+          this.enqueueRunRow(agent, now);
+          this.deps.recordActivity?.({
+            type: "scheduled-agent.queued",
+            message: `${agent.name}: previous run still in flight; queued`,
+            repoId: agent.repoId,
+            workspaceId: null,
+          });
+        } else {
+          this.deps.recordActivity?.({
+            type: "scheduled-agent.skipped_overlap",
+            message: `${agent.name}: previous run still in flight; skipped`,
+            repoId: agent.repoId,
+            workspaceId: null,
+          });
         }
         continue;
       }
-      if (!agent.cron) continue;
-      let expr: CronExpression;
-      try {
-        expr = parseCronExpression(agent.cron);
-      } catch {
-        continue;
+
+      // No in-flight: enqueue + promote + execute synchronously.
+      // For one-shots, also disable BEFORE awaiting so a slow execute() can't
+      // be picked up by the next tick (belt-and-suspenders alongside the
+      // in-flight check).
+      if (agent.scheduleType === "once") {
+        this.deps.store.updateScheduledAgent(agent.id, { enabled: false });
       }
-      if (!cronMatches(expr, minuteFloor)) continue;
-      const lastRunMinute = agent.lastRunAt ? floorToMinute(new Date(agent.lastRunAt)).getTime() : 0;
-      if (lastRunMinute >= minuteFloor.getTime()) continue;
-      await this.runOnce(agent.id, now);
-      fired.push(agent.id);
+      try {
+        await this.fireImmediately(agent, now);
+      } finally {
+        fired.push(agent.id);
+      }
     }
     return fired;
   }
 
-  /** Triggers a single run regardless of cron schedule (for manual buttons). */
+  /**
+   * Manual "Run now". Returns a typed envelope reflecting the four possible
+   * outcomes: ran-synchronously / queued / skipped (in-flight + skip policy)
+   * / queue_full.
+   */
+  async runNow(id: string, now: Date = new Date()): Promise<ManualRunResult> {
+    const agent = this.deps.store.findScheduledAgent(id);
+    if (!agent) throw new Error(`Unknown scheduled agent: ${id}`);
+    const inFlight = this.deps.store.findInFlightScheduledAgentRun(id);
+    if (inFlight) {
+      if (agent.overlapPolicy === "queue") {
+        const queueCount = this.deps.store.countQueuedScheduledAgentRuns(id);
+        if (queueCount >= MAX_QUEUED_RUNS_PER_AGENT) {
+          return { kind: "queue_full", limit: MAX_QUEUED_RUNS_PER_AGENT };
+        }
+        const queued = this.enqueueRunRow(agent, now);
+        return { kind: "queued", runId: queued.id, queuePosition: queueCount + 1 };
+      }
+      return { kind: "skipped_overlap" };
+    }
+    const result = await this.fireImmediately(agent, now);
+    return {
+      kind: "ran",
+      runId: result.runId,
+      status: result.status,
+      message: result.message,
+      workspaceId: result.workspaceId,
+      sessionId: result.sessionId,
+      backgroundSessionId: result.backgroundSessionId,
+    };
+  }
+
+  /**
+   * @deprecated kept for compat with the existing tests; new callers should
+   * use runNow which surfaces the queue / skip / queue_full outcomes
+   * explicitly. Returning the legacy result shape ignores the overlap policy
+   * and ALWAYS fires immediately if no in-flight run exists.
+   */
   async runOnce(id: string, now: Date = new Date()): Promise<ScheduledAgentRunResult> {
     const agent = this.deps.store.findScheduledAgent(id);
     if (!agent) throw new Error(`Unknown scheduled agent: ${id}`);
-    this.deps.store.recordScheduledAgentRun(id, {
+    return this.fireImmediately(agent, now);
+  }
+
+  /**
+   * Boot-sweep called once at daemon startup. Closes any orphaned 'running'
+   * rows from before the crash, syncs the denormalized lastRunStatus cache on
+   * each affected agent, kills + deletes any dangling background_sessions row,
+   * and drains any queued rows that were waiting on those orphans.
+   */
+  async recoverInFlightRuns(now: Date = new Date()): Promise<void> {
+    const inFlight = this.deps.store.listInFlightScheduledAgentRuns();
+    const affectedAgentIds = new Set<string>();
+    for (const row of inFlight) {
+      this.deps.store.recordScheduledAgentRunOutcome(row.id, {
+        status: "failed",
+        endedAt: now.toISOString(),
+        message: "daemon_restarted_during_run",
+      });
+      // Update the denormalized cache if this is the most-recent run.
+      const latest = this.deps.store.listScheduledAgentRuns(row.scheduledAgentId, { limit: 1 })[0];
+      if (latest && latest.id === row.id) {
+        this.deps.store.recordScheduledAgentRun(row.scheduledAgentId, {
+          lastRunAt: now.toISOString(),
+          lastRunStatus: "failed",
+          lastRunMessage: "daemon_restarted_during_run",
+        });
+      }
+      // Clean up the matching background session (if any).
+      if (row.backgroundSessionId) {
+        const bg = this.deps.store.findBackgroundSession(row.backgroundSessionId);
+        if (bg) {
+          try {
+            this.deps.killTmuxSession?.(bg.tmuxSessionName);
+          } catch {
+            // best-effort
+          }
+          this.deps.store.deleteBackgroundSession(bg.id);
+        }
+      }
+      affectedAgentIds.add(row.scheduledAgentId);
+    }
+    for (const agentId of affectedAgentIds) {
+      await this.drainQueue(agentId, now);
+    }
+  }
+
+  /**
+   * Promote the oldest queued row for an agent (if any) and execute it.
+   * Idempotent — concurrent calls all early-return if a run is already in
+   * flight because findInFlightScheduledAgentRun gates execution.
+   */
+  async drainQueue(scheduledAgentId: string, now: Date = new Date()): Promise<void> {
+    if (this.deps.store.findInFlightScheduledAgentRun(scheduledAgentId)) return;
+    const queued = this.deps.store.findOldestQueuedScheduledAgentRun(scheduledAgentId);
+    if (!queued) return;
+    const agent = this.deps.store.findScheduledAgent(scheduledAgentId);
+    if (!agent) return;
+    const logFilePath = buildLogFilePath(this.deps.dataDir, agent.id, queued.id);
+    ensureLogParentDir(logFilePath);
+    this.deps.store.promoteScheduledAgentRunToRunning(queued.id, {
+      startedAt: now.toISOString(),
+      logFilePath,
+    });
+    await this.executeRun(agent, queued.id, logFilePath, now);
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  // internals
+
+  /** Insert a queued run row at fire time. */
+  private enqueueRunRow(agent: ScheduledAgent, now: Date): ScheduledAgentRun {
+    const run: ScheduledAgentRun = {
+      id: createId("run"),
+      scheduledAgentId: agent.id,
+      status: "queued",
+      enqueuedAt: now.toISOString(),
+      startedAt: null,
+      endedAt: null,
+      message: null,
+      workspaceId: null,
+      sessionId: null,
+      backgroundSessionId: null,
+      logFilePath: null,
+    };
+    this.deps.store.insertScheduledAgentRun(run);
+    return run;
+  }
+
+  /** Enqueue + promote + execute synchronously. Used by tick and manual runNow when no run is in flight. */
+  private async fireImmediately(agent: ScheduledAgent, now: Date): Promise<ScheduledAgentRunResult> {
+    const queued = this.enqueueRunRow(agent, now);
+    const logFilePath = buildLogFilePath(this.deps.dataDir, agent.id, queued.id);
+    ensureLogParentDir(logFilePath);
+    this.deps.store.promoteScheduledAgentRunToRunning(queued.id, {
+      startedAt: now.toISOString(),
+      logFilePath,
+    });
+    // Mirror the denormalized cache too — readers of the agent's lastRunStatus
+    // see the run as "running" immediately, not just on outcome.
+    this.deps.store.recordScheduledAgentRun(agent.id, {
       lastRunAt: now.toISOString(),
       lastRunStatus: "running",
       lastRunMessage: "Run starting",
     });
-    const result = await this.execute(agent, now);
-    this.deps.store.recordScheduledAgentRun(id, {
+    return this.executeRun(agent, queued.id, logFilePath, now);
+  }
+
+  /**
+   * Execute a run that's already been promoted to 'running' (run row + log
+   * dir exist). Records the outcome and drains the queue afterward.
+   */
+  private async executeRun(
+    agent: ScheduledAgent,
+    runId: string,
+    logFilePath: string,
+    now: Date,
+  ): Promise<ScheduledAgentRunResult> {
+    const result = await this.execute(agent, runId, logFilePath, now);
+    // Record outcome on the run row, and surface log_truncated_at_16mib via
+    // a fs.statSync size check (the head -c cap is bounded by the same
+    // constant in @citadel/terminal; we read the file size here to detect).
+    let outcomeMessage = result.message;
+    try {
+      const stat = fs.statSync(logFilePath);
+      if (stat.size >= LOG_TRUNCATION_BYTES) {
+        outcomeMessage = `${result.message} (log_truncated_at_16mib)`;
+      }
+    } catch {
+      // No log file (workspace-mode runs may not have one yet). Fine.
+    }
+    this.deps.store.recordScheduledAgentRunOutcome(runId, {
+      status: result.status,
+      endedAt: nowIso(),
+      message: outcomeMessage,
+      workspaceId: result.workspaceId,
+      sessionId: result.sessionId,
+      backgroundSessionId: result.backgroundSessionId,
+    });
+    this.deps.store.recordScheduledAgentRun(agent.id, {
       lastRunAt: now.toISOString(),
       lastRunStatus: result.status,
-      lastRunMessage: result.message,
+      lastRunMessage: outcomeMessage,
       lastWorkspaceId: result.workspaceId,
       lastSessionId: result.sessionId,
     });
     this.deps.recordActivity?.({
       type: `scheduled-agent.${result.status}`,
-      message: `${agent.name}: ${result.message}`,
+      message: `${agent.name}: ${outcomeMessage}`,
       repoId: agent.repoId,
       workspaceId: result.workspaceId,
     });
-    return result;
+    // Fire-and-forget drain so we don't hold the caller waiting.
+    void this.drainQueue(agent.id).catch(() => {
+      /* best-effort */
+    });
+    return { ...result, message: outcomeMessage };
   }
 
-  private async execute(agent: ScheduledAgent, now: Date): Promise<ScheduledAgentRunResult> {
+  private async execute(
+    agent: ScheduledAgent,
+    runId: string,
+    logFilePath: string,
+    now: Date,
+  ): Promise<ScheduledAgentRunResult> {
     const repo = this.deps.store.listRepos().find((candidate) => candidate.id === agent.repoId);
-    if (!repo) return failure(agent, "Repository is no longer tracked");
+    if (!repo) return runFailure(agent, runId, "Repository is no longer tracked");
     const runtime = this.deps.getRuntime(agent.runtimeId);
-    if (!runtime) return failure(agent, `Runtime ${agent.runtimeId} is not configured`);
+    if (!runtime) return runFailure(agent, runId, `Runtime ${agent.runtimeId} is not configured`);
 
+    if (agent.runMode === "background") {
+      const cwd = agent.backgroundCwd ?? repo.rootPath;
+      try {
+        const stat = fs.statSync(cwd);
+        if (!stat.isDirectory()) return runFailure(agent, runId, "background_cwd_missing");
+      } catch {
+        return runFailure(agent, runId, "background_cwd_missing");
+      }
+      if (!this.deps.createBackgroundSession) {
+        return runFailure(agent, runId, "background_session_creator_unavailable");
+      }
+      try {
+        const session = await this.deps.createBackgroundSession({
+          cwd,
+          runtimeId: agent.runtimeId,
+          runtime: {
+            command: runtime.command,
+            args: runtime.args,
+            displayName: runtime.displayName,
+            promptArg: runtime.promptArg ?? null,
+          },
+          ...(agent.prompt ? { prompt: agent.prompt } : {}),
+          scheduledAgentId: agent.id,
+          logFilePath,
+        });
+        return {
+          agent,
+          runId,
+          status: "succeeded",
+          message: `Started ${runtime.displayName} (background) in ${cwd}`,
+          workspaceId: null,
+          sessionId: null,
+          backgroundSessionId: session.id,
+        };
+      } catch (error) {
+        return runFailure(agent, runId, error instanceof Error ? error.message : "background_session_failed");
+      }
+    }
+
+    // workspace runMode — unchanged path.
     let workspace: Workspace | undefined;
     try {
       workspace = await this.resolveWorkspace(agent, now);
     } catch (error) {
-      return failure(agent, error instanceof Error ? error.message : "workspace_resolution_failed");
+      return runFailure(agent, runId, error instanceof Error ? error.message : "workspace_resolution_failed");
     }
-    if (!workspace) return failure(agent, "Workspace could not be created");
-    if (workspace.lifecycle === "failed") return failure(agent, "Workspace creation failed", workspace.id);
+    if (!workspace) return runFailure(agent, runId, "Workspace could not be created");
+    if (workspace.lifecycle === "failed") return runFailure(agent, runId, "Workspace creation failed", workspace.id);
 
     try {
       const session = await this.deps.operations.createAgentSession(
@@ -431,13 +762,15 @@ export class ScheduledAgentRunner {
       );
       return {
         agent,
+        runId,
         status: "succeeded",
         message: `Started ${runtime.displayName} in ${workspace.name}`,
         workspaceId: workspace.id,
         sessionId: session.id,
+        backgroundSessionId: null,
       };
     } catch (error) {
-      return failure(agent, error instanceof Error ? error.message : "session_start_failed", workspace.id);
+      return runFailure(agent, runId, error instanceof Error ? error.message : "session_start_failed", workspace.id);
     }
   }
 
@@ -473,6 +806,14 @@ export class ScheduledAgentRunner {
   }
 }
 
-function failure(agent: ScheduledAgent, message: string, workspaceId: string | null = null): ScheduledAgentRunResult {
-  return { agent, status: "failed", message, workspaceId, sessionId: null };
+function runFailure(
+  agent: ScheduledAgent,
+  runId: string,
+  message: string,
+  workspaceId: string | null = null,
+): ScheduledAgentRunResult {
+  return { agent, runId, status: "failed", message, workspaceId, sessionId: null, backgroundSessionId: null };
 }
+
+/** Must match LOG_TRUNCATION_BYTES in @citadel/terminal (set in step 4). */
+const LOG_TRUNCATION_BYTES = 16 * 1024 * 1024;
