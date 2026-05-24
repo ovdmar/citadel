@@ -51,7 +51,9 @@ export type McpToolName =
   | "create_scheduled_agent"
   | "update_scheduled_agent"
   | "delete_scheduled_agent"
-  | "run_scheduled_agent_now";
+  | "run_scheduled_agent_now"
+  | "list_scheduled_agent_runs"
+  | "read_scheduled_agent_run_log";
 
 export type McpToolDefinition = {
   name: McpToolName;
@@ -366,7 +368,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     {
       name: "create_scheduled_agent",
       description:
-        "Create a scheduled agent. scheduleType='recurring' (default) requires a 5-field cron expression. scheduleType='once' requires runAt (ISO 8601 datetime with offset, e.g. 2026-05-23T09:00:00Z). For one-shots, the agent auto-disables itself after the run so it never repeats. workspaceStrategy='new' creates a fresh workspace per run (workspaceName becomes a prefix; a timestamp is appended). workspaceStrategy='existing' reuses the workspace with the exact name. Returns { scheduledAgent }.",
+        "Create a scheduled agent. scheduleType='recurring' (default) requires a 5-field cron expression. scheduleType='once' requires runAt (ISO 8601 with offset, e.g. 2026-05-23T09:00:00Z); one-shots auto-disable after firing. workspaceStrategy='new' creates a fresh workspace per run (workspaceName is a prefix; timestamp appended). workspaceStrategy='existing' reuses the workspace with the exact name. runMode='workspace' (default) keeps the current workspace-per-run behavior; runMode='background' runs the runtime in backgroundCwd (or repo.rootPath) without creating a workspace — intended for non-TUI scripts. overlapPolicy='skip' (default) drops fires that overlap an in-flight run; overlapPolicy='queue' enqueues up to 10 then drops with 'queue_full'. Returns { scheduledAgent }.",
       inputSchema: {
         type: "object",
         required: ["name", "repoId", "runtimeId", "workspaceStrategy", "workspaceName"],
@@ -382,6 +384,14 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
           workspaceStrategy: { type: "string", enum: ["new", "existing"] },
           workspaceName: { type: "string", minLength: 1, maxLength: 80 },
           baseBranch: { type: "string", minLength: 1, maxLength: 120 },
+          runMode: { type: "string", enum: ["workspace", "background"], default: "workspace" },
+          backgroundCwd: {
+            type: "string",
+            minLength: 1,
+            maxLength: 4000,
+            description: "Absolute directory for runMode='background'. Defaults to the repo's rootPath at run time.",
+          },
+          overlapPolicy: { type: "string", enum: ["skip", "queue"], default: "skip" },
           enabled: { type: "boolean" },
         },
         additionalProperties: false,
@@ -391,7 +401,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     {
       name: "update_scheduled_agent",
       description:
-        "Patch fields of an existing scheduled agent. All non-id fields are optional; only those provided are changed. To convert a recurring agent into a one-shot, set scheduleType='once' and runAt; the previous cron is cleared. Same in reverse for cron/recurring. Returns { scheduledAgent } or { error: 'scheduled_agent_not_found' }.",
+        "Patch fields of an existing scheduled agent. All non-id fields are optional; only those provided are changed. To convert a recurring agent into a one-shot, set scheduleType='once' and runAt; the previous cron is cleared. Switching runMode does NOT delete previously-created workspaces. Returns { scheduledAgent } or { error: 'scheduled_agent_not_found' }.",
       inputSchema: {
         type: "object",
         required: ["id"],
@@ -408,6 +418,9 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
           workspaceStrategy: { type: "string", enum: ["new", "existing"] },
           workspaceName: { type: "string", minLength: 1, maxLength: 80 },
           baseBranch: { type: "string", minLength: 1, maxLength: 120 },
+          runMode: { type: "string", enum: ["workspace", "background"] },
+          backgroundCwd: { type: "string", minLength: 1, maxLength: 4000 },
+          overlapPolicy: { type: "string", enum: ["skip", "queue"] },
           enabled: { type: "boolean" },
         },
         additionalProperties: false,
@@ -416,7 +429,8 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     },
     {
       name: "delete_scheduled_agent",
-      description: "Delete a scheduled agent. Returns { removed: true } or { error: 'scheduled_agent_not_found' }.",
+      description:
+        "Delete a scheduled agent. Cascades: kills any background tmux panes, deletes per-run log files on disk, removes scheduled_agent_runs + background_sessions rows, then deletes the agent. Returns { removed: true } or { error: 'scheduled_agent_not_found' } or { error: 'in_flight_run' } when a run is currently executing — wait for the run to finish or for the reconciler to terminate the orphan, then retry.",
       inputSchema: {
         type: "object",
         required: ["id"],
@@ -428,11 +442,43 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     {
       name: "run_scheduled_agent_now",
       description:
-        "Trigger a single run of a scheduled agent immediately, regardless of cron. Returns { status, message, workspaceId, sessionId, scheduledAgent }.",
+        "Trigger a single run of a scheduled agent immediately, regardless of cron. Behavior under overlap depends on the agent's overlapPolicy: with 'skip' returns { error: 'run_already_in_progress' } when in-flight; with 'queue' returns { queued: true, runId, queuePosition } (or { error: 'queue_full', limit: 10 } when the queue is full). When no run is in flight, returns { status, runId, message, workspaceId, sessionId, backgroundSessionId, scheduledAgent }.",
       inputSchema: {
         type: "object",
         required: ["id"],
         properties: { id: { type: "string" } },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "list_scheduled_agent_runs",
+      description:
+        "Return the run history for a scheduled agent, most recent first by enqueued_at. Each row includes status (queued|running|succeeded|failed), enqueuedAt, startedAt (null for queued), endedAt, message, the workspaceId/sessionId/backgroundSessionId of the spawn (when applicable), and logFilePath (populated for runs that produced a log). Pagination via limit (default 50, max 500) and offset.",
+      inputSchema: {
+        type: "object",
+        required: ["scheduledAgentId"],
+        properties: {
+          scheduledAgentId: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 500, default: 50 },
+          offset: { type: "integer", minimum: 0, default: 0 },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "read_scheduled_agent_run_log",
+      description:
+        "Read a byte slice of a scheduled-agent run's log file. Returns { content, bytesRead, nextOffset, truncated }. `content` is the UTF-8 decode of [offset, offset+maxBytes) bytes; `bytesRead` is the byte count consumed (NOT content.length — use it to compute nextOffset). Slice boundaries may split a UTF-8 codepoint or ANSI escape; re-fetching from offset=0 is always correct. 404-class errors come back as { error: 'run_not_found' | 'log_not_available' | 'log_file_missing' }.",
+      inputSchema: {
+        type: "object",
+        required: ["runId"],
+        properties: {
+          runId: { type: "string" },
+          offset: { type: "integer", minimum: 0, default: 0 },
+          maxBytes: { type: "integer", minimum: 256, maximum: 200_000, default: 16_000 },
+        },
         additionalProperties: false,
       },
       destructive: false,
@@ -518,6 +564,9 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "delete_scheduled_agent":
     case "run_scheduled_agent_now":
       return { error: "mutating_tool_requires_daemon" };
+    case "list_scheduled_agent_runs":
+    case "read_scheduled_agent_run_log":
+      return { error: "scheduled_agent_run_tool_requires_daemon" };
     case "read_agent_output":
     case "send_agent_message":
     case "read_agent_history":

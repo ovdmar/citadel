@@ -85,6 +85,74 @@ describe("ScheduledAgentService", () => {
     })) as { removed: boolean };
     expect(removed.removed).toBe(true);
   });
+
+  it("list_scheduled_agent_runs + read_scheduled_agent_run_log return the right shapes via MCP", async () => {
+    const { service, runner, store } = createService();
+    const repo = createRepo();
+
+    const deps = {
+      config: { runtimes: [{ id: "shell", displayName: "Shell", command: "bash", args: [] }] } as never,
+      store,
+      operations: {} as never,
+      ttyd: {} as never,
+      scheduledAgents: runner,
+      scheduledAgentService: service,
+      providerCache: new Map(),
+      emit: () => {},
+    };
+
+    const created = (await callDaemonMcpTool(deps, {
+      name: "create_scheduled_agent",
+      arguments: {
+        name: "MCP runs",
+        cron: "0 9 * * *",
+        repoId: repo.id,
+        runtimeId: "shell",
+        workspaceStrategy: "existing",
+        workspaceName: "mcp-runs",
+      },
+    })) as { scheduledAgent: { id: string } };
+    const agentId = created.scheduledAgent.id;
+
+    // Seed a row + log file.
+    const dataDir = fixtureStore.databasePath.replace(/\/citadel\.sqlite$/, "");
+    const logDir = path.join(dataDir, "scheduled-runs", agentId);
+    fs.mkdirSync(logDir, { recursive: true });
+    const logPath = path.join(logDir, "run_mcp.log");
+    fs.writeFileSync(logPath, "y".repeat(512));
+    store.insertScheduledAgentRun({
+      id: "run_mcp",
+      scheduledAgentId: agentId,
+      status: "succeeded",
+      enqueuedAt: new Date().toISOString(),
+      startedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+      message: "ok",
+      workspaceId: null,
+      sessionId: null,
+      backgroundSessionId: null,
+      logFilePath: logPath,
+    });
+
+    const runs = (await callDaemonMcpTool(deps, {
+      name: "list_scheduled_agent_runs",
+      arguments: { scheduledAgentId: agentId },
+    })) as { runs: Array<{ id: string }> };
+    expect(runs.runs.map((r) => r.id)).toContain("run_mcp");
+
+    const log = (await callDaemonMcpTool(deps, {
+      name: "read_scheduled_agent_run_log",
+      arguments: { runId: "run_mcp", maxBytes: 256 },
+    })) as { content: string; bytesRead: number; nextOffset: number; truncated: boolean };
+    expect(log.bytesRead).toBe(256);
+    expect(log.content.length).toBe(256);
+    expect(log.truncated).toBe(true);
+    expect(log.nextOffset).toBe(256);
+
+    expect(
+      await callDaemonMcpTool(deps, { name: "read_scheduled_agent_run_log", arguments: { runId: "missing" } }),
+    ).toEqual({ error: "run_not_found" });
+  });
 });
 
 let emits: Array<[string, unknown]> = [];

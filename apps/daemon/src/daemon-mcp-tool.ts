@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { CitadelConfig } from "@citadel/config";
 import {
   CreateAgentSessionInputSchema,
@@ -197,7 +198,71 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     const id = typeof call.arguments?.id === "string" ? call.arguments.id : "";
     if (!id) return { error: "id_required" };
     const result = await scheduledAgentService.runNow(id);
-    return result.ok ? result.value : { error: result.error };
+    if (!result.ok) return { error: result.error };
+    const value = result.value;
+    if (value.kind === "ran") {
+      return {
+        status: value.status,
+        runId: value.runId,
+        message: value.message,
+        workspaceId: value.workspaceId,
+        sessionId: value.sessionId,
+        backgroundSessionId: value.backgroundSessionId,
+        scheduledAgent: value.scheduledAgent,
+      };
+    }
+    if (value.kind === "queued") {
+      return {
+        queued: true,
+        runId: value.runId,
+        queuePosition: value.queuePosition,
+        scheduledAgent: value.scheduledAgent,
+      };
+    }
+    if (value.kind === "skipped_overlap") {
+      return { error: "run_already_in_progress", scheduledAgent: value.scheduledAgent };
+    }
+    return { error: "queue_full", limit: value.limit, scheduledAgent: value.scheduledAgent };
+  }
+  if (call.name === "list_scheduled_agent_runs") {
+    const agentId = typeof call.arguments?.scheduledAgentId === "string" ? call.arguments.scheduledAgentId : "";
+    if (!agentId) return { error: "scheduled_agent_id_required" };
+    if (!scheduledAgents.find(agentId)) return { error: "scheduled_agent_not_found" };
+    const limit = Math.max(1, Math.min(typeof call.arguments?.limit === "number" ? call.arguments.limit : 50, 500));
+    const offset = Math.max(0, typeof call.arguments?.offset === "number" ? call.arguments.offset : 0);
+    return { runs: store.listScheduledAgentRuns(agentId, { limit, offset }) };
+  }
+  if (call.name === "read_scheduled_agent_run_log") {
+    const runId = typeof call.arguments?.runId === "string" ? call.arguments.runId : "";
+    if (!runId) return { error: "run_id_required" };
+    const run = store.findScheduledAgentRun(runId);
+    if (!run) return { error: "run_not_found" };
+    if (!run.logFilePath) return { error: "log_not_available" };
+    const offset = Math.max(0, typeof call.arguments?.offset === "number" ? call.arguments.offset : 0);
+    const maxBytes = Math.max(
+      256,
+      Math.min(typeof call.arguments?.maxBytes === "number" ? call.arguments.maxBytes : 16_000, 200_000),
+    );
+    try {
+      const fd = fs.openSync(run.logFilePath, "r");
+      try {
+        const stat = fs.fstatSync(fd);
+        const start = Math.min(offset, stat.size);
+        const length = Math.min(maxBytes, Math.max(0, stat.size - start));
+        const buffer = Buffer.alloc(length);
+        const bytesRead = length > 0 ? fs.readSync(fd, buffer, 0, length, start) : 0;
+        return {
+          content: buffer.subarray(0, bytesRead).toString("utf8"),
+          bytesRead,
+          nextOffset: start + bytesRead,
+          truncated: start + bytesRead < stat.size,
+        };
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      return { error: "log_file_missing" };
+    }
   }
   const providerHealth = await collectProviderHealth(config.providers);
   return callMcpTool(call, {

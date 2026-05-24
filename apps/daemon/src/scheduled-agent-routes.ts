@@ -75,6 +75,7 @@ export function registerScheduledAgentRoutes(input: {
       ),
     killTmuxSession: (name) => killTmuxSession(name),
     recordActivity,
+    emitRunRow: (event) => emit("scheduled-agent.run-row", event),
   });
 
   if (process.env.CITADEL_DISABLE_SCHEDULER !== "1") {

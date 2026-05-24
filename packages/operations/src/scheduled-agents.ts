@@ -257,6 +257,8 @@ export type ScheduledAgentDeps = {
     repoId: string | null;
     workspaceId: string | null;
   }) => void;
+  /** SSE-style emit for per-row events. Fired on row insert and on terminal transition. */
+  emitRunRow?: (event: { scheduledAgentId: string; runId: string; status: ScheduledAgentRun["status"] }) => void;
 };
 
 export class ScheduledAgentRunner {
@@ -545,6 +547,7 @@ export class ScheduledAgentRunner {
         endedAt: now.toISOString(),
         message: "daemon_restarted_during_run",
       });
+      this.deps.emitRunRow?.({ scheduledAgentId: row.scheduledAgentId, runId: row.id, status: "failed" });
       // Update the denormalized cache if this is the most-recent run.
       const latest = this.deps.store.listScheduledAgentRuns(row.scheduledAgentId, { limit: 1 })[0];
       if (latest && latest.id === row.id) {
@@ -590,6 +593,7 @@ export class ScheduledAgentRunner {
       startedAt: now.toISOString(),
       logFilePath,
     });
+    this.deps.emitRunRow?.({ scheduledAgentId: agent.id, runId: queued.id, status: "running" });
     await this.executeRun(agent, queued.id, logFilePath, now);
   }
 
@@ -612,6 +616,7 @@ export class ScheduledAgentRunner {
       logFilePath: null,
     };
     this.deps.store.insertScheduledAgentRun(run);
+    this.deps.emitRunRow?.({ scheduledAgentId: agent.id, runId: run.id, status: "queued" });
     return run;
   }
 
@@ -624,6 +629,7 @@ export class ScheduledAgentRunner {
       startedAt: now.toISOString(),
       logFilePath,
     });
+    this.deps.emitRunRow?.({ scheduledAgentId: agent.id, runId: queued.id, status: "running" });
     // Mirror the denormalized cache too — readers of the agent's lastRunStatus
     // see the run as "running" immediately, not just on outcome.
     this.deps.store.recordScheduledAgentRun(agent.id, {
@@ -665,6 +671,7 @@ export class ScheduledAgentRunner {
       sessionId: result.sessionId,
       backgroundSessionId: result.backgroundSessionId,
     });
+    this.deps.emitRunRow?.({ scheduledAgentId: agent.id, runId, status: result.status });
     this.deps.store.recordScheduledAgentRun(agent.id, {
       lastRunAt: now.toISOString(),
       lastRunStatus: result.status,
