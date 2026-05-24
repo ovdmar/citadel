@@ -1,6 +1,6 @@
 import type { AgentRuntime, AgentSession, Workspace } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
-import { ExternalLink, GitBranch, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
+import { ExternalLink, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { TerminalPane, getTerminalHandle, subscribeTerminalHandle } from "./terminal-pane.js";
@@ -291,40 +291,6 @@ export function Stage(props: {
           Failed to start session: {startError}
         </div>
       ) : null}
-      <div className="stage-pane-head">
-        <div className="stage-pane-head-left">
-          <span className="stage-pane-tag">
-            <span
-              className={`cit-pulse cit-pulse-sm ${activeSession && activeSession.session.status === "running" ? "cit-pulse-run" : "cit-pulse-idle"}`}
-              aria-hidden
-            />
-            {props.workspace.name}
-          </span>
-          <span className="stage-pane-path">
-            <GitBranch size={11} />
-            <span>{props.workspace.branch}</span>
-          </span>
-          {props.workspace.dirty ? (
-            <span className="stage-pane-meta" title="Working tree has uncommitted changes">
-              · dirty
-            </span>
-          ) : null}
-        </div>
-        <div className="stage-pane-head-right">
-          {props.workspace.prUrl ? (
-            <a
-              className="stage-pane-chip"
-              href={props.workspace.prUrl}
-              target="_blank"
-              rel="noreferrer"
-              title="Open pull request"
-            >
-              <ExternalLink size={11} />
-              <span>Open PR</span>
-            </a>
-          ) : null}
-        </div>
-      </div>
       <div className="stage-body">
         {visitedPanes.map((session) => (
           <div

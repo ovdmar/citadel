@@ -299,71 +299,9 @@
   border-bottom: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
 }
 
-.stage-pane-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 9px 14px 8px;
-  background: var(--c-elev);
-  border: 0.5px solid var(--c-line-2);
-  border-bottom: 0;
-  border-radius: 0 9px 0 0;
-  margin-top: 0;
-  position: relative;
-  z-index: 5;
-  flex: 0 0 auto;
-}
-
-.stage-pane-head-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.stage-pane-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--c-fg-1);
-  background: var(--c-card);
-  border: 0.5px solid var(--c-line-2);
-  padding: 3px 8px 3px 7px;
-  border-radius: 6px;
-  white-space: nowrap;
-  flex: 0 0 auto;
-}
-
-.stage-pane-path {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--c-fg-2);
-  min-width: 0;
-}
-
-.stage-pane-path > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.stage-pane-meta {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--c-fg-4);
-}
-
-.stage-pane-head-right {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
+/* Unused — pane-head was removed; the tab strip + body alone form the chrome.
+   Keeping the .stage-pane-chip rule for any future button that wants the
+   same warm-cream pill look. */
 .stage-pane-chip {
   appearance: none;
   border: 0.5px solid var(--c-line-2);
@@ -395,8 +333,10 @@
   padding: 0;
   background: var(--c-elev);
   border: 0.5px solid var(--c-line-2);
-  border-top: 0;
-  border-radius: 0 0 12px 12px;
+  /* Top-right rounded; top-left stays flat so the active tab "sits" into the
+   * pane edge. The active tab covers its own slice of the top border via
+   * `border-bottom-color: transparent` + `margin-bottom: -0.5px`. */
+  border-radius: 0 9px 12px 12px;
   box-shadow: var(--sh-card);
   /* Trap the iframe's stacking inside this box so it can never paint over
    * the tab strip's add-session popover (stage-tabbar z:20). */
@@ -438,7 +378,10 @@
 
 .terminal-shell {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  /* Single row: the in-pane status bar was removed and the surface fills the
+   * whole pane. The previous "auto 1fr" template placed the surviving child
+   * into the auto track, collapsing the iframe to its natural (zero) height. */
+  grid-template-rows: minmax(0, 1fr);
   background: transparent;
   border: 0;
   border-radius: 0;

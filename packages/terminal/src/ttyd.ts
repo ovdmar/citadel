@@ -256,9 +256,10 @@ function ttydThemeArgs(theme: TtydTheme): string[] {
 
 // Palette matches the cockpit's warm-cream redesign so the terminal pane
 // reads as part of the surface, not a stark white island. Background tracks
-// --c-elev (the stage card colour); foreground/accents track the --c-fg-*
-// and OKLCH status ramps used elsewhere. Bright variants are nudged up in
-// chroma so e.g. yellow notices and red errors are readable on cream.
+// --c-elev (the stage card colour); foreground tracks --c-fg-1. Ansi colour
+// hues are unchanged from the previous palette — only their saturation has
+// been pushed up so each colour reads clearly on the cream/dark surfaces
+// without losing the warm-leaning character of the cockpit.
 const LIGHT_XTERM_THEME = {
   background: "#f5f1e8",
   foreground: "#1a1814",
@@ -266,20 +267,20 @@ const LIGHT_XTERM_THEME = {
   cursorAccent: "#f5f1e8",
   selectionBackground: "rgba(20, 23, 31, 0.18)",
   black: "#1a1814",
-  red: "#a8413a",
-  green: "#5f7d3c",
-  yellow: "#9a7724",
-  blue: "#3f6291",
-  magenta: "#825a8e",
-  cyan: "#3f7d8a",
+  red: "#b8281c",
+  green: "#4a8a14",
+  yellow: "#a06b0a",
+  blue: "#1f5aa6",
+  magenta: "#7a3a96",
+  cyan: "#0f7d92",
   white: "#c9c2b0",
   brightBlack: "#6f695d",
-  brightRed: "#c8584d",
-  brightGreen: "#7a9b53",
-  brightYellow: "#b89236",
-  brightBlue: "#5a82b0",
-  brightMagenta: "#9d75aa",
-  brightCyan: "#5a99a8",
+  brightRed: "#d83a26",
+  brightGreen: "#5fa024",
+  brightYellow: "#c08418",
+  brightBlue: "#3a78c0",
+  brightMagenta: "#9c52b8",
+  brightCyan: "#1f95ad",
   brightWhite: "#1a1814",
 };
 
@@ -290,20 +291,20 @@ const DARK_XTERM_THEME = {
   cursorAccent: "#1a1814",
   selectionBackground: "rgba(240, 235, 221, 0.18)",
   black: "#1a1814",
-  red: "#d6857d",
-  green: "#a8c184",
-  yellow: "#d8b878",
-  blue: "#8aa8c8",
-  magenta: "#c0a8c0",
-  cyan: "#88b0c0",
+  red: "#ec7468",
+  green: "#a3d364",
+  yellow: "#e8b552",
+  blue: "#7eb5e4",
+  magenta: "#c896d4",
+  cyan: "#7dbedc",
   white: "#e8e3d3",
   brightBlack: "#948d7b",
-  brightRed: "#e8a59c",
-  brightGreen: "#c2dba1",
-  brightYellow: "#e8d098",
-  brightBlue: "#a8c2d8",
-  brightMagenta: "#d4c2d4",
-  brightCyan: "#a8c8d8",
+  brightRed: "#ff8d80",
+  brightGreen: "#bbe683",
+  brightYellow: "#f5c66a",
+  brightBlue: "#a2cef0",
+  brightMagenta: "#dcb1e4",
+  brightCyan: "#9ad0e8",
   brightWhite: "#fffaef",
 };
 
