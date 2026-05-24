@@ -162,6 +162,28 @@ export function stopBackgroundSessionPipe(sessionName: string) {
   execFileSync("tmux", ["pipe-pane", "-t", sessionName]);
 }
 
+/**
+ * Returns true when the pane's command has exited (regardless of whether
+ * `remain-on-exit` is keeping the pane visible). Useful for background
+ * sessions where we never injected the wrapper's `isAgentLive` sentinel —
+ * the reconciler relies on this signal to close the matching run row.
+ */
+export function tmuxPaneDead(sessionName: string): boolean {
+  try {
+    const output = execFileSync("tmux", ["list-panes", "-t", sessionName, "-F", "#{pane_dead}"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    // First pane's value — for our single-pane background sessions this is
+    // the only one we care about.
+    const first = output.split(/\s+/)[0] ?? "0";
+    return first === "1";
+  } catch {
+    // Session itself is gone → treat as dead.
+    return true;
+  }
+}
+
 export function tmuxSessionExists(sessionName: string) {
   try {
     execFileSync("tmux", ["has-session", "-t", sessionName], { stdio: "ignore" });

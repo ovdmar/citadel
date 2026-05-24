@@ -5,7 +5,13 @@ import type { HookConfig } from "@citadel/config";
 import type { HookDiagnostic, HookOutput, Operation, Repo, Workspace } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { hookDiagnostic } from "@citadel/hooks";
-import { isAgentLive, tmuxSessionExists } from "@citadel/terminal";
+import {
+  isAgentLive,
+  killTmuxSession,
+  stopBackgroundSessionPipe,
+  tmuxPaneDead,
+  tmuxSessionExists,
+} from "@citadel/terminal";
 
 export function asObject(payload: unknown) {
   return typeof payload === "object" && payload !== null ? payload : {};
@@ -82,11 +88,71 @@ export function withActionHookIds(output: HookOutput, hookId: string): HookOutpu
 export function reconcileStore(
   store: SqliteStore,
   activity: (message: string, repoId: string | null) => void,
-): { sessions: number; workspaces: number; repos: number; deletedSessions: number } {
+): {
+  sessions: number;
+  workspaces: number;
+  repos: number;
+  deletedSessions: number;
+  backgroundSessions: number;
+} {
   let sessionCount = 0;
   let workspaceCount = 0;
   let repoCount = 0;
   let deletedSessions = 0;
+  let backgroundSessionCount = 0;
+
+  // Background sessions: close any in-flight scheduled-agent run rows whose
+  // pane is dead (command exited). Uses tmuxPaneDead because background
+  // sessions are spawned WITHOUT the wrapper that maintains isAgentLive's
+  // sentinel — so we can't use that signal here.
+  for (const bg of store.listRunningBackgroundSessions()) {
+    const sessionGone = !tmuxSessionExists(bg.tmuxSessionName);
+    const paneIsDead = sessionGone || tmuxPaneDead(bg.tmuxSessionName);
+    if (!paneIsDead) continue;
+    // Stop the pipe-pane stream (no-op if the session is already gone) so a
+    // user attaching to the surviving pane (remain-on-exit) doesn't keep
+    // appending to the log file.
+    if (!sessionGone) {
+      try {
+        stopBackgroundSessionPipe(bg.tmuxSessionName);
+      } catch {
+        // best-effort
+      }
+    }
+    store.updateBackgroundSessionStatus(bg.id, "stopped");
+    // Close the matching in-flight run row, if any.
+    const inFlight = bg.scheduledAgentId ? store.findInFlightScheduledAgentRun(bg.scheduledAgentId) : null;
+    if (inFlight && inFlight.backgroundSessionId === bg.id) {
+      const fileSize = (() => {
+        try {
+          return inFlight.logFilePath ? fs.statSync(inFlight.logFilePath).size : 0;
+        } catch {
+          return 0;
+        }
+      })();
+      // Best-effort outcome inference: if the log file has any bytes, treat
+      // as succeeded; if empty, treat as failed (the command produced
+      // nothing). v1 trade-off — real exit-code propagation requires the
+      // wrapper, which we don't want for background.
+      store.recordScheduledAgentRunOutcome(inFlight.id, {
+        status: fileSize > 0 ? "succeeded" : "failed",
+        endedAt: new Date().toISOString(),
+        message: fileSize > 0 ? "session_ended" : "session_ended_no_output",
+      });
+    }
+    // If the tmux session is now gone, the row's bookkeeping is done. If it
+    // survives (remain-on-exit), kill it now — the background mode lifecycle
+    // ends with the agent exit, and lingering panes are noise.
+    if (!sessionGone) {
+      try {
+        killTmuxSession(bg.tmuxSessionName);
+      } catch {
+        // best-effort
+      }
+    }
+    backgroundSessionCount += 1;
+  }
+
   for (const session of store.listSessions()) {
     if (!session.tmuxSessionName) continue;
     if (["stopped", "orphaned", "failed"].includes(session.status)) continue;
@@ -159,7 +225,13 @@ export function reconcileStore(
       }
     }
   }
-  return { sessions: sessionCount, workspaces: workspaceCount, repos: repoCount, deletedSessions };
+  return {
+    sessions: sessionCount,
+    workspaces: workspaceCount,
+    repos: repoCount,
+    deletedSessions,
+    backgroundSessions: backgroundSessionCount,
+  };
 }
 
 export function listHookDiagnostics(input: {
