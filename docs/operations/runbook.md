@@ -4,10 +4,10 @@
 
 ```bash
 make setup     # pnpm install
-make deploy    # foreground HMR; prints the worktree-scoped cockpit URL
+make deploy    # detached HMR stack; prints the worktree-scoped cockpit URL
 ```
 
-`make deploy` runs the daemon (`tsx watch`) and the Vite cockpit in parallel, scoped to the current checkout. Both bind worktree-derived ports (`4110-4209` for the daemon, `5210-5309` for vite) so multiple worktrees can run side-by-side without colliding with each other or with the systemd-supervised `citadel.service` (port `4010`).
+`make deploy` is the only dev command. It detaches an HMR stack (daemon under `tsx watch` + vite under HMR, one process group) scoped to the current checkout. Worktree-derived ports (`4110-4209` daemon, `5210-5309` vite) keep multiple worktrees from colliding with each other or with the systemd-supervised `citadel.service` (port `4010`). The cockpit's Redeploy chip runs the same `make deploy`.
 
 See [worktree-development.md](./worktree-development.md) for the full mental model, port derivation, and troubleshooting.
 

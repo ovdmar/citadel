@@ -23,24 +23,29 @@ WORKTREE_PID      := $(WORKTREE_LOGS_DIR)/daemon.pid
 WORKTREE_LOG      := $(WORKTREE_LOGS_DIR)/daemon.log
 DEV_STATE         := $(CURDIR)/.citadel/dev.json
 
-EFFECTIVE_PORT     := $(shell [ -r $(DEV_STATE) ] && command -v jq >/dev/null 2>&1 && jq -r '.port // empty'    $(DEV_STATE) 2>/dev/null || echo $(WORKTREE_PORT))
-EFFECTIVE_WEB_PORT := $(shell [ -r $(DEV_STATE) ] && command -v jq >/dev/null 2>&1 && jq -r '.webPort // empty' $(DEV_STATE) 2>/dev/null || echo $(WORKTREE_WEB_PORT))
+EFFECTIVE_PORT     := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/null 2>&1 && jq -r '.port    // empty' $(DEV_STATE) 2>/dev/null); echo $${v:-$(WORKTREE_PORT)})
+EFFECTIVE_WEB_PORT := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/null 2>&1 && jq -r '.webPort // empty' $(DEV_STATE) 2>/dev/null); echo $${v:-$(WORKTREE_WEB_PORT)})
 
-.PHONY: help setup deploy serve install build check typecheck lint test coverage e2e smoke performance clean stop logs
+.PHONY: help setup deploy install build check typecheck lint test coverage e2e smoke performance clean stop logs
 
 help:
 	@echo "Citadel — scoped to: $(CURDIR)"
 	@echo ""
-	@echo "  make setup       Install pnpm dependencies"
-	@echo "  make deploy      Run worktree-local dev stack with HMR (foreground)"
+	@echo "Two commands you actually use:"
+	@echo "  make install     For users: install/reinstall the long-term systemd service citadel.service"
+	@echo "                   pointing at this checkout. Idempotent. Use this on your devbox once you"
+	@echo "                   want Citadel running 24/7 in the background."
+	@echo "  make deploy      For devs: start a worktree-isolated HMR dev stack (detached). Daemon +"
+	@echo "                   vite, both watching for changes. Used by the cockpit's Redeploy chip."
+	@echo "                     cockpit → http://localhost:$(EFFECTIVE_WEB_PORT) (vite, HMR)"
 	@echo "                     daemon  → http://localhost:$(EFFECTIVE_PORT)"
-	@echo "                     cockpit → http://localhost:$(EFFECTIVE_WEB_PORT) (vite, hot-reload)"
-	@echo "  make serve       Build + run worktree-local daemon detached (used by Redeploy hook)"
-	@echo "                     served at http://localhost:$(EFFECTIVE_PORT)"
-	@echo "  make install     Install/reinstall systemd user service citadel.service pointing here"
-	@echo "  make stop        Stop the worktree's detached daemon (no-op for HMR foreground)"
-	@echo "  make logs        Tail the detached daemon's log"
 	@echo ""
+	@echo "Lifecycle:"
+	@echo "  make setup       pnpm install"
+	@echo "  make stop        Stop this worktree's deploy stack"
+	@echo "  make logs        Tail the deploy stack's combined log (daemon + vite)"
+	@echo ""
+	@echo "Quality:"
 	@echo "  make check       typecheck + lint + test + build"
 	@echo "  make smoke       Local API smoke against a running daemon"
 	@echo "  make e2e         Playwright happy-path"
@@ -79,89 +84,106 @@ performance:
 clean:
 	rm -rf apps/*/dist packages/*/dist coverage test-results playwright-report
 
-# `make deploy` is the everyday command. Runs the daemon (tsx watch) and the
-# cockpit (vite) in parallel, scoped to this checkout. Vite proxies /api,
-# /events, /terminals → the worktree daemon, so the cockpit hits the same
-# branch's backend. Foreground process — Ctrl-C stops everything.
+# `make deploy` is the everyday dev command. Detached HMR stack: daemon
+# (tsx watch, restarts on source change) + vite (HMR), running in one process
+# group. Idempotent: the next invocation kills the previous pgid before
+# starting fresh. The cockpit's Redeploy hook calls this same target, which is
+# the whole point — clicking Redeploy gives you the same HMR-enabled stack
+# you'd get from a terminal.
+#
+# Why detached: a button can't trigger a foreground long-running process. The
+# user gets their terminal back; live output is one `make logs` away.
+#
+# Doesn't depend on `make install` — fully self-contained in $(CURDIR)/.citadel.
 deploy:
+	@if [ ! -d node_modules ]; then \
+		echo "✗ node_modules missing — run 'make setup' first"; \
+		exit 1; \
+	fi
 	@mkdir -p $(WORKTREE_LOGS_DIR) $(WORKTREE_DATA_DIR)
-	@echo "→ Worktree dev stack (HMR)"
-	@echo "   daemon  → http://localhost:$(WORKTREE_PORT)"
-	@echo "   cockpit → http://localhost:$(WORKTREE_WEB_PORT)"
-	@echo "   data    → $(WORKTREE_DATA_DIR)"
-	@CITADEL_PORT=$(WORKTREE_PORT) \
-	 CITADEL_DATA_DIR=$(WORKTREE_DATA_DIR) \
-	 CITADEL_DAEMON_URL=http://127.0.0.1:$(WORKTREE_PORT) \
-	 CITADEL_WEB_PORT=$(WORKTREE_WEB_PORT) \
-	 pnpm dev
-
-# `make serve` is the non-interactive build-then-detach path, used by the
-# cockpit's Redeploy hook (.citadel/hooks/deploy). The daemon serves the built
-# cockpit from apps/web/dist at its own origin — no proxy, same origin for /api
-# and the bundle, so the UI a teammate visits always matches the daemon's
-# branch. setsid keeps tmux/ttyd children in one process group so `make stop`
-# can take everything down with `kill -- -PGID`.
-serve:
-	@echo "→ Building cockpit + daemon + workspace packages…"
-	@pnpm build
-	@mkdir -p $(WORKTREE_LOGS_DIR) $(WORKTREE_DATA_DIR)
+	@command -v setsid >/dev/null 2>&1 || { echo "setsid required — install util-linux"; exit 127; }
+	@# Seed dev.json with the webPort so the deploy hook can advertise the vite
+	# (HMR) URL — the daemon writes its own port on boot but doesn't know about
+	# vite. The daemon merges this with its port on next boot.
+	@if command -v jq >/dev/null 2>&1 && [ -r $(DEV_STATE) ]; then \
+		tmp=$$(mktemp); \
+		jq --arg p $(WORKTREE_WEB_PORT) '.webPort=($$p|tonumber)' $(DEV_STATE) > $$tmp && mv $$tmp $(DEV_STATE); \
+	else \
+		mkdir -p $(dir $(DEV_STATE)); \
+		printf '{"port":%d,"webPort":%d,"host":"127.0.0.1","worktreePath":"%s","writtenAt":"%s"}\n' \
+			$(WORKTREE_PORT) $(WORKTREE_WEB_PORT) "$(CURDIR)" "$$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+			> $(DEV_STATE); \
+	fi
+	@chmod 600 $(DEV_STATE) 2>/dev/null || true
 	@if [ -f $(WORKTREE_PID) ]; then \
 		pgid="$$(cat $(WORKTREE_PID) 2>/dev/null || true)"; \
 		if [ -n "$$pgid" ] && kill -0 -- "-$$pgid" 2>/dev/null; then \
-			echo "→ Stopping previous worktree daemon pgid=$$pgid"; \
+			echo "→ Stopping previous dev stack pgid=$$pgid"; \
 			kill -TERM -- "-$$pgid" 2>/dev/null || true; \
 			sleep 1; \
 			kill -KILL -- "-$$pgid" 2>/dev/null || true; \
 		fi; \
 		rm -f $(WORKTREE_PID); \
 	fi
-	@if command -v fuser >/dev/null 2>&1; then fuser -k -n tcp $(WORKTREE_PORT) 2>/dev/null || true; fi
-	@command -v setsid >/dev/null 2>&1 || { echo "setsid required — install util-linux"; exit 127; }
-	@echo "→ Starting detached daemon on :$(WORKTREE_PORT)"
-	@echo "   data dir: $(WORKTREE_DATA_DIR)"
-	@echo "   log:      $(WORKTREE_LOG)"
+	@if command -v fuser >/dev/null 2>&1; then \
+		fuser -k -n tcp $(WORKTREE_PORT)     2>/dev/null || true; \
+		fuser -k -n tcp $(WORKTREE_WEB_PORT) 2>/dev/null || true; \
+	fi
+	@echo "→ Starting worktree dev stack (HMR, detached)"
+	@echo "   cockpit → http://localhost:$(WORKTREE_WEB_PORT)  (vite, HMR)"
+	@echo "   daemon  → http://localhost:$(WORKTREE_PORT)  (tsx watch)"
+	@echo "   data    → $(WORKTREE_DATA_DIR)"
+	@echo "   log     → $(WORKTREE_LOG)"
 	@set -e; \
 		: > $(WORKTREE_LOG); \
 		setsid nohup env \
-			CITADEL_DATA_DIR=$(WORKTREE_DATA_DIR) \
 			CITADEL_PORT=$(WORKTREE_PORT) \
-			node apps/daemon/dist/index.js >>$(WORKTREE_LOG) 2>&1 & \
-		pid=$$!; \
-		echo "$$pid" > $(WORKTREE_PID); \
-		disown "$$pid" 2>/dev/null || true; \
-		sleep 0.8; \
-		if kill -0 "$$pid" 2>/dev/null; then \
-			lan_host=$$(hostname -I 2>/dev/null | awk '{ for (i=1;i<=NF;i++) if ($$i !~ /^127\./ && $$i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$$/) { print $$i; exit } }'); \
-			lan_host=$${lan_host:-127.0.0.1}; \
-			echo "✓ Worktree daemon serving — http://$$lan_host:$(WORKTREE_PORT)  (pgid $$pid)"; \
-		else \
-			echo "✗ Worktree daemon failed to start. Last 30 lines of $(WORKTREE_LOG):"; \
-			tail -n 30 $(WORKTREE_LOG); \
-			exit 1; \
-		fi
+			CITADEL_DATA_DIR=$(WORKTREE_DATA_DIR) \
+			CITADEL_DAEMON_URL=http://127.0.0.1:$(WORKTREE_PORT) \
+			CITADEL_WEB_PORT=$(WORKTREE_WEB_PORT) \
+			pnpm dev >>$(WORKTREE_LOG) 2>&1 & \
+		pgid=$$!; \
+		echo "$$pgid" > $(WORKTREE_PID); \
+		disown "$$pgid" 2>/dev/null || true
+	@# Poll the daemon's /api/state until it answers or we time out. Vite
+	# usually wakes faster but the daemon is the source of truth.
+	@deadline=$$(( $$(date +%s) + 20 )); \
+		while [ $$(date +%s) -lt $$deadline ]; do \
+			if curl -fsS --max-time 1 http://127.0.0.1:$(WORKTREE_PORT)/api/state >/dev/null 2>&1; then \
+				lan_host=$$(hostname -I 2>/dev/null | awk '{ for (i=1;i<=NF;i++) if ($$i !~ /^127\./ && $$i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$$/) { print $$i; exit } }'); \
+				lan_host=$${lan_host:-127.0.0.1}; \
+				echo "✓ Dev stack ready"; \
+				echo "  cockpit: http://$$lan_host:$(WORKTREE_WEB_PORT)"; \
+				echo "  daemon:  http://$$lan_host:$(WORKTREE_PORT)"; \
+				exit 0; \
+			fi; \
+			sleep 0.5; \
+		done; \
+		echo "✗ Dev stack didn't answer on :$(WORKTREE_PORT) within 20s. Last 40 lines of $(WORKTREE_LOG):"; \
+		tail -n 40 $(WORKTREE_LOG); \
+		exit 1
 
-# `make install` is for the long-term devbox service. Writes a user-systemd
-# unit pointing at THIS checkout and brings it up. Idempotent: re-run after a
+# `make install` is for users (or your devbox). Writes a user-systemd unit
+# pointing at THIS checkout and brings it up. Idempotent: re-run after a
 # `git pull` on the long-term checkout, or to swap the supervised daemon to a
-# different checkout entirely. Does NOT touch any worktree-local `serve` state.
+# different checkout entirely. Does NOT touch any worktree-local `deploy` stack.
 install:
 	@bash scripts/install-systemd.sh
 
-# `make stop` only kills the detached `serve` daemon — `deploy` is foreground
-# so Ctrl-C is enough. Doesn't touch the systemd unit (use `systemctl --user
-# stop citadel.service` for that).
+# `make stop` kills the detached `deploy` stack (daemon + vite, single pgid).
+# Doesn't touch the systemd unit (use `systemctl --user stop citadel.service`).
 stop:
 	@if [ -f $(WORKTREE_PID) ]; then \
 		pgid="$$(cat $(WORKTREE_PID) 2>/dev/null || true)"; \
 		if [ -n "$$pgid" ] && kill -0 -- "-$$pgid" 2>/dev/null; then \
-			echo "→ Stopping worktree daemon pgid=$$pgid"; \
+			echo "→ Stopping worktree dev stack pgid=$$pgid"; \
 			kill -TERM -- "-$$pgid" 2>/dev/null || true; \
 			sleep 1; \
 			kill -KILL -- "-$$pgid" 2>/dev/null || true; \
 		fi; \
 		rm -f $(WORKTREE_PID); \
 	else \
-		echo "→ No detached daemon recorded for $(CURDIR) (HMR foreground? Ctrl-C the `make deploy` process)"; \
+		echo "→ No dev stack recorded for $(CURDIR)"; \
 	fi
 
 logs:
