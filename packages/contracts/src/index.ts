@@ -561,8 +561,12 @@ export const CreateScheduledAgentInputSchema = z
     repoId: IdSchema,
     runtimeId: IdSchema,
     prompt: z.string().max(8000).optional(),
-    workspaceStrategy: ScheduledAgentWorkspaceStrategySchema,
-    workspaceName: z.string().min(1).max(80),
+    // workspaceStrategy + workspaceName are required for runMode='workspace'
+    // and ignored for runMode='background'. The refine below enforces this;
+    // the schema declares them optional so the UI doesn't have to send a
+    // placeholder for background runs.
+    workspaceStrategy: ScheduledAgentWorkspaceStrategySchema.optional(),
+    workspaceName: z.string().min(1).max(80).optional(),
     baseBranch: z.string().min(1).max(120).optional(),
     runMode: ScheduledAgentRunModeSchema.optional(),
     backgroundCwd: z.string().min(1).max(4000).optional(),
@@ -571,6 +575,7 @@ export const CreateScheduledAgentInputSchema = z
   })
   .superRefine((value, ctx) => {
     const type = value.scheduleType ?? "recurring";
+    const runMode = value.runMode ?? "workspace";
     if (type === "recurring" && !value.cron) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -584,6 +589,22 @@ export const CreateScheduledAgentInputSchema = z
         message: "runAt is required for one-shot schedules",
         path: ["runAt"],
       });
+    }
+    if (runMode === "workspace") {
+      if (!value.workspaceStrategy) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "workspaceStrategy is required when runMode='workspace'",
+          path: ["workspaceStrategy"],
+        });
+      }
+      if (!value.workspaceName) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "workspaceName is required when runMode='workspace'",
+          path: ["workspaceName"],
+        });
+      }
     }
   });
 

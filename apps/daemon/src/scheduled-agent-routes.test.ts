@@ -94,6 +94,34 @@ describe("scheduled agent routes", () => {
 
       const missing = await fetch(`${baseUrl}/api/scheduled-agents/missing_id`, { method: "DELETE" });
       expect(missing.status).toBe(404);
+
+      // Re-create the agent so we can exercise the in-flight DELETE 409 path.
+      const recreated = await postJson<{ scheduledAgent: { id: string } }>(`${baseUrl}/api/scheduled-agents`, {
+        name: "Inflight delete",
+        cron: "0 9 * * *",
+        repoId: "repo_sched",
+        runtimeId: "shell",
+        workspaceStrategy: "existing",
+        workspaceName: "sched-target",
+      });
+      fixture.store.insertScheduledAgentRun({
+        id: "inflight_run_test",
+        scheduledAgentId: recreated.scheduledAgent.id,
+        status: "running",
+        enqueuedAt: new Date().toISOString(),
+        startedAt: new Date().toISOString(),
+        endedAt: null,
+        message: null,
+        workspaceId: null,
+        sessionId: null,
+        backgroundSessionId: null,
+        logFilePath: null,
+      });
+      const inflightDelete = await fetch(`${baseUrl}/api/scheduled-agents/${recreated.scheduledAgent.id}`, {
+        method: "DELETE",
+      });
+      expect(inflightDelete.status).toBe(409);
+      expect((await inflightDelete.json()) as { error: string }).toEqual({ error: "in_flight_run" });
     } finally {
       await closeServer(server);
     }

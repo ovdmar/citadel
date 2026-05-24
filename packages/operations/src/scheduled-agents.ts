@@ -298,8 +298,12 @@ export class ScheduledAgentRunner {
       repoId: input.repoId,
       runtimeId: input.runtimeId,
       prompt: input.prompt ?? null,
-      workspaceStrategy: input.workspaceStrategy,
-      workspaceName: input.workspaceName,
+      // For background runs the workspace fields are unused at fire time but
+      // the entity schema still requires non-empty values. Default to safe
+      // placeholders so the contract stays satisfied without the UI faking
+      // input. resolveWorkspace skips them via the runMode branch.
+      workspaceStrategy: input.workspaceStrategy ?? "new",
+      workspaceName: input.workspaceName ?? "(background)",
       baseBranch: input.baseBranch ?? null,
       runMode: input.runMode ?? "workspace",
       backgroundCwd: input.backgroundCwd ?? null,
@@ -660,8 +664,13 @@ export class ScheduledAgentRunner {
       if (stat.size >= LOG_TRUNCATION_BYTES) {
         outcomeMessage = `${result.message} (log_truncated_at_16mib)`;
       }
-    } catch {
-      // No log file (workspace-mode runs may not have one yet). Fine.
+    } catch (error) {
+      // Workspace-mode runs never create a log file at this path, so ENOENT
+      // is the expected case. Anything else (permission errors, IO failures)
+      // is unexpected and should not silently strip the truncation marker.
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        console.warn("[citadel] scheduled-agent run log stat failed:", error);
+      }
     }
     this.deps.store.recordScheduledAgentRunOutcome(runId, {
       status: result.status,

@@ -74,8 +74,11 @@ export class ScheduledAgentService {
     if (!agent) return { ok: false, error: "scheduled_agent_not_found" };
     const result = await this.runner.runNow(id);
     if (result.kind === "ran") {
+      // scheduled-agent.run-row events are emitted by the runner itself
+      // (enqueue/promote/outcome). Emitting again here would cause the
+      // History drawer to refetch twice per transition. Only the legacy
+      // scheduled-agent.run event (used by the cockpit list) is service-owned.
       this.emit("scheduled-agent.run", { id, status: result.status });
-      this.emit("scheduled-agent.run-row", { scheduledAgentId: id, runId: result.runId, status: result.status });
       return {
         ok: true,
         value: {
@@ -91,7 +94,8 @@ export class ScheduledAgentService {
       };
     }
     if (result.kind === "queued") {
-      this.emit("scheduled-agent.run-row", { scheduledAgentId: id, runId: result.runId, status: "queued" });
+      // Same rationale as 'ran' above — the runner already emitted run-row
+      // for the new 'queued' status from inside enqueueRunRow.
       return {
         ok: true,
         value: {

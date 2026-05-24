@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import type { CitadelConfig } from "@citadel/config";
 import {
   CreateAgentSessionInputSchema,
@@ -14,6 +13,7 @@ import type { OperationService, ScheduledAgentRunner } from "@citadel/operations
 import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import type { TtydManager } from "@citadel/terminal";
+import { readLogSlice } from "./log-slice.js";
 import type { ScheduledAgentService } from "./scheduled-agent-service.js";
 import { ScratchpadTooLargeError, appendScratchpad, readScratchpad, writeScratchpad } from "./scratchpad.js";
 
@@ -238,31 +238,11 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     const run = store.findScheduledAgentRun(runId);
     if (!run) return { error: "run_not_found" };
     if (!run.logFilePath) return { error: "log_not_available" };
-    const offset = Math.max(0, typeof call.arguments?.offset === "number" ? call.arguments.offset : 0);
-    const maxBytes = Math.max(
-      256,
-      Math.min(typeof call.arguments?.maxBytes === "number" ? call.arguments.maxBytes : 16_000, 200_000),
-    );
-    try {
-      const fd = fs.openSync(run.logFilePath, "r");
-      try {
-        const stat = fs.fstatSync(fd);
-        const start = Math.min(offset, stat.size);
-        const length = Math.min(maxBytes, Math.max(0, stat.size - start));
-        const buffer = Buffer.alloc(length);
-        const bytesRead = length > 0 ? fs.readSync(fd, buffer, 0, length, start) : 0;
-        return {
-          content: buffer.subarray(0, bytesRead).toString("utf8"),
-          bytesRead,
-          nextOffset: start + bytesRead,
-          truncated: start + bytesRead < stat.size,
-        };
-      } finally {
-        fs.closeSync(fd);
-      }
-    } catch {
-      return { error: "log_file_missing" };
-    }
+    const offset = typeof call.arguments?.offset === "number" ? call.arguments.offset : 0;
+    const maxBytes = typeof call.arguments?.maxBytes === "number" ? call.arguments.maxBytes : undefined;
+    const slice = readLogSlice(run.logFilePath, { offset, ...(maxBytes !== undefined ? { maxBytes } : {}) });
+    if ("kind" in slice) return { error: "log_file_missing" };
+    return slice;
   }
   const providerHealth = await collectProviderHealth(config.providers);
   return callMcpTool(call, {

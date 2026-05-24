@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import type http from "node:http";
 import type { CitadelConfig } from "@citadel/config";
 import { CreateScheduledAgentInputSchema, UpdateScheduledAgentInputSchema } from "@citadel/contracts";
@@ -6,11 +5,8 @@ import type { SqliteStore } from "@citadel/db";
 import { type OperationService, ScheduledAgentRunner, createBackgroundAgentSession } from "@citadel/operations";
 import { killTmuxSession } from "@citadel/terminal";
 import type express from "express";
+import { LOG_SLICE_DEFAULT_BYTES, readLogSlice } from "./log-slice.js";
 import { ScheduledAgentService } from "./scheduled-agent-service.js";
-
-/** Cap on bytes returned per /log call. Mirrors read_agent_output. */
-const LOG_SLICE_MAX_BYTES = 200 * 1024;
-const LOG_SLICE_DEFAULT_BYTES = 16 * 1024;
 
 type AsyncRoute = (
   handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>,
@@ -182,36 +178,12 @@ export function registerScheduledAgentRoutes(input: {
     // 404 if either the run doesn't exist OR doesn't belong to this agent.
     if (!run || run.scheduledAgentId !== id) return res.status(404).json({ error: "run_not_found" });
     if (!run.logFilePath) return res.status(404).json({ error: "log_not_available" });
-    const offset = Math.max(0, Number.parseInt(String(req.query.offset ?? "0"), 10) || 0);
-    const maxBytes = Math.max(
-      256,
-      Math.min(
-        Number.parseInt(String(req.query.maxBytes ?? LOG_SLICE_DEFAULT_BYTES), 10) || LOG_SLICE_DEFAULT_BYTES,
-        LOG_SLICE_MAX_BYTES,
-      ),
-    );
-    let fd: number;
-    try {
-      fd = fs.openSync(run.logFilePath, "r");
-    } catch {
-      return res.status(404).json({ error: "log_file_missing" });
-    }
-    try {
-      const stat = fs.fstatSync(fd);
-      const start = Math.min(offset, stat.size);
-      const length = Math.min(maxBytes, Math.max(0, stat.size - start));
-      const buffer = Buffer.alloc(length);
-      const bytesRead = length > 0 ? fs.readSync(fd, buffer, 0, length, start) : 0;
-      const content = buffer.subarray(0, bytesRead).toString("utf8");
-      res.json({
-        content,
-        bytesRead,
-        nextOffset: start + bytesRead,
-        truncated: start + bytesRead < stat.size,
-      });
-    } finally {
-      fs.closeSync(fd);
-    }
+    const offset = Number.parseInt(String(req.query.offset ?? "0"), 10) || 0;
+    const maxBytes =
+      Number.parseInt(String(req.query.maxBytes ?? LOG_SLICE_DEFAULT_BYTES), 10) || LOG_SLICE_DEFAULT_BYTES;
+    const slice = readLogSlice(run.logFilePath, { offset, maxBytes });
+    if ("kind" in slice) return res.status(404).json({ error: "log_file_missing" });
+    res.json(slice);
   });
 
   return { runner: scheduledAgents, service };

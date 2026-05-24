@@ -197,8 +197,6 @@ function CreateScheduledAgentCard(props: { repos: Repo[]; runtimes: AgentRuntime
         repoId: draft.repoId,
         runtimeId: draft.runtimeId,
         prompt: draft.prompt.trim() || undefined,
-        workspaceStrategy: draft.workspaceStrategy,
-        workspaceName: draft.workspaceName.trim() || (draft.runMode === "background" ? "unused" : ""),
         baseBranch: draft.baseBranch.trim() || undefined,
         runMode: draft.runMode,
         backgroundCwd:
@@ -206,6 +204,13 @@ function CreateScheduledAgentCard(props: { repos: Repo[]; runtimes: AgentRuntime
         overlapPolicy: draft.overlapPolicy,
         enabled: draft.enabled,
       };
+      // workspaceStrategy + workspaceName are only sent for workspace runMode;
+      // the contract's superRefine enforces that they're absent (or undefined)
+      // for background runs rather than the UI fabricating a placeholder.
+      if (draft.runMode === "workspace") {
+        body.workspaceStrategy = draft.workspaceStrategy;
+        body.workspaceName = draft.workspaceName.trim();
+      }
       if (draft.scheduleType === "recurring") {
         body.cron = draft.cron.trim();
       } else if (resolvedRunAt) {
@@ -642,8 +647,11 @@ function ScheduledAgentRunHistory(props: { agentId: string }) {
     const events = new EventSource("/events");
     const refresh = (event: MessageEvent) => {
       try {
+        // The SSE envelope is { id, type, timestamp, source, payload }; the
+        // payload is { scheduledAgentId, runId, status }. Reading
+        // data.scheduledAgentId directly silently no-ops.
         const data = JSON.parse(event.data);
-        if (data?.scheduledAgentId === props.agentId) {
+        if (data?.payload?.scheduledAgentId === props.agentId) {
           queryClient.invalidateQueries({ queryKey: ["scheduled-agent-runs", props.agentId] });
         }
       } catch {
