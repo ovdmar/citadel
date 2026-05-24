@@ -260,6 +260,12 @@ function ttydThemeArgs(theme: TtydTheme): string[] {
 // hues are unchanged from the previous palette — only their saturation has
 // been pushed up so each colour reads clearly on the cream/dark surfaces
 // without losing the warm-leaning character of the cockpit.
+// `white` (ansi 7) and `brightWhite` (ansi 15) are deliberately remapped to
+// dark values on the light theme: a program that explicitly prints white text
+// would otherwise be invisible on the cream surface. Everything else is the
+// same hue as before, just dropped in lightness so it reads cleanly on a
+// light background — pulling the bright variants down at the same time so
+// the "bright" tier stays distinguishable from base without going pastel.
 const LIGHT_XTERM_THEME = {
   background: "#f5f1e8",
   foreground: "#1a1814",
@@ -267,21 +273,21 @@ const LIGHT_XTERM_THEME = {
   cursorAccent: "#f5f1e8",
   selectionBackground: "rgba(20, 23, 31, 0.18)",
   black: "#1a1814",
-  red: "#b8281c",
-  green: "#4a8a14",
-  yellow: "#a06b0a",
-  blue: "#1f5aa6",
-  magenta: "#7a3a96",
-  cyan: "#0f7d92",
-  white: "#c9c2b0",
-  brightBlack: "#6f695d",
-  brightRed: "#d83a26",
-  brightGreen: "#5fa024",
-  brightYellow: "#c08418",
-  brightBlue: "#3a78c0",
-  brightMagenta: "#9c52b8",
-  brightCyan: "#1f95ad",
-  brightWhite: "#1a1814",
+  red: "#9a1d12",
+  green: "#36680c",
+  yellow: "#825507",
+  blue: "#194d8e",
+  magenta: "#5f2a7a",
+  cyan: "#0a5d6e",
+  white: "#1a1814",
+  brightBlack: "#4a463e",
+  brightRed: "#b8281c",
+  brightGreen: "#4a8a14",
+  brightYellow: "#a06b0a",
+  brightBlue: "#2864ad",
+  brightMagenta: "#7d3a98",
+  brightCyan: "#0f7d92",
+  brightWhite: "#0c0a06",
 };
 
 const DARK_XTERM_THEME = {
