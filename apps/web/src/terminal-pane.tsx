@@ -1,5 +1,4 @@
 import type { AgentSession } from "@citadel/contracts";
-import { ExternalLink, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "./api.js";
 import { Button } from "./components/ui/button.js";
@@ -23,6 +22,37 @@ type EnsureError = {
 };
 
 const RUNBOOK_URL = "/docs/operations/terminal-runbook";
+
+/**
+ * Per-session handle used by Stage tabs to drive a live terminal (reload the
+ * ttyd frame, open it in a standalone tab). The in-pane status bar was
+ * removed; these affordances live on the tab now and need access to state
+ * owned by TerminalPane, so we publish a tiny registry on the window.
+ *
+ * Keyed by session id. TerminalPane registers on mount and clears on unmount.
+ */
+export type TerminalHandle = {
+  url: string | null;
+  reload: () => void;
+};
+
+const REGISTRY = new Map<string, TerminalHandle>();
+const LISTENERS = new Set<(id: string) => void>();
+
+function publish(id: string, handle: TerminalHandle | null) {
+  if (handle) REGISTRY.set(id, handle);
+  else REGISTRY.delete(id);
+  for (const listener of LISTENERS) listener(id);
+}
+
+export function getTerminalHandle(sessionId: string): TerminalHandle | undefined {
+  return REGISTRY.get(sessionId);
+}
+
+export function subscribeTerminalHandle(listener: (sessionId: string) => void): () => void {
+  LISTENERS.add(listener);
+  return () => LISTENERS.delete(listener);
+}
 
 export function TerminalPane(props: { session: AgentSession }) {
   const sessionId = props.session.id;
@@ -102,31 +132,15 @@ export function TerminalPane(props: { session: AgentSession }) {
     void ensure({ bumpFrame: true });
   }, [ensure]);
 
+  // Publish the live URL + reload callback so the stage tab can drive them.
+  // The status bar used to render these affordances inside the pane; that was
+  // removed in favour of the tab actions, but the state still lives here.
+  useEffect(() => {
+    publish(sessionId, { url, reload });
+    return () => publish(sessionId, null);
+  }, [sessionId, url, reload]);
   return (
     <div className="terminal-shell">
-      <div className="terminal-status" aria-live="polite">
-        <span>{props.session.displayName}</span>
-        <span className="terminal-status-flex" />
-        {url ? (
-          <>
-            <a
-              className="terminal-status-link"
-              href={url}
-              target="_blank"
-              rel="noreferrer"
-              title="Open in standalone tab"
-            >
-              <ExternalLink size={11} /> open
-            </a>
-            <Button type="button" variant="ghost" size="icon" title="Reload terminal frame" onClick={reload}>
-              <RefreshCw size={12} />
-            </Button>
-          </>
-        ) : null}
-        <strong className={`terminal-status-state ${url ? "connected" : error ? "closed" : "connecting"}`}>
-          {url ? "ttyd" : error ? "error" : "starting"}
-        </strong>
-      </div>
       <div className="terminal-surface terminal-surface-iframe">
         {url ? (
           <iframe

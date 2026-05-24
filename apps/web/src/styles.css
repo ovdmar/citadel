@@ -487,14 +487,20 @@ a:hover {
 }
 
 .cockpit-body.right-collapsed {
-  grid-template-columns: var(--col-left, 252px) 4px minmax(0, 1fr) 4px 0;
+  grid-template-columns: var(--col-left, 252px) 4px minmax(0, 1fr) 4px 36px;
 }
 
 .cockpit-body.left-collapsed.right-collapsed {
-  grid-template-columns: 56px 4px minmax(0, 1fr) 4px 0;
+  grid-template-columns: 56px 4px minmax(0, 1fr) 4px 36px;
 }
 
+/* Hide the resize handle on a collapsed side — there's nothing to resize. */
+.cockpit-body.left-collapsed .col-divider:first-of-type,
 .cockpit-body.right-collapsed .col-divider:last-of-type {
+  pointer-events: none;
+}
+.cockpit-body.left-collapsed .col-divider:first-of-type::after,
+.cockpit-body.right-collapsed .col-divider:last-of-type::after {
   display: none;
 }
 
@@ -596,14 +602,22 @@ a:hover {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 10px 6px;
+  justify-content: flex-start;
+  padding: 10px 0;
   gap: 8px;
   background: transparent;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .collapsed-rail.col-left,
 .collapsed-rail.col-right {
   border: 0;
+}
+
+.collapsed-rail.col-right {
+  padding: 10px 0;
+  align-items: center;
 }
 
 .collapse-toggle {

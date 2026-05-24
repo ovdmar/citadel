@@ -3,7 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { ExternalLink, GitBranch, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
-import { TerminalPane } from "./terminal-pane.js";
+import { TerminalPane, getTerminalHandle, subscribeTerminalHandle } from "./terminal-pane.js";
 
 type StageTab = {
   session: AgentSession;
@@ -127,6 +127,11 @@ export function Stage(props: {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
 
+  // Tick whenever any TerminalPane updates its handle so the tab actions
+  // (refresh, open-in-new-tab) reflect the current URL + reload callback.
+  const [, setHandleTick] = useState(0);
+  useEffect(() => subscribeTerminalHandle(() => setHandleTick((n) => n + 1)), []);
+
   const startError = startSession.error instanceof Error ? startSession.error.message : null;
   return (
     <>
@@ -187,11 +192,11 @@ export function Stage(props: {
                   <button
                     type="button"
                     className="stage-tab-act"
-                    aria-label="Restart session"
-                    title="Restart session"
+                    aria-label="Reload terminal frame"
+                    title="Reload terminal"
                     onClick={(event) => {
                       event.stopPropagation();
-                      // Restart not yet wired to backend — surface intent only.
+                      getTerminalHandle(tab.session.id)?.reload();
                     }}
                   >
                     <RefreshCw size={11} />
@@ -199,11 +204,13 @@ export function Stage(props: {
                   <button
                     type="button"
                     className="stage-tab-act"
-                    aria-label="Open session in new tab"
-                    title="Open in new tab"
+                    aria-label="Open terminal in standalone tab"
+                    title="Open in standalone tab"
+                    disabled={!getTerminalHandle(tab.session.id)?.url}
                     onClick={(event) => {
                       event.stopPropagation();
-                      window.open(window.location.href, "_blank");
+                      const handle = getTerminalHandle(tab.session.id);
+                      if (handle?.url) window.open(handle.url, "_blank");
                     }}
                   >
                     <ExternalLink size={11} />
