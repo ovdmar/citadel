@@ -669,6 +669,84 @@
   align-items: center;
 }
 
+.scheduled-agent-history {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.scheduled-agent-history-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.scheduled-agent-history-table th,
+.scheduled-agent-history-table td {
+  padding: 4px 8px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+
+.scheduled-agent-history-table th {
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.scheduled-agent-status-badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.scheduled-agent-status-badge.queued {
+  background: var(--color-info-bg, #e3e8ff);
+  color: var(--color-info, #2a3aa0);
+}
+
+.scheduled-agent-status-badge.running {
+  background: var(--color-warn-bg, #fff3cd);
+  color: var(--color-warn, #856404);
+}
+
+.scheduled-agent-status-badge.succeeded {
+  background: rgba(0, 160, 0, 0.12);
+  color: var(--color-success, #1b6e1b);
+}
+
+.scheduled-agent-status-badge.failed {
+  background: rgba(220, 0, 0, 0.12);
+  color: var(--color-danger, #a01010);
+}
+
+.scheduled-agent-history-log-row td {
+  padding: 0;
+}
+
+.scheduled-agent-run-log {
+  max-height: 400px;
+  overflow: auto;
+  background: var(--bg-elev, #0a0a0a);
+  color: var(--text-on-elev, #e0e0e0);
+  padding: 8px;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.scheduled-agent-run-log.error {
+  color: var(--color-danger, #ff6e6e);
+}
+
 @media (max-width: 768px) {
   .settings-layout > .settings-shell {
     grid-template-columns: 1fr;
