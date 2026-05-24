@@ -671,6 +671,14 @@ export function createDaemonApp(input: {
     emit,
     asyncRoute,
   });
+  // Boot-sweep: close any 'running' run rows that were in flight when the
+  // daemon last died, sync the denormalized lastRunStatus cache on the
+  // affected agents, kill orphan background tmux sessions, and drain queued
+  // rows that were waiting on the failed in-flight predecessors. Best-effort:
+  // we don't want a sweep failure to block startup.
+  void scheduledAgents.recoverInFlightRuns().catch(() => {
+    /* logged elsewhere if we add observability */
+  });
 
   const mcpDeps = { config, store, operations, ttyd, scheduledAgents, scheduledAgentService, providerCache, emit };
   registerMcpRoutes(app, asyncRoute, {
