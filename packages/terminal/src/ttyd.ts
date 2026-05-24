@@ -58,6 +58,8 @@ export type TtydManager = {
     worktreePath?: string | null;
     /** Cockpit-resolved theme used to spawn ttyd with the matching xterm palette. Defaults to "dark". */
     theme?: TtydTheme;
+    /** When true, kill any existing ttyd for this key and spawn a fresh one. */
+    force?: boolean;
   }): Promise<TtydEntry>;
   lookup(key: string): TtydEntry | null;
   release(key: string): void;
@@ -88,16 +90,18 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     tmuxSession: string;
     worktreePath?: string | null;
     theme?: TtydTheme;
+    /** Kill the existing ttyd (if any) and spawn a fresh process. Used by the
+     * cockpit's reload affordance so theme/palette changes take effect — ttyd
+     * bakes the xterm palette at spawn time, so an explicit respawn is the
+     * only way to repaint a live session. We don't auto-respawn on theme
+     * drift to avoid reconnect storms when the user just toggles the cockpit
+     * theme; respawn is opt-in via this flag. */
+    force?: boolean;
   }): Promise<TtydEntry> {
-    // ttyd bakes the xterm palette at spawn time, so the theme passed here
-    // only takes effect when we actually spawn a new ttyd. We deliberately
-    // do NOT respawn when an existing entry's theme differs from desired —
-    // that triggered visible reconnect storms whenever the user toggled
-    // cockpit theme. Terminal palette updates on the next reload instead.
     const desiredTheme: TtydTheme = args.theme ?? "dark";
     const existing = entries.get(args.key);
     if (existing && existing.child.exitCode === null) {
-      if (await portOpen(existing.port)) return toEntry(existing);
+      if (!args.force && (await portOpen(existing.port))) return toEntry(existing);
       try {
         existing.child.kill("SIGTERM");
       } catch {
