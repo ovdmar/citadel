@@ -98,6 +98,89 @@ describe("scheduled agent routes", () => {
       await closeServer(server);
     }
   });
+
+  it("GET /runs returns the per-agent run rows; GET /log slices the log file; both 404 when the run doesn't belong to the agent", async () => {
+    const fixture = createFixture();
+    const git = createGitRepo(fixture.config.dataDir);
+    const now = new Date().toISOString();
+    fixture.store.insertRepo({
+      id: "repo_runs",
+      name: "Sched repo",
+      rootPath: git.repoPath,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      deployHookCommand: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const created = await postJson<{ scheduledAgent: { id: string } }>(`${baseUrl}/api/scheduled-agents`, {
+        name: "Runs",
+        cron: "0 9 * * *",
+        repoId: "repo_runs",
+        runtimeId: "shell",
+        workspaceStrategy: "existing",
+        workspaceName: "runs-target",
+      });
+      const agentId = created.scheduledAgent.id;
+
+      // Seed a terminal run row + a log file on disk so /log has something to slice.
+      // Use a 1024-byte file so we can exercise the maxBytes floor (256) and
+      // tail-fetch via offset.
+      const runId = "run_test_log";
+      const logDir = path.join(fixture.config.dataDir, "scheduled-runs", agentId);
+      fs.mkdirSync(logDir, { recursive: true });
+      const logPath = path.join(logDir, `${runId}.log`);
+      const content = "x".repeat(1024);
+      fs.writeFileSync(logPath, content);
+      fixture.store.insertScheduledAgentRun({
+        id: runId,
+        scheduledAgentId: agentId,
+        status: "succeeded",
+        enqueuedAt: now,
+        startedAt: now,
+        endedAt: now,
+        message: "ok",
+        workspaceId: null,
+        sessionId: null,
+        backgroundSessionId: null,
+        logFilePath: logPath,
+      });
+
+      const list = await getJson<{ runs: Array<{ id: string }> }>(`${baseUrl}/api/scheduled-agents/${agentId}/runs`);
+      expect(list.runs.map((r) => r.id)).toContain(runId);
+
+      // maxBytes=256 (floor) → first 256 bytes, truncated=true (1024 > 256).
+      const log = await getJson<{ content: string; bytesRead: number; nextOffset: number; truncated: boolean }>(
+        `${baseUrl}/api/scheduled-agents/${agentId}/runs/${runId}/log?maxBytes=256`,
+      );
+      expect(log.bytesRead).toBe(256);
+      expect(log.content.length).toBe(256);
+      expect(log.nextOffset).toBe(256);
+      expect(log.truncated).toBe(true);
+
+      // Tail from byte 1000 → 24 bytes left, not truncated.
+      const tail = await getJson<{ content: string; bytesRead: number; truncated: boolean }>(
+        `${baseUrl}/api/scheduled-agents/${agentId}/runs/${runId}/log?offset=1000&maxBytes=512`,
+      );
+      expect(tail.bytesRead).toBe(24);
+      expect(tail.content.length).toBe(24);
+      expect(tail.truncated).toBe(false);
+
+      // 404 when the runId doesn't belong to the agent.
+      const wrong = await fetch(`${baseUrl}/api/scheduled-agents/${agentId}/runs/missing/log`);
+      expect(wrong.status).toBe(404);
+    } finally {
+      await closeServer(server);
+    }
+  });
 });
 
 function createFixture() {
