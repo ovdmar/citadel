@@ -49,8 +49,15 @@ export function summarizeWorkspaceState(input: {
   sessions: AgentSession[];
   providerHealth: ProviderHealth[];
 }) {
-  const activeSession = input.sessions.some((session) => ["running", "waiting"].includes(session.status));
-  const failedSession = input.sessions.some((session) => session.status === "failed" || session.status === "orphaned");
+  const activeSession = input.sessions.some((session) => ["running"].includes(session.status));
+  const failedSession = input.sessions.some(
+    (session) =>
+      session.status === "failed" ||
+      (session.status === "unknown" &&
+        (session.statusReason === "tmux_missing" ||
+          session.statusReason === "migrated_from_orphaned" ||
+          session.statusReason === "sentinel_missing_tmux_alive")),
+  );
   const degradedProvider = input.providerHealth.some((provider) => provider.status !== "healthy");
   const suggestedSection = input.workspace.pinned
     ? input.workspace.section

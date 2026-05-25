@@ -457,7 +457,9 @@ function BottomBar(props: {
   }, []);
 
   const shellCount = props.sessions.filter((session) => session.runtimeId === "shell").length;
-  const autoMode = props.sessions.some((s) => s.status === "running" || s.status === "waiting");
+  const autoMode = props.sessions.some(
+    (s) => s.status === "running" || s.status === "starting" || s.status === "waiting_for_input",
+  );
 
   // Read the head commit of the active workspace so the status bar mirrors the
   // redesign's "* <message>" hint. Falls back silently if the workspace isn't

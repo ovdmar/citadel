@@ -21,6 +21,17 @@ import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
 export type { LaunchAgentResult } from "./launch-agent.js";
 export type { AgentHistoryResult, AgentHistoryErrorResult } from "./agent-history.js";
+export { reduceStatus, LAST_OUTPUT_DEBOUNCE_MS } from "./agent-status.js";
+export type { StatusSignal, StatusUpdate, ReducerPrev, TmuxMissingReason } from "./agent-status.js";
+export { runStatusMonitorTick, startStatusMonitor } from "./status-monitor.js";
+export type {
+  MonitorTickDeps,
+  MonitorTickOptions,
+  MonitorTickResult,
+  MonitorSessionState,
+  SentinelReading,
+  StatusMonitorHandle,
+} from "./status-monitor.js";
 export {
   ScheduledAgentRunner,
   parseCronExpression,

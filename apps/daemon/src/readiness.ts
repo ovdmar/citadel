@@ -2,7 +2,7 @@ import type { WorkspaceReadiness } from "@citadel/contracts";
 
 export function deriveReadiness(input: {
   workspace: { lifecycle: string; dirty: boolean };
-  sessions: Array<{ status: string; runtimeId?: string }>;
+  sessions: Array<{ status: string; runtimeId?: string; statusReason?: string | null | undefined }>;
   operations: Array<{ status: string; type: string; error: string | null }>;
   providerHealth: Array<{ status: string; reason: string | null }>;
   git: { clean: boolean; conflicted: number; modified: number; staged: number; untracked: number; checkedAt: string };
@@ -36,9 +36,16 @@ export function deriveReadiness(input: {
     input.versionControl.status !== "healthy" || input.ci.status !== "healthy" || input.apps.status !== "healthy";
   const runningOperation = input.operations.some((operation) => ["queued", "running"].includes(operation.status));
   const activeAgentSession = input.sessions.some(
-    (session) => session.runtimeId !== "shell" && ["starting", "waiting"].includes(session.status),
+    (session) => session.runtimeId !== "shell" && ["starting", "running"].includes(session.status),
   );
-  const failedSession = input.sessions.some((session) => ["failed", "orphaned"].includes(session.status));
+  const failedSession = input.sessions.some(
+    (session) =>
+      session.status === "failed" ||
+      (session.status === "unknown" &&
+        (session.statusReason === "tmux_missing" ||
+          session.statusReason === "migrated_from_orphaned" ||
+          session.statusReason === "sentinel_missing_tmux_alive")),
+  );
   const reasons = [
     input.workspace.lifecycle === "failed" ? "Workspace lifecycle failed" : null,
     failedSession ? "A terminal or agent session needs attention" : null,

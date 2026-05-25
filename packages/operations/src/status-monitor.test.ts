@@ -59,7 +59,7 @@ function makeDeps(over: DepsOver = {}): {
     now: () => FIXED_NOW,
     listSessions: () => sessions,
     listWorkspaceIds: () => new Set(workspaces.map((w) => w.id)),
-    updateSession: (id, update) => updates.push({ id, update: update as Record<string, unknown> }),
+    updateSession: (id, update) => updates.push({ id, update: update as unknown as Record<string, unknown> }),
     deleteSession: (id) => deleted.push(id),
     emit: (event, payload) => emitted.push({ event, payload }),
     tmuxActivities: () => over.tmuxActivities ?? new Map(),

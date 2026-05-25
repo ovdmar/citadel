@@ -441,7 +441,10 @@ export class SqliteStore {
         session.displayName,
         session.status,
         session.statusReason ?? null,
-        session.lastStatusAt,
+        // Optional in the schema (older test fixtures + out-of-band callers
+        // may omit these); the DB layer normalizes to sensible defaults so
+        // the column constraints are still satisfied.
+        session.lastStatusAt ?? session.updatedAt,
         session.lastOutputAt ?? null,
         session.endedAt ?? null,
         session.exitCode ?? null,

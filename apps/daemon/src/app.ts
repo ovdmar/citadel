@@ -1,4 +1,6 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +17,13 @@ import {
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { mcpStatus, mcpToolDefinitions } from "@citadel/mcp";
-import { OperationService } from "@citadel/operations";
+import {
+  type MonitorSessionState,
+  type MonitorTickDeps,
+  OperationService,
+  type SentinelReading,
+  startStatusMonitor,
+} from "@citadel/operations";
 import {
   collectGitHubCiRunLog,
   collectGitHubCiRuns,
@@ -26,8 +34,17 @@ import {
   setJiraCommand,
   transitionJiraIssue,
 } from "@citadel/providers";
-import { listRuntimeHealth } from "@citadel/runtimes";
-import { attachTerminalWebSocket, createTtydManager, ensureTmuxSession } from "@citadel/terminal";
+import type { RuntimeStatusAdapter, SessionAdapterState } from "@citadel/runtimes";
+import { getStatusAdapter, listRuntimeHealth } from "@citadel/runtimes";
+import {
+  agentExitSentinelPath,
+  agentLiveSentinelPath,
+  attachTerminalWebSocket,
+  captureTmux,
+  createTtydManager,
+  ensureTmuxSession,
+  readAgentExitCode,
+} from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
@@ -732,6 +749,75 @@ export function createDaemonApp(input: {
     }, 30_000);
     reaper.unref();
     server.on("close", () => clearInterval(reaper));
+  }
+
+  // Status monitor — 2s tick observing tmux activity + bash-wrapper sentinels
+  // and asking the runtime adapter for pane-derived status observations.
+  // Updates agent_sessions.status and emits agent.updated SSE events.
+  if (process.env.CITADEL_DISABLE_STATUS_MONITOR !== "1") {
+    const adapterStates = new Map<string, SessionAdapterState>();
+    const monitorStates = new Map<string, MonitorSessionState>();
+    const monitorDeps: MonitorTickDeps = {
+      now: () => new Date().toISOString(),
+      listSessions: () => store.listSessions(),
+      listWorkspaceIds: () => new Set(store.listWorkspaces().map((ws) => ws.id)),
+      updateSession: (id, update) => {
+        store.updateSessionStatus(id, {
+          ...(update.status !== undefined ? { status: update.status } : {}),
+          ...(update.reason !== undefined ? { statusReason: update.reason } : {}),
+          ...(update.lastStatusAt !== undefined ? { lastStatusAt: update.lastStatusAt } : {}),
+          ...(update.lastOutputAt !== undefined ? { lastOutputAt: update.lastOutputAt } : {}),
+          ...(update.endedAt !== undefined ? { endedAt: update.endedAt } : {}),
+          ...(update.exitCode !== undefined ? { exitCode: update.exitCode } : {}),
+        });
+      },
+      deleteSession: (id) => store.deleteSession(id),
+      emit: (event, payload) => emit(event, payload),
+      tmuxActivities: () => {
+        // Single batched tmux query. `#{session_activity}` is epoch seconds.
+        try {
+          const out = execFileSync("tmux", ["list-sessions", "-F", "#{session_name} #{session_activity}"], {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
+          });
+          const map = new Map<string, number>();
+          for (const line of out.split("\n")) {
+            const [name, secs] = line.trim().split(/\s+/);
+            if (name && secs) {
+              const n = Number(secs);
+              if (Number.isFinite(n)) map.set(name, n * 1000);
+            }
+          }
+          return map;
+        } catch {
+          return new Map();
+        }
+      },
+      paneCapture: (name) => {
+        try {
+          return captureTmux(name, 50);
+        } catch {
+          return "";
+        }
+      },
+      readSentinels: async (name): Promise<SentinelReading> => {
+        const [liveStat, exitStat] = await Promise.all([
+          fsPromises.stat(agentLiveSentinelPath(name)).catch(() => null),
+          fsPromises.stat(agentExitSentinelPath(name)).catch(() => null),
+        ]);
+        const exitCode = exitStat ? readAgentExitCode(name) : null;
+        return {
+          live: liveStat !== null,
+          exitCode,
+          exitedAt: exitStat ? exitStat.ctime.toISOString() : null,
+        };
+      },
+      getAdapter: (runtimeId): RuntimeStatusAdapter => getStatusAdapter(runtimeId),
+      adapterStates,
+      monitorStates,
+    };
+    const monitor = startStatusMonitor(monitorDeps, 2000);
+    server.on("close", () => monitor.stop());
   }
 
   return { app, server, emit };
