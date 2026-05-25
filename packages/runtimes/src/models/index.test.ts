@@ -17,9 +17,7 @@ const claudeFixture = fs.readFileSync(path.join(fixturesDir, "claude-code-models
 
 describe("runtimeModelListers", () => {
   it("exposes listers for the four citadel-maintained runtimes", () => {
-    expect(Object.keys(runtimeModelListers).sort()).toEqual(
-      ["claude-code", "codex", "cursor-agent", "pi"].sort(),
-    );
+    expect(Object.keys(runtimeModelListers).sort()).toEqual(["claude-code", "codex", "cursor-agent", "pi"].sort());
   });
 
   it("hasRuntimeModelLister gates by runtime id", () => {
@@ -46,12 +44,7 @@ describe("runtimeModelListers", () => {
 describe("parseClaudeCodeModelsList", () => {
   it("extracts model ids from the captured /models picker fixture", () => {
     const ids = parseClaudeCodeModelsList(claudeFixture);
-    expect(ids).toEqual([
-      "claude-opus-4-7",
-      "claude-sonnet-4-6",
-      "claude-haiku-4-5",
-      "claude-sonnet-4-5",
-    ]);
+    expect(ids).toEqual(["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5", "claude-sonnet-4-5"]);
   });
 
   it("dedupes repeated mentions and preserves first-seen order", () => {

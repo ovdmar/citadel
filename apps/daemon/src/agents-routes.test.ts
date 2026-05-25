@@ -1,15 +1,12 @@
-import express from "express";
-import http from "node:http";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RuntimeModelLister } from "@citadel/runtimes";
+import express from "express";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { type AgentDefinitionsStorage, createAgentDefinitionsStorage } from "./agent-definitions/storage.js";
 import { registerAgentsRoutes } from "./agents-routes.js";
-import {
-  createAgentDefinitionsStorage,
-  type AgentDefinitionsStorage,
-} from "./agent-definitions/storage.js";
 
 type HttpResult = { status: number; body: Record<string, unknown> };
 
@@ -52,7 +49,9 @@ function mountApp(opts: {
   const app = express();
   app.use(express.json());
   const asyncRoute =
-    (handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>): express.RequestHandler =>
+    (
+      handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>,
+    ): express.RequestHandler =>
     (req, res, next) => {
       Promise.resolve(handler(req, res, next)).catch(next);
     };
@@ -64,11 +63,9 @@ function mountApp(opts: {
     modelListers: opts.modelListers,
     now: opts.now,
   });
-  app.use(
-    (err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-    },
-  );
+  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  });
   const server = http.createServer(app);
   return new Promise<{ app: express.Express; close: () => Promise<void>; server: http.Server }>((resolve) => {
     server.listen(0, "127.0.0.1", () => {

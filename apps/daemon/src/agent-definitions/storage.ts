@@ -3,19 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  AgentDefinitionSchema,
-  AgentsConfigSchema,
   type AgentDefinition,
+  AgentDefinitionSchema,
   type AgentsConfig,
+  AgentsConfigSchema,
   type CreateAgentDefinitionInput,
   type UpdateAgentDefinitionInput,
 } from "@citadel/contracts";
-import {
-  DEFAULT_AGENTS_CONFIG,
-  isPredefinedAgentId,
-  predefinedAgentSeed,
-  predefinedAgentSeeds,
-} from "./seed.js";
+import { DEFAULT_AGENTS_CONFIG, isPredefinedAgentId, predefinedAgentSeed, predefinedAgentSeeds } from "./seed.js";
 
 export type AgentDefinitionsStorageState = "ready" | "unavailable";
 
@@ -28,7 +23,10 @@ export type AgentDefinitionsStorageError =
   | "name_collides";
 
 export class AgentDefinitionsError extends Error {
-  constructor(public readonly code: AgentDefinitionsStorageError, message?: string) {
+  constructor(
+    public readonly code: AgentDefinitionsStorageError,
+    message?: string,
+  ) {
     super(message ?? code);
   }
 }
@@ -55,9 +53,7 @@ export type AgentDefinitionsStorageOptions = {
 
 const SLUG_RE = /^[a-z0-9][a-z0-9_-]*$/;
 
-export function createAgentDefinitionsStorage(
-  options: AgentDefinitionsStorageOptions = {},
-): AgentDefinitionsStorage {
+export function createAgentDefinitionsStorage(options: AgentDefinitionsStorageOptions = {}): AgentDefinitionsStorage {
   const home = os.homedir();
   const baseDir = options.baseDir ?? path.join(home, ".citadel", "agents");
   const configPath = options.configPath ?? path.join(home, ".citadel", "agents.config.json");
@@ -97,8 +93,8 @@ export function createAgentDefinitionsStorage(
       fs.writeFileSync(filePath, desired);
       return;
     }
-    const equal = createHash("sha256").update(current).digest("hex") ===
-      createHash("sha256").update(desired).digest("hex");
+    const equal =
+      createHash("sha256").update(current).digest("hex") === createHash("sha256").update(desired).digest("hex");
     if (!equal) {
       // Only overwrite if the on-disk file is unparseable. For valid but
       // edited predefined definitions, the user's edits stand.
@@ -151,7 +147,10 @@ export function createAgentDefinitionsStorage(
   };
 
   const idForName = (name: string): string => {
-    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    const slug = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
     if (slug.length >= 2 && SLUG_RE.test(slug)) return slug;
     // Fall back to a stable timestamp-derived id if the name is exotic.
     return `agent-${Date.now().toString(36)}`;
@@ -212,9 +211,7 @@ export function createAgentDefinitionsStorage(
       const current = all.find((d) => d.id === id);
       if (!current) throw new AgentDefinitionsError("agent_not_found");
       if (patch.name !== undefined && patch.name !== current.name) {
-        const collision = all.some(
-          (d) => d.id !== id && d.name.toLowerCase() === patch.name?.toLowerCase(),
-        );
+        const collision = all.some((d) => d.id !== id && d.name.toLowerCase() === patch.name?.toLowerCase());
         if (collision) throw new AgentDefinitionsError("name_collides");
       }
       const next: AgentDefinition = {
@@ -222,7 +219,7 @@ export function createAgentDefinitionsStorage(
         name: patch.name ?? current.name,
         systemPrompt: patch.systemPrompt ?? current.systemPrompt,
         runtime: patch.runtime ?? current.runtime,
-        model: patch.model === undefined ? current.model : patch.model ?? undefined,
+        model: patch.model === undefined ? current.model : (patch.model ?? undefined),
         updatedAt: new Date().toISOString(),
       };
       writeDefinition(next);

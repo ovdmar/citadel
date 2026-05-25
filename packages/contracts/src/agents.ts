@@ -72,14 +72,10 @@ export const LaunchHandoffAgentInputSchema = z
     customAgentId: AgentDefinitionIdSchema.optional(),
     additionalPrompt: z.string().max(50_000).optional(),
   })
-  .refine(
-    (value) =>
-      (value.predefinedKind !== undefined ? 1 : 0) + (value.customAgentId !== undefined ? 1 : 0) === 1,
-    {
-      message: "Exactly one of predefinedKind or customAgentId must be supplied",
-      path: ["predefinedKind"],
-    },
-  );
+  .refine((value) => (value.predefinedKind !== undefined ? 1 : 0) + (value.customAgentId !== undefined ? 1 : 0) === 1, {
+    message: "Exactly one of predefinedKind or customAgentId must be supplied",
+    path: ["predefinedKind"],
+  });
 
 export const RuntimeModelDescriptorSchema = z.object({
   id: z.string().min(1).max(120),

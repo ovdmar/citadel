@@ -461,16 +461,10 @@ describe("agent definition contracts", () => {
   });
 
   it("accepts launch_*_agent input with workspaceId OR repoName", () => {
-    expect(LaunchPredefinedAgentInputSchema.parse({ prompt: "go", workspaceId: "ws-1" }).prompt).toBe(
-      "go",
-    );
-    expect(LaunchPredefinedAgentInputSchema.parse({ prompt: "go", repoName: "citadel" }).repoName).toBe(
-      "citadel",
-    );
+    expect(LaunchPredefinedAgentInputSchema.parse({ prompt: "go", workspaceId: "ws-1" }).prompt).toBe("go");
+    expect(LaunchPredefinedAgentInputSchema.parse({ prompt: "go", repoName: "citadel" }).repoName).toBe("citadel");
     expect(() => LaunchPredefinedAgentInputSchema.parse({ prompt: "" })).toThrow();
-    expect(LaunchCustomAgentInputSchema.parse({ prompt: "go", agentId: "my-reviewer" }).agentId).toBe(
-      "my-reviewer",
-    );
+    expect(LaunchCustomAgentInputSchema.parse({ prompt: "go", agentId: "my-reviewer" }).agentId).toBe("my-reviewer");
     expect(() => LaunchCustomAgentInputSchema.parse({ prompt: "go" })).toThrow();
   });
 
@@ -482,8 +476,7 @@ describe("agent definition contracts", () => {
       }).predefinedKind,
     ).toBe("implementation");
     expect(
-      LaunchHandoffAgentInputSchema.parse({ workspaceId: "ws-1", customAgentId: "my-reviewer" })
-        .customAgentId,
+      LaunchHandoffAgentInputSchema.parse({ workspaceId: "ws-1", customAgentId: "my-reviewer" }).customAgentId,
     ).toBe("my-reviewer");
     // both supplied → reject
     expect(() =>

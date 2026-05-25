@@ -2,11 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  AgentDefinitionsError,
-  createAgentDefinitionsStorage,
-} from "./storage.js";
 import { predefinedAgentIds, predefinedAgentSeed } from "./seed.js";
+import { AgentDefinitionsError, createAgentDefinitionsStorage } from "./storage.js";
 
 const dirs: string[] = [];
 

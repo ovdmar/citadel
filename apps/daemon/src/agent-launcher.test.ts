@@ -2,12 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  composeAgentLaunchInput,
-  resolveCustomAgent,
-  resolvePredefinedAgent,
-} from "./agent-launcher.js";
 import { createAgentDefinitionsStorage } from "./agent-definitions/storage.js";
+import { composeAgentLaunchInput, resolveCustomAgent, resolvePredefinedAgent } from "./agent-launcher.js";
 
 const dirs: string[] = [];
 
@@ -66,7 +62,8 @@ describe("composeAgentLaunchInput", () => {
       composeAgentLaunchInput({ definition: def, userPrompt: "go", defaultRuntime: "claude-code" }).runtimeId,
     ).toBe("codex");
     expect(
-      composeAgentLaunchInput({ definition: { ...def, runtime: "" }, userPrompt: "go", defaultRuntime: "pi" }).runtimeId,
+      composeAgentLaunchInput({ definition: { ...def, runtime: "" }, userPrompt: "go", defaultRuntime: "pi" })
+        .runtimeId,
     ).toBe("pi");
   });
 

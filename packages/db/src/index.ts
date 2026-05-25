@@ -669,29 +669,20 @@ export class SqliteStore {
         `INSERT INTO plan_registrations (id, workspace_id, path, summary, registered_at, registered_by_session_id)
          VALUES (?, ?, ?, ?, ?, ?)`,
       )
-      .run(
-        row.id,
-        row.workspaceId,
-        row.path,
-        row.summary,
-        row.registeredAt,
-        row.registeredBySessionId,
-      );
+      .run(row.id, row.workspaceId, row.path, row.summary, row.registeredAt, row.registeredBySessionId);
   }
 
   findPlanRegistration(id: string): PlanRegistration | null {
-    const row = this.database
-      .prepare("SELECT * FROM plan_registrations WHERE id = ?")
-      .get(id) as Record<string, unknown> | undefined;
+    const row = this.database.prepare("SELECT * FROM plan_registrations WHERE id = ?").get(id) as
+      | Record<string, unknown>
+      | undefined;
     if (!row) return null;
     return planRegistrationFromRow(row);
   }
 
   listPlanRegistrationsForWorkspace(workspaceId: string): PlanRegistration[] {
     const rows = this.database
-      .prepare(
-        "SELECT * FROM plan_registrations WHERE workspace_id = ? ORDER BY registered_at DESC",
-      )
+      .prepare("SELECT * FROM plan_registrations WHERE workspace_id = ? ORDER BY registered_at DESC")
       .all(workspaceId) as Array<Record<string, unknown>>;
     return rows.map(planRegistrationFromRow);
   }

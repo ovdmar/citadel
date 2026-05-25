@@ -1,17 +1,16 @@
+import type { CitadelConfig } from "@citadel/config";
 import {
   AgentsConfigSchema,
   CreateAgentDefinitionInputSchema,
-  UpdateAgentDefinitionInputSchema,
   type RuntimeModelsResponse,
+  UpdateAgentDefinitionInputSchema,
 } from "@citadel/contracts";
-import {
-  type RuntimeModelLister,
-  type RuntimeModelListerResult,
-} from "@citadel/runtimes";
+import { type RuntimeModelLister, type RuntimeModelListerResult, runtimeModelListers } from "@citadel/runtimes";
 import type express from "express";
 import {
   AgentDefinitionsError,
   type AgentDefinitionsStorage,
+  createAgentDefinitionsStorage,
 } from "./agent-definitions/storage.js";
 
 const MODELS_TTL_MS = 60 * 60 * 1_000;
@@ -196,4 +195,18 @@ export function registerAgentsRoutes(deps: AgentsRoutesDeps) {
       res.json(response);
     }),
   );
+}
+
+// Wire helper: creates the storage, registers the routes, returns storage so
+// the daemon's MCP dispatch can share the same instance.
+export function wireAgents(app: express.Express, asyncRoute: AgentsRoutesDeps["asyncRoute"], config: CitadelConfig) {
+  const agentDefinitions = createAgentDefinitionsStorage();
+  registerAgentsRoutes({
+    app,
+    asyncRoute,
+    agentDefinitions,
+    modelListers: runtimeModelListers,
+    runtimes: () => config.runtimes.map((r) => ({ id: r.id, command: r.command, args: r.args })),
+  });
+  return agentDefinitions;
 }
