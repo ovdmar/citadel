@@ -63,25 +63,31 @@ function UsagePill(props: {
   const summary = props.usage;
   const category = summary ? pickTopBarCategory(summary.categories, props.topBarKey) : null;
   const timeLeft = category ? formatTimeUntilReset(category.reset) : null;
-  const primary = pillPrimary(category, timeLeft);
   const tooltip = buildTooltip(props.runtime.displayName, summary, category);
   return (
     <Link to="/settings" className="cit-usage-pill" title={tooltip} aria-label={tooltip}>
       <span className="cit-usage-pill-mark" aria-hidden>
         <RuntimeMark runtimeId={props.runtime.id} size={14} />
       </span>
-      <span className="cit-usage-pill-value">{primary}</span>
+      <span className="cit-usage-pill-value">
+        {category ? (
+          <>
+            <span className="cit-usage-pill-pct">{category.percentUsed}%</span>
+            {timeLeft ? (
+              <>
+                <span className="cit-usage-pill-sep" aria-hidden>
+                  ·
+                </span>
+                <span className="cit-usage-pill-time">{timeLeft}</span>
+              </>
+            ) : null}
+          </>
+        ) : (
+          "—"
+        )}
+      </span>
     </Link>
   );
-}
-
-function pillPrimary(category: { percentUsed: number } | null, timeLeft: string | null): string {
-  if (!category) return "—";
-  // Minimalist v1 read: time-remaining is the headline. The percentage stays
-  // in the tooltip rather than crowding the pill — operators glance the pill
-  // to see "when does this top up", and open Settings for the full breakdown.
-  if (timeLeft) return timeLeft;
-  return `${category.percentUsed}%`;
 }
 
 function buildTooltip(

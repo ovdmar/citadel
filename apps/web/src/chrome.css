@@ -186,8 +186,32 @@
 }
 
 .cit-usage-pill-value {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
+}
+
+.cit-usage-pill-pct {
+  font-weight: 500;
+}
+
+.cit-usage-pill-sep {
+  color: var(--c-fg-4, var(--c-fg-3));
+  font-weight: 400;
+}
+
+/* Time-remaining is secondary info — slightly dimmer than the percentage so
+ * the eye lands on "how full" first and "when does it reset" second. */
+.cit-usage-pill-time {
+  color: var(--c-fg-4, var(--c-fg-3));
+  font-weight: 400;
+}
+
+.cit-usage-pill:hover .cit-usage-pill-sep,
+.cit-usage-pill:hover .cit-usage-pill-time {
+  color: var(--c-fg-2, var(--c-fg-1));
 }
 
 /* Bottom status bar */
