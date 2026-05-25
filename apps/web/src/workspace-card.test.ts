@@ -1,6 +1,6 @@
-import type { AgentSession } from "@citadel/contracts";
+import type { AgentSession, PullRequestSummary } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
-import { deriveWorkspaceAgentTone } from "./workspace-card.js";
+import { deriveWorkspaceAgentTone, prToneFor } from "./workspace-card.js";
 
 function session(over: Partial<AgentSession>): AgentSession {
   return {
@@ -114,5 +114,78 @@ describe("deriveWorkspaceAgentTone", () => {
         ]),
       ).toBe("attention");
     });
+  });
+});
+
+function pr(over: Partial<PullRequestSummary> = {}): PullRequestSummary {
+  return {
+    number: 1,
+    title: "PR",
+    url: "https://example.test/pr/1",
+    state: "OPEN",
+    draft: false,
+    reviewDecision: null,
+    additions: 0,
+    deletions: 0,
+    reviewers: [],
+    checks: [],
+    mergeable: null,
+    mergeStateStatus: null,
+    ...over,
+  };
+}
+
+describe("prToneFor", () => {
+  it("null PR → missing", () => {
+    expect(prToneFor(null)).toBe("missing");
+  });
+
+  it("merged PR → merged (wins over conflicting)", () => {
+    expect(prToneFor(pr({ state: "MERGED", mergeable: "CONFLICTING" }))).toBe("merged");
+  });
+
+  it("closed PR → missing", () => {
+    expect(prToneFor(pr({ state: "CLOSED" }))).toBe("missing");
+  });
+
+  it("mergeable=CONFLICTING → conflicting", () => {
+    expect(prToneFor(pr({ mergeable: "CONFLICTING" }))).toBe("conflicting");
+  });
+
+  it("mergeStateStatus=DIRTY → conflicting (even if mergeable is null)", () => {
+    expect(prToneFor(pr({ mergeable: null, mergeStateStatus: "DIRTY" }))).toBe("conflicting");
+  });
+
+  it("mergeable=UNKNOWN → not conflicting (transient)", () => {
+    expect(prToneFor(pr({ mergeable: "UNKNOWN" }))).not.toBe("conflicting");
+  });
+
+  it("mergeable=null → not conflicting (no provider data)", () => {
+    expect(prToneFor(pr({ mergeable: null }))).not.toBe("conflicting");
+  });
+
+  it("conflicting wins over failing (PR with both failing checks and conflicts)", () => {
+    expect(
+      prToneFor(
+        pr({
+          mergeable: "CONFLICTING",
+          checks: [
+            { name: "ci", status: "completed", conclusion: "failure", url: null, startedAt: null, completedAt: null },
+          ],
+        }),
+      ),
+    ).toBe("conflicting");
+  });
+
+  it("failing checks without conflict → failing", () => {
+    expect(
+      prToneFor(
+        pr({
+          checks: [
+            { name: "ci", status: "completed", conclusion: "failure", url: null, startedAt: null, completedAt: null },
+          ],
+        }),
+      ),
+    ).toBe("failing");
   });
 });

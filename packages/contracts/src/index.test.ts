@@ -13,6 +13,8 @@ import {
   IssueTrackerSummarySchema,
   IssueTransitionActionResultSchema,
   OperationSchema,
+  PrMergeStateStatusSchema,
+  PrMergeableSchema,
   PrReviewerSchema,
   ProviderHealthSchema,
   PullRequestSummarySchema,
@@ -24,6 +26,7 @@ import {
   UpdateScheduledAgentInputSchema,
   VersionControlSummarySchema,
   WorkspaceDiffSchema,
+  WorkspaceReadinessSchema,
   WorkspaceRecentCommitsSchema,
   WorkspaceSchema,
 } from "./index.js";
@@ -407,5 +410,75 @@ describe("contract schemas", () => {
       workspaceId: "ws_test",
       commits: [],
     });
+  });
+
+  it("normalizes mergeable/mergeStateStatus and gates pr-conflicts readiness", () => {
+    // PrMergeableSchema accepts the documented values verbatim.
+    expect(PrMergeableSchema.parse("MERGEABLE")).toBe("MERGEABLE");
+    expect(PrMergeableSchema.parse("CONFLICTING")).toBe("CONFLICTING");
+    expect(PrMergeableSchema.parse("UNKNOWN")).toBe("UNKNOWN");
+    // .catch("UNKNOWN") maps anything else to UNKNOWN — drift is visible-but-non-fatal.
+    expect(PrMergeableSchema.parse("WEIRD_NEW_GH_VALUE")).toBe("UNKNOWN");
+    expect(PrMergeableSchema.parse(42)).toBe("UNKNOWN");
+
+    // PrMergeStateStatusSchema accepts all documented states.
+    for (const value of ["CLEAN", "BEHIND", "BLOCKED", "DIRTY", "HAS_HOOKS", "UNKNOWN", "UNSTABLE", "DRAFT"]) {
+      expect(PrMergeStateStatusSchema.parse(value)).toBe(value);
+    }
+    expect(PrMergeStateStatusSchema.parse("FROM_THE_FUTURE")).toBe("UNKNOWN");
+
+    // PullRequestSummary defaults mergeable/mergeStateStatus to null when omitted.
+    const prMinimal = PullRequestSummarySchema.parse({
+      number: 7,
+      title: "Test",
+      url: "https://example.test/pr/7",
+      state: "OPEN",
+      draft: false,
+      reviewDecision: null,
+      checks: [],
+    });
+    expect(prMinimal.mergeable).toBeNull();
+    expect(prMinimal.mergeStateStatus).toBeNull();
+
+    // PullRequestSummary carries the fields when supplied.
+    const prFull = PullRequestSummarySchema.parse({
+      number: 8,
+      title: "Conflicting",
+      url: "https://example.test/pr/8",
+      state: "OPEN",
+      draft: false,
+      reviewDecision: null,
+      checks: [],
+      mergeable: "CONFLICTING",
+      mergeStateStatus: "DIRTY",
+    });
+    expect(prFull.mergeable).toBe("CONFLICTING");
+    expect(prFull.mergeStateStatus).toBe("DIRTY");
+
+    // PullRequestSummary normalizes unknown values through .catch().
+    const prDrift = PullRequestSummarySchema.parse({
+      number: 9,
+      title: "Drift",
+      url: "https://example.test/pr/9",
+      state: "OPEN",
+      draft: false,
+      reviewDecision: null,
+      checks: [],
+      mergeable: "QUANTUM_SUPERPOSITION",
+      mergeStateStatus: "REGRET",
+    });
+    expect(prDrift.mergeable).toBe("UNKNOWN");
+    expect(prDrift.mergeStateStatus).toBe("UNKNOWN");
+
+    // WorkspaceReadinessSchema accepts the new pr-conflicts state.
+    expect(
+      WorkspaceReadinessSchema.parse({
+        state: "pr-conflicts",
+        tone: "danger",
+        nextAction: "Resolve PR conflicts against main before merging",
+        reasons: ["PR branch has merge conflicts with the base branch"],
+        freshness: { checkedAt: timestamp, stale: false, degraded: false },
+      }).state,
+    ).toBe("pr-conflicts");
   });
 });

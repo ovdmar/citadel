@@ -19,7 +19,7 @@ export type WorkspaceCardData = {
   namespaces?: Namespace[];
 };
 
-export type PrTone = "missing" | "pending" | "passing" | "failing" | "merged";
+export type PrTone = "missing" | "pending" | "passing" | "failing" | "merged" | "conflicting";
 export type ApprovalTone = "none" | "pending" | "changes" | "approved";
 
 export type WorkspaceAgentTone = "attention" | "running" | "idle";
@@ -444,6 +444,7 @@ export function prToneFor(pr: PullRequestSummary | null | undefined): PrTone {
   if (!pr) return "missing";
   if (pr.state?.toLowerCase() === "merged") return "merged";
   if (pr.state?.toLowerCase() === "closed") return "missing";
+  if (pr.mergeable === "CONFLICTING" || pr.mergeStateStatus === "DIRTY") return "conflicting";
   const failed = pr.checks.some((check) =>
     ["failure", "cancelled", "timed_out", "action_required"].includes(String(check.conclusion ?? "").toLowerCase()),
   );

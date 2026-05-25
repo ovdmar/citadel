@@ -370,7 +370,8 @@
   letter-spacing: 0.02em;
 }
 
-.ins-pr-badge.tone-failing {
+.ins-pr-badge.tone-failing,
+.ins-pr-badge.tone-conflicting {
   background: oklch(60% 0.16 25 / 0.16);
   color: oklch(45% 0.16 25);
 }
@@ -389,7 +390,8 @@
   color: oklch(75% 0.12 145);
 }
 
-[data-theme="dark"] .ins-pr-badge.tone-failing {
+[data-theme="dark"] .ins-pr-badge.tone-failing,
+[data-theme="dark"] .ins-pr-badge.tone-conflicting {
   color: oklch(75% 0.16 25);
 }
 

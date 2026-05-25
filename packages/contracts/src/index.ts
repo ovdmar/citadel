@@ -211,6 +211,16 @@ export const PrReviewerSchema = z.object({
   state: PrReviewerStateSchema,
 });
 
+// GitHub's mergeable + mergeStateStatus enums. Strict schemas with `.catch()`
+// so unknown values from `gh pr view --json` (new GitHub states, version
+// drift) land in a defined fallback rather than failing validation — the
+// contracts layer stays strict, but the consumer code only compares against
+// the documented literals.
+export const PrMergeableSchema = z.enum(["MERGEABLE", "CONFLICTING", "UNKNOWN"]).catch("UNKNOWN");
+export const PrMergeStateStatusSchema = z
+  .enum(["CLEAN", "BEHIND", "BLOCKED", "DIRTY", "HAS_HOOKS", "UNKNOWN", "UNSTABLE", "DRAFT"])
+  .catch("UNKNOWN");
+
 export const PullRequestSummarySchema = z.object({
   number: z.number(),
   title: z.string(),
@@ -222,6 +232,8 @@ export const PullRequestSummarySchema = z.object({
   additions: z.number().nullable().default(null),
   deletions: z.number().nullable().default(null),
   reviewers: z.array(PrReviewerSchema).default([]),
+  mergeable: PrMergeableSchema.nullable().default(null),
+  mergeStateStatus: PrMergeStateStatusSchema.nullable().default(null),
 });
 
 export const VersionControlSummarySchema = z.object({
@@ -409,6 +421,7 @@ export const WorkspaceReadinessSchema = z.object({
     "needs-review",
     "checks-failing",
     "conflicts",
+    "pr-conflicts",
     "dirty",
     "waiting-provider",
     "action-failed",

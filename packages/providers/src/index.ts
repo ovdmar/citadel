@@ -16,6 +16,7 @@ import type {
   RuntimeUsageSummary,
   VersionControlSummary,
 } from "@citadel/contracts";
+import { PrMergeStateStatusSchema, PrMergeableSchema } from "@citadel/contracts";
 import { runtimeUsageFetchers } from "@citadel/runtimes";
 
 const execFileAsync = promisify(execFile);
@@ -439,7 +440,7 @@ async function currentPullRequest(rootPath: string) {
       "pr",
       "view",
       "--json",
-      "number,title,url,state,isDraft,reviewDecision,statusCheckRollup,additions,deletions,reviews,reviewRequests",
+      "number,title,url,state,isDraft,reviewDecision,statusCheckRollup,additions,deletions,reviews,reviewRequests,mergeable,mergeStateStatus",
     ]);
     const parsed = JSON.parse(raw) as {
       number: number;
@@ -453,6 +454,8 @@ async function currentPullRequest(rootPath: string) {
       deletions?: number | null;
       reviews?: GhReview[];
       reviewRequests?: GhReviewRequest[];
+      mergeable?: string | null;
+      mergeStateStatus?: string | null;
     };
     return {
       number: parsed.number,
@@ -465,6 +468,12 @@ async function currentPullRequest(rootPath: string) {
       additions: typeof parsed.additions === "number" ? parsed.additions : null,
       deletions: typeof parsed.deletions === "number" ? parsed.deletions : null,
       reviewers: aggregateReviewers(parsed.reviews ?? [], parsed.reviewRequests ?? []),
+      // Normalize through the strict enums so unknown values from `gh`
+      // collapse to "UNKNOWN" at the provider boundary (per .catch() on the
+      // schema). Keeps the contract-typed shape downstream consumers expect.
+      mergeable: parsed.mergeable == null ? null : PrMergeableSchema.parse(parsed.mergeable),
+      mergeStateStatus:
+        parsed.mergeStateStatus == null ? null : PrMergeStateStatusSchema.parse(parsed.mergeStateStatus),
     };
   } catch {
     return null;

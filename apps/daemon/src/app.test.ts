@@ -443,6 +443,8 @@ describe("createDaemonApp", () => {
               },
             ],
             reviewers: [],
+            mergeable: null,
+            mergeStateStatus: null,
           },
           checkedAt: now,
         }),
