@@ -1,4 +1,5 @@
 import type { AgentSession, PullRequestSummary, Workspace } from "@citadel/contracts";
+import { sessionNeedsAttention } from "@citadel/core";
 import { useMutation } from "@tanstack/react-query";
 import { GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -15,31 +16,26 @@ export type WorkspaceCardData = {
 export type PrTone = "missing" | "pending" | "passing" | "failing" | "merged";
 export type ApprovalTone = "none" | "pending" | "changes" | "approved";
 
-// Reasons that indicate the agent was supposed to be there and isn't.
-// Indeterminate `unknown` reasons (daemon restart, sentinel missing during
-// boot) stay neutral so a routine daemon restart doesn't bathe the navigator
-// in red dots.
-const ATTENTION_UNKNOWN_REASONS = new Set(["tmux_missing", "sentinel_missing_tmux_alive", "migrated_from_orphaned"]);
-
 export type WorkspaceAgentTone = "attention" | "running" | "idle";
 
 // Aggregates the per-agent statuses for a workspace into one tone for the
-// pulsing dot. Priority: attention (red) > running (green) > idle (grey).
-// Shell-runtime sessions are excluded — they're plain terminals, not agents.
+// status dot. Priority: attention > running > idle. Shell sessions are
+// excluded — they're plain terminals, not agents.
 export function deriveWorkspaceAgentTone(sessions: AgentSession[]): WorkspaceAgentTone {
   const agentSessions = sessions.filter((s) => s.runtimeId !== "shell");
-  const needsAttention = agentSessions.some(
-    (s) =>
-      s.status === "waiting_for_input" ||
-      s.status === "failed" ||
-      (s.status === "unknown" &&
-        s.statusReason !== null &&
-        s.statusReason !== undefined &&
-        ATTENTION_UNKNOWN_REASONS.has(s.statusReason)),
-  );
-  if (needsAttention) return "attention";
+  if (agentSessions.some((s) => s.status === "waiting_for_input" || sessionNeedsAttention(s))) return "attention";
   if (agentSessions.some((s) => s.status === "starting" || s.status === "running")) return "running";
   return "idle";
+}
+
+// Maps the aggregated tone to the shared `cit-pulse-*` class used across
+// the cockpit (bottom-bar "auto mode" pill, navigator "Running" stat,
+// inspector deploy/runtime pulses). Keeps workspace-card chrome visually
+// consistent with the rest of the app.
+function citPulseClass(tone: WorkspaceAgentTone): string {
+  if (tone === "attention") return "cit-pulse-bad";
+  if (tone === "running") return "cit-pulse-run";
+  return "cit-pulse-idle";
 }
 
 export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSelect: () => void }) {
@@ -98,6 +94,13 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
         </span>
         <span className="workspace-card-main">
           <span className="workspace-card-title">
+            {/* Status dot is a flex sibling of <strong>, NOT a child of it —
+                <strong> has overflow: hidden for title-truncation, which
+                would clip the cit-pulse-run ripple animation's left edge. */}
+            <span
+              className={`cit-pulse cit-pulse-sm ${citPulseClass(agentTone)} workspace-status-dot`}
+              aria-hidden="true"
+            />
             {editing ? (
               <input
                 ref={editInputRef}
@@ -125,7 +128,6 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
                 }}
                 title={titleDisplay}
               >
-                <span className={`workspace-status-dot status-${agentTone}`} aria-hidden="true" />
                 {workspace.issueKey ? <span className="workspace-card-issue">{workspace.issueKey}</span> : null}
                 {titleDisplay}
               </strong>

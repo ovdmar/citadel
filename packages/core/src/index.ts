@@ -4,6 +4,27 @@ export function nowIso() {
   return new Date().toISOString();
 }
 
+// `status: "unknown"` reasons that indicate the agent was supposed to be
+// there and isn't — render as failed-tone / attention. Indeterminate reasons
+// (daemon restart, sentinel missing during boot) stay neutral so a routine
+// daemon restart doesn't paint the navigator red.
+const ATTENTION_UNKNOWN_REASONS: ReadonlySet<string> = new Set([
+  "tmux_missing",
+  "sentinel_missing_tmux_alive",
+  "migrated_from_orphaned",
+]);
+
+// True iff the session needs the operator's attention — either it failed,
+// or it's unknown because we have positive evidence the agent went away
+// (tmux gone, sentinel mismatched). Used by readiness derivations and the
+// workspace-card status dot. Single source of truth for the predicate.
+export function sessionNeedsAttention(session: Pick<AgentSession, "status" | "statusReason">): boolean {
+  if (session.status === "failed") return true;
+  if (session.status !== "unknown") return false;
+  const reason = session.statusReason;
+  return reason !== null && reason !== undefined && ATTENTION_UNKNOWN_REASONS.has(reason);
+}
+
 export function createId(prefix: string) {
   const random = Math.random().toString(36).slice(2, 10);
   const time = Date.now().toString(36);
@@ -49,15 +70,8 @@ export function summarizeWorkspaceState(input: {
   sessions: AgentSession[];
   providerHealth: ProviderHealth[];
 }) {
-  const activeSession = input.sessions.some((session) => ["running"].includes(session.status));
-  const failedSession = input.sessions.some(
-    (session) =>
-      session.status === "failed" ||
-      (session.status === "unknown" &&
-        (session.statusReason === "tmux_missing" ||
-          session.statusReason === "migrated_from_orphaned" ||
-          session.statusReason === "sentinel_missing_tmux_alive")),
-  );
+  const activeSession = input.sessions.some((session) => session.status === "running");
+  const failedSession = input.sessions.some(sessionNeedsAttention);
   const degradedProvider = input.providerHealth.some((provider) => provider.status !== "healthy");
   const suggestedSection = input.workspace.pinned
     ? input.workspace.section

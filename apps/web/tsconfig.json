@@ -6,6 +6,6 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "references": [{ "path": "../../packages/contracts" }],
+  "references": [{ "path": "../../packages/contracts" }, { "path": "../../packages/core" }],
   "include": ["src/**/*.ts", "src/**/*.tsx"]
 }

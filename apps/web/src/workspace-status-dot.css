@@ -1,81 +1,16 @@
-/* Workspace-level agent status dot. Renders before the workspace name.
+/* Layout-only override for the workspace-card status dot.
  *
- * Tones:
- *   - status-running  → green, pulsing (an agent in the workspace is active)
- *   - status-attention → red, pulsing faster (any agent waiting_for_input,
- *                       failed, or unknown with a tmux-gone reason)
- *   - status-idle      → grey, static (no active or attention-worthy session)
- *
- * The pulse halo uses transform/opacity on a ::after pseudo-element so it's
- * GPU-composited (no per-frame paint). prefers-reduced-motion disables the
- * halo entirely; the base dot stays so status is still visible.
+ * Reuses the shared cit-pulse / cit-pulse-sm classes from styles.css for size,
+ * shape, colors, and animation — same visual language as the bottom-bar
+ * "auto mode" pill, the navigator "Running" stat, and the inspector pulses.
+ * The dot is rendered as a flex sibling of <strong> (NOT a child) so the
+ * title's overflow: hidden does not clip the ripple. .workspace-card-title's
+ * flex `gap: 4px` already provides spacing — no margin needed.
  */
 
-.workspace-status-dot {
-  position: relative;
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  margin-right: 8px;
-  vertical-align: middle;
-  flex-shrink: 0;
-  /* Decorative: never intercepts clicks targeting the workspace button. */
+.workspace-card-title .workspace-status-dot {
   pointer-events: none;
-}
-
-.workspace-status-dot::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  opacity: 0;
-  will-change: transform, opacity;
-}
-
-/* Darker variants (-600/-500) chosen to clear WCAG AA 3:1 against the
- * workspace-card surface across light and dark themes. If the host theme
- * defines lighter variants, the literal hex fallback is used. */
-
-.workspace-status-dot.status-running {
-  background: var(--color-green-600, #16a34a);
-}
-.workspace-status-dot.status-running::after {
-  background: rgba(34, 197, 94, 0.5);
-  animation: workspace-dot-pulse 2s ease-out infinite;
-}
-
-.workspace-status-dot.status-attention {
-  background: var(--color-red-600, #dc2626);
-}
-.workspace-status-dot.status-attention::after {
-  background: rgba(239, 68, 68, 0.6);
-  animation: workspace-dot-pulse 1.2s ease-out infinite;
-}
-
-.workspace-status-dot.status-idle {
-  background: var(--color-grey-500, #64748b);
-  /* No animation — static for steady state. */
-}
-
-@keyframes workspace-dot-pulse {
-  0% {
-    transform: scale(1);
-    opacity: 0.6;
-  }
-  70% {
-    transform: scale(2.5);
-    opacity: 0;
-  }
-  100% {
-    transform: scale(2.5);
-    opacity: 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .workspace-status-dot::after {
-    animation: none !important;
-    opacity: 0;
-  }
+  /* Tiny inset prevents the ripple's leftmost pixel touching the card edge
+     when the title row is flush-left; cosmetic, no clipping. */
+  margin-left: 2px;
 }

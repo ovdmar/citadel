@@ -16,6 +16,19 @@ import type { RuntimeStatusAdapter, SessionAdapterState } from "@citadel/runtime
 import { getStatusAdapter } from "@citadel/runtimes";
 import { agentExitSentinelPath, agentLiveSentinelPath, captureTmux, readAgentExitCode } from "@citadel/terminal";
 
+// Dedupe monitor-side failures so a persistent tmux outage doesn't flood
+// stderr at 2 Hz. Key is `kind:message` so distinct error messages are still
+// reported (e.g., "ENOENT" vs "EACCES"). Cleared on process exit.
+const reportedMonitorFailures = new Set<string>();
+function logMonitorFailureOnce(kind: string, err: unknown): void {
+  const msg = err instanceof Error ? err.message : String(err);
+  const key = `${kind}:${msg}`;
+  if (reportedMonitorFailures.has(key)) return;
+  reportedMonitorFailures.add(key);
+  // eslint-disable-next-line no-console
+  console.error(`[status-monitor] ${kind} failed (subsequent identical errors suppressed): ${msg}`);
+}
+
 export function buildStatusMonitorDeps(
   store: SqliteStore,
   emit: (event: string, payload: unknown) => void,
@@ -39,6 +52,9 @@ export function buildStatusMonitorDeps(
     deleteSession: (id) => store.deleteSession(id),
     emit: (event, payload) => emit(event, payload),
     // Single batched tmux query per tick — `#{session_activity}` is epoch sec.
+    // Errors are caught and reported once per (kind × error-message) so a
+    // persistent tmux failure (binary missing, permission denied) surfaces in
+    // logs without flooding stderr at 2 Hz.
     tmuxActivities: () => {
       try {
         const out = execFileSync("tmux", ["list-sessions", "-F", "#{session_name} #{session_activity}"], {
@@ -54,14 +70,16 @@ export function buildStatusMonitorDeps(
           }
         }
         return map;
-      } catch {
+      } catch (err) {
+        logMonitorFailureOnce("tmuxActivities", err);
         return new Map();
       }
     },
     paneCapture: (name) => {
       try {
         return captureTmux(name, 50);
-      } catch {
+      } catch (err) {
+        logMonitorFailureOnce("paneCapture", err);
         return "";
       }
     },

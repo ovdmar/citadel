@@ -1,4 +1,5 @@
 import type { WorkspaceReadiness } from "@citadel/contracts";
+import { sessionNeedsAttention } from "@citadel/core";
 
 export function deriveReadiness(input: {
   workspace: { lifecycle: string; dirty: boolean };
@@ -38,13 +39,10 @@ export function deriveReadiness(input: {
   const activeAgentSession = input.sessions.some(
     (session) => session.runtimeId !== "shell" && ["starting", "running"].includes(session.status),
   );
-  const failedSession = input.sessions.some(
-    (session) =>
-      session.status === "failed" ||
-      (session.status === "unknown" &&
-        (session.statusReason === "tmux_missing" ||
-          session.statusReason === "migrated_from_orphaned" ||
-          session.statusReason === "sentinel_missing_tmux_alive")),
+  // Loose-typed (this signature accepts plain strings); cast to the canonical
+  // shape for the shared predicate. Any non-canonical status will return false.
+  const failedSession = input.sessions.some((session) =>
+    sessionNeedsAttention({ status: session.status as never, statusReason: session.statusReason ?? null }),
   );
   const reasons = [
     input.workspace.lifecycle === "failed" ? "Workspace lifecycle failed" : null,

@@ -1,4 +1,5 @@
 import type { AgentSession, Operation, Workspace } from "@citadel/contracts";
+import { sessionNeedsAttention } from "@citadel/core";
 
 export type WorkspaceAttention = {
   section: string;
@@ -24,14 +25,7 @@ export function readinessForWorkspace(
   const activeAgentSession = input.sessions.some(
     (session) => session.runtimeId !== "shell" && ["starting", "running"].includes(session.status),
   );
-  const failedSession = input.sessions.some(
-    (session) =>
-      session.status === "failed" ||
-      (session.status === "unknown" &&
-        (session.statusReason === "tmux_missing" ||
-          session.statusReason === "migrated_from_orphaned" ||
-          session.statusReason === "sentinel_missing_tmux_alive")),
-  );
+  const failedSession = input.sessions.some(sessionNeedsAttention);
   if (workspace.lifecycle === "failed" || failedOperation || failedSession) {
     return { section: "blocked", label: "Blocked", nextAction: "Inspect failure output", tone: "danger" };
   }
