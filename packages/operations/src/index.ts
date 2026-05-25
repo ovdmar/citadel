@@ -64,7 +64,8 @@ export {
   WorkspaceInUseError,
   WorkspaceNameTakenError,
 } from "./helpers.js";
-import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
+import { dispatchAgentHook as dispatchAgentHookImpl } from "./dispatch-agent-hook.js";
+import { type DispatchAgentHook, runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
 import {
   type WorkspaceAppsDeps,
   discoverWorkspaceApps as discoverWorkspaceAppsImpl,
@@ -83,6 +84,10 @@ export class OperationService {
         actionHookIds?: string[];
       };
       commandPolicy: CitadelConfig["commandPolicy"];
+      // runtimes is optional so existing tests that construct OperationService
+      // with a minimal config keep working. dispatchAgentHook falls back to
+      // claude-code when the list is absent.
+      runtimes?: CitadelConfig["runtimes"];
     },
   ) {}
 
@@ -778,6 +783,7 @@ export class OperationService {
       repo,
       workspace,
       operationId,
+      dispatchAgentHook: this.dispatchAgentHook,
     });
 
   private runNotificationHooks = (
@@ -795,5 +801,22 @@ export class OperationService {
       workspace,
       operationId,
       payload,
+      dispatchAgentHook: this.dispatchAgentHook,
     });
+
+  // dispatchAgentHook is the injection point for .agent file hooks. It calls
+  // back into createAgentSession with a runtime resolved from the hook's
+  // frontmatter (`runtime`) or the first prompt-capable runtime in config.
+  // The architecture-boundary check enforces that @citadel/hooks never
+  // imports @citadel/operations — this closure is how discovery (in
+  // @citadel/hooks) reaches createAgentSession (here) without a direct edge.
+  // Implementation extracted to ./dispatch-agent-hook.ts for unit testing.
+  private dispatchAgentHook: DispatchAgentHook = (input) =>
+    dispatchAgentHookImpl(
+      {
+        runtimes: this.config?.runtimes ?? [],
+        createAgentSession: (sessionInput, runtime) => this.createAgentSession(sessionInput, runtime),
+      },
+      input,
+    );
 }

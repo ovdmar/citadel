@@ -497,6 +497,10 @@ export const CreateAgentSessionInputSchema = z.object({
   displayName: z.string().min(1).optional(),
   prompt: z.string().optional(),
   namespaceId: IdSchema.optional(),
+  // operationId lets hook-dispatched sessions link their activity back to the
+  // firing operation. Always optional — user-launched sessions don't have a
+  // parent operation, and existing callers must keep working unchanged.
+  operationId: z.string().optional(),
 });
 
 // High-level one-shot launcher used by MCP orchestrators: create a workspace
@@ -786,6 +790,9 @@ export type UpdateScheduledAgentInput = z.infer<typeof UpdateScheduledAgentInput
 export type { ScratchpadSnapshot, ScratchpadHistorySource } from "./scratchpad.js";
 export type { ScratchpadHistoryEntry, ScratchpadHistorySummary } from "./scratchpad.js";
 export type { ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
+
+export { HookEventSchema, AgentHookFrontmatterSchema } from "./hooks.js";
+export type { HookEvent, AgentHookFrontmatter } from "./hooks.js";
 
 export type ApiError = {
   error: string;
