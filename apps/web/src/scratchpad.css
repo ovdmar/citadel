@@ -664,3 +664,149 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* ─── Drawer presentation ───────────────────────────────────────────────────
+ * Mounted at Shell level (sibling to <Outlet/>); visibility toggled via the
+ * `hidden` attribute so React state stays alive across close/reopen and across
+ * route changes. */
+.scratchpad-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(720px, 60vw);
+  background: var(--bg-panel, var(--panel));
+  border-left: 1px solid var(--line-strong, var(--line));
+  box-shadow: -2px 0 16px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+  z-index: 1000;
+  transition: transform 120ms ease-out;
+}
+
+.scratchpad-drawer[hidden] {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .scratchpad-drawer {
+    width: 100vw;
+  }
+}
+
+.scratchpad-drawer-header {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.scratchpad-drawer-title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.scratchpad-drawer-status {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  transition: color 120ms;
+}
+
+.scratchpad-drawer-header[data-saving="ok"] .scratchpad-drawer-status {
+  color: var(--color-success, #4ade80);
+  font-weight: 600;
+}
+
+.scratchpad-drawer-header[data-saving="err"] .scratchpad-drawer-status {
+  color: var(--color-danger, #ef4444);
+  font-weight: 600;
+}
+
+.scratchpad-drawer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.scratchpad-drawer-close:hover {
+  background: var(--c-line-1, rgba(255, 255, 255, 0.06));
+}
+
+.scratchpad-drawer-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  overflow: hidden;
+}
+
+.scratchpad-drawer .scratchpad-blocks-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.scratchpad-drawer .scratchpad-block-list {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.scratchpad-redirect {
+  padding: 24px;
+  font-size: 13px;
+  color: var(--text-muted, #888);
+}
+
+/* ─── Per-block line-number gutter ─────────────────────────────────────────
+ * Restarts at 1 per block. Sibling element to the rendered HTML / textarea;
+ * `wrap="off"` is set on the textarea so visual lines map 1:1 to `\n`-counted
+ * lines. The textarea forwards scrollTop to the gutter wrapper. */
+.scratchpad-block {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.scratchpad-block-gutter {
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  text-align: right;
+  padding-right: 4px;
+  color: var(--text-muted, #888);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  min-width: 24px;
+  border-right: 1px solid var(--line);
+}
+
+.scratchpad-block-gutter-row {
+  display: block;
+  height: 1.5em;
+}
+
+.scratchpad-block-gutter-wrap {
+  overflow: hidden;
+  max-height: 100%;
+}
+
+.scratchpad-block-editing .scratchpad-block-textarea {
+  white-space: pre;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}

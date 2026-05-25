@@ -13,6 +13,8 @@ import { RepoSettingsView } from "./routes/repo-settings.js";
 import { ScheduledAgentsView } from "./routes/scheduled-agents.js";
 import { ScratchpadView } from "./routes/scratchpad.js";
 import { SettingsView } from "./routes/settings.js";
+import { getScratchpadDrawerOpen, setScratchpadDrawerOpen, toggleScratchpadDrawer } from "./scratchpad-drawer-store.js";
+import { ScratchpadPanel } from "./scratchpad-panel.js";
 import "./styles.css";
 import "./chrome.css";
 import "./stage-terminal.css";
@@ -105,11 +107,53 @@ const scheduledAgentsRoute = createRoute({
 });
 
 function Shell() {
+  // Initialize the drawer from the `?scratchpad=1` query param on cold mount,
+  // so deep-link refreshes (e.g. /settings?scratchpad=1) restore the drawer
+  // exactly as it was. Subsequent toggles update the URL via syncDrawerToUrl
+  // below; navigation does not unmount the panel.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("scratchpad") === "1") setScratchpadDrawerOpen(true);
+  }, []);
+
+  // Shell-level keydown: cmd/ctrl+shift+s toggles the drawer from every route.
+  // Cockpit-specific shortcuts (cmd+k, c, ctrl+n) stay in Cockpit so they're
+  // not triggered on other routes.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        toggleScratchpadDrawer();
+        syncDrawerToUrl(getScratchpadDrawerOpen());
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <div className="app-root">
       <Outlet />
+      <ScratchpadPanel />
     </div>
   );
+}
+
+// Mirror the drawer's open/closed state into the `?scratchpad=1` query param
+// using replaceState — no history entry, so closing the drawer doesn't require
+// multiple back presses. Keeps the URL bar consistent with the drawer state for
+// share / reload / restore-on-cold-boot.
+function syncDrawerToUrl(open: boolean) {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  const has = url.searchParams.get("scratchpad") === "1";
+  if (open && !has) {
+    url.searchParams.set("scratchpad", "1");
+    window.history.replaceState(null, "", url.toString());
+  } else if (!open && has) {
+    url.searchParams.delete("scratchpad");
+    window.history.replaceState(null, "", url.toString());
+  }
 }
 
 function NotFoundView() {
