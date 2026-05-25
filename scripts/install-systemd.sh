@@ -42,6 +42,10 @@ echo "→ Installing citadel.service → $ROOT"
   echo "Type=simple"
   echo "WorkingDirectory=$ROOT"
   echo "Environment=NODE_ENV=production"
+  # Pin the long-term port explicitly. The daemon refuses to bind 4010 when
+  # launched from a checkout without an explicit CITADEL_PORT, to keep ad-hoc
+  # `node dist/index.js` invocations from clobbering this service.
+  echo "Environment=CITADEL_PORT=4010"
   echo "Environment=CITADEL_CONFIG=$CITADEL_CONFIG_PATH"
   echo "Environment=OPENCLAW_ROOT=$OPENCLAW_ROOT"
   echo "Environment=CITADEL_OPENCLAW_STATUS_TIMEOUT_MS=15000"

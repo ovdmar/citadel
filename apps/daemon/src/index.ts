@@ -3,10 +3,13 @@ import { SqliteStore } from "@citadel/db";
 import { OperationService } from "@citadel/operations";
 import { createDaemonApp } from "./app.js";
 
-// Resolve the worktree root before loading config so we can backfill
-// CITADEL_DATA_DIR / CITADEL_PORT from .citadel/dev.json when the daemon is
-// launched standalone (e.g. `node apps/daemon/dist/index.js` without the
-// Makefile env wrapper). Env always wins over dev.json.
+// Resolve the worktree root before loading config. When running inside a
+// Citadel checkout, env always wins over dev.json; dev.json wins over an
+// error. The bare config default (4010) is reserved for the systemd-managed
+// install — a checkout-launched daemon must never silently bind that port,
+// or it will clobber the long-term service. The Makefile, the deploy hook,
+// and the systemd unit all set CITADEL_PORT explicitly, so this guard only
+// fires when someone runs `node dist/index.js` raw without setting up env.
 const worktreeRoot = resolveWorktreeRoot();
 const devState = worktreeRoot ? loadDevState(worktreeRoot) : null;
 if (worktreeRoot && !process.env.CITADEL_DATA_DIR) {
@@ -14,6 +17,14 @@ if (worktreeRoot && !process.env.CITADEL_DATA_DIR) {
 }
 if (devState && !process.env.CITADEL_PORT) {
   process.env.CITADEL_PORT = String(devState.port);
+}
+if (worktreeRoot && !process.env.CITADEL_PORT) {
+  console.error(
+    `Citadel daemon launched from a checkout (${worktreeRoot}) without CITADEL_PORT set.\n` +
+      "Refusing to bind the systemd-reserved default (:4010).\n" +
+      "Use 'make deploy' from this checkout, or set CITADEL_PORT explicitly.",
+  );
+  process.exit(2);
 }
 
 const configPath = defaultConfigPath();
