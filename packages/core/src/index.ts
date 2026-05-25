@@ -88,3 +88,5 @@ export function summarizeWorkspaceState(input: {
   ].filter((reason): reason is string => Boolean(reason));
   return { suggestedSection, reasons };
 }
+
+export { FUNNY_ADJECTIVES, FUNNY_ANIMALS, generateFunnyName } from "./funny-name.js";

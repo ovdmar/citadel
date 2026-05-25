@@ -322,9 +322,22 @@ function defaultBranchPreview(linked: LinkedContext, name: string): string {
   return slug || "workspace";
 }
 
-function defaultNamePreview(linked: LinkedContext): string {
+// Hint shown in the modal's name input placeholder. For scratch workspaces
+// the daemon generates a memorable funny-name (e.g. funny-cat) when none
+// is provided, so the placeholder telegraphs that. For issue-linked
+// workspaces the placeholder shows the derived name (issue key lowercased).
+function defaultNameHint(linked: LinkedContext): string {
   if (linked.source === "issue" && linked.issueKey) return linked.issueKey.toLowerCase();
-  return "workspace";
+  return "e.g. funny-cat (auto)";
+}
+
+// Effective name to send to the daemon when the user leaves the field
+// blank. Empty string lets the daemon generate. Issue-linked workspaces
+// still derive from the issue key client-side to keep branch preview
+// accurate.
+function defaultNameForSubmit(linked: LinkedContext): string {
+  if (linked.source === "issue" && linked.issueKey) return linked.issueKey.toLowerCase();
+  return "";
 }
 
 export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
@@ -351,8 +364,10 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   }, [defaultRuntimeId, runtimeId]);
 
   const linked = useMemo(() => parseLinkedContext(linkInput), [linkInput]);
-  const namePreview = defaultNamePreview(linked);
-  const branchPreview = defaultBranchPreview(linked, name || namePreview);
+  const namePreview = defaultNameHint(linked);
+  // Branch preview uses a non-empty fallback so it shows something stable
+  // when no issue is attached and no name is typed.
+  const branchPreview = defaultBranchPreview(linked, name || defaultNameForSubmit(linked) || "workspace");
 
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {
@@ -361,10 +376,13 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
 
   const create = useMutation({
     mutationFn: async () => {
-      const effectiveName = name.trim() || namePreview;
+      const trimmed = name.trim();
       const payload: Record<string, unknown> = {
         repoId,
-        name: effectiveName,
+        // Empty string signals "daemon should generate a funny-name". The
+        // issue-linked path still sends the issue-key-lowercased default
+        // for backwards-compatible branch-name derivation.
+        name: trimmed || defaultNameForSubmit(linked),
         source: linked.source,
       };
       if (linked.issueKey) payload.issueKey = linked.issueKey;

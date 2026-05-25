@@ -478,7 +478,10 @@ export const CreateRepoInputSchema = z.object({
 
 export const CreateWorkspaceInputSchema = z.object({
   repoId: IdSchema,
-  name: z.string().min(1),
+  // Empty string or omitted name triggers daemon-side funny-name generation
+  // (e.g. funny-cat). Operators using the cockpit can leave the name blank;
+  // MCP/HTTP callers that want a deterministic name still send one.
+  name: z.string().default(""),
   source: WorkspaceSourceSchema.default("scratch"),
   issueKey: z.string().min(2).optional(),
   issueTitle: z.string().min(1).optional(),

@@ -732,6 +732,52 @@ describe("OperationService", () => {
     ).rejects.toThrow(/Unknown repo/);
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
+
+  it("generates a funny-name when input.name is empty (no Jira key)", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+
+    const created = await service.createWorkspace({ repoId: repo.id, name: "", source: "scratch" });
+    const workspace = store.listWorkspaces().find((w) => w.id === created.workspaceId);
+
+    // Funny names are kebab-cased two-token strings (e.g. "snappy-otter").
+    expect(workspace?.name).toMatch(/^[a-z]+-[a-z]+$/);
+    expect(workspace?.lifecycle).toBe("ready");
+  });
+
+  it("retries on unique-name collision when generating funny-names", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+
+    // Create 8 scratch workspaces with no name; each must succeed despite
+    // the unique-name constraint on the workspaces table. Verifies the
+    // retry loop produces distinct names (or appends a suffix on the
+    // sixth attempt). With a 30×30 dictionary, 8 draws are extremely
+    // unlikely to all collide, but the retry path is exercised by the
+    // unique-constraint violation when collisions do happen.
+    const names = new Set<string>();
+    for (let i = 0; i < 8; i++) {
+      const created = await service.createWorkspace({ repoId: repo.id, name: "", source: "scratch" });
+      const ws = store.listWorkspaces().find((w) => w.id === created.workspaceId);
+      expect(ws?.name).toMatch(/^[a-z]+-[a-z]+(-[a-z0-9]{4})?$/);
+      names.add(ws?.name ?? "");
+    }
+    expect(names.size).toBe(8);
+  });
 });
 
 function createGitFixture() {

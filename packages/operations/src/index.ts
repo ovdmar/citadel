@@ -14,7 +14,7 @@ import type {
   UpdateNamespaceInput,
   Workspace,
 } from "@citadel/contracts";
-import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
+import { createId, generateFunnyName, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
 import * as agentHistory from "./agent-history.js";
@@ -157,47 +157,74 @@ export class OperationService {
     const now = nowIso();
     const operation = this.operation("workspace.create", "running", repo.id, null, 5, "Validating workspace request");
     const newBranch = input.newBranch?.trim() || null;
-    const branch = newBranch ?? workspaceBranchName(input);
-    const workspacePath = path.join(repo.worktreeParent, branch);
     const baseBranch = input.baseBranch?.trim() || repo.defaultBranch;
     const existingBranch = input.existingBranch?.trim() || null;
-    const workspace: Workspace = {
-      id: createId("ws"),
-      repoId: repo.id,
-      name: input.name,
-      path: workspacePath,
-      branch: existingBranch ?? branch,
-      baseBranch,
-      source: input.source,
-      kind: "worktree",
-      prUrl: input.prUrl ?? null,
-      issueKey: input.issueKey ?? null,
-      issueTitle: input.issueTitle ?? null,
-      issueUrl: input.issueUrl ?? null,
-      slackThreadUrl: input.slackThreadUrl ?? null,
-      section: "backlog",
-      pinned: false,
-      lifecycle: "creating",
-      dirty: false,
-      namespaceId,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-    };
-    try {
-      this.store.insertWorkspace(workspace);
-    } catch (error) {
-      if (isUniqueWorkspaceNameViolation(error)) {
-        this.store.upsertOperation({
-          ...operation,
-          status: "failed",
-          progress: 100,
-          error: `workspace_name_taken: ${input.name}`,
-          updatedAt: nowIso(),
-        });
-        throw new WorkspaceNameTakenError(repo.id, input.name);
+
+    // Resolve the workspace name with daemon-side funny-name generation
+    // when the caller leaves it blank. We retry on unique-name collisions
+    // (rare with a 30×30 dictionary) up to 5 times, then fall back to a
+    // short random suffix to keep the create attempt from failing on a
+    // freshly-typed scratch workspace.
+    const callerName = input.name.trim();
+    const wantsGenerated = callerName.length === 0;
+    let workspace: Workspace | null = null;
+    let lastTriedName = callerName;
+    let branch = "";
+    let workspacePath = "";
+    const maxAttempts = wantsGenerated ? 6 : 1;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      let candidate = callerName;
+      if (wantsGenerated) {
+        candidate = attempt < 5 ? generateFunnyName() : `${generateFunnyName()}-${createId("x").slice(-4)}`;
       }
-      throw error;
+      lastTriedName = candidate;
+      branch = newBranch ?? workspaceBranchName({ ...input, name: candidate });
+      workspacePath = path.join(repo.worktreeParent, branch);
+      const draft: Workspace = {
+        id: createId("ws"),
+        repoId: repo.id,
+        name: candidate,
+        path: workspacePath,
+        branch: existingBranch ?? branch,
+        baseBranch,
+        source: input.source,
+        kind: "worktree",
+        prUrl: input.prUrl ?? null,
+        issueKey: input.issueKey ?? null,
+        issueTitle: input.issueTitle ?? null,
+        issueUrl: input.issueUrl ?? null,
+        slackThreadUrl: input.slackThreadUrl ?? null,
+        section: "backlog",
+        pinned: false,
+        lifecycle: "creating",
+        dirty: false,
+        namespaceId,
+        createdAt: now,
+        updatedAt: now,
+        archivedAt: null,
+      };
+      try {
+        this.store.insertWorkspace(draft);
+        workspace = draft;
+        break;
+      } catch (error) {
+        if (isUniqueWorkspaceNameViolation(error)) {
+          if (wantsGenerated && attempt < maxAttempts - 1) continue;
+          this.store.upsertOperation({
+            ...operation,
+            status: "failed",
+            progress: 100,
+            error: `workspace_name_taken: ${candidate}`,
+            updatedAt: nowIso(),
+          });
+          throw new WorkspaceNameTakenError(repo.id, candidate);
+        }
+        throw error;
+      }
+    }
+    if (!workspace) {
+      // Defensive — the loop above either inserts or throws; this is unreachable.
+      throw new WorkspaceNameTakenError(repo.id, lastTriedName);
     }
     this.logOp(
       operation.id,
