@@ -25,7 +25,16 @@ import { listRuntimeHealth } from "@citadel/runtimes";
 import type { TtydManager } from "@citadel/terminal";
 import { readLogSlice } from "./log-slice.js";
 import type { ScheduledAgentService } from "./scheduled-agent-service.js";
-import { ScratchpadTooLargeError, appendScratchpad, readScratchpad, writeScratchpad } from "./scratchpad.js";
+import {
+  ScratchpadTooLargeError,
+  addBlock,
+  appendScratchpad,
+  deleteBlock,
+  listBlocks,
+  readScratchpad,
+  updateBlock,
+  writeScratchpad,
+} from "./scratchpad.js";
 
 export type DaemonMcpDeps = {
   config: CitadelConfig;
@@ -225,6 +234,59 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
       if (error instanceof ScratchpadTooLargeError) return { error: error.message, limit: error.limit };
       throw error;
     }
+  }
+  if (call.name === "list_blocks") {
+    return listBlocks(config.dataDir);
+  }
+  if (call.name === "add_block") {
+    if (typeof call.arguments?.text !== "string") return { error: "text_required" };
+    const rawPosition = call.arguments?.position;
+    let position: "end" | { afterId: string } = "end";
+    if (rawPosition !== undefined && rawPosition !== "end") {
+      if (
+        typeof rawPosition !== "object" ||
+        rawPosition === null ||
+        typeof (rawPosition as { afterId?: unknown }).afterId !== "string"
+      ) {
+        return { error: "position_invalid" };
+      }
+      position = { afterId: (rawPosition as { afterId: string }).afterId };
+    }
+    const result = addBlock(config.dataDir, call.arguments.text, position, "mcp:add_block");
+    if ("error" in result) {
+      if (result.error === "scratchpad_too_large") return { error: result.error, limit: 1_000_000 };
+      return result;
+    }
+    emit("scratchpad.updated", { updatedAt: result.snapshot.updatedAt });
+    emit("scratchpad.history.updated", { updatedAt: result.snapshot.updatedAt });
+    return { block: result.block, ...result.snapshot };
+  }
+  if (call.name === "update_block") {
+    if (typeof call.arguments?.id !== "string" || call.arguments.id === "") return { error: "block_id_required" };
+    if (typeof call.arguments?.text !== "string") return { error: "text_required" };
+    const deleting = call.arguments.text.trim().length === 0;
+    const result = updateBlock(
+      config.dataDir,
+      call.arguments.id,
+      call.arguments.text,
+      deleting ? "mcp:delete_block" : "mcp:update_block",
+    );
+    if ("error" in result) {
+      if (result.error === "scratchpad_too_large") return { error: result.error, limit: 1_000_000 };
+      return result;
+    }
+    emit("scratchpad.updated", { updatedAt: result.snapshot.updatedAt });
+    emit("scratchpad.history.updated", { updatedAt: result.snapshot.updatedAt });
+    if ("block" in result) return { block: result.block, ...result.snapshot };
+    return result.snapshot;
+  }
+  if (call.name === "delete_block") {
+    if (typeof call.arguments?.id !== "string" || call.arguments.id === "") return { error: "block_id_required" };
+    const result = deleteBlock(config.dataDir, call.arguments.id, "mcp:delete_block");
+    if ("error" in result) return result;
+    emit("scratchpad.updated", { updatedAt: result.snapshot.updatedAt });
+    emit("scratchpad.history.updated", { updatedAt: result.snapshot.updatedAt });
+    return result.snapshot;
   }
   if (call.name === "list_deployed_apps") {
     const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";

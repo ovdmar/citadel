@@ -293,6 +293,56 @@ describe("scratchpad HTTP + MCP routes", () => {
     }
   });
 
+  it("exposes list_blocks / add_block / update_block / delete_block via MCP", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const added = await postJson<{ result: { structuredContent: { block: { id: string } } } }>(
+        `${baseUrl}/api/mcp/rpc`,
+        {
+          jsonrpc: "2.0",
+          id: "add",
+          method: "tools/call",
+          params: { name: "add_block", arguments: { text: "via mcp add" } },
+        },
+      );
+      const addedId = added.result.structuredContent.block.id;
+      expect(addedId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+
+      const listed = await postJson<{ result: { structuredContent: { blocks: Array<{ id: string; text: string }> } } }>(
+        `${baseUrl}/api/mcp/rpc`,
+        { jsonrpc: "2.0", id: "ls", method: "tools/call", params: { name: "list_blocks" } },
+      );
+      expect(listed.result.structuredContent.blocks).toHaveLength(1);
+      expect(listed.result.structuredContent.blocks[0]?.text).toBe("via mcp add");
+
+      // update_block with empty text deletes.
+      const removed = await postJson<{ result: { structuredContent: Record<string, unknown> } }>(
+        `${baseUrl}/api/mcp/rpc`,
+        {
+          jsonrpc: "2.0",
+          id: "del-via-update",
+          method: "tools/call",
+          params: { name: "update_block", arguments: { id: addedId, text: "" } },
+        },
+      );
+      expect(removed.result.structuredContent).not.toHaveProperty("error");
+      expect(removed.result.structuredContent).not.toHaveProperty("block");
+
+      // Unknown id paths surface block_not_found.
+      const missing = await postJson<{ result: { structuredContent: { error: string } } }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "del-missing",
+        method: "tools/call",
+        params: { name: "delete_block", arguments: { id: "nope" } },
+      });
+      expect(missing.result.structuredContent.error).toBe("block_not_found");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("GET /api/scratchpad/blocks lists fenced blocks", async () => {
     const fixture = createFixture();
     const { server } = createDaemonApp(fixture);
