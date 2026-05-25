@@ -15,6 +15,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { AddRepoModal, CreateWorkspaceModal, GroupByMenu, type GroupKey } from "./modals.js";
+import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import {
   type GroupNode,
   type GroupableKey,
@@ -211,13 +212,7 @@ export function Navigator(props: {
               <PanelLeftClose size={14} />
             </button>
           </div>
-          <Link
-            to="/scratchpad"
-            className={path === "/scratchpad" ? "active" : ""}
-            title="Scratchpad — markdown notes orchestrator agents can read via MCP"
-          >
-            <NotebookPen size={13} /> Scratchpad
-          </Link>
+          <ScratchpadNavLink />
           <Link
             to="/scheduled-agents"
             className={path === "/scheduled-agents" ? "active" : ""}
@@ -408,5 +403,26 @@ function GroupNodeView(props: GroupNodeViewProps) {
         </div>
       )}
     </div>
+  );
+}
+
+function ScratchpadNavLink() {
+  const { open, toggle } = useScratchpadDrawer();
+  const isMac =
+    typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  const hint = isMac ? "Shift+Cmd+S" : "Shift+Ctrl+S";
+  return (
+    <button
+      type="button"
+      className={`nav-link-button${open ? " active" : ""}`}
+      onClick={toggle}
+      title={`Scratchpad — markdown notes orchestrator agents can read via MCP (${hint})`}
+      aria-pressed={open}
+    >
+      <NotebookPen size={13} /> Scratchpad
+      <kbd className="nav-kbd-hint" aria-hidden>
+        {hint}
+      </kbd>
+    </button>
   );
 }

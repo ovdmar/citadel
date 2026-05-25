@@ -810,3 +810,37 @@
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* Nav-link button (replaces the <Link> for scratchpad so click toggles the
+ * drawer instead of navigating). Mirrors the visual treatment of nav Links. */
+.nav-link-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.nav-link-button:hover {
+  background: var(--c-line-1, rgba(255, 255, 255, 0.06));
+}
+
+.nav-link-button.active {
+  background: var(--c-line-2, rgba(255, 255, 255, 0.1));
+}
+
+.nav-kbd-hint {
+  margin-left: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--text-muted, #888);
+  opacity: 0.7;
+  letter-spacing: 0;
+}
