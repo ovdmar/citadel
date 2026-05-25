@@ -85,7 +85,7 @@ export function createDaemonApp(input: {
   const app = express();
   const server = http.createServer(app);
   const sseClients = new Set<express.Response>();
-  const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
+  const providerCache = new Map<string, { expiresAt: number; value: unknown; cachedAt: number }>();
   // Per-daemon ttyd port slice. Boot-time cleanupStale() blanket-SIGTERMs
   // every ttyd in this range, so any two daemons that share a range will
   // trample each other's live terminals (worktree daemons under tsx watch
