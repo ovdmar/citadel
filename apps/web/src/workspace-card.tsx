@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
+import "./workspace-status-dot.css";
 
 export type WorkspaceCardData = {
   workspace: Workspace;
@@ -14,11 +15,41 @@ export type WorkspaceCardData = {
 export type PrTone = "missing" | "pending" | "passing" | "failing" | "merged";
 export type ApprovalTone = "none" | "pending" | "changes" | "approved";
 
+// Reasons that indicate the agent was supposed to be there and isn't.
+// Indeterminate `unknown` reasons (daemon restart, sentinel missing during
+// boot) stay neutral so a routine daemon restart doesn't bathe the navigator
+// in red dots.
+const ATTENTION_UNKNOWN_REASONS = new Set(["tmux_missing", "sentinel_missing_tmux_alive", "migrated_from_orphaned"]);
+
+export type WorkspaceAgentTone = "attention" | "running" | "idle";
+
+// Aggregates the per-agent statuses for a workspace into one tone for the
+// pulsing dot. Priority: attention (red) > running (green) > idle (grey).
+// Shell-runtime sessions are excluded — they're plain terminals, not agents.
+export function deriveWorkspaceAgentTone(sessions: AgentSession[]): WorkspaceAgentTone {
+  const agentSessions = sessions.filter((s) => s.runtimeId !== "shell");
+  const needsAttention = agentSessions.some(
+    (s) =>
+      s.status === "waiting_for_input" ||
+      s.status === "failed" ||
+      (s.status === "unknown" &&
+        s.statusReason !== null &&
+        s.statusReason !== undefined &&
+        ATTENTION_UNKNOWN_REASONS.has(s.statusReason)),
+  );
+  if (needsAttention) return "attention";
+  if (agentSessions.some((s) => s.status === "starting" || s.status === "running")) return "running";
+  return "idle";
+}
+
 export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSelect: () => void }) {
   const { workspace, pullRequest } = props;
   const titleDisplay = workspaceDisplayTitle(workspace);
   const prTone = pullRequest ? prToneFor(pullRequest) : "missing";
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
+  const agentTone = deriveWorkspaceAgentTone(props.sessions);
+  const agentToneSuffix =
+    agentTone === "attention" ? ", agent needs attention" : agentTone === "running" ? ", agent running" : "";
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(titleDisplay);
@@ -51,7 +82,7 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
         onClick={() => {
           if (!editing) props.onSelect();
         }}
-        aria-label={`Open workspace ${workspace.name}`}
+        aria-label={`Open workspace ${workspace.name}${agentToneSuffix}`}
       >
         <span
           className={`workspace-card-agent tone-${prTone} ${workspace.kind === "root" ? "root" : ""}`}
@@ -94,6 +125,7 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
                 }}
                 title={titleDisplay}
               >
+                <span className={`workspace-status-dot status-${agentTone}`} aria-hidden="true" />
                 {workspace.issueKey ? <span className="workspace-card-issue">{workspace.issueKey}</span> : null}
                 {titleDisplay}
               </strong>
