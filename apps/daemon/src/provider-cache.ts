@@ -246,3 +246,13 @@ function extractWorkspaceId(key: string): string | null {
 export function createProviderCache(input: CreateProviderCacheInput): PersistentProviderCache {
   return new PersistentProviderCache(input);
 }
+
+// Resolve the effective usage refresh interval for a runtime. Provider
+// override (UsageProviderConfig.refreshIntervalMs) wins; otherwise the
+// daemon-wide default (config.providerRefresh.intervals.usageMs).
+export function resolveUsageRefreshInterval(
+  provider: { refreshIntervalMs?: number | undefined } | undefined,
+  config: { providerRefresh: { intervals: { usageMs: number } } },
+): number {
+  return provider?.refreshIntervalMs ?? config.providerRefresh.intervals.usageMs;
+}

@@ -2,6 +2,7 @@ import type { CitadelConfig } from "@citadel/config";
 import { collectRuntimeUsage } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import type express from "express";
+import { resolveUsageRefreshInterval } from "./provider-cache.js";
 
 type AsyncRoute = (
   handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>,
@@ -68,6 +69,7 @@ export function registerRuntimeUsageRoutes(input: {
       const provider = config.usageProviders.find((candidate) => candidate.runtimeId === runtimeId);
       const cacheKey = `usage:${runtimeId}:${provider?.id ?? "builtin"}`;
       if (options.force) providerCache.delete(cacheKey);
+      const ttlMs = resolveUsageRefreshInterval(provider, config);
       const usage = await cachedProvider(
         cacheKey,
         () =>
@@ -77,7 +79,7 @@ export function registerRuntimeUsageRoutes(input: {
             args: runtime.args,
             externalProvider: provider,
           }),
-        5 * 60_000,
+        ttlMs,
       );
       res.json({ usage });
     });

@@ -21,7 +21,7 @@ import type {
   Workspace,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
-import type { PersistentProviderCache } from "./provider-cache.js";
+import { type PersistentProviderCache, resolveUsageRefreshInterval } from "./provider-cache.js";
 
 export type ProviderRefreshDeps = {
   config: CitadelConfig;
@@ -109,15 +109,15 @@ export function startProviderRefreshJob(deps: ProviderRefreshDeps): ProviderRefr
   }
 
   function collectItemsForRuntime(runtime: AgentRuntime): RefreshItem[] {
-    const { usageMs } = deps.config.providerRefresh.intervals;
     if (!runtime.capabilities.supportsUsage) return [];
     if (runtime.health !== "healthy") return [];
     // Provider-id key mirrors runtime-usage-routes.ts so the live route and
     // the background job share cache entries.
     const provider = deps.config.usageProviders.find((p) => p.runtimeId === runtime.id);
     const cacheKey = `usage:${runtime.id}:${provider?.id ?? "builtin"}`;
-    if (!isStale(cacheKey, provider?.refreshIntervalMs ?? usageMs)) return [];
-    return [{ kind: "usage", runtimeId: runtime.id, cacheKey, ttlMs: provider?.refreshIntervalMs ?? usageMs }];
+    const ttlMs = resolveUsageRefreshInterval(provider, deps.config);
+    if (!isStale(cacheKey, ttlMs)) return [];
+    return [{ kind: "usage", runtimeId: runtime.id, cacheKey, ttlMs }];
   }
 
   async function executeItem(item: RefreshItem): Promise<void> {

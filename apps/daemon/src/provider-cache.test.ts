@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import type { Workspace } from "@citadel/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { type PersistentProviderCache, type ProviderCacheEntry, createProviderCache } from "./provider-cache.js";
+import {
+  type PersistentProviderCache,
+  type ProviderCacheEntry,
+  createProviderCache,
+  resolveUsageRefreshInterval,
+} from "./provider-cache.js";
 
 const dirs: string[] = [];
 
@@ -292,6 +297,24 @@ describe("PersistentProviderCache.flush()", () => {
     // No leftover tmp files in the dataDir.
     const tmpLeftover = fs.readdirSync(dataDir).filter((f) => f.includes(".tmp"));
     expect(tmpLeftover.length).toBe(0);
+  });
+});
+
+describe("resolveUsageRefreshInterval", () => {
+  const config = {
+    providerRefresh: { intervals: { usageMs: 5 * 60_000 } },
+  } as Parameters<typeof resolveUsageRefreshInterval>[1];
+
+  it("returns the provider override when set", () => {
+    expect(resolveUsageRefreshInterval({ refreshIntervalMs: 30_000 }, config)).toBe(30_000);
+  });
+
+  it("falls back to the daemon-wide default when provider is undefined", () => {
+    expect(resolveUsageRefreshInterval(undefined, config)).toBe(5 * 60_000);
+  });
+
+  it("falls back when provider has no refreshIntervalMs", () => {
+    expect(resolveUsageRefreshInterval({}, config)).toBe(5 * 60_000);
   });
 });
 
