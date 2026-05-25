@@ -20,13 +20,21 @@ const IGNORED_TOP_LEVEL = new Set([
 ]);
 const IGNORED_GIT_INTERNAL = new Set(["objects", "logs", "lfs", "hooks"]);
 const DEBOUNCE_MS = 350;
+// Second-layer debounce: after the bust fires, wait this long for the edit
+// storm to settle before signaling onSettled (which pokes the refresh job).
+// The fs-watcher bust fires every 350ms during active editing — that keeps
+// the cache cold during the storm (correct), and onSettled fires once 2s
+// AFTER the last bust so the cache repopulates promptly when typing stops.
+const DEFAULT_POKE_DEBOUNCE_MS = 2_000;
 
-type ProviderCache = Map<string, { expiresAt: number; value: unknown }>;
+type ProviderCache = Map<string, { expiresAt: number; value: unknown; cachedAt: number }>;
 
 type WorkspaceFsWatcherDeps = {
   listWorkspaces: () => Workspace[];
   providerCache: ProviderCache;
   emit: (type: string, payload: unknown) => void;
+  onSettled?: ((workspaceId: string) => void) | undefined;
+  pokeDebounceMs?: number | undefined;
 };
 
 export function bustCacheByPrefixes(providerCache: ProviderCache, prefixes: string[]): number {
@@ -51,7 +59,9 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
   // Reconnecting/Reconnected overlay storm).
   const watchers = new Map<string, fs.FSWatcher[]>();
   const debounces = new Map<string, ReturnType<typeof setTimeout>>();
+  const pokeDebounces = new Map<string, ReturnType<typeof setTimeout>>();
   const failed = new Set<string>();
+  const pokeDebounceMs = deps.pokeDebounceMs ?? DEFAULT_POKE_DEBOUNCE_MS;
 
   const onChange = (workspaceId: string) => (rel: string) => {
     if (!rel || isIgnored(rel)) return;
@@ -63,6 +73,18 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
         debounces.delete(workspaceId);
         bustWorkspaceCaches(deps.providerCache, workspaceId);
         deps.emit("workspace.fsChanged", { workspaceId });
+        // Schedule a poke 2s after the LAST bust — gives the edit storm time
+        // to settle so we don't poke the refresh job per 350ms-burst tick.
+        if (!deps.onSettled) return;
+        const existingPoke = pokeDebounces.get(workspaceId);
+        if (existingPoke) clearTimeout(existingPoke);
+        pokeDebounces.set(
+          workspaceId,
+          setTimeout(() => {
+            pokeDebounces.delete(workspaceId);
+            deps.onSettled?.(workspaceId);
+          }, pokeDebounceMs),
+        );
       }, DEBOUNCE_MS),
     );
   };
@@ -114,6 +136,9 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
     const d = debounces.get(id);
     if (d) clearTimeout(d);
     debounces.delete(id);
+    const p = pokeDebounces.get(id);
+    if (p) clearTimeout(p);
+    pokeDebounces.delete(id);
     failed.delete(id);
   };
 
@@ -150,6 +175,8 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
     watchers.clear();
     for (const d of debounces.values()) clearTimeout(d);
     debounces.clear();
+    for (const d of pokeDebounces.values()) clearTimeout(d);
+    pokeDebounces.clear();
     failed.clear();
   };
 

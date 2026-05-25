@@ -677,14 +677,6 @@ export async function createDaemonApp(input: {
     console.error(`[scratchpad-history] backfill skipped: ${error instanceof Error ? error.message : error}`);
   }
 
-  fsWatchers = createWorkspaceFsWatchers({
-    listWorkspaces: () => store.listWorkspaces(),
-    providerCache,
-    emit,
-  });
-  fsWatchers.reconcile();
-  server.on("close", () => fsWatchers?.close());
-
   const refreshJob =
     input.enableRefreshJob !== false
       ? startProviderRefreshJob({
@@ -702,6 +694,15 @@ export async function createDaemonApp(input: {
         })
       : null;
   if (refreshJob) server.on("close", () => refreshJob.stop());
+
+  fsWatchers = createWorkspaceFsWatchers({
+    listWorkspaces: () => store.listWorkspaces(),
+    providerCache,
+    emit,
+    onSettled: refreshJob ? (workspaceId) => void refreshJob.pokeWorkspace(workspaceId) : undefined,
+  });
+  fsWatchers.reconcile();
+  server.on("close", () => fsWatchers?.close());
 
   server.on("close", () => {
     // Final synchronous flush so the persisted cache reflects in-memory state

@@ -52,8 +52,8 @@ describe("workspace fs watcher", () => {
   it("emits workspace.fsChanged when a tracked file changes", async () => {
     const ws = tmpWorkspace();
     fs.writeFileSync(path.join(ws.path, "README.md"), "initial\n");
-    const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
-    providerCache.set(`git:${ws.id}:x`, { expiresAt: Date.now() + 60_000, value: "cached" });
+    const providerCache = new Map<string, { expiresAt: number; value: unknown; cachedAt: number }>();
+    providerCache.set(`git:${ws.id}:x`, { expiresAt: Date.now() + 60_000, value: "cached", cachedAt: Date.now() });
     const events: Array<{ type: string; payload: unknown }> = [];
     const watcher = createWorkspaceFsWatchers({
       listWorkspaces: () => [ws],
@@ -107,6 +107,58 @@ describe("workspace fs watcher", () => {
       fs.writeFileSync(path.join(ws.path, ".git", "index"), "fake-index\n");
       await awaitEvent(() => events.length > 0);
       expect(events[0]?.type).toBe("workspace.fsChanged");
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it("schedules a pokeWorkspace call 2s after the LAST bust, not after the first", async () => {
+    const ws = tmpWorkspace();
+    const pokes: Array<{ at: number; workspaceId: string }> = [];
+    const watcher = createWorkspaceFsWatchers({
+      listWorkspaces: () => [ws],
+      providerCache: new Map(),
+      emit: () => {},
+      onSettled: (workspaceId) => pokes.push({ at: Date.now(), workspaceId }),
+      pokeDebounceMs: 200,
+    });
+    watcher.reconcile();
+    try {
+      const start = Date.now();
+      // First write at t=0.
+      fs.writeFileSync(path.join(ws.path, "edit-1.txt"), "x\n");
+      await new Promise((r) => setTimeout(r, 150));
+      // Second write at ~t=150ms — well within the 200ms poke debounce. The
+      // poke timer should reset and only fire ~200ms after THIS write.
+      fs.writeFileSync(path.join(ws.path, "edit-2.txt"), "y\n");
+      // Wait long enough for the bust debounce (350ms) + poke debounce (200ms)
+      // measured from t=150ms = ~550ms total. Wait 900ms to be safe.
+      await new Promise((r) => setTimeout(r, 900));
+      expect(pokes.length).toBe(1);
+      expect(pokes[0]?.workspaceId).toBe(ws.id);
+      // The poke should fire after t=350ms+200ms (anchored to the second write
+      // at t=150ms) = ~700ms from start. Allow generous slack for CI jitter.
+      const elapsed = (pokes[0]?.at ?? 0) - start;
+      expect(elapsed).toBeGreaterThan(400);
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it("does not poke when no fs changes occur", async () => {
+    const ws = tmpWorkspace();
+    const pokes: string[] = [];
+    const watcher = createWorkspaceFsWatchers({
+      listWorkspaces: () => [ws],
+      providerCache: new Map(),
+      emit: () => {},
+      onSettled: (workspaceId) => pokes.push(workspaceId),
+      pokeDebounceMs: 200,
+    });
+    watcher.reconcile();
+    try {
+      await new Promise((r) => setTimeout(r, 700));
+      expect(pokes).toEqual([]);
     } finally {
       watcher.close();
     }
