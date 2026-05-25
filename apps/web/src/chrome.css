@@ -141,6 +141,49 @@
   color: var(--c-fg-3);
 }
 
+.cit-usage-indicator {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 4px;
+}
+
+/* Citadel v1 style: low-contrast, secondary text weight, no chrome. The pill
+ * exists to surface a number without competing with the surrounding icons.
+ * Hover lifts contrast just enough to confirm it's clickable. */
+.cit-usage-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--c-fg-3);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-decoration: none;
+  border: 1px solid transparent;
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+}
+
+.cit-usage-pill:hover {
+  color: var(--c-fg-1);
+  border-color: var(--c-line-1);
+  text-decoration: none;
+}
+
+.cit-usage-pill-label {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--c-fg-4, var(--c-fg-3));
+}
+
+.cit-usage-pill-value {
+  font-variant-numeric: tabular-nums;
+}
+
 /* Bottom status bar */
 
 .cit-bottombar {

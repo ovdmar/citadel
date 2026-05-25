@@ -22,7 +22,6 @@ import {
   collectGitHubVersionControlSummary,
   collectJiraIssueSummary,
   collectProviderHealth,
-  collectRuntimeUsage,
   setGithubCommand,
   setJiraCommand,
   transitionJiraIssue,
@@ -37,6 +36,7 @@ import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
+import { runtimeUsageHandlerFactory } from "./runtime-usage-route.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
@@ -460,20 +460,16 @@ export function createDaemonApp(input: {
     res.json({ runtimes: listRuntimeHealth(config.runtimes) });
   });
 
-  app.get(
-    "/api/runtimes/:runtimeId/usage",
-    asyncRoute(async (req, res) => {
-      const runtimeId = req.params.runtimeId;
-      if (typeof runtimeId !== "string") return res.status(400).json({ error: "runtime_id_required" });
-      const runtime = config.runtimes.find((candidate) => candidate.id === runtimeId);
-      if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
-      const provider = config.usageProviders.find((candidate) => candidate.runtimeId === runtimeId);
-      const usage = await cachedProvider(`usage:${runtimeId}:${provider?.id ?? "unsupported"}`, () =>
-        collectRuntimeUsage(runtimeId, provider),
-      );
-      res.json({ usage });
-    }),
-  );
+  const runtimeUsageHandler = runtimeUsageHandlerFactory({
+    runtimes: config.runtimes,
+    usageProviders: config.usageProviders,
+    providerCache,
+    cachedProvider,
+    asyncRoute,
+  });
+
+  app.get("/api/runtimes/:runtimeId/usage", runtimeUsageHandler({ force: false }));
+  app.post("/api/runtimes/:runtimeId/usage/refresh", runtimeUsageHandler({ force: true }));
 
   app.post(
     "/api/agent-sessions",

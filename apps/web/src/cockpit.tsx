@@ -11,6 +11,7 @@ import { CommandPalette } from "./command-palette.js";
 import { Inspector } from "./inspector.js";
 import { Navigator } from "./navigator.js";
 import { Stage } from "./stage.js";
+import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
 import { useResolvedTheme } from "./use-resolved-theme.js";
 import { prToneFor } from "./workspace-card.js";
@@ -159,7 +160,12 @@ export function Cockpit() {
 
   return (
     <div className="cockpit-shell">
-      <TopBar onSearch={() => setCommandOpen(true)} activeWorkspace={activeWorkspace} repo={selectedRepo} />
+      <TopBar
+        onSearch={() => setCommandOpen(true)}
+        activeWorkspace={activeWorkspace}
+        repo={selectedRepo}
+        runtimes={data?.runtimes ?? []}
+      />
       <div
         className={`cockpit-body ${layout.state.leftCollapsed ? "left-collapsed" : ""} ${
           layout.state.rightCollapsed ? "right-collapsed" : ""
@@ -379,6 +385,7 @@ function TopBar(props: {
   onSearch: () => void;
   activeWorkspace: Workspace | null;
   repo: import("@citadel/contracts").Repo | null;
+  runtimes: import("@citadel/contracts").AgentRuntime[];
 }) {
   return (
     <header className="cit-topbar">
@@ -403,6 +410,7 @@ function TopBar(props: {
         </button>
       </div>
       <div className="cit-top-right">
+        <UsageIndicator runtimes={props.runtimes} />
         <ThemeToggle />
         <Link className="cit-icon-btn" to="/settings" aria-label="Settings" title="Open settings">
           <SettingsIcon size={15} />

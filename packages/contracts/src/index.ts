@@ -139,16 +139,22 @@ export const CiProviderSummarySchema = z.object({
   checkedAt: z.string(),
 });
 
+export const RuntimeUsageCategorySchema = z.object({
+  label: z.string().min(1),
+  // Normalized "% used" (0-100). Providers that report "% left" must convert
+  // before populating this field — see codex fetcher.
+  percentUsed: z.number().min(0).max(100),
+  reset: z.string().nullable().default(null),
+  section: z.string().nullable().default(null),
+});
+
 export const RuntimeUsageSummarySchema = z.object({
   runtimeId: IdSchema,
   providerId: z.string(),
   source: z.string(),
   status: ProviderStatusSchema,
   reason: z.string().nullable(),
-  model: z.string().nullable(),
-  remaining: z.string().nullable(),
-  spend: z.string().nullable(),
-  resetAt: z.string().nullable(),
+  categories: z.array(RuntimeUsageCategorySchema).default([]),
   checkedAt: z.string(),
 });
 
@@ -677,6 +683,7 @@ export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 export type CheckSummary = z.infer<typeof CheckSummarySchema>;
 export type CiRunSummary = z.infer<typeof CiRunSummarySchema>;
 export type CiProviderSummary = z.infer<typeof CiProviderSummarySchema>;
+export type RuntimeUsageCategory = z.infer<typeof RuntimeUsageCategorySchema>;
 export type RuntimeUsageSummary = z.infer<typeof RuntimeUsageSummarySchema>;
 export type PullRequestSummary = z.infer<typeof PullRequestSummarySchema>;
 export type PrReviewer = z.infer<typeof PrReviewerSchema>;

@@ -12,9 +12,11 @@ import type {
   IssueTransitionActionResult,
   PrReviewerState,
   ProviderHealth,
+  RuntimeUsageCategory,
   RuntimeUsageSummary,
   VersionControlSummary,
 } from "@citadel/contracts";
+import { runtimeUsageFetchers } from "@citadel/runtimes";
 
 const execFileAsync = promisify(execFile);
 
@@ -191,22 +193,52 @@ export async function collectGitHubCiRunLog(rootPath: string, runId: string) {
   }
 }
 
-export async function collectRuntimeUsage(
-  runtimeId: string,
-  provider: UsageProviderConfig | undefined,
-): Promise<RuntimeUsageSummary> {
+export type CollectRuntimeUsageInput = {
+  runtimeId: string;
+  command: string;
+  args: string[];
+  // Optional external usage-provider command — used as the fallback for custom
+  // runtimes that don't have a built-in fetcher. Known runtimes (claude-code,
+  // codex) always prefer their runtime-owned fetcher and ignore this.
+  externalProvider?: UsageProviderConfig | undefined;
+};
+
+export async function collectRuntimeUsage(input: CollectRuntimeUsageInput): Promise<RuntimeUsageSummary> {
   const checkedAt = new Date().toISOString();
+  const fetcher = runtimeUsageFetchers[input.runtimeId];
+  if (fetcher) {
+    try {
+      const categories = await fetcher({ command: input.command, args: input.args });
+      return {
+        runtimeId: input.runtimeId,
+        providerId: `usage-${input.runtimeId}`,
+        source: `${input.runtimeId}-runtime`,
+        status: categories.length > 0 ? "healthy" : "degraded",
+        reason: categories.length > 0 ? null : "Usage panel did not render any categories",
+        categories,
+        checkedAt,
+      };
+    } catch (error) {
+      return {
+        runtimeId: input.runtimeId,
+        providerId: `usage-${input.runtimeId}`,
+        source: `${input.runtimeId}-runtime`,
+        status: "degraded",
+        reason: error instanceof Error ? error.message : "Runtime usage fetch failed",
+        categories: [],
+        checkedAt,
+      };
+    }
+  }
+  const provider = input.externalProvider;
   if (!provider) {
     return {
-      runtimeId,
+      runtimeId: input.runtimeId,
       providerId: "usage-unsupported",
       source: "unsupported",
       status: "unavailable",
       reason: "No usage provider configured for this runtime",
-      model: null,
-      remaining: null,
-      spend: null,
-      resetAt: null,
+      categories: [],
       checkedAt,
     };
   }
@@ -216,23 +248,23 @@ export async function collectRuntimeUsage(
       timeout: 8000,
       maxBuffer: 128 * 1024,
     });
-    return normalizeRuntimeUsage(runtimeId, provider.id, stdout, checkedAt);
+    return normalizeRuntimeUsage(input.runtimeId, provider.id, stdout, checkedAt);
   } catch (error) {
     return {
-      runtimeId,
+      runtimeId: input.runtimeId,
       providerId: provider.id,
       source: provider.command,
       status: "degraded",
       reason: error instanceof Error ? error.message : "Usage provider failed",
-      model: null,
-      remaining: null,
-      spend: null,
-      resetAt: null,
+      categories: [],
       checkedAt,
     };
   }
 }
 
+// Parse the JSON contract emitted by an external (custom-runtime) usage
+// command. The external script must return:
+//   { categories: [{ label, percentUsed, reset?, section? }, ...], status?, reason?, source? }
 export function normalizeRuntimeUsage(
   runtimeId: string,
   providerId: string,
@@ -240,16 +272,31 @@ export function normalizeRuntimeUsage(
   checkedAt = new Date().toISOString(),
 ): RuntimeUsageSummary {
   const parsed = JSON.parse(output) as Record<string, unknown>;
+  const rawCategories = Array.isArray(parsed.categories) ? (parsed.categories as unknown[]) : [];
+  const categories: RuntimeUsageCategory[] = [];
+  for (const entry of rawCategories) {
+    if (!entry || typeof entry !== "object") continue;
+    const obj = entry as Record<string, unknown>;
+    const label = typeof obj.label === "string" ? obj.label : null;
+    const pct = typeof obj.percentUsed === "number" ? obj.percentUsed : null;
+    if (!label || pct === null || pct < 0 || pct > 100) continue;
+    categories.push({
+      label,
+      percentUsed: pct,
+      reset: typeof obj.reset === "string" ? obj.reset : null,
+      section: typeof obj.section === "string" ? obj.section : null,
+    });
+  }
+  const declaredStatus = parsed.status;
+  const status: RuntimeUsageSummary["status"] =
+    declaredStatus === "degraded" || declaredStatus === "unavailable" ? declaredStatus : "healthy";
   return {
     runtimeId,
     providerId,
     source: typeof parsed.source === "string" ? parsed.source : providerId,
-    status: parsed.status === "degraded" || parsed.status === "unavailable" ? parsed.status : "healthy",
+    status,
     reason: typeof parsed.reason === "string" ? parsed.reason : null,
-    model: typeof parsed.model === "string" ? parsed.model : null,
-    remaining: typeof parsed.remaining === "string" ? parsed.remaining : null,
-    spend: typeof parsed.spend === "string" ? parsed.spend : null,
-    resetAt: typeof parsed.resetAt === "string" ? parsed.resetAt : null,
+    categories,
     checkedAt,
   };
 }

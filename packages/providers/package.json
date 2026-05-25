@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "@citadel/config": "workspace:*",
-    "@citadel/contracts": "workspace:*"
+    "@citadel/contracts": "workspace:*",
+    "@citadel/runtimes": "workspace:*"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json"
