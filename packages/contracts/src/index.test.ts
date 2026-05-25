@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  AgentDefinitionSchema,
   AgentRuntimeSchema,
   AgentSessionSchema,
+  AgentsConfigSchema,
   AppEventSchema,
   BackgroundAgentSessionSchema,
   CiProviderSummarySchema,
+  CreateAgentDefinitionInputSchema,
   CreateAgentSessionInputSchema,
   CreateRepoInputSchema,
   CreateScheduledAgentInputSchema,
@@ -12,15 +15,22 @@ import {
   HookOutputSchema,
   IssueTrackerSummarySchema,
   IssueTransitionActionResultSchema,
+  LaunchCustomAgentInputSchema,
+  LaunchHandoffAgentInputSchema,
+  LaunchPredefinedAgentInputSchema,
   OperationSchema,
+  PlanRegistrationSchema,
   PrReviewerSchema,
   ProviderHealthSchema,
   PullRequestSummarySchema,
   RecentCommitSchema,
+  RegisterPlanInputSchema,
   RepoSchema,
+  RuntimeModelsResponseSchema,
   RuntimeUsageSummarySchema,
   ScheduledAgentRunSchema,
   ScheduledAgentSchema,
+  UpdateAgentDefinitionInputSchema,
   UpdateScheduledAgentInputSchema,
   VersionControlSummarySchema,
   WorkspaceDiffSchema,
@@ -407,5 +417,108 @@ describe("contract schemas", () => {
       workspaceId: "ws_test",
       commits: [],
     });
+  });
+});
+
+describe("agent definition contracts", () => {
+  it("round-trips predefined and custom agent definitions", () => {
+    const predefined = AgentDefinitionSchema.parse({
+      id: "implementation",
+      kind: "predefined",
+      name: "Implementation",
+      systemPrompt: "You are an Implementation agent.",
+      runtime: "claude-code",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    expect(predefined.kind).toBe("predefined");
+    expect(predefined.model).toBeUndefined();
+
+    const custom = AgentDefinitionSchema.parse({
+      id: "my-reviewer",
+      kind: "custom",
+      name: "My Reviewer",
+      systemPrompt: "Review carefully.",
+      runtime: "claude-code",
+      model: "claude-opus-4-7",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    expect(custom.model).toBe("claude-opus-4-7");
+  });
+
+  it("validates create and update inputs", () => {
+    expect(() =>
+      CreateAgentDefinitionInputSchema.parse({
+        name: "",
+        systemPrompt: "x",
+        runtime: "claude-code",
+      }),
+    ).toThrow();
+
+    const update = UpdateAgentDefinitionInputSchema.parse({ systemPrompt: "new" });
+    expect(update.systemPrompt).toBe("new");
+  });
+
+  it("accepts launch_*_agent input with workspaceId OR repoName", () => {
+    expect(LaunchPredefinedAgentInputSchema.parse({ prompt: "go", workspaceId: "ws-1" }).prompt).toBe(
+      "go",
+    );
+    expect(LaunchPredefinedAgentInputSchema.parse({ prompt: "go", repoName: "citadel" }).repoName).toBe(
+      "citadel",
+    );
+    expect(() => LaunchPredefinedAgentInputSchema.parse({ prompt: "" })).toThrow();
+    expect(LaunchCustomAgentInputSchema.parse({ prompt: "go", agentId: "my-reviewer" }).agentId).toBe(
+      "my-reviewer",
+    );
+    expect(() => LaunchCustomAgentInputSchema.parse({ prompt: "go" })).toThrow();
+  });
+
+  it("enforces the predefinedKind XOR customAgentId constraint on handoff", () => {
+    expect(
+      LaunchHandoffAgentInputSchema.parse({
+        workspaceId: "ws-1",
+        predefinedKind: "implementation",
+      }).predefinedKind,
+    ).toBe("implementation");
+    expect(
+      LaunchHandoffAgentInputSchema.parse({ workspaceId: "ws-1", customAgentId: "my-reviewer" })
+        .customAgentId,
+    ).toBe("my-reviewer");
+    // both supplied → reject
+    expect(() =>
+      LaunchHandoffAgentInputSchema.parse({
+        workspaceId: "ws-1",
+        predefinedKind: "implementation",
+        customAgentId: "my-reviewer",
+      }),
+    ).toThrow();
+    // neither supplied → reject
+    expect(() => LaunchHandoffAgentInputSchema.parse({ workspaceId: "ws-1" })).toThrow();
+  });
+
+  it("validates plan registration + runtime model + agents config schemas", () => {
+    const registration = PlanRegistrationSchema.parse({
+      id: "plan-1",
+      workspaceId: "ws-1",
+      path: "/work/ws-1/.agents/plans/foo.md",
+      summary: null,
+      registeredAt: timestamp,
+      registeredBySessionId: null,
+    });
+    expect(registration.summary).toBeNull();
+
+    const reg = RegisterPlanInputSchema.parse({ workspaceId: "ws-1", path: ".agents/plans/foo.md" });
+    expect(reg.path).toBe(".agents/plans/foo.md");
+
+    const response = RuntimeModelsResponseSchema.parse({
+      models: [{ id: "claude-sonnet-4-6", displayName: "Sonnet 4.6" }],
+      probeError: "tmux timeout",
+    });
+    expect(response.models[0]?.id).toBe("claude-sonnet-4-6");
+    expect(response.probeError).toBe("tmux timeout");
+
+    const config = AgentsConfigSchema.parse({ defaultRuntime: "claude-code" });
+    expect(config.defaultRuntime).toBe("claude-code");
   });
 });
