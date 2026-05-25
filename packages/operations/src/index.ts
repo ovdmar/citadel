@@ -48,6 +48,7 @@ import {
   addWorktree,
   cancelOperationInStore,
   classifyWorktreeError,
+  cleanupWorktree,
   discoverDefaultBranch,
   isUniqueWorkspaceNameViolation,
   listHookDiagnostics,
@@ -448,58 +449,40 @@ export class OperationService {
     }
 
     const worktreeMissing = !input.archiveOnly && !fs.existsSync(workspace.path);
-    if (!input.archiveOnly) {
-      if (worktreeMissing) {
+    if (!input.archiveOnly && !worktreeMissing) {
+      try {
         this.logOp(
           operation.id,
           "info",
-          `Worktree path ${workspace.path} is already gone; skipping ${repo.teardownHookIds.length} teardown hook(s)`,
+          `Running ${repo.teardownHookIds.length} teardown hook(s): ${repo.teardownHookIds.join(", ") || "(none)"}`,
         );
-      } else {
-        try {
-          this.logOp(
+        await this.runWorkspaceHooks("workspace.teardown", repo.teardownHookIds, repo, workspace, operation.id);
+      } catch (error) {
+        if (!input.force) {
+          this.store.upsertOperation({
+            ...operation,
+            status: "failed",
+            progress: 100,
+            error: error instanceof Error ? error.message : "workspace_teardown_failed",
+            updatedAt: nowIso(),
+          });
+          this.activity(
+            "workspace.remove.blocked",
+            "system",
+            `Removal blocked because teardown failed for ${workspace.name}`,
+            workspace.repoId,
+            workspace.id,
             operation.id,
-            "info",
-            `Running ${repo.teardownHookIds.length} teardown hook(s): ${repo.teardownHookIds.join(", ") || "(none)"}`,
           );
-          await this.runWorkspaceHooks("workspace.teardown", repo.teardownHookIds, repo, workspace, operation.id);
-        } catch (error) {
-          if (!input.force) {
-            this.store.upsertOperation({
-              ...operation,
-              status: "failed",
-              progress: 100,
-              error: error instanceof Error ? error.message : "workspace_teardown_failed",
-              updatedAt: nowIso(),
-            });
-            this.activity(
-              "workspace.remove.blocked",
-              "system",
-              `Removal blocked because teardown failed for ${workspace.name}`,
-              workspace.repoId,
-              workspace.id,
-              operation.id,
-            );
-            return { operationId: operation.id, removed: false, archived: false, dirty };
-          }
+          return { operationId: operation.id, removed: false, archived: false, dirty };
         }
       }
     }
 
-    if (!input.archiveOnly && fs.existsSync(workspace.path)) {
-      tryRunGit(repo.rootPath, ["worktree", "remove", "--force", workspace.path]);
-      this.logOp(operation.id, "info", `Removed worktree at ${workspace.path}`);
-    } else if (worktreeMissing) {
-      try {
-        tryRunGit(repo.rootPath, ["worktree", "prune"]);
-        this.logOp(operation.id, "info", `Pruned stale worktree refs for ${workspace.path}`);
-      } catch (error) {
-        this.logOp(
-          operation.id,
-          "warn",
-          `git worktree prune failed: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      }
+    if (!input.archiveOnly) {
+      const cleanup = cleanupWorktree(repo.rootPath, workspace.path);
+      this.logOp(operation.id, "info", `${cleanup.action} worktree at ${workspace.path}`);
+      if (cleanup.warning) this.logOp(operation.id, "warn", `git worktree prune failed: ${cleanup.warning}`);
     }
     if (input.archiveOnly) {
       this.store.archiveWorkspace(workspace.id, "archived", dirty);
