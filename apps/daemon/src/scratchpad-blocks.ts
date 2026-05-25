@@ -35,7 +35,7 @@ export function parseBlocks(content: string): ParseResult {
       const leading = pendingLeading.join("\n");
       const promoted = promoteLeading(leading);
       if (promoted !== null) {
-        blocks.push({ id: freshUuid(seenIds), text: promoted });
+        blocks.push({ id: freshBlockId(seenIds), text: promoted });
         needsRewrite = true;
       }
       pendingLeading = [];
@@ -70,7 +70,7 @@ export function parseBlocks(content: string): ParseResult {
     const bodyText = bodyLines.join("\n");
     let id = openId;
     if (seenIds.has(id)) {
-      id = freshUuid(seenIds);
+      id = freshBlockId(seenIds);
       needsRewrite = true;
     }
     seenIds.add(id);
@@ -96,7 +96,7 @@ export function parseBlocks(content: string): ParseResult {
     const leading = pendingLeading.join("\n");
     const promoted = promoteLeading(leading);
     if (promoted !== null) {
-      blocks.push({ id: freshUuid(seenIds), text: promoted });
+      blocks.push({ id: freshBlockId(seenIds), text: promoted });
       needsRewrite = true;
     }
   }
@@ -133,7 +133,7 @@ export function migrateIfNeeded(raw: string): MigrateResult {
     .filter((chunk) => chunk.length > 0);
   if (chunks.length === 0) return { migrated: false, content: raw };
   const seen = new Set<string>();
-  const blocks: Block[] = chunks.map((text) => ({ id: freshUuid(seen), text }));
+  const blocks: Block[] = chunks.map((text) => ({ id: freshBlockId(seen), text }));
   return { migrated: true, content: serializeBlocks(blocks) };
 }
 
@@ -214,7 +214,7 @@ function promoteLeading(raw: string): string | null {
   return trimmed;
 }
 
-function freshUuid(seen: Set<string>): string {
+export function freshBlockId(seen: Set<string>): string {
   for (let i = 0; i < 8; i += 1) {
     const id = crypto.randomUUID();
     if (!seen.has(id)) {

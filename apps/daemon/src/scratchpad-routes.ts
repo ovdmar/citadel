@@ -6,6 +6,7 @@ import {
   addBlock,
   deleteBlock,
   listBlocks,
+  parsePosition,
   readScratchpad,
   updateBlock,
   writeScratchpad,
@@ -106,15 +107,6 @@ export function registerScratchpadRoutes(input: { app: express.Express; config: 
     emit("scratchpad.history.updated", { updatedAt: result.snapshot.updatedAt });
     res.json({ snapshot: result.snapshot });
   });
-}
-
-function parsePosition(raw: unknown): "end" | { afterId: string } | "invalid" {
-  if (raw === undefined || raw === "end") return "end";
-  if (typeof raw === "object" && raw !== null && "afterId" in raw) {
-    const afterId = (raw as { afterId: unknown }).afterId;
-    if (typeof afterId === "string" && afterId.length > 0) return { afterId };
-  }
-  return "invalid";
 }
 
 function errorStatus(code: string): number {

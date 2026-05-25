@@ -107,7 +107,7 @@
 
 The cockpit's scratchpad view renders the per-workspace `scratchpad.md` (see B.7 for the storage format) as a stack of discrete, focusable blocks.
 
-[ ] 1. Blocks render as sanitized markdown when not focused (headings, lists, bold/italic, inline + fenced code, links). Raw HTML is stripped; `<img>` tags are stripped in v1 since block content can originate from external MCP agents.
+[ ] 1. Blocks render as sanitized markdown when not focused (headings, lists, bold/italic, inline + fenced code, links). Raw HTML is sanitized (scripts and inline event handlers removed); `<img>` tags are stripped in v1 since block content can originate from external MCP agents.
 [ ] 2. Clicking a block enters inline edit mode with a `<textarea>` containing the raw markdown.
 [ ] 3. Saving triggers: blur, Cmd/Ctrl-Enter (also exits edit mode), and ~1s debounce after the last keystroke. Esc cancels unsaved changes without a network call.
 [ ] 4. Editing a block to empty/whitespace deletes the block (empty blocks are never persisted).

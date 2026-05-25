@@ -31,6 +31,7 @@ import {
   appendScratchpad,
   deleteBlock,
   listBlocks,
+  parsePosition,
   readScratchpad,
   updateBlock,
   writeScratchpad,
@@ -240,18 +241,8 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
   }
   if (call.name === "add_block") {
     if (typeof call.arguments?.text !== "string") return { error: "text_required" };
-    const rawPosition = call.arguments?.position;
-    let position: "end" | { afterId: string } = "end";
-    if (rawPosition !== undefined && rawPosition !== "end") {
-      if (
-        typeof rawPosition !== "object" ||
-        rawPosition === null ||
-        typeof (rawPosition as { afterId?: unknown }).afterId !== "string"
-      ) {
-        return { error: "position_invalid" };
-      }
-      position = { afterId: (rawPosition as { afterId: string }).afterId };
-    }
+    const position = parsePosition(call.arguments?.position);
+    if (position === "invalid") return { error: "position_invalid" };
     const result = addBlock(config.dataDir, call.arguments.text, position, "mcp:add_block");
     if ("error" in result) {
       if (result.error === "scratchpad_too_large") return { error: result.error, limit: 1_000_000 };

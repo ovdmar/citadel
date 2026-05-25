@@ -253,7 +253,8 @@ describe("writeScratchpad byte-faithfulness", () => {
 
   it("non-canonical fenced content survives writeScratchpad verbatim", () => {
     const dir = tmpDir();
-    const noisy = `<!-- block:11111111-aaaa-4bbb-8ccc-aaaaaaaaaaaa -->\nbody\n<!-- /block:11111111-aaaa-4bbb-8ccc-aaaaaaaaaaaa -->\nTRAILING JUNK\n`;
+    const noisy =
+      "<!-- block:11111111-aaaa-4bbb-8ccc-aaaaaaaaaaaa -->\nbody\n<!-- /block:11111111-aaaa-4bbb-8ccc-aaaaaaaaaaaa -->\nTRAILING JUNK\n";
     writeScratchpad(dir, noisy, "ui");
     const onDisk = fs.readFileSync(scratchpadPath(dir), "utf8");
     expect(onDisk).toBe(noisy);

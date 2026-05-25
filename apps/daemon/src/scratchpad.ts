@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type {
@@ -7,7 +6,13 @@ import type {
   ScratchpadBlockSummary,
   ScratchpadSnapshot,
 } from "@citadel/contracts";
-import { listBlockSummaries, migrateIfNeeded, parseBlocks, serializeBlocks } from "./scratchpad-blocks.js";
+import {
+  freshBlockId,
+  listBlockSummaries,
+  migrateIfNeeded,
+  parseBlocks,
+  serializeBlocks,
+} from "./scratchpad-blocks.js";
 import { type HistoryOptions, type HistorySource, readHistory, recordHistoryWrite } from "./scratchpad-history.js";
 
 export const SCRATCHPAD_FILENAME = "scratchpad.md";
@@ -88,9 +93,9 @@ export function listBlocks(dataDir: string): { blocks: ScratchpadBlockSummary[] 
   return { blocks: listBlockSummaries(blocks, history, fallbackMtime) };
 }
 
-export type BlockMutationResult = { block: ScratchpadBlock; snapshot: ScratchpadSnapshot } | { error: string };
+type BlockMutationResult = { block: ScratchpadBlock; snapshot: ScratchpadSnapshot } | { error: string };
 
-export type BlockDeleteResult = { snapshot: ScratchpadSnapshot } | { error: string };
+type BlockDeleteResult = { snapshot: ScratchpadSnapshot } | { error: string };
 
 export function addBlock(
   dataDir: string,
@@ -102,7 +107,7 @@ export function addBlock(
   if (text.trim().length === 0) return { error: "text_required" };
   const snapshot = readScratchpad(dataDir);
   const { blocks } = parseBlocks(snapshot.content);
-  const newBlock: ScratchpadBlock = { id: freshId(blocks), text };
+  const newBlock: ScratchpadBlock = { id: freshBlockId(new Set(blocks.map((b) => b.id))), text };
   if (position === "end") {
     blocks.push(newBlock);
   } else {
@@ -110,7 +115,9 @@ export function addBlock(
     if (idx === -1) return { error: "block_not_found" };
     blocks.splice(idx + 1, 0, newBlock);
   }
-  return writeBlocks(dataDir, blocks, source, historyOptions, newBlock);
+  const result = persistBlocks(dataDir, blocks, source, historyOptions);
+  if ("error" in result) return result;
+  return { block: newBlock, snapshot: result.snapshot };
 }
 
 export function updateBlock(
@@ -126,13 +133,13 @@ export function updateBlock(
   if (idx === -1) return { error: "block_not_found" };
   if (text.trim().length === 0) {
     blocks.splice(idx, 1);
-    const result = writeBlocks(dataDir, blocks, source, historyOptions);
-    if ("error" in result) return result;
-    return { snapshot: result.snapshot };
+    return persistBlocks(dataDir, blocks, source, historyOptions);
   }
   const updated: ScratchpadBlock = { id, text };
   blocks[idx] = updated;
-  return writeBlocks(dataDir, blocks, source, historyOptions, updated);
+  const result = persistBlocks(dataDir, blocks, source, historyOptions);
+  if ("error" in result) return result;
+  return { block: updated, snapshot: result.snapshot };
 }
 
 export function deleteBlock(
@@ -146,35 +153,35 @@ export function deleteBlock(
   const idx = blocks.findIndex((b) => b.id === id);
   if (idx === -1) return { error: "block_not_found" };
   blocks.splice(idx, 1);
-  const result = writeBlocks(dataDir, blocks, source, historyOptions);
-  if ("error" in result) return result;
-  return { snapshot: result.snapshot };
+  return persistBlocks(dataDir, blocks, source, historyOptions);
 }
 
-function writeBlocks(
+// Serialize the block list and write it through writeScratchpad, mapping the
+// size-cap error to a structured result. Callers that need to expose a block
+// in the response wrap this themselves to keep the return shape narrow.
+function persistBlocks(
   dataDir: string,
   blocks: ScratchpadBlock[],
   source: HistorySource,
   historyOptions: HistoryOptions | undefined,
-  trackBlock?: ScratchpadBlock,
-): BlockMutationResult {
+): BlockDeleteResult {
   const content = serializeBlocks(blocks);
   try {
     const snapshot = writeScratchpad(dataDir, content, source, historyOptions);
-    return { block: trackBlock ?? { id: "", text: "" }, snapshot };
+    return { snapshot };
   } catch (error) {
     if (error instanceof ScratchpadTooLargeError) return { error: "scratchpad_too_large" };
     throw error;
   }
 }
 
-function freshId(existing: ScratchpadBlock[]): string {
-  const seen = new Set(existing.map((b) => b.id));
-  for (let i = 0; i < 8; i += 1) {
-    const id = crypto.randomUUID();
-    if (!seen.has(id)) return id;
+export function parsePosition(raw: unknown): "end" | { afterId: string } | "invalid" {
+  if (raw === undefined || raw === "end") return "end";
+  if (typeof raw === "object" && raw !== null && "afterId" in raw) {
+    const afterId = (raw as { afterId: unknown }).afterId;
+    if (typeof afterId === "string" && afterId.length > 0) return { afterId };
   }
-  throw new Error("Failed to generate a unique block id");
+  return "invalid";
 }
 
 function ensureDataDir(dataDir: string) {
