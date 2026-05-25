@@ -166,8 +166,9 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
   if (call.name === "write_scratchpad") {
     if (typeof call.arguments?.content !== "string") return { error: "content_required" };
     try {
-      const snapshot = writeScratchpad(config.dataDir, call.arguments.content);
+      const snapshot = writeScratchpad(config.dataDir, call.arguments.content, "mcp:write_scratchpad");
       emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
+      emit("scratchpad.history.updated", { updatedAt: snapshot.updatedAt });
       return snapshot;
     } catch (error) {
       if (error instanceof ScratchpadTooLargeError) return { error: error.message, limit: error.limit };
@@ -179,8 +180,9 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
       return { error: "content_required" };
     }
     try {
-      const snapshot = appendScratchpad(config.dataDir, call.arguments.content);
+      const snapshot = appendScratchpad(config.dataDir, call.arguments.content, "mcp:append_scratchpad");
       emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
+      emit("scratchpad.history.updated", { updatedAt: snapshot.updatedAt });
       return snapshot;
     } catch (error) {
       if (error instanceof ScratchpadTooLargeError) return { error: error.message, limit: error.limit };

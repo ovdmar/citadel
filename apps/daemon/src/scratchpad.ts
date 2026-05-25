@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { type HistoryOptions, recordHistoryWrite } from "./scratchpad-history.js";
 
 export const SCRATCHPAD_FILENAME = "scratchpad.md";
 export const SCRATCHPAD_MAX_BYTES = 1_000_000;
@@ -32,16 +33,27 @@ export function readScratchpad(dataDir: string): ScratchpadSnapshot {
   return { content, updatedAt: stat.mtime.toISOString() };
 }
 
-export function writeScratchpad(dataDir: string, content: string): ScratchpadSnapshot {
+export function writeScratchpad(
+  dataDir: string,
+  content: string,
+  source: string,
+  historyOptions?: HistoryOptions,
+): ScratchpadSnapshot {
   assertSize(content);
   ensureDataDir(dataDir);
   const filePath = scratchpadPath(dataDir);
   fs.writeFileSync(filePath, content, "utf8");
   const stat = fs.statSync(filePath);
+  recordHistoryWrite(dataDir, { content, source }, historyOptions);
   return { content, updatedAt: stat.mtime.toISOString() };
 }
 
-export function appendScratchpad(dataDir: string, chunk: string): ScratchpadSnapshot {
+export function appendScratchpad(
+  dataDir: string,
+  chunk: string,
+  source: string,
+  historyOptions?: HistoryOptions,
+): ScratchpadSnapshot {
   ensureDataDir(dataDir);
   const filePath = scratchpadPath(dataDir);
   const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
@@ -49,7 +61,7 @@ export function appendScratchpad(dataDir: string, chunk: string): ScratchpadSnap
   // appended chunk, so concurrent agents append clean stanzas instead of run-on text.
   const separator = existing.length === 0 || existing.endsWith("\n\n") ? "" : existing.endsWith("\n") ? "\n" : "\n\n";
   const tail = chunk.endsWith("\n") ? chunk : `${chunk}\n`;
-  return writeScratchpad(dataDir, `${existing}${separator}${tail}`);
+  return writeScratchpad(dataDir, `${existing}${separator}${tail}`, source, historyOptions);
 }
 
 function ensureDataDir(dataDir: string) {
