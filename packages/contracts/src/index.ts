@@ -171,17 +171,31 @@ export const CiProviderSummarySchema = z.object({
   checkedAt: z.string(),
 });
 
+export const RuntimeUsageCategorySchema = z.object({
+  label: z.string().min(1),
+  // Normalized "% used" (0-100). Providers that report "% left" must convert
+  // before populating this field — see codex fetcher.
+  percentUsed: z.number().min(0).max(100),
+  reset: z.string().nullable().default(null),
+  section: z.string().nullable().default(null),
+});
+
 export const RuntimeUsageSummarySchema = z.object({
   runtimeId: IdSchema,
   providerId: z.string(),
   source: z.string(),
   status: ProviderStatusSchema,
   reason: z.string().nullable(),
-  model: z.string().nullable(),
-  remaining: z.string().nullable(),
-  spend: z.string().nullable(),
-  resetAt: z.string().nullable(),
+  categories: z.array(RuntimeUsageCategorySchema).default([]),
   checkedAt: z.string(),
+});
+
+export const PrReviewerStateSchema = z.enum(["approved", "changes_requested", "commented", "pending", "dismissed"]);
+
+export const PrReviewerSchema = z.object({
+  login: z.string().min(1),
+  name: z.string().nullable().default(null),
+  state: PrReviewerStateSchema,
 });
 
 export const PullRequestSummarySchema = z.object({
@@ -194,6 +208,7 @@ export const PullRequestSummarySchema = z.object({
   checks: z.array(CheckSummarySchema),
   additions: z.number().nullable().default(null),
   deletions: z.number().nullable().default(null),
+  reviewers: z.array(PrReviewerSchema).default([]),
 });
 
 export const VersionControlSummarySchema = z.object({
@@ -563,6 +578,20 @@ export const WorkspaceDiffSchema = z.object({
   deletedLines: z.number().int().default(0),
 });
 
+export const RecentCommitSchema = z.object({
+  sha: z.string().min(7),
+  shortSha: z.string().min(4),
+  message: z.string(),
+  author: z.string(),
+  relativeTime: z.string(),
+  isoTime: z.string(),
+});
+
+export const WorkspaceRecentCommitsSchema = z.object({
+  workspaceId: IdSchema,
+  commits: z.array(RecentCommitSchema),
+});
+
 export type Repo = z.infer<typeof RepoSchema>;
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 export type AgentSession = z.infer<typeof AgentSessionSchema>;
@@ -572,8 +601,11 @@ export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 export type CheckSummary = z.infer<typeof CheckSummarySchema>;
 export type CiRunSummary = z.infer<typeof CiRunSummarySchema>;
 export type CiProviderSummary = z.infer<typeof CiProviderSummarySchema>;
+export type RuntimeUsageCategory = z.infer<typeof RuntimeUsageCategorySchema>;
 export type RuntimeUsageSummary = z.infer<typeof RuntimeUsageSummarySchema>;
 export type PullRequestSummary = z.infer<typeof PullRequestSummarySchema>;
+export type PrReviewer = z.infer<typeof PrReviewerSchema>;
+export type PrReviewerState = z.infer<typeof PrReviewerStateSchema>;
 export type VersionControlSummary = z.infer<typeof VersionControlSummarySchema>;
 export type IssueTransition = z.infer<typeof IssueTransitionSchema>;
 export type IssueTrackerSummary = z.infer<typeof IssueTrackerSummarySchema>;
@@ -608,6 +640,8 @@ export type UpdateNamespaceInput = z.infer<typeof UpdateNamespaceInputSchema>;
 export type AssignWorkspaceToNamespaceInput = z.infer<typeof AssignWorkspaceToNamespaceInputSchema>;
 export type DiffFile = z.infer<typeof DiffFileSchema>;
 export type WorkspaceDiff = z.infer<typeof WorkspaceDiffSchema>;
+export type RecentCommit = z.infer<typeof RecentCommitSchema>;
+export type WorkspaceRecentCommits = z.infer<typeof WorkspaceRecentCommitsSchema>;
 export type ScheduledAgent = z.infer<typeof ScheduledAgentSchema>;
 export type ScheduledAgentWorkspaceStrategy = z.infer<typeof ScheduledAgentWorkspaceStrategySchema>;
 export type ScheduledAgentRunStatus = z.infer<typeof ScheduledAgentRunStatusSchema>;

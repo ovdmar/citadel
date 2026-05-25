@@ -251,6 +251,14 @@ export function WorkspaceCard(
 }
 
 function NamespacePickerDialog(props: { workspace: Workspace; namespaces: Namespace[]; onClose: () => void }) {
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const newNameRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (creating) newNameRef.current?.focus();
+  }, [creating]);
+
   const assign = useMutation({
     mutationFn: (namespaceId: string | null) =>
       api("/api/namespaces/assign", {
@@ -261,7 +269,31 @@ function NamespacePickerDialog(props: { workspace: Workspace; namespaces: Namesp
       queryClient.invalidateQueries({ queryKey: ["state"] });
       props.onClose();
     },
+    onError: (err) => setError(err instanceof Error ? err.message : "assign_failed"),
   });
+
+  // Combined create-and-assign: POST /api/namespaces then assign the new id to
+  // this workspace. createNamespace is idempotent on name (returns the existing
+  // row with `created: false`) — fine here, the assign step still runs.
+  const createAndAssign = useMutation({
+    mutationFn: async (name: string) => {
+      const created = await api<{ namespace: Namespace; created: boolean }>("/api/namespaces", {
+        method: "POST",
+        body: JSON.stringify({ name }),
+      });
+      await api("/api/namespaces/assign", {
+        method: "POST",
+        body: JSON.stringify({ workspaceId: props.workspace.id, namespaceId: created.namespace.id }),
+      });
+      return created.namespace;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      props.onClose();
+    },
+    onError: (err) => setError(err instanceof Error ? err.message : "create_failed"),
+  });
+
   return (
     <div className="drop-workspace-backdrop" onMouseDown={props.onClose}>
       <dialog
@@ -272,6 +304,55 @@ function NamespacePickerDialog(props: { workspace: Workspace; namespaces: Namesp
       >
         <strong>Move "{props.workspace.name}" to…</strong>
         <div className="namespace-picker-list">
+          {creating ? (
+            <form
+              className="namespace-picker-create"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const trimmed = newName.trim();
+                if (!trimmed) return;
+                setError(null);
+                createAndAssign.mutate(trimmed);
+              }}
+            >
+              <input
+                ref={newNameRef}
+                value={newName}
+                onChange={(event) => setNewName(event.target.value)}
+                placeholder="New namespace name"
+                aria-label="New namespace name"
+                disabled={createAndAssign.isPending}
+              />
+              <button
+                type="submit"
+                className="drop-workspace-confirm"
+                disabled={!newName.trim() || createAndAssign.isPending}
+              >
+                {createAndAssign.isPending ? "Creating…" : "Create & move"}
+              </button>
+              <button
+                type="button"
+                className="drop-workspace-cancel"
+                onClick={() => {
+                  setCreating(false);
+                  setNewName("");
+                  setError(null);
+                }}
+                disabled={createAndAssign.isPending}
+              >
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <button
+              type="button"
+              className="check-row namespace-picker-new"
+              onClick={() => setCreating(true)}
+              disabled={assign.isPending}
+            >
+              + Create new namespace and put workspace into it
+            </button>
+          )}
           <button
             type="button"
             className="check-row"
@@ -291,13 +372,11 @@ function NamespacePickerDialog(props: { workspace: Workspace; namespaces: Namesp
               {namespace.name}
             </button>
           ))}
-          {!props.namespaces.length ? (
-            <div className="empty compact">No namespaces yet. Create one from the dashboard.</div>
-          ) : null}
         </div>
+        {error ? <p className="drop-workspace-error">{error}</p> : null}
         <div className="drop-workspace-actions">
           <button type="button" className="drop-workspace-cancel" onClick={props.onClose}>
-            Cancel
+            Close
           </button>
         </div>
       </dialog>

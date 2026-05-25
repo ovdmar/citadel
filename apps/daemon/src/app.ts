@@ -41,7 +41,7 @@ import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
-import { readWorkspaceDiff, readWorkspaceGitStatus } from "./workspace-diff.js";
+import { readWorkspaceDiff, readWorkspaceGitStatus, readWorkspaceRecentCommits } from "./workspace-diff.js";
 
 export type DaemonApp = {
   app: express.Express;
@@ -461,20 +461,65 @@ export function createDaemonApp(input: {
     res.json({ runtimes: listRuntimeHealth(config.runtimes) });
   });
 
-  app.get(
-    "/api/runtimes/:runtimeId/usage",
+  const runtimeUsageHandler = (options: { force: boolean }) =>
     asyncRoute(async (req, res) => {
       const runtimeId = req.params.runtimeId;
       if (typeof runtimeId !== "string") return res.status(400).json({ error: "runtime_id_required" });
       const runtime = config.runtimes.find((candidate) => candidate.id === runtimeId);
       if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
+
+      const runtimeHealth = listRuntimeHealth(config.runtimes).find((entry) => entry.id === runtimeId);
+      const checkedAt = new Date().toISOString();
+      // Health gate: a runtime that isn't healthy has no usage to fetch. We
+      // short-circuit BEFORE spawning anything (tmux, PTY, external command).
+      if (!runtimeHealth || runtimeHealth.health !== "healthy") {
+        return res.json({
+          usage: {
+            runtimeId,
+            providerId: "usage-unavailable",
+            source: "health-gate",
+            status: "unavailable" as const,
+            reason: runtimeHealth?.healthReason ?? "Runtime is not healthy",
+            categories: [],
+            checkedAt,
+          },
+        });
+      }
+      // Capability gate: only runtimes that advertise supportsUsage have a
+      // fetcher (built-in or external). Same logic, different reason.
+      if (!runtimeHealth.capabilities.supportsUsage) {
+        return res.json({
+          usage: {
+            runtimeId,
+            providerId: "usage-unsupported",
+            source: "unsupported",
+            status: "unavailable" as const,
+            reason: "Runtime does not support usage reporting",
+            categories: [],
+            checkedAt,
+          },
+        });
+      }
+
       const provider = config.usageProviders.find((candidate) => candidate.runtimeId === runtimeId);
-      const usage = await cachedProvider(`usage:${runtimeId}:${provider?.id ?? "unsupported"}`, () =>
-        collectRuntimeUsage(runtimeId, provider),
+      const cacheKey = `usage:${runtimeId}:${provider?.id ?? "builtin"}`;
+      if (options.force) providerCache.delete(cacheKey);
+      const usage = await cachedProvider(
+        cacheKey,
+        () =>
+          collectRuntimeUsage({
+            runtimeId,
+            command: runtime.command,
+            args: runtime.args,
+            externalProvider: provider,
+          }),
+        5 * 60_000,
       );
       res.json({ usage });
-    }),
-  );
+    });
+
+  app.get("/api/runtimes/:runtimeId/usage", runtimeUsageHandler({ force: false }));
+  app.post("/api/runtimes/:runtimeId/usage/refresh", runtimeUsageHandler({ force: true }));
 
   app.post(
     "/api/agent-sessions",
@@ -684,6 +729,17 @@ export function createDaemonApp(input: {
       return res.status(400).json({ error: "invalid_path" });
     res.json(readWorkspaceDiff(workspace.id, workspace.path));
   });
+
+  app.get(
+    "/api/workspaces/:workspaceId/recent-commits",
+    asyncRoute(async (req, res) => {
+      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
+      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
+      const limitParam = Number.parseInt(String(req.query.limit ?? "8"), 10);
+      const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 50) : 8;
+      res.json(readWorkspaceRecentCommits(workspace.id, workspace.path, limit));
+    }),
+  );
 
   app.get("/events", (req, res) => {
     req.socket.setTimeout(0);

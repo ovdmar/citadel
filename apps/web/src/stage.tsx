@@ -1,9 +1,9 @@
 import type { AgentRuntime, AgentSession, Workspace } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
-import { Plus, TerminalSquare, X } from "lucide-react";
+import { ExternalLink, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
-import { TerminalPane } from "./terminal-pane.js";
+import { TerminalPane, getTerminalHandle, subscribeTerminalHandle } from "./terminal-pane.js";
 
 type StageTab = {
   session: AgentSession;
@@ -127,13 +127,19 @@ export function Stage(props: {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
 
+  // Tick whenever any TerminalPane updates its handle so the tab actions
+  // (refresh, open-in-new-tab) reflect the current URL + reload callback.
+  const [, setHandleTick] = useState(0);
+  useEffect(() => subscribeTerminalHandle(() => setHandleTick((n) => n + 1)), []);
+
   const startError = startSession.error instanceof Error ? startSession.error.message : null;
   return (
     <>
       <div className="stage-tabbar">
         <div className="stage-tabs">
-          {tabs.map((tab) => {
+          {tabs.map((tab, index) => {
             const isActive = tab.session.id === activeSession?.session.id;
+            const isRunning = tab.session.status === "running";
             return (
               <div key={tab.session.id} className={`stage-tab ${isActive ? "active" : ""}`}>
                 <button
@@ -145,10 +151,17 @@ export function Stage(props: {
                   }}
                   aria-label={`Switch to ${tab.label}`}
                   title={`Switch to ${tab.label} (double-click to rename)`}
-                  style={{ background: "transparent", border: 0, color: "inherit", cursor: "pointer", padding: 0 }}
+                  className="stage-tab-button"
                 >
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-                    <TerminalSquare size={12} />
+                  <span className="stage-tab-inner">
+                    {index < 9 ? (
+                      <kbd className="stage-tab-kbd" title={`Shift+${index + 1}`}>
+                        ⇧{index + 1}
+                      </kbd>
+                    ) : null}
+                    <span className="stage-tab-icon" aria-hidden>
+                      <span className={`cit-pulse cit-pulse-sm ${isRunning ? "cit-pulse-run" : "cit-pulse-idle"}`} />
+                    </span>
                     {editingId === tab.session.id ? (
                       <input
                         ref={(node) => {
@@ -171,19 +184,50 @@ export function Stage(props: {
                         }}
                       />
                     ) : (
-                      <span>{tab.label}</span>
+                      <span className="stage-tab-label">{tab.label}</span>
                     )}
                   </span>
                 </button>
-                <button
-                  type="button"
-                  className="close-tab"
-                  aria-label="Stop session"
-                  onClick={() => stopSession.mutate(tab.session.id)}
-                  title="Stop session"
-                >
-                  <X size={11} />
-                </button>
+                <span className="stage-tab-actions">
+                  <button
+                    type="button"
+                    className="stage-tab-act"
+                    aria-label="Restart terminal session"
+                    title="Restart session"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      getTerminalHandle(tab.session.id)?.reload();
+                    }}
+                  >
+                    <RefreshCw size={11} />
+                  </button>
+                  <button
+                    type="button"
+                    className="stage-tab-act"
+                    aria-label="Open terminal in standalone tab"
+                    title="Open in standalone tab"
+                    disabled={!getTerminalHandle(tab.session.id)?.url}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      const handle = getTerminalHandle(tab.session.id);
+                      if (handle?.url) window.open(handle.url, "_blank");
+                    }}
+                  >
+                    <ExternalLink size={11} />
+                  </button>
+                  <button
+                    type="button"
+                    className="close-tab"
+                    aria-label="Stop session"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      stopSession.mutate(tab.session.id);
+                    }}
+                    title="Stop session"
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
               </div>
             );
           })}

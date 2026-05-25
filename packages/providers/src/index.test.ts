@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  aggregateReviewers,
   collectGitHubCiRunLog,
   collectGitHubCiRuns,
   collectGitHubVersionControlSummary,
@@ -146,6 +147,69 @@ describe("commandHealth", () => {
     });
   });
 
+  it("aggregates the latest review per author and promotes re-requested reviewers to pending", () => {
+    const reviewers = aggregateReviewers(
+      [
+        {
+          author: { login: "ovi", name: "Ovi M" },
+          state: "COMMENTED",
+          submittedAt: "2026-05-22T10:00:00Z",
+        },
+        {
+          author: { login: "ovi", name: "Ovi M" },
+          state: "APPROVED",
+          submittedAt: "2026-05-22T11:00:00Z",
+        },
+        {
+          author: { login: "jon", name: "Jon S" },
+          state: "CHANGES_REQUESTED",
+          submittedAt: "2026-05-22T09:00:00Z",
+        },
+      ],
+      [
+        { login: "jon", name: "Jon S" },
+        { login: "alex", name: "Alex P" },
+      ],
+    );
+    const byLogin = Object.fromEntries(reviewers.map((reviewer) => [reviewer.login, reviewer]));
+    expect(reviewers).toHaveLength(3);
+    // Exclusivity: ovi's earlier COMMENTED review must not slip through; only the
+    // latest APPROVED state survives.
+    expect(byLogin.ovi).toEqual({ login: "ovi", name: "Ovi M", state: "approved" });
+    expect(byLogin.jon).toEqual({ login: "jon", name: "Jon S", state: "pending" });
+    expect(byLogin.alex).toEqual({ login: "alex", name: "Alex P", state: "pending" });
+  });
+
+  it("maps every GitHub review state and falls back to 'pending' for unknown/null states", () => {
+    const reviewers = aggregateReviewers(
+      [
+        { author: { login: "dis", name: null }, state: "DISMISSED", submittedAt: "2026-05-22T01:00:00Z" },
+        { author: { login: "com", name: null }, state: "COMMENTED", submittedAt: "2026-05-22T02:00:00Z" },
+        { author: { login: "unk", name: null }, state: "MYSTERY_STATE", submittedAt: "2026-05-22T03:00:00Z" },
+        { author: { login: "nul", name: null }, state: null, submittedAt: "2026-05-22T04:00:00Z" },
+      ],
+      [],
+    );
+    const byLogin = Object.fromEntries(reviewers.map((reviewer) => [reviewer.login, reviewer.state]));
+    expect(byLogin).toEqual({ dis: "dismissed", com: "commented", unk: "pending", nul: "pending" });
+  });
+
+  it("drops reviews and reviewRequests with falsy logins and backfills missing name from the request", () => {
+    const reviewers = aggregateReviewers(
+      [
+        { author: null, state: "APPROVED", submittedAt: "2026-05-22T05:00:00Z" },
+        { author: { login: "", name: "Anon" }, state: "APPROVED", submittedAt: "2026-05-22T06:00:00Z" },
+        { author: { login: "needs-name", name: null }, state: "APPROVED", submittedAt: "2026-05-22T07:00:00Z" },
+      ],
+      [
+        { login: null, name: "ignored" },
+        { login: "needs-name", name: "Backfilled" },
+      ],
+    );
+    expect(reviewers).toHaveLength(1);
+    expect(reviewers[0]).toEqual({ login: "needs-name", name: "Backfilled", state: "pending" });
+  });
+
   it("parses Jira issue details and workflow transitions", () => {
     expect(
       parseJiraIssueOutput(
@@ -184,21 +248,39 @@ describe("commandHealth", () => {
     expect(result.transition).toBe("31");
   });
 
-  it("normalizes runtime usage and reports unsupported runtimes clearly", async () => {
-    expect(
-      normalizeRuntimeUsage(
-        "codex",
-        "usage-codex",
-        JSON.stringify({ source: "codex-usage", model: "gpt", remaining: "42%", spend: "$1.25" }),
-      ),
-    ).toMatchObject({ runtimeId: "codex", status: "healthy", remaining: "42%" });
+  it("normalizes runtime usage emitted by an external provider command", () => {
+    const summary = normalizeRuntimeUsage(
+      "custom-bot",
+      "usage-custom",
+      JSON.stringify({
+        source: "custom-usage",
+        categories: [
+          { label: "Daily", percentUsed: 42, reset: "tomorrow" },
+          { label: "Bogus", percentUsed: 250 },
+          { label: "Weekly", percentUsed: 10, section: "Premium tier" },
+        ],
+      }),
+    );
+    expect(summary).toMatchObject({ runtimeId: "custom-bot", status: "healthy", source: "custom-usage" });
+    // The 250%-used row is dropped (out of range); others survive.
+    expect(summary.categories).toEqual([
+      { label: "Daily", percentUsed: 42, reset: "tomorrow", section: null },
+      { label: "Weekly", percentUsed: 10, reset: null, section: "Premium tier" },
+    ]);
+  });
 
-    const unsupported = await collectRuntimeUsage("codex", undefined);
+  it("reports custom runtimes without an external usage provider as unavailable", async () => {
+    const unsupported = await collectRuntimeUsage({
+      runtimeId: "custom-bot",
+      command: "custom-bot",
+      args: [],
+    });
     expect(unsupported).toMatchObject({
-      runtimeId: "codex",
+      runtimeId: "custom-bot",
       status: "unavailable",
       reason: "No usage provider configured for this runtime",
     });
+    expect(unsupported.categories).toEqual([]);
   });
 });
 

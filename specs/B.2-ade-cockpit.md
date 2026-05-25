@@ -51,8 +51,8 @@
 
 [ ] 1. The inspector has at least two tabs: `Stats` and `Diff`. The tab strip is a compact pill-style picker that occupies only its own content width — never a half-panel-sized control.
 [ ] 2. The `Stats` tab focuses on PR stats and PR check stats. It does **not** repeat workspace identity (name, branch) or workspace lifecycle/dirty state — those are already visible on the workspace card and stage header.
-[ ] 3. The Slack icon is grey when no thread is attached; clicking allows attaching a Slack conversation by URL when the Slack provider is healthy.
-[ ] 4. The Issue (Jira-style) icon is grey when no issue is attached; clicking allows attaching an issue when the issue provider is healthy. If safe, attaching an issue can rename the workspace branch to `<issue-key>-<title-dashified>`.
+[~] 3. Slack threads are attached at workspace creation (the create-workspace modal accepts a Slack URL) and surfaced on the workspace card. The redesign removed the per-inspector Slack attach affordance; re-attaching after creation is not exposed today.
+[x] 4. The Issue (Jira-style) chip is always rendered above the inspector body. When no issue is attached it shows a dashed empty-state "Attach Jira ticket" placeholder that toggles an inline form (key + URL); when one is attached it shows the key, optional title, and a sync-aware status pill (`cit-jira-status--unknown` fallback when the live status hasn't synced). If safe, attaching an issue can rename the workspace branch to `<issue-key>-<title-dashified>` (not yet implemented).
 [ ] 5. The PR pill in the Stats tab is auto-detected from workspace git state and cycles through lifecycle colors (grey → yellow → green → red as appropriate). It is not manually attachable.
 [ ] 6. The `Stats` tab shows the list of locally deployed apps for the current namespace, sourced from repo hooks. App chips show name, status colour, and clickable link.
 [ ] 6a. When no apps hook is configured, the Deployed apps panel renders an explicit mock preview of how chips will appear and links directly to the repo settings where the hook is configured. It must never show a blank or non-actionable empty panel.

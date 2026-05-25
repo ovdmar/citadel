@@ -17,6 +17,18 @@ export {
 } from "./transcripts/index.js";
 export type { RuntimeUserPrompt, RuntimeTranscriptAdapter, GetUserPromptsInput } from "./transcripts/index.js";
 
+export {
+  runtimeUsageFetchers,
+  hasRuntimeUsageFetcher,
+  fetchClaudeUsageCategories,
+  parseClaudeUsageCategories,
+  extractClaudeUsagePanel,
+  fetchCodexUsageCategories,
+  parseCodexUsageCategories,
+  extractCodexStatusPanel,
+} from "./usage/index.js";
+export type { RuntimeUsageFetcher } from "./usage/index.js";
+
 const baseCapabilities = {
   supportsPrompt: false,
   supportsResume: false,
@@ -43,6 +55,7 @@ const builtinCapabilities: Record<string, Partial<typeof baseCapabilities>> = {
     supportsPrompt: true,
     supportsResume: true,
     supportsNonInteractiveGoal: true,
+    supportsUsage: true,
   },
   "cursor-agent": {
     supportsPrompt: true,

@@ -49,7 +49,32 @@ export async function createAgentSession(
     command: runtime.command,
     args: runtimeArgs,
   });
-  if (promptForKeys) await submitPrompt(sessionName, promptForKeys);
+  if (promptForKeys) {
+    // Treat the initial prompt as load-bearing: if submitPrompt couldn't
+    // verify delivery, the agent will sit on a blank prompt forever, which
+    // is exactly the failure mode launch_agent's callers can't recover from.
+    // Surface it as an explicit error instead of a phantom success.
+    //
+    // Tune the cold-start budget by runtime kind. Interactive TUIs (Claude
+    // Code with MCP servers connecting, Codex) routinely take 8–15 s before
+    // they're ready to accept input. Shell runtimes paint a prompt in
+    // milliseconds and `read` is ready instantly; using the TUI budget there
+    // makes every test session sit waiting for a 1 s silence threshold that
+    // doesn't apply.
+    const isShellRuntime = ["bash", "sh", "zsh", "fish"].includes(runtime.command);
+    const submitted = await submitPrompt(sessionName, promptForKeys, {
+      ...(isShellRuntime
+        ? { waitForReadyMs: 1500, submitDelayMs: 800 }
+        : {
+            waitForReadyMs: 15000,
+            submitDelayMs: 3000,
+            runtimeReadyPredicate: (cmd) => cmd !== "bash" && cmd !== "sh" && cmd !== "zsh" && cmd.length > 0,
+          }),
+    });
+    if (!submitted.ok) {
+      throw new Error(`initial_prompt_not_delivered: ${submitted.error ?? "unknown"}`);
+    }
+  }
   const session: AgentSession = {
     id: createId("sess"),
     workspaceId: workspace.id,

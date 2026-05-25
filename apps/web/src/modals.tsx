@@ -1,108 +1,66 @@
 import type { AgentRuntime, Namespace, Repo } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { GripVertical, Search, X } from "lucide-react";
+import { Check, Search, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
 
-export type GroupKey = "repo" | "status" | "namespace";
+export type GroupKey = "repo" | "status" | "namespace" | "none";
 
-const GROUP_KEYS: GroupKey[] = ["repo", "status", "namespace"];
+const GROUP_BY_OPTIONS: Array<{ id: GroupKey; label: string; hint: string }> = [
+  { id: "repo", label: "Repository", hint: "citadel · skills · …" },
+  { id: "status", label: "Status", hint: "running · review · idle" },
+  // Namespace mode nests under Repository so two workspaces named "main" in
+  // different repos don't collapse together. The nav tree builder owns that
+  // two-level shape; this menu just exposes the toggle.
+  { id: "namespace", label: "Namespace", hint: "repo → namespace" },
+  { id: "none", label: "No grouping", hint: "flat list" },
+];
 
-// "namespace" without "repo" produces ambiguous groups when two repos both
-// have a workspace named "main" sitting in Uncategorized. Force repo on
-// whenever namespace is selected so the second grouping level always
-// disambiguates by source repo.
-export function normalizeGrouping(grouping: GroupKey[]): GroupKey[] {
-  if (!grouping.includes("namespace") || grouping.includes("repo")) return grouping;
-  // Put repo first so the namespace heading nests under repo (e.g. "Citadel ·
-  // epic-revamp") — that read order matches how the user thinks about it.
-  return ["repo", ...grouping];
-}
-
-type GroupByOverlayProps = {
-  value: GroupKey[];
-  onChange: (next: GroupKey[]) => void;
+type GroupByMenuProps = {
+  value: GroupKey;
+  onChange: (next: GroupKey) => void;
   onClose: () => void;
 };
 
-export function GroupByOverlay(props: GroupByOverlayProps) {
-  const [dragging, setDragging] = useState<GroupKey | null>(null);
-  const labels: Record<GroupKey, string> = {
-    repo: "Repository",
-    status: "Status",
-    namespace: "Namespace",
-  };
-  const ordered = props.value;
-  const inactive = GROUP_KEYS.filter((key) => !ordered.includes(key));
-  const namespaceActive = ordered.includes("namespace");
-  const isLocked = (key: GroupKey) => key === "repo" && namespaceActive;
-  const toggle = (key: GroupKey) => {
-    if (isLocked(key)) return;
-    if (ordered.includes(key)) props.onChange(normalizeGrouping(ordered.filter((entry) => entry !== key)));
-    else props.onChange(normalizeGrouping([...ordered, key]));
-  };
-  const reorder = (source: GroupKey, target: GroupKey) => {
-    if (source === target) return;
-    const next = [...ordered];
-    const sourceIndex = next.indexOf(source);
-    const targetIndex = next.indexOf(target);
-    if (sourceIndex < 0 || targetIndex < 0) return;
-    next.splice(sourceIndex, 1);
-    next.splice(targetIndex, 0, source);
-    props.onChange(normalizeGrouping(next));
-  };
+export function GroupByMenu(props: GroupByMenuProps) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const onDocClick = (event: MouseEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) props.onClose();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") props.onClose();
+    };
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [props]);
   return (
-    <div className="popover group-by-overlay" aria-label="Group workspaces">
-      <span className="command-section-label">Group by</span>
-      {ordered.map((key) => (
-        <div
-          key={key}
-          className={`group-by-row ${dragging === key ? "dragging" : ""} ${isLocked(key) ? "locked" : ""}`}
-          draggable
-          onDragStart={() => setDragging(key)}
-          onDragEnd={() => setDragging(null)}
-          onDragOver={(event) => event.preventDefault()}
-          onDrop={() => {
-            if (dragging) reorder(dragging, key);
-            setDragging(null);
+    <div ref={ref} className="cit-gb-menu" role="menu" aria-label="Group workspaces">
+      <div className="cit-gb-menu-head">Group workspaces by</div>
+      {GROUP_BY_OPTIONS.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          role="menuitemradio"
+          aria-checked={props.value === option.id}
+          className={`cit-gb-opt ${props.value === option.id ? "is-active" : ""}`}
+          onClick={() => {
+            props.onChange(option.id);
+            props.onClose();
           }}
         >
-          <GripVertical size={12} />
-          <input type="checkbox" checked readOnly aria-label={`${labels[key]} grouping enabled`} />
-          <span>
-            {labels[key]}
-            {isLocked(key) ? <em className="group-by-required"> (required by Namespace)</em> : null}
+          <span className="cit-gb-opt-check">{props.value === option.id ? <Check size={11} /> : null}</span>
+          <span className="cit-gb-opt-text">
+            <span className="cit-gb-opt-label">{option.label}</span>
+            <span className="cit-gb-opt-hint">{option.hint}</span>
           </span>
-          {isLocked(key) ? null : (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={() => toggle(key)}
-              aria-label={`Remove ${labels[key]} grouping`}
-              title={`Remove ${labels[key]} grouping`}
-            >
-              <X size={11} />
-            </Button>
-          )}
-        </div>
+        </button>
       ))}
-      {inactive.map((key) => (
-        <div key={key} className="group-by-row">
-          <GripVertical size={12} style={{ opacity: 0.3 }} />
-          <input
-            type="checkbox"
-            checked={false}
-            onChange={() => toggle(key)}
-            aria-label={`${labels[key]} grouping disabled`}
-          />
-          <span>{labels[key]}</span>
-        </div>
-      ))}
-      <Button type="button" variant="secondary" onClick={props.onClose}>
-        Done
-      </Button>
     </div>
   );
 }

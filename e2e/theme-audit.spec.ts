@@ -60,7 +60,7 @@ test.describe("cockpit theme audit", () => {
   test("light theme has no dark-slate backgrounds inside .app-root", async ({ page }, testInfo) => {
     await forceTheme(page, "light");
     await page.goto("/");
-    await expect(page.locator(".top-bar-brand")).toBeVisible();
+    await expect(page.locator(".cit-brand")).toBeVisible();
     await openCommandPalette(page);
     await page.screenshot({ path: `docs/campaigns/theme-light-${testInfo.project.name}-cockpit.png`, fullPage: true });
 
@@ -85,7 +85,7 @@ test.describe("cockpit theme audit", () => {
   test("dark theme has no pure-white backgrounds inside .app-root", async ({ page }, testInfo) => {
     await forceTheme(page, "dark");
     await page.goto("/");
-    await expect(page.locator(".top-bar-brand")).toBeVisible();
+    await expect(page.locator(".cit-brand")).toBeVisible();
     await openCommandPalette(page);
     await page.screenshot({ path: `docs/campaigns/theme-dark-${testInfo.project.name}-cockpit.png`, fullPage: true });
 
