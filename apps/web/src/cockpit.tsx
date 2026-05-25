@@ -1,5 +1,5 @@
 import type { Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -8,6 +8,7 @@ import { useEventRefresh, useStateQuery } from "./app-state.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { useWorkspaceCockpitSummary } from "./cockpit-tools.js";
 import { CommandPalette } from "./command-palette.js";
+import { useFocusRefresh } from "./hooks/use-focus-refresh.js";
 import { Inspector } from "./inspector.js";
 import { Navigator } from "./navigator.js";
 import { Stage } from "./stage.js";
@@ -60,6 +61,23 @@ export function Cockpit() {
   }, [activeWorkspace, activeWorkspaceId, lastRepoId, setActiveWorkspaceId, setLastRepoId]);
 
   const cockpitSummary = useWorkspaceCockpitSummary(activeWorkspace);
+
+  // On-focus refresh: when the operator brings the cockpit window back to
+  // focus, invalidate the cockpit-summary + workspaces-pr-state queries if
+  // the cached data is older than focusRefreshThresholdMs (default 30s).
+  // Prevents alt-tab thrashing while keeping a window-in-background warm.
+  const queryClient = useQueryClient();
+  const focusConfig = useQuery({
+    queryKey: ["config"],
+    queryFn: () => api<{ config: { providerRefresh?: { focusRefreshThresholdMs?: number } } }>("/api/config"),
+  });
+  const focusThresholdMs = focusConfig.data?.config?.providerRefresh?.focusRefreshThresholdMs ?? 30_000;
+  useFocusRefresh({
+    workspaceId: activeWorkspace?.id ?? null,
+    thresholdMs: focusThresholdMs,
+    queryClient,
+  });
+
   const selectedRepo = activeWorkspace
     ? (data?.repos.find((repo) => repo.id === activeWorkspace.repoId) ?? null)
     : (data?.repos[0] ?? null);
