@@ -160,7 +160,7 @@ describe("discoverFileHooks", () => {
     ] as const;
     for (const event of events) {
       const ws = makeWorkspace();
-      writeHook(ws, event, "hook.agent", "prompt for " + event + "\n");
+      writeHook(ws, event, "hook.agent", `prompt for ${event}\n`);
       const result = discoverFileHooks({ workspacePath: ws, event });
       expect(result.hooks).toHaveLength(1);
       expect(result.hooks[0]?.kind).toBe("agent-file");

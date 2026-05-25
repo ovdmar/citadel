@@ -84,9 +84,6 @@ export class OperationService {
         actionHookIds?: string[];
       };
       commandPolicy: CitadelConfig["commandPolicy"];
-      // runtimes is optional so existing tests that construct OperationService
-      // with a minimal config keep working. dispatchAgentHook falls back to
-      // claude-code when the list is absent.
       runtimes?: CitadelConfig["runtimes"];
     },
   ) {}
@@ -768,23 +765,21 @@ export class OperationService {
     });
   }
 
+  private hooksDeps() {
+    return {
+      config: this.config,
+      activity: (...args: Parameters<typeof this.activity>) => this.activity(...args),
+      dispatchAgentHook: this.dispatchAgentHook,
+    };
+  }
+
   private runWorkspaceHooks = (
     event: HookConfig["event"],
     hookIds: string[],
     repo: Repo,
     workspace: Workspace,
     operationId: string,
-  ) =>
-    runWorkspaceHooks({
-      config: this.config,
-      activity: (...args) => this.activity(...args),
-      event,
-      hookIds,
-      repo,
-      workspace,
-      operationId,
-      dispatchAgentHook: this.dispatchAgentHook,
-    });
+  ) => runWorkspaceHooks({ ...this.hooksDeps(), event, hookIds, repo, workspace, operationId });
 
   private runNotificationHooks = (
     event: HookConfig["event"],
@@ -792,31 +787,11 @@ export class OperationService {
     workspace: Workspace,
     operationId: string | null,
     payload: unknown,
-  ) =>
-    runNotificationHooks({
-      config: this.config,
-      activity: (...args) => this.activity(...args),
-      event,
-      repo,
-      workspace,
-      operationId,
-      payload,
-      dispatchAgentHook: this.dispatchAgentHook,
-    });
+  ) => runNotificationHooks({ ...this.hooksDeps(), event, repo, workspace, operationId, payload });
 
-  // dispatchAgentHook is the injection point for .agent file hooks. It calls
-  // back into createAgentSession with a runtime resolved from the hook's
-  // frontmatter (`runtime`) or the first prompt-capable runtime in config.
-  // The architecture-boundary check enforces that @citadel/hooks never
-  // imports @citadel/operations — this closure is how discovery (in
-  // @citadel/hooks) reaches createAgentSession (here) without a direct edge.
-  // Implementation extracted to ./dispatch-agent-hook.ts for unit testing.
   private dispatchAgentHook: DispatchAgentHook = (input) =>
     dispatchAgentHookImpl(
-      {
-        runtimes: this.config?.runtimes ?? [],
-        createAgentSession: (sessionInput, runtime) => this.createAgentSession(sessionInput, runtime),
-      },
+      { runtimes: this.config?.runtimes ?? [], createAgentSession: this.createAgentSession },
       input,
     );
 }

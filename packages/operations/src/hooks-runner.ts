@@ -158,7 +158,14 @@ export async function runWorkspaceHooks(input: {
     input.config?.hooks ?? [],
     input.workspace.path,
   );
-  emitDiscoveryDiagnostics(diagnostics, input.event, input.repo.id, input.workspace.id, input.operationId, input.activity);
+  emitDiscoveryDiagnostics(
+    diagnostics,
+    input.event,
+    input.repo.id,
+    input.workspace.id,
+    input.operationId,
+    input.activity,
+  );
 
   for (const hook of hooks) {
     await runOne(hook, input);
@@ -178,7 +185,14 @@ export async function runNotificationHooks(input: {
   // null hookIds = "run every config hook for this event" (today's notification
   // semantics). File hooks are unconditionally discovered.
   const { hooks, diagnostics } = collectHooks(input.event, null, input.config?.hooks ?? [], input.workspace.path);
-  emitDiscoveryDiagnostics(diagnostics, input.event, input.repo.id, input.workspace.id, input.operationId, input.activity);
+  emitDiscoveryDiagnostics(
+    diagnostics,
+    input.event,
+    input.repo.id,
+    input.workspace.id,
+    input.operationId,
+    input.activity,
+  );
 
   for (const hook of hooks) {
     try {

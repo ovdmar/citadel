@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  defaultConfigPath,
-  detectWorktree,
   HookConfigSchema,
   HookEventSchema,
+  defaultConfigPath,
+  detectWorktree,
   loadConfig,
   mergeConfigPatch,
   saveConfig,
@@ -314,14 +314,10 @@ describe("HookConfigSchema", () => {
   });
 
   it("rejects a config-hook id with the reserved 'file:' prefix (file-based hooks own that namespace)", () => {
-    expect(() =>
-      HookConfigSchema.parse({ id: "file:foo", event: "workspace.setup", command: "true" }),
-    ).toThrow();
+    expect(() => HookConfigSchema.parse({ id: "file:foo", event: "workspace.setup", command: "true" })).toThrow();
   });
 
   it("accepts normal ids", () => {
-    expect(() =>
-      HookConfigSchema.parse({ id: "bootstrap", event: "workspace.setup", command: "true" }),
-    ).not.toThrow();
+    expect(() => HookConfigSchema.parse({ id: "bootstrap", event: "workspace.setup", command: "true" })).not.toThrow();
   });
 });
