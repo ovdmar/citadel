@@ -44,7 +44,7 @@ import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { scratchpadPath } from "./scratchpad.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
 import { readWorkspaceDiff, readWorkspaceGitStatus, readWorkspaceRecentCommits } from "./workspace-diff.js";
-import { createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
+import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
 
 export type DaemonApp = {
   app: express.Express;
@@ -615,9 +615,7 @@ export function createDaemonApp(input: {
         `apps:${workspace.id}`,
         workspace.issueKey ? `issue:${workspace.issueKey}` : null,
       ].filter(Boolean) as string[];
-      for (const key of Array.from(providerCache.keys())) {
-        if (prefixes.some((prefix) => key.startsWith(prefix))) providerCache.delete(key);
-      }
+      bustCacheByPrefixes(providerCache, prefixes);
       emit("workspace.refreshed", { workspaceId: workspace.id });
       res.json({ refreshed: prefixes });
     }),
@@ -629,9 +627,7 @@ export function createDaemonApp(input: {
       const repo = store.listRepos().find((candidate) => candidate.id === req.params.repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
       const prefixes = [`vc:${repo.id}`, `ci:${repo.id}`];
-      for (const key of Array.from(providerCache.keys())) {
-        if (prefixes.some((prefix) => key.startsWith(prefix))) providerCache.delete(key);
-      }
+      bustCacheByPrefixes(providerCache, prefixes);
       emit("repo.refreshed", { repoId: repo.id });
       res.json({ refreshed: prefixes });
     }),
@@ -679,8 +675,8 @@ export function createDaemonApp(input: {
         backfillIfEmpty(config.dataDir, { content, updatedAt: stat.mtime.toISOString() });
       }
     }
-  } catch {
-    /* non-fatal */
+  } catch (error) {
+    console.error(`[scratchpad-history] backfill skipped: ${error instanceof Error ? error.message : error}`);
   }
 
   fsWatchers = createWorkspaceFsWatchers({

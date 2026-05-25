@@ -1,15 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { type HistoryOptions, recordHistoryWrite } from "./scratchpad-history.js";
+import type { ScratchpadSnapshot } from "@citadel/contracts";
+import { type HistoryOptions, type HistorySource, recordHistoryWrite } from "./scratchpad-history.js";
 
 export const SCRATCHPAD_FILENAME = "scratchpad.md";
 export const SCRATCHPAD_MAX_BYTES = 1_000_000;
 const DEFAULT_STUB = "# Scratchpad\n\n";
 
-export type ScratchpadSnapshot = {
-  content: string;
-  updatedAt: string;
-};
+export type { ScratchpadSnapshot };
 
 export class ScratchpadTooLargeError extends Error {
   constructor(readonly limit: number = SCRATCHPAD_MAX_BYTES) {
@@ -36,7 +34,7 @@ export function readScratchpad(dataDir: string): ScratchpadSnapshot {
 export function writeScratchpad(
   dataDir: string,
   content: string,
-  source: string,
+  source: HistorySource,
   historyOptions?: HistoryOptions,
 ): ScratchpadSnapshot {
   assertSize(content);
@@ -51,14 +49,12 @@ export function writeScratchpad(
 export function appendScratchpad(
   dataDir: string,
   chunk: string,
-  source: string,
+  source: HistorySource,
   historyOptions?: HistoryOptions,
 ): ScratchpadSnapshot {
   ensureDataDir(dataDir);
   const filePath = scratchpadPath(dataDir);
   const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf8") : "";
-  // Normalize whatever the file ends with into a blank-line boundary before the
-  // appended chunk, so concurrent agents append clean stanzas instead of run-on text.
   const separator = existing.length === 0 || existing.endsWith("\n\n") ? "" : existing.endsWith("\n") ? "\n" : "\n\n";
   const tail = chunk.endsWith("\n") ? chunk : `${chunk}\n`;
   return writeScratchpad(dataDir, `${existing}${separator}${tail}`, source, historyOptions);

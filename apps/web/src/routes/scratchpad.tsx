@@ -1,20 +1,12 @@
+import type { ScratchpadHistorySummary, ScratchpadSnapshot } from "@citadel/contracts";
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 import { sideBySideDiff } from "./scratchpad-diff.js";
+import { createSaveCoordinator, formatBytes, pillLabel, pillSlug } from "./scratchpad-helpers.js";
 
-type ScratchpadSnapshot = { content: string; updatedAt: string };
-type HistorySummary = {
-  id: string;
-  ts: string;
-  firstWriteTs: string;
-  source: string;
-  contentSha256: string;
-  byteLength: number;
-  coalescedCount: number;
-  preview: string;
-};
+type HistorySummary = ScratchpadHistorySummary;
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -36,7 +28,6 @@ export function ScratchpadView() {
   const lastSavedRef = useRef<string>("");
   const latestRef = useRef<string>("");
   const savingRef = useRef(false);
-  const pendingRefreshRef = useRef(false);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -88,38 +79,52 @@ export function ScratchpadView() {
     void loadHistory();
   }, [loadFromServer, loadHistory]);
 
-  const saveLatest = useCallback(async () => {
-    if (savingRef.current) return;
-    savingRef.current = true;
-    try {
-      while (latestRef.current !== lastSavedRef.current) {
-        const snapshot = latestRef.current;
+  const coordinatorRef = useRef<ReturnType<typeof createSaveCoordinator> | null>(null);
+  if (!coordinatorRef.current) {
+    coordinatorRef.current = createSaveCoordinator({
+      getLatest: () => latestRef.current,
+      getLastSaved: () => lastSavedRef.current,
+      setLastSaved: (value) => {
+        lastSavedRef.current = value;
+      },
+      put: async (snapshot) => {
         if (mountedRef.current) setSaveState("saving");
         try {
           const result = await api<ScratchpadSnapshot>("/api/scratchpad", {
             method: "PUT",
             body: JSON.stringify({ content: snapshot }),
           });
-          lastSavedRef.current = result.content;
-          if (!mountedRef.current) return;
-          setUpdatedAt(result.updatedAt);
-          setErrorMessage(null);
+          if (mountedRef.current) {
+            setUpdatedAt(result.updatedAt);
+            setErrorMessage(null);
+          }
+          return result;
         } catch (error) {
-          if (!mountedRef.current) return;
-          setErrorMessage(error instanceof Error ? error.message : "save_failed");
-          setSaveState("error");
-          return;
+          if (mountedRef.current) {
+            setErrorMessage(error instanceof Error ? error.message : "save_failed");
+            setSaveState("error");
+          }
+          throw error;
         }
-      }
-      if (mountedRef.current) setSaveState("saved");
-    } finally {
-      savingRef.current = false;
-      if (pendingRefreshRef.current) {
-        pendingRefreshRef.current = false;
-        void loadFromServer();
-      }
+      },
+      load: () => loadFromServer(),
+      onSaveStart: () => {
+        savingRef.current = true;
+      },
+      onSaveFinish: () => {
+        savingRef.current = false;
+        if (mountedRef.current) setSaveState("saved");
+      },
+    });
+  }
+
+  const saveLatest = useCallback(async () => {
+    try {
+      await coordinatorRef.current?.save();
+    } catch {
+      /* errors already surfaced through put() into setErrorMessage / setSaveState */
     }
-  }, [loadFromServer]);
+  }, []);
 
   useEffect(() => {
     if (!loaded) return;
@@ -137,11 +142,7 @@ export function ScratchpadView() {
   useEffect(() => {
     const events = new EventSource("/events");
     const refreshContent = () => {
-      if (savingRef.current) {
-        pendingRefreshRef.current = true;
-        return;
-      }
-      void loadFromServer();
+      coordinatorRef.current?.noteSseRefresh();
     };
     const refreshHistory = () => {
       void loadHistory();
@@ -153,7 +154,7 @@ export function ScratchpadView() {
       events.removeEventListener("scratchpad.history.updated", refreshHistory);
       events.close();
     };
-  }, [loadFromServer, loadHistory]);
+  }, [loadHistory]);
 
   const openEntry = useCallback(
     async (id: string) => {
@@ -182,6 +183,19 @@ export function ScratchpadView() {
     setDiffError(null);
   }, []);
 
+  // Native <dialog open> (declarative) does not fire `cancel` on Escape — only
+  // dialog.showModal() does — so bind a document-level listener while the modal
+  // is open. tabIndex={-1} on the backdrop is not focusable, so an in-tree
+  // keydown handler never fires for the user.
+  useEffect(() => {
+    if (!selectedEntryId) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeDiff();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [selectedEntryId, closeDiff]);
+
   const restoreSelected = useCallback(async () => {
     if (!selectedEntryId) return;
     setRestoring(true);
@@ -208,10 +222,11 @@ export function ScratchpadView() {
 
   const diff = useMemo(() => {
     if (selectedContent === null) return null;
-    const rows = sideBySideDiff(selectedContent, content);
+    const result = sideBySideDiff(selectedContent, content);
+    if (result.kind === "too_large") return result;
     let lastOld = 0;
     let lastNew = 0;
-    return rows.map((row) => {
+    const mapped = result.rows.map((row) => {
       if (row.kind === "skip") {
         return { row, key: `skip-${lastOld}-${lastNew}-${row.hiddenCount}` as string };
       }
@@ -227,6 +242,7 @@ export function ScratchpadView() {
       lastNew = row.newNo;
       return { row, key: `add-${row.newNo}` };
     });
+    return { kind: "rows" as const, rows: mapped };
   }, [selectedContent, content]);
 
   return (
@@ -292,16 +308,7 @@ export function ScratchpadView() {
       </div>
       {selectedEntryId ? (
         <dialog className="scratchpad-diff-overlay" open aria-modal="true" aria-label="Scratchpad version diff">
-          <div
-            className="scratchpad-diff-backdrop"
-            onClick={closeDiff}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") closeDiff();
-            }}
-            role="button"
-            tabIndex={-1}
-            aria-label="Close diff"
-          />
+          <button type="button" className="scratchpad-diff-backdrop" onClick={closeDiff} aria-label="Close diff" />
           <div className="scratchpad-diff-panel">
             <header className="scratchpad-diff-header">
               <span>Older version vs current</span>
@@ -330,11 +337,16 @@ export function ScratchpadView() {
                 <p className="scratchpad-diff-error">{diffError}</p>
               ) : diff === null ? (
                 <p className="scratchpad-diff-loading">Loading…</p>
-              ) : diff.length === 0 ? (
+              ) : diff.kind === "too_large" ? (
+                <p className="scratchpad-diff-empty">
+                  Diff is too large to render ({diff.oldLines} vs {diff.newLines} lines; limit {diff.limit}). Use
+                  Restore to swap in this version, or open the file directly.
+                </p>
+              ) : diff.rows.length === 0 ? (
                 <p className="scratchpad-diff-empty">No differences.</p>
               ) : (
                 <div className="scratchpad-diff-grid">
-                  {diff.map(({ row, key }) => {
+                  {diff.rows.map(({ row, key }) => {
                     if (row.kind === "skip") {
                       return (
                         <div key={key} className="scratchpad-diff-skip">
@@ -396,26 +408,4 @@ function formatStamp(ts: string) {
   const stamp = new Date(ts);
   if (Number.isNaN(stamp.getTime())) return ts;
   return stamp.toLocaleString();
-}
-
-function formatBytes(n: number) {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function pillSlug(source: string) {
-  if (source.startsWith("restore:")) return "restore";
-  if (source === "mcp:write_scratchpad") return "mcp-write";
-  if (source === "mcp:append_scratchpad") return "mcp-append";
-  return source;
-}
-
-function pillLabel(source: string) {
-  if (source === "ui") return "UI";
-  if (source === "mcp:write_scratchpad") return "MCP write";
-  if (source === "mcp:append_scratchpad") return "MCP append";
-  if (source === "backfill") return "Backfill";
-  if (source.startsWith("restore:")) return "Restore";
-  return source;
 }
