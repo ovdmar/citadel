@@ -44,6 +44,7 @@ import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { scratchpadPath } from "./scratchpad.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
 import { readWorkspaceDiff, readWorkspaceGitStatus, readWorkspaceRecentCommits } from "./workspace-diff.js";
+import { createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
 
 export type DaemonApp = {
   app: express.Express;
@@ -87,6 +88,7 @@ export function createDaemonApp(input: {
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
 
+  let fsWatchers: { reconcile: () => void; close: () => void } | null = null;
   const emit = (type: string, payload: unknown) => {
     const event: AppEvent = {
       id: `sse_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -96,6 +98,9 @@ export function createDaemonApp(input: {
       payload,
     };
     for (const client of sseClients) client.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
+    if (fsWatchers && (type === "workspace.updated" || type === "state.reconciled" || type === "repo.updated")) {
+      fsWatchers.reconcile();
+    }
   };
 
   // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
@@ -677,6 +682,14 @@ export function createDaemonApp(input: {
   } catch {
     /* non-fatal */
   }
+
+  fsWatchers = createWorkspaceFsWatchers({
+    listWorkspaces: () => store.listWorkspaces(),
+    providerCache,
+    emit,
+  });
+  fsWatchers.reconcile();
+  server.on("close", () => fsWatchers?.close());
 
   app.get("/api/workspaces/:workspaceId/diff", (req, res) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
