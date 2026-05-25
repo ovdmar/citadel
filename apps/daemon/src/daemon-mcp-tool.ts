@@ -10,6 +10,7 @@ import {
   UpdateNamespaceInputSchema,
   UpdateScheduledAgentInputSchema,
 } from "@citadel/contracts";
+import { fuzzySearchBlocks } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, serializeWorkspaceResource } from "@citadel/mcp";
 import {
@@ -278,6 +279,15 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     emit("scratchpad.updated", { updatedAt: result.snapshot.updatedAt });
     emit("scratchpad.history.updated", { updatedAt: result.snapshot.updatedAt });
     return result.snapshot;
+  }
+  if (call.name === "fuzzy_search_scratchpad") {
+    const query = typeof call.arguments?.query === "string" ? call.arguments.query : "";
+    if (query.trim().length === 0) return { error: "query_required" };
+    const limitRaw = call.arguments?.limit;
+    const limit =
+      typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : (undefined as number | undefined);
+    const { blocks } = listBlocks(config.dataDir);
+    return { matches: fuzzySearchBlocks(blocks, query, limit) };
   }
   if (call.name === "list_deployed_apps") {
     const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";

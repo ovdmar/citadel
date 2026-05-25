@@ -15,7 +15,6 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { AddRepoModal, CreateWorkspaceModal, GroupByMenu, type GroupKey } from "./modals.js";
-import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import {
   type GroupNode,
   type GroupableKey,
@@ -23,6 +22,7 @@ import {
   buildGroupTree,
   collectGroupPaths,
 } from "./navigator-groups.js";
+import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { WorkspaceCard } from "./workspace-card.js";
 
 const GROUP_STORAGE = "citadel.navigator-group";

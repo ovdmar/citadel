@@ -9,6 +9,7 @@
 // history updates from other tabs or MCP writers keep converging into local
 // state even while the drawer is closed.
 import type { ScratchpadBlockSummary, ScratchpadHistorySummary, ScratchpadSnapshot } from "@citadel/contracts";
+import type { FuzzyBlockMatch } from "@citadel/core";
 import { X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
@@ -16,6 +17,7 @@ import { sideBySideDiff } from "./routes/scratchpad-diff.js";
 import { formatBytes, pillLabel, pillSlug } from "./routes/scratchpad-helpers.js";
 import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { BlockItem, type UiBlock } from "./scratchpad-panel-block.js";
+import { ScratchpadPanelSearch } from "./scratchpad-panel-search.js";
 
 type HistorySummary = ScratchpadHistorySummary;
 type BlockSummary = ScratchpadBlockSummary;
@@ -46,6 +48,8 @@ export function ScratchpadPanel() {
   // "ok" right after a successful cmd+s save, "err" right after a failure.
   // null = no pulse. Reads via [data-saving] on the drawer header element.
   const [savePulse, setSavePulse] = useState<"ok" | "err" | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchResults, setSearchResults] = useState<FuzzyBlockMatch[] | null>(null);
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -143,12 +147,14 @@ export function ScratchpadPanel() {
     prevOpenRef.current = true;
     if (!loaded || !listRef.current) return;
     if (opening) {
-      if (!hasOpenedOnceRef.current || wasAtBottomRef.current) {
+      // Don't auto-scroll-to-bottom if a search is active — the user's match
+      // position takes precedence over latest-block visibility.
+      if (!searchResults && (!hasOpenedOnceRef.current || wasAtBottomRef.current)) {
         listRef.current.scrollTop = listRef.current.scrollHeight;
       }
       hasOpenedOnceRef.current = true;
     }
-  }, [open, loaded]);
+  }, [open, loaded, searchResults]);
 
   // When new content arrives while the drawer is open and the user is already
   // at the bottom, keep the bottom in view. This is the original auto-scroll
@@ -418,13 +424,15 @@ export function ScratchpadPanel() {
     setDiffError(null);
   }, []);
 
-  // Esc precedence inside the drawer: diff modal first, then drawer close.
-  // (Block-edit cancel is handled inside BlockItem's own keydown so it
-  // intercepts Esc before the document listener fires.)
+  // Esc precedence inside the drawer: (1) searchbar (handled inside its own
+  // component, which calls onClose), (2) diff modal, (3) drawer close.
+  // Block-edit cancel is handled inside BlockItem's own keydown so it
+  // intercepts Esc before this document listener fires.
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      if (searchOpen) return; // searchbar already owns this Esc
       if (selectedEntryId) {
         event.preventDefault();
         closeDiff();
@@ -443,7 +451,27 @@ export function ScratchpadPanel() {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [open, selectedEntryId, closeDiff, setOpen]);
+  }, [open, searchOpen, selectedEntryId, closeDiff, setOpen]);
+
+  // `/` opens the searchbar when no input/textarea is focused. Listening on
+  // window so the keypress fires even when focus is on the drawer chrome.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "/") return;
+      const target = event.target as HTMLElement | null;
+      const inEditable =
+        target?.isContentEditable ||
+        target?.tagName === "INPUT" ||
+        target?.tagName === "TEXTAREA" ||
+        target?.tagName === "SELECT";
+      if (inEditable) return;
+      event.preventDefault();
+      setSearchOpen(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
 
   const restoreSelected = useCallback(async () => {
     if (!selectedEntryId) return;
@@ -500,6 +528,13 @@ export function ScratchpadPanel() {
     return { kind: "rows" as const, rows: mapped };
   }, [selectedContent, currentContent]);
 
+  // Filter visible blocks by search results when search is active.
+  const visibleBlocks = useMemo(() => {
+    if (!searchResults) return blocks;
+    const order = new Map(searchResults.map((m, i) => [m.block.id, i]));
+    return blocks.filter((b) => order.has(b.id)).sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+  }, [blocks, searchResults]);
+
   return (
     <div className="scratchpad-drawer" hidden={!open} aria-hidden={!open} aria-label="Scratchpad">
       <header className="scratchpad-drawer-header" data-saving={savePulse ?? undefined}>
@@ -517,6 +552,12 @@ export function ScratchpadPanel() {
           <X size={14} />
         </button>
       </header>
+      <ScratchpadPanelSearch
+        blocks={blocks}
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+        onResultsChange={setSearchResults}
+      />
       <div className="scratchpad-drawer-body">
         <div className="scratchpad-blocks-pane">
           {loadError ? (
@@ -529,10 +570,14 @@ export function ScratchpadPanel() {
           ) : (
             <>
               <div ref={listRef} className="scratchpad-block-list">
-                {blocks.length === 0 ? (
-                  <p className="scratchpad-block-empty">No blocks yet. Use the composer below to add one.</p>
+                {visibleBlocks.length === 0 ? (
+                  <p className="scratchpad-block-empty">
+                    {searchResults
+                      ? "No blocks match the search."
+                      : "No blocks yet. Use the composer below to add one."}
+                  </p>
                 ) : null}
-                {blocks.map((block) => (
+                {visibleBlocks.map((block) => (
                   <BlockItem
                     key={block.id}
                     block={block}

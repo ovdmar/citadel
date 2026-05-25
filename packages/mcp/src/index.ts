@@ -679,6 +679,8 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "add_block":
     case "update_block":
     case "delete_block":
+    case "fuzzy_search_scratchpad":
+    case "refine_scratchpad":
       // The scratchpad lives on disk under the daemon's data dir; the snapshot
       // path has no fs access, so route through the daemon explicitly.
       return { error: "scratchpad_tool_requires_daemon" };

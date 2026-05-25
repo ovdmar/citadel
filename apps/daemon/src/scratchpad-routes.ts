@@ -1,4 +1,5 @@
 import type { CitadelConfig } from "@citadel/config";
+import { SEARCH_LIMITS, fuzzySearchBlocks } from "@citadel/core";
 import type express from "express";
 import { findHistoryEntry, listHistorySummaries } from "./scratchpad-history.js";
 import {
@@ -61,6 +62,19 @@ export function registerScratchpadRoutes(input: { app: express.Express; config: 
 
   app.get("/api/scratchpad/blocks", (_req, res) => {
     res.json(listBlocks(config.dataDir));
+  });
+
+  // Fuzzy search over block text. Shares the `fuzzySearchBlocks` core function
+  // with the cockpit's floating searchbar so ranking is identical UI ↔ API ↔
+  // MCP. Empty q → 400; limit is clamped to [1, SEARCH_LIMITS.max].
+  app.get("/api/scratchpad/blocks/search", (req, res) => {
+    const q = typeof req.query.q === "string" ? req.query.q : "";
+    if (q.trim().length === 0) return res.status(400).json({ error: "query_required" });
+    const limitRaw = typeof req.query.limit === "string" ? Number.parseInt(req.query.limit, 10) : SEARCH_LIMITS.default;
+    const limit = Number.isFinite(limitRaw) ? limitRaw : SEARCH_LIMITS.default;
+    const { blocks } = listBlocks(config.dataDir);
+    const matches = fuzzySearchBlocks(blocks, q, limit);
+    res.json({ matches });
   });
 
   app.post("/api/scratchpad/blocks", (req, res) => {
