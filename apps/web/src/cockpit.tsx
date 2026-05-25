@@ -14,6 +14,7 @@ import { Stage } from "./stage.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
 import { useResolvedTheme } from "./use-resolved-theme.js";
+import { consumeNewWorkspaceDeeplink, shouldOpenNewWorkspaceModal } from "./lib/new-workspace-deeplink.js";
 import { prToneFor } from "./workspace-card.js";
 
 const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";
@@ -45,6 +46,21 @@ export function Cockpit() {
       navigate({ to: location.pathname, search: {} as Record<string, string> });
     }
   }, [search.workspace, navigate, location.pathname, setActiveWorkspaceId]);
+
+  // Deeplink: /?modal=new-workspace opens the existing Create Workspace modal
+  // on mount, then strips the param so a refresh doesn't re-open it. Used by
+  // external launchers (scripts/mac-satellite/new-workspace.sh).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!shouldOpenNewWorkspaceModal(window.location.search)) return;
+    setCreateWorkspaceOpen(true);
+    consumeNewWorkspaceDeeplink({
+      pathname: window.location.pathname,
+      search: window.location.search,
+      hash: window.location.hash,
+      history: window.history,
+    });
+  }, []);
 
   const activeWorkspace = useMemo<Workspace | null>(() => {
     if (!data?.workspaces.length) return null;
