@@ -2,6 +2,7 @@ import type {
   ActivityEvent,
   AgentRuntime,
   AgentSession,
+  Namespace,
   Operation,
   ProviderHealth,
   Repo,
@@ -22,13 +23,15 @@ export type StateResponse = {
   runtimes: AgentRuntime[];
   mcp: { enabled: boolean; resources: string[]; tools: string[] };
   scheduledAgents: ScheduledAgent[];
+  namespaces: Namespace[];
 };
 
-export function useStateQuery() {
+export function useStateQuery(options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["state"],
     queryFn: () => api<StateResponse>("/api/state"),
     refetchInterval: 5000,
+    enabled: options?.enabled ?? true,
   });
 }
 
@@ -41,6 +44,7 @@ export function useEventRefresh() {
     events.addEventListener("agent.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("scheduled-agent.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("scheduled-agent.run", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("namespace.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     return () => events.close();
   }, []);
 }

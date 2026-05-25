@@ -35,10 +35,13 @@ import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
+import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
+import { backfillIfEmpty } from "./scratchpad-history.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
+import { scratchpadPath } from "./scratchpad.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
 import { readWorkspaceDiff, readWorkspaceGitStatus, readWorkspaceRecentCommits } from "./workspace-diff.js";
 
@@ -98,7 +101,6 @@ export function createDaemonApp(input: {
   // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
   const initialTerminalCleanup = ttyd.cleanupStale();
   if (initialTerminalCleanup.killed > 0) emit("terminal.cleanup", initialTerminalCleanup);
-  // Self-heal: when a terminal's tmux session is gone (restart, manual kill), recreate it from the recorded runtime.
   const respawnTmux = async (session: import("@citadel/contracts").AgentSession) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     const runtime = config.runtimes.find((candidate) => candidate.id === session.runtimeId);
@@ -146,6 +148,7 @@ export function createDaemonApp(input: {
         runtimes: listRuntimeHealth(config.runtimes),
         mcp: mcpStatus(config.mcp.enabled),
         scheduledAgents: scheduledAgents.list(),
+        namespaces: store.listNamespaces(),
       });
     }),
   );
@@ -677,7 +680,20 @@ export function createDaemonApp(input: {
   });
 
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations });
+  registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit });
+  try {
+    const spPath = scratchpadPath(config.dataDir);
+    if (fs.existsSync(spPath)) {
+      const content = fs.readFileSync(spPath, "utf8");
+      if (content.length > 0) {
+        const stat = fs.statSync(spPath);
+        backfillIfEmpty(config.dataDir, { content, updatedAt: stat.mtime.toISOString() });
+      }
+    }
+  } catch {
+    /* non-fatal */
+  }
 
   app.get("/api/workspaces/:workspaceId/diff", (req, res) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);

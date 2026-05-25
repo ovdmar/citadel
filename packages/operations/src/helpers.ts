@@ -35,6 +35,103 @@ export function tryRunGit(cwd: string, args: string[]) {
   execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
 }
 
+export class WorkspaceNameTakenError extends Error {
+  constructor(
+    readonly repoId: string,
+    readonly name: string,
+  ) {
+    super(`workspace_name_taken: ${name}`);
+    this.name = "WorkspaceNameTakenError";
+  }
+}
+
+export class BranchInUseByWorktreeError extends Error {
+  constructor(
+    readonly branch: string,
+    readonly worktreePath: string,
+  ) {
+    super(`branch_in_use_by_worktree: ${branch} at ${worktreePath}`);
+    this.name = "BranchInUseByWorktreeError";
+  }
+}
+
+export class RemoteRefMissingError extends Error {
+  constructor(
+    readonly branch: string,
+    readonly remote: string,
+  ) {
+    super(`remote_ref_missing: ${remote}/${branch}`);
+    this.name = "RemoteRefMissingError";
+  }
+}
+
+export class WorkspaceInUseError extends Error {
+  constructor(
+    readonly workspaceId: string,
+    readonly lifecycle: string,
+  ) {
+    super(`workspace_in_use: ${workspaceId} lifecycle=${lifecycle}`);
+    this.name = "WorkspaceInUseError";
+  }
+}
+
+export function classifyWorktreeError(message: string): { branch: string; worktreePath: string } | null {
+  // Git output: "fatal: 'branch' is already used by worktree at '/path'"
+  const match = message.match(/'([^']+)' is already (?:used by|checked out at) worktree at '([^']+)'/);
+  if (match) return { branch: match[1] ?? "", worktreePath: match[2] ?? "" };
+  return null;
+}
+
+export function isUniqueWorkspaceNameViolation(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return /UNIQUE constraint failed: workspaces\.repo_id, workspaces\.name/i.test(error.message);
+}
+
+export type WorktreeAddResult = { mode: "checkout" | "tracking" | "new-from-base"; startPoint?: string };
+
+// Attach a worktree at workspacePath. existingBranch (when set) is preferred:
+// reuse it locally, else pull from remote, else fall back to creating a fresh
+// branch off origin/baseBranch (the "brand-new branch" case). When
+// existingBranch is null we just create a new branch off origin/baseBranch.
+export function addWorktree(
+  repoRoot: string,
+  workspacePath: string,
+  remote: string,
+  baseBranch: string,
+  branch: string,
+  existingBranch: string | null,
+): WorktreeAddResult {
+  if (existingBranch) {
+    try {
+      tryRunGit(repoRoot, ["worktree", "add", workspacePath, existingBranch]);
+      return { mode: "checkout" };
+    } catch {
+      if (remoteBranchExists(repoRoot, remote, existingBranch)) {
+        tryRunGit(repoRoot, ["worktree", "add", "-B", existingBranch, workspacePath, `${remote}/${existingBranch}`]);
+        return { mode: "tracking", startPoint: `${remote}/${existingBranch}` };
+      }
+      const startPoint = `${remote}/${baseBranch}`;
+      tryRunGit(repoRoot, ["worktree", "add", "-b", existingBranch, workspacePath, startPoint]);
+      return { mode: "new-from-base", startPoint };
+    }
+  }
+  const startPoint = `${remote}/${baseBranch}`;
+  tryRunGit(repoRoot, ["worktree", "add", "-b", branch, workspacePath, startPoint]);
+  return { mode: "new-from-base", startPoint };
+}
+
+export function remoteBranchExists(cwd: string, remote: string, branch: string) {
+  try {
+    execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`], {
+      cwd,
+      stdio: "pipe",
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function workspaceIsDirty(workspacePath: string) {
   if (!fs.existsSync(workspacePath)) return false;
   const output = execFileSync("git", ["status", "--porcelain=v1"], {
@@ -214,6 +311,7 @@ export function reconcileStore(
           pinned: true,
           lifecycle: "ready",
           dirty: false,
+          namespaceId: null,
           createdAt: now,
           updatedAt: now,
           archivedAt: null,

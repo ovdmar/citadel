@@ -210,6 +210,7 @@ export function Cockpit() {
               activeSummary={cockpitSummary.data}
               activeWorkspaceId={activeWorkspace?.id ?? ""}
               runtimes={data?.runtimes ?? []}
+              namespaces={data?.namespaces ?? []}
               lastRepoId={lastRepoId || undefined}
               createWorkspaceOpen={createWorkspaceOpen}
               onOpenCreateWorkspace={() => setCreateWorkspaceOpen(true)}
@@ -393,7 +394,7 @@ function TopBar(props: {
         <CitadelMark size={22} />
         <div className="cit-brand-text">
           <div className="cit-brand-name">Citadel</div>
-          <div className="cit-brand-org">{props.repo?.name ?? "local"}</div>
+          <div className="cit-brand-org">v0.42</div>
         </div>
       </div>
       <div className="cit-search-wrap">

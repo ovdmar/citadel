@@ -4,6 +4,7 @@ import type {
   AgentSession,
   HookAction,
   HookLink,
+  Namespace,
   Operation,
   ProviderHealth,
   Repo,
@@ -12,6 +13,8 @@ import type {
 } from "@citadel/contracts";
 
 export type AgentSessionSummary = AgentSession & {
+  namespaceId: string | null;
+  namespaceName: string | null;
   initialPrompt: string | null;
   messageCount: number;
 };
@@ -41,6 +44,12 @@ export type McpToolName =
   | "inspect_readiness"
   | "read_agent_output"
   | "send_agent_message"
+  | "list_namespaces"
+  | "create_namespace"
+  | "update_namespace"
+  | "archive_namespace"
+  | "restore_namespace"
+  | "assign_workspace_to_namespace"
   | "read_scratchpad"
   | "write_scratchpad"
   | "append_scratchpad"
@@ -71,6 +80,7 @@ export type McpToolContext = {
   providerHealth: ProviderHealth[];
   runtimes: AgentRuntime[];
   scheduledAgents?: ScheduledAgent[];
+  namespaces: Namespace[];
   sessionPromptSummary?: (sessionId: string) => { initialPrompt: string | null; messageCount: number };
 };
 
@@ -84,7 +94,13 @@ export type McpToolCall = {
 export function mcpStatus(enabled: boolean): McpStatusSnapshot {
   return {
     enabled,
-    resources: ["citadel://repos", "citadel://workspaces", "citadel://provider-health", "citadel://activity"],
+    resources: [
+      "citadel://repos",
+      "citadel://workspaces",
+      "citadel://provider-health",
+      "citadel://activity",
+      "citadel://namespaces",
+    ],
     tools: mcpToolDefinitions().map((tool) => tool.name),
   };
 }
@@ -105,15 +121,24 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     },
     {
       name: "list_workspaces",
-      description: "List workspaces, optionally filtered by repoId.",
-      inputSchema: { type: "object", properties: { repoId: { type: "string" } }, additionalProperties: false },
+      description:
+        "List workspaces, optionally filtered by repoId or namespaceId. Each entry includes namespaceId and namespaceName when assigned.",
+      inputSchema: {
+        type: "object",
+        properties: { repoId: { type: "string" }, namespaceId: { type: "string" } },
+        additionalProperties: false,
+      },
       destructive: false,
     },
     {
       name: "list_agent_sessions",
       description:
-        "List agent sessions with status, runtime, and tmux session metadata. Each entry includes a truncated initialPrompt and a messageCount so callers can see what the agent was asked to do and how much follow-up steering it has received. Use read_agent_history for the full text. Optionally filter by workspaceId.",
-      inputSchema: { type: "object", properties: { workspaceId: { type: "string" } }, additionalProperties: false },
+        "List agent sessions with status, runtime, namespace info (derived from the workspace), and tmux session metadata. Each entry includes a truncated initialPrompt and a messageCount so callers can see what the agent was asked to do and how much follow-up steering it has received. Use read_agent_history for the full text. Optionally filter by workspaceId or namespaceId.",
+      inputSchema: {
+        type: "object",
+        properties: { workspaceId: { type: "string" }, namespaceId: { type: "string" } },
+        additionalProperties: false,
+      },
       destructive: false,
     },
     {
@@ -199,7 +224,8 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     },
     {
       name: "create_workspace",
-      description: "Create a workspace through the daemon operation service.",
+      description:
+        "Create a workspace through the daemon operation service. Pass namespaceId to drop the new workspace into an existing namespace (used by orchestrator agents that spawn N sub-agents under one epic).",
       inputSchema: {
         type: "object",
         required: ["repoId", "name"],
@@ -210,6 +236,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
           issueKey: { type: "string" },
           issueTitle: { type: "string" },
           prUrl: { type: "string" },
+          namespaceId: { type: "string" },
         },
         additionalProperties: false,
       },
@@ -217,7 +244,8 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     },
     {
       name: "start_agent_session",
-      description: "Start a configured agent runtime in a workspace through the daemon operation service.",
+      description:
+        "Start a configured agent runtime in a workspace through the daemon operation service. If namespaceId is provided, the workspace is reassigned to that namespace as a side effect (assignment-on-launch).",
       inputSchema: {
         type: "object",
         required: ["workspaceId", "runtimeId"],
@@ -226,7 +254,88 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
           runtimeId: { type: "string" },
           displayName: { type: "string" },
           prompt: { type: "string" },
+          namespaceId: { type: "string" },
         },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "list_namespaces",
+      description:
+        "List namespaces (organizational groupings for workspaces, typically one per Jira epic / topic spanning multiple repos). Pass includeArchived=true to include archived namespaces.",
+      inputSchema: {
+        type: "object",
+        properties: { includeArchived: { type: "boolean" } },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "create_namespace",
+      description:
+        "Create a namespace so a main agent can group the sub-workspaces it spawns. Returns the namespace id to pass to create_workspace/start_agent_session.",
+      inputSchema: {
+        type: "object",
+        required: ["name"],
+        properties: {
+          name: { type: "string", minLength: 1, maxLength: 80 },
+          color: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "assign_workspace_to_namespace",
+      description:
+        "Move an existing workspace into a namespace (or pass namespaceId=null to unassign). Both arguments are required: pass namespaceId=null explicitly to detach. Use after the fact when a workspace should join a topic that did not exist when it was created.",
+      inputSchema: {
+        type: "object",
+        required: ["workspaceId", "namespaceId"],
+        properties: {
+          workspaceId: { type: "string" },
+          namespaceId: { type: ["string", "null"] },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "update_namespace",
+      description:
+        "Rename a namespace and/or change its color. At least one of name/color must be provided. Active namespaces only — to edit an archived one, restore it first.",
+      inputSchema: {
+        type: "object",
+        required: ["namespaceId"],
+        properties: {
+          namespaceId: { type: "string" },
+          name: { type: "string", minLength: 1, maxLength: 80 },
+          color: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "archive_namespace",
+      description:
+        "Soft-archive a namespace. Workspaces stay assigned but the namespace is hidden from the default list_namespaces view. Pass includeArchived=true to list_namespaces to see archived entries. Reversible with restore_namespace.",
+      inputSchema: {
+        type: "object",
+        required: ["namespaceId"],
+        properties: { namespaceId: { type: "string" } },
+        additionalProperties: false,
+      },
+      destructive: true,
+    },
+    {
+      name: "restore_namespace",
+      description: "Unarchive a previously archived namespace. The name UNIQUE constraint reactivates the row.",
+      inputSchema: {
+        type: "object",
+        required: ["namespaceId"],
+        properties: { namespaceId: { type: "string" } },
         additionalProperties: false,
       },
       destructive: false,
@@ -234,7 +343,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     {
       name: "launch_agent",
       description:
-        "High-level one-shot: create a fresh scratch workspace in a repo and immediately start an agent session in it with the given prompt. Returns { workspaceId, sessionId, branchName, workspacePath, operationId }. Use this instead of chaining create_workspace + start_agent_session when an orchestrator just wants 'run this prompt in repo X'. Pass exactly one of repoId or repoName; runtimeId defaults to claude-code. namespaceId is accepted but currently ignored (namespaces not yet implemented).",
+        "High-level one-shot: create a fresh scratch workspace in a repo and immediately start an agent session in it with the given prompt. Returns { workspaceId, sessionId, branchName, workspacePath, operationId }. Use this instead of chaining create_workspace + start_agent_session when an orchestrator just wants 'run this prompt in repo X'. Pass exactly one of repoId or repoName; runtimeId defaults to claude-code. If namespaceId is provided, the new workspace is assigned to that namespace at creation (so it groups with sibling sub-agents under one topic).",
       inputSchema: {
         type: "object",
         required: ["prompt"],
@@ -504,19 +613,26 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
         repos: context.repos.length,
         workspaces: context.workspaces.length,
         sessions: context.sessions.length,
+        namespaces: context.namespaces.length,
         operations: context.operations.slice(0, 10),
         providerHealth: context.providerHealth,
       };
     case "list_repos":
       return { repos: context.repos };
-    case "list_workspaces":
-      return {
-        workspaces: filterByRepo(context.workspaces, call.arguments?.repoId),
-      };
+    case "list_workspaces": {
+      const filtered = filterByRepo(context.workspaces, call.arguments?.repoId);
+      const byNamespace = filterByNamespaceId(filtered, call.arguments?.namespaceId);
+      return { workspaces: byNamespace.map((workspace) => annotateWorkspace(workspace, context.namespaces)) };
+    }
     case "list_agent_sessions": {
       const filtered = filterByWorkspace(context.sessions, call.arguments?.workspaceId);
+      const enriched = filtered.map((session) => annotateSession(session, context.workspaces, context.namespaces));
+      const byNamespace =
+        typeof call.arguments?.namespaceId === "string"
+          ? enriched.filter((session) => session.namespaceId === call.arguments?.namespaceId)
+          : enriched;
       const summarize = context.sessionPromptSummary;
-      const sessions: AgentSessionSummary[] = filtered.map((session) => {
+      const sessions: AgentSessionSummary[] = byNamespace.map((session) => {
         const summary = summarize?.(session.id) ?? { initialPrompt: null, messageCount: 0 };
         return {
           ...session,
@@ -534,6 +650,14 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
       return { runtimes: context.runtimes };
     case "list_workspace_links":
       return listWorkspaceLinks(context.activity, call.arguments?.workspaceId);
+    case "list_namespaces": {
+      // includeArchived from the daemon path is honored there; here we only
+      // see the active snapshot the daemon serialized into context.namespaces.
+      // When called against the snapshot, archived entries are simply absent.
+      const includeArchived = call.arguments?.includeArchived === true;
+      if (includeArchived) return { namespaces: context.namespaces, includeArchived: true };
+      return { namespaces: context.namespaces.filter((entry) => !entry.archivedAt) };
+    }
     case "inspect_readiness": {
       const workspaceId = typeof call.arguments?.workspaceId === "string" ? (call.arguments.workspaceId as string) : "";
       const workspace = context.workspaces.find((candidate) => candidate.id === workspaceId);
@@ -541,6 +665,7 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
       return {
         workspaceId,
         lifecycle: workspace.lifecycle,
+        namespaceId: workspace.namespaceId ?? null,
         sessions: context.sessions
           .filter((session) => session.workspaceId === workspaceId)
           .map((session) => ({ id: session.id, status: session.status, runtimeId: session.runtimeId })),
@@ -555,6 +680,11 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "archive_workspace":
     case "remove_workspace":
     case "reconcile":
+    case "create_namespace":
+    case "update_namespace":
+    case "archive_namespace":
+    case "restore_namespace":
+    case "assign_workspace_to_namespace":
     case "write_scratchpad":
     case "append_scratchpad":
     case "list_deployed_apps":
@@ -582,6 +712,23 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     default:
       return assertNever(call.name);
   }
+}
+
+function annotateWorkspace(workspace: Workspace, namespaces: Namespace[]) {
+  const namespace = workspace.namespaceId ? namespaces.find((entry) => entry.id === workspace.namespaceId) : null;
+  return { ...workspace, namespaceName: namespace?.name ?? null };
+}
+
+function annotateSession(session: AgentSession, workspaces: Workspace[], namespaces: Namespace[]) {
+  const workspace = workspaces.find((entry) => entry.id === session.workspaceId) ?? null;
+  const namespaceId = workspace?.namespaceId ?? null;
+  const namespace = namespaceId ? namespaces.find((entry) => entry.id === namespaceId) : null;
+  return { ...session, namespaceId, namespaceName: namespace?.name ?? null };
+}
+
+function filterByNamespaceId(workspaces: Workspace[], namespaceId: unknown) {
+  if (typeof namespaceId !== "string") return workspaces;
+  return workspaces.filter((workspace) => workspace.namespaceId === namespaceId);
 }
 
 export function serializeWorkspaceResource(input: {

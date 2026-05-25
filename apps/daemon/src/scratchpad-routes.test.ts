@@ -56,6 +56,109 @@ describe("scratchpad HTTP + MCP routes", () => {
     }
   });
 
+  it("rejects PUT bodies that try to spoof a non-ui source", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const response = await fetch(`${baseUrl}/api/scratchpad`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "spoof", source: "mcp:write_scratchpad" }),
+      });
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toBe("source_forbidden");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("exposes scratchpad history and supports restore", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      await putJson(`${baseUrl}/api/scratchpad`, { content: "first" });
+      // Different source ensures a new entry, not a coalesced one.
+      await postJson(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "w",
+        method: "tools/call",
+        params: { name: "write_scratchpad", arguments: { content: "second from mcp" } },
+      });
+      await putJson(`${baseUrl}/api/scratchpad`, { content: "third" });
+
+      const list = await getJson<{ entries: Array<{ id: string; source: string; preview: string; content?: string }> }>(
+        `${baseUrl}/api/scratchpad/history`,
+      );
+      expect(list.entries.length).toBeGreaterThanOrEqual(3);
+      expect(list.entries[0]?.source).toBe("ui");
+      for (const entry of list.entries) {
+        expect(entry.content).toBeUndefined();
+        expect(typeof entry.preview).toBe("string");
+      }
+      const sources = list.entries.map((entry) => entry.source);
+      expect(sources).toEqual(expect.arrayContaining(["ui", "mcp:write_scratchpad"]));
+
+      const oldest = list.entries[list.entries.length - 1];
+      if (!oldest) throw new Error("expected history entries");
+      const full = await getJson<{ entry: { id: string; content: string } }>(
+        `${baseUrl}/api/scratchpad/history/${oldest.id}`,
+      );
+      expect(full.entry.id).toBe(oldest.id);
+      expect(typeof full.entry.content).toBe("string");
+
+      const restored = await postJson<{ content: string }>(`${baseUrl}/api/scratchpad/restore`, {
+        entryId: oldest.id,
+      });
+      expect(restored.content).toBe(full.entry.content);
+      const current = await getJson<{ content: string }>(`${baseUrl}/api/scratchpad`);
+      expect(current.content).toBe(full.entry.content);
+
+      const after = await getJson<{ entries: Array<{ source: string }> }>(`${baseUrl}/api/scratchpad/history`);
+      expect(after.entries[0]?.source).toBe(`restore:${oldest.id}`);
+
+      const missing = await fetch(`${baseUrl}/api/scratchpad/history/nope`);
+      expect(missing.status).toBe(404);
+      const badRestore = await fetch(`${baseUrl}/api/scratchpad/restore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ entryId: "nope" }),
+      });
+      expect(badRestore.status).toBe(404);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("backfills pre-existing scratchpad content on first boot only", async () => {
+    const fixture = createFixture();
+    const spPath = path.join(fixture.config.dataDir, "scratchpad.md");
+    fs.writeFileSync(spPath, "pre-existing notes");
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const list = await getJson<{ entries: Array<{ source: string; preview: string }> }>(
+        `${baseUrl}/api/scratchpad/history`,
+      );
+      expect(list.entries).toHaveLength(1);
+      expect(list.entries[0]?.source).toBe("backfill");
+      expect(list.entries[0]?.preview).toBe("pre-existing notes");
+    } finally {
+      await closeServer(server);
+    }
+
+    const { server: server2 } = createDaemonApp(fixture);
+    const baseUrl2 = await listen(server2);
+    try {
+      const list = await getJson<{ entries: unknown[] }>(`${baseUrl2}/api/scratchpad/history`);
+      expect(list.entries).toHaveLength(1);
+    } finally {
+      await closeServer(server2);
+    }
+  });
+
   it("rejects oversize PUT bodies", async () => {
     const fixture = createFixture();
     const { server } = createDaemonApp(fixture);

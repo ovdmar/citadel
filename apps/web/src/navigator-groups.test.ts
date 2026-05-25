@@ -41,6 +41,7 @@ function makeWorkspace(id: string, repoId: string, overrides: Partial<Workspace>
     pinned: false,
     lifecycle: "ready",
     dirty: false,
+    namespaceId: null,
     createdAt: ts,
     updatedAt: ts,
     archivedAt: null,

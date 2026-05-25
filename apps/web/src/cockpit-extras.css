@@ -137,6 +137,10 @@
 
 .nav-group {
   padding: 2px 6px 4px;
+  /* Shared right-edge slot for the group count and the workspace approval
+   * shield. Both elements anchor to this width and right-align, so their
+   * right edges coincide regardless of zoom level or font metrics. */
+  --right-slot: 22px;
 }
 
 .nav-group-flat {
@@ -148,7 +152,9 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 6px 2px;
+  padding: 4px 10px 2px 6px;
+  /* Match the workspace-card right padding so the .nav-group-count slot and
+   * the .workspace-card-right slot share the same right edge. */
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -182,13 +188,12 @@
 
 .nav-group-count {
   flex: 0 0 auto;
+  font-family: var(--font-mono);
   font-size: 10px;
   color: var(--c-fg-4);
-  background: var(--c-line-2);
-  border-radius: 8px;
-  padding: 0 5px;
-  min-width: 16px;
-  text-align: center;
+  font-variant-numeric: tabular-nums;
+  min-width: var(--right-slot);
+  text-align: right;
 }
 
 .nav-group-body {
@@ -389,25 +394,43 @@
   width: 22px;
   height: 16px;
   border-radius: 4px;
-  color: var(--c-fg-3);
+  color: var(--c-fg-4);
 }
 
-.workspace-card-agent.running {
-  color: var(--color-success);
+.workspace-card-agent.tone-pending {
+  color: var(--c-warn);
 }
 
-.workspace-card-agent.starting {
-  color: var(--color-warning);
+.workspace-card-agent.tone-passing {
+  color: var(--c-ok);
 }
 
-.workspace-card-agent.failed {
-  color: var(--color-danger);
+.workspace-card-agent.tone-failing {
+  color: var(--c-bad);
 }
 
-.workspace-card-agent.root {
-  color: var(--color-action);
-  background: color-mix(in srgb, var(--color-action) 14%, transparent);
-  border-radius: 4px;
+.workspace-card-agent.tone-merged {
+  color: var(--color-merged);
+}
+
+.workspace-card.active .workspace-card-agent {
+  color: var(--c-on-dark);
+}
+
+.workspace-card.active .workspace-card-agent.tone-pending {
+  color: var(--c-warn);
+}
+
+.workspace-card.active .workspace-card-agent.tone-passing {
+  color: var(--c-ok);
+}
+
+.workspace-card.active .workspace-card-agent.tone-failing {
+  color: var(--c-bad);
+}
+
+.workspace-card.active .workspace-card-agent.tone-merged {
+  color: var(--color-merged);
 }
 
 .workspace-card-main {
@@ -460,7 +483,9 @@
   gap: 4px;
   font-size: 10.5px;
   color: var(--c-fg-3);
-  min-width: 26px;
+  /* Mirrors .nav-group-count so the shield right edge matches the count
+   * right edge inside the same .nav-group. */
+  min-width: var(--right-slot);
   justify-content: flex-end;
 }
 
@@ -498,8 +523,9 @@
 .pr-pill,
 .approval-pill {
   display: inline-grid;
-  place-items: center;
-  width: 18px;
+  /* Hug the right edge so the icon's visual right matches the count's text
+   * right inside the shared --right-slot. Centering would leave a 2-3px gap. */
+  place-items: center end;
   height: 18px;
   border-radius: 4px;
   background: transparent;

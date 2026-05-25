@@ -107,6 +107,7 @@ describe("mcp helpers", () => {
           pinned: false,
           lifecycle: "ready",
           dirty: false,
+          namespaceId: null,
           createdAt: "2026-05-17T00:00:00.000Z",
           updatedAt: "2026-05-17T00:00:00.000Z",
           archivedAt: null,
@@ -191,16 +192,23 @@ describe("mcp helpers", () => {
           },
         },
       ],
+      namespaces: [],
     } satisfies McpToolContext;
 
     const result = callMcpTool({ name: "inspect_status" }, context);
     expect(result).toMatchObject({ repos: 1, workspaces: 1, sessions: 1 });
     expect(callMcpTool({ name: "list_repos" }, context)).toEqual({ repos: context.repos });
     expect(callMcpTool({ name: "list_workspaces", arguments: { repoId: "repo_test" } }, context)).toEqual({
-      workspaces: context.workspaces,
+      workspaces: context.workspaces.map((workspace) => ({ ...workspace, namespaceName: null })),
     });
     expect(callMcpTool({ name: "list_agent_sessions", arguments: { workspaceId: "ws_test" } }, context)).toEqual({
-      sessions: context.sessions.map((session) => ({ ...session, initialPrompt: null, messageCount: 0 })),
+      sessions: context.sessions.map((session) => ({
+        ...session,
+        namespaceId: null,
+        namespaceName: null,
+        initialPrompt: null,
+        messageCount: 0,
+      })),
     });
     expect(callMcpTool({ name: "list_provider_health" }, context)).toEqual({
       providerHealth: context.providerHealth,

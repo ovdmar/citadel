@@ -123,24 +123,13 @@ export function isAgentLive(sessionName: string) {
   return fs.existsSync(agentLiveSentinelPath(sessionName));
 }
 
-// Wrap the agent invocation so the tmux pane survives the agent's exit.
-//
-// Today pressing Ctrl+C inside a running agent (e.g. Claude Code) leaves an
-// unusable terminal: the pane becomes dead because the agent process was PID 1
-// of the pane. The wrapper drops the user back into a fresh interactive login
-// shell rooted at the workspace cwd so they can run any command, including
-// `claude resume <sessionId>`.
-//
-// A sentinel file under tmpdir marks "agent currently live"; the reconciler
-// consults it to flip the session status to "stopped" without killing the
-// pane.
-//
-// Outer shell is intentionally non-login (`bash -c`, not `bash -lc`) so the
-// agent's environment matches what tmux delivered before this wrapper
-// existed — we don't want to silently start sourcing `~/.bash_profile` for
-// every agent. The *fallback* shell the user sees after the agent exits IS a
-// login shell (so they get their normal interactive setup) and respects
-// `$SHELL` so zsh/fish users aren't forced into bash.
+// Wrap the agent so the tmux pane survives its exit: Ctrl+C in Claude Code
+// would otherwise kill PID 1 of the pane. After exit we drop into a fresh
+// interactive login shell at the workspace cwd. A tmpdir sentinel marks
+// "agent live" so the reconciler can flip session status without killing the
+// pane. Outer shell is non-login (`bash -c`) so we don't silently source
+// ~/.bash_profile per agent; the post-exit fallback IS a login shell and
+// respects $SHELL so zsh/fish users aren't forced into bash.
 function terminalCommand(sessionName: string, command: string, args: string[]) {
   const argv = [command, ...args].map(shellQuote).join(" ");
   const envPrefix = "env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor FORCE_COLOR=1 CLICOLOR_FORCE=1";

@@ -8,6 +8,7 @@ import type {
 } from "@citadel/contracts";
 import { createId } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
+import { WorkspaceInUseError } from "./helpers.js";
 
 export type LaunchAgentResult = {
   workspaceId: string;
@@ -16,6 +17,7 @@ export type LaunchAgentResult = {
   workspacePath: string;
   operationId: string;
   error?: string;
+  resumed?: boolean;
 };
 
 export type LaunchAgentDeps = {
@@ -46,25 +48,63 @@ export async function launchAgent(
   runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
 ): Promise<LaunchAgentResult> {
   const repo = resolveRepo(deps.store, input);
-  if (input.namespaceId) {
-    // namespaces are not implemented yet; accept but flag so the orchestrator
-    // sees that we ignored it rather than silently dropping it.
-    deps.activity({
-      type: "launch_agent.namespace_ignored",
-      source: "system",
-      message: `launch_agent received namespaceId=${input.namespaceId} but namespaces are not yet implemented`,
-      repoId: repo.id,
-      workspaceId: null,
-      operationId: null,
-    });
-  }
   const workspaceName = input.workspaceName ?? `agent-${createId("ws").slice(-8)}`;
   const branchOverride = input.branchName?.trim();
+  // Idempotent resume: if a ready workspace with this name already exists,
+  // skip creation and either return its running session or start a new one.
+  const existing = findActiveWorkspaceByName(deps.store, repo.id, workspaceName);
+  if (existing) {
+    if (existing.lifecycle !== "ready") {
+      throw new WorkspaceInUseError(existing.id, existing.lifecycle);
+    }
+    const running = deps.store.listSessions(existing.id).find((s) => s.status === "running");
+    if (running) {
+      return {
+        workspaceId: existing.id,
+        sessionId: running.id,
+        branchName: existing.branch,
+        workspacePath: existing.path,
+        operationId: createId("op"),
+        resumed: true,
+      };
+    }
+    const sessionInput: CreateAgentSessionInput = {
+      workspaceId: existing.id,
+      runtimeId: input.runtimeId,
+      displayName: input.displayName ?? deriveAgentDisplayName(input.prompt),
+      prompt: input.prompt,
+    };
+    try {
+      const session = await deps.createAgentSession(sessionInput, runtime);
+      return {
+        workspaceId: existing.id,
+        sessionId: session.id,
+        branchName: existing.branch,
+        workspacePath: existing.path,
+        operationId: createId("op"),
+        resumed: true,
+      };
+    } catch (error) {
+      return {
+        workspaceId: existing.id,
+        sessionId: null,
+        branchName: existing.branch,
+        workspacePath: existing.path,
+        operationId: createId("op"),
+        resumed: true,
+        error: error instanceof Error ? error.message : "agent_session_start_failed",
+      };
+    }
+  }
+  // No explicit override (or caller passed default branch): derive a unique
+  // new branch so we don't collide with the primary worktree's checkout.
+  const isDefaultBranch = !branchOverride || branchOverride === repo.defaultBranch;
   const workspaceInput: CreateWorkspaceInput = {
     repoId: repo.id,
     name: workspaceName,
     source: "scratch",
-    ...(branchOverride ? { existingBranch: branchOverride } : {}),
+    ...(isDefaultBranch ? { newBranch: deriveAgentBranchName(workspaceName) } : { existingBranch: branchOverride }),
+    ...(input.namespaceId ? { namespaceId: input.namespaceId } : {}),
   };
   const { operationId, workspaceId } = await deps.createWorkspace(workspaceInput);
   const created = findWorkspace(deps.store, workspaceId);
@@ -84,6 +124,7 @@ export async function launchAgent(
     runtimeId: input.runtimeId,
     displayName: input.displayName ?? deriveAgentDisplayName(input.prompt),
     prompt: input.prompt,
+    ...(input.namespaceId ? { namespaceId: input.namespaceId } : {}),
   };
   try {
     const session = await deps.createAgentSession(sessionInput, runtime);
@@ -119,6 +160,23 @@ function resolveRepo(store: SqliteStore, input: LaunchAgentInput): Repo {
 
 function findWorkspace(store: SqliteStore, workspaceId: string): Workspace | undefined {
   return store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+}
+
+function findActiveWorkspaceByName(store: SqliteStore, repoId: string, name: string): Workspace | undefined {
+  return store
+    .listWorkspaces(repoId)
+    .find((candidate) => candidate.name === name && candidate.kind !== "root" && !candidate.archivedAt);
+}
+
+function deriveAgentBranchName(workspaceName: string) {
+  const slug =
+    workspaceName
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 32) || "agent";
+  const suffix = createId("ws").slice(-6);
+  return `agent/${slug}-${suffix}`;
 }
 
 function deriveAgentDisplayName(prompt: string) {

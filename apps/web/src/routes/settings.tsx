@@ -147,11 +147,16 @@ function OverviewCard(props: { label: string; value: string; ready: boolean }) {
 }
 
 function McpSection(props: { mcpEnabled: boolean }) {
+  // Derived at render time so the example matches *this* cockpit's daemon —
+  // important in worktree dev where the port is derived from the worktree path
+  // and the systemd main daemon is also running on :4010.
+  const mcpUrl =
+    typeof window !== "undefined" ? `${window.location.origin}/api/mcp/rpc` : "http://127.0.0.1:4010/api/mcp/rpc";
   const example = JSON.stringify(
     {
       mcpServers: {
         citadel: {
-          url: "http://127.0.0.1:4010/mcp",
+          url: mcpUrl,
         },
       },
     },
