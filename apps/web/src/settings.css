@@ -1,4 +1,8 @@
-/* Settings + onboarding share the dense cockpit theme. */
+/* Shared header + onboarding styles.
+ * Settings page chrome now lives in settings-ia.css (set-* classes).
+ * This file is kept narrow to onboarding + simple .page header still used by
+ * /onboarding, /history, /operations, /scratchpad.
+ */
 
 .page {
   padding: 0;
@@ -95,10 +99,6 @@
   grid-column: 1 / -1;
 }
 
-.page > .grid > .panel-title {
-  display: none;
-}
-
 .panel-title {
   display: flex;
   align-items: center;
@@ -112,216 +112,6 @@
   letter-spacing: 0.08em;
   color: var(--muted);
   margin: 0;
-}
-
-/* Health/setup/usage compact rows */
-
-.setup-list,
-.runtime-row,
-.repo-management {
-  display: grid;
-  gap: 6px;
-}
-
-.setup-row,
-.usage-row,
-.repo-row {
-  display: grid;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  background: var(--panel-strong);
-  font-size: 12px;
-}
-
-.setup-row {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-}
-
-.setup-row.ready {
-  border-color: color-mix(in srgb, var(--color-success) 26%, transparent);
-}
-
-.setup-row.pending {
-  border-color: color-mix(in srgb, var(--color-warning) 26%, transparent);
-}
-
-.health {
-  display: grid;
-  gap: 2px;
-  padding: 6px 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel-strong);
-  font-size: 12px;
-}
-
-.health strong {
-  font-size: 12px;
-}
-
-.health.healthy {
-  border-left: 3px solid var(--color-success);
-}
-
-.health.degraded {
-  border-left: 3px solid var(--color-warning);
-}
-
-.health.unavailable {
-  border-left: 3px solid var(--color-danger);
-}
-
-.health span {
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-}
-
-.health.healthy span {
-  color: var(--color-success);
-}
-
-.health.degraded span,
-.health.unavailable span {
-  color: var(--color-warning);
-}
-
-.health.unavailable span {
-  color: var(--color-danger);
-}
-
-.health p,
-.health em {
-  font-size: 11px;
-  color: var(--muted);
-  font-style: normal;
-}
-
-.runtime-row {
-  display: grid;
-  gap: 4px;
-}
-
-.usage-row {
-  grid-template-columns: minmax(0, 1fr) auto;
-  background: color-mix(in srgb, CanvasText 4%, transparent);
-}
-
-.usage-row p {
-  grid-column: 1 / -1;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.repo-row {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-}
-
-.repo-row strong {
-  font-size: 12.5px;
-  color: CanvasText;
-}
-
-.repo-row span {
-  font-size: 11px;
-  color: var(--muted);
-  overflow-wrap: anywhere;
-}
-
-.repo-row small,
-.repo-remove-controls small {
-  display: block;
-  font-size: 10.5px;
-  color: var(--muted);
-}
-
-.repo-remove-controls {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  justify-content: flex-end;
-}
-
-.repo-remove-controls .settings-link {
-  display: inline-flex;
-  align-items: center;
-  min-height: 26px;
-  padding: 0 9px;
-  font-size: 11.5px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-
-.toggle-grid,
-.form-grid {
-  display: grid;
-  gap: 6px;
-}
-
-.toggle-grid {
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-}
-
-.toggle-grid label {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 4px 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel-strong);
-  font-size: 12px;
-  color: CanvasText;
-}
-
-.form-grid {
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-}
-
-.form-grid label {
-  display: grid;
-  gap: 3px;
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-.form-grid input,
-.form-grid select,
-.form-grid textarea {
-  min-height: 28px;
-  padding: 3px 7px;
-  border-radius: 5px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  color: CanvasText;
-  font-size: 12px;
-}
-
-.form-grid label:has(input[type="number"]) {
-  max-width: 220px;
-}
-
-.form-error,
-.form-error-list {
-  color: var(--color-danger);
-  font-size: 11.5px;
-}
-
-.config-path {
-  color: var(--muted);
-  font-size: 11px;
-  overflow-wrap: anywhere;
-}
-
-.danger-action {
-  background: var(--color-danger);
 }
 
 /* Onboarding */
@@ -507,23 +297,21 @@
   gap: 4px;
 }
 
-.repo-inspect {
-  display: grid;
-  gap: 2px;
-  padding: 6px 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel-strong);
+/* Form error text, used across onboarding + structured config. */
+.form-error,
+.form-error-list {
+  color: var(--color-danger);
   font-size: 11.5px;
+}
+
+.config-path {
   color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 
-.repo-inspect.warn {
-  border-color: color-mix(in srgb, var(--color-warning) 36%, transparent);
-}
-
-.repo-inspect.ok {
-  border-color: color-mix(in srgb, var(--color-success) 36%, transparent);
+.danger-action {
+  background: var(--color-danger);
 }
 
 @media (max-width: 980px) {
