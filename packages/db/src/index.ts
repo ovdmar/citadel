@@ -121,6 +121,11 @@ export class SqliteStore {
         runtime_id TEXT NOT NULL,
         display_name TEXT NOT NULL,
         status TEXT NOT NULL,
+        status_reason TEXT,
+        last_status_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
+        last_output_at TEXT,
+        ended_at TEXT,
+        exit_code INTEGER,
         transport TEXT NOT NULL,
         tmux_session_name TEXT,
         tmux_session_id TEXT,
@@ -161,6 +166,33 @@ export class SqliteStore {
     this.ensureColumn("workspaces", "slack_thread_url", "TEXT");
     this.ensureColumn("workspaces", "kind", "TEXT NOT NULL DEFAULT 'worktree'");
     this.ensureColumn("repos", "deploy_hook_command", "TEXT");
+    // Agent-status migration (canonical enum + tracking fields). All additive;
+    // status remaps below are idempotent. Wrapped in a transaction so a crash
+    // mid-migration leaves rows untouched. See specs/B.3 for canonical values.
+    this.ensureColumn("agent_sessions", "status_reason", "TEXT");
+    this.ensureColumn("agent_sessions", "last_status_at", "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z'");
+    this.ensureColumn("agent_sessions", "last_output_at", "TEXT");
+    this.ensureColumn("agent_sessions", "ended_at", "TEXT");
+    this.ensureColumn("agent_sessions", "exit_code", "INTEGER");
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(
+        "UPDATE agent_sessions SET last_status_at = updated_at WHERE last_status_at = '1970-01-01T00:00:00.000Z'",
+      );
+      db.exec(
+        "UPDATE agent_sessions SET status = 'running', status_reason = 'migrated_from_waiting' WHERE status = 'waiting'",
+      );
+      db.exec(
+        "UPDATE agent_sessions SET status = 'unknown', status_reason = 'migrated_from_orphaned' WHERE status = 'orphaned'",
+      );
+      db.exec(
+        "UPDATE agent_sessions SET status_reason = 'migrated_legacy_idle' WHERE status = 'idle' AND status_reason IS NULL",
+      );
+      db.exec("COMMIT");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      throw err;
+    }
     db.exec(`
       CREATE TABLE IF NOT EXISTS scheduled_agents (
         id TEXT PRIMARY KEY,
@@ -397,9 +429,10 @@ export class SqliteStore {
   insertSession(session: AgentSession) {
     this.database
       .prepare(
-        `INSERT INTO agent_sessions (id, workspace_id, runtime_id, display_name, status, transport,
+        `INSERT INTO agent_sessions (id, workspace_id, runtime_id, display_name, status, status_reason,
+          last_status_at, last_output_at, ended_at, exit_code, transport,
           tmux_session_name, tmux_session_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -407,6 +440,11 @@ export class SqliteStore {
         session.runtimeId,
         session.displayName,
         session.status,
+        session.statusReason ?? null,
+        session.lastStatusAt,
+        session.lastOutputAt ?? null,
+        session.endedAt ?? null,
+        session.exitCode ?? null,
         session.transport,
         session.tmuxSessionName ?? null,
         session.tmuxSessionId ?? null,
@@ -415,10 +453,53 @@ export class SqliteStore {
       );
   }
 
-  updateSessionStatus(sessionId: string, status: AgentSession["status"]) {
-    this.database
-      .prepare("UPDATE agent_sessions SET status = ?, updated_at = ? WHERE id = ?")
-      .run(status, new Date().toISOString(), sessionId);
+  // Partial update accepting any subset of mutable status-tracking fields.
+  // Used by the status reducer (via @citadel/operations) to apply reducer
+  // outputs without round-tripping through the full AgentSession schema.
+  // Fields with `undefined` value are left unchanged; fields with `null` are
+  // written as SQL NULL.
+  updateSessionStatus(
+    sessionId: string,
+    update: {
+      status?: AgentSession["status"];
+      statusReason?: string | null;
+      lastStatusAt?: string;
+      lastOutputAt?: string | null;
+      endedAt?: string | null;
+      exitCode?: number | null;
+    },
+  ) {
+    const sets: string[] = [];
+    const values: Array<string | number | null> = [];
+    if (update.status !== undefined) {
+      sets.push("status = ?");
+      values.push(update.status);
+    }
+    if (update.statusReason !== undefined) {
+      sets.push("status_reason = ?");
+      values.push(update.statusReason);
+    }
+    if (update.lastStatusAt !== undefined) {
+      sets.push("last_status_at = ?");
+      values.push(update.lastStatusAt);
+    }
+    if (update.lastOutputAt !== undefined) {
+      sets.push("last_output_at = ?");
+      values.push(update.lastOutputAt);
+    }
+    if (update.endedAt !== undefined) {
+      sets.push("ended_at = ?");
+      values.push(update.endedAt);
+    }
+    if (update.exitCode !== undefined) {
+      sets.push("exit_code = ?");
+      values.push(update.exitCode);
+    }
+    if (sets.length === 0) return; // nothing to do
+    sets.push("updated_at = ?");
+    values.push(new Date().toISOString());
+    values.push(sessionId);
+    this.database.prepare(`UPDATE agent_sessions SET ${sets.join(", ")} WHERE id = ?`).run(...values);
   }
 
   updateSessionDisplayName(sessionId: string, displayName: string) {
