@@ -54,8 +54,18 @@ export async function createAgentSession(
     // verify delivery, the agent will sit on a blank prompt forever, which
     // is exactly the failure mode launch_agent's callers can't recover from.
     // Surface it as an explicit error instead of a phantom success.
+    //
+    // The runtime-ready predicate watches pane_current_command to catch the
+    // "wrapper bash still running setup" race. We only arm it when the agent
+    // is NOT itself a shell — for a shell runtime the predicate would never
+    // resolve (the agent IS bash), wasting the full waitForReadyMs budget
+    // and tipping launchAgent tests over their timeout.
+    const baseName = runtime.command.split("/").pop() ?? runtime.command;
+    const runtimeIsShell = baseName === "bash" || baseName === "sh" || baseName === "zsh";
     const submitted = await submitPrompt(sessionName, promptForKeys, {
-      runtimeReadyPredicate: (cmd) => cmd !== "bash" && cmd !== "sh" && cmd !== "zsh" && cmd.length > 0,
+      ...(runtimeIsShell
+        ? {}
+        : { runtimeReadyPredicate: (cmd) => cmd !== "bash" && cmd !== "sh" && cmd !== "zsh" && cmd.length > 0 }),
     });
     if (!submitted.ok) {
       throw new Error(`initial_prompt_not_delivered: ${submitted.error ?? "unknown"}`);
