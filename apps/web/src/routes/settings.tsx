@@ -1,11 +1,12 @@
 import type { AgentRuntime, ProviderHealth, Repo } from "@citadel/contracts";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, Cable, CheckCircle2, ChevronRight, FolderGit2, Moon, Server, Sun, Workflow } from "lucide-react";
+import { ArrowLeft, Cable, CheckCircle2, ChevronRight, FolderGit2, Server, Workflow } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useStateQuery } from "../app-state.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { AgentsPanel } from "../settings-runtimes.js";
+import { ThemeControls } from "../theme-controls.js";
 
 type SectionId = "overview" | "providers" | "agents" | "repositories" | "mcp";
 
@@ -71,7 +72,7 @@ export function SettingsView() {
         <div />
 
         <div className="set-top-right">
-          <ThemeToggle />
+          <ThemeControls />
         </div>
       </header>
 
@@ -157,33 +158,6 @@ function PageHead(props: { title: string; sub?: string; help?: string }) {
       {props.sub ? <div className="set-page-sub">{props.sub}</div> : null}
       {props.help ? <div className="set-page-help">{props.help}</div> : null}
     </div>
-  );
-}
-
-function ThemeToggle() {
-  const [theme, setTheme] = useState(() => localStorage.getItem("citadel.theme") || "system");
-  useEffect(() => {
-    localStorage.setItem("citadel.theme", theme);
-    if (theme === "system") {
-      delete document.documentElement.dataset.theme;
-    } else {
-      document.documentElement.dataset.theme = theme;
-    }
-  }, [theme]);
-
-  // Light <-> Dark cycle (system stays accessible via the existing CockpitTools menu).
-  const isDark = theme === "dark";
-  const toggle = () => setTheme(isDark ? "light" : "dark");
-  return (
-    <button
-      type="button"
-      className="set-icon-btn"
-      onClick={toggle}
-      title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-      aria-label="Toggle theme"
-    >
-      {isDark ? <Sun size={15} /> : <Moon size={15} />}
-    </button>
   );
 }
 
