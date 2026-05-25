@@ -514,10 +514,7 @@ export function ScratchpadView() {
             </>
           )}
         </div>
-        <aside
-          className={`scratchpad-history${historyOpen ? " is-open" : ""}`}
-          aria-label="Scratchpad version history"
-        >
+        <aside className={`scratchpad-history${historyOpen ? " is-open" : ""}`} aria-label="Scratchpad version history">
           <header className="scratchpad-history-header">
             <span>Versions</span>
             <span className="scratchpad-history-count">{history.length}</span>

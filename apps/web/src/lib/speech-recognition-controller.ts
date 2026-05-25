@@ -56,7 +56,9 @@ export function resolveCtor(): SpeechRecognitionCtor | undefined {
   return g.SpeechRecognition ?? g.webkitSpeechRecognition;
 }
 
-export function createSpeechRecognitionController(input: SpeechRecognitionControllerInput): SpeechRecognitionController {
+export function createSpeechRecognitionController(
+  input: SpeechRecognitionControllerInput,
+): SpeechRecognitionController {
   const { Ctor, onTranscript, onError, onStateChange } = input;
   const silenceMs = input.silenceTimeoutMs ?? SILENCE_TIMEOUT_MS;
   let active: RecognitionInstance | null = null;

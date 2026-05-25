@@ -20,7 +20,8 @@ class MockRecognition {
   continuous = false;
   interimResults = false;
   lang = "";
-  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null = null;
+  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null =
+    null;
   onerror: ((event: { error: string }) => void) | null = null;
   onend: (() => void) | null = null;
 
@@ -57,9 +58,11 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
-  // Scrub the globals the support probe reads.
-  delete (globalThis as { SpeechRecognition?: unknown }).SpeechRecognition;
-  delete (globalThis as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition;
+  // Scrub the globals the support probe reads. Use `undefined` assignment
+  // rather than `delete` so biome's noDelete lint stays quiet; the probe
+  // uses `??` so undefined and missing are equivalent.
+  (globalThis as { SpeechRecognition?: unknown }).SpeechRecognition = undefined;
+  (globalThis as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition = undefined;
 });
 
 describe("isSpeechRecognitionSupported", () => {

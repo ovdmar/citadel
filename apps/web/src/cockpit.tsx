@@ -9,12 +9,12 @@ import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { useWorkspaceCockpitSummary } from "./cockpit-tools.js";
 import { CommandPalette } from "./command-palette.js";
 import { Inspector } from "./inspector.js";
+import { consumeNewWorkspaceDeeplink, shouldOpenNewWorkspaceModal } from "./lib/new-workspace-deeplink.js";
 import { Navigator } from "./navigator.js";
 import { Stage } from "./stage.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
 import { useResolvedTheme } from "./use-resolved-theme.js";
-import { consumeNewWorkspaceDeeplink, shouldOpenNewWorkspaceModal } from "./lib/new-workspace-deeplink.js";
 import { prToneFor } from "./workspace-card.js";
 
 const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";

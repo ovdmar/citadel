@@ -314,8 +314,13 @@
 }
 
 @keyframes scratchpad-mic-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(79, 140, 255, 0.4); }
-  50% { box-shadow: 0 0 0 6px rgba(79, 140, 255, 0); }
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(79, 140, 255, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(79, 140, 255, 0);
+  }
 }
 
 /* Undo toast for optimistic-delete. */
