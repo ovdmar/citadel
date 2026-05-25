@@ -38,6 +38,7 @@ import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { createProviderCache } from "./provider-cache.js";
+import { startProviderRefreshJob } from "./provider-refresh-job.js";
 import { workspaceAppHookSample } from "./readiness.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
@@ -70,6 +71,11 @@ export async function createDaemonApp(input: {
   store: SqliteStore;
   operations?: OperationService;
   providers?: Partial<ProviderCollectors>;
+  // Default true. Test helpers pass false so vitest boots don't spawn the
+  // 15s background tick (and the implied `gh`/`jtk` subprocesses on tick).
+  // Note: deliberately NOT gated on process.env.VITEST — that pattern would
+  // silently disable the feature in production if the env var leaks.
+  enableRefreshJob?: boolean;
 }): Promise<DaemonApp> {
   const { config, configPath, store } = input;
   setGithubCommand(config.providers.github.command);
@@ -678,6 +684,25 @@ export async function createDaemonApp(input: {
   });
   fsWatchers.reconcile();
   server.on("close", () => fsWatchers?.close());
+
+  const refreshJob =
+    input.enableRefreshJob !== false
+      ? startProviderRefreshJob({
+          config,
+          store,
+          cache: providerCache,
+          providers: {
+            collectGitHubVersionControlSummary: (rootPath) => providers.collectGitHubVersionControlSummary(rootPath),
+            collectGitHubCiRuns: (rootPath) => providers.collectGitHubCiRuns(rootPath),
+            collectJiraIssueSummary: (issueKey) => providers.collectJiraIssueSummary(issueKey),
+            collectRuntimeUsage: (provider) =>
+              import("@citadel/providers").then((mod) => mod.collectRuntimeUsage(provider)),
+            listRuntimeHealth: () => listRuntimeHealth(config.runtimes),
+          },
+        })
+      : null;
+  if (refreshJob) server.on("close", () => refreshJob.stop());
+
   server.on("close", () => {
     // Final synchronous flush so the persisted cache reflects in-memory state
     // at shutdown. Errors are logged inside dispose() and not re-thrown.

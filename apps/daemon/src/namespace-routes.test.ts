@@ -283,7 +283,7 @@ function createFixture() {
   config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
   const store = new SqliteStore(config.databasePath);
   store.migrate();
-  return { config, configPath, store };
+  return { config, configPath, store, enableRefreshJob: false };
 }
 
 function createGitRepo(dir: string) {
