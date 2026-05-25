@@ -12,7 +12,7 @@ export type FocusRefreshOptions = {
   thresholdMs: number;
   queryClient: QueryClient;
   // Inject `now` for tests; defaults to Date.now.
-  now?: () => number;
+  now?: (() => number) | undefined;
 };
 
 /**

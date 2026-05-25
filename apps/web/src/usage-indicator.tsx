@@ -1,9 +1,17 @@
 import type { AgentRuntime, RuntimeUsageSummary } from "@citadel/contracts";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { RefreshCw } from "lucide-react";
 import { api } from "./api.js";
 import { categoryKey, formatLocalReset, formatTimeUntilReset, pickTopBarCategory } from "./lib/usage-format.js";
 import { RuntimeMark } from "./runtime-mark.js";
+
+export function usagePillNeedsReload(summary: RuntimeUsageSummary | undefined): boolean {
+  if (!summary) return true;
+  if (summary.status !== "healthy") return true;
+  if (summary.categories.length === 0) return true;
+  return false;
+}
 
 type RuntimeConfigEntry = {
   id: string;
@@ -61,7 +69,37 @@ function UsagePill(props: {
   usage: RuntimeUsageSummary | undefined;
 }) {
   const summary = props.usage;
-  const category = summary ? pickTopBarCategory(summary.categories, props.topBarKey) : null;
+  const queryClient = useQueryClient();
+  const refreshMutation = useMutation({
+    mutationFn: () => api(`/api/runtimes/${props.runtime.id}/usage/refresh`, { method: "POST" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["runtime-usage", props.runtime.id] }),
+  });
+  // Reload affordance for missing / errored / empty usage data. Pill keeps
+  // the same chrome (min-width on .cit-usage-pill) so swapping percentage ↔
+  // refresh icon doesn't shift neighboring controls.
+  if (usagePillNeedsReload(summary)) {
+    const tooltip = summary?.reason
+      ? `${props.runtime.displayName}: ${summary.reason} — click to retry`
+      : `${props.runtime.displayName}: usage unavailable — click to retry`;
+    return (
+      <button
+        type="button"
+        className="cit-usage-pill cit-usage-pill--reload"
+        title={tooltip}
+        aria-label={tooltip}
+        disabled={refreshMutation.isPending}
+        onClick={() => refreshMutation.mutate()}
+      >
+        <span className="cit-usage-pill-mark" aria-hidden>
+          <RuntimeMark runtimeId={props.runtime.id} size={14} />
+        </span>
+        <span className="cit-usage-pill-value">
+          <RefreshCw size={12} aria-hidden />
+        </span>
+      </button>
+    );
+  }
+  const category = pickTopBarCategory(summary?.categories ?? [], props.topBarKey);
   const timeLeft = category ? formatTimeUntilReset(category.reset) : null;
   const tooltip = buildTooltip(props.runtime.displayName, summary, category);
   return (
