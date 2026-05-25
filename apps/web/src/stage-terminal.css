@@ -239,6 +239,18 @@
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.stage-add-menu .stage-add-cap {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--c-bad);
 }
 
 .stage-add-menu button {
