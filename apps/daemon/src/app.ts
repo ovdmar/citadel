@@ -106,7 +106,7 @@ export function createDaemonApp(input: {
     const sessionName = session.tmuxSessionName ?? `citadel_${workspace.id}_${session.id.slice(-8)}`;
     return ensureTmuxSession({ sessionName, cwd: workspace.path, command: runtime.command, args: runtime.args });
   };
-  registerTerminalRoutes({ app, server, store, ttyd, emit, respawnTmux });
+  registerTerminalRoutes({ app, server, store, ttyd, dataDir: config.dataDir, emit, respawnTmux });
 
   const cachedProviderHealth = () =>
     cachedProvider("provider-health", () => collectProviderHealth(config.providers), 15_000);
@@ -461,7 +461,7 @@ export function createDaemonApp(input: {
     res.json({ runtimes: listRuntimeHealth(config.runtimes) });
   });
 
-  registerRuntimeUsageRoutes({ app, config, asyncRoute, cachedProvider, providerCache });
+  registerRuntimeUsageRoutes({ app, config, asyncRoute, providerCache, cachedProvider });
 
   app.post(
     "/api/agent-sessions",

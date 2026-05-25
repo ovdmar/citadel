@@ -185,8 +185,53 @@ export function defaultDataDir() {
   return process.env.CITADEL_DATA_DIR || path.join(os.homedir(), ".local", "share", "citadel");
 }
 
+// Walk up from `cwd` looking for a `.git` entry. Returns the worktree name if
+// `.git` is a FILE pointing at `<mainRepo>/.git/worktrees/<name>`, otherwise
+// null (main repo, or not in a git tree at all). Best-effort — any I/O or
+// parse failure returns null so the caller falls back to the unscoped path.
+export function detectWorktree(cwd: string = process.cwd()): { name: string; gitDir: string } | null {
+  let dir = path.resolve(cwd);
+  for (;;) {
+    const gitPath = path.join(dir, ".git");
+    try {
+      const stat = fs.statSync(gitPath);
+      if (stat.isFile()) {
+        const content = fs.readFileSync(gitPath, "utf8").trim();
+        const match = /^gitdir:\s*(.+)$/mu.exec(content);
+        const gitDir = match?.[1]?.trim();
+        if (!gitDir) return null;
+        // A worktree's gitdir is `<main>/.git/worktrees/<name>` — the basename
+        // of the gitdir IS the worktree name. If the path doesn't include a
+        // `/worktrees/` segment it's some other gitdir-redirect (submodule,
+        // unusual setup) and we don't risk scoping it.
+        if (!gitDir.includes(`${path.sep}worktrees${path.sep}`) && !gitDir.includes("/worktrees/")) {
+          return null;
+        }
+        return { name: path.basename(gitDir), gitDir };
+      }
+      // .git is a directory → main repo, not a worktree.
+      return null;
+    } catch {
+      // No .git here — climb.
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return null; // reached filesystem root
+    dir = parent;
+  }
+}
+
+// Where the daemon stores its config file. When the daemon is run from a git
+// worktree (and `CITADEL_CONFIG` isn't set explicitly), scope the path to
+// `<dataDir>/worktrees/<name>/citadel.config.json` so an ad-hoc dev daemon
+// can't overwrite the production install's config. The production daemon
+// (systemd-supervised) always passes `CITADEL_CONFIG` explicitly, so it stays
+// on the canonical path regardless of `cwd`.
 export function defaultConfigPath() {
-  return process.env.CITADEL_CONFIG || path.join(defaultDataDir(), "citadel.config.json");
+  if (process.env.CITADEL_CONFIG) return process.env.CITADEL_CONFIG;
+  const dataDir = defaultDataDir();
+  const worktree = detectWorktree();
+  if (worktree) return path.join(dataDir, "worktrees", worktree.name, "citadel.config.json");
+  return path.join(dataDir, "citadel.config.json");
 }
 
 export function loadConfig(configPath = defaultConfigPath()): CitadelConfig {
