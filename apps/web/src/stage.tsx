@@ -10,6 +10,12 @@ type StageTab = {
   label: string;
 };
 
+// Each daemon allocates 20 ttyd ports (one per active terminal) — see the
+// per-daemon ttyd slice in apps/daemon/src/app.ts. We cap per workspace at
+// the same number so the UI never lets the user create a session that
+// would inevitably fail to bind a terminal port.
+const WORKSPACE_AGENT_CAP = 20;
+
 export function Stage(props: {
   workspace: Workspace;
   sessions: AgentSession[];
@@ -133,6 +139,11 @@ export function Stage(props: {
   useEffect(() => subscribeTerminalHandle(() => setHandleTick((n) => n + 1)), []);
 
   const startError = startSession.error instanceof Error ? startSession.error.message : null;
+  const atSessionCap = props.sessions.length >= WORKSPACE_AGENT_CAP;
+  const addDisabled = startSession.isPending || atSessionCap;
+  const addTitle = atSessionCap
+    ? `Workspace is at the ${WORKSPACE_AGENT_CAP}-session cap. Close a session to start another.`
+    : "Add session";
   return (
     <>
       <div className="stage-tabbar">
@@ -237,45 +248,60 @@ export function Stage(props: {
             type="button"
             className="stage-add"
             onClick={() => setAddMenuOpen((v) => !v)}
-            aria-label="Add session"
+            aria-label={addTitle}
             aria-haspopup="menu"
             aria-expanded={addMenuOpen}
-            title="Add session"
-            disabled={startSession.isPending}
+            title={addTitle}
+            disabled={addDisabled}
           >
             <Plus size={14} />
           </button>
           {addMenuOpen ? (
             <div className="stage-add-menu" role="menu">
-              <div className="stage-add-menu-label">New session</div>
+              <div className="stage-add-menu-label">
+                New session
+                {atSessionCap ? (
+                  <output className="stage-add-cap">
+                    {props.sessions.length}/{WORKSPACE_AGENT_CAP} — cap reached
+                  </output>
+                ) : null}
+              </div>
               <button
                 type="button"
                 role="menuitem"
-                title="Start a shell terminal in this workspace"
+                title={
+                  atSessionCap
+                    ? `Cap reached (${WORKSPACE_AGENT_CAP}). Close a session first.`
+                    : "Start a shell terminal in this workspace"
+                }
                 onClick={() => startSession.mutate({ runtimeId: "shell", displayName: "Terminal" })}
-                disabled={startSession.isPending}
+                disabled={addDisabled}
               >
                 <TerminalSquare size={12} /> Plain Terminal
               </button>
               {props.runtimes
                 .filter((runtime) => runtime.id !== "shell")
-                .map((runtime) => (
-                  <button
-                    key={runtime.id}
-                    type="button"
-                    role="menuitem"
-                    disabled={runtime.health !== "healthy" || startSession.isPending}
-                    title={
-                      runtime.health === "healthy"
-                        ? `Start ${runtime.displayName}`
-                        : `${runtime.displayName} is ${runtime.health}${runtime.healthReason ? ` · ${runtime.healthReason}` : ""}`
-                    }
-                    onClick={() => startSession.mutate({ runtimeId: runtime.id, displayName: runtime.displayName })}
-                  >
-                    {runtime.displayName} ·{" "}
-                    <span className={`stage-add-health ${runtime.health}`}>{runtime.health}</span>
-                  </button>
-                ))}
+                .map((runtime) => {
+                  const runtimeDisabled = runtime.health !== "healthy" || addDisabled;
+                  const runtimeTitle = atSessionCap
+                    ? `Cap reached (${WORKSPACE_AGENT_CAP}). Close a session first.`
+                    : runtime.health === "healthy"
+                      ? `Start ${runtime.displayName}`
+                      : `${runtime.displayName} is ${runtime.health}${runtime.healthReason ? ` · ${runtime.healthReason}` : ""}`;
+                  return (
+                    <button
+                      key={runtime.id}
+                      type="button"
+                      role="menuitem"
+                      disabled={runtimeDisabled}
+                      title={runtimeTitle}
+                      onClick={() => startSession.mutate({ runtimeId: runtime.id, displayName: runtime.displayName })}
+                    >
+                      {runtime.displayName} ·{" "}
+                      <span className={`stage-add-health ${runtime.health}`}>{runtime.health}</span>
+                    </button>
+                  );
+                })}
               {props.runtimes.filter((runtime) => runtime.id !== "shell").length === 0 ? (
                 <div className="stage-add-empty">
                   No agents configured. <a href="/settings">Open settings</a> to add one.

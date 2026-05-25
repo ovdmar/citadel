@@ -90,13 +90,17 @@ export function createDaemonApp(input: {
   // trample each other's live terminals (worktree daemons under tsx watch
   // restart on file save, and each restart killed the systemd install's
   // ttyds — that's where the "Reconnecting/Reconnected" storm came from).
-  // Slot = ((daemonPort - 4010) mod 11) * 20; gives 11 disjoint 20-port
-  // slices in 7681..7900 and is deterministic per HTTP port. Env overrides
-  // still win so operators can pin the range explicitly.
+  //
+  // Slot = ((daemonPort - 4010) mod 11) * 20 gives 11 disjoint 20-port
+  // slices, each deterministic per HTTP port. The base is shifted to 7721
+  // (just above the legacy hardcoded ceiling of 7720) so daemons running
+  // OLD pre-slot code — whose cleanupStale still targets the legacy
+  // 7681..7720 range — physically cannot reach new daemons' terminals.
+  // Env overrides still win so operators can pin the range explicitly.
   const ttydSlot = (((config.port - 4010) % 11) + 11) % 11;
   const envTtydBase = Number.parseInt(process.env.CITADEL_TTYD_PORT_BASE ?? "", 10);
   const envTtydMax = Number.parseInt(process.env.CITADEL_TTYD_PORT_MAX ?? "", 10);
-  const ttydPortBase = Number.isFinite(envTtydBase) && envTtydBase > 0 ? envTtydBase : 7681 + 20 * ttydSlot;
+  const ttydPortBase = Number.isFinite(envTtydBase) && envTtydBase > 0 ? envTtydBase : 7721 + 20 * ttydSlot;
   const ttydPortMax = Number.isFinite(envTtydMax) && envTtydMax > 0 ? envTtydMax : ttydPortBase + 19;
   const ttyd = createTtydManager({ portBase: ttydPortBase, portMax: ttydPortMax });
 
