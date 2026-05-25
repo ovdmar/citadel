@@ -125,6 +125,7 @@ describe("loadConfig", () => {
     const prevConfig = process.env.CITADEL_CONFIG;
     const prevData = process.env.CITADEL_DATA_DIR;
     const prevCwd = process.cwd();
+    // biome-ignore lint/performance/noDelete: `delete` is the only real way to unset a process.env key — `= undefined` coerces to "undefined".
     delete process.env.CITADEL_CONFIG;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-scope-"));
     dirs.push(root);
@@ -140,8 +141,10 @@ describe("loadConfig", () => {
       expect(defaultConfigPath()).toBe(path.join(dataDir, "worktrees", "feat-x", "citadel.config.json"));
     } finally {
       process.chdir(prevCwd);
+      // biome-ignore lint/performance/noDelete: `delete` is the only real way to unset a process.env key.
       if (prevConfig === undefined) delete process.env.CITADEL_CONFIG;
       else process.env.CITADEL_CONFIG = prevConfig;
+      // biome-ignore lint/performance/noDelete: see above.
       if (prevData === undefined) delete process.env.CITADEL_DATA_DIR;
       else process.env.CITADEL_DATA_DIR = prevData;
     }
@@ -164,6 +167,7 @@ describe("loadConfig", () => {
       expect(defaultConfigPath()).toBe(explicit);
     } finally {
       process.chdir(prevCwd);
+      // biome-ignore lint/performance/noDelete: see above.
       if (prevConfig === undefined) delete process.env.CITADEL_CONFIG;
       else process.env.CITADEL_CONFIG = prevConfig;
     }

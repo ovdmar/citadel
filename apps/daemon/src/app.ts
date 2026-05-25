@@ -22,7 +22,6 @@ import {
   collectGitHubVersionControlSummary,
   collectJiraIssueSummary,
   collectProviderHealth,
-  collectRuntimeUsage,
   setGithubCommand,
   setJiraCommand,
   transitionJiraIssue,
@@ -37,6 +36,7 @@ import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
+import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
@@ -460,65 +460,7 @@ export function createDaemonApp(input: {
     res.json({ runtimes: listRuntimeHealth(config.runtimes) });
   });
 
-  const runtimeUsageHandler = (options: { force: boolean }) =>
-    asyncRoute(async (req, res) => {
-      const runtimeId = req.params.runtimeId;
-      if (typeof runtimeId !== "string") return res.status(400).json({ error: "runtime_id_required" });
-      const runtime = config.runtimes.find((candidate) => candidate.id === runtimeId);
-      if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
-
-      const runtimeHealth = listRuntimeHealth(config.runtimes).find((entry) => entry.id === runtimeId);
-      const checkedAt = new Date().toISOString();
-      // Health gate: a runtime that isn't healthy has no usage to fetch. We
-      // short-circuit BEFORE spawning anything (tmux, PTY, external command).
-      if (!runtimeHealth || runtimeHealth.health !== "healthy") {
-        return res.json({
-          usage: {
-            runtimeId,
-            providerId: "usage-unavailable",
-            source: "health-gate",
-            status: "unavailable" as const,
-            reason: runtimeHealth?.healthReason ?? "Runtime is not healthy",
-            categories: [],
-            checkedAt,
-          },
-        });
-      }
-      // Capability gate: only runtimes that advertise supportsUsage have a
-      // fetcher (built-in or external). Same logic, different reason.
-      if (!runtimeHealth.capabilities.supportsUsage) {
-        return res.json({
-          usage: {
-            runtimeId,
-            providerId: "usage-unsupported",
-            source: "unsupported",
-            status: "unavailable" as const,
-            reason: "Runtime does not support usage reporting",
-            categories: [],
-            checkedAt,
-          },
-        });
-      }
-
-      const provider = config.usageProviders.find((candidate) => candidate.runtimeId === runtimeId);
-      const cacheKey = `usage:${runtimeId}:${provider?.id ?? "builtin"}`;
-      if (options.force) providerCache.delete(cacheKey);
-      const usage = await cachedProvider(
-        cacheKey,
-        () =>
-          collectRuntimeUsage({
-            runtimeId,
-            command: runtime.command,
-            args: runtime.args,
-            externalProvider: provider,
-          }),
-        5 * 60_000,
-      );
-      res.json({ usage });
-    });
-
-  app.get("/api/runtimes/:runtimeId/usage", runtimeUsageHandler({ force: false }));
-  app.post("/api/runtimes/:runtimeId/usage/refresh", runtimeUsageHandler({ force: true }));
+  registerRuntimeUsageRoutes({ app, config, asyncRoute, providerCache, cachedProvider });
 
   app.post(
     "/api/agent-sessions",
