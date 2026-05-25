@@ -196,16 +196,18 @@ describe("loadConfig", () => {
     expect(reloaded.repoDefaults.setupHookIds).toEqual(["setup"]);
   });
 
-  it("ignores dataDir/databasePath stored in the raw config file and derives them from the current env", () => {
+  it("in worktree mode, ignores dataDir/databasePath stored in the raw config file and derives them from env", () => {
     // Worktree-isolation regression: if a worktree daemon accidentally reads a
     // config file that has `dataDir` pointing at the prod install (e.g. via a
     // leaked CITADEL_CONFIG env var), the saved paths MUST NOT override the
     // env-derived defaults. Otherwise the worktree daemon writes to prod data.
     const prevData = process.env.CITADEL_DATA_DIR;
+    const prevWorktree = process.env.CITADEL_WORKTREE;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-iso-"));
     dirs.push(root);
     const worktreeDataDir = path.join(root, "worktree-data");
     process.env.CITADEL_DATA_DIR = worktreeDataDir;
+    process.env.CITADEL_WORKTREE = "1";
     const configPath = path.join(root, "leaked.config.json");
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     fs.writeFileSync(
@@ -227,6 +229,47 @@ describe("loadConfig", () => {
       // biome-ignore lint/performance/noDelete: `delete` is the only real way to unset a process.env key.
       if (prevData === undefined) delete process.env.CITADEL_DATA_DIR;
       else process.env.CITADEL_DATA_DIR = prevData;
+      // biome-ignore lint/performance/noDelete: same — must actually unset.
+      if (prevWorktree === undefined) delete process.env.CITADEL_WORKTREE;
+      else process.env.CITADEL_WORKTREE = prevWorktree;
+    }
+  });
+
+  it("in prod mode (no CITADEL_WORKTREE), honors dataDir/databasePath persisted in the config file", () => {
+    // Prod regression: the systemd-supervised daemon at the main install must
+    // be able to persist a customized `databasePath` in
+    // `~/.local/share/citadel/citadel.config.json` and have it actually take
+    // effect. Without this, the worktree-isolation strip would silently route
+    // the prod daemon to the env-derived default dir, stranding the operator's
+    // real data.
+    const prevData = process.env.CITADEL_DATA_DIR;
+    const prevWorktree = process.env.CITADEL_WORKTREE;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-prod-"));
+    dirs.push(root);
+    const customDataDir = path.join(root, "custom-data");
+    const customDbPath = path.join(customDataDir, "citadel.sqlite");
+    // biome-ignore lint/performance/noDelete: must actually clear these for the env-derived defaults to fall back to the home XDG path.
+    delete process.env.CITADEL_DATA_DIR;
+    // biome-ignore lint/performance/noDelete: ensure we're not in worktree mode.
+    delete process.env.CITADEL_WORKTREE;
+    const configPath = path.join(root, "prod.config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        dataDir: customDataDir,
+        databasePath: customDbPath,
+        port: 4010,
+      }),
+    );
+    try {
+      const loaded = loadConfig(configPath);
+      expect(loaded.dataDir).toBe(customDataDir);
+      expect(loaded.databasePath).toBe(customDbPath);
+      expect(loaded.port).toBe(4010);
+    } finally {
+      if (prevData !== undefined) process.env.CITADEL_DATA_DIR = prevData;
+      if (prevWorktree !== undefined) process.env.CITADEL_WORKTREE = prevWorktree;
     }
   });
 });

@@ -248,13 +248,19 @@ export function loadConfig(configPath = defaultConfigPath()): CitadelConfig {
     return parsed;
   }
   const raw = JSON.parse(fs.readFileSync(configPath, "utf8"));
-  // Path-shaped keys are ALWAYS resolved from the current run's env + defaults,
-  // never from the saved file. Persisting `dataDir` / `databasePath` inside the
-  // config means a worktree daemon that accidentally read the prod config (env
-  // leak, misconfigured CITADEL_CONFIG, etc.) would silently write to the prod
-  // data dir. Defense in depth: the env-derived defaults beat raw for these.
-  const { dataDir: _ignoredDataDir, databasePath: _ignoredDbPath, ...rawWithoutPaths } = raw ?? {};
-  return CitadelConfigSchema.parse({ ...defaults, ...rawWithoutPaths });
+  // Worktree-mode only: strip `dataDir` / `databasePath` from the file before
+  // merging, so a worktree daemon that accidentally reads the prod config
+  // (leaked CITADEL_CONFIG, misconfigured paths, etc.) cannot inherit the
+  // prod data paths from the file — env-derived defaults win instead.
+  //
+  // Prod mode (no CITADEL_WORKTREE=1): honor the file's `dataDir` /
+  // `databasePath` so an operator who has customized those settings in
+  // `~/.local/share/citadel/citadel.config.json` actually sees them applied.
+  if (process.env.CITADEL_WORKTREE === "1") {
+    const { dataDir: _ignoredDataDir, databasePath: _ignoredDbPath, ...rawWithoutPaths } = raw ?? {};
+    return CitadelConfigSchema.parse({ ...defaults, ...rawWithoutPaths });
+  }
+  return CitadelConfigSchema.parse({ ...defaults, ...(raw ?? {}) });
 }
 
 export function saveConfig(config: CitadelConfig, configPath = defaultConfigPath()) {

@@ -12,26 +12,25 @@ import { createDaemonApp } from "./app.js";
 // fires when someone runs `node dist/index.js` raw without setting up env.
 const worktreeRoot = resolveWorktreeRoot();
 const devState = worktreeRoot ? loadDevState(worktreeRoot) : null;
-// In worktree mode, FORCE-isolate from inherited env that could point at the
-// prod install. The systemd unit sets CITADEL_CONFIG and CITADEL_DATA_DIR at
-// the prod paths; when the cockpit (running under systemd) invokes `make
-// deploy` from a worktree, those vars are inherited by the make subprocess
-// and would otherwise leak into the worktree daemon, causing it to read/write
-// the prod config + data. Wiping them here is defense in depth — the
-// Makefile also scrubs them, but this guarantees correct behavior regardless
-// of how the worktree daemon was launched.
-if (worktreeRoot) {
-  // CITADEL_CONFIG: only honored when it points inside this worktree.
-  // Otherwise we ignore it and let defaultConfigPath derive a worktree-scoped
-  // path from CITADEL_DATA_DIR.
+// "Am I a worktree dev daemon?" is decided by an explicit positive signal
+// (CITADEL_WORKTREE=1, set by `make deploy`), NOT by filesystem inspection.
+// The main checkout that `make install` points the systemd unit at also has
+// `.git/` and `.citadel/`, so `resolveWorktreeRoot()` alone can't tell prod
+// apart from a dev worktree — and treating prod as a worktree would override
+// the systemd unit's CITADEL_CONFIG / strand the prod data dir.
+//
+// When the positive signal IS set, hard-isolate from inherited env that
+// could point outside this worktree (cockpit-under-systemd invoking `make
+// deploy` leaks CITADEL_CONFIG=<prod>). The Makefile also `env -u`s these
+// vars; the block below is defense in depth.
+const isWorktreeDaemon = worktreeRoot !== null && process.env.CITADEL_WORKTREE === "1";
+if (isWorktreeDaemon && worktreeRoot) {
   if (process.env.CITADEL_CONFIG && !process.env.CITADEL_CONFIG.startsWith(`${worktreeRoot}/`)) {
     console.warn(
       `Ignoring inherited CITADEL_CONFIG=${process.env.CITADEL_CONFIG} — points outside the worktree (${worktreeRoot}). Worktree daemons must use worktree-scoped config.`,
     );
     process.env.CITADEL_CONFIG = "";
   }
-  // CITADEL_DATA_DIR: same rule — must be inside the worktree, otherwise
-  // force the worktree-local path.
   const expectedDataDir = `${worktreeRoot}/.citadel/data`;
   if (process.env.CITADEL_DATA_DIR && !process.env.CITADEL_DATA_DIR.startsWith(`${worktreeRoot}/`)) {
     console.warn(
@@ -45,9 +44,9 @@ if (worktreeRoot) {
 if (devState && !process.env.CITADEL_PORT) {
   process.env.CITADEL_PORT = String(devState.port);
 }
-if (worktreeRoot && !process.env.CITADEL_PORT) {
+if (isWorktreeDaemon && !process.env.CITADEL_PORT) {
   console.error(
-    `Citadel daemon launched from a checkout (${worktreeRoot}) without CITADEL_PORT set.\nRefusing to bind the systemd-reserved default (:4010).\nUse 'make deploy' from this checkout, or set CITADEL_PORT explicitly.`,
+    `Citadel daemon launched as a worktree daemon (${worktreeRoot}) without CITADEL_PORT set.\nRefusing to bind the systemd-reserved default (:4010).\nUse 'make deploy' from this checkout, or set CITADEL_PORT explicitly.`,
   );
   process.exit(2);
 }
@@ -85,7 +84,7 @@ server.on("error", (error: NodeJS.ErrnoException) => {
 server.listen(config.port, config.bindHost, () => {
   console.log(`Citadel daemon listening on http://${config.bindHost}:${config.port}`);
   console.log(`  data dir: ${config.dataDir}`);
-  if (worktreeRoot) {
+  if (isWorktreeDaemon && worktreeRoot) {
     console.log(`  worktree: ${worktreeRoot}`);
     saveDevState(worktreeRoot, {
       port: config.port,
