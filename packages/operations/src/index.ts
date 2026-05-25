@@ -447,32 +447,41 @@ export class OperationService {
       this.logOp(operation.id, "info", `Killed ${ownedSessions.length} tmux session(s) attached to workspace`);
     }
 
+    const worktreeMissing = !input.archiveOnly && !fs.existsSync(workspace.path);
     if (!input.archiveOnly) {
-      try {
+      if (worktreeMissing) {
         this.logOp(
           operation.id,
           "info",
-          `Running ${repo.teardownHookIds.length} teardown hook(s): ${repo.teardownHookIds.join(", ") || "(none)"}`,
+          `Worktree path ${workspace.path} is already gone; skipping ${repo.teardownHookIds.length} teardown hook(s)`,
         );
-        await this.runWorkspaceHooks("workspace.teardown", repo.teardownHookIds, repo, workspace, operation.id);
-      } catch (error) {
-        if (!input.force) {
-          this.store.upsertOperation({
-            ...operation,
-            status: "failed",
-            progress: 100,
-            error: error instanceof Error ? error.message : "workspace_teardown_failed",
-            updatedAt: nowIso(),
-          });
-          this.activity(
-            "workspace.remove.blocked",
-            "system",
-            `Removal blocked because teardown failed for ${workspace.name}`,
-            workspace.repoId,
-            workspace.id,
+      } else {
+        try {
+          this.logOp(
             operation.id,
+            "info",
+            `Running ${repo.teardownHookIds.length} teardown hook(s): ${repo.teardownHookIds.join(", ") || "(none)"}`,
           );
-          return { operationId: operation.id, removed: false, archived: false, dirty };
+          await this.runWorkspaceHooks("workspace.teardown", repo.teardownHookIds, repo, workspace, operation.id);
+        } catch (error) {
+          if (!input.force) {
+            this.store.upsertOperation({
+              ...operation,
+              status: "failed",
+              progress: 100,
+              error: error instanceof Error ? error.message : "workspace_teardown_failed",
+              updatedAt: nowIso(),
+            });
+            this.activity(
+              "workspace.remove.blocked",
+              "system",
+              `Removal blocked because teardown failed for ${workspace.name}`,
+              workspace.repoId,
+              workspace.id,
+              operation.id,
+            );
+            return { operationId: operation.id, removed: false, archived: false, dirty };
+          }
         }
       }
     }
@@ -480,6 +489,17 @@ export class OperationService {
     if (!input.archiveOnly && fs.existsSync(workspace.path)) {
       tryRunGit(repo.rootPath, ["worktree", "remove", "--force", workspace.path]);
       this.logOp(operation.id, "info", `Removed worktree at ${workspace.path}`);
+    } else if (worktreeMissing) {
+      try {
+        tryRunGit(repo.rootPath, ["worktree", "prune"]);
+        this.logOp(operation.id, "info", `Pruned stale worktree refs for ${workspace.path}`);
+      } catch (error) {
+        this.logOp(
+          operation.id,
+          "warn",
+          `git worktree prune failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
     if (input.archiveOnly) {
       this.store.archiveWorkspace(workspace.id, "archived", dirty);
