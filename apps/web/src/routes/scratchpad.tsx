@@ -1,66 +1,88 @@
-import type { ScratchpadHistorySummary, ScratchpadSnapshot } from "@citadel/contracts";
+import type { ScratchpadBlockSummary, ScratchpadHistorySummary, ScratchpadSnapshot } from "@citadel/contracts";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, X } from "lucide-react";
+import { ArrowLeft, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 import { sideBySideDiff } from "./scratchpad-diff.js";
-import { createSaveCoordinator, formatBytes, pillLabel, pillSlug } from "./scratchpad-helpers.js";
+import { formatBytes, pillLabel, pillSlug } from "./scratchpad-helpers.js";
+import { renderBlockMarkdown } from "./scratchpad-markdown.js";
 
 type HistorySummary = ScratchpadHistorySummary;
+type BlockSummary = ScratchpadBlockSummary;
 
-type SaveState = "idle" | "saving" | "saved" | "error";
+type UiBlock = BlockSummary & { draft: string; isEditing: boolean };
 
-const SAVE_DEBOUNCE_MS = 500;
+type UndoPayload = { block: BlockSummary; previousIds: string[] };
+
+const SAVE_DEBOUNCE_MS = 1000;
+const UNDO_WINDOW_MS = 5000;
 
 export function ScratchpadView() {
-  const [content, setContent] = useState("");
+  const [blocks, setBlocks] = useState<UiBlock[]>([]);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
-  const [saveState, setSaveState] = useState<SaveState>("idle");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [composer, setComposer] = useState("");
   const [history, setHistory] = useState<HistorySummary[]>([]);
   const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
   const [selectedContent, setSelectedContent] = useState<string | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [restoring, setRestoring] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSavedRef = useRef<string>("");
-  const latestRef = useRef<string>("");
-  const savingRef = useRef(false);
+  const [composerError, setComposerError] = useState<string | null>(null);
+  const [undo, setUndo] = useState<UndoPayload | null>(null);
+
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const mountedRef = useRef(true);
+  const blocksRef = useRef<UiBlock[]>([]);
+  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
     };
   }, []);
 
   useEffect(() => {
-    latestRef.current = content;
-  }, [content]);
+    blocksRef.current = blocks;
+  }, [blocks]);
 
-  const loadFromServer = useCallback(async () => {
+  const mergeBlocks = useCallback((server: BlockSummary[]) => {
+    setBlocks((current) => {
+      const localById = new Map(current.map((b) => [b.id, b]));
+      const merged: UiBlock[] = server.map((sb) => {
+        const local = localById.get(sb.id);
+        if (local?.isEditing) {
+          return { ...local, ...sb, draft: local.draft, isEditing: true };
+        }
+        return { ...sb, draft: sb.text, isEditing: false };
+      });
+      return merged;
+    });
+  }, []);
+
+  const loadBlocks = useCallback(async () => {
+    try {
+      const snap = await api<{ blocks: BlockSummary[] }>("/api/scratchpad/blocks");
+      if (!mountedRef.current) return;
+      mergeBlocks(snap.blocks);
+      setLoadError(null);
+      setLoaded(true);
+    } catch (error) {
+      if (!mountedRef.current) return;
+      setLoadError(error instanceof Error ? error.message : "load_failed");
+    }
+  }, [mergeBlocks]);
+
+  const loadCurrentMeta = useCallback(async () => {
     try {
       const snapshot = await api<ScratchpadSnapshot>("/api/scratchpad");
       if (!mountedRef.current) return;
-      if (latestRef.current === lastSavedRef.current) {
-        setContent(snapshot.content);
-        latestRef.current = snapshot.content;
-      }
-      lastSavedRef.current = snapshot.content;
       setUpdatedAt(snapshot.updatedAt);
-      setErrorMessage(null);
-      setLoadError(null);
-      setLoaded(true);
-      if (!savingRef.current) setSaveState("saved");
-    } catch (error) {
-      if (!mountedRef.current) return;
-      const message = error instanceof Error ? error.message : "load_failed";
-      setLoadError(message);
-      setErrorMessage(message);
-      setSaveState("error");
+    } catch {
+      /* meta is best-effort */
     }
   }, []);
 
@@ -70,79 +92,36 @@ export function ScratchpadView() {
       if (!mountedRef.current) return;
       setHistory(result.entries);
     } catch {
-      /* sidebar refresh is best-effort */
+      /* sidebar is best-effort */
     }
   }, []);
 
   useEffect(() => {
-    void loadFromServer();
+    void loadBlocks();
+    void loadCurrentMeta();
     void loadHistory();
-  }, [loadFromServer, loadHistory]);
+  }, [loadBlocks, loadCurrentMeta, loadHistory]);
 
-  const coordinatorRef = useRef<ReturnType<typeof createSaveCoordinator> | null>(null);
-  if (!coordinatorRef.current) {
-    coordinatorRef.current = createSaveCoordinator({
-      getLatest: () => latestRef.current,
-      getLastSaved: () => lastSavedRef.current,
-      setLastSaved: (value) => {
-        lastSavedRef.current = value;
-      },
-      put: async (snapshot) => {
-        if (mountedRef.current) setSaveState("saving");
-        try {
-          const result = await api<ScratchpadSnapshot>("/api/scratchpad", {
-            method: "PUT",
-            body: JSON.stringify({ content: snapshot }),
-          });
-          if (mountedRef.current) {
-            setUpdatedAt(result.updatedAt);
-            setErrorMessage(null);
-          }
-          return result;
-        } catch (error) {
-          if (mountedRef.current) {
-            setErrorMessage(error instanceof Error ? error.message : "save_failed");
-            setSaveState("error");
-          }
-          throw error;
-        }
-      },
-      load: () => loadFromServer(),
-      onSaveStart: () => {
-        savingRef.current = true;
-      },
-      onSaveFinish: () => {
-        savingRef.current = false;
-        if (mountedRef.current) setSaveState("saved");
-      },
-    });
-  }
-
-  const saveLatest = useCallback(async () => {
-    try {
-      await coordinatorRef.current?.save();
-    } catch {
-      /* errors already surfaced through put() into setErrorMessage / setSaveState */
-    }
-  }, []);
-
+  // Scroll the list to the bottom whenever blocks are added/removed so the newest
+  // content and the composer stay in view. The composer itself is sticky-positioned.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: blocks.length is the intentional trigger
   useEffect(() => {
     if (!loaded) return;
-    if (content === lastSavedRef.current) return;
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    setSaveState("saving");
-    debounceRef.current = setTimeout(() => {
-      void saveLatest();
-    }, SAVE_DEBOUNCE_MS);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [content, loaded, saveLatest]);
+    if (!listRef.current) return;
+    listRef.current.scrollTop = listRef.current.scrollHeight;
+  }, [loaded, blocks.length]);
 
+  // Focus the composer on mount.
+  useEffect(() => {
+    if (loaded) composerRef.current?.focus();
+  }, [loaded]);
+
+  // SSE: refetch blocks + history on every scratchpad mutation.
   useEffect(() => {
     const events = new EventSource("/events");
     const refreshContent = () => {
-      coordinatorRef.current?.noteSseRefresh();
+      void loadBlocks();
+      void loadCurrentMeta();
     };
     const refreshHistory = () => {
       void loadHistory();
@@ -154,17 +133,206 @@ export function ScratchpadView() {
       events.removeEventListener("scratchpad.history.updated", refreshHistory);
       events.close();
     };
-  }, [loadHistory]);
+  }, [loadBlocks, loadCurrentMeta, loadHistory]);
 
+  const setBlockField = useCallback((id: string, patch: Partial<UiBlock>) => {
+    setBlocks((current) => current.map((b) => (b.id === id ? { ...b, ...patch } : b)));
+  }, []);
+
+  const startEditing = useCallback(
+    (id: string) => {
+      const block = blocksRef.current.find((b) => b.id === id);
+      if (!block) return;
+      setBlockField(id, { isEditing: true, draft: block.text });
+    },
+    [setBlockField],
+  );
+
+  const cancelEditing = useCallback(
+    (id: string) => {
+      const block = blocksRef.current.find((b) => b.id === id);
+      if (!block) return;
+      setBlockField(id, { isEditing: false, draft: block.text });
+    },
+    [setBlockField],
+  );
+
+  const saveBlock = useCallback(
+    async (id: string, draft: string) => {
+      const trimmed = draft.trim();
+      if (trimmed.length === 0) {
+        // Empty edit deletes the block.
+        try {
+          await api<{ snapshot: ScratchpadSnapshot }>(`/api/scratchpad/blocks/${encodeURIComponent(id)}`, {
+            method: "DELETE",
+          });
+        } catch {
+          /* error already surfaced via SSE refresh */
+        }
+        await loadBlocks();
+        return;
+      }
+      try {
+        const result = await api<{ block: BlockSummary; snapshot: ScratchpadSnapshot }>(
+          `/api/scratchpad/blocks/${encodeURIComponent(id)}`,
+          {
+            method: "PUT",
+            body: JSON.stringify({ text: draft }),
+          },
+        );
+        if (!mountedRef.current) return;
+        setBlocks((current) =>
+          current.map((b) =>
+            b.id === id
+              ? {
+                  ...b,
+                  text: result.block.text,
+                  draft: result.block.text,
+                  updatedAt: result.block.updatedAt,
+                  isEditing: false,
+                }
+              : b,
+          ),
+        );
+        setUpdatedAt(result.snapshot.updatedAt);
+      } catch (error) {
+        if (!mountedRef.current) return;
+        // Drop the local edit state so user can re-engage.
+        setBlockField(id, { isEditing: false });
+        const message = error instanceof Error ? error.message : "save_failed";
+        setComposerError(message);
+      }
+    },
+    [loadBlocks, setBlockField],
+  );
+
+  const scheduleAutoSave = useDebouncedSave(saveBlock);
+
+  const onBlockChange = useCallback(
+    (id: string, value: string) => {
+      setBlockField(id, { draft: value });
+      scheduleAutoSave(id, value);
+    },
+    [scheduleAutoSave, setBlockField],
+  );
+
+  const onBlockKey = useCallback(
+    (id: string, event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        const draft = event.currentTarget.value;
+        void saveBlock(id, draft);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        cancelEditing(id);
+      }
+    },
+    [cancelEditing, saveBlock],
+  );
+
+  const onBlockBlur = useCallback(
+    (id: string, value: string) => {
+      void saveBlock(id, value);
+    },
+    [saveBlock],
+  );
+
+  const submitComposer = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (trimmed.length === 0) return;
+      try {
+        await api<{ block: BlockSummary; snapshot: ScratchpadSnapshot }>("/api/scratchpad/blocks", {
+          method: "POST",
+          body: JSON.stringify({ text }),
+        });
+        if (!mountedRef.current) return;
+        setComposer("");
+        setComposerError(null);
+        await loadBlocks();
+        // Re-focus composer for rapid entry.
+        composerRef.current?.focus();
+      } catch (error) {
+        if (!mountedRef.current) return;
+        setComposerError(error instanceof Error ? error.message : "save_failed");
+      }
+    },
+    [loadBlocks],
+  );
+
+  const onComposerKey = useCallback(
+    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+        event.preventDefault();
+        void submitComposer(event.currentTarget.value);
+      }
+    },
+    [submitComposer],
+  );
+
+  const onComposerBlur = useCallback(() => {
+    if (composer.trim().length > 0) void submitComposer(composer);
+  }, [composer, submitComposer]);
+
+  const requestDelete = useCallback(
+    async (id: string) => {
+      const block = blocksRef.current.find((b) => b.id === id);
+      if (!block) return;
+      const previousIds = blocksRef.current.map((b) => b.id);
+      // Optimistically remove from local state.
+      setBlocks((current) => current.filter((b) => b.id !== id));
+      try {
+        await api<{ snapshot: ScratchpadSnapshot }>(`/api/scratchpad/blocks/${encodeURIComponent(id)}`, {
+          method: "DELETE",
+        });
+      } catch {
+        // Rollback on server failure.
+        await loadBlocks();
+        return;
+      }
+      // Offer undo via a transient toast.
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+      setUndo({ block, previousIds });
+      undoTimerRef.current = setTimeout(() => {
+        if (mountedRef.current) setUndo(null);
+      }, UNDO_WINDOW_MS);
+    },
+    [loadBlocks],
+  );
+
+  const dismissUndo = useCallback(() => {
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    setUndo(null);
+  }, []);
+
+  const performUndo = useCallback(async () => {
+    if (!undo) return;
+    const { block, previousIds } = undo;
+    dismissUndo();
+    const beforeIndex = previousIds.findIndex((id) => id === block.id);
+    const afterId = beforeIndex > 0 ? previousIds[beforeIndex - 1] : undefined;
+    try {
+      const body: { text: string; position?: { afterId: string } } = { text: block.text };
+      if (afterId) body.position = { afterId };
+      await api<{ block: BlockSummary; snapshot: ScratchpadSnapshot }>("/api/scratchpad/blocks", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      await loadBlocks();
+    } catch {
+      /* user dismissed expectation; reload to converge on server truth */
+      await loadBlocks();
+    }
+  }, [dismissUndo, loadBlocks, undo]);
+
+  // History sidebar + diff modal — unchanged from prior version.
   const openEntry = useCallback(
     async (id: string) => {
       setSelectedEntryId(id);
       setSelectedContent(null);
       setDiffError(null);
-      // Refresh current scratchpad alongside the entry fetch so the right
-      // side of the diff always reflects what's on disk right now, not a
-      // possibly-stale local snapshot from before an external write.
-      void loadFromServer();
+      void loadBlocks();
+      void loadCurrentMeta();
       try {
         const result = await api<{ entry: { content: string } }>(`/api/scratchpad/history/${encodeURIComponent(id)}`);
         if (!mountedRef.current) return;
@@ -174,7 +342,7 @@ export function ScratchpadView() {
         setDiffError(error instanceof Error ? error.message : "load_failed");
       }
     },
-    [loadFromServer],
+    [loadBlocks, loadCurrentMeta],
   );
 
   const closeDiff = useCallback(() => {
@@ -183,10 +351,6 @@ export function ScratchpadView() {
     setDiffError(null);
   }, []);
 
-  // Native <dialog open> (declarative) does not fire `cancel` on Escape — only
-  // dialog.showModal() does — so bind a document-level listener while the modal
-  // is open. tabIndex={-1} on the backdrop is not focusable, so an in-tree
-  // keydown handler never fires for the user.
   useEffect(() => {
     if (!selectedEntryId) return;
     const onKey = (event: KeyboardEvent) => {
@@ -204,7 +368,7 @@ export function ScratchpadView() {
         method: "POST",
         body: JSON.stringify({ entryId: selectedEntryId }),
       });
-      await Promise.all([loadFromServer(), loadHistory()]);
+      await Promise.all([loadBlocks(), loadCurrentMeta(), loadHistory()]);
       if (mountedRef.current) closeDiff();
     } catch (error) {
       if (!mountedRef.current) return;
@@ -212,24 +376,30 @@ export function ScratchpadView() {
     } finally {
       if (mountedRef.current) setRestoring(false);
     }
-  }, [closeDiff, loadFromServer, loadHistory, selectedEntryId]);
+  }, [closeDiff, loadBlocks, loadCurrentMeta, loadHistory, selectedEntryId]);
 
   const retryLoad = useCallback(() => {
     setLoadError(null);
-    setSaveState("idle");
-    void loadFromServer();
-  }, [loadFromServer]);
+    void loadBlocks();
+  }, [loadBlocks]);
+
+  const currentContent = useMemo(
+    () =>
+      blocks
+        .filter((b) => !b.isEditing)
+        .map((b) => b.text)
+        .join("\n\n"),
+    [blocks],
+  );
 
   const diff = useMemo(() => {
     if (selectedContent === null) return null;
-    const result = sideBySideDiff(selectedContent, content);
+    const result = sideBySideDiff(selectedContent, currentContent);
     if (result.kind === "too_large") return result;
     let lastOld = 0;
     let lastNew = 0;
     const mapped = result.rows.map((row) => {
-      if (row.kind === "skip") {
-        return { row, key: `skip-${lastOld}-${lastNew}-${row.hiddenCount}` as string };
-      }
+      if (row.kind === "skip") return { row, key: `skip-${lastOld}-${lastNew}-${row.hiddenCount}` };
       if (row.kind === "context") {
         lastOld = row.oldNo;
         lastNew = row.newNo;
@@ -243,7 +413,7 @@ export function ScratchpadView() {
       return { row, key: `add-${row.newNo}` };
     });
     return { kind: "rows" as const, rows: mapped };
-  }, [selectedContent, content]);
+  }, [selectedContent, currentContent]);
 
   return (
     <div className="page dashboard-page scratchpad-page">
@@ -253,28 +423,70 @@ export function ScratchpadView() {
         </Link>
         <span className="dashboard-title">Scratchpad</span>
         <span className="command-result-meta scratchpad-status" aria-live="polite">
-          {renderStatus(saveState, updatedAt, errorMessage)}
+          {renderStatus(updatedAt)}
         </span>
       </header>
       <div className="scratchpad-body">
-        {loadError ? (
-          <div className="scratchpad-load-error" role="alert">
-            <p>Couldn't load the scratchpad: {loadError}</p>
-            <button type="button" onClick={retryLoad}>
-              Retry
-            </button>
-          </div>
-        ) : (
-          <textarea
-            className="scratchpad-textarea"
-            aria-label="Scratchpad markdown"
-            spellCheck={false}
-            value={content}
-            onChange={(event) => setContent(event.target.value)}
-            placeholder="Note things here. Orchestrator agents can read this via MCP and spin up work."
-            disabled={!loaded}
-          />
-        )}
+        <div className="scratchpad-blocks-pane">
+          {loadError ? (
+            <div className="scratchpad-load-error" role="alert">
+              <p>Couldn't load the scratchpad: {loadError}</p>
+              <button type="button" onClick={retryLoad}>
+                Retry
+              </button>
+            </div>
+          ) : (
+            <>
+              <div ref={listRef} className="scratchpad-block-list">
+                {blocks.length === 0 ? (
+                  <p className="scratchpad-block-empty">No blocks yet. Use the composer below to add one.</p>
+                ) : null}
+                {blocks.map((block) => (
+                  <BlockItem
+                    key={block.id}
+                    block={block}
+                    onStartEditing={startEditing}
+                    onCancel={cancelEditing}
+                    onChange={onBlockChange}
+                    onBlur={onBlockBlur}
+                    onKey={onBlockKey}
+                    onDelete={requestDelete}
+                  />
+                ))}
+              </div>
+              <div className="scratchpad-composer">
+                {composerError ? (
+                  <p className="scratchpad-composer-error" role="alert">
+                    {composerError}
+                  </p>
+                ) : null}
+                <textarea
+                  ref={composerRef}
+                  className="scratchpad-composer-input"
+                  aria-label="New scratchpad block"
+                  placeholder="Add a note. ⌘/Ctrl-Enter creates a new block."
+                  value={composer}
+                  onChange={(event) => setComposer(event.target.value)}
+                  onKeyDown={onComposerKey}
+                  onBlur={onComposerBlur}
+                  disabled={!loaded}
+                  rows={2}
+                />
+              </div>
+              {undo ? (
+                <output className="scratchpad-undo-toast">
+                  <span>Block deleted.</span>
+                  <button type="button" onClick={() => void performUndo()}>
+                    Undo
+                  </button>
+                  <button type="button" aria-label="Dismiss undo" onClick={dismissUndo}>
+                    <X size={12} />
+                  </button>
+                </output>
+              ) : null}
+            </>
+          )}
+        </div>
         <aside className="scratchpad-history" aria-label="Scratchpad version history">
           <header className="scratchpad-history-header">
             <span>Versions</span>
@@ -393,15 +605,105 @@ export function ScratchpadView() {
   );
 }
 
-function renderStatus(state: SaveState, updatedAt: string | null, error: string | null) {
-  if (state === "saving") return "Saving…";
-  if (state === "error") return error ? `Error: ${error}` : "Save failed";
-  if (state === "saved" || state === "idle") {
-    if (!updatedAt) return "";
-    const stamp = new Date(updatedAt);
-    return Number.isNaN(stamp.getTime()) ? "Saved" : `Saved · ${stamp.toLocaleTimeString()}`;
+type BlockItemProps = {
+  block: UiBlock;
+  onStartEditing: (id: string) => void;
+  onCancel: (id: string) => void;
+  onChange: (id: string, value: string) => void;
+  onBlur: (id: string, value: string) => void;
+  onKey: (id: string, event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  onDelete: (id: string) => void;
+};
+
+function BlockItem(props: BlockItemProps) {
+  const { block, onStartEditing, onChange, onBlur, onKey, onDelete } = props;
+  const renderedHtml = useMemo(
+    () => (block.isEditing ? "" : renderBlockMarkdown(block.text)),
+    [block.isEditing, block.text],
+  );
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (block.isEditing) {
+      editorRef.current?.focus();
+      const end = editorRef.current?.value.length ?? 0;
+      editorRef.current?.setSelectionRange(end, end);
+    }
+  }, [block.isEditing]);
+
+  if (block.isEditing) {
+    return (
+      <div className="scratchpad-block scratchpad-block-editing">
+        <textarea
+          ref={editorRef}
+          className="scratchpad-block-textarea"
+          aria-label="Edit block"
+          value={block.draft}
+          onChange={(event) => onChange(block.id, event.target.value)}
+          onBlur={(event) => onBlur(block.id, event.target.value)}
+          onKeyDown={(event) => onKey(block.id, event)}
+          rows={Math.max(2, block.draft.split("\n").length + 1)}
+        />
+      </div>
+    );
   }
-  return "";
+
+  return (
+    <div className="scratchpad-block">
+      <button
+        type="button"
+        className="scratchpad-block-delete"
+        aria-label="Delete block"
+        title="Delete block"
+        onClick={(event) => {
+          event.stopPropagation();
+          onDelete(block.id);
+        }}
+      >
+        <Trash2 size={12} />
+      </button>
+      <button
+        type="button"
+        className="scratchpad-block-content"
+        aria-label="Edit block"
+        onClick={() => onStartEditing(block.id)}
+      >
+        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify in renderBlockMarkdown */}
+        <div className="scratchpad-block-rendered" dangerouslySetInnerHTML={{ __html: renderedHtml }} />
+      </button>
+    </div>
+  );
+}
+
+function useDebouncedSave(save: (id: string, draft: string) => void | Promise<void>) {
+  const timerRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  useEffect(
+    () => () => {
+      for (const t of timerRef.current.values()) clearTimeout(t);
+      timerRef.current.clear();
+    },
+    [],
+  );
+
+  return useCallback(
+    (id: string, draft: string) => {
+      const existing = timerRef.current.get(id);
+      if (existing) clearTimeout(existing);
+      const handle = setTimeout(() => {
+        timerRef.current.delete(id);
+        void save(id, draft);
+      }, SAVE_DEBOUNCE_MS);
+      timerRef.current.set(id, handle);
+    },
+    [save],
+  );
+}
+
+function renderStatus(updatedAt: string | null) {
+  if (!updatedAt) return "";
+  const stamp = new Date(updatedAt);
+  return Number.isNaN(stamp.getTime()) ? "Saved" : `Saved · ${stamp.toLocaleTimeString()}`;
 }
 
 function formatStamp(ts: string) {
