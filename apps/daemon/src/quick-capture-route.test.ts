@@ -1,7 +1,11 @@
+import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
-import { registerQuickCaptureRoute } from "./quick-capture-route.js";
+import { QUICK_CAPTURE_SILENCE_TIMEOUT_MS, registerQuickCaptureRoute } from "./quick-capture-route.js";
+import { registerSpaFallback } from "./spa-fallback-route.js";
 
 const servers: http.Server[] = [];
 
@@ -70,5 +74,65 @@ describe("GET /quick-capture", () => {
     expect(response.status).toBe(404);
     const ct = response.headers.get("content-type") ?? "";
     expect(ct).not.toMatch(/text\/html/);
+  });
+
+  it("templates the silence timeout from QUICK_CAPTURE_SILENCE_TIMEOUT_MS into the inline JS", async () => {
+    const baseUrl = await startApp();
+    const body = await (await fetch(`${baseUrl}/quick-capture`)).text();
+    expect(body).toContain(
+      `setTimeout(function(){ if (rec) try { rec.stop(); } catch(_){} }, ${QUICK_CAPTURE_SILENCE_TIMEOUT_MS})`,
+    );
+    expect(body).not.toContain("__SILENCE_TIMEOUT_MS__");
+  });
+});
+
+// Integration: /quick-capture must win over the SPA fallback when both
+// routes are registered in the same order as apps/daemon/src/app.ts. A
+// regression that swaps the order would have the wildcard SPA route swallow
+// /quick-capture and serve the cockpit index.html — this test catches that.
+describe("/quick-capture + SPA fallback ordering", () => {
+  const tmpDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function start(quickCaptureFirst: boolean): Promise<string> {
+    const webDist = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-qc-order-"));
+    tmpDirs.push(webDist);
+    fs.writeFileSync(path.join(webDist, "index.html"), "<!doctype html><title>cockpit-shell</title>");
+    const app = express();
+    if (quickCaptureFirst) {
+      registerQuickCaptureRoute({ app });
+      registerSpaFallback({ app, webDist });
+    } else {
+      registerSpaFallback({ app, webDist });
+      registerQuickCaptureRoute({ app });
+    }
+    const server = http.createServer(app);
+    servers.push(server);
+    return new Promise((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        if (!address || typeof address === "string") throw new Error("expected TCP address");
+        resolve(`http://127.0.0.1:${address.port}`);
+      });
+    });
+  }
+
+  it("correct order: GET /quick-capture returns the quick-capture HTML (not the SPA shell)", async () => {
+    const baseUrl = await start(true);
+    const body = await (await fetch(`${baseUrl}/quick-capture`)).text();
+    expect(body).toContain("<textarea");
+    expect(body).toContain("/api/scratchpad/blocks");
+    expect(body).not.toContain("cockpit-shell");
+  });
+
+  it("regression demonstration: SPA-first order WOULD serve the cockpit shell (this is why ordering matters)", async () => {
+    const baseUrl = await start(false);
+    const body = await (await fetch(`${baseUrl}/quick-capture`)).text();
+    // With the wrong order, the wildcard returns the cockpit shell. This test
+    // documents the failure mode the correct-order test guards against.
+    expect(body).toContain("cockpit-shell");
   });
 });

@@ -768,6 +768,14 @@
     padding-bottom: max(10px, env(safe-area-inset-bottom));
   }
 
+  /* Spec B.2 Scratchpad #11: tap targets ≥ 36×36 on narrow viewports. The
+     desktop delete affordance is 26×26 for a tighter hover feel; on touch
+     surfaces it has to grow so the user can reliably hit it. */
+  .scratchpad-block-delete {
+    width: 36px;
+    height: 36px;
+  }
+
   /* History sidebar is hidden by default on mobile; the toggle in the header
      promotes it to a full-pane drawer when the user wants it. */
   .scratchpad-history {

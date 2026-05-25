@@ -61,4 +61,11 @@ describe("applyBootstrapNavigation — mobile redirect wins over saved last-rout
     applyBootstrapNavigation({ location: locOf("/"), history, storage, narrow: false });
     expect(history.replaceState).not.toHaveBeenCalled();
   });
+
+  it("narrow viewport + bare root + no saved route → URL becomes /scratchpad (primary AC2 case)", () => {
+    const history = { replaceState: vi.fn() };
+    const storage = memoryStorage();
+    applyBootstrapNavigation({ location: locOf("/"), history, storage, narrow: true });
+    expect(history.replaceState).toHaveBeenCalledWith({}, "", "/scratchpad");
+  });
 });

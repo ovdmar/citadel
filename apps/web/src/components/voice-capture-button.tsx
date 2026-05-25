@@ -1,6 +1,13 @@
 import { Mic, MicOff } from "lucide-react";
-import type { CSSProperties } from "react";
+import { type CSSProperties, useEffect, useImperativeHandle } from "react";
+import type { Ref } from "react";
 import { useSpeechRecognition } from "../lib/use-speech-recognition.js";
+
+export type VoiceCaptureButtonHandle = {
+  // Imperative stop — parents call this when the host textarea loses focus so
+  // recognition matches the spec's "blurring stops it" clause.
+  stop: () => void;
+};
 
 export type VoiceCaptureButtonProps = {
   onTranscript: (text: string) => void;
@@ -8,6 +15,7 @@ export type VoiceCaptureButtonProps = {
   className?: string;
   style?: CSSProperties;
   label?: string;
+  controlRef?: Ref<VoiceCaptureButtonHandle>;
 };
 
 // Renders a mic toggle that dictates into the host composer via the Web Speech
@@ -15,11 +23,19 @@ export type VoiceCaptureButtonProps = {
 // component returns null so the host UI gracefully degrades — no broken icon,
 // no permission prompt, no console noise.
 export function VoiceCaptureButton(props: VoiceCaptureButtonProps) {
-  const { onTranscript, onError, className, style, label = "Voice capture" } = props;
+  const { onTranscript, onError, className, style, label = "Voice capture", controlRef } = props;
   const speech = useSpeechRecognition({ onTranscript });
 
+  // Errors are surfaced via an effect (not render) so an `onError` that updates
+  // parent state never triggers a render loop.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: onError is allowed to be unstable; we intentionally key on the error string only.
+  useEffect(() => {
+    if (speech.error && onError) onError(speech.error);
+  }, [speech.error]);
+
+  useImperativeHandle(controlRef, () => ({ stop: () => speech.stop() }), [speech.stop]);
+
   if (!speech.supported) return null;
-  if (speech.error) onError?.(speech.error);
 
   const ariaLabel = speech.listening ? `${label}: stop listening` : `${label}: start listening`;
   return (

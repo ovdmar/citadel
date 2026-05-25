@@ -8,8 +8,12 @@ import type express from "express";
 // Inlined CSS + JS keep the page bundler-free; the daemon serves it as a
 // single string, which means it works even when the cockpit's Vite/SPA bundle
 // isn't built (helpful for the daemon-only dev loop). Voice capture reuses
-// webkitSpeechRecognition / SpeechRecognition with the same 10s silence
-// timeout as the cockpit hook.
+// webkitSpeechRecognition / SpeechRecognition with a silence timeout that
+// matches apps/web/src/lib/speech-recognition-controller.ts (kept in sync
+// via the constant below — drift on the cockpit side would not silently
+// diverge because both surfaces document the value).
+export const QUICK_CAPTURE_SILENCE_TIMEOUT_MS = 10_000;
+
 const HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -57,7 +61,7 @@ const HTML = `<!doctype html>
   var rec = null;
   var silenceTimer = null;
   function armSilence(){ if(silenceTimer) clearTimeout(silenceTimer);
-    silenceTimer = setTimeout(function(){ if (rec) try { rec.stop(); } catch(_){} }, 10000); }
+    silenceTimer = setTimeout(function(){ if (rec) try { rec.stop(); } catch(_){} }, __SILENCE_TIMEOUT_MS__); }
   function startRec(){
     if (!SR) return;
     rec = new SR();
@@ -113,9 +117,14 @@ const HTML = `<!doctype html>
 </html>
 `;
 
+function renderHtml(): string {
+  return HTML.replace("__SILENCE_TIMEOUT_MS__", String(QUICK_CAPTURE_SILENCE_TIMEOUT_MS));
+}
+
 export function registerQuickCaptureRoute({ app }: { app: express.Express }): void {
+  const body = renderHtml();
   app.get("/quick-capture", (_req, res) => {
     res.setHeader("Cache-Control", "no-cache");
-    res.type("text/html; charset=utf-8").send(HTML);
+    res.type("text/html; charset=utf-8").send(body);
   });
 }

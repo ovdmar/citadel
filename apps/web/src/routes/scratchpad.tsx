@@ -3,7 +3,8 @@ import { Link } from "@tanstack/react-router";
 import { ArrowLeft, Clock, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
-import { VoiceCaptureButton } from "../components/voice-capture-button.js";
+import { VoiceCaptureButton, type VoiceCaptureButtonHandle } from "../components/voice-capture-button.js";
+import { appendTranscript } from "../lib/append-transcript.js";
 import { sideBySideDiff } from "./scratchpad-diff.js";
 import { formatBytes, pillLabel, pillSlug } from "./scratchpad-helpers.js";
 import { renderBlockMarkdown } from "./scratchpad-markdown.js";
@@ -274,7 +275,10 @@ export function ScratchpadView() {
     [submitComposer],
   );
 
+  const composerMicRef = useRef<VoiceCaptureButtonHandle | null>(null);
   const onComposerBlur = useCallback(() => {
+    // Spec B.2 Scratchpad #9: voice capture stops on textarea blur.
+    composerMicRef.current?.stop();
     if (composer.trim().length > 0) void submitComposer(composer);
   }, [composer, submitComposer]);
 
@@ -494,9 +498,8 @@ export function ScratchpadView() {
                     rows={2}
                   />
                   <VoiceCaptureButton
-                    onTranscript={(text) =>
-                      setComposer((prev) => (prev.trim().length === 0 ? text : `${prev.trim()} ${text}`))
-                    }
+                    controlRef={composerMicRef}
+                    onTranscript={(text) => setComposer((prev) => appendTranscript(prev, text))}
                   />
                 </div>
               </div>
@@ -649,6 +652,7 @@ function BlockItem(props: BlockItemProps) {
     [block.isEditing, block.text],
   );
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
+  const blockMicRef = useRef<VoiceCaptureButtonHandle | null>(null);
 
   useEffect(() => {
     if (block.isEditing) {
@@ -681,14 +685,16 @@ function BlockItem(props: BlockItemProps) {
             value={block.draft}
             onInput={onTextareaInput}
             onChange={(event) => onChange(block.id, event.target.value)}
-            onBlur={(event) => onBlur(block.id, event.target.value)}
+            onBlur={(event) => {
+              // Spec B.2 Scratchpad #9: blurring stops voice capture.
+              blockMicRef.current?.stop();
+              onBlur(block.id, event.target.value);
+            }}
             onKeyDown={(event) => onKey(block.id, event)}
           />
           <VoiceCaptureButton
-            onTranscript={(text) => {
-              const merged = block.draft.trim().length === 0 ? text : `${block.draft.trim()} ${text}`;
-              onChange(block.id, merged);
-            }}
+            controlRef={blockMicRef}
+            onTranscript={(text) => onChange(block.id, appendTranscript(block.draft, text))}
           />
         </div>
       </div>

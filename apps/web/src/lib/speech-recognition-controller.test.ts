@@ -171,6 +171,22 @@ describe("createSpeechRecognitionController", () => {
     expect(rec.stopCalls).toBe(stopsBefore);
   });
 
+  it("dispose() detaches handlers so a late onend from abort() cannot fire onStateChange after dispose", () => {
+    const onState = vi.fn();
+    const controller = createSpeechRecognitionController({ Ctor, onStateChange: onState });
+    controller.start();
+    const rec = MockRecognition.instances[0];
+    if (!rec) throw new Error("expected a mock recognition instance");
+    controller.dispose();
+    // Real browsers fire onend asynchronously after abort(). Simulate that:
+    // call the handler the controller had attached, if it didn't null it.
+    rec.onend?.();
+    rec.onerror?.({ error: "aborted" });
+    // After dispose, onStateChange must NOT have been called with `false`
+    // by a late handler — only the explicit dispose-time absence matters.
+    expect(onState).not.toHaveBeenCalledWith(false);
+  });
+
   it("returns null when the API is unsupported and start() is a no-op", () => {
     const onState = vi.fn();
     const controller = createSpeechRecognitionController({ Ctor: undefined, onStateChange: onState });

@@ -123,6 +123,12 @@ export function createSpeechRecognitionController(
       disposed = true;
       clearSilenceTimer();
       if (active) {
+        // Null the handlers BEFORE abort() so the async onend/onerror events
+        // browsers emit during teardown cannot reach stopAndReport — otherwise
+        // onStateChange would fire on a disposed controller.
+        active.onresult = null;
+        active.onerror = null;
+        active.onend = null;
         try {
           active.abort();
         } catch {

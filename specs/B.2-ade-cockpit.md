@@ -105,7 +105,7 @@
 
 ## Scratchpad
 
-The cockpit's scratchpad view renders the per-workspace `scratchpad.md` (see B.7 for the storage format) as a stack of discrete, focusable blocks.
+The cockpit's scratchpad view renders the global `scratchpad.md` (see B.7 for the storage format) as a stack of discrete, focusable blocks. One scratchpad per daemon installation — not per workspace.
 
 [ ] 1. Blocks render as sanitized markdown when not focused (headings, lists, bold/italic, inline + fenced code, links). Raw HTML is sanitized (scripts and inline event handlers removed); `<img>` tags are stripped in v1 since block content can originate from external MCP agents.
 [ ] 2. Clicking a block enters inline edit mode with a `<textarea>` containing the raw markdown.
