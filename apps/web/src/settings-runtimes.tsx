@@ -1,7 +1,7 @@
 import type { AgentRuntime, RuntimeUsageSummary } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Plus, RefreshCw, Save, Search, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { categoryKey, formatLocalReset } from "./lib/usage-format.js";
 
@@ -180,7 +180,9 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
         {save.error ? <span className="form-error">{String(save.error)}</span> : null}
       </div>
 
-      {showAdd ? <AddRuntimeModal onClose={() => setShowAdd(false)} onAdd={addCustom} existingIds={drafts.map((d) => d.id)} /> : null}
+      {showAdd ? (
+        <AddRuntimeModal onClose={() => setShowAdd(false)} onAdd={addCustom} existingIds={drafts.map((d) => d.id)} />
+      ) : null}
     </>
   );
 }
@@ -243,7 +245,7 @@ function AgentCard(props: {
       </div>
 
       <div className={`set-agent-card-desc ${isUnavailable ? "is-bad" : ""}`}>
-        {isUnavailable ? row.healthReason ?? `\`${row.command}\` not on PATH` : row.desc}
+        {isUnavailable ? (row.healthReason ?? `\`${row.command}\` not on PATH`) : row.desc}
       </div>
 
       <div className="set-agent-card-fields">
@@ -330,8 +332,10 @@ function AddRuntimeModal(props: {
   // Auto-derive id from display name until the user types one explicitly,
   // so most users only fill in two fields.
   const [idTouched, setIdTouched] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    nameRef.current?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") props.onClose();
     };
@@ -358,8 +362,8 @@ function AddRuntimeModal(props: {
   };
 
   return (
-    <div className="set-modal-scrim" onClick={props.onClose}>
-      <div className="set-modal" onClick={(event) => event.stopPropagation()}>
+    <div className="set-modal-scrim" role="presentation" onMouseDown={props.onClose}>
+      <div className="set-modal" onMouseDown={(event) => event.stopPropagation()}>
         <div className="set-modal-head">
           <div>
             <div className="set-modal-eyebrow">Agent runtimes</div>
@@ -375,9 +379,9 @@ function AddRuntimeModal(props: {
             <label className="set-modal-field">
               <span className="set-field-label">Display name</span>
               <input
+                ref={nameRef}
                 className="set-input"
                 placeholder="e.g. Aider"
-                autoFocus
                 value={displayName}
                 onChange={(event) => setDisplayName(event.target.value)}
               />

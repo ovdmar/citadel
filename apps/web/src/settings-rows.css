@@ -144,15 +144,11 @@
   border-radius: 8px;
   color: var(--c-fg-3);
   box-shadow: var(--sh-1);
-  transition:
-    border-color 0.12s,
-    box-shadow 0.12s;
+  transition: border-color 0.12s, box-shadow 0.12s;
 }
 .set-repo-search:focus-within {
   border-color: var(--c-line-3);
-  box-shadow:
-    0 0 0 3px rgba(36, 28, 14, 0.04),
-    var(--sh-1);
+  box-shadow: 0 0 0 3px rgba(36, 28, 14, 0.04), var(--sh-1);
 }
 .set-repo-search-input {
   flex: 1;
@@ -273,4 +269,3 @@
   align-items: center;
   gap: 6px;
 }
-

@@ -73,9 +73,7 @@
   cursor: pointer;
   color: var(--c-fg-1);
   text-decoration: none;
-  transition:
-    background 0.12s,
-    border-color 0.12s;
+  transition: background 0.12s, border-color 0.12s;
 }
 .set-back:hover {
   background: var(--c-elev);
@@ -94,9 +92,7 @@
   justify-content: center;
   color: var(--c-fg-2);
   flex: 0 0 auto;
-  transition:
-    transform 0.15s ease,
-    color 0.12s;
+  transition: transform 0.15s ease, color 0.12s;
 }
 .set-back:hover .set-back-icon {
   transform: translateX(-1px);
@@ -348,17 +344,13 @@
   color: var(--c-fg-1);
   box-shadow: var(--sh-1);
   outline: none;
-  transition:
-    border-color 0.12s,
-    box-shadow 0.12s;
+  transition: border-color 0.12s, box-shadow 0.12s;
 }
 .set-input:focus,
 .set-select:focus,
 .set-textarea:focus {
   border-color: var(--c-line-3);
-  box-shadow:
-    0 0 0 3px rgba(36, 28, 14, 0.04),
-    var(--sh-1);
+  box-shadow: 0 0 0 3px rgba(36, 28, 14, 0.04), var(--sh-1);
 }
 .set-input.is-mono,
 .set-select.is-mono,
@@ -580,10 +572,8 @@
   background: var(--c-card);
   border: 0.5px solid var(--c-line-3);
   border-radius: 14px;
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.6) inset,
-    0 24px 60px -12px rgba(20, 12, 0, 0.35),
-    0 4px 12px rgba(20, 12, 0, 0.12);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 24px 60px -12px rgba(20, 12, 0, 0.35), 0 4px 12px
+    rgba(20, 12, 0, 0.12);
   overflow: hidden;
   animation: set-modal-pop 0.18s cubic-bezier(0.4, 0, 0.2, 1);
 }

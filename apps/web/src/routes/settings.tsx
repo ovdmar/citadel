@@ -1,16 +1,6 @@
 import type { AgentRuntime, ProviderHealth, Repo } from "@citadel/contracts";
 import { Link } from "@tanstack/react-router";
-import {
-  ArrowLeft,
-  Cable,
-  CheckCircle2,
-  ChevronRight,
-  FolderGit2,
-  Moon,
-  Server,
-  Sun,
-  Workflow,
-} from "lucide-react";
+import { ArrowLeft, Cable, CheckCircle2, ChevronRight, FolderGit2, Moon, Server, Sun, Workflow } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useStateQuery } from "../app-state.js";
 import { ProvidersPanel } from "../settings-providers.js";
@@ -148,10 +138,7 @@ export function SettingsView() {
           ) : null}
           {section === "mcp" ? (
             <>
-              <PageHead
-                title="MCP servers"
-                sub="Model Context Protocol servers Citadel exposes to agents."
-              />
+              <PageHead title="MCP servers" sub="Model Context Protocol servers Citadel exposes to agents." />
               <McpSection mcpEnabled={Boolean(data?.mcp.enabled)} />
             </>
           ) : null}
@@ -281,18 +268,14 @@ function Overview(props: {
             Things Citadel can keep running without, but should be resolved.
           </div>
           <div className="set-attn-list">
-            {attention.map((item, index) => (
-              <div key={index} className={`set-attn set-attn--${item.tone}`}>
+            {attention.map((item) => (
+              <div key={`${item.tone}:${item.title}`} className={`set-attn set-attn--${item.tone}`}>
                 <span className="set-attn-dot" />
                 <div className="set-attn-text">
                   <div className="set-attn-title">{item.title}</div>
                   <div className="set-attn-detail">{item.detail}</div>
                 </div>
-                <button
-                  type="button"
-                  className="set-btn"
-                  onClick={() => item.target && props.onNavigate(item.target)}
-                >
+                <button type="button" className="set-btn" onClick={() => item.target && props.onNavigate(item.target)}>
                   {item.action} →
                 </button>
               </div>
@@ -329,11 +312,11 @@ function OverviewCard(props: { card: SumCard; onNavigate: (id: SectionId) => voi
         <div className="set-sum-empty">Nothing here yet.</div>
       ) : (
         <div className="set-sum-list">
-          {visible.map((item, index) => {
+          {visible.map((item) => {
             const pill = STATUS_PILL[item.status];
             return (
               <button
-                key={index}
+                key={`${item.status}:${item.name}`}
                 type="button"
                 className="set-sum-row"
                 onClick={() => card.target && props.onNavigate(card.target)}
@@ -404,8 +387,7 @@ function buildAttention(props: {
       items.push({
         tone: "bad",
         title: `${runtime.displayName} is unavailable`,
-        detail:
-          runtime.healthReason ?? `Command \`${runtime.command}\` could not be verified. Check PATH or auth.`,
+        detail: runtime.healthReason ?? `Command \`${runtime.command}\` could not be verified. Check PATH or auth.`,
         action: "Configure",
         target: "agents",
       });

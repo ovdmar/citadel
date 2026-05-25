@@ -118,8 +118,7 @@ export function ProvidersPanel(props: { providerHealth: ProviderHealth[] }) {
   const jiraHealth = healthByProvider.get("jira-jtk");
   const githubHealth = healthByProvider.get("github-gh");
 
-  const dirty =
-    githubCommand !== pristine.github || jiraCommand !== pristine.jira || jiraProject !== pristine.project;
+  const dirty = githubCommand !== pristine.github || jiraCommand !== pristine.jira || jiraProject !== pristine.project;
 
   const discard = () => {
     setGithubCommand(pristine.github);
@@ -164,12 +163,7 @@ export function ProvidersPanel(props: { providerHealth: ProviderHealth[] }) {
         >
           <Save size={13} /> Save integrations
         </button>
-        <button
-          type="button"
-          className="set-btn set-btn-ghost"
-          onClick={discard}
-          disabled={!dirty || save.isPending}
-        >
+        <button type="button" className="set-btn set-btn-ghost" onClick={discard} disabled={!dirty || save.isPending}>
           Discard changes
         </button>
         {save.error ? <span className="form-error">{String(save.error)}</span> : null}
@@ -283,7 +277,8 @@ function formatRelativeChecked(iso: string | undefined): string {
 function BrandJira(props: { size?: number }) {
   const size = props.size ?? 22;
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+    <svg width={size} height={size} viewBox="0 0 24 24" role="img" aria-label="Jira">
+      <title>Jira</title>
       <defs>
         <linearGradient id="jira-a" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stopColor="#2684FF" />
@@ -302,7 +297,8 @@ function BrandJira(props: { size?: number }) {
 function BrandGitHub(props: { size?: number }) {
   const size = props.size ?? 22;
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden>
+    <svg width={size} height={size} viewBox="0 0 24 24" role="img" aria-label="GitHub">
+      <title>GitHub</title>
       <path
         d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56v-1.96c-3.2.7-3.87-1.54-3.87-1.54-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.74.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.69 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.18 1.84 1.18 3.1 0 4.42-2.69 5.4-5.25 5.68.41.36.78 1.07.78 2.15v3.19c0 .31.21.67.8.56C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5Z"
         fill="currentColor"

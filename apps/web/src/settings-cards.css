@@ -56,9 +56,7 @@
 .set-sum-arrow {
   color: var(--c-fg-4);
   font-size: 12px;
-  transition:
-    transform 0.12s,
-    color 0.12s;
+  transition: transform 0.12s, color 0.12s;
 }
 .set-sum-head:hover .set-sum-arrow {
   transform: translateX(2px);
@@ -415,9 +413,7 @@
   border-radius: 6px;
   padding: 2px 2px 2px 8px;
   font-size: 11.5px;
-  transition:
-    border-color 0.12s,
-    background 0.12s;
+  transition: border-color 0.12s, background 0.12s;
 }
 .set-int-fld:hover {
   border-color: var(--c-line-3);
@@ -607,4 +603,3 @@
   border-radius: 8px;
   margin: 0;
 }
-

@@ -2,7 +2,7 @@ import type { AgentSession, Operation, Repo, Workspace } from "@citadel/contract
 import { useMutation } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ExternalLink, FolderGit2, FolderPlus, Search, Settings as SettingsIcon, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import type { StateResponse } from "./app-state.js";
 
@@ -113,14 +113,14 @@ function RepoCard(props: {
   const [confirming, setConfirming] = useState(false);
   const workspaceIds = new Set(props.workspaces.map((workspace) => workspace.id));
   const activeSessions = props.sessions.filter(
-    (session) => workspaceIds.has(session.workspaceId) && ["starting", "running", "waiting_for_input"].includes(session.status),
+    (session) =>
+      workspaceIds.has(session.workspaceId) && ["starting", "running", "waiting_for_input"].includes(session.status),
   ).length;
   const runningOperations = props.operations.filter(
     (operation) => operation.repoId === props.repo.id && ["queued", "running"].includes(operation.status),
   ).length;
   const remove = useMutation({
-    mutationFn: () =>
-      api(`/api/repos/${props.repo.id}${confirming ? "?force=true" : ""}`, { method: "DELETE" }),
+    mutationFn: () => api(`/api/repos/${props.repo.id}${confirming ? "?force=true" : ""}`, { method: "DELETE" }),
     onSuccess: () => {
       setConfirming(false);
       queryClient.invalidateQueries({ queryKey: ["state"] });
@@ -189,8 +189,10 @@ function RepoCard(props: {
 function AddRepoModal(props: { onClose: () => void }) {
   const [rootPath, setRootPath] = useState("");
   const [name, setName] = useState("");
+  const pathRef = useRef<HTMLInputElement>(null);
   const inspect = useMutation({
-    mutationFn: () => api<RepoInspectResult>("/api/repos/inspect", { method: "POST", body: JSON.stringify({ rootPath }) }),
+    mutationFn: () =>
+      api<RepoInspectResult>("/api/repos/inspect", { method: "POST", body: JSON.stringify({ rootPath }) }),
   });
   const register = useMutation({
     mutationFn: () =>
@@ -209,6 +211,7 @@ function AddRepoModal(props: { onClose: () => void }) {
   });
 
   useEffect(() => {
+    pathRef.current?.focus();
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") props.onClose();
     };
@@ -228,8 +231,8 @@ function AddRepoModal(props: { onClose: () => void }) {
   };
 
   return (
-    <div className="set-modal-scrim" onClick={props.onClose}>
-      <div className="set-modal" onClick={(event) => event.stopPropagation()}>
+    <div className="set-modal-scrim" role="presentation" onMouseDown={props.onClose}>
+      <div className="set-modal" onMouseDown={(event) => event.stopPropagation()}>
         <div className="set-modal-head">
           <div>
             <div className="set-modal-eyebrow">Repositories</div>
@@ -245,9 +248,9 @@ function AddRepoModal(props: { onClose: () => void }) {
             <label className="set-modal-field">
               <span className="set-field-label">Path</span>
               <input
+                ref={pathRef}
                 className="set-input is-mono"
                 placeholder="/home/me/project"
-                autoFocus
                 value={rootPath}
                 onChange={(event) => {
                   setRootPath(event.target.value);
@@ -267,8 +270,8 @@ function AddRepoModal(props: { onClose: () => void }) {
               />
             </label>
             <div className="set-modal-hint">
-              Citadel will scan the path, register the git remote, and add it to your tracked list. Nothing on disk
-              is moved.
+              Citadel will scan the path, register the git remote, and add it to your tracked list. Nothing on disk is
+              moved.
             </div>
             {inspected ? (
               <div className="set-modal-hint">
