@@ -5,6 +5,7 @@ import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, Shiel
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { useStateQuery } from "./app-state.js";
+import { pickReadableForeground } from "./color-contrast.js";
 import "./workspace-status-dot.css";
 
 export type WorkspaceCardData = {
@@ -182,7 +183,11 @@ export function WorkspaceCard(
             <span
               className="namespace-pill"
               title={`Namespace: ${namespace.name}`}
-              style={namespace.color ? { background: namespace.color, color: "#fff" } : undefined}
+              style={
+                namespace.color
+                  ? { background: namespace.color, color: pickReadableForeground(namespace.color) }
+                  : undefined
+              }
             >
               <Folder size={10} /> {namespace.name}
             </span>
