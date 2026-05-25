@@ -32,6 +32,7 @@ import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
+import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
@@ -789,20 +790,7 @@ export function createDaemonApp(input: {
 
   return { app, server, emit };
 
-  async function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000) {
-    const cached = providerCache.get(key);
-    const now = Date.now();
-    if (cached && cached.expiresAt > now) return cached.value as T;
-    const value = await load();
-    providerCache.set(key, { expiresAt: now + ttlMs, value });
-    return value;
+  function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
+    return cachedProviderValue(providerCache, key, load, ttlMs);
   }
-}
-
-function asyncRoute(
-  handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>,
-) {
-  return (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    handler(req, res, next).catch(next);
-  };
 }

@@ -195,4 +195,38 @@ describe("loadConfig", () => {
     expect(reloaded.hooks[0]).toMatchObject({ id: "setup", blocking: false });
     expect(reloaded.repoDefaults.setupHookIds).toEqual(["setup"]);
   });
+
+  it("ignores dataDir/databasePath stored in the raw config file and derives them from the current env", () => {
+    // Worktree-isolation regression: if a worktree daemon accidentally reads a
+    // config file that has `dataDir` pointing at the prod install (e.g. via a
+    // leaked CITADEL_CONFIG env var), the saved paths MUST NOT override the
+    // env-derived defaults. Otherwise the worktree daemon writes to prod data.
+    const prevData = process.env.CITADEL_DATA_DIR;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-iso-"));
+    dirs.push(root);
+    const worktreeDataDir = path.join(root, "worktree-data");
+    process.env.CITADEL_DATA_DIR = worktreeDataDir;
+    const configPath = path.join(root, "leaked.config.json");
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        dataDir: "/home/prod/.local/share/citadel",
+        databasePath: "/home/prod/.local/share/citadel/citadel.sqlite",
+        port: 4010,
+      }),
+    );
+    try {
+      const loaded = loadConfig(configPath);
+      expect(loaded.dataDir).toBe(worktreeDataDir);
+      expect(loaded.databasePath).toBe(path.join(worktreeDataDir, "citadel.sqlite"));
+      // Non-path keys (port, providers, etc.) still come from the file.
+      expect(loaded.port).toBe(4010);
+    } finally {
+      // biome-ignore lint/performance/noDelete: `delete` is the only real way to unset a process.env key.
+      if (prevData === undefined) delete process.env.CITADEL_DATA_DIR;
+      else process.env.CITADEL_DATA_DIR = prevData;
+    }
+  });
 });

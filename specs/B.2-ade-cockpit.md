@@ -103,6 +103,19 @@
 [ ] 4. Side-effectful actions run through operations.
 [ ] 5. Completed actions leave visible output or activity.
 
+## Scratchpad
+
+The cockpit's scratchpad view renders the per-workspace `scratchpad.md` (see B.7 for the storage format) as a stack of discrete, focusable blocks.
+
+[ ] 1. Blocks render as sanitized markdown when not focused (headings, lists, bold/italic, inline + fenced code, links). Raw HTML is sanitized (scripts and inline event handlers removed); `<img>` tags are stripped in v1 since block content can originate from external MCP agents.
+[ ] 2. Clicking a block enters inline edit mode with a `<textarea>` containing the raw markdown.
+[ ] 3. Saving triggers: blur, Cmd/Ctrl-Enter (also exits edit mode), and ~1s debounce after the last keystroke. Esc cancels unsaved changes without a network call.
+[ ] 4. Editing a block to empty/whitespace deletes the block (empty blocks are never persisted).
+[ ] 5. A pinned composer at the bottom of the list is always visible. Cmd/Ctrl-Enter or blur-with-non-empty-content creates a new block at the end of the file. The list autoscrolls so the composer stays in view.
+[ ] 6. Each block has a hover-visible delete affordance; deletion is optimistic and reversible via an undo toast.
+[ ] 7. The version history sidebar continues to show whole-file snapshots, including the `migrate-to-blocks` entry that runs on the first read after upgrade.
+[ ] 8. No drag-drop reorder, no typed blocks (code/todo/heading), no per-block diff in v1 — out of scope.
+
 ---
 
-keywords: ade, cockpit, readiness, next action, workspace detail, operator, attention state
+keywords: ade, cockpit, readiness, next action, workspace detail, operator, attention state, scratchpad, blocks

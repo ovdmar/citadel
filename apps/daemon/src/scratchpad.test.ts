@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parseBlocks } from "./scratchpad-blocks.js";
 import {
   backfillIfEmpty,
   findHistoryEntry,
@@ -12,9 +13,13 @@ import {
 import {
   SCRATCHPAD_MAX_BYTES,
   ScratchpadTooLargeError,
+  addBlock,
   appendScratchpad,
+  deleteBlock,
+  listBlocks,
   readScratchpad,
   scratchpadPath,
+  updateBlock,
   writeScratchpad,
 } from "./scratchpad.js";
 
@@ -40,7 +45,7 @@ describe("scratchpad storage", () => {
     expect(snapshot.updatedAt).toMatch(/T.*Z$/);
   });
 
-  it("round-trips writes and reports mtime", () => {
+  it("round-trips writes and reports mtime; legacy content migrates on next read", () => {
     const dir = tmpDir();
     const first = writeScratchpad(dir, "hello world", "ui");
     expect(first.content).toBe("hello world");
@@ -48,25 +53,32 @@ describe("scratchpad storage", () => {
     fs.utimesSync(scratchpadPath(dir), earlier, earlier);
     const second = writeScratchpad(dir, "second pass", "ui");
     expect(second.content).toBe("second pass");
-    expect(readScratchpad(dir).content).toBe("second pass");
+    // readScratchpad migrates the legacy (no-fence) content into a fenced block.
+    const blocks = parseBlocks(readScratchpad(dir).content).blocks;
+    expect(blocks.map((b) => b.text)).toEqual(["second pass"]);
     expect(new Date(second.updatedAt).getTime()).toBeGreaterThan(earlier.getTime());
   });
 
-  it("appends with a clean newline boundary", () => {
+  it("appendScratchpad creates a new fenced block per call, never merging", () => {
     const dir = tmpDir();
-    writeScratchpad(dir, "first line", "ui");
+    appendScratchpad(dir, "first line", "mcp:append_scratchpad");
     const after = appendScratchpad(dir, "second line", "mcp:append_scratchpad");
-    expect(after.content).toBe("first line\n\nsecond line\n");
-    const again = appendScratchpad(dir, "third line", "mcp:append_scratchpad");
-    expect(again.content).toBe("first line\n\nsecond line\n\nthird line\n");
+    const blocks = parseBlocks(after.content).blocks;
+    expect(blocks.map((b) => b.text)).toEqual(["first line", "second line"]);
+    const after3 = appendScratchpad(dir, "third line", "mcp:append_scratchpad");
+    const blocks3 = parseBlocks(after3.content).blocks;
+    expect(blocks3.map((b) => b.text)).toEqual(["first line", "second line", "third line"]);
   });
 
-  it("appends to an empty file without leading separator", () => {
+  it("appendScratchpad to an empty file produces one fenced block whose inner text matches", () => {
     const dir = tmpDir();
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(scratchpadPath(dir), "");
     const result = appendScratchpad(dir, "note", "mcp:append_scratchpad");
-    expect(result.content).toBe("note\n");
+    const blocks = parseBlocks(result.content).blocks;
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.text).toBe("note");
+    expect(result.content).toMatch(/^<!-- block:/);
   });
 
   it("rejects writes that exceed the size cap with a typed error", () => {
@@ -193,5 +205,158 @@ describe("scratchpad history", () => {
     const dir = tmpDir();
     expect(backfillIfEmpty(dir, { content: "", updatedAt: new Date().toISOString() })).toBeNull();
     expect(fs.existsSync(historyPath(dir))).toBe(false);
+  });
+});
+
+describe("scratchpad migration on read", () => {
+  it("auto-migrates a legacy file and records exactly one migrate-to-blocks history entry", () => {
+    const dir = tmpDir();
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(scratchpadPath(dir), "alpha\n\nbeta\n");
+    const snap = readScratchpad(dir);
+    const parsed = parseBlocks(snap.content);
+    expect(parsed.blocks.map((b) => b.text)).toEqual(["alpha", "beta"]);
+    expect(parsed.needsRewrite).toBe(false);
+    const entries = readHistory(dir);
+    const migrationEntries = entries.filter((e) => e.source === "migrate-to-blocks");
+    expect(migrationEntries).toHaveLength(1);
+  });
+
+  it("is idempotent — second read does not record another migrate-to-blocks entry", () => {
+    const dir = tmpDir();
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(scratchpadPath(dir), "alpha\n\nbeta\n");
+    readScratchpad(dir);
+    readScratchpad(dir);
+    const entries = readHistory(dir);
+    const migrationEntries = entries.filter((e) => e.source === "migrate-to-blocks");
+    expect(migrationEntries).toHaveLength(1);
+  });
+
+  it("does NOT migrate empty / stub files", () => {
+    const dir = tmpDir();
+    readScratchpad(dir); // seeds stub
+    readScratchpad(dir); // second call
+    const entries = readHistory(dir);
+    expect(entries.filter((e) => e.source === "migrate-to-blocks")).toHaveLength(0);
+  });
+});
+
+describe("writeScratchpad byte-faithfulness", () => {
+  it("writes the exact bytes it is given (no internal normalization)", () => {
+    const dir = tmpDir();
+    const weird = "raw text with no fences\n\nand another paragraph\n";
+    writeScratchpad(dir, weird, "ui");
+    const onDisk = fs.readFileSync(scratchpadPath(dir), "utf8");
+    expect(onDisk).toBe(weird);
+  });
+
+  it("non-canonical fenced content survives writeScratchpad verbatim", () => {
+    const dir = tmpDir();
+    const noisy =
+      "<!-- block:11111111-aaaa-4bbb-8ccc-aaaaaaaaaaaa -->\nbody\n<!-- /block:11111111-aaaa-4bbb-8ccc-aaaaaaaaaaaa -->\nTRAILING JUNK\n";
+    writeScratchpad(dir, noisy, "ui");
+    const onDisk = fs.readFileSync(scratchpadPath(dir), "utf8");
+    expect(onDisk).toBe(noisy);
+  });
+});
+
+describe("block CRUD", () => {
+  it("addBlock at end appends after existing blocks", () => {
+    const dir = tmpDir();
+    addBlock(dir, "first", "end", "ui:add_block");
+    const result = addBlock(dir, "second", "end", "ui:add_block");
+    if ("error" in result) throw new Error(result.error);
+    const blocks = parseBlocks(result.snapshot.content).blocks;
+    expect(blocks.map((b) => b.text)).toEqual(["first", "second"]);
+  });
+
+  it("addBlock with afterId inserts after the given block", () => {
+    const dir = tmpDir();
+    const a = addBlock(dir, "a", "end", "ui:add_block");
+    addBlock(dir, "c", "end", "ui:add_block");
+    if ("error" in a) throw new Error(a.error);
+    addBlock(dir, "b", { afterId: a.block.id }, "ui:add_block");
+    const blocks = listBlocks(dir).blocks;
+    expect(blocks.map((b) => b.text)).toEqual(["a", "b", "c"]);
+  });
+
+  it("addBlock with unknown afterId returns block_not_found", () => {
+    const dir = tmpDir();
+    addBlock(dir, "real", "end", "ui:add_block");
+    const result = addBlock(dir, "x", { afterId: "missing-id" }, "ui:add_block");
+    expect(result).toEqual({ error: "block_not_found" });
+  });
+
+  it("addBlock with empty/whitespace text returns text_required", () => {
+    const dir = tmpDir();
+    expect(addBlock(dir, "", "end", "ui:add_block")).toEqual({ error: "text_required" });
+    expect(addBlock(dir, "  \n\t ", "end", "ui:add_block")).toEqual({ error: "text_required" });
+  });
+
+  it("updateBlock overwrites a block's text while preserving its UUID", () => {
+    const dir = tmpDir();
+    const a = addBlock(dir, "before", "end", "ui:add_block");
+    if ("error" in a) throw new Error(a.error);
+    const r = updateBlock(dir, a.block.id, "after", "ui:edit_block");
+    if ("error" in r) throw new Error(r.error);
+    if (!("block" in r)) throw new Error("update with non-empty text must return a block");
+    expect(r.block.id).toBe(a.block.id);
+    expect(r.block.text).toBe("after");
+  });
+
+  it("updateBlock with empty text deletes the block", () => {
+    const dir = tmpDir();
+    const a = addBlock(dir, "doomed", "end", "ui:add_block");
+    if ("error" in a) throw new Error(a.error);
+    const r = updateBlock(dir, a.block.id, "", "ui:delete_block");
+    expect("error" in r).toBe(false);
+    expect(listBlocks(dir).blocks).toHaveLength(0);
+  });
+
+  it("updateBlock with unknown id returns block_not_found", () => {
+    const dir = tmpDir();
+    expect(updateBlock(dir, "missing", "text", "ui:edit_block")).toEqual({ error: "block_not_found" });
+  });
+
+  it("deleteBlock removes the block and preserves all other UUIDs", () => {
+    const dir = tmpDir();
+    const a = addBlock(dir, "a", "end", "ui:add_block");
+    const b = addBlock(dir, "b", "end", "ui:add_block");
+    const c = addBlock(dir, "c", "end", "ui:add_block");
+    if ("error" in a || "error" in b || "error" in c) throw new Error("seed failed");
+    deleteBlock(dir, b.block.id, "ui:delete_block");
+    const ids = listBlocks(dir).blocks.map((x) => x.id);
+    expect(ids).toEqual([a.block.id, c.block.id]);
+  });
+
+  it("deleteBlock with unknown id returns block_not_found", () => {
+    const dir = tmpDir();
+    expect(deleteBlock(dir, "missing", "ui:delete_block")).toEqual({ error: "block_not_found" });
+  });
+
+  it("listBlocks returns blocks with createdAt/updatedAt derived from history", () => {
+    const dir = tmpDir();
+    const t0 = new Date("2026-05-25T10:00:00Z");
+    const t1 = new Date("2026-05-25T10:30:00Z");
+    const a = addBlock(dir, "v1", "end", "ui:add_block", { now: () => t0 });
+    if ("error" in a) throw new Error(a.error);
+    // Different source so the second write opens a fresh history entry rather than coalescing.
+    updateBlock(dir, a.block.id, "v2", "mcp:update_block", { now: () => t1 });
+    const blocks = listBlocks(dir).blocks;
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]?.createdAt).toBe(t0.toISOString());
+    expect(blocks[0]?.updatedAt).toBe(t1.toISOString());
+  });
+
+  it("block CRUD writes inside the same coalesce window collapse into one history entry", () => {
+    const dir = tmpDir();
+    const t0 = new Date("2026-05-25T10:00:00Z");
+    const t30 = new Date("2026-05-25T10:00:30Z");
+    addBlock(dir, "first", "end", "ui:add_block", { now: () => t0 });
+    addBlock(dir, "second", "end", "ui:add_block", { now: () => t30 });
+    const entries = readHistory(dir).filter((e) => e.source === "ui:add_block");
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.coalescedCount).toBe(2);
   });
 });
