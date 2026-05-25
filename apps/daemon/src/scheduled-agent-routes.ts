@@ -3,6 +3,7 @@ import type { CitadelConfig } from "@citadel/config";
 import { CreateScheduledAgentInputSchema, UpdateScheduledAgentInputSchema } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type OperationService, ScheduledAgentRunner, createBackgroundAgentSession } from "@citadel/operations";
+import { findClaudeTranscriptForSession, renderClaudeTranscriptAsText } from "@citadel/runtimes";
 import { killTmuxSession, pipePaneLogPath } from "@citadel/terminal";
 import type express from "express";
 import { LOG_SLICE_DEFAULT_BYTES, readLogSlice } from "./log-slice.js";
@@ -204,21 +205,54 @@ export function registerScheduledAgentRoutes(input: {
 
     // Resolve which on-disk file to read. Background runs pipe directly to
     // run.logFilePath. Workspace runs don't — their output lands in tmux's
-    // pipe-pane side-channel log (keyed by tmux session name), so fall back
-    // to that when the recorded path is missing. As a last resort, look up
-    // the session via run.sessionId for older runs whose logFilePath wasn't
-    // set at all.
+    // pipe-pane side-channel log (keyed by tmux session name), which itself
+    // lives under tmpdir and may be cleaned across reboots. As a last resort
+    // we render the agent runtime's own JSONL transcript (claude-code) into
+    // a human-readable conversation. Order:
+    //   1. recorded logFilePath (background mode writes here)
+    //   2. tmux pipe-pane log via session.tmuxSessionName (workspace mode)
+    //   3. runtime transcript via session.workspaceId + session.createdAt
+    //      (workspace mode, after the pipe-pane log is gone)
     const candidates: string[] = [];
+    const session = run.sessionId
+      ? store.listSessions().find((candidate) => candidate.id === run.sessionId)
+      : undefined;
     if (run.logFilePath) candidates.push(run.logFilePath);
-    if (run.sessionId) {
-      const session = store.listSessions().find((candidate) => candidate.id === run.sessionId);
-      if (session?.tmuxSessionName) candidates.push(pipePaneLogPath(session.tmuxSessionName));
-    }
-    if (!candidates.length) return res.status(404).json({ error: "log_not_available" });
+    if (session?.tmuxSessionName) candidates.push(pipePaneLogPath(session.tmuxSessionName));
+
     for (const candidate of candidates) {
       const slice = readLogSlice(candidate, { offset: offset.value, maxBytes: maxBytes.value });
-      if (!("kind" in slice)) return res.json(slice);
+      if (!("kind" in slice) && slice.bytesRead > 0) return res.json(slice);
     }
+
+    // Transcript fallback. Only claude-code is supported for now; other
+    // runtimes (shell, codex, cursor-agent) fall through to log_file_missing.
+    if (session && session.runtimeId === "claude-code") {
+      const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
+      if (workspace) {
+        const transcriptPath = findClaudeTranscriptForSession({
+          workspacePath: workspace.path,
+          sessionStartedAt: session.createdAt,
+        });
+        if (transcriptPath) {
+          const rendered = renderClaudeTranscriptAsText(transcriptPath);
+          if (rendered) {
+            const buffer = Buffer.from(rendered, "utf8");
+            const start = Math.min(offset.value, buffer.length);
+            const length = Math.min(maxBytes.value, Math.max(0, buffer.length - start));
+            const slice = buffer.subarray(start, start + length).toString("utf8");
+            return res.json({
+              content: slice,
+              bytesRead: length,
+              nextOffset: start + length,
+              truncated: start + length < buffer.length,
+              source: "transcript",
+            });
+          }
+        }
+      }
+    }
+
     return res.status(404).json({ error: "log_file_missing" });
   });
 

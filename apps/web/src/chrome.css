@@ -74,7 +74,6 @@
   font-size: 13px;
   cursor: text;
   width: 100%;
-  box-shadow: var(--sh-1);
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
@@ -84,7 +83,7 @@
 
 .cit-search:focus-within {
   border-color: rgba(36, 28, 14, 0.22);
-  box-shadow: 0 0 0 3px rgba(36, 28, 14, 0.04), var(--sh-1);
+  box-shadow: 0 0 0 3px rgba(36, 28, 14, 0.04);
 }
 
 .cit-search .cit-search-placeholder {

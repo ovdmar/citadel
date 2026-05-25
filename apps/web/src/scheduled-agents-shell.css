@@ -411,3 +411,35 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+/* ============================================================
+ * Initial-prompt quotes (timeline card + editor header)
+ * ============================================================ */
+
+.sched-timeline-prompt,
+.sched-editor-prompt {
+  margin: 0;
+  padding: 6px 10px 6px 12px;
+  border-left: 2px solid var(--c-line-3);
+  background: var(--c-elev);
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
+  color: var(--c-fg-2);
+  white-space: pre-wrap;
+  /* Multi-line prompts can be long. Clamp to ~5 lines on the timeline so a
+   * single card doesn't dominate the scroll; the user can hover to see the
+   * full title and click View log to drop into the run anyway. */
+  max-height: calc(1.5em * 5);
+  overflow: hidden;
+  position: relative;
+}
+
+.sched-timeline-prompt::after,
+.sched-editor-prompt::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 1.5em;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0), var(--c-elev));
+  pointer-events: none;
+}

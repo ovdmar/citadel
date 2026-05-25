@@ -97,6 +97,11 @@ export function ScheduledAgentEditor(props: {
             <Trash2 size={13} /> Delete
           </Button>
         </div>
+        {props.agent.prompt ? (
+          <blockquote className="sched-editor-prompt" title="Initial prompt sent to the agent on every run">
+            {props.agent.prompt}
+          </blockquote>
+        ) : null}
         <small className={`scheduled-agent-status ${props.agent.lastRunStatus}`}>
           Last run: {formatLabel(props.agent.lastRunStatus)}
           {props.agent.lastRunAt ? ` · ${new Date(props.agent.lastRunAt).toLocaleString()}` : ""}

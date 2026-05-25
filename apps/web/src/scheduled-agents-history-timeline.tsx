@@ -105,6 +105,11 @@ function TimelineRow(props: {
           <strong className="sched-timeline-agent">{agent.name}</strong>
           <span className="sched-timeline-kind">{isOneShot ? "one-shot" : "recurring"}</span>
         </div>
+        {agent.prompt ? (
+          <blockquote className="sched-timeline-prompt" title="Initial prompt Citadel sent to the agent">
+            {agent.prompt}
+          </blockquote>
+        ) : null}
         {run.message ? <p className="sched-timeline-message">{run.message}</p> : null}
         <div className="sched-timeline-actions">
           {canViewLog ? (

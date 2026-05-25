@@ -6,6 +6,7 @@ export {
   claudeProjectsDir,
   parseClaudeTranscript,
   findClaudeTranscriptForSession,
+  renderClaudeTranscriptAsText,
   claudeCodeAdapter,
   codexAdapter,
   cursorAgentAdapter,
