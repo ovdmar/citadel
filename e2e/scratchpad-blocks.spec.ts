@@ -52,7 +52,7 @@ test.describe("scratchpad blocks", () => {
     await page.goto("/scratchpad");
 
     const block = page.locator(".scratchpad-block").first();
-    await block.getByRole("button", { name: "Edit block" }).click();
+    await block.click();
 
     const textarea = block.locator("textarea");
     await expect(textarea).toBeFocused();
@@ -81,7 +81,7 @@ test.describe("scratchpad blocks", () => {
     await request.post(`${API_BASE}/api/scratchpad/blocks`, { data: { text: "delete me via empty edit" } });
     await page.goto("/scratchpad");
     const block = page.locator(".scratchpad-block").first();
-    await block.getByRole("button", { name: "Edit block" }).click();
+    await block.click();
     const textarea = block.locator("textarea");
     await textarea.fill("");
     await textarea.press("ControlOrMeta+Enter");

@@ -467,6 +467,11 @@ export function ScratchpadView() {
                   placeholder="Add a note. ⌘/Ctrl-Enter creates a new block."
                   value={composer}
                   onChange={(event) => setComposer(event.target.value)}
+                  onInput={(event) => {
+                    const el = event.currentTarget;
+                    el.style.height = "auto";
+                    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+                  }}
                   onKeyDown={onComposerKey}
                   onBlur={onComposerBlur}
                   disabled={!loaded}
@@ -625,11 +630,23 @@ function BlockItem(props: BlockItemProps) {
 
   useEffect(() => {
     if (block.isEditing) {
-      editorRef.current?.focus();
-      const end = editorRef.current?.value.length ?? 0;
-      editorRef.current?.setSelectionRange(end, end);
+      const el = editorRef.current;
+      if (!el) return;
+      el.focus();
+      const end = el.value.length;
+      el.setSelectionRange(end, end);
+      // Auto-size to content so the editing surface keeps the rendered block's
+      // visual height (no "shrink to small textarea" feeling).
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
     }
   }, [block.isEditing]);
+
+  const onTextareaInput = useCallback((event: React.FormEvent<HTMLTextAreaElement>) => {
+    const el = event.currentTarget;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
 
   if (block.isEditing) {
     return (
@@ -639,17 +656,36 @@ function BlockItem(props: BlockItemProps) {
           className="scratchpad-block-textarea"
           aria-label="Edit block"
           value={block.draft}
+          onInput={onTextareaInput}
           onChange={(event) => onChange(block.id, event.target.value)}
           onBlur={(event) => onBlur(block.id, event.target.value)}
           onKeyDown={(event) => onKey(block.id, event)}
-          rows={Math.max(2, block.draft.split("\n").length + 1)}
         />
       </div>
     );
   }
 
+  // Non-editing block: a full-width clickable surface that opens edit mode.
+  // We deliberately use a div with role="button" (not a <button>) so links
+  // and other interactive content in the rendered markdown stay valid HTML
+  // and aren't swallowed by a button-in-button.
+  const open = () => onStartEditing(block.id);
   return (
-    <div className="scratchpad-block">
+    <div
+      className="scratchpad-block"
+      // biome-ignore lint/a11y/useSemanticElements: a <button> here would invalidate links rendered from markdown (nested-interactive), so div+role=button is the right structure.
+      role="button"
+      tabIndex={0}
+      onClick={open}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          open();
+        }
+      }}
+    >
+      {/* biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify in renderBlockMarkdown */}
+      <div className="scratchpad-block-rendered" dangerouslySetInnerHTML={{ __html: renderedHtml }} />
       <button
         type="button"
         className="scratchpad-block-delete"
@@ -660,16 +696,7 @@ function BlockItem(props: BlockItemProps) {
           onDelete(block.id);
         }}
       >
-        <Trash2 size={12} />
-      </button>
-      <button
-        type="button"
-        className="scratchpad-block-content"
-        aria-label="Edit block"
-        onClick={() => onStartEditing(block.id)}
-      >
-        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: HTML is sanitized via DOMPurify in renderBlockMarkdown */}
-        <div className="scratchpad-block-rendered" dangerouslySetInnerHTML={{ __html: renderedHtml }} />
+        <Trash2 size={14} />
       </button>
     </div>
   );
