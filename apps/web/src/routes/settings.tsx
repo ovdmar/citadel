@@ -1,13 +1,25 @@
 import type { AgentRuntime, ProviderHealth, Repo } from "@citadel/contracts";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, Cable, CheckCircle2, ChevronRight, FolderGit2, Moon, Server, Sun, Workflow } from "lucide-react";
+import {
+  ArrowLeft,
+  Cable,
+  CheckCircle2,
+  ChevronRight,
+  FolderGit2,
+  Moon,
+  Server,
+  Sparkles,
+  Sun,
+  Workflow,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { useStateQuery } from "../app-state.js";
+import { CitadelActionsPanel } from "../settings-citadel-actions.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { AgentsPanel } from "../settings-runtimes.js";
 
-type SectionId = "overview" | "providers" | "agents" | "repositories" | "mcp";
+type SectionId = "overview" | "providers" | "agents" | "repositories" | "actions" | "mcp";
 
 type Section = {
   id: SectionId;
@@ -35,6 +47,12 @@ const SECTIONS: Section[] = [
     label: "Repositories",
     description: "Registered repos and tracking.",
     icon: FolderGit2,
+  },
+  {
+    id: "actions",
+    label: "Citadel Actions",
+    description: "Configurable prompt presets (e.g. scratchpad Refine).",
+    icon: Sparkles,
   },
   { id: "mcp", label: "MCP", description: "Model Context Protocol servers Citadel exposes to agents.", icon: Workflow },
 ];
@@ -134,6 +152,16 @@ export function SettingsView() {
                 help="Removing tracking preserves the local repo and worktrees on disk — Citadel only forgets about them. Each repo has its own hook bindings inside its Repo settings."
               />
               <RepositoriesPanel state={data} />
+            </>
+          ) : null}
+          {section === "actions" ? (
+            <>
+              <PageHead
+                title="Citadel Actions"
+                sub="Configurable prompt presets surfaced as buttons in the cockpit."
+                help="Each action stores a name + description + icon + prompt template at <dataDir>/citadel-actions.json. The built-in 'Refine scratchpad' action seeds on first read; it can be edited or reset to default but not deleted."
+              />
+              <CitadelActionsPanel />
             </>
           ) : null}
           {section === "mcp" ? (

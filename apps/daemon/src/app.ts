@@ -33,6 +33,7 @@ import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
+import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
@@ -711,6 +712,7 @@ export function createDaemonApp(input: {
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit });
+  registerCitadelActionRoutes({ app, config, emit });
   try {
     const spPath = scratchpadPath(config.dataDir);
     if (fs.existsSync(spPath)) {
