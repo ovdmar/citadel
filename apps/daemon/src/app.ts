@@ -124,8 +124,16 @@ export function createDaemonApp(input: {
   };
 
   // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
-  const initialTerminalCleanup = ttyd.cleanupStale();
-  if (initialTerminalCleanup.killed > 0) emit("terminal.cleanup", initialTerminalCleanup);
+  //
+  // Skip cleanupStale() when running under vitest. Every test that boots a
+  // daemon (~20 of them) derives the same slot 0 range as the production
+  // install for config.port=4010 — running cleanupStale() in tests would
+  // SIGTERM the live cockpit's ttyds on every test that calls
+  // createDaemonApp(). Production daemons still get the boot-time sweep.
+  if (!process.env.VITEST) {
+    const initialTerminalCleanup = ttyd.cleanupStale();
+    if (initialTerminalCleanup.killed > 0) emit("terminal.cleanup", initialTerminalCleanup);
+  }
   const respawnTmux = async (session: import("@citadel/contracts").AgentSession) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     const runtime = config.runtimes.find((candidate) => candidate.id === session.runtimeId);
