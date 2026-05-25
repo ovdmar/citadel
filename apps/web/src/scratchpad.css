@@ -696,7 +696,7 @@
 
 .scratchpad-drawer-header {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto auto auto;
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
@@ -1007,4 +1007,149 @@
 .citadel-actions-error {
   font-size: 11px;
   color: var(--color-danger, #ef4444);
+}
+
+.scratchpad-drawer-refine {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.scratchpad-drawer-refine:hover {
+  background: var(--c-line-1, rgba(255, 255, 255, 0.06));
+}
+
+/* ─── Refine modal ───────────────────────────────────────────────────── */
+.scratchpad-refine-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+}
+
+.scratchpad-refine-overlay[open] {
+  display: flex;
+}
+
+.scratchpad-refine-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.scratchpad-refine-panel {
+  position: relative;
+  width: min(640px, 92vw);
+  max-height: 80vh;
+  background: var(--bg-panel, var(--panel));
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+}
+
+.scratchpad-refine-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.scratchpad-refine-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.scratchpad-refine-body {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.scratchpad-refine-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.scratchpad-refine-label {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+}
+
+.scratchpad-refine-row select,
+.scratchpad-refine-row textarea {
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg-panel, var(--panel));
+  color: inherit;
+}
+
+.scratchpad-refine-prompt-row textarea {
+  min-height: 200px;
+  resize: vertical;
+}
+
+.scratchpad-refine-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: rgba(255, 200, 0, 0.12);
+  color: var(--color-warn, #f59e0b);
+  font-size: 12px;
+}
+
+.scratchpad-refine-error {
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: rgba(255, 60, 60, 0.12);
+  color: var(--color-danger, #ef4444);
+  font-size: 12px;
+}
+
+.scratchpad-refine-empty {
+  font-size: 12px;
+  color: var(--text-muted, #888);
+}
+
+.scratchpad-refine-loading {
+  font-size: 12px;
+  color: var(--text-muted, #888);
+}
+
+.scratchpad-refine-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 4px;
 }

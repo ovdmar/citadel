@@ -26,6 +26,7 @@ import { listRuntimeHealth } from "@citadel/runtimes";
 import type { TtydManager } from "@citadel/terminal";
 import { readLogSlice } from "./log-slice.js";
 import type { ScheduledAgentService } from "./scheduled-agent-service.js";
+import { refineScratchpad } from "./scratchpad-refine.js";
 import {
   ScratchpadTooLargeError,
   addBlock,
@@ -288,6 +289,20 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
       typeof limitRaw === "number" && Number.isFinite(limitRaw) ? limitRaw : (undefined as number | undefined);
     const { blocks } = listBlocks(config.dataDir);
     return { matches: fuzzySearchBlocks(blocks, query, limit) };
+  }
+  if (call.name === "refine_scratchpad") {
+    const args = call.arguments ?? {};
+    const input: { repoId?: string; repoName?: string; prompt?: string } = {};
+    if (typeof args.repoId === "string") input.repoId = args.repoId;
+    if (typeof args.repoName === "string") input.repoName = args.repoName;
+    if (typeof args.prompt === "string") input.prompt = args.prompt;
+    const refineProviderHealth = async () => collectProviderHealth(config.providers);
+    const result = await refineScratchpad({ config, store, operations, providerHealth: refineProviderHealth }, input);
+    if (result.ok) {
+      emit("workspace.updated", { workspaceId: result.workspaceId, operationId: result.operationId });
+      if (result.sessionId) emit("agent.updated", { workspaceId: result.workspaceId, sessionId: result.sessionId });
+    }
+    return result;
   }
   if (call.name === "list_deployed_apps") {
     const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";

@@ -1,7 +1,11 @@
 import type { CitadelConfig } from "@citadel/config";
+import type { ProviderHealth } from "@citadel/contracts";
 import { SEARCH_LIMITS, fuzzySearchBlocks } from "@citadel/core";
+import type { SqliteStore } from "@citadel/db";
+import type { OperationService } from "@citadel/operations";
 import type express from "express";
 import { findHistoryEntry, listHistorySummaries } from "./scratchpad-history.js";
+import { refineScratchpad } from "./scratchpad-refine.js";
 import {
   SCRATCHPAD_MAX_BYTES,
   addBlock,
@@ -15,8 +19,15 @@ import {
 
 type Emit = (type: string, payload: unknown) => void;
 
-export function registerScratchpadRoutes(input: { app: express.Express; config: CitadelConfig; emit: Emit }) {
-  const { app, config, emit } = input;
+export function registerScratchpadRoutes(input: {
+  app: express.Express;
+  config: CitadelConfig;
+  emit: Emit;
+  store?: SqliteStore;
+  operations?: OperationService;
+  providerHealth?: () => Promise<ProviderHealth[]>;
+}) {
+  const { app, config, emit, store, operations, providerHealth } = input;
 
   app.get("/api/scratchpad", (_req, res) => {
     res.json(readScratchpad(config.dataDir));
@@ -121,6 +132,28 @@ export function registerScratchpadRoutes(input: { app: express.Express; config: 
     emit("scratchpad.history.updated", { updatedAt: result.snapshot.updatedAt });
     res.json({ snapshot: result.snapshot });
   });
+
+  // Refine scratchpad — launches an agent with the saved Citadel Action prompt
+  // (or an override). Full degradation matrix lives in `scratchpad-refine.ts`.
+  // Requires store + operations + providerHealth — only registered when the
+  // caller supplied them (vitest fixtures that don't need refine can omit).
+  if (store && operations && providerHealth) {
+    app.post("/api/scratchpad/refine", async (req, res) => {
+      const body = (req.body ?? {}) as { repoId?: unknown; repoName?: unknown; prompt?: unknown };
+      const input: { repoId?: string; repoName?: string; prompt?: string } = {};
+      if (typeof body.repoId === "string") input.repoId = body.repoId;
+      if (typeof body.repoName === "string") input.repoName = body.repoName;
+      if (typeof body.prompt === "string") input.prompt = body.prompt;
+      const result = await refineScratchpad({ config, store, operations, providerHealth }, input);
+      if (result.ok) {
+        emit("workspace.updated", { workspaceId: result.workspaceId, operationId: result.operationId });
+        if (result.sessionId) emit("agent.updated", { workspaceId: result.workspaceId, sessionId: result.sessionId });
+        return res.json(result);
+      }
+      const status = result.error === "launch_failed" ? 502 : 400;
+      res.status(status).json(result);
+    });
+  }
 }
 
 function errorStatus(code: string): number {

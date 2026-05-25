@@ -10,7 +10,7 @@
 // state even while the drawer is closed.
 import type { ScratchpadBlockSummary, ScratchpadHistorySummary, ScratchpadSnapshot } from "@citadel/contracts";
 import type { FuzzyBlockMatch } from "@citadel/core";
-import { X } from "lucide-react";
+import { Wand2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import { sideBySideDiff } from "./routes/scratchpad-diff.js";
@@ -18,6 +18,7 @@ import { formatBytes, pillLabel, pillSlug } from "./routes/scratchpad-helpers.js
 import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { BlockItem, type UiBlock } from "./scratchpad-panel-block.js";
 import { ScratchpadPanelSearch } from "./scratchpad-panel-search.js";
+import { ScratchpadRefineModal } from "./scratchpad-refine-modal.js";
 
 type HistorySummary = ScratchpadHistorySummary;
 type BlockSummary = ScratchpadBlockSummary;
@@ -50,6 +51,7 @@ export function ScratchpadPanel() {
   const [savePulse, setSavePulse] = useState<"ok" | "err" | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchResults, setSearchResults] = useState<FuzzyBlockMatch[] | null>(null);
+  const [refineOpen, setRefineOpen] = useState(false);
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -544,6 +546,15 @@ export function ScratchpadPanel() {
         </span>
         <button
           type="button"
+          className="scratchpad-drawer-refine"
+          aria-label="Refine scratchpad"
+          title="Refine scratchpad — launch an agent to dedupe and group blocks"
+          onClick={() => setRefineOpen(true)}
+        >
+          <Wand2 size={14} /> Refine
+        </button>
+        <button
+          type="button"
           className="scratchpad-drawer-close"
           aria-label="Close scratchpad"
           title="Close scratchpad (Esc)"
@@ -552,6 +563,7 @@ export function ScratchpadPanel() {
           <X size={14} />
         </button>
       </header>
+      <ScratchpadRefineModal open={refineOpen} onClose={() => setRefineOpen(false)} />
       <ScratchpadPanelSearch
         blocks={blocks}
         open={searchOpen}

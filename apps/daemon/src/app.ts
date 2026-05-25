@@ -711,7 +711,7 @@ export function createDaemonApp(input: {
 
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
-  registerScratchpadRoutes({ app, config, emit });
+  registerScratchpadRoutes({ app, config, emit, store, operations, providerHealth: cachedProviderHealth });
   registerCitadelActionRoutes({ app, config, emit });
   try {
     const spPath = scratchpadPath(config.dataDir);
