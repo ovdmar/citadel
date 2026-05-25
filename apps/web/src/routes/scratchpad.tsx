@@ -36,6 +36,7 @@ export function ScratchpadView() {
   const lastSavedRef = useRef<string>("");
   const latestRef = useRef<string>("");
   const savingRef = useRef(false);
+  const pendingRefreshRef = useRef(false);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -113,8 +114,12 @@ export function ScratchpadView() {
       if (mountedRef.current) setSaveState("saved");
     } finally {
       savingRef.current = false;
+      if (pendingRefreshRef.current) {
+        pendingRefreshRef.current = false;
+        void loadFromServer();
+      }
     }
-  }, []);
+  }, [loadFromServer]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -132,7 +137,10 @@ export function ScratchpadView() {
   useEffect(() => {
     const events = new EventSource("/events");
     const refreshContent = () => {
-      if (savingRef.current) return;
+      if (savingRef.current) {
+        pendingRefreshRef.current = true;
+        return;
+      }
       void loadFromServer();
     };
     const refreshHistory = () => {
@@ -147,19 +155,26 @@ export function ScratchpadView() {
     };
   }, [loadFromServer, loadHistory]);
 
-  const openEntry = useCallback(async (id: string) => {
-    setSelectedEntryId(id);
-    setSelectedContent(null);
-    setDiffError(null);
-    try {
-      const result = await api<{ entry: { content: string } }>(`/api/scratchpad/history/${encodeURIComponent(id)}`);
-      if (!mountedRef.current) return;
-      setSelectedContent(result.entry.content);
-    } catch (error) {
-      if (!mountedRef.current) return;
-      setDiffError(error instanceof Error ? error.message : "load_failed");
-    }
-  }, []);
+  const openEntry = useCallback(
+    async (id: string) => {
+      setSelectedEntryId(id);
+      setSelectedContent(null);
+      setDiffError(null);
+      // Refresh current scratchpad alongside the entry fetch so the right
+      // side of the diff always reflects what's on disk right now, not a
+      // possibly-stale local snapshot from before an external write.
+      void loadFromServer();
+      try {
+        const result = await api<{ entry: { content: string } }>(`/api/scratchpad/history/${encodeURIComponent(id)}`);
+        if (!mountedRef.current) return;
+        setSelectedContent(result.entry.content);
+      } catch (error) {
+        if (!mountedRef.current) return;
+        setDiffError(error instanceof Error ? error.message : "load_failed");
+      }
+    },
+    [loadFromServer],
+  );
 
   const closeDiff = useCallback(() => {
     setSelectedEntryId(null);
