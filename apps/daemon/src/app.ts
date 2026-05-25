@@ -40,6 +40,7 @@ import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { backfillIfEmpty } from "./scratchpad-history.js";
+import { registerQuickCaptureRoute } from "./quick-capture-route.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { scratchpadPath } from "./scratchpad.js";
 import { registerSpaFallback } from "./spa-fallback-route.js";
@@ -746,6 +747,7 @@ export function createDaemonApp(input: {
     req.on("close", () => sseClients.delete(res));
   });
 
+  registerQuickCaptureRoute({ app });
   registerSpaFallback({ app });
 
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
