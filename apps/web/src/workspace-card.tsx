@@ -1,20 +1,6 @@
 import type { AgentSession, Namespace, PullRequestSummary, Workspace } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
-import {
-  Bot,
-  CircleDot,
-  ExternalLink,
-  Folder,
-  GitPullRequest,
-  Hash,
-  Home,
-  Loader2,
-  MessageSquare,
-  ShieldAlert,
-  ShieldCheck,
-  ShieldQuestion,
-  X,
-} from "lucide-react";
+import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { useStateQuery } from "./app-state.js";
@@ -24,9 +10,9 @@ export type WorkspaceCardData = {
   sessions: AgentSession[];
   pullRequest?: PullRequestSummary | null;
   approval?: ApprovalTone;
-  // When provided, skip the global state lookup and use this directly. Callers
-  // rendering many cards should build a Map once at the parent and pass the
-  // entry per workspace to avoid O(n*m) lookups across a large list.
+  // When provided, skip the global state lookup and use these directly.
+  // Callers rendering many cards should build the namespace Map once at the
+  // parent so we avoid O(n*m) lookups across a large list.
   namespace?: Namespace | null;
   namespaces?: Namespace[];
 };
@@ -37,13 +23,11 @@ export type ApprovalTone = "none" | "pending" | "changes" | "approved";
 export function WorkspaceCard(
   props: WorkspaceCardData & { active: boolean; onSelect: () => void; draggable?: boolean },
 ) {
-  const { workspace, sessions, pullRequest } = props;
+  const { workspace, pullRequest } = props;
   const titleDisplay = workspaceDisplayTitle(workspace);
-  const agentState = deriveAgentState(sessions);
   const prTone = pullRequest ? prToneFor(pullRequest) : "missing";
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
-  const additions = pullRequest?.additions ?? null;
-  const deletions = pullRequest?.deletions ?? null;
+
   // Only hit the global state query when callers haven't already passed the
   // resolved namespace / namespace list in via props.
   const needsFallback = props.namespace === undefined && props.namespaces === undefined;
@@ -80,9 +64,9 @@ export function WorkspaceCard(
     },
   });
 
-  // Drag payload: the workspace id, so namespace drop targets can reassign it
-  // via /api/namespaces/assign. Opt-in per call site (only the nav/dashboard
-  // namespace views enable it) to avoid accidental drags elsewhere.
+  // Drag payload: workspace id, so namespace drop targets in the nav and
+  // dashboard can reassign via /api/namespaces/assign. Opt-in so accidental
+  // drags elsewhere stay no-ops.
   const dragHandlers = props.draggable
     ? {
         draggable: true,
@@ -107,16 +91,16 @@ export function WorkspaceCard(
         aria-label={`Open workspace ${workspace.name}`}
       >
         <span
-          className={`workspace-card-agent ${agentState.tone} ${workspace.kind === "root" ? "root" : ""}`}
-          title={workspace.kind === "root" ? "Repository root workspace" : agentState.label}
+          className={`workspace-card-agent tone-${prTone} ${workspace.kind === "root" ? "root" : ""}`}
+          title={
+            workspace.kind === "root"
+              ? "Repository root workspace"
+              : pullRequest
+                ? `PR #${pullRequest.number} · ${prTone}`
+                : "No PR yet"
+          }
         >
-          {workspace.kind === "root" ? (
-            <Home size={14} />
-          ) : agentState.tone === "starting" || agentState.tone === "running" ? (
-            <Loader2 size={14} style={{ animation: "spin 1.4s linear infinite" }} />
-          ) : (
-            <Bot size={14} />
-          )}
+          {workspace.kind === "root" ? <Home size={14} /> : <GitBranch size={14} />}
         </span>
         <span className="workspace-card-main">
           <span className="workspace-card-title">
@@ -166,65 +150,17 @@ export function WorkspaceCard(
               <Folder size={10} /> {namespace.name}
             </span>
           ) : null}
-          {workspace.slackThreadUrl ? (
-            <a
-              href={workspace.slackThreadUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="linked-pill"
-              title="Open linked Slack thread"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <MessageSquare size={11} />
-            </a>
-          ) : null}
-          {workspace.issueUrl ? (
-            <a
-              href={workspace.issueUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="linked-pill"
-              title={workspace.issueKey ? `Open ${workspace.issueKey}` : "Open linked issue"}
-              onClick={(event) => event.stopPropagation()}
-            >
-              {workspace.issueKey ? <Hash size={11} /> : <ExternalLink size={11} />}
-            </a>
-          ) : null}
-          {additions !== null || deletions !== null ? (
-            <span className="workspace-card-diff">
-              <span className="diff-add">+{additions ?? 0}</span>
-              <span className="diff-del">-{deletions ?? 0}</span>
-            </span>
-          ) : null}
-          {pullRequest ? (
-            <a
-              href={pullRequest.url}
-              target="_blank"
-              rel="noreferrer"
-              className={`pr-pill tone-${prTone}`}
-              title={`PR #${pullRequest.number} · ${prTone}`}
-              onClick={(event) => event.stopPropagation()}
-            >
-              <GitPullRequest size={11} />
-            </a>
-          ) : (
-            <span className="pr-pill" title="No PR yet">
-              <GitPullRequest size={11} />
-            </span>
-          )}
           <span className={`approval-pill tone-${approvalTone}`} title={`Approval: ${approvalTone}`}>
             {approvalTone === "approved" ? (
-              <ShieldCheck size={11} />
+              <ShieldCheck size={13} />
             ) : approvalTone === "changes" ? (
-              <ShieldAlert size={11} />
+              <ShieldAlert size={13} />
             ) : approvalTone === "pending" ? (
-              <MessageSquare size={11} />
+              <MessageSquare size={13} />
             ) : (
-              <ShieldQuestion size={11} />
+              <ShieldQuestion size={13} />
             )}
           </span>
-          {workspace.dirty ? <span className="workspace-card-dirty" title="Uncommitted changes" /> : null}
-          {agentState.tone === "failed" ? <CircleDot size={10} color="var(--color-danger)" /> : null}
         </span>
       </button>
       {workspace.kind === "root" ? null : (
@@ -272,9 +208,9 @@ function NamespacePickerDialog(props: { workspace: Workspace; namespaces: Namesp
     onError: (err) => setError(err instanceof Error ? err.message : "assign_failed"),
   });
 
-  // Combined create-and-assign: POST /api/namespaces then assign the new id to
-  // this workspace. createNamespace is idempotent on name (returns the existing
-  // row with `created: false`) — fine here, the assign step still runs.
+  // Create-and-assign in a single click. createNamespace is idempotent on name
+  // (returns the existing row with `created: false`) — the assign step still
+  // runs either way, which is the intent here.
   const createAndAssign = useMutation({
     mutationFn: async (name: string) => {
       const created = await api<{ namespace: Namespace; created: boolean }>("/api/namespaces", {
@@ -361,15 +297,15 @@ function NamespacePickerDialog(props: { workspace: Workspace; namespaces: Namesp
           >
             Uncategorized
           </button>
-          {props.namespaces.map((namespace) => (
+          {props.namespaces.map((ns) => (
             <button
-              key={namespace.id}
+              key={ns.id}
               type="button"
               className="check-row"
-              onClick={() => assign.mutate(namespace.id)}
-              disabled={props.workspace.namespaceId === namespace.id || assign.isPending}
+              onClick={() => assign.mutate(ns.id)}
+              disabled={props.workspace.namespaceId === ns.id || assign.isPending}
             >
-              {namespace.name}
+              {ns.name}
             </button>
           ))}
         </div>
@@ -459,22 +395,6 @@ export function workspaceDisplayTitle(workspace: Workspace) {
     return `${workspace.issueTitle} (${workspace.name})`;
   }
   return workspace.name;
-}
-
-function deriveAgentState(sessions: AgentSession[]): {
-  tone: "running" | "starting" | "stopped" | "failed";
-  label: string;
-} {
-  const agentSessions = sessions.filter((session) => session.runtimeId !== "shell");
-  if (agentSessions.some((session) => session.status === "starting"))
-    return { tone: "starting", label: "Agent starting" };
-  if (agentSessions.some((session) => session.status === "waiting")) return { tone: "running", label: "Agent working" };
-  if (agentSessions.some((session) => ["failed", "orphaned"].includes(session.status))) {
-    return { tone: "failed", label: "Agent needs attention" };
-  }
-  if (agentSessions.length) return { tone: "stopped", label: "Agent stopped" };
-  if (sessions.length) return { tone: "stopped", label: "Terminal session" };
-  return { tone: "stopped", label: "No session" };
 }
 
 export function prToneFor(pr: PullRequestSummary | null | undefined): PrTone {

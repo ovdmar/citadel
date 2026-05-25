@@ -20,9 +20,7 @@ if (devState && !process.env.CITADEL_PORT) {
 }
 if (worktreeRoot && !process.env.CITADEL_PORT) {
   console.error(
-    `Citadel daemon launched from a checkout (${worktreeRoot}) without CITADEL_PORT set.\n` +
-      "Refusing to bind the systemd-reserved default (:4010).\n" +
-      "Use 'make deploy' from this checkout, or set CITADEL_PORT explicitly.",
+    `Citadel daemon launched from a checkout (${worktreeRoot}) without CITADEL_PORT set.\nRefusing to bind the systemd-reserved default (:4010).\nUse 'make deploy' from this checkout, or set CITADEL_PORT explicitly.`,
   );
   process.exit(2);
 }

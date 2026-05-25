@@ -148,7 +148,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 6px 2px;
+  padding: 4px 10px 2px 6px;
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -182,13 +182,11 @@
 
 .nav-group-count {
   flex: 0 0 auto;
+  font-family: var(--font-mono);
   font-size: 10px;
   color: var(--c-fg-4);
-  background: var(--c-line-2);
-  border-radius: 8px;
-  padding: 0 5px;
-  min-width: 16px;
-  text-align: center;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .nav-group-body {
@@ -389,25 +387,43 @@
   width: 22px;
   height: 16px;
   border-radius: 4px;
-  color: var(--c-fg-3);
+  color: var(--c-fg-4);
 }
 
-.workspace-card-agent.running {
-  color: var(--color-success);
+.workspace-card-agent.tone-pending {
+  color: var(--c-warn);
 }
 
-.workspace-card-agent.starting {
-  color: var(--color-warning);
+.workspace-card-agent.tone-passing {
+  color: var(--c-ok);
 }
 
-.workspace-card-agent.failed {
-  color: var(--color-danger);
+.workspace-card-agent.tone-failing {
+  color: var(--c-bad);
 }
 
-.workspace-card-agent.root {
-  color: var(--color-action);
-  background: color-mix(in srgb, var(--color-action) 14%, transparent);
-  border-radius: 4px;
+.workspace-card-agent.tone-merged {
+  color: var(--color-merged);
+}
+
+.workspace-card.active .workspace-card-agent {
+  color: var(--c-on-dark);
+}
+
+.workspace-card.active .workspace-card-agent.tone-pending {
+  color: var(--c-warn);
+}
+
+.workspace-card.active .workspace-card-agent.tone-passing {
+  color: var(--c-ok);
+}
+
+.workspace-card.active .workspace-card-agent.tone-failing {
+  color: var(--c-bad);
+}
+
+.workspace-card.active .workspace-card-agent.tone-merged {
+  color: var(--color-merged);
 }
 
 .workspace-card-main {
