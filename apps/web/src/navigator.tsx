@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, queryClient } from "./api.js";
+import { useWorkspacesPrState } from "./cockpit-tools.js";
 import { AddRepoModal, CreateWorkspaceModal, GroupByMenu, type GroupKey } from "./modals.js";
 import {
   type GroupNode,
@@ -22,6 +23,7 @@ import {
   buildGroupTree,
   collectGroupPaths,
 } from "./navigator-groups.js";
+import { resolveWorkspacePullRequest } from "./navigator-pr-state.js";
 import { WorkspaceCard } from "./workspace-card.js";
 
 const GROUP_STORAGE = "citadel.navigator-group";
@@ -140,6 +142,14 @@ export function Navigator(props: {
     return map;
   }, [props.namespaces]);
 
+  // Navigator-wide PR/CI pill data. Polled every 30s; focus invalidation in
+  // useFocusRefresh also busts this query so newly-focused windows see fresh
+  // data. Active workspace prefers its own cockpit-summary (10s cadence) to
+  // avoid showing 30s-stale data on a workspace the operator is actively
+  // staring at.
+  const workspacesPrStateQuery = useWorkspacesPrState();
+  const workspacesPrState = workspacesPrStateQuery.data?.workspacePrState ?? {};
+
   const assignNamespace = useMutation({
     mutationFn: (input: { workspaceId: string; namespaceId: string | null }) =>
       api("/api/namespaces/assign", {
@@ -169,11 +179,11 @@ export function Navigator(props: {
         key={workspace.id}
         workspace={workspace}
         sessions={sessions}
-        pullRequest={
-          workspace.id === props.activeSummary?.workspaceId
-            ? (props.activeSummary.versionControl.pullRequest ?? null)
-            : null
-        }
+        pullRequest={resolveWorkspacePullRequest({
+          workspaceId: workspace.id,
+          activeSummary: props.activeSummary,
+          workspacesPrState,
+        })}
         namespace={workspace.namespaceId ? (namespacesById.get(workspace.namespaceId) ?? null) : null}
         namespaces={props.namespaces}
         active={workspace.id === props.activeWorkspaceId}
@@ -181,7 +191,15 @@ export function Navigator(props: {
         onSelect={() => props.onPickWorkspace(workspace)}
       />
     ),
-    [props.activeSummary, props.activeWorkspaceId, props.onPickWorkspace, props.namespaces, namespacesById, grouping],
+    [
+      props.activeSummary,
+      props.activeWorkspaceId,
+      props.onPickWorkspace,
+      props.namespaces,
+      namespacesById,
+      grouping,
+      workspacesPrState,
+    ],
   );
 
   const flatEntries = useMemo<WorkspaceEntry[]>(
