@@ -149,13 +149,17 @@ export function registerTerminalRoutes(input: {
   // Try ensure(); if tmux disappeared (system reboot, manual kill), call the
   // injected respawnTmux hook to bring the underlying tmux session back, then
   // retry. Returns null if no self-heal was possible.
-  const ensureWithHeal = async (session: ResolvedSession, theme?: Theme): Promise<TtydEntry> => {
+  const ensureWithHeal = async (session: ResolvedSession, theme?: Theme, force?: boolean): Promise<TtydEntry> => {
     const base = {
       key: session.sessionId,
       tmuxSession: session.tmuxSession,
       worktreePath: session.worktreePath,
     };
-    const ensureArgs = theme ? { ...base, theme } : base;
+    const ensureArgs = {
+      ...base,
+      ...(theme ? { theme } : {}),
+      ...(force ? { force: true } : {}),
+    };
     try {
       return await ttyd.ensure(ensureArgs);
     } catch (error) {
@@ -165,9 +169,13 @@ export function registerTerminalRoutes(input: {
       if (!dbSession) throw error;
       const respawn = await input.respawnTmux(dbSession);
       if (!respawn) throw error;
-      const healArgs = theme
-        ? { key: session.sessionId, tmuxSession: respawn.tmuxSessionName, worktreePath: session.worktreePath, theme }
-        : { key: session.sessionId, tmuxSession: respawn.tmuxSessionName, worktreePath: session.worktreePath };
+      const healArgs = {
+        key: session.sessionId,
+        tmuxSession: respawn.tmuxSessionName,
+        worktreePath: session.worktreePath,
+        ...(theme ? { theme } : {}),
+        ...(force ? { force: true } : {}),
+      };
       return await ttyd.ensure(healArgs);
     }
   };
@@ -178,8 +186,12 @@ export function registerTerminalRoutes(input: {
     if (!session) return res.status(404).json({ error: "session_not_found" });
     const theme = parseTheme(req.query.theme) ?? parseTheme((req.body as { theme?: unknown } | undefined)?.theme);
     if (theme) themePreferences.set(sessionId, theme);
+    const force =
+      req.query.force === "true" ||
+      req.query.force === "1" ||
+      (req.body as { force?: unknown } | undefined)?.force === true;
     try {
-      const entry = await ensureWithHeal(session, theme ?? themePreferences.get(sessionId));
+      const entry = await ensureWithHeal(session, theme ?? themePreferences.get(sessionId), force);
       const url = `${TERMINAL_PROXY_PREFIX}/${encodeURIComponent(session.sessionId)}/`;
       input.emit?.("terminal.ready", { sessionId: session.sessionId, port: entry.port });
       return res.json({ terminal: terminalDto(entry, url) });

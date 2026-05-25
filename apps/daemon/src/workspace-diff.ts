@@ -1,7 +1,13 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { DiffFile, GitStatusSummary, WorkspaceDiff } from "@citadel/contracts";
+import type {
+  DiffFile,
+  GitStatusSummary,
+  RecentCommit,
+  WorkspaceDiff,
+  WorkspaceRecentCommits,
+} from "@citadel/contracts";
 
 const MAX_DIFF_BYTES = 128 * 1024;
 const MAX_DIFF_FILES = 80;
@@ -104,6 +110,48 @@ function isLikelyBinaryPreview(diff: string) {
 
 function execGit(cwd: string, args: string[]) {
   return execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 2 * 1024 * 1024 });
+}
+
+export function readWorkspaceRecentCommits(workspaceId: string, cwd: string, limit = 8): WorkspaceRecentCommits {
+  const SEP = "\x1f";
+  const REC = "\x1e";
+  let output: string;
+  try {
+    output = execGit(cwd, [
+      "log",
+      "-n",
+      String(limit),
+      `--pretty=format:%H${SEP}%h${SEP}%s${SEP}%an${SEP}%ar${SEP}%aI${REC}`,
+    ]);
+  } catch (error) {
+    // A pristine workspace (newly cloned with no commits yet) makes `git log`
+    // exit 128 with "does not have any commits yet". Treat that single
+    // shape as "no commits" — every other git failure propagates so the
+    // route returns 500 rather than silently empty.
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("does not have any commits yet") || message.includes("bad default revision")) {
+      return { workspaceId, commits: [] };
+    }
+    throw error;
+  }
+  const commits: RecentCommit[] = [];
+  for (const chunk of output.split(REC)) {
+    const line = chunk.trim();
+    if (!line) continue;
+    const parts = line.split(SEP);
+    if (parts.length < 6) continue;
+    const [sha, shortSha, message, author, relativeTime, isoTime] = parts;
+    if (!sha || !shortSha) continue;
+    commits.push({
+      sha,
+      shortSha,
+      message: message ?? "",
+      author: author ?? "",
+      relativeTime: relativeTime ?? "",
+      isoTime: isoTime ?? "",
+    });
+  }
+  return { workspaceId, commits };
 }
 
 function countDiffLines(diff: string) {

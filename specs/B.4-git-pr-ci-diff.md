@@ -14,6 +14,7 @@
 [~] 6. Workspace details show additions/deletions and changed file counts.
 [ ] 7. Git status shows refresh time and stale state.
 [ ] 8. Git status shows conflicts as high-attention readiness input.
+[x] 9. Workspace details show a "Recent" section listing the most recent commits with short sha, subject, author, and relative time.
 
 ## PR Identity
 
@@ -21,7 +22,7 @@
 [~] 2. Workspace cards and details show PR draft state.
 [~] 3. Workspace cards and details show PR review decision.
 [ ] 4. Workspace details show PR title, author, branch, target branch, labels, and mergeability when available.
-[ ] 5. Workspace details show PR review requests and approval/blocking review state when available.
+[x] 5. Workspace details show PR review requests and approval/blocking review state when available — rendered as overlapping reviewer avatars plus `N approved · N changes · N pending` counters in the inspector PR meta row.
 [ ] 6. PR state contributes to readiness and next action.
 [ ] 7. Workspace cards render the PR icon with lifecycle color: grey when no PR exists, yellow when the PR exists and checks are pending, green when checks pass, red when any check fails.
 [ ] 8. The PR icon on a workspace card links directly to the provider PR URL.

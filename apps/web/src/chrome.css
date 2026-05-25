@@ -1,0 +1,255 @@
+/* Top bar — cit-* tokens shared with the Citadel redesign */
+
+.cit-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(280px, 540px) minmax(160px, 1fr);
+  align-items: center;
+  gap: 16px;
+  height: 48px;
+  padding: 0 14px;
+  background: var(--c-app);
+  color: var(--c-fg-1);
+  border-bottom: 0.5px solid var(--c-line-2);
+}
+
+.cit-topbar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--c-line-1) 20%, var(--c-line-1) 80%, transparent);
+  pointer-events: none;
+}
+
+.cit-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--c-fg-1);
+}
+
+.cit-brand-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  line-height: 1.05;
+}
+
+.cit-brand-name {
+  font-family: var(--font-serif);
+  font-size: 18px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  color: var(--c-fg-1);
+}
+
+.cit-brand-org {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--c-fg-3);
+  letter-spacing: 0.02em;
+}
+
+.cit-search-wrap {
+  display: flex;
+  justify-content: center;
+}
+
+.cit-search {
+  appearance: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px 0 12px;
+  border-radius: 8px;
+  background: var(--c-elev);
+  border: 0.5px solid var(--c-line-2);
+  color: var(--c-fg-3);
+  font-size: 13px;
+  cursor: text;
+  width: 100%;
+  box-shadow: var(--sh-1);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.cit-search:hover {
+  border-color: var(--c-line-3);
+}
+
+.cit-search:focus-within {
+  border-color: rgba(36, 28, 14, 0.22);
+  box-shadow: 0 0 0 3px rgba(36, 28, 14, 0.04), var(--sh-1);
+}
+
+.cit-search .cit-search-placeholder {
+  flex: 1;
+  color: var(--c-fg-4);
+  text-align: left;
+}
+
+.cit-kbd {
+  margin-left: auto;
+  padding: 1px 5px;
+  border-radius: 5px;
+  border: 0.5px solid var(--c-line-2);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--c-fg-3);
+  background: transparent;
+}
+
+.cit-top-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.cit-icon-btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  border: 0;
+  background: transparent;
+  color: var(--c-fg-3);
+  cursor: pointer;
+  position: relative;
+  transition: background 0.12s, color 0.12s;
+  text-decoration: none;
+}
+
+.cit-icon-btn:hover {
+  background: var(--c-line-1);
+  color: var(--c-fg-1);
+  text-decoration: none;
+}
+
+.cit-icon-btn--sm {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: var(--c-fg-3);
+}
+
+/* Bottom status bar */
+
+.cit-bottombar {
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  background: var(--c-app);
+  border-top: 0.5px solid var(--c-line-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-fg-3);
+}
+
+.cit-bb-left,
+.cit-bb-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cit-bb-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--c-ok-bg);
+  color: var(--c-ok);
+  font-weight: 500;
+}
+
+.cit-bb-divider {
+  width: 0.5px;
+  height: 12px;
+  background: var(--c-line-3);
+}
+
+.cit-bb-item {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.cit-bb-muted {
+  color: var(--c-fg-4);
+}
+
+.cit-bb-mono {
+  color: var(--c-fg-1);
+  font-weight: 600;
+}
+
+.cit-bb-tmux {
+  color: var(--c-fg-2);
+  white-space: nowrap;
+}
+
+.cit-bb-commit {
+  color: var(--c-fg-3);
+  font-style: italic;
+  max-width: 280px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cit-bb-time {
+  color: var(--c-fg-4);
+}
+
+.cit-bb-left kbd,
+.cit-bb-right kbd {
+  font-size: 9.5px;
+  background: var(--c-line-1);
+  color: var(--c-fg-3);
+  border: 0.5px solid var(--c-line-2);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+@media (max-width: 820px) {
+  /* Top bar shrinks: drop the centered search hint and shortcut chip. */
+  .cit-topbar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 0 8px;
+  }
+
+  .cit-brand {
+    gap: 0;
+    font-size: 0;
+  }
+
+  .cit-search {
+    height: 30px;
+    padding: 0 10px;
+  }
+
+  .cit-search .cit-search-placeholder {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .cit-search .cit-kbd {
+    display: none;
+  }
+}

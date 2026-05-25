@@ -2,17 +2,21 @@
 
 .stage-tabbar {
   display: flex;
-  align-items: stretch;
-  gap: 4px;
-  padding: 6px 6px 0 6px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel-strong);
+  align-items: flex-end;
+  gap: 0;
+  padding: 0;
+  border-bottom: 0;
+  background: transparent;
   position: relative;
+  /* Above stage-body (which is isolate'd) so the add-session popover floats
+   * over the terminal iframe. iframes otherwise sit on their own composite
+   * layer and can occlude overlapping siblings. */
+  z-index: 20;
 }
 
 .stage-tabs {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 2px;
   flex: 0 1 auto;
   min-width: 0;
@@ -30,25 +34,129 @@
 .stage-tab {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 9px;
-  border-top-left-radius: 6px;
-  border-top-right-radius: 6px;
-  border: 1px solid transparent;
+  gap: 8px;
+  max-width: 200px;
+  min-width: 0;
+  height: auto;
+  padding: 7px 8px 7px 12px;
+  border-top-left-radius: 9px;
+  border-top-right-radius: 9px;
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+  border: 0;
   background: transparent;
-  color: var(--muted);
+  color: var(--c-fg-3);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 12.5px;
+  font-weight: 500;
   flex-shrink: 0;
+  position: relative;
+}
+
+.stage-tab:hover {
+  color: var(--c-fg-1);
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .stage-tab.active {
-  background: var(--surface);
-  color: CanvasText;
-  border-color: var(--line);
-  border-bottom-color: var(--surface);
-  margin-bottom: -1px;
+  background: var(--c-elev);
+  color: var(--c-fg-1);
+  border: 0.5px solid var(--c-line-2);
+  border-bottom-color: transparent;
+  padding: 6.5px 7.5px 7.5px 11.5px;
+  margin-bottom: -0.5px;
+  z-index: 2;
+}
+
+.stage-tab-button {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.stage-tab-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.stage-tab-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stage-tab-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 10px;
+}
+
+.stage-tab-kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--c-fg-4);
+  background: var(--c-line-1);
+  border: 0.5px solid var(--c-line-2);
+  padding: 0.5px 4px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+  flex: 0 0 auto;
+  line-height: 1.2;
+}
+
+.stage-tab.active .stage-tab-kbd {
+  color: var(--c-fg-2);
+  background: var(--c-canvas);
+  border-color: var(--c-line-2);
+}
+
+.stage-tab-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  margin-left: 2px;
+}
+
+.stage-tab-act {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--c-fg-4);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.1s, background 0.1s, color 0.1s;
+}
+
+.stage-tab-act:hover {
+  background: var(--c-line-2);
+  color: var(--c-fg-1);
+}
+
+.stage-tab:hover .stage-tab-act,
+.stage-tab.active .stage-tab-act {
+  opacity: 0.7;
+}
+
+.stage-tab .stage-tab-act:hover {
+  opacity: 1;
 }
 
 .stage-tab input {
@@ -60,58 +168,62 @@
   max-width: 180px;
   padding: 0;
   outline: none;
+  font: inherit;
 }
 
 .stage-tab .close-tab {
   border: 0;
   background: transparent;
-  color: inherit;
+  color: var(--c-fg-4);
   opacity: 0.6;
   cursor: pointer;
   display: inline-grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
 }
 
 .stage-tab .close-tab:hover {
   opacity: 1;
-  background: color-mix(in srgb, CanvasText 8%, transparent);
+  background: var(--c-line-2);
+  color: var(--c-fg-1);
 }
 
 .stage-add {
   display: inline-grid;
   place-items: center;
-  height: 24px;
-  width: 24px;
-  margin: 0 4px 2px;
-  border-radius: 5px;
+  height: 26px;
+  width: 26px;
+  margin: 0 4px 4px;
+  border-radius: 6px;
   background: transparent;
-  color: var(--muted);
-  border: 1px dashed var(--line);
+  color: var(--c-fg-4);
+  border: 0;
   cursor: pointer;
+  align-self: center;
 }
 
 .stage-add:hover {
-  border-style: solid;
-  color: var(--color-action);
-  border-color: var(--color-action);
+  background: var(--c-line-1);
+  color: var(--c-fg-1);
 }
 
 .stage-add-menu {
   position: absolute;
   top: calc(100% + 4px);
   left: 0;
-  z-index: 12;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 7px;
+  z-index: 30;
+  background: var(--c-elev);
+  border: 0.5px solid var(--c-line-3);
+  border-radius: 10px;
   min-width: 220px;
-  box-shadow: 0 18px 40px rgb(var(--shadow-color) / 0.28);
-  padding: 4px;
-  display: grid;
-  gap: 2px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 8px 24px -4px rgba(20, 12, 0, 0.18), 0 2px 6px
+    rgba(20, 12, 0, 0.08);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .stage-add-wrapper {
@@ -187,13 +299,66 @@
   border-bottom: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
 }
 
+/* Unused — pane-head was removed; the tab strip + body alone form the chrome.
+   Keeping the .stage-pane-chip rule for any future button that wants the
+   same warm-cream pill look. */
+.stage-pane-chip {
+  appearance: none;
+  border: 0.5px solid var(--c-line-2);
+  background: var(--c-card);
+  color: var(--c-fg-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 7px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: var(--sh-1);
+  text-decoration: none;
+}
+
+.stage-pane-chip:hover {
+  background: var(--c-elev);
+  color: var(--c-fg-1);
+  text-decoration: none;
+}
+
 .stage-body {
   position: relative;
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  padding: 6px;
-  background: var(--surface);
+  padding: 0;
+  background: var(--c-elev);
+  border: 0.5px solid var(--c-line-2);
+  /* Top-right rounded; top-left stays flat so the active tab "sits" into the
+   * pane edge. The active tab covers its own slice of the top border via
+   * `border-bottom-color: transparent` + `margin-bottom: -0.5px`. */
+  border-radius: 0 9px 12px 12px;
+  box-shadow: var(--sh-card);
+  /* Trap the iframe's stacking inside this box so it can never paint over
+   * the tab strip's add-session popover (stage-tabbar z:20). */
+  isolation: isolate;
+  z-index: 0;
+}
+
+.stage-body::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.6 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  z-index: 0;
+}
+
+/* Direct children sit above the grain ::before. Now that stage-body has its
+ * own stacking context, this z-index is local and can't escape the box. */
+.stage-body > * {
+  position: relative;
+  z-index: 1;
 }
 
 .terminal-stage {
@@ -213,22 +378,26 @@
 
 .terminal-shell {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  background: var(--surface-strong);
-  border: 1px solid var(--line);
-  border-radius: 7px;
+  /* Single row: the in-pane status bar was removed and the surface fills the
+   * whole pane. The previous "auto 1fr" template placed the surviving child
+   * into the auto track, collapsing the iframe to its natural (zero) height. */
+  grid-template-rows: minmax(0, 1fr);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   overflow: hidden;
+  height: 100%;
 }
 
 .terminal-status {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 10px;
-  color: var(--muted);
-  border-bottom: 1px solid var(--line);
-  background: var(--panel-strong);
-  font-size: 11px;
+  padding: 9px 14px 8px;
+  color: var(--c-fg-2);
+  border-bottom: 0.5px solid var(--c-line-2);
+  background: var(--c-elev);
+  font-size: 11.5px;
 }
 
 .terminal-status-flex {
@@ -270,7 +439,7 @@
   height: 100%;
   min-height: 0;
   padding: 4px 0 0 6px;
-  background: var(--surface-strong);
+  background: var(--c-elev);
 }
 
 .terminal-surface .xterm,
@@ -292,7 +461,7 @@
   width: 100%;
   height: 100%;
   border: 0;
-  background: var(--surface-strong);
+  background: var(--c-elev);
 }
 
 .terminal-pending {

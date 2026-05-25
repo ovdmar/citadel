@@ -11,12 +11,22 @@ import {
   Settings2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AddRepoModal, CreateWorkspaceModal, GroupByOverlay, type GroupKey } from "./modals.js";
-import { type GroupNode, type WorkspaceEntry, buildGroupTree, collectGroupPaths } from "./navigator-groups.js";
+import { AddRepoModal, CreateWorkspaceModal, GroupByMenu, type GroupKey } from "./modals.js";
+import {
+  type GroupNode,
+  type GroupableKey,
+  type WorkspaceEntry,
+  buildGroupTree,
+  collectGroupPaths,
+} from "./navigator-groups.js";
 import { WorkspaceCard } from "./workspace-card.js";
 
 const GROUP_STORAGE = "citadel.navigator-group";
 const COLLAPSE_STORAGE = "citadel.navigator-group-collapsed";
+
+function runningCount(sessions: AgentSession[]): number {
+  return sessions.filter((session) => session.status === "running").length;
+}
 
 export function Navigator(props: {
   repos: Repo[];
@@ -35,21 +45,26 @@ export function Navigator(props: {
 }) {
   const location = useLocation();
   const path = location.pathname;
-  const [grouping, setGrouping] = useState<GroupKey[]>(() => {
-    if (typeof window === "undefined") return ["repo", "status"];
-    try {
-      const raw = window.localStorage.getItem(GROUP_STORAGE);
-      if (!raw) return ["repo", "status"];
-      const parsed = JSON.parse(raw) as GroupKey[];
-      const allowed = parsed.filter((entry) => entry === "repo" || entry === "status");
-      return allowed.length ? allowed : ["repo", "status"];
-    } catch {
-      return ["repo", "status"];
+  const [grouping, setGrouping] = useState<GroupKey>(() => {
+    if (typeof window === "undefined") return "repo";
+    const raw = window.localStorage.getItem(GROUP_STORAGE);
+    if (raw === "repo" || raw === "status" || raw === "none") return raw;
+    // Migration: legacy storage held an array like ["repo","status"]; collapse
+    // to the first entry, otherwise default to "repo".
+    if (raw?.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(raw) as unknown[];
+        const first = parsed[0];
+        if (first === "repo" || first === "status" || first === "none") return first;
+      } catch {
+        // fall through to default
+      }
     }
+    return "repo";
   });
   useEffect(() => {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(GROUP_STORAGE, JSON.stringify(grouping));
+    window.localStorage.setItem(GROUP_STORAGE, grouping);
   }, [grouping]);
 
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
@@ -82,16 +97,18 @@ export function Navigator(props: {
   // Intentionally exclude props.activeSummary from buildGroupTree: status sections
   // are derived from /api/state only, so the active workspace doesn't drift
   // between sections each time the per-workspace cockpit-summary refetches.
+  const treeGrouping = useMemo<GroupableKey[]>(() => (grouping === "none" ? [] : [grouping]), [grouping]);
   const tree = useMemo(
-    () => buildGroupTree(props.workspaces, props.repos, props.sessions, props.operations, grouping),
-    [props.workspaces, props.repos, props.sessions, props.operations, grouping],
+    () => buildGroupTree(props.workspaces, props.repos, props.sessions, props.operations, treeGrouping),
+    [props.workspaces, props.repos, props.sessions, props.operations, treeGrouping],
   );
+  const historyCount = props.operations.length;
 
   // Prune collapsed entries whose group no longer exists, so localStorage doesn't accumulate
   // orphans across repo/workspace renames or deletions. Skip when grouping is off or the tree
   // is empty, otherwise switching Group By off (or having no workspaces) would wipe everything.
   useEffect(() => {
-    if (!grouping.length || !tree.length) return;
+    if (!treeGrouping.length || !tree.length) return;
     setCollapsed((prev) => {
       const keys = Object.keys(prev);
       if (!keys.length) return prev;
@@ -104,7 +121,7 @@ export function Navigator(props: {
       }
       return changed ? next : prev;
     });
-  }, [tree, grouping]);
+  }, [tree, treeGrouping]);
 
   const renderWorkspace = useCallback(
     ({ workspace, sessions }: WorkspaceEntry) => (
@@ -159,21 +176,28 @@ export function Navigator(props: {
             <NotebookPen size={13} /> Scratchpad
           </Link>
           <Link to="/history" className={path === "/history" ? "active" : ""} title="Activity & operations history">
-            <ClipboardList size={13} /> History
+            <ClipboardList size={13} /> <span>History</span>
+            {historyCount > 0 ? <span className="cit-nav-count">{historyCount}</span> : null}
           </Link>
         </nav>
         <div className="divider" />
         <div className="nav-section">
           <strong>Workspaces</strong>
           <div className="nav-section-icons">
-            <button
-              type="button"
-              onClick={() => setShowGroupBy((v) => !v)}
-              aria-label="Group workspaces"
-              title="Group by"
-            >
-              <Settings2 size={12} />
-            </button>
+            <div className="cit-gb">
+              <button
+                type="button"
+                className={`cit-icon-btn cit-icon-btn--sm cit-gb-btn ${showGroupBy ? "is-open" : ""}`}
+                onClick={() => setShowGroupBy((v) => !v)}
+                aria-label="Group workspaces"
+                title={`Group by: ${grouping === "none" ? "no grouping" : grouping}`}
+              >
+                <Settings2 size={12} />
+              </button>
+              {showGroupBy ? (
+                <GroupByMenu value={grouping} onChange={setGrouping} onClose={() => setShowGroupBy(false)} />
+              ) : null}
+            </div>
             <button
               type="button"
               onClick={() => setShowAddRepo(true)}
@@ -190,13 +214,10 @@ export function Navigator(props: {
             >
               <Plus size={12} />
             </button>
-            {showGroupBy ? (
-              <GroupByOverlay value={grouping} onChange={setGrouping} onClose={() => setShowGroupBy(false)} />
-            ) : null}
           </div>
         </div>
         <div className="nav-groups">
-          {grouping.length === 0 ? (
+          {grouping === "none" ? (
             <div className="nav-group nav-group-flat">{flatEntries.map((entry) => renderWorkspace(entry))}</div>
           ) : (
             tree.map((node) => (
@@ -213,6 +234,22 @@ export function Navigator(props: {
           {!props.workspaces.length ? (
             <div className="empty compact">No workspaces yet. Use the plus button above to create one.</div>
           ) : null}
+        </div>
+        <div className="nav-foot">
+          <div className="nav-foot-stat">
+            <div className="nav-foot-stat-label">Workspaces</div>
+            <div className="nav-foot-stat-val">{props.workspaces.length}</div>
+          </div>
+          <div className="nav-foot-stat">
+            <div className="nav-foot-stat-label">Running</div>
+            <div className="nav-foot-stat-val">
+              <span
+                className={`cit-pulse cit-pulse-sm ${runningCount(props.sessions) ? "cit-pulse-run" : "cit-pulse-idle"}`}
+                aria-hidden
+              />
+              {runningCount(props.sessions)}
+            </div>
+          </div>
         </div>
       </div>
       {showAddRepo ? <AddRepoModal onClose={() => setShowAddRepo(false)} /> : null}
