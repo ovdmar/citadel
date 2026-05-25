@@ -44,10 +44,10 @@ export function ScheduledAgentsView() {
 
       <main className="set-content">
         <div className="set-page-head">
-          <div className="set-page-title">
+          <h1 className="set-page-title">
             <Clock size={20} style={{ verticalAlign: "-3px", marginRight: 8, color: "var(--c-fg-3)" }} />
             Scheduled agents
-          </div>
+          </h1>
           <div className="set-page-sub">Cron-driven agent runs.</div>
           <div className="set-page-help">
             Scheduled agents start a session on a cron (or one-shot) schedule, using the same MCPs and CLIs as

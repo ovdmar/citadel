@@ -79,7 +79,7 @@ export function SettingsView() {
         <nav className="set-nav" aria-label="Settings sections">
           <div className="set-nav-head">
             <div className="set-nav-eyebrow">Citadel</div>
-            <div className="set-nav-title">Settings</div>
+            <h1 className="set-nav-title">Settings</h1>
           </div>
           <div className="set-nav-list">
             {SECTIONS.map((entry) => {
@@ -151,7 +151,9 @@ export function SettingsView() {
 function PageHead(props: { title: string; sub?: string; help?: string }) {
   return (
     <div className="set-page-head">
-      <div className="set-page-title">{props.title}</div>
+      <h2 id="settings-section-title" className="set-page-title">
+        {props.title}
+      </h2>
       {props.sub ? <div className="set-page-sub">{props.sub}</div> : null}
       {props.help ? <div className="set-page-help">{props.help}</div> : null}
     </div>

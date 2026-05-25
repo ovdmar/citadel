@@ -119,15 +119,16 @@ test("desktop repo settings page renders identity and provider toggles", async (
 test("settings sidebar exposes all configured sections", async ({ page }, testInfo) => {
   await page.goto("/settings");
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
-  const sidebar = page.locator(".settings-sidebar");
+  const sidebar = page.locator(".set-nav");
   // Scheduled agents has its own top-level nav entry (not a settings section).
-  for (const label of ["Overview", "Providers", "Agents", "Repositories", "MCP", "Advanced"]) {
+  // Advanced was folded into other surfaces during the settings redesign.
+  for (const label of ["Overview", "Integrations", "Agent runtimes", "Repositories", "MCP"]) {
     await expect(sidebar.getByRole("button", { name: label, exact: true })).toBeVisible();
   }
-  await sidebar.getByRole("button", { name: "Providers", exact: true }).click();
-  await expect(page.locator("#settings-section-title")).toContainText("Providers");
-  await sidebar.getByRole("button", { name: "Agents", exact: true }).click();
-  await expect(page.locator("#settings-section-title")).toContainText("Agents");
+  await sidebar.getByRole("button", { name: "Integrations", exact: true }).click();
+  await expect(page.locator("#settings-section-title")).toContainText("Integrations");
+  await sidebar.getByRole("button", { name: "Agent runtimes", exact: true }).click();
+  await expect(page.locator("#settings-section-title")).toContainText("Agent runtimes");
   await page.screenshot({ path: `docs/campaigns/screenshot-${testInfo.project.name}-settings.png`, fullPage: true });
 });
 

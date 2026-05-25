@@ -198,12 +198,13 @@
   text-transform: uppercase;
   color: var(--c-fg-4);
 }
+h1.set-nav-title,
 .set-nav-title {
   font-size: 16px;
   font-weight: 600;
   color: var(--c-fg-1);
   letter-spacing: -0.01em;
-  margin-top: 2px;
+  margin: 2px 0 0;
 }
 .set-nav-list {
   display: flex;
@@ -263,6 +264,7 @@
   font-weight: 400;
   color: var(--c-fg-1);
   letter-spacing: -0.01em;
+  margin: 0;
 }
 .set-page-sub {
   font-size: 13px;
