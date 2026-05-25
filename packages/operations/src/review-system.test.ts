@@ -27,7 +27,7 @@ function makeStore() {
   return { dir, store };
 }
 
-function makeRepo(dir: string, opts: { requestReviewHookIds?: string[] } = {}): Repo {
+function makeRepo(dir: string, opts: { requestReviewHookIds?: string[] | undefined } = {}): Repo {
   const now = new Date().toISOString();
   return {
     id: "repo_1",

@@ -706,7 +706,7 @@ export class OperationService {
       workspace,
       hooks: this.config?.hooks ?? [],
       appHookIds: this.config?.repoDefaults.appHookIds ?? [],
-      actionHookIds: this.config?.repoDefaults.actionHookIds ?? [],
+      actionHookIds: this.config?.repoDefaults.actionHookIds ?? [], requestReviewHookIds: this.config?.repoDefaults.requestReviewHookIds ?? [],
       hookTimeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
     });
 

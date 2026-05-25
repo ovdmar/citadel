@@ -24,6 +24,7 @@ type HookConfig = {
     | "workspace.teardown"
     | "workspace.apps"
     | "workspace.action"
+    | "workspace.requestReview"
     | "workspace.created"
     | "workspace.archived"
     | "workspace.removed"
@@ -52,7 +53,13 @@ type ConfigResponse = {
     runtimes: RuntimeConfig[];
     usageProviders: UsageProviderConfig[];
     hooks: HookConfig[];
-    repoDefaults: { setupHookIds: string[]; teardownHookIds: string[] };
+    repoDefaults: {
+      setupHookIds: string[];
+      teardownHookIds: string[];
+      appHookIds?: string[];
+      actionHookIds?: string[];
+      requestReviewHookIds?: string[];
+    };
     commandPolicy: { hookTimeoutMs: number; allowDestructiveWorkspaceCleanup: boolean };
   };
   configPath: string;
@@ -63,6 +70,7 @@ const HOOK_EVENTS: HookConfig["event"][] = [
   "workspace.teardown",
   "workspace.apps",
   "workspace.action",
+  "workspace.requestReview",
   "workspace.created",
   "workspace.archived",
   "workspace.removed",

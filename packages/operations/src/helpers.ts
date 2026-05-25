@@ -387,6 +387,7 @@ export function listHookDiagnostics(input: {
   hooks: HookConfig[];
   appHookIds: string[];
   actionHookIds: string[];
+  requestReviewHookIds: string[];
   hookTimeoutMs: number;
 }): HookDiagnostic[] {
   const events: Array<HookConfig["event"]> = [
@@ -394,6 +395,7 @@ export function listHookDiagnostics(input: {
     "workspace.teardown",
     "workspace.apps",
     "workspace.action",
+    "workspace.requestReview",
   ];
   return events.flatMap((event) => {
     const ids =
@@ -403,7 +405,9 @@ export function listHookDiagnostics(input: {
           ? input.repo.teardownHookIds
           : event === "workspace.apps"
             ? input.appHookIds
-            : input.actionHookIds;
+            : event === "workspace.action"
+              ? input.actionHookIds
+              : input.requestReviewHookIds;
     const eventHooks = input.hooks.filter((hook) => hook.event === event);
     const filtered = ids.length ? eventHooks.filter((hook) => ids.includes(hook.id)) : eventHooks;
     return filtered.map((hook) =>
