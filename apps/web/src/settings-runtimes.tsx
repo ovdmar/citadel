@@ -1,6 +1,6 @@
 import type { AgentRuntime, RuntimeUsageSummary } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Plus, Save, Trash2 } from "lucide-react";
+import { Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
@@ -16,6 +16,7 @@ type RuntimeConfig = {
   supportsResume?: boolean;
   supportsPrompt?: boolean;
   supportsModelSelection?: boolean;
+  showUsageInTopBar?: boolean;
 };
 
 type ConfigResponse = { config: { runtimes: RuntimeConfig[] } };
@@ -119,7 +120,15 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
         </header>
         <div className="runtime-grid">
           {platform.map((runtime) => (
-            <RuntimeRow key={runtime.id} runtime={runtime} platform />
+            <RuntimeRow
+              key={runtime.id}
+              runtime={runtime}
+              platform
+              draft={drafts.find((entry) => entry.id === runtime.id)}
+              onToggleTopBar={(next) => updateDraft(runtime.id, { showUsageInTopBar: next })}
+              onSaveDrafts={() => save.mutate(drafts)}
+              saving={save.isPending}
+            />
           ))}
           {missingPlatform.map((id) => {
             const meta = PLATFORM_AGENTS[id];
@@ -224,7 +233,15 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
           </header>
           <div className="runtime-grid">
             {custom.map((runtime) => (
-              <RuntimeRow key={runtime.id} runtime={runtime} platform={false} />
+              <RuntimeRow
+                key={runtime.id}
+                runtime={runtime}
+                platform={false}
+                draft={drafts.find((entry) => entry.id === runtime.id)}
+                onToggleTopBar={(next) => updateDraft(runtime.id, { showUsageInTopBar: next })}
+                onSaveDrafts={() => save.mutate(drafts)}
+                saving={save.isPending}
+              />
             ))}
           </div>
         </section>
@@ -235,9 +252,17 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
 
 export const RuntimesPanel = AgentsPanel;
 
-function RuntimeRow(props: { runtime: AgentRuntime; platform: boolean }) {
+function RuntimeRow(props: {
+  runtime: AgentRuntime;
+  platform: boolean;
+  draft: RuntimeConfig | undefined;
+  onToggleTopBar: (next: boolean) => void;
+  onSaveDrafts: () => void;
+  saving: boolean;
+}) {
   const platformMeta = props.platform ? PLATFORM_AGENTS[props.runtime.id] : undefined;
   const kindLabel = platformMeta?.kind ?? (props.runtime.capabilities.supportsPrompt ? "agent" : "terminal");
+  const healthy = props.runtime.health === "healthy";
   return (
     <div className={`runtime-card ${props.runtime.health}`}>
       <header>
@@ -255,23 +280,92 @@ function RuntimeRow(props: { runtime: AgentRuntime; platform: boolean }) {
         {props.runtime.healthReason ? <small>{props.runtime.healthReason}</small> : null}
       </div>
       <code className="runtime-command">{[props.runtime.command, ...props.runtime.args].join(" ").trim()}</code>
-      {props.runtime.capabilities.supportsUsage ? <RuntimeUsageRow runtimeId={props.runtime.id} /> : null}
+      {props.runtime.capabilities.supportsUsage && healthy ? (
+        <RuntimeUsagePanel
+          runtimeId={props.runtime.id}
+          showInTopBar={props.draft?.showUsageInTopBar ?? false}
+          onToggleTopBar={(next) => {
+            props.onToggleTopBar(next);
+            // Persist immediately so the top-bar pill appears without a manual Save.
+            queueMicrotask(props.onSaveDrafts);
+          }}
+          disabled={props.saving}
+        />
+      ) : null}
     </div>
   );
 }
 
-function RuntimeUsageRow(props: { runtimeId: string }) {
+function RuntimeUsagePanel(props: {
+  runtimeId: string;
+  showInTopBar: boolean;
+  onToggleTopBar: (next: boolean) => void;
+  disabled: boolean;
+}) {
   const usage = useQuery({
     queryKey: ["runtime-usage", props.runtimeId],
     queryFn: () => api<{ usage: RuntimeUsageSummary }>(`/api/runtimes/${props.runtimeId}/usage`),
+    // 5-min cache lives in the daemon; refetching the SPA more often is wasted.
+    staleTime: 5 * 60_000,
+  });
+  const refresh = useMutation({
+    mutationFn: () =>
+      api<{ usage: RuntimeUsageSummary }>(`/api/runtimes/${props.runtimeId}/usage/refresh`, { method: "POST" }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["runtime-usage", props.runtimeId], data);
+    },
   });
   const summary = usage.data?.usage;
-  if (!summary) return <div className="runtime-usage muted">Usage unavailable</div>;
+  const loading = usage.isLoading || refresh.isPending;
   return (
-    <div className={`runtime-usage ${summary.status}`}>
-      <span>{summary.source}</span>
-      <strong>{summary.remaining ?? summary.spend ?? formatLabel(summary.status)}</strong>
-      {summary.reason ? <small>{summary.reason}</small> : null}
+    <div className={`runtime-usage-panel ${summary?.status ?? "loading"}`}>
+      <div className="runtime-usage-header">
+        <span className="runtime-usage-title">Usage</span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          onClick={() => refresh.mutate()}
+          disabled={loading}
+          title="Refresh usage"
+        >
+          <RefreshCw size={12} className={loading ? "spinning" : undefined} />
+        </Button>
+      </div>
+      {summary && summary.status !== "healthy" && summary.reason ? (
+        <small className="runtime-usage-note">{summary.reason}</small>
+      ) : null}
+      {summary && summary.categories.length === 0 && summary.status === "healthy" ? (
+        <small className="runtime-usage-note">No categories reported.</small>
+      ) : null}
+      {summary && summary.categories.length > 0 ? (
+        <ul className="runtime-usage-list">
+          {summary.categories.map((category, index) => (
+            <li key={`${category.section ?? ""}:${category.label}:${index}`} className="runtime-usage-row">
+              <div className="runtime-usage-label">
+                {category.section ? <small className="runtime-usage-section">{category.section}</small> : null}
+                <span>{category.label}</span>
+              </div>
+              <div className="runtime-usage-bar" aria-hidden>
+                <div className="runtime-usage-bar-fill" style={{ width: `${Math.min(100, category.percentUsed)}%` }} />
+              </div>
+              <div className="runtime-usage-meta">
+                <strong>{category.percentUsed}%</strong>
+                {category.reset ? <small>resets {category.reset}</small> : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <label className="runtime-usage-toggle">
+        <input
+          type="checkbox"
+          checked={props.showInTopBar}
+          onChange={(event) => props.onToggleTopBar(event.target.checked)}
+          disabled={props.disabled}
+        />
+        <span>Show in top bar</span>
+      </label>
     </div>
   );
 }

@@ -5,6 +5,6 @@
     "rootDir": "src",
     "outDir": "dist"
   },
-  "references": [{ "path": "../config" }, { "path": "../contracts" }],
+  "references": [{ "path": "../config" }, { "path": "../contracts" }, { "path": "../runtimes" }],
   "include": ["src/**/*.ts"]
 }

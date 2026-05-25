@@ -160,15 +160,20 @@ describe("contract schemas", () => {
         runtimeId: "codex",
         providerId: "usage-codex",
         source: "codex-usage",
-        status: "unavailable",
-        reason: "Unsupported on this host",
-        model: null,
-        remaining: null,
-        spend: null,
-        resetAt: null,
+        status: "healthy",
+        reason: null,
+        categories: [
+          { label: "5h limit", percentUsed: 0, reset: "10:00", section: null },
+          {
+            label: "Weekly limit",
+            percentUsed: 90,
+            reset: "21:32 on 30 May",
+            section: "GPT-5.3-Codex-Spark limit",
+          },
+        ],
         checkedAt: timestamp,
-      }).runtimeId,
-    ).toBe("codex");
+      }).categories[1]?.section,
+    ).toBe("GPT-5.3-Codex-Spark limit");
     expect(
       HookOutputSchema.parse({
         links: [{ label: "Preview", url: "https://example.test/preview", kind: "preview" }],

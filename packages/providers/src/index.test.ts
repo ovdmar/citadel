@@ -248,21 +248,39 @@ describe("commandHealth", () => {
     expect(result.transition).toBe("31");
   });
 
-  it("normalizes runtime usage and reports unsupported runtimes clearly", async () => {
-    expect(
-      normalizeRuntimeUsage(
-        "codex",
-        "usage-codex",
-        JSON.stringify({ source: "codex-usage", model: "gpt", remaining: "42%", spend: "$1.25" }),
-      ),
-    ).toMatchObject({ runtimeId: "codex", status: "healthy", remaining: "42%" });
+  it("normalizes runtime usage emitted by an external provider command", () => {
+    const summary = normalizeRuntimeUsage(
+      "custom-bot",
+      "usage-custom",
+      JSON.stringify({
+        source: "custom-usage",
+        categories: [
+          { label: "Daily", percentUsed: 42, reset: "tomorrow" },
+          { label: "Bogus", percentUsed: 250 },
+          { label: "Weekly", percentUsed: 10, section: "Premium tier" },
+        ],
+      }),
+    );
+    expect(summary).toMatchObject({ runtimeId: "custom-bot", status: "healthy", source: "custom-usage" });
+    // The 250%-used row is dropped (out of range); others survive.
+    expect(summary.categories).toEqual([
+      { label: "Daily", percentUsed: 42, reset: "tomorrow", section: null },
+      { label: "Weekly", percentUsed: 10, reset: null, section: "Premium tier" },
+    ]);
+  });
 
-    const unsupported = await collectRuntimeUsage("codex", undefined);
+  it("reports custom runtimes without an external usage provider as unavailable", async () => {
+    const unsupported = await collectRuntimeUsage({
+      runtimeId: "custom-bot",
+      command: "custom-bot",
+      args: [],
+    });
     expect(unsupported).toMatchObject({
-      runtimeId: "codex",
+      runtimeId: "custom-bot",
       status: "unavailable",
       reason: "No usage provider configured for this runtime",
     });
+    expect(unsupported.categories).toEqual([]);
   });
 });
 

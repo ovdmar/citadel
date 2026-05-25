@@ -256,6 +256,9 @@ importers:
       '@citadel/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@citadel/runtimes':
+        specifier: workspace:*
+        version: link:../runtimes
 
   packages/runtimes:
     dependencies:

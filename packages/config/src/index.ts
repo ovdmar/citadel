@@ -13,6 +13,10 @@ export const RuntimeConfigSchema = z.object({
   supportsResume: z.boolean().optional(),
   supportsPrompt: z.boolean().optional(),
   supportsModelSelection: z.boolean().optional(),
+  // When true, the cockpit top bar renders a low-contrast usage pill next to
+  // the Settings icon for this runtime. Health-gated: a runtime that isn't
+  // healthy is silently dropped from the bar regardless of this flag.
+  showUsageInTopBar: z.boolean().optional(),
 });
 
 export const UsageProviderConfigSchema = z.object({
