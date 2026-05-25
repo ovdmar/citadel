@@ -27,8 +27,8 @@
 
 ## Actions
 
-[~] 1. A workspace can show executable actions returned by repo hooks.
-[~] 2. Action examples include redeploy, restart, open logs, refresh provider, run setup, or run teardown.
+[ ] 1. A workspace can show executable actions returned by repo hooks. (Was partially shipped via an inspector chip row; the redesign removed that surface — the Local deploys section now shows only chip + per-chip Redeploy. A dedicated home for repo-level actions is TBD.)
+[ ] 2. Action examples include redeploy, restart, open logs, refresh provider, run setup, or run teardown.
 [ ] 3. Executable actions run through Citadel operations.
 [ ] 4. Action execution captures stdout, stderr, result, duration, and failure text.
 [ ] 5. Latest action result is visible near the workspace.

@@ -45,9 +45,9 @@ try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     await time("web_ade_visible", 2000, async () => {
       await page.goto(webBaseUrl);
-      // The current cockpit identifies itself via the top-bar brand "Citadel"
+      // The current cockpit identifies itself via the cit-brand "Citadel"
       // and the agent-stage main element rather than the old ADE copy.
-      await page.locator(".top-bar-brand").waitFor();
+      await page.locator(".cit-brand").waitFor();
       await page.locator("main[aria-label='Agent stage']").waitFor();
     });
     await time("workspace_switch_long_buffers", 1000, async () => {

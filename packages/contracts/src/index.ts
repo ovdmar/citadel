@@ -152,6 +152,14 @@ export const RuntimeUsageSummarySchema = z.object({
   checkedAt: z.string(),
 });
 
+export const PrReviewerStateSchema = z.enum(["approved", "changes_requested", "commented", "pending", "dismissed"]);
+
+export const PrReviewerSchema = z.object({
+  login: z.string().min(1),
+  name: z.string().nullable().default(null),
+  state: PrReviewerStateSchema,
+});
+
 export const PullRequestSummarySchema = z.object({
   number: z.number(),
   title: z.string(),
@@ -162,6 +170,7 @@ export const PullRequestSummarySchema = z.object({
   checks: z.array(CheckSummarySchema),
   additions: z.number().nullable().default(null),
   deletions: z.number().nullable().default(null),
+  reviewers: z.array(PrReviewerSchema).default([]),
 });
 
 export const VersionControlSummarySchema = z.object({
@@ -645,6 +654,20 @@ export const WorkspaceDiffSchema = z.object({
   deletedLines: z.number().int().default(0),
 });
 
+export const RecentCommitSchema = z.object({
+  sha: z.string().min(7),
+  shortSha: z.string().min(4),
+  message: z.string(),
+  author: z.string(),
+  relativeTime: z.string(),
+  isoTime: z.string(),
+});
+
+export const WorkspaceRecentCommitsSchema = z.object({
+  workspaceId: IdSchema,
+  commits: z.array(RecentCommitSchema),
+});
+
 export type Repo = z.infer<typeof RepoSchema>;
 export type Workspace = z.infer<typeof WorkspaceSchema>;
 export type AgentSession = z.infer<typeof AgentSessionSchema>;
@@ -656,6 +679,8 @@ export type CiRunSummary = z.infer<typeof CiRunSummarySchema>;
 export type CiProviderSummary = z.infer<typeof CiProviderSummarySchema>;
 export type RuntimeUsageSummary = z.infer<typeof RuntimeUsageSummarySchema>;
 export type PullRequestSummary = z.infer<typeof PullRequestSummarySchema>;
+export type PrReviewer = z.infer<typeof PrReviewerSchema>;
+export type PrReviewerState = z.infer<typeof PrReviewerStateSchema>;
 export type VersionControlSummary = z.infer<typeof VersionControlSummarySchema>;
 export type IssueTransition = z.infer<typeof IssueTransitionSchema>;
 export type IssueTrackerSummary = z.infer<typeof IssueTrackerSummarySchema>;
@@ -686,6 +711,8 @@ export type LaunchAgentInput = z.infer<typeof LaunchAgentInputSchema>;
 export type TransitionIssueInput = z.infer<typeof TransitionIssueInputSchema>;
 export type DiffFile = z.infer<typeof DiffFileSchema>;
 export type WorkspaceDiff = z.infer<typeof WorkspaceDiffSchema>;
+export type RecentCommit = z.infer<typeof RecentCommitSchema>;
+export type WorkspaceRecentCommits = z.infer<typeof WorkspaceRecentCommitsSchema>;
 export type ScheduledAgent = z.infer<typeof ScheduledAgentSchema>;
 export type ScheduledAgentWorkspaceStrategy = z.infer<typeof ScheduledAgentWorkspaceStrategySchema>;
 export type ScheduledAgentRunStatus = z.infer<typeof ScheduledAgentRunStatusSchema>;

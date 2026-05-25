@@ -58,6 +58,8 @@ export type TtydManager = {
     worktreePath?: string | null;
     /** Cockpit-resolved theme used to spawn ttyd with the matching xterm palette. Defaults to "dark". */
     theme?: TtydTheme;
+    /** When true, kill any existing ttyd for this key and spawn a fresh one. */
+    force?: boolean;
   }): Promise<TtydEntry>;
   lookup(key: string): TtydEntry | null;
   release(key: string): void;
@@ -88,16 +90,18 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     tmuxSession: string;
     worktreePath?: string | null;
     theme?: TtydTheme;
+    /** Kill the existing ttyd (if any) and spawn a fresh process. Used by the
+     * cockpit's reload affordance so theme/palette changes take effect — ttyd
+     * bakes the xterm palette at spawn time, so an explicit respawn is the
+     * only way to repaint a live session. We don't auto-respawn on theme
+     * drift to avoid reconnect storms when the user just toggles the cockpit
+     * theme; respawn is opt-in via this flag. */
+    force?: boolean;
   }): Promise<TtydEntry> {
-    // ttyd bakes the xterm palette at spawn time, so the theme passed here
-    // only takes effect when we actually spawn a new ttyd. We deliberately
-    // do NOT respawn when an existing entry's theme differs from desired —
-    // that triggered visible reconnect storms whenever the user toggled
-    // cockpit theme. Terminal palette updates on the next reload instead.
     const desiredTheme: TtydTheme = args.theme ?? "dark";
     const existing = entries.get(args.key);
     if (existing && existing.child.exitCode === null) {
-      if (await portOpen(existing.port)) return toEntry(existing);
+      if (!args.force && (await portOpen(existing.port))) return toEntry(existing);
       try {
         existing.child.kill("SIGTERM");
       } catch {
@@ -254,52 +258,64 @@ function ttydThemeArgs(theme: TtydTheme): string[] {
   ];
 }
 
+// Palette matches the cockpit's warm-cream redesign so the terminal pane
+// reads as part of the surface, not a stark white island. Background tracks
+// --c-elev (the stage card colour); foreground tracks --c-fg-1. Ansi colour
+// hues are unchanged from the previous palette — only their saturation has
+// been pushed up so each colour reads clearly on the cream/dark surfaces
+// without losing the warm-leaning character of the cockpit.
+// `white` (ansi 7) and `brightWhite` (ansi 15) are deliberately remapped to
+// dark values on the light theme: a program that explicitly prints white text
+// would otherwise be invisible on the cream surface. Everything else is the
+// same hue as before, just dropped in lightness so it reads cleanly on a
+// light background — pulling the bright variants down at the same time so
+// the "bright" tier stays distinguishable from base without going pastel.
 const LIGHT_XTERM_THEME = {
-  background: "#f4f2ee",
-  foreground: "#1a2030",
-  cursor: "#1e3a5f",
-  cursorAccent: "#f4f2ee",
-  selectionBackground: "rgba(30, 58, 95, 0.22)",
-  black: "#1a2030",
-  red: "#8a3030",
-  green: "#4a7a5a",
-  yellow: "#b8963c",
-  blue: "#1e3a5f",
-  magenta: "#5a4a52",
-  cyan: "#5a8aae",
-  white: "#dcd8cc",
-  brightBlack: "#6a7080",
-  brightRed: "#c25050",
-  brightGreen: "#6aa080",
-  brightYellow: "#d4b860",
-  brightBlue: "#5a8aae",
-  brightMagenta: "#c0a8b0",
-  brightCyan: "#78a0be",
-  brightWhite: "#fffefa",
+  background: "#f5f1e8",
+  foreground: "#1a1814",
+  cursor: "#14171f",
+  cursorAccent: "#f5f1e8",
+  selectionBackground: "rgba(20, 23, 31, 0.18)",
+  black: "#1a1814",
+  red: "#9a1d12",
+  green: "#36680c",
+  yellow: "#825507",
+  blue: "#194d8e",
+  magenta: "#5f2a7a",
+  cyan: "#0a5d6e",
+  white: "#1a1814",
+  brightBlack: "#4a463e",
+  brightRed: "#b8281c",
+  brightGreen: "#4a8a14",
+  brightYellow: "#a06b0a",
+  brightBlue: "#2864ad",
+  brightMagenta: "#7d3a98",
+  brightCyan: "#0f7d92",
+  brightWhite: "#0c0a06",
 };
 
 const DARK_XTERM_THEME = {
-  background: "#0e1620",
-  foreground: "#d8dce4",
-  cursor: "#8ab4d8",
-  cursorAccent: "#0e1620",
-  selectionBackground: "rgba(138, 180, 216, 0.25)",
-  black: "#0e1620",
-  red: "#d08080",
-  green: "#78b088",
-  yellow: "#d4ba78",
-  blue: "#8ab4d8",
-  magenta: "#c0a8b0",
-  cyan: "#78a0be",
-  white: "#d8dce4",
-  brightBlack: "#4a5468",
-  brightRed: "#e0a0a0",
-  brightGreen: "#98c8a8",
-  brightYellow: "#e8d098",
-  brightBlue: "#a8c8e0",
-  brightMagenta: "#d0b8c0",
-  brightCyan: "#98c0d8",
-  brightWhite: "#f4f2ee",
+  background: "#1a1814",
+  foreground: "#e8e3d3",
+  cursor: "#f0ebdd",
+  cursorAccent: "#1a1814",
+  selectionBackground: "rgba(240, 235, 221, 0.18)",
+  black: "#1a1814",
+  red: "#ec7468",
+  green: "#a3d364",
+  yellow: "#e8b552",
+  blue: "#7eb5e4",
+  magenta: "#c896d4",
+  cyan: "#7dbedc",
+  white: "#e8e3d3",
+  brightBlack: "#948d7b",
+  brightRed: "#ff8d80",
+  brightGreen: "#bbe683",
+  brightYellow: "#f5c66a",
+  brightBlue: "#a2cef0",
+  brightMagenta: "#dcb1e4",
+  brightCyan: "#9ad0e8",
+  brightWhite: "#fffaef",
 };
 
 function buildAttachCommand(tmuxSession: string) {

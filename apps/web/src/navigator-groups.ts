@@ -5,6 +5,10 @@ import type { GroupKey } from "./modals.js";
 
 export const SECTION_ORDER = ["blocked", "needs-review", "working", "dirty", "idle", "done"];
 
+// Subset of GroupKey that actually participates in the bucket tree. "none" is
+// the navigator's flat-list mode and never reaches buildGroupTree.
+export type GroupableKey = Exclude<GroupKey, "none">;
+
 export type WorkspaceEntry = { workspace: Workspace; sessions: AgentSession[] };
 
 export type GroupNode =
@@ -13,15 +17,15 @@ export type GroupNode =
 
 type EnrichedWorkspace = WorkspaceEntry & { repo: Repo | undefined; section: string };
 
-function rawBucketKey(entry: EnrichedWorkspace, field: GroupKey): string {
+function rawBucketKey(entry: EnrichedWorkspace, field: GroupableKey): string {
   return field === "repo" ? (entry.repo?.name ?? "Unknown repo") : (entry.section ?? "idle");
 }
 
-function bucketLabel(rawKey: string, field: GroupKey): string {
+function bucketLabel(rawKey: string, field: GroupableKey): string {
   return field === "repo" ? rawKey : formatLabel(rawKey);
 }
 
-function compareKeys(a: string, b: string, field: GroupKey): number {
+function compareKeys(a: string, b: string, field: GroupableKey): number {
   if (field === "status") {
     const ai = SECTION_ORDER.indexOf(a);
     const bi = SECTION_ORDER.indexOf(b);
@@ -39,7 +43,7 @@ export function buildGroupTree(
   repos: Repo[],
   sessions: AgentSession[],
   operations: Operation[],
-  grouping: GroupKey[],
+  grouping: GroupableKey[],
 ): GroupNode[] {
   if (!grouping.length) return [];
 
@@ -54,9 +58,9 @@ export function buildGroupTree(
     return { workspace, sessions: workspaceSessions, repo, section: attention.section };
   });
 
-  const build = (entries: EnrichedWorkspace[], levels: GroupKey[], parentPath: string): GroupNode[] => {
+  const build = (entries: EnrichedWorkspace[], levels: GroupableKey[], parentPath: string): GroupNode[] => {
     if (!entries.length || !levels.length) return [];
-    const head = levels[0] as GroupKey;
+    const head = levels[0] as GroupableKey;
     const rest = levels.slice(1);
     const buckets = new Map<string, EnrichedWorkspace[]>();
     for (const entry of entries) {

@@ -1,7 +1,9 @@
-import type { Workspace } from "@citadel/contracts";
+import type { Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
-import { ChevronsLeft, ChevronsRight, Search as SearchIcon, Settings as SettingsIcon } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { api } from "./api.js";
 import { useEventRefresh, useStateQuery } from "./app-state.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { useWorkspaceCockpitSummary } from "./cockpit-tools.js";
@@ -10,6 +12,7 @@ import { Inspector } from "./inspector.js";
 import { Navigator } from "./navigator.js";
 import { Stage } from "./stage.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
+import { useResolvedTheme } from "./use-resolved-theme.js";
 import { prToneFor } from "./workspace-card.js";
 
 const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";
@@ -64,6 +67,9 @@ export function Cockpit() {
     ? allSessions.filter((session) => session.workspaceId === activeWorkspace.id)
     : [];
   const activeSessionId = activeWorkspace ? activeSessionByWorkspace[activeWorkspace.id] : "";
+  const activeSession = activeSessionId
+    ? (activeWorkspaceSessions.find((session) => session.id === activeSessionId) ?? null)
+    : (activeWorkspaceSessions[0] ?? null);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -153,7 +159,7 @@ export function Cockpit() {
 
   return (
     <div className="cockpit-shell">
-      <TopBar onSearch={() => setCommandOpen(true)} />
+      <TopBar onSearch={() => setCommandOpen(true)} activeWorkspace={activeWorkspace} repo={selectedRepo} />
       <div
         className={`cockpit-body ${layout.state.leftCollapsed ? "left-collapsed" : ""} ${
           layout.state.rightCollapsed ? "right-collapsed" : ""
@@ -178,17 +184,13 @@ export function Cockpit() {
           ))}
         </nav>
         {layout.state.leftCollapsed ? (
-          <div className="collapsed-rail col-left">
-            <button
-              type="button"
-              className="collapse-toggle"
-              onClick={layout.toggleLeft}
-              aria-label="Expand navigator"
-              title="Expand navigator"
-            >
-              <ChevronsRight size={14} />
-            </button>
-          </div>
+          <CollapsedLeftRail
+            workspaces={data?.workspaces ?? []}
+            activeWorkspaceId={activeWorkspace?.id ?? ""}
+            sessions={data?.sessions ?? []}
+            onExpand={layout.toggleLeft}
+            onPickWorkspace={focusWorkspace}
+          />
         ) : (
           <aside
             className={`column col-left ${mobileView === "navigator" ? "" : "mobile-hidden"}`}
@@ -276,6 +278,7 @@ export function Cockpit() {
           </aside>
         )}
       </div>
+      <BottomBar activeWorkspace={activeWorkspace} activeSession={activeSession} sessions={activeWorkspaceSessions} />
       {commandOpen ? (
         <CommandPalette
           workspaces={data?.workspaces ?? []}
@@ -296,31 +299,200 @@ export function Cockpit() {
   );
 }
 
-function TopBar(props: { onSearch: () => void }) {
+function CollapsedLeftRail(props: {
+  workspaces: Workspace[];
+  activeWorkspaceId: string;
+  sessions: import("@citadel/contracts").AgentSession[];
+  onExpand: () => void;
+  onPickWorkspace: (workspace: Workspace) => void;
+}) {
+  const navigate = useNavigate();
+  const location = useLocation();
+  // Show up to 8 most-recent workspaces in the rail; rest accessible via Cmd+K
+  // or by expanding the sidebar. Sort by updated desc so live ones surface.
+  const recent = [...props.workspaces].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 8);
   return (
-    <header className="top-bar">
-      <div className="top-bar-brand">
-        <span className="top-bar-brand-mark">C</span>
-        Citadel
-      </div>
+    <aside className="collapsed-rail col-left">
       <button
         type="button"
-        className="top-bar-search"
-        onClick={props.onSearch}
-        aria-label="Search workspaces"
-        title="Search workspaces, branches, issues, PRs (Cmd+K)"
+        className="collapsed-mini-btn"
+        onClick={props.onExpand}
+        aria-label="Expand navigator"
+        title="Expand"
       >
-        <SearchIcon size={13} />
-        <span>Search workspaces, branches, issues, PRs…</span>
-        <span className="top-bar-search-shortcut">⌘K</span>
+        <ChevronsRight size={15} />
       </button>
-      <div className="top-bar-actions">
-        <Link className="top-bar-icon" to="/settings" aria-label="Settings" title="Open settings">
-          <SettingsIcon size={14} />
+      <div className="collapsed-mini-divider" aria-hidden />
+      <button
+        type="button"
+        className={`collapsed-mini-btn ${location.pathname === "/dashboard" ? "is-active" : ""}`}
+        title="Dashboard"
+        onClick={() => navigate({ to: "/dashboard" })}
+      >
+        <SearchIcon size={15} />
+      </button>
+      <button
+        type="button"
+        className={`collapsed-mini-btn ${location.pathname === "/history" ? "is-active" : ""}`}
+        title="History"
+        onClick={() => navigate({ to: "/history" })}
+      >
+        <SettingsIcon size={15} />
+      </button>
+      <div className="collapsed-mini-divider" aria-hidden />
+      <div className="collapsed-mini-stack">
+        {recent.map((workspace) => {
+          const isActive = workspace.id === props.activeWorkspaceId;
+          const running = props.sessions.some(
+            (session) => session.workspaceId === workspace.id && session.status === "running",
+          );
+          const letter = (workspace.name.match(/[A-Za-z0-9]/)?.[0] ?? workspace.name[0] ?? "?").toUpperCase();
+          return (
+            <button
+              key={workspace.id}
+              type="button"
+              className={`collapsed-mini-ws ${isActive ? "is-selected" : ""}`}
+              title={`${workspace.name} · ${workspace.branch}`}
+              onClick={() => props.onPickWorkspace(workspace)}
+            >
+              <span className="collapsed-mini-letter">{letter}</span>
+              {running ? <span className="collapsed-mini-dot" aria-hidden /> : null}
+            </button>
+          );
+        })}
+      </div>
+    </aside>
+  );
+}
+
+function CitadelMark({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 100 100" aria-hidden="true">
+      <rect width="100" height="100" rx="22" fill="currentColor" />
+      <path d="M22 22h6v6h-6zM36 22h6v6h-6zM50 22h6v6h-6zM64 22h6v6h-6z" fill="var(--c-on-dark)" />
+      <path d="M70 48a16 16 0 100 14" stroke="var(--c-on-dark)" strokeWidth="6" fill="none" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function TopBar(props: {
+  onSearch: () => void;
+  activeWorkspace: Workspace | null;
+  repo: import("@citadel/contracts").Repo | null;
+}) {
+  return (
+    <header className="cit-topbar">
+      <div className="cit-brand">
+        <CitadelMark size={22} />
+        <div className="cit-brand-text">
+          <div className="cit-brand-name">Citadel</div>
+          <div className="cit-brand-org">{props.repo?.name ?? "local"}</div>
+        </div>
+      </div>
+      <div className="cit-search-wrap">
+        <button
+          type="button"
+          className="cit-search"
+          onClick={props.onSearch}
+          aria-label="Search workspaces"
+          title="Search workspaces, branches, issues, PRs (Cmd+K)"
+        >
+          <SearchIcon size={14} />
+          <span className="cit-search-placeholder">Search workspaces, branches, issues, PRs, recent commands…</span>
+          <kbd className="cit-kbd">⌘K</kbd>
+        </button>
+      </div>
+      <div className="cit-top-right">
+        <ThemeToggle />
+        <Link className="cit-icon-btn" to="/settings" aria-label="Settings" title="Open settings">
+          <SettingsIcon size={15} />
         </Link>
       </div>
     </header>
   );
+}
+
+function ThemeToggle() {
+  const resolved = useResolvedTheme();
+  const isDark = resolved === "dark";
+  const toggle = () => {
+    const next = isDark ? "light" : "dark";
+    document.documentElement.dataset.theme = next;
+    try {
+      localStorage.setItem("citadel.theme", next);
+    } catch {
+      // localStorage is best-effort
+    }
+  };
+  return (
+    <button
+      type="button"
+      className="cit-icon-btn"
+      onClick={toggle}
+      aria-label="Toggle theme"
+      title={isDark ? "Switch to light theme" : "Switch to dark theme"}
+    >
+      {isDark ? <Sun size={15} /> : <Moon size={15} />}
+    </button>
+  );
+}
+
+function BottomBar(props: {
+  activeWorkspace: Workspace | null;
+  activeSession: import("@citadel/contracts").AgentSession | null;
+  sessions: import("@citadel/contracts").AgentSession[];
+}) {
+  const [now, setNow] = useState(() => formatClock(new Date()));
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(formatClock(new Date())), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const shellCount = props.sessions.filter((session) => session.runtimeId === "shell").length;
+  const autoMode = props.sessions.some((s) => s.status === "running" || s.status === "waiting");
+
+  // Read the head commit of the active workspace so the status bar mirrors the
+  // redesign's "* <message>" hint. Falls back silently if the workspace isn't
+  // yet usable.
+  const recent = useQuery<WorkspaceRecentCommits>({
+    queryKey: ["recent-commits", props.activeWorkspace?.id, 1],
+    queryFn: () => api<WorkspaceRecentCommits>(`/api/workspaces/${props.activeWorkspace?.id}/recent-commits?limit=1`),
+    enabled: Boolean(props.activeWorkspace?.id),
+    staleTime: 30_000,
+  });
+  const headCommitMessage = recent.data?.commits[0]?.message ?? "";
+  const tmuxLabel = props.activeSession?.tmuxSessionName ?? null;
+
+  return (
+    <footer className="cit-bottombar" aria-label="Status bar">
+      <div className="cit-bb-left">
+        <span className="cit-bb-pill">
+          <span className={`cit-pulse ${autoMode ? "cit-pulse-run" : "cit-pulse-ok"}`} aria-hidden="true" />
+          auto mode {autoMode ? "running" : "on"}
+        </span>
+        <span className="cit-bb-divider" aria-hidden="true" />
+        <span className="cit-bb-item">
+          <span className="cit-bb-mono">{shellCount}</span> {shellCount === 1 ? "shell" : "shells"}
+        </span>
+        <span className="cit-bb-divider" aria-hidden="true" />
+        <span className="cit-bb-item cit-bb-muted">
+          <kbd>ctrl</kbd>+<kbd>k</kbd> palette
+        </span>
+        <span className="cit-bb-item cit-bb-muted">
+          <kbd>c</kbd> new workspace
+        </span>
+      </div>
+      <div className="cit-bb-right">
+        {tmuxLabel ? <span className="cit-bb-tmux">[{tmuxLabel}]</span> : null}
+        {headCommitMessage ? <span className="cit-bb-commit">* {headCommitMessage}</span> : null}
+        <span className="cit-bb-time">{now}</span>
+      </div>
+    </footer>
+  );
+}
+
+function formatClock(d: Date) {
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 function EmptyStage(props: { hasRepos: boolean }) {

@@ -1,12 +1,19 @@
-import type { AgentSession, Repo, Workspace, WorkspaceCockpitSummary, WorkspaceDiff } from "@citadel/contracts";
+import type {
+  AgentSession,
+  PrReviewer,
+  Repo,
+  Workspace,
+  WorkspaceCockpitSummary,
+  WorkspaceDiff,
+  WorkspaceRecentCommits,
+} from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, GitPullRequest, Hash, Loader2, PanelRightClose, Slack, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, ChevronDown, ExternalLink, GitPullRequest, Hash, Loader2, Plus, RefreshCw, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
-import { Button } from "./components/ui/button.js";
 import { DeployedAppsPanel } from "./deployed-apps.js";
 import { formatLabel } from "./labels.js";
-import { type ApprovalTone, approvalToneFor, prToneFor } from "./workspace-card.js";
+import { prToneFor } from "./workspace-card.js";
 
 type InspectorTab = "stats" | "diff";
 
@@ -18,23 +25,14 @@ export function Inspector(props: {
   onCollapse: () => void;
 }) {
   const [tab, setTab] = useState<InspectorTab>("stats");
+  const diff = useQuery<WorkspaceDiff>({
+    queryKey: ["diff", props.workspace.id],
+    queryFn: () => api<WorkspaceDiff>(`/api/workspaces/${props.workspace.id}/diff`),
+  });
+  const fileCount = diff.data?.files.length ?? null;
   return (
     <>
-      <div className="column-header">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={props.onCollapse}
-          aria-label="Collapse inspector"
-          title="Collapse inspector"
-        >
-          <PanelRightClose size={14} />
-        </Button>
-        <strong>Workspace</strong>
-        <span className="header-spacer" />
-      </div>
-      <div className="inspector-tabs">
+      <div className="inspector-tabs" data-active={tab}>
         <button
           type="button"
           className={`inspector-tab ${tab === "stats" ? "active" : ""}`}
@@ -50,13 +48,24 @@ export function Inspector(props: {
           title="Changed files and working tree diff"
         >
           Diff
+          {fileCount !== null && fileCount > 0 ? <span className="inspector-tab-count">{fileCount}</span> : null}
+        </button>
+        <span className="inspector-tab-indicator" data-tab={tab} aria-hidden />
+        <button
+          type="button"
+          className="cit-icon-btn cit-icon-btn--sm inspector-tabs-collapse"
+          onClick={props.onCollapse}
+          aria-label="Collapse inspector"
+          title="Collapse inspector"
+        >
+          <X size={12} />
         </button>
       </div>
       <div className="column-body">
         {tab === "stats" ? (
-          <StatsTab workspace={props.workspace} repo={props.repo} summary={props.summary} />
+          <StatsTab workspace={props.workspace} repo={props.repo} summary={props.summary} diff={diff.data} />
         ) : (
-          <DiffTab workspace={props.workspace} summary={props.summary} />
+          <DiffTab workspace={props.workspace} summary={props.summary} diff={diff.data} />
         )}
       </div>
     </>
@@ -67,229 +76,554 @@ function StatsTab(props: {
   workspace: Workspace;
   repo: Repo | null;
   summary: WorkspaceCockpitSummary | undefined;
+  diff: WorkspaceDiff | undefined;
 }) {
   const pr = props.summary?.versionControl.pullRequest ?? null;
   const prTone = prToneFor(pr);
-  const approvalTone: ApprovalTone = approvalToneFor(pr);
   const additions = pr?.additions ?? 0;
   const deletions = pr?.deletions ?? 0;
   const apps = props.summary?.apps;
   const checks = pr?.checks ?? [];
 
   const issueUrl = props.workspace.issueUrl ?? props.summary?.issueTracker?.url ?? null;
-  const slackThreadUrl = props.workspace.slackThreadUrl;
+  const diffFiles = props.diff?.files.length ?? 0;
+  const diffAdded = additions || sumDiffLines(props.diff, "+");
+  const diffRemoved = deletions || sumDiffLines(props.diff, "-");
+  const issueKey = props.workspace.issueKey ?? props.summary?.issueTracker?.key ?? null;
+  const issueTitle = props.workspace.issueTitle ?? props.summary?.issueTracker?.summary ?? null;
+  const issueStatus = props.summary?.issueTracker?.issueStatus ?? null;
+  const [checksOpen, setChecksOpen] = useState(false);
+  const checksSummary = summarizeChecks(checks);
 
-  const attachIssue = useMutation({
-    mutationFn: (input: { issueKey: string; issueTitle?: string; issueUrl?: string }) =>
-      api(`/api/workspaces/${props.workspace.id}`, {
+  const recent = useQuery<WorkspaceRecentCommits>({
+    queryKey: ["recent-commits", props.workspace.id, 6],
+    queryFn: () => api<WorkspaceRecentCommits>(`/api/workspaces/${props.workspace.id}/recent-commits?limit=6`),
+    staleTime: 30_000,
+  });
+
+  const reviewerAggregate = aggregateReviewerCounts(pr?.reviewers ?? []);
+
+  return (
+    <>
+      <IssueAttachSlot
+        workspaceId={props.workspace.id}
+        issueKey={issueKey}
+        issueTitle={issueTitle}
+        issueStatus={issueStatus}
+        issueUrl={issueUrl}
+      />
+
+      <div className="inspector-body">
+        <section className="ins-section">
+          <div className="ins-section-head">
+            <span className="ins-section-label">Pull request</span>
+          </div>
+          <div className="ins-section-body">
+            {pr ? (
+              <div className="ins-pr">
+                <div className="ins-pr-head">
+                  <span className={`ins-pr-badge tone-${prTone}`}>
+                    <GitPullRequest size={10} />
+                    {formatLabel(pr.state)}
+                  </span>
+                  <a
+                    className="ins-pr-num"
+                    href={pr.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={`Open PR #${pr.number}`}
+                  >
+                    #{pr.number} <ExternalLink size={9} />
+                  </a>
+                  <span className="ins-pr-base">
+                    <span className="ins-mono">{props.workspace.branch}</span>
+                    <span className="ins-pr-arrow">→</span>
+                    <span className="ins-mono">{props.workspace.baseBranch}</span>
+                  </span>
+                </div>
+                <div className="ins-pr-title">{pr.title}</div>
+                <div className="ins-pr-stats">
+                  <div className="ins-stat">
+                    <div className="ins-stat-num">{diffFiles}</div>
+                    <div className="ins-stat-label">files</div>
+                  </div>
+                  <div className="ins-stat">
+                    <div className="ins-stat-num ins-stat-add">+{diffAdded}</div>
+                    <div className="ins-stat-label">added</div>
+                  </div>
+                  <div className="ins-stat">
+                    <div className="ins-stat-num ins-stat-del">−{diffRemoved}</div>
+                    <div className="ins-stat-label">removed</div>
+                  </div>
+                  <div className="ins-pr-diffbar" aria-hidden>
+                    <span className="ins-bar-add" style={{ flex: Math.max(diffAdded, 1) }} />
+                    <span className="ins-bar-del" style={{ flex: Math.max(diffRemoved, 1) }} />
+                    <span className="ins-bar-rest" style={{ flex: Math.max(diffFiles, 1) }} />
+                  </div>
+                </div>
+                <div className="ins-pr-meta">
+                  <ReviewerAvatars reviewers={pr.reviewers} />
+                  <span className="ins-pr-meta-text">
+                    {reviewerAggregate.approved > 0 ? (
+                      <>
+                        <span className="ch-pill ch-pill-ok">{reviewerAggregate.approved}</span> approved
+                      </>
+                    ) : null}
+                    {reviewerAggregate.changes > 0 ? (
+                      <>
+                        {reviewerAggregate.approved > 0 ? <span className="ins-deploy-sep">·</span> : null}
+                        <span className="ch-pill ch-pill-bad">{reviewerAggregate.changes}</span> changes
+                      </>
+                    ) : null}
+                    {reviewerAggregate.pending > 0 ? (
+                      <>
+                        {reviewerAggregate.approved + reviewerAggregate.changes > 0 ? (
+                          <span className="ins-deploy-sep">·</span>
+                        ) : null}
+                        <span className="ch-pill ch-pill-mute">{reviewerAggregate.pending}</span> pending
+                      </>
+                    ) : null}
+                    {reviewerAggregate.approved + reviewerAggregate.changes + reviewerAggregate.pending === 0 ? (
+                      <span className="ins-pr-meta-empty">No reviewers assigned</span>
+                    ) : null}
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="ins-empty">
+                <div className="ins-empty-icon">
+                  <GitPullRequest size={12} />
+                </div>
+                <div className="ins-empty-text">No PR for this branch yet.</div>
+                <div className="ins-empty-hint">Push and open one when you're ready for review.</div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="ins-section">
+          <div className="ins-section-head">
+            <span className="ins-section-label">Checks</span>
+            {pr && checks.length ? (
+              <button
+                type="button"
+                className="ch-toggle"
+                onClick={() => setChecksOpen((v) => !v)}
+                aria-expanded={checksOpen}
+                title={checksOpen ? "Collapse checks" : "Expand checks"}
+              >
+                <ChevronDown
+                  size={11}
+                  style={{
+                    transform: checksOpen ? "rotate(180deg)" : "rotate(0deg)",
+                    transition: "transform 0.15s",
+                  }}
+                />
+              </button>
+            ) : null}
+          </div>
+          <div className="ins-section-body">
+            {pr && checks.length ? (
+              <>
+                <div className={`ch-summary-row ch-summary-row--${checksSummary.tone}`}>
+                  <CheckSummaryIcon tone={checksSummary.tone} />
+                  <div>
+                    <div className="ch-summary-title">{checksSummary.title}</div>
+                    {checksSummary.sub ? <div className="ch-summary-sub">{checksSummary.sub}</div> : null}
+                  </div>
+                  {checksSummary.bad > 0 ? (
+                    <button
+                      type="button"
+                      className="cit-chip cit-chip-ghost ch-summary-rerun"
+                      title="Re-run all checks"
+                    >
+                      <RefreshCw size={10} /> Re-run all
+                    </button>
+                  ) : (
+                    <span className="ch-summary-rerun" />
+                  )}
+                </div>
+                {checksOpen ? (
+                  <div className="check-list">
+                    {checks.map((check) => (
+                      <CheckRow key={`${check.name}-${check.conclusion ?? check.status}`} check={check} />
+                    ))}
+                  </div>
+                ) : null}
+              </>
+            ) : pr ? (
+              <div className="ins-empty">
+                <div className="ins-empty-text">No checks reported.</div>
+              </div>
+            ) : (
+              <div className="ins-empty">
+                <div className="ins-empty-text">No PR — nothing to check.</div>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {apps?.applications.length ? (
+          <section className="ins-section">
+            <div className="ins-section-head">
+              <span className="ins-section-label">Local deploys</span>
+            </div>
+            <div className="app-chip-grid ins-deploy-chips">
+              {apps.applications.map((app) => (
+                <div
+                  key={app.id}
+                  className={`app-chip ins-chip tone-${app.status} ins-chip--${app.status === "healthy" ? "up" : app.status === "degraded" ? "restarting" : "down"}`}
+                  title={`${app.label}${app.environment ? ` · ${app.environment}` : ""} · ${app.status}`}
+                >
+                  <a className="ins-chip-tap" href={app.url ?? undefined} target="_blank" rel="noreferrer">
+                    <span
+                      className={`cit-pulse cit-pulse-sm ${app.status === "healthy" ? "cit-pulse-ok" : app.status === "degraded" ? "cit-pulse-run" : "cit-pulse-bad"}`}
+                    />
+                    <span className="ins-chip-name">{app.label}</span>
+                  </a>
+                  <button type="button" className="ins-chip-reload" title="Redeploy" aria-label="Redeploy">
+                    <RefreshCw size={11} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        <DeployedAppsPanel workspaceId={props.workspace.id} repo={props.repo} />
+
+        <section className="ins-section">
+          <div className="ins-section-head">
+            <span className="ins-section-label">Recent</span>
+          </div>
+          <div className="ins-section-body">
+            {recent.isLoading ? (
+              <div className="ins-empty">
+                <div className="ins-empty-text">Reading git log…</div>
+              </div>
+            ) : recent.data?.commits.length ? (
+              <ul className="ins-recent">
+                {recent.data.commits.map((commit) => (
+                  <li key={commit.sha} title={`${commit.author} · ${commit.isoTime}`}>
+                    <span className="ins-recent-sha">{commit.shortSha}</span>
+                    <span className="ins-recent-msg">{commit.message}</span>
+                    <span className="ins-recent-time">{shortenRelative(commit.relativeTime)}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="ins-empty">
+                <div className="ins-empty-text">No commits in this workspace yet.</div>
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+    </>
+  );
+}
+
+function IssueAttachSlot(props: {
+  workspaceId: string;
+  issueKey: string | null;
+  issueTitle: string | null;
+  issueStatus: string | null;
+  issueUrl: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const [keyDraft, setKeyDraft] = useState("");
+  const [urlDraft, setUrlDraft] = useState("");
+  const keyInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (open) keyInputRef.current?.focus();
+  }, [open]);
+
+  const attach = useMutation({
+    mutationFn: (input: { issueKey: string; issueUrl: string | null }) =>
+      api(`/api/workspaces/${props.workspaceId}`, {
         method: "PATCH",
         body: JSON.stringify({
           issueKey: input.issueKey,
-          issueTitle: input.issueTitle ?? null,
-          issueUrl: input.issueUrl || null,
+          issueUrl: input.issueUrl,
+          issueTitle: null,
         }),
       }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
-  });
-  const attachSlack = useMutation({
-    mutationFn: (slackThreadUrl: string) =>
-      api(`/api/workspaces/${props.workspace.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ slackThreadUrl }),
-      }),
     onSuccess: () => {
-      setShowSlackAttach(false);
+      setOpen(false);
+      setKeyDraft("");
+      setUrlDraft("");
       queryClient.invalidateQueries({ queryKey: ["state"] });
     },
   });
 
-  const [issueDraft, setIssueDraft] = useState("");
-  const [issueUrlDraft, setIssueUrlDraft] = useState("");
-  const [showIssueAttach, setShowIssueAttach] = useState(false);
-  const [slackDraft, setSlackDraft] = useState("");
-  const [showSlackAttach, setShowSlackAttach] = useState(false);
+  if (props.issueKey) {
+    return (
+      <div className="inspector-attach">
+        <a
+          className="cit-jira"
+          href={props.issueUrl ?? undefined}
+          target="_blank"
+          rel="noreferrer"
+          title={`Open ${props.issueKey}${props.issueTitle ? `: ${props.issueTitle}` : ""}`}
+        >
+          <span className="cit-jira-icon" aria-hidden>
+            <svg viewBox="0 0 16 16" width="14" height="14" role="img" aria-label="Issue tracker">
+              <title>Issue tracker</title>
+              <rect x="1.5" y="1.5" width="13" height="13" rx="2.5" fill="oklch(50% 0.16 250)" />
+              <path
+                d="M5 8.2l2 2 4-4"
+                fill="none"
+                stroke="#fff"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
+          <span className="cit-jira-text">
+            <span className="cit-jira-key">{props.issueKey}</span>
+            {props.issueTitle ? <span className="cit-jira-title">{props.issueTitle}</span> : null}
+          </span>
+          <span
+            className={`cit-jira-status cit-jira-status--${props.issueStatus ? jiraStatusTone(props.issueStatus) : "unknown"}`}
+            title={props.issueStatus ? `Issue status: ${props.issueStatus}` : "Status not synced"}
+          >
+            {props.issueStatus ?? "—"}
+          </span>
+        </a>
+      </div>
+    );
+  }
 
   return (
-    <div className="inspector-body">
-      <section className="inspector-block">
-        <h4>PR</h4>
-        {pr ? (
-          <div className="pr-summary">
-            <a
-              href={pr.url}
-              target="_blank"
-              rel="noreferrer"
-              className={`attach-button attached tone-${approvalTone === "approved" ? "success" : approvalTone === "changes" ? "danger" : "warning"}`}
-              title={`PR #${pr.number}: ${pr.title}`}
-            >
-              <GitPullRequest size={12} /> #{pr.number}
-            </a>
-            <div className="command-result-meta">
-              <span className="diff-add">+{additions}</span>
-              <span className="diff-del"> −{deletions}</span>
-              {" · "}
-              <span
-                className={`tone-${prTone === "passing" ? "success" : prTone === "failing" ? "failure" : "pending"}`}
-              >
-                {formatLabel(prTone)}
-              </span>
-              {" · "}
-              <strong>{approvalTone}</strong>
-            </div>
-          </div>
-        ) : (
-          <div className="empty compact">
-            <GitPullRequest size={12} /> No PR for this branch yet.
-          </div>
-        )}
-      </section>
-
-      <section className="inspector-block">
-        <h4>PR checks</h4>
-        {pr ? (
-          <div className="check-list">
-            {checks.length ? (
-              checks.map((check) => (
-                <CheckRow key={`${check.name}-${check.conclusion ?? check.status}`} check={check} />
-              ))
-            ) : (
-              <div className="empty compact">PR exists but no checks reported yet.</div>
-            )}
-          </div>
-        ) : (
-          <div className="empty compact">No PR yet, nothing to check.</div>
-        )}
-      </section>
-
-      <section className="inspector-block">
-        <h4>Attached</h4>
-        <div className="attach-row">
-          {slackThreadUrl ? (
-            <a
-              className="attach-button attached"
-              href={slackThreadUrl}
-              target="_blank"
-              rel="noreferrer"
-              title="Open linked Slack thread"
-            >
-              <Slack size={12} /> Slack
-            </a>
-          ) : (
-            <button
-              type="button"
-              className={`attach-button ${showSlackAttach ? "tone-warning" : ""}`}
-              onClick={() => setShowSlackAttach((v) => !v)}
-              title="Attach Slack conversation"
-            >
-              <Slack size={12} /> {showSlackAttach ? "Cancel" : "Slack"}
+    <>
+      <div className="inspector-attach">
+        <button
+          type="button"
+          className="cit-jira cit-jira--empty"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          title="Attach a Jira ticket to this workspace"
+        >
+          <span className="cit-jira-empty-mark" aria-hidden>
+            <Plus size={11} />
+          </span>
+          <span className="cit-jira-empty-text">
+            <span className="cit-jira-empty-title">Attach Jira ticket</span>
+            <span className="cit-jira-empty-hint">link an issue to this workspace</span>
+          </span>
+        </button>
+      </div>
+      {open ? (
+        <form
+          className="cit-jira-attach-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const key = keyDraft.trim();
+            if (!key) return;
+            attach.mutate({ issueKey: key, issueUrl: urlDraft.trim() || null });
+          }}
+        >
+          <label>
+            Issue key
+            <input
+              ref={keyInputRef}
+              value={keyDraft}
+              onChange={(event) => setKeyDraft(event.target.value)}
+              placeholder="ABC-123"
+            />
+          </label>
+          <label>
+            Issue URL (optional)
+            <input
+              value={urlDraft}
+              onChange={(event) => setUrlDraft(event.target.value)}
+              placeholder="https://jira.example/browse/ABC-123"
+            />
+          </label>
+          <div className="cit-jira-attach-actions">
+            <button type="button" onClick={() => setOpen(false)} disabled={attach.isPending}>
+              Cancel
             </button>
-          )}
-          {issueUrl ? (
-            <a
-              className="attach-button attached"
-              href={issueUrl}
-              target="_blank"
-              rel="noreferrer"
-              title={props.workspace.issueKey ? `Open ${props.workspace.issueKey}` : "Open linked issue"}
-            >
-              <Hash size={12} /> {props.workspace.issueKey ?? "Issue"}
-            </a>
-          ) : (
-            <button
-              type="button"
-              className={`attach-button ${props.workspace.issueKey ? "attached" : ""}`}
-              onClick={() => setShowIssueAttach((v) => !v)}
-              title={props.workspace.issueKey ? `Attached ${props.workspace.issueKey}; add URL` : "Attach issue"}
-            >
-              <Hash size={12} /> {props.workspace.issueKey ?? "Issue"}
+            <button type="submit" data-primary disabled={!keyDraft.trim() || attach.isPending}>
+              {attach.isPending ? "Attaching…" : "Attach"}
             </button>
-          )}
-        </div>
-        {showSlackAttach ? (
-          <div className="modal-form">
-            <label>
-              Slack thread URL
-              <input
-                value={slackDraft}
-                onChange={(event) => setSlackDraft(event.target.value)}
-                placeholder="https://slack.com/archives/CHANNEL/p123..."
-              />
-            </label>
-            <Button
-              type="button"
-              variant="secondary"
-              onClick={() => attachSlack.mutate(slackDraft.trim())}
-              disabled={!slackDraft.trim() || attachSlack.isPending}
-            >
-              {attachSlack.isPending ? "Attaching…" : "Attach Slack"}
-            </Button>
           </div>
-        ) : null}
-        {showIssueAttach ? (
-          <div className="modal-form">
-            <label>
-              Issue key
-              <input value={issueDraft} onChange={(event) => setIssueDraft(event.target.value)} placeholder="ABC-123" />
-            </label>
-            <label>
-              Issue URL
-              <input
-                value={issueUrlDraft}
-                onChange={(event) => setIssueUrlDraft(event.target.value)}
-                placeholder="https://jira.example/browse/ABC-123"
-              />
-            </label>
-            <Button
-              type="button"
-              disabled={!issueDraft.trim() || attachIssue.isPending}
-              onClick={() => attachIssue.mutate({ issueKey: issueDraft.trim(), issueUrl: issueUrlDraft.trim() })}
-            >
-              {attachIssue.isPending ? "Attaching…" : "Attach issue"}
-            </Button>
-          </div>
-        ) : null}
-      </section>
-
-      {apps?.applications.length ? (
-        <section className="inspector-block">
-          <h4>Deployed apps</h4>
-          <div className="app-chip-grid">
-            {apps.applications.map((app) => (
-              <a
-                key={app.id}
-                className={`app-chip tone-${app.status}`}
-                href={app.url ?? undefined}
-                target="_blank"
-                rel="noreferrer"
-                title={`${app.label}${app.environment ? ` · ${app.environment}` : ""} · ${app.status}`}
-              >
-                <span className="dot" />
-                <span>{app.label}</span>
-                <span className="command-result-meta">{app.environment ?? formatLabel(app.kind)}</span>
-              </a>
-            ))}
-          </div>
-          {apps.actions.length ? (
-            <div className="attach-row">
-              {apps.actions.map((action) => (
-                <span key={action.id} className="attach-button" title={action.description ?? action.label}>
-                  {action.label}
-                </span>
-              ))}
-            </div>
-          ) : null}
-        </section>
+        </form>
       ) : null}
-
-      <DeployedAppsPanel workspaceId={props.workspace.id} repo={props.repo} />
-    </div>
+    </>
   );
 }
 
-function DiffTab(props: { workspace: Workspace; summary: WorkspaceCockpitSummary | undefined }) {
+function ReviewerAvatars({ reviewers }: { reviewers: PrReviewer[] }) {
+  if (!reviewers.length) return <span className="ins-pr-avatars" aria-hidden />;
+  const visible = reviewers.slice(0, 3);
+  const extra = reviewers.length - visible.length;
+  return (
+    <span className="ins-pr-avatars">
+      {visible.map((reviewer) => (
+        <span
+          key={reviewer.login}
+          className={`ins-av ins-av--${reviewer.state}`}
+          style={{ background: avatarGradient(reviewer.login) }}
+          title={`${reviewer.name ?? reviewer.login} · ${formatLabel(reviewer.state)}`}
+        >
+          {reviewerInitials(reviewer)}
+        </span>
+      ))}
+      {extra > 0 ? (
+        <span className="ins-av ins-av-more" title={`+${extra} more reviewers`}>
+          +{extra}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+export function aggregateReviewerCounts(reviewers: PrReviewer[]) {
+  let approved = 0;
+  let changes = 0;
+  let pending = 0;
+  for (const reviewer of reviewers) {
+    if (reviewer.state === "approved") approved += 1;
+    else if (reviewer.state === "changes_requested") changes += 1;
+    else if (reviewer.state === "pending") pending += 1;
+  }
+  return { approved, changes, pending };
+}
+
+function reviewerInitials(reviewer: PrReviewer) {
+  const source = reviewer.name?.trim() || reviewer.login;
+  const tokens = source.split(/[\s_.-]+/).filter(Boolean);
+  if (tokens.length >= 2) return `${tokens[0]?.[0] ?? ""}${tokens[1]?.[0] ?? ""}`.toUpperCase();
+  return source.slice(0, 2).toUpperCase();
+}
+
+const AVATAR_PALETTE: ReadonlyArray<readonly [string, string]> = [
+  ["#8e6b4a", "#4a3622"],
+  ["#5a7a8e", "#2a4252"],
+  ["#7a5a8e", "#3a2a52"],
+  ["#5a8e6b", "#2a4a36"],
+  ["#8e5a6b", "#522a36"],
+  ["#5a6b8e", "#2a3652"],
+] as const;
+const AVATAR_DEFAULT: readonly [string, string] = ["#8e6b4a", "#4a3622"];
+
+function avatarGradient(seed: string) {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  const pair = AVATAR_PALETTE[hash % AVATAR_PALETTE.length] ?? AVATAR_DEFAULT;
+  return `linear-gradient(135deg, ${pair[0]}, ${pair[1]})`;
+}
+
+export function shortenRelative(value: string) {
+  if (!value) return "";
+  // git's "ago" strings (e.g. "3 minutes ago") read better trimmed in the chip.
+  return value
+    .replace(/ ago$/, "")
+    .replace(/(\d+) minutes?/, "$1m")
+    .replace(/(\d+) hours?/, "$1h")
+    .replace(/(\d+) days?/, "$1d")
+    .replace(/(\d+) weeks?/, "$1w")
+    .replace(/(\d+) months?/, "$1mo")
+    .replace(/(\d+) years?/, "$1y")
+    .replace(/(\d+) seconds?/, "$1s");
+}
+
+function CheckSummaryIcon({ tone }: { tone: "ok" | "bad" | "run" | "mixed" }) {
+  if (tone === "ok") {
+    return (
+      <span className="ch-status ch-status-ok" aria-hidden>
+        <Check size={14} />
+      </span>
+    );
+  }
+  if (tone === "bad") {
+    return (
+      <span className="ch-status ch-status-bad" aria-hidden>
+        <X size={14} />
+      </span>
+    );
+  }
+  if (tone === "run") {
+    return (
+      <span className="ch-status ch-status-run" aria-hidden>
+        <Loader2 size={14} className="spin" />
+      </span>
+    );
+  }
+  return (
+    <span className="ch-status ch-status-skip" aria-hidden>
+      <Hash size={14} />
+    </span>
+  );
+}
+
+function summarizeChecks(checks: Array<{ status: string; conclusion: string | null }>) {
+  let ok = 0;
+  let bad = 0;
+  let run = 0;
+  let pend = 0;
+  for (const check of checks) {
+    const conclusion = (check.conclusion ?? "").toLowerCase();
+    const status = check.status.toLowerCase();
+    if (["failure", "cancelled", "timed_out", "action_required"].includes(conclusion)) bad += 1;
+    else if (conclusion === "success") ok += 1;
+    else if (
+      status === "in_progress" ||
+      status === "queued" ||
+      status === "pending" ||
+      (!conclusion && status !== "completed")
+    )
+      run += 1;
+    else pend += 1;
+  }
+  const total = checks.length;
+  let tone: "ok" | "bad" | "run" | "mixed" = "mixed";
+  let title = `${total} checks`;
+  let sub = "";
+  if (bad === 0 && run === 0 && pend === 0) {
+    tone = "ok";
+    title = `All ${total} checks passed`;
+  } else if (bad > 0 && run === 0) {
+    tone = "bad";
+    title = `${bad} ${bad === 1 ? "check" : "checks"} failing`;
+    sub = `${ok}/${total} passed`;
+  } else if (run > 0) {
+    tone = "run";
+    title = `${run} ${run === 1 ? "check" : "checks"} running`;
+    sub = `${ok}/${total} passed`;
+  } else {
+    sub = `${ok} passed`;
+  }
+  return { ok, bad, run, pend, total, tone, title, sub };
+}
+
+function jiraStatusTone(status: string): "todo" | "progress" | "review" | "done" | "blocked" {
+  const s = status.toLowerCase();
+  if (s.includes("done") || s.includes("closed") || s.includes("resolved")) return "done";
+  if (s.includes("review")) return "review";
+  if (s.includes("progress") || s.includes("doing")) return "progress";
+  if (s.includes("block")) return "blocked";
+  return "todo";
+}
+
+function sumDiffLines(diff: WorkspaceDiff | undefined, prefix: "+" | "-"): number {
+  if (!diff) return 0;
+  let total = 0;
+  for (const file of diff.files) total += countLines(file.diff, prefix);
+  return total;
+}
+
+function DiffTab(props: {
+  workspace: Workspace;
+  summary: WorkspaceCockpitSummary | undefined;
+  diff: WorkspaceDiff | undefined;
+}) {
   const diff = useQuery<WorkspaceDiff>({
     queryKey: ["diff", props.workspace.id],
     queryFn: () => api<WorkspaceDiff>(`/api/workspaces/${props.workspace.id}/diff`),
+    ...(props.diff ? { initialData: props.diff } : {}),
   });
   const git = props.summary?.git;
   return (

@@ -14,7 +14,7 @@ const API_BASE =
 
 test("cockpit renders top bar, navigator, stage, and inspector", async ({ page }, testInfo) => {
   await page.goto("/");
-  await expect(page.locator(".top-bar-brand")).toContainText("Citadel");
+  await expect(page.locator(".cit-brand")).toContainText("Citadel");
   await expect(page.getByRole("button", { name: "Search workspaces" })).toBeVisible();
   if (testInfo.project.name === "mobile") {
     // Mobile collapses to one column at a time and exposes a switcher.

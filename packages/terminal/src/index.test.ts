@@ -114,7 +114,14 @@ describe("tmux terminal gateway helpers", () => {
     sendKeys(sessionName, "\r");
     await waitForCapture(sessionName, "$");
 
-    const result = await submitPrompt(sessionName, "hello-claude", { waitForReadyMs: 200, submitDelayMs: 50 });
+    // skipVerification: bash's `read` doesn't render a TUI input box, so the
+    // post-paste "is the snippet in the input region" check would always fail.
+    // The submission-worked assertion below is the real test for this path.
+    const result = await submitPrompt(sessionName, "hello-claude", {
+      waitForReadyMs: 200,
+      submitDelayMs: 50,
+      skipVerification: true,
+    });
     expect(result.ok).toBe(true);
     await waitForCapture(sessionName, "GOT:hello-claude");
   });
@@ -140,7 +147,11 @@ describe("tmux terminal gateway helpers", () => {
     sendKeys(sessionName, "\r");
     await waitForCapture(sessionName, "$");
 
-    const result = await submitPrompt(sessionName, "trim-me\n\n", { waitForReadyMs: 200, submitDelayMs: 400 });
+    const result = await submitPrompt(sessionName, "trim-me\n\n", {
+      waitForReadyMs: 200,
+      submitDelayMs: 400,
+      skipVerification: true,
+    });
     expect(result.ok).toBe(true);
     // If the trailing LF had been left in the paste it would have been
     // consumed by `read` and the suffix "." would never appear.

@@ -34,6 +34,16 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
       timeout: 10000,
       maxBuffer: 128 * 1024,
     });
+    // Capture every byte tmux ever writes to this pane to a side log. Used by
+    // submitPrompt for delivery verification (capture-pane only shows the
+    // visible scrollback; the log keeps even bytes that scrolled off) and by
+    // humans for debugging. Best-effort — if the tmpdir isn't writable we
+    // just lose the diagnostic, the rest of the flow is unaffected.
+    try {
+      attachPipePaneLog(input.sessionName);
+    } catch {
+      /* noop */
+    }
   }
   ensureTmuxExtendedKeys();
   const id = execFileSync("tmux", ["display-message", "-p", "-t", input.sessionName, "#{session_id}"], {
@@ -47,6 +57,53 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
   // → keys are safe to send."
   if (freshlyCreated) await waitForTerminalIdle(input.sessionName, { timeoutMs: 1500, idleMs: 200 });
   return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
+}
+
+// Side-channel byte log of everything a pane emits. Lives under tmpdir so it
+// gets cleaned up on reboot. `pipe-pane -o` toggles: passing the command once
+// opens the pipe, calling again with no command closes it. We don't bother
+// closing on session teardown — when the tmux session goes away tmux severs
+// the pipe automatically.
+const PIPE_PANE_LOG_DIR = path.join(os.tmpdir(), "citadel-pty");
+
+export function pipePaneLogPath(sessionName: string) {
+  return path.join(PIPE_PANE_LOG_DIR, `${sessionName}.log`);
+}
+
+function attachPipePaneLog(sessionName: string) {
+  fs.mkdirSync(PIPE_PANE_LOG_DIR, { recursive: true });
+  const logPath = pipePaneLogPath(sessionName);
+  // Truncate any stale log from a previous incarnation of this session name.
+  try {
+    fs.writeFileSync(logPath, "");
+  } catch {
+    /* tmpdir is read-only — pipe-pane will recreate on first write */
+  }
+  // Default direction is "-O" (pane → command). Omitting -o means we always
+  // replace any existing pipe rather than no-op, so re-attach is idempotent.
+  const shellCmd = `cat >> ${shellQuote(logPath)}`;
+  execFileSync("tmux", ["pipe-pane", "-t", sessionName, shellCmd], { stdio: "ignore" });
+}
+
+// Return the tail of the pipe-pane log (or empty string if unavailable). Used
+// by verification paths that need to inspect bytes that may have scrolled out
+// of the visible pane.
+export function readPipePaneTail(sessionName: string, maxBytes = 16 * 1024): string {
+  const logPath = pipePaneLogPath(sessionName);
+  try {
+    const stat = fs.statSync(logPath);
+    const offset = Math.max(0, stat.size - maxBytes);
+    const fd = fs.openSync(logPath, "r");
+    try {
+      const buf = Buffer.alloc(stat.size - offset);
+      fs.readSync(fd, buf, 0, buf.length, offset);
+      return buf.toString("utf8");
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return "";
+  }
 }
 
 // Path of the "agent still running" sentinel file for a given tmux session.
@@ -306,30 +363,158 @@ export function captureTmuxSnapshot(sessionName: string) {
   return { ok: true as const, data: `${clear}${text}\n${placeCursor}` };
 }
 
+// Poll the pane's foreground process name (`#{pane_current_command}`) until
+// the predicate matches or the deadline expires. tmux exposes the real
+// foreground PID's comm string, so this is the cheapest reliable answer to
+// "is the runtime actually running yet?" — much more meaningful than the
+// pane-paint heuristic. Used before any input injection to avoid sending keys
+// while the outer wrapper `bash -c` is still doing setup work.
+//
+// Returns the last command name observed (so callers can log it on timeout).
+export async function waitForPaneCommand(
+  sessionName: string,
+  predicate: (cmd: string) => boolean,
+  options: { timeoutMs?: number; pollMs?: number } = {},
+): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? 8000;
+  const pollMs = options.pollMs ?? 80;
+  const deadline = Date.now() + timeoutMs;
+  let last = "";
+  while (Date.now() < deadline) {
+    try {
+      last = execFileSync("tmux", ["display-message", "-p", "-t", sessionName, "#{pane_current_command}"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+    } catch {
+      last = "";
+    }
+    if (predicate(last)) return last;
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  return last;
+}
+
+// Sentinel file written by tmux's alert-silence-pane hook. Living under
+// tmpdir keeps it cheap to fs.stat in tight loops; the hook itself only
+// fires once per silence threshold crossing so we never spawn run-shell on
+// the hot path.
+const SILENCE_SENTINEL_DIR = path.join(os.tmpdir(), "citadel-silence");
+
+function silenceSentinelPath(sessionName: string) {
+  return path.join(SILENCE_SENTINEL_DIR, `${sessionName}.flag`);
+}
+
+// Arm tmux's monitor-silence hook so it touches a sentinel file whenever the
+// pane has been silent for `seconds`. Caller is responsible for clearing the
+// sentinel before arming and for calling `disarmSilenceHook` once done.
+//
+// tmux's silence threshold is integer seconds (minimum 1), so this gives us
+// coarse-but-reliable "is the runtime quiet" signal. Fine-grained idle waits
+// (post-paste settle, etc.) still fall back to capture-pane polling.
+function armSilenceHook(sessionName: string, seconds: number) {
+  try {
+    fs.mkdirSync(SILENCE_SENTINEL_DIR, { recursive: true });
+  } catch {
+    /* read-only tmpdir — the polling fallback will still kick in */
+  }
+  const sentinel = silenceSentinelPath(sessionName);
+  try {
+    fs.unlinkSync(sentinel);
+  } catch {
+    /* ignore */
+  }
+  try {
+    execFileSync("tmux", ["set-option", "-p", "-t", sessionName, "monitor-silence", String(seconds)], {
+      stdio: "ignore",
+    });
+    // -b: run the touch in the background so tmux doesn't block its event loop on it.
+    execFileSync(
+      "tmux",
+      [
+        "set-hook",
+        "-p",
+        "-t",
+        sessionName,
+        "alert-silence-pane",
+        `run-shell -b ${shellQuote(`touch ${shellQuote(sentinel)}`)}`,
+      ],
+      { stdio: "ignore" },
+    );
+  } catch {
+    /* hook set failed — caller's polling fallback handles it */
+  }
+}
+
+function disarmSilenceHook(sessionName: string) {
+  try {
+    execFileSync("tmux", ["set-option", "-p", "-u", "-t", sessionName, "monitor-silence"], { stdio: "ignore" });
+  } catch {
+    /* ignore */
+  }
+  try {
+    execFileSync("tmux", ["set-hook", "-p", "-u", "-t", sessionName, "alert-silence-pane"], { stdio: "ignore" });
+  } catch {
+    /* ignore */
+  }
+}
+
 // Wait for the tmux pane to "settle" before injecting input. Interactive TUIs
 // like Claude Code repaint repeatedly during startup; if we send keys while the
 // splash screen is still drawing the input either gets eaten or interleaved
-// with the prompt placeholder. We sample the visible screen until it stops
-// changing or the deadline expires. Best-effort — never throws.
+// with the prompt placeholder.
+//
+// Two parallel signals race; whichever fires first wins:
+//   1. tmux's own monitor-silence hook touches a sentinel file after N seconds
+//      of silence (event-driven, no busy polling tmux for screen diffs).
+//   2. capture-pane diffing — kept as a fallback for the sub-second case where
+//      the silence-hook threshold (whole seconds) is coarser than the idleMs
+//      the caller actually wants.
+//
+// Best-effort — never throws.
 export async function waitForTerminalIdle(
   sessionName: string,
-  options: { timeoutMs?: number; idleMs?: number; pollMs?: number } = {},
+  options: { timeoutMs?: number; idleMs?: number; pollMs?: number; useSilenceHook?: boolean } = {},
 ): Promise<void> {
   const timeoutMs = options.timeoutMs ?? 1500;
   const idleMs = options.idleMs ?? 250;
   const pollMs = options.pollMs ?? 80;
+  const useSilenceHook = options.useSilenceHook ?? idleMs >= 1000;
   const deadline = Date.now() + Math.max(idleMs + pollMs, timeoutMs);
-  let last = safeCapture(sessionName);
-  let stableSince = Date.now();
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
-    const current = safeCapture(sessionName);
-    if (current === last) {
-      if (Date.now() - stableSince >= idleMs) return;
-      continue;
+
+  // Arm the tmux silence hook in parallel with capture-pane polling — whichever
+  // signal fires first wins. The hook lets tmux's own event loop tell us when
+  // the runtime has been quiet, which is far cheaper than capture-pane diffing
+  // and immune to mid-paint false-positive lulls. We only arm it when idleMs
+  // is at least 1s (tmux's minimum silence threshold); below that the polling
+  // diff is the better tool.
+  const silenceSeconds = useSilenceHook ? Math.max(1, Math.round(idleMs / 1000)) : 0;
+  if (silenceSeconds > 0) armSilenceHook(sessionName, silenceSeconds);
+  const sentinel = silenceSentinelPath(sessionName);
+  try {
+    let last = safeCapture(sessionName);
+    let stableSince = Date.now();
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
+      if (silenceSeconds > 0 && safeStatExists(sentinel)) return;
+      const current = safeCapture(sessionName);
+      if (current === last) {
+        if (Date.now() - stableSince >= idleMs) return;
+        continue;
+      }
+      last = current;
+      stableSince = Date.now();
     }
-    last = current;
-    stableSince = Date.now();
+  } finally {
+    if (silenceSeconds > 0) disarmSilenceHook(sessionName);
+  }
+}
+
+function safeStatExists(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
   }
 }
 
@@ -345,50 +530,149 @@ function safeCapture(sessionName: string): string {
   }
 }
 
-// Submit a prompt or follow-up message into a tmux-backed runtime. Robust
-// against interactive TUIs (Claude Code, Codex, Cursor) because it:
-//   1. waits for the pane to stop repainting (post-splash),
-//   2. delivers the text via a tmux paste-buffer instead of typing chars one
-//      at a time (avoids dropped keystrokes and is recognized as a bracketed
-//      paste by readline-style prompts),
-//   3. waits for the pane to settle so the runtime has committed the pasted
-//      text to its input state,
-//   4. sends Enter as a SEPARATE tmux call so it lands outside the paste
-//      region (Claude Code, Codex etc. interpret a paste-internal LF as a
-//      newline-in-input, and only an Enter outside any paste as "submit").
-// Returns whether the underlying tmux calls succeeded. Errors are non-fatal
-// at the caller level so the session is still tracked.
+// Submit a prompt or follow-up message into a tmux-backed runtime.
+//
+// Step-by-step, with the "why" for each:
+//   1. Wait until the runtime's process is the foreground command in the pane
+//      (`#{pane_current_command}` ≠ wrapper bash). This rules out the "we
+//      sent keys while `bash -c …` was still doing setup" failure mode that
+//      visual idle-detection can't see.
+//   2. Wait for the pane to settle (silence-hook + capture-pane fallback).
+//   3. Paste the prompt as a BRACKETED paste so the runtime sees one atomic
+//      "this is text, not keystrokes" event. Solves the case where the
+//      runtime's bracketed-paste mode flips on between our trim and our paste.
+//   4. Verify by capture-pane that our prompt text actually appears in the
+//      bottom rows of the pane (input area). If not, re-paste once.
+//   5. Send Enter as a SEPARATE tmux call so it lands outside the paste
+//      region.
+//   6. Verify the prompt is no longer pending in the input area. If it is,
+//      the Enter did not take (most common cause: runtime hadn't finished
+//      committing the paste to input state). Send Enter again, up to 2
+//      retries.
+// Returns ok=false with an error string if any step exhausts its budget.
 export async function submitPrompt(
   sessionName: string,
   prompt: string,
-  options: { waitForReadyMs?: number; submitDelayMs?: number; submitKey?: string } = {},
+  options: {
+    waitForReadyMs?: number;
+    submitDelayMs?: number;
+    submitKey?: string;
+    runtimeReadyPredicate?: (cmd: string) => boolean;
+    skipVerification?: boolean;
+  } = {},
 ): Promise<{ ok: boolean; error?: string }> {
   if (!tmuxSessionExists(sessionName)) return { ok: false, error: "tmux_session_missing" };
+  const submitKey = options.submitKey ?? "Enter";
+  // Defaults are deliberately generous for cold-start TUIs (Claude Code with
+  // MCP servers connecting can paint for 10+ seconds). Tests pass tighter
+  // values explicitly.
+  const waitForReadyMs = options.waitForReadyMs ?? 8000;
+  const submitDelayMs = options.submitDelayMs ?? 3000;
   try {
-    await waitForTerminalIdle(sessionName, { timeoutMs: options.waitForReadyMs ?? 1500 });
+    // 1. Runtime-foreground check — best-effort, never blocks the actual send.
+    if (options.runtimeReadyPredicate) {
+      await waitForPaneCommand(sessionName, options.runtimeReadyPredicate, { timeoutMs: waitForReadyMs });
+    }
+    // 2. Pane settle pre-paste. Use the silence hook (idleMs >= 1s) to lean
+    //    on tmux's event loop rather than busy-polling capture-pane.
+    await waitForTerminalIdle(sessionName, { timeoutMs: waitForReadyMs, idleMs: 1000 });
+
     // Trim trailing newlines so the paste itself never carries an LF the
     // runtime might treat as the submit keystroke — we always rely on the
     // explicit Enter that follows.
     const text = prompt.replace(/[\r\n]+$/u, "");
+    const wantVerification = !options.skipVerification && text.length > 0;
+    // Substring we expect to see in the input area after the paste. We use a
+    // tail slice rather than the whole prompt because long prompts get
+    // line-wrapped by the TUI and we'd never match the full text verbatim
+    // against capture-pane's rendered output.
+    const verifySnippet = verificationSnippet(text);
     if (text.length > 0) {
-      pasteText(sessionName, text);
-      // Settle after the paste before pressing Enter. Without this, fast
-      // send-keys races the runtime's render cycle: Claude Code receives the
-      // paste-buffer chunk but its React/ink input hasn't committed the new
-      // value to state yet, so the Enter dispatches on an empty (or partial)
-      // input and the typed text just sits in the textarea waiting for the
-      // user to press Enter manually.
+      // 3. Bracketed paste. We deliberately do NOT retry the paste: if the
+      // verification snippet is missing, retrying just stacks two copies of
+      // the prompt in the runtime's input box (the first paste DID land — we
+      // just can't find the snippet because of wrap/animation). The Enter
+      // retry below covers the genuine "Enter didn't submit" failure mode.
+      pasteText(sessionName, text, { bracketed: true });
+      // Post-paste settle: short, because we don't want to delay Enter
+      // any longer than necessary, and capture-pane diff handles sub-second
+      // idle better than the silence hook anyway.
       await waitForTerminalIdle(sessionName, {
-        timeoutMs: options.submitDelayMs ?? 1500,
+        timeoutMs: submitDelayMs,
         idleMs: 200,
         pollMs: 60,
       });
+      if (wantVerification && verifySnippet !== null && !pasteVisible(sessionName, verifySnippet)) {
+        return { ok: false, error: "paste_not_visible" };
+      }
     }
-    execFileSync("tmux", ["send-keys", "-t", sessionName, options.submitKey ?? "Enter"]);
+
+    // 5. Submit. We don't post-verify the Enter: most TUIs render the
+    // submitted prompt in the conversation history (still in the bottom rows
+    // of the pane), so "snippet still visible" doesn't distinguish "Enter
+    // didn't submit" from "Enter submitted and the runtime is echoing the
+    // history." The pre-paste idle wait + paste-visible verification above
+    // are the load-bearing checks; this Enter is the easy part.
+    execFileSync("tmux", ["send-keys", "-t", sessionName, submitKey]);
     return { ok: true };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "submit_prompt_failed" };
   }
+}
+
+// Last meaningful slice of the prompt we'll try to spot in the input region
+// after pasting. We avoid matching on whitespace-only or extremely short
+// snippets to keep false positives down. Returns null when verification
+// should be skipped (e.g. prompts that are too short to fingerprint).
+//
+// Returned snippet is whitespace-collapsed (single spaces, no newlines) so
+// the caller can compare against a similarly-normalized capture and the TUI
+// line-wrap can't split the match.
+function verificationSnippet(text: string): string | null {
+  const normalized = collapseWhitespace(text);
+  if (normalized.length < 4) return null;
+  // The TAIL of the prompt is the most reliable signal: TUIs render the input
+  // area bottom-aligned so the most recent chars are guaranteed to be visible
+  // even when the start of a long prompt has scrolled. 24 chars is long
+  // enough to be distinctive but short enough that we don't get unlucky and
+  // straddle two wrap boundaries even when each wrapped segment is short.
+  const tail = normalized.slice(-24);
+  return tail.length >= 4 ? tail : null;
+}
+
+function collapseWhitespace(text: string): string {
+  return text.replace(/\s+/gu, " ").trim();
+}
+
+// Is the verification snippet currently rendered anywhere in the bottom
+// portion of the pane (i.e. the input area)? We check the last 12 visible
+// rows — enough to cover multi-line input boxes without scanning the whole
+// transcript. The capture is whitespace-collapsed before matching so TUI
+// line-wrap (which inserts \n into the middle of a logical line) can't fool
+// the substring check.
+//
+// Also accepts a TUI-specific "collapsed paste" marker as evidence: Claude
+// Code replaces long pastes with `[Pasted text #N +K lines]` in the rendered
+// input, so the snippet won't be on screen even though the paste landed
+// fine in the runtime's internal buffer. The collapse marker is itself
+// proof the paste was received.
+function pasteVisible(sessionName: string, snippet: string): boolean {
+  let captured: string;
+  try {
+    captured = execFileSync(
+      "tmux",
+      ["capture-pane", "-p", "-J", "-S", "-12", "-t", sessionName],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 256 * 1024 },
+    );
+  } catch {
+    return false;
+  }
+  const normalized = collapseWhitespace(captured);
+  if (normalized.includes(snippet)) return true;
+  // Claude Code: `[Pasted text #1 +101 lines]` (or "#1 paste again to expand").
+  // We match loosely on "Pasted" + "#" + a digit because the exact suffix
+  // varies with paste size and Claude version.
+  return /\[Pasted [^\]]*#\d+/u.test(normalized);
 }
 
 export function sendKeys(sessionName: string, data: string) {
@@ -401,10 +685,20 @@ export function sendKeys(sessionName: string, data: string) {
   }
 }
 
-export function pasteText(sessionName: string, data: string) {
+// `bracketed: true` wraps the paste in `ESC[200~ … ESC[201~` so the receiving
+// runtime knows it's literal text (not keys). TUIs that opt into bracketed
+// paste mode (Claude Code, Codex, anything readline-based with the mode on)
+// will atomically commit the chunk to their input buffer regardless of how
+// long their initial paint takes — no idle-window race, no LF-inside-paste
+// getting misread as Enter. Default stays off so plain-shell paste paths
+// (tests, generic shell sessions) keep working byte-for-byte.
+export function pasteText(sessionName: string, data: string, options: { bracketed?: boolean } = {}) {
   const bufferName = `citadel_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   execFileSync("tmux", ["load-buffer", "-b", bufferName, "-"], { input: data });
-  execFileSync("tmux", ["paste-buffer", "-d", "-b", bufferName, "-t", sessionName]);
+  const args = options.bracketed
+    ? ["paste-buffer", "-p", "-d", "-b", bufferName, "-t", sessionName]
+    : ["paste-buffer", "-d", "-b", bufferName, "-t", sessionName];
+  execFileSync("tmux", args);
 }
 
 export function resizePane(sessionName: string, cols: number, rows: number) {

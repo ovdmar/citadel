@@ -1,5 +1,4 @@
 import type { AgentSession } from "@citadel/contracts";
-import { ExternalLink, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "./api.js";
 import { Button } from "./components/ui/button.js";
@@ -24,14 +23,46 @@ type EnsureError = {
 
 const RUNBOOK_URL = "/docs/operations/terminal-runbook";
 
+/**
+ * Per-session handle used by Stage tabs to drive a live terminal (reload the
+ * ttyd frame, open it in a standalone tab). The in-pane status bar was
+ * removed; these affordances live on the tab now and need access to state
+ * owned by TerminalPane, so we publish a tiny registry on the window.
+ *
+ * Keyed by session id. TerminalPane registers on mount and clears on unmount.
+ */
+export type TerminalHandle = {
+  url: string | null;
+  reload: () => void;
+};
+
+const REGISTRY = new Map<string, TerminalHandle>();
+const LISTENERS = new Set<(id: string) => void>();
+
+function publish(id: string, handle: TerminalHandle | null) {
+  if (handle) REGISTRY.set(id, handle);
+  else REGISTRY.delete(id);
+  for (const listener of LISTENERS) listener(id);
+}
+
+export function getTerminalHandle(sessionId: string): TerminalHandle | undefined {
+  return REGISTRY.get(sessionId);
+}
+
+export function subscribeTerminalHandle(listener: (sessionId: string) => void): () => void {
+  LISTENERS.add(listener);
+  return () => LISTENERS.delete(listener);
+}
+
 export function TerminalPane(props: { session: AgentSession }) {
   const sessionId = props.session.id;
   const theme = useResolvedTheme();
   // Capture the theme in a ref so ensure() reads the current value without
   // re-creating its identity on every theme change. We deliberately do NOT
-  // re-issue ensure on theme change — ttyd bakes the xterm palette at spawn
-  // time, so changing it would require respawning, which causes reconnect
-  // storms. Terminal palette updates on the next page reload instead.
+  // auto-respawn on theme change — that would trigger reconnect storms when
+  // the cockpit theme toggles. The user picks up a new palette by clicking
+  // the tab's reload button, which calls ensure({ force: true }) and forces
+  // the daemon to spawn a fresh ttyd with the current themeRef value.
   const themeRef = useRef(theme);
   themeRef.current = theme;
   const [url, setUrl] = useState<string | null>(null);
@@ -41,15 +72,16 @@ export function TerminalPane(props: { session: AgentSession }) {
   const requestSeqRef = useRef(0);
 
   const ensure = useCallback(
-    async (options: { bumpFrame?: boolean } = {}) => {
+    async (options: { bumpFrame?: boolean; force?: boolean } = {}) => {
       const seq = ++requestSeqRef.current;
       setPending(true);
       setError(null);
       try {
-        const response = await api<EnsureResponse>(
-          `/api/agent-sessions/${sessionId}/terminal?theme=${encodeURIComponent(themeRef.current)}`,
-          { method: "POST" },
-        );
+        const params = new URLSearchParams({ theme: themeRef.current });
+        if (options.force) params.set("force", "true");
+        const response = await api<EnsureResponse>(`/api/agent-sessions/${sessionId}/terminal?${params.toString()}`, {
+          method: "POST",
+        });
         if (requestSeqRef.current !== seq) return;
         setUrl(response.terminal.url);
         setError(null);
@@ -95,38 +127,25 @@ export function TerminalPane(props: { session: AgentSession }) {
     void ensure();
   }, [ensure]);
 
-  // Reload re-runs ensure() so a stale entry (daemon restart, orphan kill, etc.)
-  // self-heals before the iframe re-fetches the URL. Bumping the iframe key
-  // forces React to remount the iframe even if the URL is unchanged.
+  // Reload re-runs ensure() with force=true so the daemon respawns ttyd with
+  // the current cockpit theme. ttyd bakes the xterm palette at spawn time, so
+  // this is the only way to repaint a live session after a theme toggle. It
+  // also self-heals stale entries from daemon restarts / orphan kills.
+  // Bumping the iframe key forces React to remount even if the URL is the
+  // same — the underlying ttyd process is new, so reconnecting is required.
   const reload = useCallback(() => {
-    void ensure({ bumpFrame: true });
+    void ensure({ bumpFrame: true, force: true });
   }, [ensure]);
 
+  // Publish the live URL + reload callback so the stage tab can drive them.
+  // The status bar used to render these affordances inside the pane; that was
+  // removed in favour of the tab actions, but the state still lives here.
+  useEffect(() => {
+    publish(sessionId, { url, reload });
+    return () => publish(sessionId, null);
+  }, [sessionId, url, reload]);
   return (
     <div className="terminal-shell">
-      <div className="terminal-status" aria-live="polite">
-        <span>{props.session.displayName}</span>
-        <span className="terminal-status-flex" />
-        {url ? (
-          <>
-            <a
-              className="terminal-status-link"
-              href={url}
-              target="_blank"
-              rel="noreferrer"
-              title="Open in standalone tab"
-            >
-              <ExternalLink size={11} /> open
-            </a>
-            <Button type="button" variant="ghost" size="icon" title="Reload terminal frame" onClick={reload}>
-              <RefreshCw size={12} />
-            </Button>
-          </>
-        ) : null}
-        <strong className={`terminal-status-state ${url ? "connected" : error ? "closed" : "connecting"}`}>
-          {url ? "ttyd" : error ? "error" : "starting"}
-        </strong>
-      </div>
       <div className="terminal-surface terminal-surface-iframe">
         {url ? (
           <iframe
