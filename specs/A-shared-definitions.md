@@ -18,6 +18,7 @@
 [ ] 1. Repository — a configured source repository with stable identity, provider settings, hooks, and workspace defaults.
 [ ] 2. Workspace — a tracked git worktree inside a repository, with stable identity independent of path/name.
 [ ] 3. Agent session — a durable agent/runtime session attached to a workspace.
+[ ] 3a. Agent definition — a reusable template combining system prompt, runtime, and optional model. Predefined definitions (implementation, prototype, pm, architect) are non-deletable but editable; custom definitions support full CRUD. Distinct from an agent session — an agent definition is a template, an agent session is a running instance launched from one.
 [ ] 4. Runtime adapter — a CLI agent integration such as Claude, Codex, Pi, or another configured shell-backed agent.
 [ ] 5. Provider — an integration that normalizes external system data into Citadel contracts.
 [ ] 6. Hook — a repo-scoped extension command that returns structured data or executes structured actions.
@@ -34,4 +35,4 @@
 
 ---
 
-keywords: citadel, ade, cockpit, repository, workspace, agent session, runtime, provider, hook, operation, readiness
+keywords: citadel, ade, cockpit, repository, workspace, agent session, agent definition, runtime, provider, hook, operation, readiness

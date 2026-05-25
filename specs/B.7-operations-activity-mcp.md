@@ -95,6 +95,27 @@ The file remains a regular markdown file so external tooling (git, editors, grep
 
 All block-level tools go through the same version-history coalesce path; sources are `mcp:add_block`, `mcp:update_block`, `mcp:delete_block` (or `ui:*_block` from the cockpit). Empty blocks are never persisted.
 
+## Agent launchers
+
+Six MCP tools launch named agents from reusable agent definitions:
+
+- `launch_implementation_agent`, `launch_prototype_agent`, `launch_pm_agent`, `launch_architect_agent` — each loads the matching predefined definition and launches it. Inputs: `{ prompt, workspaceId? | repoId? | repoName?, namespaceId?, displayName?, branchName?, workspaceName? }`. When `workspaceId` is absent, a new workspace is created (matching `launch_agent`).
+- `list_custom_agents` — returns `{ agents: AgentDefinition[] }` filtered to `kind === "custom"`. Daemon-only.
+- `launch_custom_agent` — same input as the predefined launchers plus required `agentId`.
+
+All eight tools (including `list_custom_agents`) are daemon-only — the snapshot dispatch returns `{ error: "agent_launcher_requires_daemon" }`. `McpToolContext` has no fs access; agent definitions live on disk under `~/.citadel/agents/`.
+
+The launcher prepends the definition's system prompt to the user prompt under `## System` / `## User prompt` headers before submitting; composition is uniform across all runtimes (no runtime-specific `--system-prompt` flags in v1).
+
+## Plan handoff
+
+Two MCP tools support the architect → implementation handoff:
+
+- `register_plan({ workspaceId, path, summary? })` — validates `path` resolves (via `fs.realpath`) to a location inside the workspace, rejects symlink escapes, enforces a 1 MiB cap, stores the realpath in the `plan_registrations` SQLite table.
+- `launch_handoff_agent({ workspaceId, planId?, predefinedKind? | customAgentId?, additionalPrompt? })` — resolves the plan via priority `planId` → newest registered → newest `<workspacePath>/.agents/plans/*.md` → `no_plan_found`. Re-validates realpath at read time. Prepends the plan body under `## Plan to implement` to the agent's system prompt and launches.
+
+Exactly one of `predefinedKind` (enum) or `customAgentId` must be supplied — typos cannot silently 404 as a custom-agent lookup.
+
 ---
 
-keywords: operations, activity, audit, progress, logs, mcp, automation, agents, scratchpad
+keywords: operations, activity, audit, progress, logs, mcp, automation, agents, agent definitions, agent launchers, plan handoff, scratchpad
