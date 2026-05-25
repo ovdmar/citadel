@@ -682,7 +682,8 @@ export function createDaemonApp(input: {
     console.error("[citadel] scheduledAgents.recoverInFlightRuns failed:", error);
   });
 
-  const mcpDeps = { config, store, operations, ttyd, scheduledAgents, scheduledAgentService, providerCache, emit };
+  const agentDefinitions = createAgentDefinitionsStorage();
+  const mcpDeps = { config, store, operations, ttyd, scheduledAgents, scheduledAgentService, providerCache, emit, agentDefinitions };
   registerMcpRoutes(app, asyncRoute, {
     config,
     store,
@@ -692,7 +693,6 @@ export function createDaemonApp(input: {
 
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
-  const agentDefinitions = createAgentDefinitionsStorage();
   registerAgentsRoutes({ app, asyncRoute, agentDefinitions, modelListers: runtimeModelListers,
     runtimes: () => config.runtimes.map((r) => ({ id: r.id, command: r.command, args: r.args })) });
   registerScratchpadRoutes({ app, config, emit });
