@@ -51,14 +51,25 @@
 [ ] 10. The diff/review surface is read-only.
 [ ] 11. The inspector `Diff` tab shows the changed files list with additions/deletions per file in a compact list.
 
-## Human Review (Planned)
+## Human Review
 
 [ ] 1. A future full-screen *Human Review* mode is reachable from the inspector `Diff` tab.
 [ ] 2. Human Review presents files in a GitHub-style review surface.
-[ ] 3. Human Review allows leaving file/line comments.
-[ ] 4. Comments are visible to the active agent session as structured input.
-[ ] 5. Human Review remains scoped to the selected workspace.
+[~] 3. Inspector hosts a `Review` tab that accepts workspace-level and file/line comments persisted in Citadel's SQLite (not posted to GitHub). The full diff-anchored inline renderer is still planned (item 2); v1 ships a flat list with file:line anchors shown above each comment.
+[~] 4. Comments are visible to the active agent session as structured input via MCP tools `list_review_comments`, `add_review_comment`, `update_review_comment`, `delete_review_comment`. The MCP path stamps `author = 'agent:<runtime-id>'`; the cockpit HTTP path stamps `author = 'operator'`. Mutations carry an `ifUpdatedAtMatches` token for optimistic concurrency (409 on mismatch).
+[~] 5. Comments are scoped to the selected workspace. Archived workspaces are filtered out of default listings; `includeArchived` is an explicit opt-in.
+
+### Request Review
+
+[~] 1. A repo can configure a `workspace.requestReview` hook (event added to `HookEventSchema` in `@citadel/config`). The hook receives `{ workspace, repo, pr, diff: { files, addedLines, deletedLines, truncated } }` on stdin and returns a validated `ReviewSuggestionsOutput` payload on stdout.
+[~] 2. The inspector exposes a "Request review" button next to (or above) the `Diff`/`Review` surface. When no `workspace.requestReview` hook is configured, the button is disabled with a tooltip pointing operators at the Settings UI hook editor.
+[~] 3. Each invocation records one `activity_events` row (`hook.workspace.requestReview` on success, `hook.workspace.requestReview.failed` on failure or timeout) plus a `review_suggestion_runs` row that preserves parsed output (success), raw stderr tail, and error message (failure).
+[ ] 4. Suggestion entries carry a `kind` (`reviewer`, `checklist`, `note`, `warning`), `label`, optional `detail`, optional `url`, and optional `metadata`.
+
+### Retention
+
+v1 has no retention policy for `review_suggestion_runs` or `activity_events`; both grow unbounded. Bulk-resolve or auto-archive on merged PRs is a follow-up.
 
 ---
 
-keywords: git, branch, status, pr, review, checks, ci, diff, additions, deletions, provider
+keywords: git, branch, status, pr, review, checks, ci, diff, additions, deletions, provider, comments, mcp, request review, hook

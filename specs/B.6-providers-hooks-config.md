@@ -53,6 +53,7 @@ Rules:
 [ ] 3. Teardown hooks are configured per repo.
 [ ] 4. App/link discovery hooks are configured per repo.
 [ ] 5. Action hooks are configured per repo.
+[~] 5a. Request-review hooks are configured per repo via `repoDefaults.requestReviewHookIds`. The `workspace.requestReview` event in `HookEventSchema` returns a dedicated `ReviewSuggestionsOutput` payload (not the generic `HookOutput`). Authored hooks for this event default to `blocking: true` (same as setup/teardown). Diagnostics include `workspace.requestReview` in `listHookDiagnostics` and in the Settings UI hook editor dropdown.
 [ ] 6. Hooks receive structured workspace/repo/provider context.
 [ ] 7. Hooks return structured JSON.
 [ ] 8. Hook output is validated before it appears in the UI.

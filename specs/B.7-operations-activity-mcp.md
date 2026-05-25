@@ -50,12 +50,16 @@
 Read-only:
 - `inspect_status`, `list_repos`, `list_workspaces`, `list_agent_sessions`,
   `list_provider_health`, `list_runtimes`, `list_workspace_links`,
-  `inspect_readiness`, `read_agent_output`.
+  `inspect_readiness`, `read_agent_output`, `list_review_comments`.
 
 Daemon-mediated (run through the operation service so they obey the same hook, activity, and safety model as the UI):
 - `create_workspace`, `start_agent_session`, `send_agent_message`,
   `stop_agent_session` (destructive), `archive_workspace`,
-  `remove_workspace` (destructive), `reconcile` (destructive).
+  `remove_workspace` (destructive), `reconcile` (destructive),
+  `request_review`, `add_review_comment`, `update_review_comment` (destructive),
+  `delete_review_comment` (destructive).
+
+`add_review_comment` schema rejects a caller-supplied `author` field; the daemon stamps `author = 'agent:<runtime-id>'`. The cockpit HTTP route stamps `author = 'operator'`. `update_review_comment` and `delete_review_comment` require an `ifUpdatedAtMatches` token; the daemon returns `{ error: 'conflict', latest }` on mismatch.
 
 For interactive runtimes like Claude Code, both `start_agent_session` (with a `prompt`) and `send_agent_message` deliver text into the backing tmux pane via a paste buffer followed by Enter. This guarantees the agent actually receives and processes the prompt — it is not just typed into the input box.
 
