@@ -120,8 +120,8 @@ test("settings sidebar exposes all configured sections", async ({ page }, testIn
   await page.goto("/settings");
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   const sidebar = page.locator(".settings-sidebar");
-  for (const label of ["Overview", "Providers", "Agents", "Scheduled agents", "Repositories", "MCP", "Advanced"]) {
-    // `exact` so "Agents" doesn't also match "Scheduled agents".
+  // Scheduled agents has its own top-level nav entry (not a settings section).
+  for (const label of ["Overview", "Providers", "Agents", "Repositories", "MCP", "Advanced"]) {
     await expect(sidebar.getByRole("button", { name: label, exact: true })).toBeVisible();
   }
   await sidebar.getByRole("button", { name: "Providers", exact: true }).click();

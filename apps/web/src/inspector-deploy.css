@@ -100,7 +100,6 @@
   background: var(--c-elev);
   border: 0.5px solid var(--c-line-2);
   border-radius: 8px;
-  box-shadow: var(--sh-1);
   align-self: stretch;
   width: auto;
   flex: 0 0 auto;

@@ -2,6 +2,7 @@ import type { AgentSession, Namespace, Operation, Repo, Workspace, WorkspaceCock
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
+  AlarmClock,
   ChevronRight,
   ClipboardList,
   FolderPlus,
@@ -216,6 +217,13 @@ export function Navigator(props: {
             title="Scratchpad — markdown notes orchestrator agents can read via MCP"
           >
             <NotebookPen size={13} /> Scratchpad
+          </Link>
+          <Link
+            to="/scheduled-agents"
+            className={path === "/scheduled-agents" ? "active" : ""}
+            title="Scheduled agents — cron-driven agent runs"
+          >
+            <AlarmClock size={13} /> Scheduled agents
           </Link>
           <Link to="/history" className={path === "/history" ? "active" : ""} title="Activity & operations history">
             <ClipboardList size={13} /> <span>History</span>

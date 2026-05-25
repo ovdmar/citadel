@@ -111,6 +111,76 @@ export function findClaudeTranscriptForSession(input: GetUserPromptsInput): stri
   return bestPath;
 }
 
+/**
+ * Render a Claude Code .jsonl transcript as a flat plaintext conversation —
+ * `[HH:MM:SS] user|assistant` headers followed by the text body. Tool calls
+ * and tool results are skipped: the goal is "what did the human ask, what
+ * did the model say", not a full mechanical replay. Returns null if the
+ * file is missing/unparseable; callers (e.g. the /log fallback) use that
+ * signal to fall through to the next source.
+ */
+export function renderClaudeTranscriptAsText(filePath: string): string | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  const out: string[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line) continue;
+    let entry: Record<string, unknown>;
+    try {
+      entry = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const kind = entry.type;
+    if (kind !== "user" && kind !== "assistant") continue;
+    const message = entry.message as { role?: string; content?: unknown } | undefined;
+    if (!message) continue;
+    const role = message.role;
+    if (role !== "user" && role !== "assistant") continue;
+    const text = extractMessageText(message.content);
+    if (!text) continue;
+    const stamp = typeof entry.timestamp === "string" ? formatTime(entry.timestamp) : "";
+    const header = stamp ? `[${stamp}] ${role}` : role;
+    out.push(`${header}\n${text}`);
+  }
+  if (!out.length) return null;
+  return out.join("\n\n");
+}
+
+// Like extractUserText but tolerates assistant turns (which may interleave
+// text blocks with tool_use blocks). Returns the concatenation of every
+// text block in order; tool calls are summarised as "[tool: name]" so the
+// reader can see WHERE the model paused without being buried in arguments.
+function extractMessageText(content: unknown): string | null {
+  if (typeof content === "string") return content.trim() || null;
+  if (!Array.isArray(content)) return null;
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const record = block as Record<string, unknown>;
+    if (record.type === "text" && typeof record.text === "string") {
+      parts.push(record.text);
+    } else if (record.type === "tool_use" && typeof record.name === "string") {
+      parts.push(`[tool: ${record.name}]`);
+    }
+    // tool_result blocks (synthetic "user" turns) are skipped — they're
+    // covered by the surrounding assistant's tool_use marker.
+  }
+  const joined = parts.join("\n").trim();
+  return joined || null;
+}
+
+function formatTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
 export const claudeCodeAdapter: RuntimeTranscriptAdapter = {
   runtimeId: "claude-code",
   getUserPrompts(input) {
