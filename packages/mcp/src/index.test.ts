@@ -22,6 +22,11 @@ describe("mcp helpers", () => {
     expect(mcpToolDefinitions().find((tool) => tool.name === "delete_scheduled_agent")?.destructive).toBe(true);
     expect(status.tools).toContain("list_workspace_links");
     expect(status.tools).toContain("read_agent_output");
+    expect(status.tools).toContain("list_review_comments");
+    expect(status.tools).toContain("add_review_comment");
+    expect(status.tools).toContain("update_review_comment");
+    expect(status.tools).toContain("delete_review_comment");
+    expect(status.tools).toContain("request_review");
     expect(status.tools).toContain("send_agent_message");
     const launch = mcpToolDefinitions().find((tool) => tool.name === "launch_agent");
     expect(launch).toBeDefined();
@@ -282,5 +287,35 @@ describe("mcp helpers", () => {
     ).toEqual({
       error: "session_tool_requires_daemon",
     });
+    expect(callMcpTool({ name: "list_review_comments", arguments: { workspaceId: "ws_test" } }, context)).toEqual({
+      error: "review_tool_requires_daemon",
+    });
+    expect(
+      callMcpTool({ name: "add_review_comment", arguments: { workspaceId: "ws_test", body: "hi" } }, context),
+    ).toEqual({ error: "review_tool_requires_daemon" });
+    expect(callMcpTool({ name: "request_review", arguments: { workspaceId: "ws_test" } }, context)).toEqual({
+      error: "review_tool_requires_daemon",
+    });
+  });
+
+  it("includes the five review tools in the inventory with correct destructive flags", () => {
+    const definitions = mcpToolDefinitions();
+    const names = definitions.map((t) => t.name);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        "list_review_comments",
+        "add_review_comment",
+        "update_review_comment",
+        "delete_review_comment",
+        "request_review",
+      ]),
+    );
+    expect(definitions.find((t) => t.name === "update_review_comment")?.destructive).toBe(true);
+    expect(definitions.find((t) => t.name === "delete_review_comment")?.destructive).toBe(true);
+    const add = definitions.find((t) => t.name === "add_review_comment");
+    expect(add?.destructive).toBe(false);
+    // schema must not list `author` — agents cannot supply it
+    const addProps = (add?.inputSchema as { properties?: Record<string, unknown> })?.properties ?? {};
+    expect(Object.keys(addProps)).not.toContain("author");
   });
 });

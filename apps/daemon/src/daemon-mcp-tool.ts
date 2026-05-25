@@ -19,6 +19,11 @@ import {
   type ScheduledAgentRunner,
   WorkspaceInUseError,
   WorkspaceNameTakenError,
+  addReviewComment,
+  deleteReviewComment,
+  listReviewComments,
+  requestReviewForWorkspace,
+  updateReviewComment,
 } from "@citadel/operations";
 import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
@@ -378,6 +383,15 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     if ("kind" in slice) return { error: "log_file_missing" };
     return slice;
   }
+  if (
+    call.name === "list_review_comments" ||
+    call.name === "add_review_comment" ||
+    call.name === "update_review_comment" ||
+    call.name === "delete_review_comment" ||
+    call.name === "request_review"
+  ) {
+    return handleReviewTool(deps, call);
+  }
   const providerHealth = await collectProviderHealth(config.providers);
   return callMcpTool(call, {
     repos: store.listRepos(),
@@ -394,4 +408,129 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     // calls cheap even on big project dirs.
     sessionPromptSummary: (sessionId) => operations.getSessionPromptSummary(sessionId),
   });
+}
+
+async function handleReviewTool(deps: DaemonMcpDeps, call: McpToolCall): Promise<unknown> {
+  const { store, config } = deps;
+  const args = (call.arguments ?? {}) as Record<string, unknown>;
+  const activity = (
+    type: string,
+    source: "user" | "system" | "hook",
+    message: string,
+    repoId: string | null,
+    workspaceId: string | null,
+  ) => {
+    store.addActivity({
+      id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+      type,
+      source,
+      repoId,
+      workspaceId,
+      operationId: null,
+      message,
+      hookOutput: null,
+      createdAt: new Date().toISOString(),
+    });
+  };
+  const resolveWorkspace = (workspaceId: string) =>
+    store.listWorkspaces().find((w) => w.id === workspaceId) ?? null;
+
+  if (call.name === "list_review_comments") {
+    const workspaceId = typeof args.workspaceId === "string" ? args.workspaceId : "";
+    const workspace = resolveWorkspace(workspaceId);
+    if (!workspace) return { error: "workspace_not_found" };
+    const status = (args.status as "open" | "resolved" | "all" | undefined) ?? "all";
+    const includeDeleted = args.includeDeleted === true;
+    const comments = listReviewComments({ store, workspaceId, status, includeDeleted });
+    return { comments };
+  }
+
+  if (call.name === "add_review_comment") {
+    if ("author" in args) return { error: "author_not_allowed" };
+    const workspaceId = typeof args.workspaceId === "string" ? args.workspaceId : "";
+    const workspace = resolveWorkspace(workspaceId);
+    if (!workspace) return { error: "workspace_not_found" };
+    const body = typeof args.body === "string" ? args.body : "";
+    if (!body) return { error: "body_required" };
+    const filePath = (args.filePath as string | undefined) ?? null;
+    const lineStart = (args.lineStart as number | undefined) ?? null;
+    const lineEnd = (args.lineEnd as number | undefined) ?? null;
+    const side = (args.side as "LEFT" | "RIGHT" | undefined) ?? null;
+    const runtimeId = typeof args.runtimeId === "string" ? args.runtimeId : "unknown";
+    const row = addReviewComment({
+      store,
+      activity,
+      workspaceId,
+      body,
+      author: `agent:${runtimeId}`,
+      repoId: workspace.repoId,
+      filePath,
+      lineStart,
+      lineEnd,
+      side,
+    });
+    return { comment: row };
+  }
+
+  if (call.name === "update_review_comment") {
+    const id = typeof args.id === "string" ? args.id : "";
+    const ifUpdatedAtMatches = typeof args.ifUpdatedAtMatches === "string" ? args.ifUpdatedAtMatches : "";
+    if (!id || !ifUpdatedAtMatches) return { error: "invalid_input" };
+    const existing = store.getReviewComment(id);
+    if (!existing || existing.deletedAt) return { error: "comment_not_found" };
+    const workspace = resolveWorkspace(existing.workspaceId);
+    const result = updateReviewComment({
+      store,
+      activity,
+      id,
+      ...(typeof args.body === "string" ? { body: args.body } : {}),
+      ...(args.status === "open" || args.status === "resolved" ? { status: args.status } : {}),
+      ifUpdatedAtMatches,
+      repoId: workspace?.repoId ?? "",
+    });
+    if (result.kind === "not-found") return { error: "comment_not_found" };
+    if (result.kind === "conflict") return { error: "conflict", latest: result.latest };
+    return { comment: result.row };
+  }
+
+  if (call.name === "delete_review_comment") {
+    const id = typeof args.id === "string" ? args.id : "";
+    const ifUpdatedAtMatches = typeof args.ifUpdatedAtMatches === "string" ? args.ifUpdatedAtMatches : "";
+    if (!id || !ifUpdatedAtMatches) return { error: "invalid_input" };
+    const existing = store.getReviewComment(id);
+    if (!existing || existing.deletedAt) return { error: "comment_not_found" };
+    const workspace = resolveWorkspace(existing.workspaceId);
+    const result = deleteReviewComment({
+      store,
+      activity,
+      id,
+      ifUpdatedAtMatches,
+      repoId: workspace?.repoId ?? "",
+    });
+    if (result.kind === "not-found") return { error: "comment_not_found" };
+    if (result.kind === "conflict") return { error: "conflict", latest: result.latest };
+    return { ok: true };
+  }
+
+  if (call.name === "request_review") {
+    const workspaceId = typeof args.workspaceId === "string" ? args.workspaceId : "";
+    const workspace = resolveWorkspace(workspaceId);
+    if (!workspace) return { error: "workspace_not_found" };
+    const repos = store.listRepos();
+    const repo = repos.find((r) => r.id === workspace.repoId);
+    if (!repo) return { error: "repo_not_found" };
+    const result = await requestReviewForWorkspace({
+      store,
+      config: { hooks: config.hooks, commandPolicy: config.commandPolicy },
+      activity,
+      repo,
+      workspace,
+      diff: { files: [], addedLines: 0, deletedLines: 0, truncated: false },
+    });
+    if (result.kind === "no-hook") return { error: "no-hook" };
+    if (result.kind === "succeeded") return { run: result.run, output: result.output };
+    if (result.kind === "timed-out") return { error: "timed-out", run: result.run };
+    return { error: "hook-failed", run: result.run, message: result.error };
+  }
+  return { error: "unknown_review_tool" };
 }
