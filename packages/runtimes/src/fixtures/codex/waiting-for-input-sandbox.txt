@@ -1,0 +1,19 @@
+› Start a long-running background bash task: run `sleep 90` in the background.
+  Don't wait for it. After starting it, just say "bg started" and stop.
+
+
+◦ Running sleep 90
+
+
+  Would you like to run the following command?
+
+  Reason: Do you want to start the requested long-running background sleep
+  command outside the sandbox?
+
+  $ sleep 90
+
+› 1. Yes, proceed (y)
+  2. Yes, and don't ask again for commands that start with `sleep` (p)
+  3. No, and tell Codex what to do differently (esc)
+
+  Press enter to confirm or esc to cancel

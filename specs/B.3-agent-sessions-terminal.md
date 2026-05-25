@@ -13,7 +13,8 @@
 [ ] 5. The operator can provide an initial prompt/task when starting a session.
 [ ] 6. The operator can resume or reconnect to an existing session.
 [ ] 7. The operator can stop a session with confirmation.
-[ ] 8. Session status includes running, waiting, failed, orphaned, completed, and needs-attention states.
+[~] 8. Session status uses the canonical seven-value enum: `starting`, `running`, `waiting_for_input`, `idle`, `stopped`, `failed`, `unknown`. Semantics: `starting` = TUI initializing; `running` = agent actively working OR in-turn background work (Monitor, background Bash, subagent) still in flight; `waiting_for_input` = agent has invoked an explicit question / sandbox-approval tool and is blocked on the operator; `idle` = turn ended on the agent's own initiative; `stopped`/`failed` = the CLI process itself exited (rare for persistent TUIs — only when the operator `/quit`s or it crashes; `failed` means a non-zero exit code); `unknown` = liveness cannot be proven (tmux gone, daemon restart with indeterminate state). The legacy `orphaned` and `completed` values collapse into `unknown` and `stopped` respectively, distinguished via a `status_reason` field. Status is persisted in the agent_sessions table along with `last_status_at`, `last_output_at`, `ended_at`, `exit_code`, and `status_reason`.
+[~] 14. Workspace cards display a small pulsing status icon before the workspace name, aggregated across the workspace's agent sessions. The icon reuses the shared `cit-pulse` / `cit-pulse-sm` chrome already used by the bottom-bar "auto mode" pill, the navigator "Running" stat, and the inspector deploy/runtime pulses. Tones: `cit-pulse-run` (warn/yellow with ripple) when at least one agent is `starting` or `running`; `cit-pulse-bad` (red) when at least one is `waiting_for_input`, `failed`, or `unknown` with a tmux-gone reason (`tmux_missing`, `sentinel_missing_tmux_alive`, or `migrated_from_orphaned`); `cit-pulse-idle` (grey, static) otherwise. Priority bad > run > idle. The aggregation predicate is implemented as `deriveWorkspaceAgentTone` in `apps/web/src/workspace-card.tsx`; the attention condition delegates to `sessionNeedsAttention` in `@citadel/core` so all readiness derivations share the same definition.
 [ ] 9. Session state survives browser refresh/reconnect.
 [ ] 10. Switching sessions preserves useful terminal context.
 [ ] 11. Sessions surface in the center column as a tab strip with a plus button that offers `Terminal` plus every healthy agent runtime.
@@ -23,7 +24,7 @@
 ## Runtime Adapters
 
 [ ] 1. Runtime adapters expose capabilities.
-[ ] 2. Capability examples include start, resume, prompt injection, transcript discovery, model selection, status detection, and plan/review modes.
+[~] 2. Capability examples include start, resume, prompt injection, transcript discovery, model selection, status detection, and plan/review modes. Status detection is implemented as a per-runtime adapter that analyzes pane content on each monitor tick and emits canonical status observations (`running` / `idle` / `waiting_for_input` / null). Adapter regexes are anchored to the bottom of the visible pane (mode-line / status-line region) and matched against committed fixture files; UI rendering changes in a runtime trigger fixture-update-and-regex-update as a single PR. Lifecycle signals (`tmux_missing`, `exited_clean`, `exited_failed`) come from the deterministic process layer (tmux session existence, bash wrapper's `.live` / `.exit` sentinel files), runtime-agnostic.
 [ ] 3. Runtime health is visible before session start.
 [ ] 4. Unavailable runtime adapters explain the missing binary, auth, config, or health issue.
 [ ] 5. Agent adapter configuration lives in Citadel settings/config.

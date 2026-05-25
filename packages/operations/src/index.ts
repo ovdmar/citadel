@@ -26,6 +26,7 @@ export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from 
 export type { LaunchAgentResult } from "./launch-agent.js";
 export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
 export type { AgentHistoryResult, AgentHistoryErrorResult } from "./agent-history.js";
+export * from "./status.js";
 export {
   ScheduledAgentRunner,
   parseCronExpression,
@@ -521,7 +522,7 @@ export class OperationService {
       .listSessions()
       .filter((session) => workspaces.some((workspace) => workspace.id === session.workspaceId));
     const activeSessions = sessions.filter((session) =>
-      ["starting", "running", "waiting", "idle"].includes(session.status),
+      ["starting", "running", "waiting_for_input", "idle"].includes(session.status),
     );
     const runningOperations = this.store
       .listOperations()

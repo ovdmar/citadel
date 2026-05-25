@@ -1,0 +1,18 @@
+● Monitor(log watcher)
+  ⎿  Monitor started · task bsrybhkqq · timeout 60s
+  ⎿  Allowed by auto mode classifier
+
+● monitor started
+
+✻ Worked for 13s · 1 monitor still running
+
+● Monitor event: "log watcher"
+
+● Event received (2 lines). No action taken per your instructions.
+
+✻ Baked for 7s · 1 monitor still running
+                                Update available! Run: brew upgrade claude-code
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on · 1 monitor · ↓ to manage

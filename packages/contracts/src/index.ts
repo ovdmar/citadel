@@ -13,11 +13,11 @@ export const WorkspaceKindSchema = z.enum(["worktree", "root"]);
 export const AgentSessionStatusSchema = z.enum([
   "starting",
   "running",
-  "waiting",
+  "waiting_for_input",
   "idle",
-  "failed",
   "stopped",
-  "orphaned",
+  "failed",
+  "unknown",
 ]);
 export const TransportStatusSchema = z.enum(["disconnected", "connecting", "connected", "degraded"]);
 export const OperationStatusSchema = z.enum(["queued", "running", "succeeded", "failed", "cancelled"]);
@@ -132,6 +132,13 @@ export const AgentSessionSchema = z.object({
   runtimeId: IdSchema,
   displayName: z.string(),
   status: AgentSessionStatusSchema,
+  // Status-tracking fields written by the DB layer; optional at the TS level
+  // so older test fixtures still typecheck.
+  statusReason: z.string().nullable().optional(),
+  lastStatusAt: z.string().optional(),
+  lastOutputAt: z.string().nullable().optional(),
+  endedAt: z.string().nullable().optional(),
+  exitCode: z.number().int().nullable().optional(),
   transport: TransportStatusSchema,
   tmuxSessionName: z.string().nullable(),
   tmuxSessionId: z.string().nullable(),

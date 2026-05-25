@@ -1,0 +1,13 @@
+❯ - and after stopping the monitor, start a long-running background bash task:
+  run `sleep 120` with run_in_background=true. After it's running, just say
+  "background started" and don't do anything else.
+
+● Monitor(log watcher)
+
+· Pondering… (10s · ↓ 281 tokens)
+  ⎿  Tip: Run /install-slack-app to use Claude in Slack
+                                Update available! Run: brew upgrade claude-code
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt

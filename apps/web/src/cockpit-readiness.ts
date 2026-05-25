@@ -1,4 +1,5 @@
 import type { AgentSession, Operation, Workspace } from "@citadel/contracts";
+import { sessionNeedsAttention } from "@citadel/core";
 
 export type WorkspaceAttention = {
   section: string;
@@ -22,9 +23,9 @@ export function readinessForWorkspace(
   const failedOperation = input.operations.some((operation) => operation.status === "failed");
   const runningOperation = input.operations.some((operation) => ["queued", "running"].includes(operation.status));
   const activeAgentSession = input.sessions.some(
-    (session) => session.runtimeId !== "shell" && ["starting", "waiting"].includes(session.status),
+    (session) => session.runtimeId !== "shell" && ["starting", "running"].includes(session.status),
   );
-  const failedSession = input.sessions.some((session) => ["failed", "orphaned"].includes(session.status));
+  const failedSession = input.sessions.some(sessionNeedsAttention);
   if (workspace.lifecycle === "failed" || failedOperation || failedSession) {
     return { section: "blocked", label: "Blocked", nextAction: "Inspect failure output", tone: "danger" };
   }

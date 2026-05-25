@@ -1,8 +1,9 @@
 import type { WorkspaceReadiness } from "@citadel/contracts";
+import { sessionNeedsAttention } from "@citadel/core";
 
 export function deriveReadiness(input: {
   workspace: { lifecycle: string; dirty: boolean };
-  sessions: Array<{ status: string; runtimeId?: string }>;
+  sessions: Array<{ status: string; runtimeId?: string; statusReason?: string | null | undefined }>;
   operations: Array<{ status: string; type: string; error: string | null }>;
   providerHealth: Array<{ status: string; reason: string | null }>;
   git: { clean: boolean; conflicted: number; modified: number; staged: number; untracked: number; checkedAt: string };
@@ -36,9 +37,13 @@ export function deriveReadiness(input: {
     input.versionControl.status !== "healthy" || input.ci.status !== "healthy" || input.apps.status !== "healthy";
   const runningOperation = input.operations.some((operation) => ["queued", "running"].includes(operation.status));
   const activeAgentSession = input.sessions.some(
-    (session) => session.runtimeId !== "shell" && ["starting", "waiting"].includes(session.status),
+    (session) => session.runtimeId !== "shell" && ["starting", "running"].includes(session.status),
   );
-  const failedSession = input.sessions.some((session) => ["failed", "orphaned"].includes(session.status));
+  // Loose-typed (this signature accepts plain strings); cast to the canonical
+  // shape for the shared predicate. Any non-canonical status will return false.
+  const failedSession = input.sessions.some((session) =>
+    sessionNeedsAttention({ status: session.status as never, statusReason: session.statusReason ?? null }),
+  );
   const reasons = [
     input.workspace.lifecycle === "failed" ? "Workspace lifecycle failed" : null,
     failedSession ? "A terminal or agent session needs attention" : null,

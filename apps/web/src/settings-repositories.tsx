@@ -133,7 +133,7 @@ function RepositoryRow(props: {
   const activeSessions = props.sessions.filter(
     (session) =>
       props.workspaces.some((workspace) => workspace.id === session.workspaceId) &&
-      ["starting", "running", "waiting", "idle"].includes(session.status),
+      ["starting", "running", "waiting_for_input"].includes(session.status),
   ).length;
   const runningOperations = props.operations.filter(
     (operation) => operation.repoId === props.repo.id && ["queued", "running"].includes(operation.status),

@@ -1,0 +1,22 @@
+❯ Think deeply about how to design a distributed cache invalidation system.
+  Take your time, consider multiple angles, write at least 5 paragraphs.
+
+● Distributed cache invalidation is fundamentally a consistency problem
+  disguised as a performance problem. The cache exists because the source of
+  truth is too slow or too expensive to hit on every read, but the moment you
+  duplicate state across nodes you inherit every hard problem in distributed
+  systems: ordering, partial failure, clock skew, and the impossibility of
+  simultaneous updates. Before designing anything, the first question to answer
+  is what consistency model the application actually needs. Strong consistency
+  (a write is never followed by a stale read anywhere) is expensive and often
+  unnecessary; bounded staleness (reads may lag by at most N seconds) is
+  dramatically cheaper and usually sufficient; eventual consistency is cheapest
+  but exposes the application to surprising read-your-writes violations. The
+  design space collapses dramatically once this is pinned down, and skipping
+  this step is the most common reason cache systems end up with elaborate
+  machinery that solves the wrong problem.
+                                Update available! Run: brew upgrade claude-code
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt

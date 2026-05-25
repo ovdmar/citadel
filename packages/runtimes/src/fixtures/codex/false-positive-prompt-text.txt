@@ -1,0 +1,11 @@
+› What does the sandbox approval prompt look like?
+
+
+• When Codex needs an out-of-sandbox command, it shows a numbered choice
+  block ending with the footer line "Press enter to confirm or esc to
+  cancel". That string is part of the chrome, not regular agent output.
+
+
+› Use /skills to list available skills
+
+  gpt-5.5 default · ~/Workspace/citadel-worktrees/new-owrk

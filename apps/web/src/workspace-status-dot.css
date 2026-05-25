@@ -1,0 +1,16 @@
+/* Layout-only override for the workspace-card status dot.
+ *
+ * Reuses the shared cit-pulse / cit-pulse-sm classes from styles.css for size,
+ * shape, colors, and animation — same visual language as the bottom-bar
+ * "auto mode" pill, the navigator "Running" stat, and the inspector pulses.
+ * The dot is rendered as a flex sibling of <strong> (NOT a child) so the
+ * title's overflow: hidden does not clip the ripple. .workspace-card-title's
+ * flex `gap: 4px` already provides spacing — no margin needed.
+ */
+
+.workspace-card-title .workspace-status-dot {
+  pointer-events: none;
+  /* Tiny inset prevents the ripple's leftmost pixel touching the card edge
+     when the title row is flush-left; cosmetic, no clipping. */
+  margin-left: 2px;
+}

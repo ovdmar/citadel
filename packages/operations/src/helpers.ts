@@ -178,9 +178,14 @@ export function withActionHookIds(output: HookOutput, hookId: string): HookOutpu
 
 /**
  * Walk the local SqliteStore and reconcile it with disk reality:
- *  - mark sessions as `orphaned` (or delete) when their tmux session is gone
+ *  - mark sessions as `unknown(tmux_missing)` (or delete) when their tmux session is gone
  *  - mark workspaces whose worktree directory no longer exists as `failed`
  *  - archive repos whose rootPath no longer exists.
+ *
+ * Session-status reconciliation here covers the boot-time pass. The periodic
+ * 2-second status monitor (startStatusMonitor in status-monitor.ts) catches
+ * everything that happens after boot. The two paths share the same canonical
+ * enum and the same updateSessionStatus shape.
  */
 export function reconcileStore(
   store: SqliteStore,
@@ -197,6 +202,7 @@ export function reconcileStore(
   let repoCount = 0;
   let deletedSessions = 0;
   let backgroundSessionCount = 0;
+  const nowIso = new Date().toISOString();
 
   // Background sessions: close any in-flight scheduled-agent run rows whose
   // pane is dead (command exited). Uses tmuxPaneDead because background
@@ -233,7 +239,7 @@ export function reconcileStore(
       // wrapper, which we don't want for background.
       store.recordScheduledAgentRunOutcome(inFlight.id, {
         status: fileSize > 0 ? "succeeded" : "failed",
-        endedAt: new Date().toISOString(),
+        endedAt: nowIso,
         message: fileSize > 0 ? "session_ended" : "session_ended_no_output",
       });
     }
@@ -252,14 +258,21 @@ export function reconcileStore(
 
   for (const session of store.listSessions()) {
     if (!session.tmuxSessionName) continue;
-    if (["stopped", "orphaned", "failed"].includes(session.status)) continue;
+    if (["stopped", "failed", "unknown"].includes(session.status)) continue;
     if (!tmuxSessionExists(session.tmuxSessionName)) {
       const workspaceExists = store.listWorkspaces().some((workspace) => workspace.id === session.workspaceId);
       if (!workspaceExists) {
         store.deleteSession(session.id);
         deletedSessions += 1;
       } else {
-        store.updateSessionStatus(session.id, "orphaned");
+        // Boot-time tmux missing = indeterminate (the daemon just restarted;
+        // we can't tell whether tmux was killed externally or whether the
+        // pane crashed). The next tick of the periodic monitor will refine.
+        store.updateSessionStatus(session.id, {
+          status: "unknown",
+          statusReason: "daemon_restart_indeterminate",
+          lastStatusAt: nowIso,
+        });
       }
       sessionCount += 1;
       continue;
@@ -269,7 +282,12 @@ export function reconcileStore(
     // to "stopped" so the cockpit accurately reflects that the agent is gone,
     // while leaving the tmux session intact for the user to keep working in.
     if (!isAgentLive(session.tmuxSessionName)) {
-      store.updateSessionStatus(session.id, "stopped");
+      store.updateSessionStatus(session.id, {
+        status: "stopped",
+        statusReason: "exit_code_0",
+        lastStatusAt: nowIso,
+        endedAt: nowIso,
+      });
       sessionCount += 1;
     }
   }

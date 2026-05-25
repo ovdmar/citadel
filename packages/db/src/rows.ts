@@ -76,6 +76,13 @@ export function sessionFromRow(row: Record<string, unknown>): AgentSession {
     runtimeId: asString(row, "runtime_id"),
     displayName: asString(row, "display_name"),
     status: asString(row, "status") as AgentSession["status"],
+    statusReason: row.status_reason ? asString(row, "status_reason") : null,
+    // `||` (not `??`) is deliberate: asString() returns "" for null DB columns,
+    // and we want the updated_at fallback to fire on the empty-string case.
+    lastStatusAt: asString(row, "last_status_at") || asString(row, "updated_at"),
+    lastOutputAt: row.last_output_at ? asString(row, "last_output_at") : null,
+    endedAt: row.ended_at ? asString(row, "ended_at") : null,
+    exitCode: row.exit_code === null || row.exit_code === undefined ? null : Number(row.exit_code),
     transport: asString(row, "transport") as AgentSession["transport"],
     tmuxSessionName: row.tmux_session_name ? asString(row, "tmux_session_name") : null,
     tmuxSessionId: row.tmux_session_id ? asString(row, "tmux_session_id") : null,

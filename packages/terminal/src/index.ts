@@ -119,8 +119,29 @@ export function agentLiveSentinelPath(sessionName: string) {
   return path.join(os.tmpdir(), `citadel-agent-${sessionName}.live`);
 }
 
+// Side-channel exit-code file. The bash wrapper writes the agent's `$?` here
+// immediately after the agent process returns (or via the EXIT trap on
+// signal death). The status monitor reads it to classify stopped/failed.
+export function agentExitSentinelPath(sessionName: string) {
+  return path.join(os.tmpdir(), `citadel-agent-${sessionName}.exit`);
+}
+
 export function isAgentLive(sessionName: string) {
   return fs.existsSync(agentLiveSentinelPath(sessionName));
+}
+
+// Reads the recorded exit code for an agent session, or null if no .exit
+// file is present (agent hasn't exited yet, or wrapper crashed before writing).
+export function readAgentExitCode(sessionName: string): number | null {
+  const exitPath = agentExitSentinelPath(sessionName);
+  try {
+    const raw = fs.readFileSync(exitPath, "utf8").trim();
+    if (raw === "") return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
 }
 
 // Wrap the agent so the tmux pane survives its exit: Ctrl+C in Claude Code
@@ -133,13 +154,22 @@ export function isAgentLive(sessionName: string) {
 function terminalCommand(sessionName: string, command: string, args: string[]) {
   const argv = [command, ...args].map(shellQuote).join(" ");
   const envPrefix = "env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor FORCE_COLOR=1 CLICOLOR_FORCE=1";
-  const sentinel = shellQuote(agentLiveSentinelPath(sessionName));
+  const liveSentinel = shellQuote(agentLiveSentinelPath(sessionName));
+  const exitSentinel = shellQuote(agentExitSentinelPath(sessionName));
   const exitHint = "[citadel] Agent exited. Run any command, or restart the agent (e.g. `claude resume <sessionId>`).";
+  // The trap fires on bash signal-death (the bash shell receives SIGTERM/SIGINT
+  // mid-`<agent>`); the explicit lines after `<agent>` cover the happy-path
+  // (natural agent exit) before `exec` replaces this bash with the fallback
+  // shell. The explicit lines run normally; the trap also runs on signal but
+  // `exec` skips the trap on the happy path. `$?` at trap time reflects the
+  // killed agent's exit status (typically 130/SIGINT or 143/SIGTERM).
   const script = [
-    `touch ${sentinel}`,
-    `trap 'rm -f ${sentinel}' EXIT`,
+    `touch ${liveSentinel}`,
+    `trap 'rc=$?; echo $rc > ${exitSentinel}; rm -f ${liveSentinel}' EXIT`,
     `${envPrefix} ${argv}`,
-    `rm -f ${sentinel}`,
+    "rc=$?",
+    `echo $rc > ${exitSentinel}`,
+    `rm -f ${liveSentinel}`,
     `printf '\\n%s\\n' ${shellQuote(exitHint)}`,
     'exec "${SHELL:-/bin/bash}" -l',
   ].join("; ");
@@ -562,6 +592,11 @@ export function killTmuxSession(sessionName: string) {
   }
   try {
     fs.rmSync(agentLiveSentinelPath(sessionName), { force: true });
+  } catch {
+    // best-effort
+  }
+  try {
+    fs.rmSync(agentExitSentinelPath(sessionName), { force: true });
   } catch {
     // best-effort
   }

@@ -13,6 +13,7 @@
   "dependencies": {
     "@citadel/config": "workspace:*",
     "@citadel/contracts": "workspace:*",
+    "@citadel/core": "workspace:*",
     "@citadel/db": "workspace:*",
     "@citadel/mcp": "workspace:*",
     "@citadel/operations": "workspace:*",

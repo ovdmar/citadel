@@ -42,8 +42,10 @@ import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { backfillIfEmpty } from "./scratchpad-history.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { scratchpadPath } from "./scratchpad.js";
+import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
-import { readWorkspaceDiff, readWorkspaceGitStatus, readWorkspaceRecentCommits } from "./workspace-diff.js";
+import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
+import { readWorkspaceGitStatus } from "./workspace-diff.js";
 import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
 
 export type DaemonApp = {
@@ -704,24 +706,7 @@ export function createDaemonApp(input: {
   fsWatchers.reconcile();
   server.on("close", () => fsWatchers?.close());
 
-  app.get("/api/workspaces/:workspaceId/diff", (req, res) => {
-    const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-    if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-    if (!path.resolve(workspace.path).startsWith(path.resolve(workspace.path)))
-      return res.status(400).json({ error: "invalid_path" });
-    res.json(readWorkspaceDiff(workspace.id, workspace.path));
-  });
-
-  app.get(
-    "/api/workspaces/:workspaceId/recent-commits",
-    asyncRoute(async (req, res) => {
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      const limitParam = Number.parseInt(String(req.query.limit ?? "8"), 10);
-      const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 50) : 8;
-      res.json(readWorkspaceRecentCommits(workspace.id, workspace.path, limit));
-    }),
-  );
+  registerWorkspaceDiffRoutes({ app, store, asyncRoute });
 
   app.get("/events", (req, res) => {
     req.socket.setTimeout(0);
@@ -774,6 +759,15 @@ export function createDaemonApp(input: {
     }, 30_000);
     reaper.unref();
     server.on("close", () => clearInterval(reaper));
+  }
+
+  // Status monitor — 2s tick observing tmux activity + bash-wrapper sentinels
+  // and asking the runtime adapter for pane-derived status observations.
+  // Updates agent_sessions.status and emits agent.updated SSE events. Wiring
+  // lives in status-monitor-wiring.ts to keep this file under the 800-line gate.
+  const statusMonitor = startDaemonStatusMonitor(store, emit);
+  if (statusMonitor) {
+    server.on("close", () => statusMonitor.stop());
   }
 
   return { app, server, emit };

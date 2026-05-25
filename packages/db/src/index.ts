@@ -12,6 +12,7 @@ import type {
   ScheduledAgent,
   Workspace,
 } from "@citadel/contracts";
+import { runMigrations } from "./migrate.js";
 import * as namespaces from "./namespaces.js";
 import {
   activityFromRow,
@@ -84,169 +85,7 @@ export class SqliteStore {
   }
 
   migrate() {
-    const db = this.database;
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        version INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        applied_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS repos (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        root_path TEXT NOT NULL UNIQUE,
-        default_branch TEXT NOT NULL,
-        default_remote TEXT NOT NULL,
-        worktree_parent TEXT NOT NULL,
-        setup_hook_ids TEXT NOT NULL,
-        teardown_hook_ids TEXT NOT NULL,
-        provider_ids TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        archived_at TEXT
-      );
-      CREATE TABLE IF NOT EXISTS workspaces (
-        id TEXT PRIMARY KEY,
-        repo_id TEXT NOT NULL REFERENCES repos(id),
-        name TEXT NOT NULL,
-        path TEXT NOT NULL UNIQUE,
-        branch TEXT NOT NULL,
-        base_branch TEXT NOT NULL,
-        source TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'worktree',
-        pr_url TEXT,
-        issue_key TEXT,
-        issue_title TEXT,
-        section TEXT NOT NULL,
-        pinned INTEGER NOT NULL,
-        lifecycle TEXT NOT NULL,
-        dirty INTEGER NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        archived_at TEXT,
-        UNIQUE(repo_id, name)
-      );
-      CREATE TABLE IF NOT EXISTS agent_sessions (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-        runtime_id TEXT NOT NULL,
-        display_name TEXT NOT NULL,
-        status TEXT NOT NULL,
-        transport TEXT NOT NULL,
-        tmux_session_name TEXT,
-        tmux_session_id TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS operations (
-        id TEXT PRIMARY KEY,
-        type TEXT NOT NULL,
-        status TEXT NOT NULL,
-        repo_id TEXT,
-        workspace_id TEXT,
-        progress INTEGER NOT NULL,
-        message TEXT,
-        error TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS activity_events (
-        id TEXT PRIMARY KEY,
-        type TEXT NOT NULL,
-        source TEXT NOT NULL,
-        repo_id TEXT,
-        workspace_id TEXT,
-        operation_id TEXT,
-        message TEXT NOT NULL,
-        hook_output TEXT,
-        created_at TEXT NOT NULL
-      );
-      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-      VALUES (1, 'initial-local-first-schema', datetime('now'));
-    `);
-    this.ensureColumn("activity_events", "hook_output", "TEXT");
-    this.ensureColumn("operations", "logs", "TEXT");
-    this.ensureColumn("operations", "retriable", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureColumn("operations", "retry_input", "TEXT");
-    this.ensureColumn("workspaces", "issue_url", "TEXT");
-    this.ensureColumn("workspaces", "slack_thread_url", "TEXT");
-    this.ensureColumn("workspaces", "kind", "TEXT NOT NULL DEFAULT 'worktree'");
-    this.ensureColumn("repos", "deploy_hook_command", "TEXT");
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS namespaces (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL UNIQUE,
-        color TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        archived_at TEXT
-      );
-    `);
-    this.ensureColumn("workspaces", "namespace_id", "TEXT REFERENCES namespaces(id)");
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS scheduled_agents (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT,
-        cron TEXT NOT NULL,
-        repo_id TEXT NOT NULL,
-        runtime_id TEXT NOT NULL,
-        prompt TEXT,
-        workspace_strategy TEXT NOT NULL,
-        workspace_name TEXT NOT NULL,
-        base_branch TEXT,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        last_run_at TEXT,
-        last_run_status TEXT NOT NULL DEFAULT 'never',
-        last_run_message TEXT,
-        last_workspace_id TEXT,
-        last_session_id TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS scheduled_agent_runs (
-        id TEXT PRIMARY KEY,
-        scheduled_agent_id TEXT NOT NULL,
-        status TEXT NOT NULL,
-        enqueued_at TEXT NOT NULL,
-        started_at TEXT,
-        ended_at TEXT,
-        message TEXT,
-        workspace_id TEXT,
-        session_id TEXT,
-        background_session_id TEXT,
-        log_file_path TEXT
-      );
-      CREATE INDEX IF NOT EXISTS idx_scheduled_agent_runs_agent_enqueued
-        ON scheduled_agent_runs(scheduled_agent_id, enqueued_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_scheduled_agent_runs_status
-        ON scheduled_agent_runs(scheduled_agent_id, status);
-      CREATE TABLE IF NOT EXISTS background_sessions (
-        id TEXT PRIMARY KEY,
-        scheduled_agent_id TEXT,
-        cwd TEXT NOT NULL,
-        log_file_path TEXT NOT NULL,
-        tmux_session_name TEXT NOT NULL,
-        tmux_session_id TEXT NOT NULL,
-        status TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS idx_background_sessions_scheduled_agent
-        ON background_sessions(scheduled_agent_id);
-      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
-        (2, 'activity-hook-output', datetime('now')),
-        (3, 'operation-logs-retry', datetime('now')),
-        (4, 'workspace-linked-urls', datetime('now')),
-        (5, 'scheduled-agents', datetime('now')),
-        (6, 'namespaces', datetime('now')),
-        (7, 'background-sessions-and-runs', datetime('now'));
-    `);
-    this.ensureColumn("scheduled_agents", "schedule_type", "TEXT NOT NULL DEFAULT 'recurring'");
-    this.ensureColumn("scheduled_agents", "run_at", "TEXT");
-    this.ensureColumn("scheduled_agents", "run_mode", "TEXT NOT NULL DEFAULT 'workspace'");
-    this.ensureColumn("scheduled_agents", "background_cwd", "TEXT");
-    this.ensureColumn("scheduled_agents", "overlap_policy", "TEXT NOT NULL DEFAULT 'skip'");
+    runMigrations(this.database, (table, column, definition) => this.ensureColumn(table, column, definition));
   }
 
   exec(sql: string) {
@@ -474,9 +313,10 @@ export class SqliteStore {
   insertSession(session: AgentSession) {
     this.database
       .prepare(
-        `INSERT INTO agent_sessions (id, workspace_id, runtime_id, display_name, status, transport,
+        `INSERT INTO agent_sessions (id, workspace_id, runtime_id, display_name, status, status_reason,
+          last_status_at, last_output_at, ended_at, exit_code, transport,
           tmux_session_name, tmux_session_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -484,6 +324,14 @@ export class SqliteStore {
         session.runtimeId,
         session.displayName,
         session.status,
+        session.statusReason ?? null,
+        // Optional in the schema (older test fixtures + out-of-band callers
+        // may omit these); the DB layer normalizes to sensible defaults so
+        // the column constraints are still satisfied.
+        session.lastStatusAt ?? session.updatedAt,
+        session.lastOutputAt ?? null,
+        session.endedAt ?? null,
+        session.exitCode ?? null,
         session.transport,
         session.tmuxSessionName ?? null,
         session.tmuxSessionId ?? null,
@@ -492,10 +340,53 @@ export class SqliteStore {
       );
   }
 
-  updateSessionStatus(sessionId: string, status: AgentSession["status"]) {
-    this.database
-      .prepare("UPDATE agent_sessions SET status = ?, updated_at = ? WHERE id = ?")
-      .run(status, new Date().toISOString(), sessionId);
+  // Partial update accepting any subset of mutable status-tracking fields.
+  // Used by the status reducer (via @citadel/operations) to apply reducer
+  // outputs without round-tripping through the full AgentSession schema.
+  // Fields with `undefined` value are left unchanged; fields with `null` are
+  // written as SQL NULL.
+  updateSessionStatus(
+    sessionId: string,
+    update: {
+      status?: AgentSession["status"];
+      statusReason?: string | null;
+      lastStatusAt?: string;
+      lastOutputAt?: string | null;
+      endedAt?: string | null;
+      exitCode?: number | null;
+    },
+  ) {
+    const sets: string[] = [];
+    const values: Array<string | number | null> = [];
+    if (update.status !== undefined) {
+      sets.push("status = ?");
+      values.push(update.status);
+    }
+    if (update.statusReason !== undefined) {
+      sets.push("status_reason = ?");
+      values.push(update.statusReason);
+    }
+    if (update.lastStatusAt !== undefined) {
+      sets.push("last_status_at = ?");
+      values.push(update.lastStatusAt);
+    }
+    if (update.lastOutputAt !== undefined) {
+      sets.push("last_output_at = ?");
+      values.push(update.lastOutputAt);
+    }
+    if (update.endedAt !== undefined) {
+      sets.push("ended_at = ?");
+      values.push(update.endedAt);
+    }
+    if (update.exitCode !== undefined) {
+      sets.push("exit_code = ?");
+      values.push(update.exitCode);
+    }
+    if (sets.length === 0) return; // nothing to do
+    sets.push("updated_at = ?");
+    values.push(new Date().toISOString());
+    values.push(sessionId);
+    this.database.prepare(`UPDATE agent_sessions SET ${sets.join(", ")} WHERE id = ?`).run(...values);
   }
 
   updateSessionDisplayName(sessionId: string, displayName: string) {

@@ -30,6 +30,14 @@ export {
 } from "./usage/index.js";
 export type { RuntimeUsageFetcher } from "./usage/index.js";
 
+export { getStatusAdapter, claudeCodeStatusAdapter, codexStatusAdapter, lastNonEmptyLine } from "./status/index.js";
+export type {
+  RuntimeStatusAdapter,
+  SessionAdapterState,
+  ObservationContext,
+  PaneObservation,
+} from "./status/index.js";
+
 const baseCapabilities = {
   supportsPrompt: false,
   supportsResume: false,

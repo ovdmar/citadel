@@ -1,0 +1,19 @@
+❯ Use your Task tool to spawn a general-purpose subagent. The subagent should:
+  "Think deeply for at least 60 seconds about the philosophical implications of
+   distributed consensus. Write a thorough 5-paragraph response." Once you've
+  spawned the subagent, just say "subagent spawned" and don't do anything else
+  - DO NOT wait, DO NOT process the result, just spawn it and stop.
+
+● Agent(Philosophical essay on consensus)
+  ⎿  Backgrounded agent (↓ to manage · ctrl+o to expand)
+
+
+✻ Flambéing… (7s · ↑ 252 tokens · thought for 1s)
+                                        3 claude.ai connectors need auth · /mcp
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on · 1 local agent · esc to interrupt · ↓ to manage
+
+  ● main                                           ↑/↓ to select · Enter to view
+  ◯ general-purpose  Philosophical essay on consensus                         1s
