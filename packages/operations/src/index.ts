@@ -65,6 +65,7 @@ export {
   WorkspaceNameTakenError,
 } from "./helpers.js";
 import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
+export type { RequestReviewResult, UpdateReviewCommentResult } from "./review-system.js";
 import {
   type WorkspaceAppsDeps,
   discoverWorkspaceApps as discoverWorkspaceAppsImpl,
@@ -79,9 +80,7 @@ export class OperationService {
       repoDefaults: {
         setupHookIds: string[];
         teardownHookIds: string[];
-        appHookIds?: string[];
-        actionHookIds?: string[];
-        requestReviewHookIds?: string[];
+        appHookIds?: string[]; actionHookIds?: string[]; requestReviewHookIds?: string[];
       };
       commandPolicy: CitadelConfig["commandPolicy"];
     },

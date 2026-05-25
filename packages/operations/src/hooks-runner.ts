@@ -18,7 +18,7 @@ type RunnerConfig = {
   commandPolicy: CitadelConfig["commandPolicy"];
 };
 
-function commandHook(hook: HookConfig, workspacePath: string, config: RunnerConfig | undefined) {
+export function commandHook(hook: HookConfig, workspacePath: string, config: RunnerConfig | undefined) {
   return {
     id: hook.id,
     event: hook.event,
