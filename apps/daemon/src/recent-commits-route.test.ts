@@ -31,6 +31,7 @@ describe("recent-commits route", () => {
       worktreeParent: String(fixture.config.dataDir),
       setupHookIds: [],
       teardownHookIds: [],
+      requestReviewHookIds: [],
       providerIds: [],
       deployHookCommand: null,
       createdAt: now,

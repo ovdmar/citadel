@@ -14,6 +14,7 @@ function makeRepo(id: string, name: string): Repo {
     worktreeParent: `/repos/${id}/.wt`,
     setupHookIds: [],
     teardownHookIds: [],
+    requestReviewHookIds: [],
     providerIds: [],
     deployHookCommand: null,
     createdAt: ts,

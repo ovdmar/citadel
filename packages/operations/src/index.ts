@@ -81,6 +81,7 @@ export class OperationService {
         teardownHookIds: string[];
         appHookIds?: string[];
         actionHookIds?: string[];
+        requestReviewHookIds?: string[];
       };
       commandPolicy: CitadelConfig["commandPolicy"];
     },
@@ -99,6 +100,7 @@ export class OperationService {
       worktreeParent: input.worktreeParent || path.join(path.dirname(rootPath), `${path.basename(rootPath)}-worktrees`),
       setupHookIds: this.config?.repoDefaults.setupHookIds ?? [],
       teardownHookIds: this.config?.repoDefaults.teardownHookIds ?? [],
+      requestReviewHookIds: this.config?.repoDefaults.requestReviewHookIds ?? [],
       providerIds: ["github-gh", "jira-jtk"],
       deployHookCommand: null,
       createdAt: now,

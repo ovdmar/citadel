@@ -31,6 +31,7 @@ export const RepoSchema = z.object({
   worktreeParent: z.string().min(1),
   setupHookIds: z.array(z.string()).default([]),
   teardownHookIds: z.array(z.string()).default([]),
+  requestReviewHookIds: z.array(z.string()).default([]),
   providerIds: z.array(z.string()).default([]),
   deployHookCommand: z.string().max(4000).nullable().default(null),
   createdAt: z.string(),

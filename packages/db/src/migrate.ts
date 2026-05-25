@@ -205,4 +205,41 @@ export function runMigrations(
   ensureColumn("scheduled_agents", "run_mode", "TEXT NOT NULL DEFAULT 'workspace'");
   ensureColumn("scheduled_agents", "background_cwd", "TEXT");
   ensureColumn("scheduled_agents", "overlap_policy", "TEXT NOT NULL DEFAULT 'skip'");
+  ensureColumn("repos", "request_review_hook_ids", "TEXT NOT NULL DEFAULT '[]'");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS review_comments (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      file_path TEXT,
+      line_start INTEGER,
+      line_end INTEGER,
+      side TEXT CHECK (side IS NULL OR side IN ('LEFT','RIGHT')),
+      author TEXT NOT NULL,
+      body TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('open','resolved')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_review_comments_workspace
+      ON review_comments(workspace_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_review_comments_status
+      ON review_comments(workspace_id, status);
+    CREATE TABLE IF NOT EXISTS review_suggestion_runs (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      hook_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('succeeded','failed','timed_out')),
+      duration_ms INTEGER,
+      exit_status INTEGER,
+      output_json TEXT,
+      stderr TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_review_suggestion_runs_workspace
+      ON review_suggestion_runs(workspace_id, created_at DESC);
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (8, 'review-system', datetime('now'));
+  `);
 }

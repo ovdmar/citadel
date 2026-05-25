@@ -107,8 +107,8 @@ export class SqliteStore {
     this.database
       .prepare(
         `INSERT INTO repos (id, name, root_path, default_branch, default_remote, worktree_parent,
-          setup_hook_ids, teardown_hook_ids, provider_ids, deploy_hook_command, created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          setup_hook_ids, teardown_hook_ids, request_review_hook_ids, provider_ids, deploy_hook_command, created_at, updated_at, archived_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         repo.id,
@@ -119,6 +119,7 @@ export class SqliteStore {
         repo.worktreeParent,
         JSON.stringify(repo.setupHookIds),
         JSON.stringify(repo.teardownHookIds),
+        JSON.stringify(repo.requestReviewHookIds ?? []),
         JSON.stringify(repo.providerIds),
         repo.deployHookCommand ?? null,
         repo.createdAt,
@@ -130,7 +131,16 @@ export class SqliteStore {
   updateRepo(
     repoId: string,
     patch: Partial<
-      Pick<Repo, "name" | "worktreeParent" | "setupHookIds" | "teardownHookIds" | "providerIds" | "deployHookCommand">
+      Pick<
+        Repo,
+        | "name"
+        | "worktreeParent"
+        | "setupHookIds"
+        | "teardownHookIds"
+        | "requestReviewHookIds"
+        | "providerIds"
+        | "deployHookCommand"
+      >
     >,
   ) {
     const existing = this.database.prepare("SELECT * FROM repos WHERE id = ?").get(repoId) as
@@ -144,6 +154,7 @@ export class SqliteStore {
       worktreeParent: patch.worktreeParent ?? current.worktreeParent,
       setupHookIds: patch.setupHookIds ?? current.setupHookIds,
       teardownHookIds: patch.teardownHookIds ?? current.teardownHookIds,
+      requestReviewHookIds: patch.requestReviewHookIds ?? current.requestReviewHookIds,
       providerIds: patch.providerIds ?? current.providerIds,
       deployHookCommand: patch.deployHookCommand !== undefined ? patch.deployHookCommand : current.deployHookCommand,
       updatedAt: new Date().toISOString(),
@@ -151,13 +162,14 @@ export class SqliteStore {
     this.database
       .prepare(
         `UPDATE repos SET name = ?, worktree_parent = ?, setup_hook_ids = ?, teardown_hook_ids = ?,
-          provider_ids = ?, deploy_hook_command = ?, updated_at = ? WHERE id = ?`,
+          request_review_hook_ids = ?, provider_ids = ?, deploy_hook_command = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         next.name,
         next.worktreeParent,
         JSON.stringify(next.setupHookIds),
         JSON.stringify(next.teardownHookIds),
+        JSON.stringify(next.requestReviewHookIds),
         JSON.stringify(next.providerIds),
         next.deployHookCommand ?? null,
         next.updatedAt,
@@ -677,4 +689,13 @@ export class SqliteStore {
 // the assignment inside scheduled-run-store.ts itself because ES module
 // hoisting would run it before this class declaration completes.
 import { scheduledRunStoreMethods } from "./scheduled-run-store.js";
+import { reviewStoreMethods } from "./review.js";
 Object.assign(SqliteStore.prototype, scheduledRunStoreMethods);
+Object.assign(SqliteStore.prototype, reviewStoreMethods);
+export type {
+  InsertReviewCommentInput,
+  InsertReviewSuggestionRunInput,
+  ListReviewCommentsOptions,
+  ReviewCommentMutationResult,
+  ReviewCommentPatch,
+} from "./review.js";

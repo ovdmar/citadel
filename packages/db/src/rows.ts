@@ -35,6 +35,7 @@ export function repoFromRow(row: Record<string, unknown>): Repo {
     worktreeParent: asString(row, "worktree_parent"),
     setupHookIds: jsonArray(row, "setup_hook_ids"),
     teardownHookIds: jsonArray(row, "teardown_hook_ids"),
+    requestReviewHookIds: jsonArray(row, "request_review_hook_ids"),
     providerIds: jsonArray(row, "provider_ids"),
     deployHookCommand: row.deploy_hook_command ? asString(row, "deploy_hook_command") : null,
     createdAt: asString(row, "created_at"),
