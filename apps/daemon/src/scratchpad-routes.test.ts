@@ -87,19 +87,27 @@ describe("scratchpad HTTP + MCP routes", () => {
         method: "tools/call",
         params: { name: "write_scratchpad", arguments: { content: "second from mcp" } },
       });
+      // Drive append_scratchpad too so its source label is exercised end-to-end.
+      await postJson(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "a",
+        method: "tools/call",
+        params: { name: "append_scratchpad", arguments: { content: "tail" } },
+      });
       await putJson(`${baseUrl}/api/scratchpad`, { content: "third" });
 
       const list = await getJson<{ entries: Array<{ id: string; source: string; preview: string; content?: string }> }>(
         `${baseUrl}/api/scratchpad/history`,
       );
-      expect(list.entries.length).toBeGreaterThanOrEqual(3);
+      expect(list.entries.length).toBeGreaterThanOrEqual(4);
       expect(list.entries[0]?.source).toBe("ui");
       for (const entry of list.entries) {
         expect(entry.content).toBeUndefined();
         expect(typeof entry.preview).toBe("string");
       }
+      // Newest-first ordering: ui (third), mcp:append, mcp:write, ui (first).
       const sources = list.entries.map((entry) => entry.source);
-      expect(sources).toEqual(expect.arrayContaining(["ui", "mcp:write_scratchpad"]));
+      expect(sources.slice(0, 4)).toEqual(["ui", "mcp:append_scratchpad", "mcp:write_scratchpad", "ui"]);
 
       const oldest = list.entries[list.entries.length - 1];
       if (!oldest) throw new Error("expected history entries");
@@ -256,7 +264,96 @@ describe("scratchpad HTTP + MCP routes", () => {
       await closeServer(server);
     }
   });
+
+  it("emits scratchpad.history.updated on every mutation path", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    const listener = await openHistorySseListener(baseUrl);
+    try {
+      await putJson(`${baseUrl}/api/scratchpad`, { content: "via put" });
+      await postJson(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "mw",
+        method: "tools/call",
+        params: { name: "write_scratchpad", arguments: { content: "via mcp write" } },
+      });
+      await postJson(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "ma",
+        method: "tools/call",
+        params: { name: "append_scratchpad", arguments: { content: "tail" } },
+      });
+      const list = await getJson<{ entries: Array<{ id: string }> }>(`${baseUrl}/api/scratchpad/history`);
+      const oldest = list.entries[list.entries.length - 1];
+      if (!oldest) throw new Error("expected an entry to restore");
+      await postJson(`${baseUrl}/api/scratchpad/restore`, { entryId: oldest.id });
+
+      const events = await listener.waitFor(4, 2_000);
+      expect(events).toHaveLength(4);
+      // Every event has an updatedAt timestamp.
+      for (const event of events) expect(typeof event.payload?.updatedAt).toBe("string");
+    } finally {
+      listener.close();
+      await closeServer(server);
+    }
+  });
 });
+
+type SseEvent = { type: string; payload: { updatedAt?: string } };
+
+async function openHistorySseListener(baseUrl: string) {
+  const response = await fetch(`${baseUrl}/events`, { headers: { Accept: "text/event-stream" } });
+  if (!response.ok || !response.body) throw new Error("sse_open_failed");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const events: SseEvent[] = [];
+  let buffer = "";
+  let closed = false;
+  let pendingType: string | null = null;
+  const consume = async () => {
+    while (!closed) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      buffer += decoder.decode(value, { stream: true });
+      for (;;) {
+        const newlineIdx = buffer.indexOf("\n");
+        if (newlineIdx < 0) break;
+        const line = buffer.slice(0, newlineIdx).trim();
+        buffer = buffer.slice(newlineIdx + 1);
+        if (line.startsWith("event: ")) pendingType = line.slice("event: ".length);
+        else if (line.startsWith("data: ") && pendingType === "scratchpad.history.updated") {
+          try {
+            const parsed = JSON.parse(line.slice("data: ".length)) as SseEvent;
+            events.push({ type: pendingType, payload: parsed.payload ?? {} });
+          } catch {
+            /* ignore malformed */
+          }
+        }
+        if (line === "") pendingType = null;
+      }
+    }
+  };
+  consume().catch(() => {
+    /* stream closed */
+  });
+  return {
+    async waitFor(count: number, timeoutMs: number) {
+      const start = Date.now();
+      while (events.length < count) {
+        if (Date.now() - start > timeoutMs) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      return events.slice();
+    },
+    close() {
+      closed = true;
+      reader.cancel().catch(() => {
+        /* already closed */
+      });
+    },
+  };
+}
 
 function createFixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-scratchpad-routes-"));

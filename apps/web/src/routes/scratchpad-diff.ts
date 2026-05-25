@@ -1,4 +1,4 @@
-export type DiffLine = { kind: "context" | "add" | "remove"; text: string };
+type DiffLine = { kind: "context" | "add" | "remove"; text: string };
 
 export type SideRow =
   | { kind: "context"; oldNo: number; newNo: number; text: string }
@@ -6,51 +6,38 @@ export type SideRow =
   | { kind: "remove"; oldNo: number; text: string }
   | { kind: "skip"; hiddenCount: number };
 
-export function lineDiff(oldText: string, newText: string): DiffLine[] {
-  const a = oldText.split("\n");
-  const b = newText.split("\n");
-  const n = a.length;
-  const m = b.length;
-  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
-  for (let i = n - 1; i >= 0; i -= 1) {
-    const rowI = lcs[i] ?? [];
-    const rowNext = lcs[i + 1] ?? [];
-    for (let j = m - 1; j >= 0; j -= 1) {
-      rowI[j] = a[i] === b[j] ? (rowNext[j + 1] ?? 0) + 1 : Math.max(rowNext[j] ?? 0, rowI[j + 1] ?? 0);
-    }
+export type SideBySideResult =
+  | { kind: "diff"; rows: SideRow[] }
+  | { kind: "too_large"; oldLines: number; newLines: number; limit: number };
+
+// LCS allocates O(n*m) cells. SCRATCHPAD_MAX_BYTES is 1_000_000 (~12.5k lines
+// at typical density); a full max-vs-max compare would allocate ~156M cells
+// (~600 MB-1.2 GB heap) and crash the tab. Cap defensively and let the UI
+// render a "diff too large" notice that still exposes restore.
+export const MAX_DIFF_LINES = 2000;
+
+export function sideBySideDiff(
+  oldText: string,
+  newText: string,
+  contextLines = 3,
+  maxLines = MAX_DIFF_LINES,
+): SideBySideResult {
+  const oldLines = countLines(oldText);
+  const newLines = countLines(newText);
+  if (oldLines > maxLines || newLines > maxLines) {
+    return { kind: "too_large", oldLines, newLines, limit: maxLines };
   }
-  const out: DiffLine[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < n && j < m) {
-    const ai = a[i] ?? "";
-    const bj = b[j] ?? "";
-    const rowI = lcs[i] ?? [];
-    const rowNext = lcs[i + 1] ?? [];
-    if (ai === bj) {
-      out.push({ kind: "context", text: ai });
-      i += 1;
-      j += 1;
-    } else if ((rowNext[j] ?? 0) >= (rowI[j + 1] ?? 0)) {
-      out.push({ kind: "remove", text: ai });
-      i += 1;
-    } else {
-      out.push({ kind: "add", text: bj });
-      j += 1;
-    }
-  }
-  while (i < n) {
-    out.push({ kind: "remove", text: a[i] ?? "" });
-    i += 1;
-  }
-  while (j < m) {
-    out.push({ kind: "add", text: b[j] ?? "" });
-    j += 1;
-  }
-  return out;
+  return { kind: "diff", rows: buildRows(oldText, newText, contextLines) };
 }
 
-export function sideBySideDiff(oldText: string, newText: string, contextLines = 3): SideRow[] {
+function countLines(text: string): number {
+  if (text.length === 0) return 1;
+  let lines = 1;
+  for (let i = 0; i < text.length; i += 1) if (text.charCodeAt(i) === 10) lines += 1;
+  return lines;
+}
+
+function buildRows(oldText: string, newText: string, contextLines: number): SideRow[] {
   const lines = lineDiff(oldText, newText);
   const expanded: SideRow[] = [];
   let oldNo = 0;
@@ -101,6 +88,50 @@ export function sideBySideDiff(oldText: string, newText: string, contextLines = 
       }
     }
     i = j;
+  }
+  return out;
+}
+
+function lineDiff(oldText: string, newText: string): DiffLine[] {
+  const a = oldText.split("\n");
+  const b = newText.split("\n");
+  const n = a.length;
+  const m = b.length;
+  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i -= 1) {
+    const rowI = lcs[i] ?? [];
+    const rowNext = lcs[i + 1] ?? [];
+    for (let j = m - 1; j >= 0; j -= 1) {
+      rowI[j] = a[i] === b[j] ? (rowNext[j + 1] ?? 0) + 1 : Math.max(rowNext[j] ?? 0, rowI[j + 1] ?? 0);
+    }
+  }
+  const out: DiffLine[] = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    const ai = a[i] ?? "";
+    const bj = b[j] ?? "";
+    const rowI = lcs[i] ?? [];
+    const rowNext = lcs[i + 1] ?? [];
+    if (ai === bj) {
+      out.push({ kind: "context", text: ai });
+      i += 1;
+      j += 1;
+    } else if ((rowNext[j] ?? 0) >= (rowI[j + 1] ?? 0)) {
+      out.push({ kind: "remove", text: ai });
+      i += 1;
+    } else {
+      out.push({ kind: "add", text: bj });
+      j += 1;
+    }
+  }
+  while (i < n) {
+    out.push({ kind: "remove", text: a[i] ?? "" });
+    i += 1;
+  }
+  while (j < m) {
+    out.push({ kind: "add", text: b[j] ?? "" });
+    j += 1;
   }
   return out;
 }

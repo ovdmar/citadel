@@ -132,11 +132,8 @@ export const AgentSessionSchema = z.object({
   runtimeId: IdSchema,
   displayName: z.string(),
   status: AgentSessionStatusSchema,
-  // Status-tracking fields. The DB layer always writes these via
-  // insertSession / updateSessionStatus; readers should default null/now.
-  // They're optional at the TypeScript level so existing test fixtures and
-  // out-of-band session-shaped literals continue to typecheck without an
-  // explicit migration to set them.
+  // Status-tracking fields written by the DB layer; optional at the TS level
+  // so older test fixtures still typecheck.
   statusReason: z.string().nullable().optional(),
   lastStatusAt: z.string().optional(),
   lastOutputAt: z.string().nullable().optional(),
@@ -785,6 +782,13 @@ export type ScheduledAgentRun = z.infer<typeof ScheduledAgentRunSchema>;
 export type BackgroundAgentSession = z.infer<typeof BackgroundAgentSessionSchema>;
 export type CreateScheduledAgentInput = z.infer<typeof CreateScheduledAgentInputSchema>;
 export type UpdateScheduledAgentInput = z.infer<typeof UpdateScheduledAgentInputSchema>;
+
+export type {
+  ScratchpadSnapshot,
+  ScratchpadHistorySource,
+  ScratchpadHistoryEntry,
+  ScratchpadHistorySummary,
+} from "./scratchpad.js";
 
 export type ApiError = {
   error: string;

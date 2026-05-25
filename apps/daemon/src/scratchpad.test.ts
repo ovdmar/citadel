@@ -140,7 +140,7 @@ describe("scratchpad history", () => {
     const dir = tmpDir();
     for (let i = 0; i < 101; i += 1) {
       const ts = new Date(2026, 4, 25, 12, 0, i, 0);
-      writeScratchpad(dir, `body-${i}`, `src-${i}`, { now: () => ts });
+      writeScratchpad(dir, `body-${i}`, `restore:src-${i}`, { now: () => ts });
     }
     const entries = readHistory(dir);
     expect(entries).toHaveLength(100);
@@ -151,11 +151,11 @@ describe("scratchpad history", () => {
   it("retains by byte budget", () => {
     const dir = tmpDir();
     const now = (i: number) => new Date(2026, 4, 25, 12, 0, i, 0);
-    writeScratchpad(dir, "x".repeat(2000), "src-a", { maxBytes: 1500, now: () => now(0) });
-    writeScratchpad(dir, "y".repeat(2000), "src-b", { maxBytes: 1500, now: () => now(1) });
+    writeScratchpad(dir, "x".repeat(2000), "restore:a", { maxBytes: 1500, now: () => now(0) });
+    writeScratchpad(dir, "y".repeat(2000), "restore:b", { maxBytes: 1500, now: () => now(1) });
     const entries = readHistory(dir);
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.source).toBe("src-b");
+    expect(entries[0]?.source).toBe("restore:b");
   });
 
   it("summary excludes content and adds preview", () => {

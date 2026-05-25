@@ -23,11 +23,22 @@ const DEBOUNCE_MS = 350;
 
 type ProviderCache = Map<string, { expiresAt: number; value: unknown }>;
 
-export type WorkspaceFsWatcherDeps = {
+type WorkspaceFsWatcherDeps = {
   listWorkspaces: () => Workspace[];
   providerCache: ProviderCache;
   emit: (type: string, payload: unknown) => void;
 };
+
+export function bustCacheByPrefixes(providerCache: ProviderCache, prefixes: string[]): number {
+  let removed = 0;
+  for (const key of Array.from(providerCache.keys())) {
+    if (prefixes.some((prefix) => key.startsWith(prefix))) {
+      providerCache.delete(key);
+      removed += 1;
+    }
+  }
+  return removed;
+}
 
 export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
   const watchers = new Map<string, fs.FSWatcher>();
@@ -97,10 +108,12 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
 }
 
 function bustWorkspaceCaches(providerCache: ProviderCache, workspaceId: string) {
-  const prefixes = [`git:${workspaceId}`, `vc:${workspaceId}`, `ci:${workspaceId}`, `apps:${workspaceId}`];
-  for (const key of Array.from(providerCache.keys())) {
-    if (prefixes.some((prefix) => key.startsWith(prefix))) providerCache.delete(key);
-  }
+  bustCacheByPrefixes(providerCache, [
+    `git:${workspaceId}`,
+    `vc:${workspaceId}`,
+    `ci:${workspaceId}`,
+    `apps:${workspaceId}`,
+  ]);
 }
 
 function isIgnored(rel: string): boolean {

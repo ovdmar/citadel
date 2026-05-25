@@ -1,26 +1,18 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type {
+  ScratchpadHistoryEntry as HistoryEntry,
+  ScratchpadHistorySource as HistorySource,
+  ScratchpadHistorySummary as HistorySummary,
+} from "@citadel/contracts";
 
-export const SCRATCHPAD_HISTORY_FILENAME = "scratchpad-history.jsonl";
-export const DEFAULT_MAX_HISTORY_ENTRIES = 100;
-export const DEFAULT_MAX_HISTORY_BYTES = 1_073_741_824;
-export const COALESCE_WINDOW_MS = 60_000;
+export type { HistoryEntry, HistorySource, HistorySummary };
 
-export type HistorySource = "ui" | "mcp:write_scratchpad" | "mcp:append_scratchpad" | "backfill" | `restore:${string}`;
-
-export type HistoryEntry = {
-  id: string;
-  ts: string;
-  firstWriteTs: string;
-  source: string;
-  contentSha256: string;
-  byteLength: number;
-  coalescedCount: number;
-  content: string;
-};
-
-export type HistorySummary = Omit<HistoryEntry, "content"> & { preview: string };
+const HISTORY_FILENAME = "scratchpad-history.jsonl";
+const DEFAULT_MAX_ENTRIES = 100;
+const DEFAULT_MAX_BYTES = 1_073_741_824;
+const COALESCE_WINDOW_MS = 60_000;
 
 export type HistoryOptions = {
   maxEntries?: number;
@@ -29,7 +21,7 @@ export type HistoryOptions = {
 };
 
 export function historyPath(dataDir: string) {
-  return path.join(dataDir, SCRATCHPAD_HISTORY_FILENAME);
+  return path.join(dataDir, HISTORY_FILENAME);
 }
 
 export function readHistory(dataDir: string): HistoryEntry[] {
@@ -61,11 +53,11 @@ export function listHistorySummaries(dataDir: string): HistorySummary[] {
 
 export function recordHistoryWrite(
   dataDir: string,
-  input: { content: string; source: string },
+  input: { content: string; source: HistorySource },
   options: HistoryOptions = {},
 ): HistoryEntry | null {
-  const maxEntries = options.maxEntries ?? DEFAULT_MAX_HISTORY_ENTRIES;
-  const maxBytes = options.maxBytes ?? DEFAULT_MAX_HISTORY_BYTES;
+  const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
+  const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   const now = (options.now?.() ?? new Date()).toISOString();
   ensureDir(dataDir);
   const entries = readHistory(dataDir);
@@ -77,23 +69,12 @@ export function recordHistoryWrite(
     last.contentSha256 = sha256(input.content);
     last.byteLength = Buffer.byteLength(input.content, "utf8");
     last.coalescedCount += 1;
-    const pruned = prune(entries, maxEntries, maxBytes);
-    writeAll(dataDir, pruned);
+    writeAll(dataDir, prune(entries, maxEntries, maxBytes));
     return last;
   }
-  const entry: HistoryEntry = {
-    id: `scratch_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`,
-    ts: now,
-    firstWriteTs: now,
-    source: input.source,
-    contentSha256: sha256(input.content),
-    byteLength: Buffer.byteLength(input.content, "utf8"),
-    coalescedCount: 1,
-    content: input.content,
-  };
+  const entry = createEntry({ ts: now, firstWriteTs: now, source: input.source, content: input.content });
   entries.push(entry);
-  const pruned = prune(entries, maxEntries, maxBytes);
-  writeAll(dataDir, pruned);
+  writeAll(dataDir, prune(entries, maxEntries, maxBytes));
   return entry;
 }
 
@@ -106,19 +87,28 @@ export function backfillIfEmpty(
   const filePath = historyPath(dataDir);
   if (fs.existsSync(filePath) && fs.statSync(filePath).size > 0) return null;
   const ts = current.updatedAt ?? (options.now?.() ?? new Date()).toISOString();
-  const entry: HistoryEntry = {
-    id: `scratch_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`,
-    ts,
-    firstWriteTs: ts,
-    source: "backfill",
-    contentSha256: sha256(current.content),
-    byteLength: Buffer.byteLength(current.content, "utf8"),
-    coalescedCount: 1,
-    content: current.content,
-  };
+  const entry = createEntry({ ts, firstWriteTs: ts, source: "backfill", content: current.content });
   ensureDir(dataDir);
   writeAll(dataDir, [entry]);
   return entry;
+}
+
+function createEntry(input: {
+  ts: string;
+  firstWriteTs: string;
+  source: HistorySource;
+  content: string;
+}): HistoryEntry {
+  return {
+    id: `scratch_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`,
+    ts: input.ts,
+    firstWriteTs: input.firstWriteTs,
+    source: input.source,
+    contentSha256: sha256(input.content),
+    byteLength: Buffer.byteLength(input.content, "utf8"),
+    coalescedCount: 1,
+    content: input.content,
+  };
 }
 
 function toSummary(entry: HistoryEntry): HistorySummary {
