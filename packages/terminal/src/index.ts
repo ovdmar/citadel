@@ -566,6 +566,12 @@ function collapseWhitespace(text: string): string {
 // transcript. The capture is whitespace-collapsed before matching so TUI
 // line-wrap (which inserts \n into the middle of a logical line) can't fool
 // the substring check.
+//
+// Also accepts a TUI-specific "collapsed paste" marker as evidence: Claude
+// Code replaces long pastes with `[Pasted text #N +K lines]` in the rendered
+// input, so the snippet won't be on screen even though the paste landed
+// fine in the runtime's internal buffer. The collapse marker is itself
+// proof the paste was received.
 function pasteVisible(sessionName: string, snippet: string): boolean {
   let captured: string;
   try {
@@ -577,7 +583,12 @@ function pasteVisible(sessionName: string, snippet: string): boolean {
   } catch {
     return false;
   }
-  return collapseWhitespace(captured).includes(snippet);
+  const normalized = collapseWhitespace(captured);
+  if (normalized.includes(snippet)) return true;
+  // Claude Code: `[Pasted text #1 +101 lines]` (or "#1 paste again to expand").
+  // We match loosely on "Pasted" + "#" + a digit because the exact suffix
+  // varies with paste size and Claude version.
+  return /\[Pasted [^\]]*#\d+/u.test(normalized);
 }
 
 export function sendKeys(sessionName: string, data: string) {
