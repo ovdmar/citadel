@@ -12,7 +12,7 @@ test.describe("scratchpad blocks", () => {
     await request.put(`${API_BASE}/api/scratchpad`, { data: { content: "" } });
   });
 
-  test("migrates legacy content on first read and shows migrate-to-blocks in history", async ({ page, request }) => {
+  test("migrates legacy content on first read and shows migrate-to-blocks in history", async ({ page, request }, testInfo) => {
     // Seed legacy content via byte-faithful PUT.
     await request.put(`${API_BASE}/api/scratchpad`, { data: { content: "first idea\n\nsecond idea\n" } });
 
@@ -24,9 +24,16 @@ test.describe("scratchpad blocks", () => {
     await expect(blockList.getByText("first idea")).toBeVisible();
     await expect(blockList.getByText("second idea")).toBeVisible();
 
-    // Sidebar shows the migrate-to-blocks history entry.
-    const history = page.locator(".scratchpad-history-list");
-    await expect(history.locator(".source-migrate")).toBeVisible();
+    // The history sidebar is hidden on the narrow (mobile/tablet) layouts;
+    // assert the migrate-to-blocks pill via the API on those projects.
+    if (testInfo.project.name === "desktop") {
+      const history = page.locator(".scratchpad-history-list");
+      await expect(history.locator(".source-migrate")).toBeVisible();
+    } else {
+      const list = await request.get(`${API_BASE}/api/scratchpad/history`);
+      const body = (await list.json()) as { entries: Array<{ source: string }> };
+      expect(body.entries.map((e) => e.source)).toContain("migrate-to-blocks");
+    }
   });
 
   test("composer creates a new block via Cmd-Enter", async ({ page, request }) => {
@@ -103,7 +110,7 @@ test.describe("scratchpad blocks", () => {
     const toast = page.locator(".scratchpad-undo-toast");
     await expect(toast).toBeVisible();
 
-    await toast.getByRole("button", { name: "Undo" }).click();
+    await toast.getByRole("button", { name: "Undo", exact: true }).click();
     await expect(page.locator(".scratchpad-block-list").getByText("block to delete")).toBeVisible();
   });
 });
