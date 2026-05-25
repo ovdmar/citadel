@@ -28,19 +28,9 @@ export {
   nextCronRun,
   describeCron,
 } from "./scheduled-agents.js";
-export type {
-  CronExpression,
-  ScheduledAgentRunResult,
-  ScheduledAgentDeps,
-  BackgroundSessionCreator,
-  ManualRunResult,
-} from "./scheduled-agents.js";
+export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
-export type {
-  CreateBackgroundAgentSessionDeps,
-  CreateBackgroundAgentSessionInput,
-} from "./create-background-agent-session.js";
 import {
   type DeployOpsDeps,
   listDeployedApps as listDeployedAppsImpl,

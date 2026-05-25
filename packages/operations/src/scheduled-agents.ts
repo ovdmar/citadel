@@ -525,18 +525,6 @@ export class ScheduledAgentRunner {
   }
 
   /**
-   * @deprecated kept for compat with the existing tests; new callers should
-   * use runNow which surfaces the queue / skip / queue_full outcomes
-   * explicitly. Returning the legacy result shape ignores the overlap policy
-   * and ALWAYS fires immediately if no in-flight run exists.
-   */
-  async runOnce(id: string, now: Date = new Date()): Promise<ScheduledAgentRunResult> {
-    const agent = this.deps.store.findScheduledAgent(id);
-    if (!agent) throw new Error(`Unknown scheduled agent: ${id}`);
-    return this.fireImmediately(agent, now);
-  }
-
-  /**
    * Boot-sweep called once at daemon startup. Closes any orphaned 'running'
    * rows from before the crash, syncs the denormalized lastRunStatus cache on
    * each affected agent, kills + deletes any dangling background_sessions row,

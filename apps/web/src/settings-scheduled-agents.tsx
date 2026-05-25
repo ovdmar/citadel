@@ -11,7 +11,7 @@ import type {
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { History, Play, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { api, queryClient } from "./api.js";
+import { type ApiError, api, queryClient } from "./api.js";
 import type { StateResponse } from "./app-state.js";
 import { Button } from "./components/ui/button.js";
 import { formatLabel } from "./labels.js";
@@ -550,10 +550,33 @@ function ScheduledAgentRow(props: {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
 
-  const runNow = useMutation({
-    mutationFn: () => api(`/api/scheduled-agents/${props.agent.id}/run`, { method: "POST" }),
+  // POST /run has four outcomes mapped from runner.runNow:
+  //   202 + { runId, status: "succeeded"|"failed", ... } — fired synchronously
+  //   202 + { queued: true, runId, queuePosition }       — enqueued (queue policy)
+  //   409 + { error: "run_already_in_progress" }         — skip policy + busy
+  //   429 + { error: "queue_full", limit }                — queue full
+  // The api() helper throws on non-2xx, so the 409/429 paths land in onError.
+  type RunNowResponse =
+    | { runId: string; status: "succeeded" | "failed"; message?: string }
+    | { queued: true; runId: string; queuePosition: number };
+  const runNow = useMutation<RunNowResponse, ApiError>({
+    mutationFn: () => api<RunNowResponse>(`/api/scheduled-agents/${props.agent.id}/run`, { method: "POST" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
+  // Inline feedback string derived from the last attempt; auto-clears after 6s.
+  const runNowFeedback = (() => {
+    if (runNow.isPending) return null;
+    if (runNow.error) {
+      if (runNow.error.message === "run_already_in_progress") return "Already running — skip policy.";
+      if (runNow.error.message === "queue_full") return "Queue full (max 10).";
+      return `Failed: ${runNow.error.message}`;
+    }
+    if (runNow.data) {
+      if ("queued" in runNow.data) return `Queued (position ${runNow.data.queuePosition}).`;
+      return runNow.data.status === "succeeded" ? "Started." : `Failed: ${runNow.data.message ?? "see history"}.`;
+    }
+    return null;
+  })();
 
   const remove = useMutation({
     mutationFn: () => api(`/api/scheduled-agents/${props.agent.id}`, { method: "DELETE" }),
@@ -614,6 +637,7 @@ function ScheduledAgentRow(props: {
         <Button type="button" variant="secondary" onClick={() => runNow.mutate()} disabled={runNow.isPending}>
           <Play size={13} /> Run now
         </Button>
+        {runNowFeedback ? <span className="scheduled-agent-run-feedback">{runNowFeedback}</span> : null}
         <Button type="button" variant="ghost" onClick={() => setHistoryOpen((v) => !v)} title="View run history">
           <History size={13} /> History
         </Button>

@@ -669,6 +669,12 @@
   align-items: center;
 }
 
+.scheduled-agent-run-feedback {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 0 4px;
+}
+
 .scheduled-agent-history {
   grid-column: 1 / -1;
   margin-top: 8px;

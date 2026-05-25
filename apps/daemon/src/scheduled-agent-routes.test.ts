@@ -209,6 +209,150 @@ describe("scheduled agent routes", () => {
       await closeServer(server);
     }
   });
+
+  it("POST /run maps the four overlap-policy outcomes to HTTP envelopes (skip/queue/queue_full)", async () => {
+    const fixture = createFixture();
+    const git = createGitRepo(fixture.config.dataDir);
+    const now = new Date().toISOString();
+    fixture.store.insertRepo({
+      id: "repo_run_envelope",
+      name: "Sched repo",
+      rootPath: git.repoPath,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      deployHookCommand: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      // Skip-policy agent: in-flight run + POST /run → 409.
+      const skipAgent = await postJson<{ scheduledAgent: { id: string } }>(`${baseUrl}/api/scheduled-agents`, {
+        name: "Skip envelope",
+        cron: "0 9 * * *",
+        repoId: "repo_run_envelope",
+        runtimeId: "shell",
+        workspaceStrategy: "existing",
+        workspaceName: "skip-env",
+        overlapPolicy: "skip",
+      });
+      fixture.store.insertScheduledAgentRun({
+        id: "inflight_skip",
+        scheduledAgentId: skipAgent.scheduledAgent.id,
+        status: "running",
+        enqueuedAt: now,
+        startedAt: now,
+        endedAt: null,
+        message: null,
+        workspaceId: null,
+        sessionId: null,
+        backgroundSessionId: null,
+        logFilePath: null,
+      });
+      const skipResp = await fetch(`${baseUrl}/api/scheduled-agents/${skipAgent.scheduledAgent.id}/run`, {
+        method: "POST",
+      });
+      expect(skipResp.status).toBe(409);
+      expect((await skipResp.json()) as { error: string }).toMatchObject({ error: "run_already_in_progress" });
+
+      // Queue-policy agent: in-flight + POST /run → 202 queued.
+      const queueAgent = await postJson<{ scheduledAgent: { id: string } }>(`${baseUrl}/api/scheduled-agents`, {
+        name: "Queue envelope",
+        cron: "0 9 * * *",
+        repoId: "repo_run_envelope",
+        runtimeId: "shell",
+        workspaceStrategy: "existing",
+        workspaceName: "queue-env",
+        overlapPolicy: "queue",
+      });
+      fixture.store.insertScheduledAgentRun({
+        id: "inflight_queue",
+        scheduledAgentId: queueAgent.scheduledAgent.id,
+        status: "running",
+        enqueuedAt: now,
+        startedAt: now,
+        endedAt: null,
+        message: null,
+        workspaceId: null,
+        sessionId: null,
+        backgroundSessionId: null,
+        logFilePath: null,
+      });
+      const queueResp = await fetch(`${baseUrl}/api/scheduled-agents/${queueAgent.scheduledAgent.id}/run`, {
+        method: "POST",
+      });
+      expect(queueResp.status).toBe(202);
+      const queueBody = (await queueResp.json()) as { queued: boolean; runId: string; queuePosition: number };
+      expect(queueBody.queued).toBe(true);
+      expect(queueBody.runId).toMatch(/^run_/);
+      expect(queueBody.queuePosition).toBe(1);
+
+      // Saturate the queue and verify 429 queue_full.
+      for (let i = 0; i < 9; i += 1) {
+        await fetch(`${baseUrl}/api/scheduled-agents/${queueAgent.scheduledAgent.id}/run`, { method: "POST" });
+      }
+      const fullResp = await fetch(`${baseUrl}/api/scheduled-agents/${queueAgent.scheduledAgent.id}/run`, {
+        method: "POST",
+      });
+      expect(fullResp.status).toBe(429);
+      expect((await fullResp.json()) as { error: string; limit: number }).toMatchObject({
+        error: "queue_full",
+        limit: 10,
+      });
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("rejects invalid query parameters with 400", async () => {
+    const fixture = createFixture();
+    const git = createGitRepo(fixture.config.dataDir);
+    fixture.store.insertRepo({
+      id: "repo_q",
+      name: "Sched repo",
+      rootPath: git.repoPath,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      deployHookCommand: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      archivedAt: null,
+    });
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const created = await postJson<{ scheduledAgent: { id: string } }>(`${baseUrl}/api/scheduled-agents`, {
+        name: "Q",
+        cron: "0 9 * * *",
+        repoId: "repo_q",
+        runtimeId: "shell",
+        workspaceStrategy: "existing",
+        workspaceName: "q",
+      });
+      // limit=garbage → 400 invalid_integer, not silent fallback to 50.
+      const bad = await fetch(`${baseUrl}/api/scheduled-agents/${created.scheduledAgent.id}/runs?limit=abc`);
+      expect(bad.status).toBe(400);
+      expect((await bad.json()) as { error: string; field: string }).toEqual({
+        error: "invalid_integer",
+        field: "limit",
+      });
+      // limit=0 → 400 out_of_range (min is 1).
+      const zero = await fetch(`${baseUrl}/api/scheduled-agents/${created.scheduledAgent.id}/runs?limit=0`);
+      expect(zero.status).toBe(400);
+    } finally {
+      await closeServer(server);
+    }
+  });
 });
 
 function createFixture() {

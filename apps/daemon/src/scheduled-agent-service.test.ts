@@ -153,6 +153,106 @@ describe("ScheduledAgentService", () => {
       await callDaemonMcpTool(deps, { name: "read_scheduled_agent_run_log", arguments: { runId: "missing" } }),
     ).toEqual({ error: "run_not_found" });
   });
+
+  it("run_scheduled_agent_now maps the four overlap-policy outcomes to MCP envelopes", async () => {
+    const { service, runner, store } = createService();
+    const repo = createRepo();
+    const deps = {
+      config: { runtimes: [{ id: "shell", displayName: "Shell", command: "bash", args: [] }] } as never,
+      store,
+      operations: {} as never,
+      ttyd: {} as never,
+      scheduledAgents: runner,
+      scheduledAgentService: service,
+      providerCache: new Map(),
+      emit: () => {},
+    };
+
+    // not found.
+    expect(await callDaemonMcpTool(deps, { name: "run_scheduled_agent_now", arguments: { id: "missing" } })).toEqual({
+      error: "scheduled_agent_not_found",
+    });
+
+    // skip + in-flight → run_already_in_progress.
+    const skipAgent = (await callDaemonMcpTool(deps, {
+      name: "create_scheduled_agent",
+      arguments: {
+        name: "MCP skip",
+        cron: "0 9 * * *",
+        repoId: repo.id,
+        runtimeId: "shell",
+        workspaceStrategy: "existing",
+        workspaceName: "mcp-skip",
+        overlapPolicy: "skip",
+      },
+    })) as { scheduledAgent: { id: string } };
+    store.insertScheduledAgentRun({
+      id: "inflight_skip_mcp",
+      scheduledAgentId: skipAgent.scheduledAgent.id,
+      status: "running",
+      enqueuedAt: new Date().toISOString(),
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      message: null,
+      workspaceId: null,
+      sessionId: null,
+      backgroundSessionId: null,
+      logFilePath: null,
+    });
+    const skipResult = (await callDaemonMcpTool(deps, {
+      name: "run_scheduled_agent_now",
+      arguments: { id: skipAgent.scheduledAgent.id },
+    })) as { error: string };
+    expect(skipResult.error).toBe("run_already_in_progress");
+
+    // queue + in-flight → queued envelope.
+    const queueAgent = (await callDaemonMcpTool(deps, {
+      name: "create_scheduled_agent",
+      arguments: {
+        name: "MCP queue",
+        cron: "0 9 * * *",
+        repoId: repo.id,
+        runtimeId: "shell",
+        workspaceStrategy: "existing",
+        workspaceName: "mcp-queue",
+        overlapPolicy: "queue",
+      },
+    })) as { scheduledAgent: { id: string } };
+    store.insertScheduledAgentRun({
+      id: "inflight_queue_mcp",
+      scheduledAgentId: queueAgent.scheduledAgent.id,
+      status: "running",
+      enqueuedAt: new Date().toISOString(),
+      startedAt: new Date().toISOString(),
+      endedAt: null,
+      message: null,
+      workspaceId: null,
+      sessionId: null,
+      backgroundSessionId: null,
+      logFilePath: null,
+    });
+    const queuedResult = (await callDaemonMcpTool(deps, {
+      name: "run_scheduled_agent_now",
+      arguments: { id: queueAgent.scheduledAgent.id },
+    })) as { queued: boolean; runId: string; queuePosition: number };
+    expect(queuedResult.queued).toBe(true);
+    expect(queuedResult.runId).toMatch(/^run_/);
+    expect(queuedResult.queuePosition).toBe(1);
+
+    // Saturate then expect queue_full.
+    for (let i = 0; i < 9; i += 1) {
+      await callDaemonMcpTool(deps, {
+        name: "run_scheduled_agent_now",
+        arguments: { id: queueAgent.scheduledAgent.id },
+      });
+    }
+    const fullResult = (await callDaemonMcpTool(deps, {
+      name: "run_scheduled_agent_now",
+      arguments: { id: queueAgent.scheduledAgent.id },
+    })) as { error: string; limit: number };
+    expect(fullResult.error).toBe("queue_full");
+    expect(fullResult.limit).toBe(10);
+  });
 });
 
 let emits: Array<[string, unknown]> = [];

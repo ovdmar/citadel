@@ -8,6 +8,24 @@ import type express from "express";
 import { LOG_SLICE_DEFAULT_BYTES, readLogSlice } from "./log-slice.js";
 import { ScheduledAgentService } from "./scheduled-agent-service.js";
 
+/**
+ * Strict query-string integer parser. Distinguishes "not provided" (uses
+ * default) from "provided but invalid" (400) so the public API doesn't
+ * silently coerce garbage into a server-chosen default.
+ */
+function parseQueryInt(
+  raw: unknown,
+  bounds: { default: number; min: number; max?: number },
+): { kind: "ok"; value: number } | { kind: "error"; error: string } {
+  if (raw === undefined || raw === null || raw === "") return { kind: "ok", value: bounds.default };
+  const str = Array.isArray(raw) ? String(raw[0]) : String(raw);
+  if (!/^-?\d+$/.test(str)) return { kind: "error", error: "invalid_integer" };
+  const value = Number.parseInt(str, 10);
+  if (!Number.isFinite(value) || value < bounds.min) return { kind: "error", error: "out_of_range" };
+  if (bounds.max !== undefined && value > bounds.max) return { kind: "error", error: "out_of_range" };
+  return { kind: "ok", value };
+}
+
 type AsyncRoute = (
   handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>,
 ) => (req: express.Request, res: express.Response, next: express.NextFunction) => void;
@@ -165,9 +183,11 @@ export function registerScheduledAgentRoutes(input: {
   app.get("/api/scheduled-agents/:id/runs", (req, res) => {
     const id = String(req.params.id);
     if (!scheduledAgents.find(id)) return res.status(404).json({ error: "scheduled_agent_not_found" });
-    const limit = Math.max(1, Math.min(Number.parseInt(String(req.query.limit ?? "50"), 10) || 50, 500));
-    const offset = Math.max(0, Number.parseInt(String(req.query.offset ?? "0"), 10) || 0);
-    const runs = store.listScheduledAgentRuns(id, { limit, offset });
+    const limit = parseQueryInt(req.query.limit, { default: 50, min: 1, max: 500 });
+    if (limit.kind === "error") return res.status(400).json({ error: limit.error, field: "limit" });
+    const offset = parseQueryInt(req.query.offset, { default: 0, min: 0 });
+    if (offset.kind === "error") return res.status(400).json({ error: offset.error, field: "offset" });
+    const runs = store.listScheduledAgentRuns(id, { limit: limit.value, offset: offset.value });
     res.json({ runs });
   });
 
@@ -178,10 +198,11 @@ export function registerScheduledAgentRoutes(input: {
     // 404 if either the run doesn't exist OR doesn't belong to this agent.
     if (!run || run.scheduledAgentId !== id) return res.status(404).json({ error: "run_not_found" });
     if (!run.logFilePath) return res.status(404).json({ error: "log_not_available" });
-    const offset = Number.parseInt(String(req.query.offset ?? "0"), 10) || 0;
-    const maxBytes =
-      Number.parseInt(String(req.query.maxBytes ?? LOG_SLICE_DEFAULT_BYTES), 10) || LOG_SLICE_DEFAULT_BYTES;
-    const slice = readLogSlice(run.logFilePath, { offset, maxBytes });
+    const offset = parseQueryInt(req.query.offset, { default: 0, min: 0 });
+    if (offset.kind === "error") return res.status(400).json({ error: offset.error, field: "offset" });
+    const maxBytes = parseQueryInt(req.query.maxBytes, { default: LOG_SLICE_DEFAULT_BYTES, min: 256, max: 200 * 1024 });
+    if (maxBytes.kind === "error") return res.status(400).json({ error: maxBytes.error, field: "maxBytes" });
+    const slice = readLogSlice(run.logFilePath, { offset: offset.value, maxBytes: maxBytes.value });
     if ("kind" in slice) return res.status(404).json({ error: "log_file_missing" });
     res.json(slice);
   });

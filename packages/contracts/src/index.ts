@@ -689,13 +689,11 @@ export type WorkspaceDiff = z.infer<typeof WorkspaceDiffSchema>;
 export type ScheduledAgent = z.infer<typeof ScheduledAgentSchema>;
 export type ScheduledAgentWorkspaceStrategy = z.infer<typeof ScheduledAgentWorkspaceStrategySchema>;
 export type ScheduledAgentRunStatus = z.infer<typeof ScheduledAgentRunStatusSchema>;
-export type ScheduledAgentRunRowStatus = z.infer<typeof ScheduledAgentRunRowStatusSchema>;
 export type ScheduledAgentScheduleType = z.infer<typeof ScheduledAgentScheduleTypeSchema>;
 export type ScheduledAgentRunMode = z.infer<typeof ScheduledAgentRunModeSchema>;
 export type ScheduledAgentOverlapPolicy = z.infer<typeof ScheduledAgentOverlapPolicySchema>;
 export type ScheduledAgentRun = z.infer<typeof ScheduledAgentRunSchema>;
 export type BackgroundAgentSession = z.infer<typeof BackgroundAgentSessionSchema>;
-export type BackgroundAgentSessionStatus = z.infer<typeof BackgroundAgentSessionStatusSchema>;
 export type CreateScheduledAgentInput = z.infer<typeof CreateScheduledAgentInputSchema>;
 export type UpdateScheduledAgentInput = z.infer<typeof UpdateScheduledAgentInputSchema>;
 
