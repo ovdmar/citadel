@@ -13,11 +13,11 @@ export const WorkspaceKindSchema = z.enum(["worktree", "root"]);
 export const AgentSessionStatusSchema = z.enum([
   "starting",
   "running",
-  "waiting",
+  "waiting_for_input",
   "idle",
-  "failed",
   "stopped",
-  "orphaned",
+  "failed",
+  "unknown",
 ]);
 export const TransportStatusSchema = z.enum(["disconnected", "connecting", "connected", "degraded"]);
 export const OperationStatusSchema = z.enum(["queued", "running", "succeeded", "failed", "cancelled"]);
@@ -88,6 +88,11 @@ export const AgentSessionSchema = z.object({
   runtimeId: IdSchema,
   displayName: z.string(),
   status: AgentSessionStatusSchema,
+  statusReason: z.string().nullable().default(null),
+  lastStatusAt: z.string(),
+  lastOutputAt: z.string().nullable().default(null),
+  endedAt: z.string().nullable().default(null),
+  exitCode: z.number().int().nullable().default(null),
   transport: TransportStatusSchema,
   tmuxSessionName: z.string().nullable(),
   tmuxSessionId: z.string().nullable(),
