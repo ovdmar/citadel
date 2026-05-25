@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { CitadelConfig } from "@citadel/config";
 import { mergeConfigPatch, saveConfig } from "@citadel/config";
 import {
@@ -43,6 +42,7 @@ import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { backfillIfEmpty } from "./scratchpad-history.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { scratchpadPath } from "./scratchpad.js";
+import { registerSpaFallback } from "./spa-fallback-route.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
@@ -746,14 +746,7 @@ export function createDaemonApp(input: {
     req.on("close", () => sseClients.delete(res));
   });
 
-  const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
-  if (fs.existsSync(path.join(webDist, "index.html"))) {
-    app.use(express.static(webDist, { index: false }));
-    app.get("*", (req, res, next) => {
-      if (req.path.startsWith("/api/") || req.path === "/events") return next();
-      res.sendFile(path.join(webDist, "index.html"));
-    });
-  }
+  registerSpaFallback({ app });
 
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     if (error instanceof ZodError) {
