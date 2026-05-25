@@ -1,6 +1,6 @@
 import type { ScratchpadBlockSummary, ScratchpadHistorySummary, ScratchpadSnapshot } from "@citadel/contracts";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, Trash2, X } from "lucide-react";
+import { ArrowLeft, Clock, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
 import { VoiceCaptureButton } from "../components/voice-capture-button.js";
@@ -31,6 +31,9 @@ export function ScratchpadView() {
   const [restoring, setRestoring] = useState(false);
   const [composerError, setComposerError] = useState<string | null>(null);
   const [undo, setUndo] = useState<UndoPayload | null>(null);
+  // On narrow viewports the history sidebar is hidden behind this toggle.
+  // Desktop CSS always shows the sidebar regardless of this flag.
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -426,6 +429,17 @@ export function ScratchpadView() {
         <span className="command-result-meta scratchpad-status" aria-live="polite">
           {renderStatus(updatedAt)}
         </span>
+        <button
+          type="button"
+          className={`scratchpad-history-toggle${historyOpen ? " is-open" : ""}`}
+          aria-pressed={historyOpen}
+          aria-label={historyOpen ? "Hide version history" : "Show version history"}
+          title={historyOpen ? "Hide version history" : "Show version history"}
+          onClick={() => setHistoryOpen((open) => !open)}
+        >
+          <Clock size={14} />
+          <span>History</span>
+        </button>
       </header>
       <div className="scratchpad-body">
         <div className="scratchpad-blocks-pane">
@@ -500,7 +514,10 @@ export function ScratchpadView() {
             </>
           )}
         </div>
-        <aside className="scratchpad-history" aria-label="Scratchpad version history">
+        <aside
+          className={`scratchpad-history${historyOpen ? " is-open" : ""}`}
+          aria-label="Scratchpad version history"
+        >
           <header className="scratchpad-history-header">
             <span>Versions</span>
             <span className="scratchpad-history-count">{history.length}</span>
