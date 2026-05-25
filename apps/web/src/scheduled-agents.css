@@ -388,4 +388,12 @@
   .scheduled-agent-row {
     grid-template-columns: 1fr;
   }
+
+  .sched-master-detail {
+    grid-template-columns: 1fr;
+  }
+
+  .sched-list {
+    max-height: 240px;
+  }
 }
