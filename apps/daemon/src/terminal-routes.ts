@@ -241,13 +241,32 @@ export function registerTerminalRoutes(input: {
     // shim injection can operate on the raw bytes. ttyd's other assets are
     // small enough that the bandwidth loss is negligible.
     req.headers["accept-encoding"] = "identity";
-    proxy.web(req, res, { target: resolved.target }, (error?: Error) => {
-      if (!res.headersSent) {
-        res
-          .status(502)
-          .type("text/plain")
-          .send(error instanceof Error ? error.message : "terminal_proxy_failed");
+    // Auto-heal on connect-refused / reset: the daemon's `entries` map can
+    // briefly hold a "live" record for a ttyd that bound the port but exited
+    // immediately afterwards (e.g. its inner `bash -lc "tmux attach"` failed
+    // because the tmux session wasn't ready yet, or two concurrent ensure()
+    // calls raced). The user used to see "connect ECONNREFUSED 127.0.0.1:..."
+    // and had to manually click reload. Release the stale entry and let
+    // reviveProxyTarget spawn a fresh one, then retry the proxy once.
+    proxy.web(req, res, { target: resolved.target }, async (error?: Error) => {
+      if (res.headersSent) return;
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ECONNREFUSED" || code === "ECONNRESET") {
+        ttyd.release(resolved.sessionId);
+        const revived = await reviveProxyTarget(req.url);
+        if (revived) {
+          proxy.web(req, res, { target: revived.target }, (err2?: Error) => {
+            if (!res.headersSent) {
+              res
+                .status(502)
+                .type("text/plain")
+                .send(err2 instanceof Error ? err2.message : "terminal_proxy_failed");
+            }
+          });
+          return;
+        }
       }
+      res.status(502).type("text/plain").send(error instanceof Error ? error.message : "terminal_proxy_failed");
     });
   });
 
