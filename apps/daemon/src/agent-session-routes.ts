@@ -1,3 +1,5 @@
+import type { CitadelConfig } from "@citadel/config";
+import { CreateAgentSessionInputSchema } from "@citadel/contracts";
 import type { OperationService } from "@citadel/operations";
 import type express from "express";
 
@@ -9,6 +11,8 @@ type Deps = {
   operations: OperationService;
   emit: (type: string, payload: unknown) => void;
   asyncRoute: AsyncRoute;
+  config: CitadelConfig;
+  ttyd: { release: (sessionId: string) => void };
 };
 
 /**
@@ -17,7 +21,37 @@ type Deps = {
  * automation share the same backend code path.
  */
 export function registerAgentSessionRoutes(app: express.Express, deps: Deps) {
-  const { operations, emit, asyncRoute } = deps;
+  const { operations, emit, asyncRoute, config, ttyd } = deps;
+
+  app.post(
+    "/api/agent-sessions",
+    asyncRoute(async (req, res) => {
+      const input = CreateAgentSessionInputSchema.parse(req.body);
+      const runtime = config.runtimes.find((candidate) => candidate.id === input.runtimeId);
+      if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
+      const session = await operations.createAgentSession(input, {
+        command: runtime.command,
+        args: runtime.args,
+        displayName: runtime.displayName,
+        promptArg: runtime.promptArg ?? null,
+      });
+      emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
+      res.status(202).json({ session });
+    }),
+  );
+
+  app.delete(
+    "/api/agent-sessions/:sessionId",
+    asyncRoute(async (req, res) => {
+      const sessionId = req.params.sessionId;
+      if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
+      const result = operations.stopAgentSession({ sessionId });
+      if (!result.stopped) return res.status(404).json(result);
+      ttyd.release(sessionId);
+      emit("agent.updated", { sessionId });
+      res.status(202).json(result);
+    }),
+  );
 
   app.get(
     "/api/agent-sessions/:sessionId/output",

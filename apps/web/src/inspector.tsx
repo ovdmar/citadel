@@ -11,6 +11,7 @@ import { Check, ChevronDown, ExternalLink, GitPullRequest, Hash, Loader2, Plus, 
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { DeployedAppsPanel } from "./deployed-apps.js";
+import { FixConflictsButton } from "./inspector-fix-conflicts.js";
 import { ReviewerAvatars, aggregateReviewerCounts } from "./inspector-reviewers.js";
 import { formatLabel } from "./labels.js";
 import { prToneFor } from "./workspace-card.js";
@@ -326,39 +327,6 @@ function StatsTab(props: {
         </section>
       </div>
     </>
-  );
-}
-
-function FixConflictsButton(props: { workspaceId: string }) {
-  const mutation = useMutation({
-    mutationFn: () =>
-      api<{ session: { id: string }; promptSource: string }>(`/api/workspaces/${props.workspaceId}/fix-conflicts`, {
-        method: "POST",
-        body: JSON.stringify({}),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["state"] });
-      queryClient.invalidateQueries({ queryKey: ["cockpit-summary", props.workspaceId] });
-    },
-  });
-  return (
-    <div className="ins-pr-fix">
-      <button
-        type="button"
-        className="cit-btn cit-btn-danger"
-        onClick={() => mutation.mutate()}
-        disabled={mutation.isPending}
-        title="Launch a fresh agent to resolve PR conflicts against main"
-      >
-        {mutation.isPending ? <Loader2 size={11} className="spin" /> : <GitPullRequest size={11} />}
-        {mutation.isPending ? "Launching…" : "Fix conflicts"}
-      </button>
-      {mutation.isError ? (
-        <span className="ins-pr-fix-err">
-          {mutation.error instanceof Error ? mutation.error.message : "Failed to launch agent"}
-        </span>
-      ) : null}
-    </div>
   );
 }
 

@@ -35,8 +35,8 @@ export {
   nextCronRun,
   describeCron,
 } from "./scheduled-agents.js";
-export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
+export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
 import {
   type DeployOpsDeps,
@@ -282,10 +282,9 @@ export class OperationService {
     options: { activitySource?: ActivityEvent["source"] } = {},
   ) => {
     if (input.namespaceId) {
-      const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
-      if (workspace && input.namespaceId !== workspace.namespaceId) {
-        this.assignWorkspaceToNamespace({ workspaceId: workspace.id, namespaceId: input.namespaceId });
-      }
+      const ws = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+      if (ws && input.namespaceId !== ws.namespaceId)
+        this.assignWorkspaceToNamespace({ workspaceId: ws.id, namespaceId: input.namespaceId });
     }
     return createAgentSessionImpl(
       {
@@ -652,9 +651,7 @@ export class OperationService {
 
   listDeployedApps = (input: { workspaceId: string }) =>
     listDeployedAppsImpl(this.deployOpsDeps(), this.resolveRepoWorkspace(input.workspaceId));
-
-  // Per-workspace inflight guard so a double-click in the cockpit or a
-  // human+MCP overlap doesn't run two redeploys against the same port.
+  // Per-workspace inflight guard prevents concurrent redeploys (double-click, human+MCP overlap).
   private redeployInflight = new Map<string, ReturnType<typeof redeployAppImpl>>();
   redeployApp = (input: { workspaceId: string; appName?: string | undefined }) => {
     const existing = this.redeployInflight.get(input.workspaceId);

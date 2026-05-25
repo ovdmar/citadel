@@ -6,7 +6,6 @@ import type { CitadelConfig } from "@citadel/config";
 import { mergeConfigPatch, saveConfig } from "@citadel/config";
 import {
   type AppEvent,
-  CreateAgentSessionInputSchema,
   CreateRepoInputSchema,
   CreateWorkspaceInputSchema,
   HookActionSchema,
@@ -14,7 +13,6 @@ import {
   type WorkspaceCockpitSummary,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
-import { resolveFixConflictsPrompt } from "@citadel/hooks";
 import { mcpStatus, mcpToolDefinitions } from "@citadel/mcp";
 import { OperationService } from "@citadel/operations";
 import {
@@ -500,79 +498,7 @@ export function createDaemonApp(input: {
 
   registerRuntimeUsageRoutes({ app, config, asyncRoute, providerCache, cachedProvider });
 
-  app.post(
-    "/api/agent-sessions",
-    asyncRoute(async (req, res) => {
-      const input = CreateAgentSessionInputSchema.parse(req.body);
-      const runtime = config.runtimes.find((candidate) => candidate.id === input.runtimeId);
-      if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
-      const session = await operations.createAgentSession(input, {
-        command: runtime.command,
-        args: runtime.args,
-        displayName: runtime.displayName,
-        promptArg: runtime.promptArg ?? null,
-      });
-      emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
-      res.status(202).json({ session });
-    }),
-  );
-
-  app.delete(
-    "/api/agent-sessions/:sessionId",
-    asyncRoute(async (req, res) => {
-      const sessionId = req.params.sessionId;
-      if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
-      const result = operations.stopAgentSession({ sessionId });
-      if (!result.stopped) return res.status(404).json(result);
-      ttyd.release(sessionId);
-      emit("agent.updated", { sessionId });
-      res.status(202).json(result);
-    }),
-  );
-
-  // Launch a fresh agent to resolve a PR's merge conflicts. Always spawns a new
-  // session (no de-duplication) per the design — operators can click multiple
-  // times if they want multiple agents trying. The prompt is taken from a repo
-  // `.citadel/hooks/fixconflicts` hook when present, else a hardcoded default
-  // that references Citadel's non-fast-forward policy.
-  app.post(
-    "/api/workspaces/:workspaceId/fix-conflicts",
-    asyncRoute(async (req, res) => {
-      const workspaceId = req.params.workspaceId;
-      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const runtimeId = typeof req.body?.runtimeId === "string" ? req.body.runtimeId : config.runtimes[0]?.id;
-      const runtime = config.runtimes.find((candidate) => candidate.id === runtimeId);
-      if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
-      const resolved = await resolveFixConflictsPrompt({
-        workspacePath: workspace.path,
-        workspaceId: workspace.id,
-        workspaceBranch: workspace.branch,
-        repoId: repo.id,
-      });
-      const session = await operations.createAgentSession(
-        {
-          workspaceId: workspace.id,
-          runtimeId: runtime.id,
-          displayName: "Fix conflicts",
-          prompt: resolved.prompt,
-        },
-        {
-          command: runtime.command,
-          args: runtime.args,
-          displayName: runtime.displayName,
-          promptArg: runtime.promptArg ?? null,
-        },
-      );
-      emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
-      res.status(202).json({ session, promptSource: resolved.source, diagnostic: resolved.diagnostic });
-    }),
-  );
-
-  registerAgentSessionRoutes(app, { operations, emit, asyncRoute });
+  registerAgentSessionRoutes(app, { operations, emit, asyncRoute, config, ttyd });
 
   app.post(
     "/api/reconcile",
@@ -752,7 +678,7 @@ export function createDaemonApp(input: {
     readMcpResource: (uri) => readMcpResource(store, config, uri),
   });
 
-  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations });
+  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, config });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit });
   try {
@@ -831,24 +757,11 @@ export function createDaemonApp(input: {
     server.on("close", () => clearInterval(reaper));
   }
 
-  // Status monitor — 2s tick observing tmux activity + bash-wrapper sentinels
-  // and asking the runtime adapter for pane-derived status observations.
-  // Updates agent_sessions.status and emits agent.updated SSE events. Wiring
-  // lives in status-monitor-wiring.ts to keep this file under the 800-line gate.
+  // Background monitors — wired in *-wiring.ts files; both attach to server.on("close").
   const statusMonitor = startDaemonStatusMonitor(store, emit);
-  if (statusMonitor) {
-    server.on("close", () => statusMonitor.stop());
-  }
-
-  // Auto-recovery — periodic (default 60s) tick that auto-launches a fix-CI
-  // agent when a workspace's PR has been failing CI with no agent activity
-  // for the idle window, deduped per PR-head-SHA + debounce window. Disabled
-  // by CITADEL_AUTO_RECOVERY_DISABLED=1; default knobs documented in
-  // specs/B.7 and auto-recovery-wiring.ts.
+  if (statusMonitor) server.on("close", () => statusMonitor.stop());
   const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({ store, config, operations, emit });
-  if (autoRecoveryMonitor) {
-    server.on("close", () => autoRecoveryMonitor.stop());
-  }
+  if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
 
   return { app, server, emit };
 
