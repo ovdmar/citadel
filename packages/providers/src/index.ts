@@ -10,6 +10,7 @@ import type {
   IssueTrackerSummary,
   IssueTransition,
   IssueTransitionActionResult,
+  PrReviewerState,
   ProviderHealth,
   RuntimeUsageSummary,
   VersionControlSummary,
@@ -378,13 +379,20 @@ async function discoverDefaultBranch(rootPath: string) {
   return (await gitOptional(rootPath, ["branch", "--show-current"])) || null;
 }
 
+type GhReview = {
+  author?: { login?: string | null; name?: string | null } | null;
+  state?: string | null;
+  submittedAt?: string | null;
+};
+type GhReviewRequest = { login?: string | null; name?: string | null };
+
 async function currentPullRequest(rootPath: string) {
   try {
     const raw = await gh(rootPath, [
       "pr",
       "view",
       "--json",
-      "number,title,url,state,isDraft,reviewDecision,statusCheckRollup,additions,deletions",
+      "number,title,url,state,isDraft,reviewDecision,statusCheckRollup,additions,deletions,reviews,reviewRequests",
     ]);
     const parsed = JSON.parse(raw) as {
       number: number;
@@ -396,6 +404,8 @@ async function currentPullRequest(rootPath: string) {
       statusCheckRollup?: Array<Record<string, unknown>>;
       additions?: number | null;
       deletions?: number | null;
+      reviews?: GhReview[];
+      reviewRequests?: GhReviewRequest[];
     };
     return {
       number: parsed.number,
@@ -407,9 +417,59 @@ async function currentPullRequest(rootPath: string) {
       checks: (parsed.statusCheckRollup ?? []).map(normalizeCheck),
       additions: typeof parsed.additions === "number" ? parsed.additions : null,
       deletions: typeof parsed.deletions === "number" ? parsed.deletions : null,
+      reviewers: aggregateReviewers(parsed.reviews ?? [], parsed.reviewRequests ?? []),
     };
   } catch {
     return null;
+  }
+}
+
+export function aggregateReviewers(reviews: GhReview[], reviewRequests: GhReviewRequest[]) {
+  // Take the latest review per author; "pending" review requests outrank older
+  // states because GitHub re-requests a review when the PR moves on.
+  const latestByLogin = new Map<string, { name: string | null; state: string; submittedAt: string }>();
+  for (const review of reviews) {
+    const login = review.author?.login;
+    if (!login) continue;
+    const submittedAt = review.submittedAt ?? "";
+    const prev = latestByLogin.get(login);
+    if (!prev || submittedAt > prev.submittedAt) {
+      latestByLogin.set(login, {
+        name: review.author?.name ?? null,
+        state: String(review.state ?? "").toUpperCase(),
+        submittedAt,
+      });
+    }
+  }
+  const out: Array<{ login: string; name: string | null; state: PrReviewerState }> = [];
+  for (const [login, entry] of latestByLogin) {
+    out.push({ login, name: entry.name, state: mapReviewState(entry.state) });
+  }
+  for (const requested of reviewRequests) {
+    if (!requested.login) continue;
+    const existing = out.find((r) => r.login === requested.login);
+    if (existing) {
+      existing.state = "pending";
+      if (!existing.name && requested.name) existing.name = requested.name;
+    } else {
+      out.push({ login: requested.login, name: requested.name ?? null, state: "pending" });
+    }
+  }
+  return out;
+}
+
+function mapReviewState(state: string): PrReviewerState {
+  switch (state) {
+    case "APPROVED":
+      return "approved";
+    case "CHANGES_REQUESTED":
+      return "changes_requested";
+    case "COMMENTED":
+      return "commented";
+    case "DISMISSED":
+      return "dismissed";
+    default:
+      return "pending";
   }
 }
 

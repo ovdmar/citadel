@@ -1,23 +1,19 @@
-import type { AgentSession, Repo, Workspace, WorkspaceCockpitSummary, WorkspaceDiff } from "@citadel/contracts";
+import type {
+  AgentSession,
+  PrReviewer,
+  Repo,
+  Workspace,
+  WorkspaceCockpitSummary,
+  WorkspaceDiff,
+  WorkspaceRecentCommits,
+} from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import {
-  Check,
-  ChevronDown,
-  ExternalLink,
-  GitPullRequest,
-  Hash,
-  Loader2,
-  PanelRightClose,
-  RefreshCw,
-  Slack,
-  X,
-} from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, ChevronDown, ExternalLink, GitPullRequest, Hash, Loader2, Plus, RefreshCw, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
-import { Button } from "./components/ui/button.js";
 import { DeployedAppsPanel } from "./deployed-apps.js";
 import { formatLabel } from "./labels.js";
-import { type ApprovalTone, approvalToneFor, prToneFor } from "./workspace-card.js";
+import { prToneFor } from "./workspace-card.js";
 
 type InspectorTab = "stats" | "diff";
 
@@ -29,9 +25,6 @@ export function Inspector(props: {
   onCollapse: () => void;
 }) {
   const [tab, setTab] = useState<InspectorTab>("stats");
-  // Diff count is shared between StatsTab (branch card) and the tab pill —
-  // queried at the Inspector level so the count is always available regardless
-  // of which tab is active. React Query dedupes with DiffTab's identical key.
   const diff = useQuery<WorkspaceDiff>({
     queryKey: ["diff", props.workspace.id],
     queryFn: () => api<WorkspaceDiff>(`/api/workspaces/${props.workspace.id}/diff`),
@@ -39,22 +32,6 @@ export function Inspector(props: {
   const fileCount = diff.data?.files.length ?? null;
   return (
     <>
-      <div className="column-header inspector-head">
-        <div className="inspector-head-title">
-          <span className="inspector-eyebrow">Workspace</span>
-          <span className="inspector-head-name">{props.workspace.name}</span>
-        </div>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          onClick={props.onCollapse}
-          aria-label="Collapse inspector"
-          title="Collapse inspector"
-        >
-          <PanelRightClose size={14} />
-        </Button>
-      </div>
       <div className="inspector-tabs" data-active={tab}>
         <button
           type="button"
@@ -74,6 +51,15 @@ export function Inspector(props: {
           {fileCount !== null && fileCount > 0 ? <span className="inspector-tab-count">{fileCount}</span> : null}
         </button>
         <span className="inspector-tab-indicator" data-tab={tab} aria-hidden />
+        <button
+          type="button"
+          className="cit-icon-btn cit-icon-btn--sm inspector-tabs-collapse"
+          onClick={props.onCollapse}
+          aria-label="Collapse inspector"
+          title="Collapse inspector"
+        >
+          <X size={12} />
+        </button>
       </div>
       <div className="column-body">
         {tab === "stats" ? (
@@ -94,45 +80,12 @@ function StatsTab(props: {
 }) {
   const pr = props.summary?.versionControl.pullRequest ?? null;
   const prTone = prToneFor(pr);
-  const approvalTone: ApprovalTone = approvalToneFor(pr);
   const additions = pr?.additions ?? 0;
   const deletions = pr?.deletions ?? 0;
   const apps = props.summary?.apps;
   const checks = pr?.checks ?? [];
 
   const issueUrl = props.workspace.issueUrl ?? props.summary?.issueTracker?.url ?? null;
-  const slackThreadUrl = props.workspace.slackThreadUrl;
-
-  const attachIssue = useMutation({
-    mutationFn: (input: { issueKey: string; issueTitle?: string; issueUrl?: string }) =>
-      api(`/api/workspaces/${props.workspace.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          issueKey: input.issueKey,
-          issueTitle: input.issueTitle ?? null,
-          issueUrl: input.issueUrl || null,
-        }),
-      }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
-  });
-  const attachSlack = useMutation({
-    mutationFn: (slackThreadUrl: string) =>
-      api(`/api/workspaces/${props.workspace.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ slackThreadUrl }),
-      }),
-    onSuccess: () => {
-      setShowSlackAttach(false);
-      queryClient.invalidateQueries({ queryKey: ["state"] });
-    },
-  });
-
-  const [issueDraft, setIssueDraft] = useState("");
-  const [issueUrlDraft, setIssueUrlDraft] = useState("");
-  const [showIssueAttach, setShowIssueAttach] = useState(false);
-  const [slackDraft, setSlackDraft] = useState("");
-  const [showSlackAttach, setShowSlackAttach] = useState(false);
-
   const diffFiles = props.diff?.files.length ?? 0;
   const diffAdded = additions || sumDiffLines(props.diff, "+");
   const diffRemoved = deletions || sumDiffLines(props.diff, "-");
@@ -142,52 +95,25 @@ function StatsTab(props: {
   const [checksOpen, setChecksOpen] = useState(false);
   const checksSummary = summarizeChecks(checks);
 
+  const recent = useQuery<WorkspaceRecentCommits>({
+    queryKey: ["recent-commits", props.workspace.id, 6],
+    queryFn: () => api<WorkspaceRecentCommits>(`/api/workspaces/${props.workspace.id}/recent-commits?limit=6`),
+    staleTime: 30_000,
+  });
+
+  const reviewerAggregate = aggregateReviewerCounts(pr?.reviewers ?? []);
+
   return (
     <>
-      {issueKey ? (
-        <div className="inspector-attach">
-          <a
-            className="cit-jira"
-            href={issueUrl ?? undefined}
-            target="_blank"
-            rel="noreferrer"
-            title={`Open ${issueKey}${issueTitle ? `: ${issueTitle}` : ""}`}
-          >
-            <span className="cit-jira-icon" aria-hidden>
-              <svg viewBox="0 0 16 16" width="14" height="14" role="img" aria-label="Issue tracker">
-                <title>Issue tracker</title>
-                <rect x="1.5" y="1.5" width="13" height="13" rx="2.5" fill="oklch(50% 0.16 250)" />
-                <path
-                  d="M5 8.2l2 2 4-4"
-                  fill="none"
-                  stroke="#fff"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </span>
-            <span className="cit-jira-text">
-              <span className="cit-jira-key">{issueKey}</span>
-              {issueTitle ? <span className="cit-jira-title">{issueTitle}</span> : null}
-            </span>
-            {issueStatus ? (
-              <span className={`cit-jira-status cit-jira-status--${jiraStatusTone(issueStatus)}`}>{issueStatus}</span>
-            ) : null}
-          </a>
-        </div>
-      ) : null}
+      <IssueAttachSlot
+        workspaceId={props.workspace.id}
+        issueKey={issueKey}
+        issueTitle={issueTitle}
+        issueStatus={issueStatus}
+        issueUrl={issueUrl}
+      />
 
       <div className="inspector-body">
-        <BranchCard
-          branch={props.workspace.branch}
-          baseBranch={props.workspace.baseBranch}
-          files={diffFiles}
-          added={diffAdded}
-          removed={diffRemoved}
-          dirty={props.workspace.dirty}
-        />
-
         <section className="ins-section">
           <div className="ins-section-head">
             <span className="ins-section-label">Pull request</span>
@@ -236,13 +162,30 @@ function StatsTab(props: {
                   </div>
                 </div>
                 <div className="ins-pr-meta">
+                  <ReviewerAvatars reviewers={pr.reviewers} />
                   <span className="ins-pr-meta-text">
-                    <span
-                      className={`ch-pill ch-pill-${approvalTone === "approved" ? "ok" : approvalTone === "changes" ? "bad" : "mute"}`}
-                    >
-                      {approvalTone === "approved" ? "✓" : approvalTone === "changes" ? "!" : "·"}
-                    </span>
-                    {formatLabel(approvalTone)}
+                    {reviewerAggregate.approved > 0 ? (
+                      <>
+                        <span className="ch-pill ch-pill-ok">{reviewerAggregate.approved}</span> approved
+                      </>
+                    ) : null}
+                    {reviewerAggregate.changes > 0 ? (
+                      <>
+                        {reviewerAggregate.approved > 0 ? <span className="ins-deploy-sep">·</span> : null}
+                        <span className="ch-pill ch-pill-bad">{reviewerAggregate.changes}</span> changes
+                      </>
+                    ) : null}
+                    {reviewerAggregate.pending > 0 ? (
+                      <>
+                        {reviewerAggregate.approved + reviewerAggregate.changes > 0 ? (
+                          <span className="ins-deploy-sep">·</span>
+                        ) : null}
+                        <span className="ch-pill ch-pill-mute">{reviewerAggregate.pending}</span> pending
+                      </>
+                    ) : null}
+                    {reviewerAggregate.approved + reviewerAggregate.changes + reviewerAggregate.pending === 0 ? (
+                      <span className="ins-pr-meta-empty">No reviewers assigned</span>
+                    ) : null}
                   </span>
                 </div>
               </div>
@@ -288,18 +231,17 @@ function StatsTab(props: {
                     <div className="ch-summary-title">{checksSummary.title}</div>
                     {checksSummary.sub ? <div className="ch-summary-sub">{checksSummary.sub}</div> : null}
                   </div>
-                  <span className="ch-summary-rerun">
-                    {checksSummary.bad > 0 ? (
-                      <button
-                        type="button"
-                        className="ch-rerun"
-                        title="Re-run failing checks"
-                        aria-label="Re-run failing checks"
-                      >
-                        <RefreshCw size={11} />
-                      </button>
-                    ) : null}
-                  </span>
+                  {checksSummary.bad > 0 ? (
+                    <button
+                      type="button"
+                      className="cit-chip cit-chip-ghost ch-summary-rerun"
+                      title="Re-run all checks"
+                    >
+                      <RefreshCw size={10} /> Re-run all
+                    </button>
+                  ) : (
+                    <span className="ch-summary-rerun" />
+                  )}
                 </div>
                 {checksOpen ? (
                   <div className="check-list">
@@ -319,101 +261,6 @@ function StatsTab(props: {
               </div>
             )}
           </div>
-        </section>
-
-        <section className="ins-section">
-          <div className="ins-section-head">
-            <span className="ins-section-label">Attached</span>
-          </div>
-          <div className="attach-row">
-            {slackThreadUrl ? (
-              <a
-                className="attach-button attached"
-                href={slackThreadUrl}
-                target="_blank"
-                rel="noreferrer"
-                title="Open linked Slack thread"
-              >
-                <Slack size={12} /> Slack
-              </a>
-            ) : (
-              <button
-                type="button"
-                className={`attach-button ${showSlackAttach ? "tone-warning" : ""}`}
-                onClick={() => setShowSlackAttach((v) => !v)}
-                title="Attach Slack conversation"
-              >
-                <Slack size={12} /> {showSlackAttach ? "Cancel" : "Slack"}
-              </button>
-            )}
-            {issueUrl ? (
-              <a
-                className="attach-button attached"
-                href={issueUrl}
-                target="_blank"
-                rel="noreferrer"
-                title={props.workspace.issueKey ? `Open ${props.workspace.issueKey}` : "Open linked issue"}
-              >
-                <Hash size={12} /> {props.workspace.issueKey ?? "Issue"}
-              </a>
-            ) : (
-              <button
-                type="button"
-                className={`attach-button ${props.workspace.issueKey ? "attached" : ""}`}
-                onClick={() => setShowIssueAttach((v) => !v)}
-                title={props.workspace.issueKey ? `Attached ${props.workspace.issueKey}; add URL` : "Attach issue"}
-              >
-                <Hash size={12} /> {props.workspace.issueKey ?? "Issue"}
-              </button>
-            )}
-          </div>
-          {showSlackAttach ? (
-            <div className="modal-form">
-              <label>
-                Slack thread URL
-                <input
-                  value={slackDraft}
-                  onChange={(event) => setSlackDraft(event.target.value)}
-                  placeholder="https://slack.com/archives/CHANNEL/p123..."
-                />
-              </label>
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => attachSlack.mutate(slackDraft.trim())}
-                disabled={!slackDraft.trim() || attachSlack.isPending}
-              >
-                {attachSlack.isPending ? "Attaching…" : "Attach Slack"}
-              </Button>
-            </div>
-          ) : null}
-          {showIssueAttach ? (
-            <div className="modal-form">
-              <label>
-                Issue key
-                <input
-                  value={issueDraft}
-                  onChange={(event) => setIssueDraft(event.target.value)}
-                  placeholder="ABC-123"
-                />
-              </label>
-              <label>
-                Issue URL
-                <input
-                  value={issueUrlDraft}
-                  onChange={(event) => setIssueUrlDraft(event.target.value)}
-                  placeholder="https://jira.example/browse/ABC-123"
-                />
-              </label>
-              <Button
-                type="button"
-                disabled={!issueDraft.trim() || attachIssue.isPending}
-                onClick={() => attachIssue.mutate({ issueKey: issueDraft.trim(), issueUrl: issueUrlDraft.trim() })}
-              >
-                {attachIssue.isPending ? "Attaching…" : "Attach issue"}
-              </Button>
-            </div>
-          ) : null}
         </section>
 
         {apps?.applications.length ? (
@@ -440,64 +287,247 @@ function StatsTab(props: {
                 </div>
               ))}
             </div>
-            {apps.actions.length ? (
-              <div className="attach-row">
-                {apps.actions.map((action) => (
-                  <span key={action.id} className="attach-button" title={action.description ?? action.label}>
-                    {action.label}
-                  </span>
-                ))}
-              </div>
-            ) : null}
           </section>
         ) : null}
 
         <DeployedAppsPanel workspaceId={props.workspace.id} repo={props.repo} />
+
+        <section className="ins-section">
+          <div className="ins-section-head">
+            <span className="ins-section-label">Recent</span>
+          </div>
+          <div className="ins-section-body">
+            {recent.isLoading ? (
+              <div className="ins-empty">
+                <div className="ins-empty-text">Reading git log…</div>
+              </div>
+            ) : recent.data?.commits.length ? (
+              <ul className="ins-recent">
+                {recent.data.commits.map((commit) => (
+                  <li key={commit.sha} title={`${commit.author} · ${commit.isoTime}`}>
+                    <span className="ins-recent-sha">{commit.shortSha}</span>
+                    <span className="ins-recent-msg">{commit.message}</span>
+                    <span className="ins-recent-time">{shortenRelative(commit.relativeTime)}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <div className="ins-empty">
+                <div className="ins-empty-text">No commits in this workspace yet.</div>
+              </div>
+            )}
+          </div>
+        </section>
       </div>
     </>
   );
 }
 
-function BranchCard(props: {
-  branch: string;
-  baseBranch: string;
-  files: number;
-  added: number;
-  removed: number;
-  dirty: boolean;
+function IssueAttachSlot(props: {
+  workspaceId: string;
+  issueKey: string | null;
+  issueTitle: string | null;
+  issueStatus: string | null;
+  issueUrl: string | null;
 }) {
+  const [open, setOpen] = useState(false);
+  const [keyDraft, setKeyDraft] = useState("");
+  const [urlDraft, setUrlDraft] = useState("");
+  const keyInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    if (open) keyInputRef.current?.focus();
+  }, [open]);
+
+  const attach = useMutation({
+    mutationFn: (input: { issueKey: string; issueUrl: string | null }) =>
+      api(`/api/workspaces/${props.workspaceId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          issueKey: input.issueKey,
+          issueUrl: input.issueUrl,
+          issueTitle: null,
+        }),
+      }),
+    onSuccess: () => {
+      setOpen(false);
+      setKeyDraft("");
+      setUrlDraft("");
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+    },
+  });
+
+  if (props.issueKey) {
+    return (
+      <div className="inspector-attach">
+        <a
+          className="cit-jira"
+          href={props.issueUrl ?? undefined}
+          target="_blank"
+          rel="noreferrer"
+          title={`Open ${props.issueKey}${props.issueTitle ? `: ${props.issueTitle}` : ""}`}
+        >
+          <span className="cit-jira-icon" aria-hidden>
+            <svg viewBox="0 0 16 16" width="14" height="14" role="img" aria-label="Issue tracker">
+              <title>Issue tracker</title>
+              <rect x="1.5" y="1.5" width="13" height="13" rx="2.5" fill="oklch(50% 0.16 250)" />
+              <path
+                d="M5 8.2l2 2 4-4"
+                fill="none"
+                stroke="#fff"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </span>
+          <span className="cit-jira-text">
+            <span className="cit-jira-key">{props.issueKey}</span>
+            {props.issueTitle ? <span className="cit-jira-title">{props.issueTitle}</span> : null}
+          </span>
+          <span
+            className={`cit-jira-status cit-jira-status--${props.issueStatus ? jiraStatusTone(props.issueStatus) : "unknown"}`}
+            title={props.issueStatus ? `Issue status: ${props.issueStatus}` : "Status not synced"}
+          >
+            {props.issueStatus ?? "—"}
+          </span>
+        </a>
+      </div>
+    );
+  }
+
   return (
-    <section className="ins-card ins-card--branch">
-      <div className="ins-branch-head">
-        <span className="ins-branch-name">{props.branch}</span>
-        <span className="ins-branch-base">→ {props.baseBranch}</span>
+    <>
+      <div className="inspector-attach">
+        <button
+          type="button"
+          className="cit-jira cit-jira--empty"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          title="Attach a Jira ticket to this workspace"
+        >
+          <span className="cit-jira-empty-mark" aria-hidden>
+            <Plus size={11} />
+          </span>
+          <span className="cit-jira-empty-text">
+            <span className="cit-jira-empty-title">Attach Jira ticket</span>
+            <span className="cit-jira-empty-hint">link an issue to this workspace</span>
+          </span>
+        </button>
       </div>
-      <div className="ins-branch-stats">
-        <div className="ins-stat">
-          <div className="ins-stat-num">{props.files}</div>
-          <div className="ins-stat-label">files</div>
-        </div>
-        <div className="ins-stat">
-          <div className="ins-stat-num ins-stat-add">+{props.added}</div>
-          <div className="ins-stat-label">added</div>
-        </div>
-        <div className="ins-stat">
-          <div className="ins-stat-num ins-stat-del">−{props.removed}</div>
-          <div className="ins-stat-label">removed</div>
-        </div>
-      </div>
-      <div className="ins-branch-bar" aria-hidden>
-        <span className="ins-bar-add" style={{ flex: Math.max(props.added, 1) }} />
-        <span className="ins-bar-del" style={{ flex: Math.max(props.removed, 1) }} />
-        <span className="ins-bar-rest" style={{ flex: Math.max(props.files, 1) }} />
-      </div>
-      {props.dirty ? (
-        <div className="ins-branch-meta">working tree dirty</div>
-      ) : (
-        <div className="ins-branch-meta">working tree clean</div>
-      )}
-    </section>
+      {open ? (
+        <form
+          className="cit-jira-attach-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const key = keyDraft.trim();
+            if (!key) return;
+            attach.mutate({ issueKey: key, issueUrl: urlDraft.trim() || null });
+          }}
+        >
+          <label>
+            Issue key
+            <input
+              ref={keyInputRef}
+              value={keyDraft}
+              onChange={(event) => setKeyDraft(event.target.value)}
+              placeholder="ABC-123"
+            />
+          </label>
+          <label>
+            Issue URL (optional)
+            <input
+              value={urlDraft}
+              onChange={(event) => setUrlDraft(event.target.value)}
+              placeholder="https://jira.example/browse/ABC-123"
+            />
+          </label>
+          <div className="cit-jira-attach-actions">
+            <button type="button" onClick={() => setOpen(false)} disabled={attach.isPending}>
+              Cancel
+            </button>
+            <button type="submit" data-primary disabled={!keyDraft.trim() || attach.isPending}>
+              {attach.isPending ? "Attaching…" : "Attach"}
+            </button>
+          </div>
+        </form>
+      ) : null}
+    </>
   );
+}
+
+function ReviewerAvatars({ reviewers }: { reviewers: PrReviewer[] }) {
+  if (!reviewers.length) return <span className="ins-pr-avatars" aria-hidden />;
+  const visible = reviewers.slice(0, 3);
+  const extra = reviewers.length - visible.length;
+  return (
+    <span className="ins-pr-avatars">
+      {visible.map((reviewer) => (
+        <span
+          key={reviewer.login}
+          className={`ins-av ins-av--${reviewer.state}`}
+          style={{ background: avatarGradient(reviewer.login) }}
+          title={`${reviewer.name ?? reviewer.login} · ${formatLabel(reviewer.state)}`}
+        >
+          {reviewerInitials(reviewer)}
+        </span>
+      ))}
+      {extra > 0 ? (
+        <span className="ins-av ins-av-more" title={`+${extra} more reviewers`}>
+          +{extra}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+export function aggregateReviewerCounts(reviewers: PrReviewer[]) {
+  let approved = 0;
+  let changes = 0;
+  let pending = 0;
+  for (const reviewer of reviewers) {
+    if (reviewer.state === "approved") approved += 1;
+    else if (reviewer.state === "changes_requested") changes += 1;
+    else if (reviewer.state === "pending") pending += 1;
+  }
+  return { approved, changes, pending };
+}
+
+function reviewerInitials(reviewer: PrReviewer) {
+  const source = reviewer.name?.trim() || reviewer.login;
+  const tokens = source.split(/[\s_.-]+/).filter(Boolean);
+  if (tokens.length >= 2) return `${tokens[0]?.[0] ?? ""}${tokens[1]?.[0] ?? ""}`.toUpperCase();
+  return source.slice(0, 2).toUpperCase();
+}
+
+const AVATAR_PALETTE: ReadonlyArray<readonly [string, string]> = [
+  ["#8e6b4a", "#4a3622"],
+  ["#5a7a8e", "#2a4252"],
+  ["#7a5a8e", "#3a2a52"],
+  ["#5a8e6b", "#2a4a36"],
+  ["#8e5a6b", "#522a36"],
+  ["#5a6b8e", "#2a3652"],
+] as const;
+const AVATAR_DEFAULT: readonly [string, string] = ["#8e6b4a", "#4a3622"];
+
+function avatarGradient(seed: string) {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+  const pair = AVATAR_PALETTE[hash % AVATAR_PALETTE.length] ?? AVATAR_DEFAULT;
+  return `linear-gradient(135deg, ${pair[0]}, ${pair[1]})`;
+}
+
+export function shortenRelative(value: string) {
+  if (!value) return "";
+  // git's "ago" strings (e.g. "3 minutes ago") read better trimmed in the chip.
+  return value
+    .replace(/ ago$/, "")
+    .replace(/(\d+) minutes?/, "$1m")
+    .replace(/(\d+) hours?/, "$1h")
+    .replace(/(\d+) days?/, "$1d")
+    .replace(/(\d+) weeks?/, "$1w")
+    .replace(/(\d+) months?/, "$1mo")
+    .replace(/(\d+) years?/, "$1y")
+    .replace(/(\d+) seconds?/, "$1s");
 }
 
 function CheckSummaryIcon({ tone }: { tone: "ok" | "bad" | "run" | "mixed" }) {
@@ -590,10 +620,6 @@ function DiffTab(props: {
   summary: WorkspaceCockpitSummary | undefined;
   diff: WorkspaceDiff | undefined;
 }) {
-  // Subscribe to the same diff query the Inspector started so React-Query
-  // returns the cached entry instantly when this tab mounts. initialData is
-  // only set when we already have a value — passing undefined trips
-  // exactOptionalPropertyTypes.
   const diff = useQuery<WorkspaceDiff>({
     queryKey: ["diff", props.workspace.id],
     queryFn: () => api<WorkspaceDiff>(`/api/workspaces/${props.workspace.id}/diff`),

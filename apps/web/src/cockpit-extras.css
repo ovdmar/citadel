@@ -520,17 +520,6 @@
   color: var(--color-action);
 }
 
-/* Inspector */
-
-.inspector-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 4px 4px 4px;
-  background: transparent;
-  border-bottom: 0;
-}
-
 /* Jira-style chip tile pinned above the inspector body */
 
 .inspector-attach {
@@ -557,6 +546,126 @@
   background: var(--c-elev);
   border-color: var(--c-line-3);
   text-decoration: none;
+}
+
+.cit-jira--empty {
+  border-style: dashed;
+  border-color: var(--c-line-3);
+  background: transparent;
+  box-shadow: none;
+  color: var(--c-fg-3);
+  appearance: none;
+  text-align: left;
+  font: inherit;
+  width: 100%;
+}
+
+.cit-jira--empty:hover {
+  background: var(--c-line-1);
+  border-style: dashed;
+  border-color: var(--c-fg-4);
+  color: var(--c-fg-1);
+}
+
+.cit-jira-empty-mark {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px dashed currentColor;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+  flex: 0 0 auto;
+}
+
+.cit-jira-empty-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.cit-jira-empty-title {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--c-fg-2);
+}
+
+.cit-jira-empty-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--c-fg-4);
+}
+
+.cit-jira-attach-form {
+  margin: 6px 2px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  background: var(--c-elev);
+  border: 0.5px solid var(--c-line-2);
+  border-radius: 8px;
+  box-shadow: var(--sh-1);
+}
+
+.cit-jira-attach-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-fg-4);
+}
+
+.cit-jira-attach-form input {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  padding: 5px 8px;
+  border: 0.5px solid var(--c-line-2);
+  border-radius: 6px;
+  background: var(--c-card);
+  color: var(--c-fg-1);
+}
+
+.cit-jira-attach-form input:focus {
+  outline: 0;
+  border-color: var(--c-line-3);
+  box-shadow: 0 0 0 3px rgba(36, 28, 14, 0.04);
+}
+
+.cit-jira-attach-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.cit-jira-attach-actions button {
+  appearance: none;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 0.5px solid var(--c-line-2);
+  background: var(--c-card);
+  color: var(--c-fg-1);
+  cursor: pointer;
+}
+
+.cit-jira-attach-actions button[disabled] {
+  opacity: 0.5;
+  cursor: progress;
+}
+
+.cit-jira-attach-actions button[data-primary] {
+  background: var(--c-fg-1);
+  color: var(--c-card);
+  border-color: var(--c-fg-1);
 }
 
 .cit-jira-icon {
@@ -610,6 +719,13 @@
 .cit-jira-status--todo {
   background: var(--c-line-2);
   color: var(--c-fg-3);
+}
+.cit-jira-status--unknown {
+  background: transparent;
+  color: var(--c-fg-4);
+  border: 0.5px dashed var(--c-line-3);
+  font-family: var(--font-mono);
+  letter-spacing: 0;
 }
 .cit-jira-status--progress {
   background: oklch(85% 0.1 70 / 0.45);
@@ -693,51 +809,7 @@
   color: var(--c-fg-1);
 }
 
-/* Branch card — top of the Stats body */
-
-.ins-card {
-  background: var(--c-card);
-  border: 0.5px solid var(--c-line-2);
-  border-radius: 10px;
-  padding: 12px;
-  box-shadow: var(--sh-card);
-}
-
-.ins-card--branch {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.ins-branch-head {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-  color: var(--c-fg-2);
-}
-
-.ins-branch-name {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: var(--c-fg-1);
-  font-weight: 600;
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.ins-branch-base {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--c-fg-3);
-}
-
-.ins-branch-stats {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-}
+/* Shared inspector stat cells (used inside the PR card) */
 
 .ins-stat {
   display: flex;
@@ -771,14 +843,6 @@
   margin-top: 2px;
 }
 
-.ins-branch-bar {
-  display: flex;
-  gap: 2px;
-  height: 4px;
-  border-radius: 2px;
-  overflow: hidden;
-}
-
 .ins-bar-add {
   background: var(--c-ok);
 }
@@ -789,12 +853,6 @@
 
 .ins-bar-rest {
   background: var(--c-line-3);
-}
-
-.ins-branch-meta {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--c-fg-4);
 }
 
 .ins-mono {
@@ -1243,34 +1301,6 @@
   color: var(--c-fg-1);
 }
 
-.inspector-head-title {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  line-height: 1.1;
-  min-width: 0;
-}
-
-.inspector-eyebrow {
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--c-fg-4);
-}
-
-.inspector-head-name {
-  font-family: var(--font-serif);
-  font-size: 17px;
-  font-weight: 400;
-  letter-spacing: -0.01em;
-  color: var(--c-fg-1);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .inspector-tabs {
   position: relative;
   display: flex;
@@ -1385,56 +1415,6 @@
   font-size: 10.5px;
   color: var(--c-fg-3);
   margin-top: 4px;
-}
-
-.attach-row {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.attach-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px 6px 7px;
-  border: 0.5px solid var(--c-line-2);
-  border-radius: 8px;
-  background: var(--c-card);
-  color: var(--c-fg-1);
-  font-size: 11.5px;
-  font-weight: 500;
-  cursor: pointer;
-  box-shadow: var(--sh-1);
-}
-
-.attach-button.attached {
-  background: var(--c-card);
-  color: var(--c-fg-1);
-  border-color: var(--c-line-2);
-}
-
-.attach-button.tone-warning {
-  background: oklch(85% 0.1 70 / 0.25);
-  color: var(--c-warn);
-  border-color: var(--c-line-2);
-}
-
-.attach-button.tone-success {
-  background: oklch(85% 0.1 145 / 0.2);
-  color: var(--c-ok);
-  border-color: var(--c-line-2);
-}
-
-.attach-button.tone-danger {
-  background: oklch(85% 0.1 25 / 0.22);
-  color: var(--c-bad);
-  border-color: var(--c-line-2);
-}
-
-.attach-button:hover {
-  background: var(--c-elev);
-  border-color: var(--c-line-3);
 }
 
 .inspector-block {
@@ -1720,6 +1700,249 @@
   color: var(--c-bad);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+}
+
+/* GroupBy dropdown (single-select) — Navigator workspaces section */
+
+.cit-gb {
+  position: relative;
+  display: inline-flex;
+}
+
+.cit-gb-btn.is-open {
+  background: var(--c-line-2);
+  color: var(--c-fg-1);
+}
+
+.cit-gb-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  width: 220px;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--c-elev);
+  border: 0.5px solid var(--c-line-3);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 8px 24px -4px rgba(20, 12, 0, 0.18), 0 2px 6px
+    rgba(20, 12, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cit-gb-menu-head {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-fg-4);
+  padding: 6px 8px 4px;
+}
+
+.cit-gb-opt {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--c-fg-2);
+}
+
+.cit-gb-opt:hover {
+  background: var(--c-line-1);
+  color: var(--c-fg-1);
+}
+
+.cit-gb-opt.is-active {
+  color: var(--c-fg-1);
+}
+
+.cit-gb-opt-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--c-fg-1);
+}
+
+.cit-gb-opt-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.cit-gb-opt-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.cit-gb-opt-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--c-fg-4);
+  margin-top: 1px;
+}
+
+/* Counts attached to nav links (e.g. History) */
+
+.cit-nav-count {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--c-fg-4);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  padding-left: 8px;
+}
+
+/* Generic chip used for "Re-run all" and similar small actions */
+
+.cit-chip {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 0.5px solid var(--c-line-2);
+  background: var(--c-card);
+  color: var(--c-fg-2);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: var(--sh-1);
+}
+
+.cit-chip:hover {
+  background: var(--c-elev);
+  color: var(--c-fg-1);
+  border-color: var(--c-line-3);
+}
+
+.cit-chip-ghost {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Recent commits list — sha · message · short relative time per row */
+
+.ins-recent {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ins-recent li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 4px;
+  border-bottom: 0.5px solid var(--c-line-1);
+  font-size: 11.5px;
+}
+
+.ins-recent li:last-child {
+  border-bottom: 0;
+}
+
+.ins-recent-sha {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--c-fg-3);
+}
+
+.ins-recent-msg {
+  color: var(--c-fg-1);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ins-recent-time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--c-fg-4);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Inspector tabs row gets a small collapse affordance pinned to the right */
+
+.inspector-tabs-collapse {
+  margin-left: 6px;
+  flex: 0 0 auto;
+}
+
+/* PR meta empty-state hint and avatar row alignment */
+
+.ins-pr-meta-empty {
+  color: var(--c-fg-4);
+  font-style: italic;
+}
+
+.ins-pr-avatars {
+  display: inline-flex;
+}
+
+.ins-pr-avatars:empty {
+  display: none;
+}
+
+.ins-av {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--c-card);
+  margin-left: -6px;
+  letter-spacing: 0.02em;
+}
+
+.ins-av:first-child {
+  margin-left: 0;
+}
+
+.ins-av-more {
+  background: var(--c-line-2);
+  color: var(--c-fg-2);
+}
+
+/* Avatar tone borders so dark/light hint at review state without color noise */
+
+.ins-av--approved {
+  outline: 1.5px solid var(--c-ok);
+  outline-offset: -1.5px;
+}
+
+.ins-av--changes_requested {
+  outline: 1.5px solid var(--c-bad);
+  outline-offset: -1.5px;
+}
+
+.ins-pr-meta-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--c-fg-3);
+}
+
+.ins-deploy-sep {
+  color: var(--c-fg-4);
 }
 
 /* Command palette */

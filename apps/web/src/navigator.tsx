@@ -4,7 +4,7 @@ import { ClipboardList, FolderPlus, LayoutDashboard, NotebookPen, PanelLeftClose
 import { useEffect, useMemo, useState } from "react";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { formatLabel } from "./labels.js";
-import { AddRepoModal, CreateWorkspaceModal, GroupByOverlay, type GroupKey } from "./modals.js";
+import { AddRepoModal, CreateWorkspaceModal, GroupByMenu, type GroupKey } from "./modals.js";
 import { WorkspaceCard } from "./workspace-card.js";
 
 const GROUP_STORAGE = "citadel.navigator-group";
@@ -32,21 +32,26 @@ export function Navigator(props: {
 }) {
   const location = useLocation();
   const path = location.pathname;
-  const [grouping, setGrouping] = useState<GroupKey[]>(() => {
-    if (typeof window === "undefined") return ["repo", "status"];
-    try {
-      const raw = window.localStorage.getItem(GROUP_STORAGE);
-      if (!raw) return ["repo", "status"];
-      const parsed = JSON.parse(raw) as GroupKey[];
-      const allowed = parsed.filter((entry) => entry === "repo" || entry === "status");
-      return allowed.length ? allowed : ["repo", "status"];
-    } catch {
-      return ["repo", "status"];
+  const [grouping, setGrouping] = useState<GroupKey>(() => {
+    if (typeof window === "undefined") return "repo";
+    const raw = window.localStorage.getItem(GROUP_STORAGE);
+    if (raw === "repo" || raw === "status" || raw === "none") return raw;
+    // Migration: legacy storage held an array like ["repo","status"]; collapse
+    // to the first entry, otherwise default to "repo".
+    if (raw?.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(raw) as unknown[];
+        const first = parsed[0];
+        if (first === "repo" || first === "status" || first === "none") return first;
+      } catch {
+        // fall through to default
+      }
     }
+    return "repo";
   });
   useEffect(() => {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(GROUP_STORAGE, JSON.stringify(grouping));
+    window.localStorage.setItem(GROUP_STORAGE, grouping);
   }, [grouping]);
 
   const [showGroupBy, setShowGroupBy] = useState(false);
@@ -59,6 +64,7 @@ export function Navigator(props: {
     () => buildGroups(props.workspaces, props.repos, props.sessions, props.operations, grouping),
     [props.workspaces, props.repos, props.sessions, props.operations, grouping],
   );
+  const historyCount = props.operations.length;
 
   return (
     <>
@@ -86,21 +92,28 @@ export function Navigator(props: {
             <NotebookPen size={13} /> Scratchpad
           </Link>
           <Link to="/history" className={path === "/history" ? "active" : ""} title="Activity & operations history">
-            <ClipboardList size={13} /> History
+            <ClipboardList size={13} /> <span>History</span>
+            {historyCount > 0 ? <span className="cit-nav-count">{historyCount}</span> : null}
           </Link>
         </nav>
         <div className="divider" />
         <div className="nav-section">
           <strong>Workspaces</strong>
           <div className="nav-section-icons">
-            <button
-              type="button"
-              onClick={() => setShowGroupBy((v) => !v)}
-              aria-label="Group workspaces"
-              title="Group by"
-            >
-              <Settings2 size={12} />
-            </button>
+            <div className="cit-gb">
+              <button
+                type="button"
+                className={`cit-icon-btn cit-icon-btn--sm cit-gb-btn ${showGroupBy ? "is-open" : ""}`}
+                onClick={() => setShowGroupBy((v) => !v)}
+                aria-label="Group workspaces"
+                title={`Group by: ${grouping === "none" ? "no grouping" : grouping}`}
+              >
+                <Settings2 size={12} />
+              </button>
+              {showGroupBy ? (
+                <GroupByMenu value={grouping} onChange={setGrouping} onClose={() => setShowGroupBy(false)} />
+              ) : null}
+            </div>
             <button
               type="button"
               onClick={() => setShowAddRepo(true)}
@@ -117,9 +130,6 @@ export function Navigator(props: {
             >
               <Plus size={12} />
             </button>
-            {showGroupBy ? (
-              <GroupByOverlay value={grouping} onChange={setGrouping} onClose={() => setShowGroupBy(false)} />
-            ) : null}
           </div>
         </div>
         <div className="nav-groups">
@@ -196,9 +206,9 @@ function buildGroups(
   repos: Repo[],
   sessions: AgentSession[],
   operations: Operation[],
-  grouping: GroupKey[],
+  grouping: GroupKey,
 ): GroupedSection[] {
-  if (!grouping.length) {
+  if (grouping === "none") {
     return [
       {
         id: "all",
@@ -221,46 +231,30 @@ function buildGroups(
     return { workspace, sessions: workspaceSessions, repo, section: attention.section };
   });
 
-  const compose = (entries: typeof enriched, levels: GroupKey[]): GroupedSection[] => {
-    if (!levels.length) {
-      return [
-        { id: "leaf", label: "", workspaces: entries.map(({ workspace, sessions }) => ({ workspace, sessions })) },
-      ];
+  const buckets = new Map<string, { label: string; items: typeof enriched }>();
+  for (const entry of enriched) {
+    const keyValue = grouping === "repo" ? (entry.repo?.name ?? "Unknown repo") : formatLabel(entry.section ?? "idle");
+    const bucket = buckets.get(keyValue) ?? { label: keyValue, items: [] };
+    bucket.items.push(entry);
+    buckets.set(keyValue, bucket);
+  }
+  const sortedKeys = Array.from(buckets.keys()).sort((a, b) => {
+    if (grouping === "status") {
+      const ai = SECTION_ORDER.indexOf(a.toLowerCase());
+      const bi = SECTION_ORDER.indexOf(b.toLowerCase());
+      return (ai < 0 ? SECTION_ORDER.length : ai) - (bi < 0 ? SECTION_ORDER.length : bi);
     }
-    const [head, ...rest] = levels;
-    const buckets = new Map<string, { label: string; items: typeof enriched }>();
-    for (const entry of entries) {
-      const keyValue = head === "repo" ? (entry.repo?.name ?? "Unknown repo") : formatLabel(entry.section ?? "idle");
-      const bucket = buckets.get(keyValue) ?? { label: keyValue, items: [] };
-      bucket.items.push(entry);
-      buckets.set(keyValue, bucket);
-    }
-    const sortedKeys = Array.from(buckets.keys()).sort((a, b) => {
-      if (head === "status") {
-        const ai = SECTION_ORDER.indexOf(a.toLowerCase());
-        const bi = SECTION_ORDER.indexOf(b.toLowerCase());
-        return (ai < 0 ? SECTION_ORDER.length : ai) - (bi < 0 ? SECTION_ORDER.length : bi);
-      }
-      return a.localeCompare(b);
-    });
-    const result: GroupedSection[] = [];
-    for (const key of sortedKeys) {
-      const bucket = buckets.get(key);
-      if (!bucket) continue;
-      const childSections = compose(bucket.items, rest);
-      if (rest.length === 0) {
-        result.push({ id: key, label: bucket.label, workspaces: childSections[0]?.workspaces ?? [] });
-      } else {
-        for (const child of childSections) {
-          result.push({
-            id: `${key}::${child.id}`,
-            label: child.label ? `${bucket.label} · ${child.label}` : bucket.label,
-            workspaces: child.workspaces,
-          });
-        }
-      }
-    }
-    return result;
-  };
-  return compose(enriched, grouping);
+    return a.localeCompare(b);
+  });
+  return sortedKeys.flatMap((key) => {
+    const bucket = buckets.get(key);
+    if (!bucket) return [];
+    return [
+      {
+        id: key,
+        label: bucket.label,
+        workspaces: bucket.items.map(({ workspace, sessions }) => ({ workspace, sessions })),
+      },
+    ];
+  });
 }

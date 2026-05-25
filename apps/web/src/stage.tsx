@@ -192,8 +192,8 @@ export function Stage(props: {
                   <button
                     type="button"
                     className="stage-tab-act"
-                    aria-label="Reload terminal frame"
-                    title="Reload terminal"
+                    aria-label="Restart terminal session"
+                    title="Restart session"
                     onClick={(event) => {
                       event.stopPropagation();
                       getTerminalHandle(tab.session.id)?.reload();

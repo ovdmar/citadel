@@ -1,7 +1,9 @@
-import type { Workspace } from "@citadel/contracts";
+import type { Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { api } from "./api.js";
 import { useEventRefresh, useStateQuery } from "./app-state.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { useWorkspaceCockpitSummary } from "./cockpit-tools.js";
@@ -65,6 +67,9 @@ export function Cockpit() {
     ? allSessions.filter((session) => session.workspaceId === activeWorkspace.id)
     : [];
   const activeSessionId = activeWorkspace ? activeSessionByWorkspace[activeWorkspace.id] : "";
+  const activeSession = activeSessionId
+    ? (activeWorkspaceSessions.find((session) => session.id === activeSessionId) ?? null)
+    : (activeWorkspaceSessions[0] ?? null);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -273,7 +278,7 @@ export function Cockpit() {
           </aside>
         )}
       </div>
-      <BottomBar activeWorkspace={activeWorkspace} repo={selectedRepo} sessions={activeWorkspaceSessions} />
+      <BottomBar activeWorkspace={activeWorkspace} activeSession={activeSession} sessions={activeWorkspaceSessions} />
       {commandOpen ? (
         <CommandPalette
           workspaces={data?.workspaces ?? []}
@@ -376,33 +381,31 @@ function TopBar(props: {
   repo: import("@citadel/contracts").Repo | null;
 }) {
   return (
-    <header className="top-bar">
-      <div className="top-bar-brand">
-        <span className="top-bar-brand-mark" aria-hidden="true">
-          <CitadelMark size={14} />
-        </span>
-        <span className="top-bar-brand-text">
-          <span className="top-bar-brand-name">Citadel</span>
-          <span className="top-bar-brand-org">{props.repo?.name ?? "local"}</span>
-        </span>
+    <header className="cit-topbar">
+      <div className="cit-brand">
+        <CitadelMark size={22} />
+        <div className="cit-brand-text">
+          <div className="cit-brand-name">Citadel</div>
+          <div className="cit-brand-org">{props.repo?.name ?? "local"}</div>
+        </div>
       </div>
-      <div className="top-bar-search-wrap">
+      <div className="cit-search-wrap">
         <button
           type="button"
-          className="top-bar-search"
+          className="cit-search"
           onClick={props.onSearch}
           aria-label="Search workspaces"
           title="Search workspaces, branches, issues, PRs (Cmd+K)"
         >
-          <SearchIcon size={13} />
-          <span>Search workspaces, branches, issues, PRs…</span>
-          <span className="top-bar-search-shortcut">⌘K</span>
+          <SearchIcon size={14} />
+          <span className="cit-search-placeholder">Search workspaces, branches, issues, PRs, recent commands…</span>
+          <kbd className="cit-kbd">⌘K</kbd>
         </button>
       </div>
-      <div className="top-bar-actions">
+      <div className="cit-top-right">
         <ThemeToggle />
-        <Link className="top-bar-icon" to="/settings" aria-label="Settings" title="Open settings">
-          <SettingsIcon size={14} />
+        <Link className="cit-icon-btn" to="/settings" aria-label="Settings" title="Open settings">
+          <SettingsIcon size={15} />
         </Link>
       </div>
     </header>
@@ -424,19 +427,19 @@ function ThemeToggle() {
   return (
     <button
       type="button"
-      className="top-bar-icon"
+      className="cit-icon-btn"
       onClick={toggle}
       aria-label="Toggle theme"
       title={isDark ? "Switch to light theme" : "Switch to dark theme"}
     >
-      {isDark ? <Sun size={14} /> : <Moon size={14} />}
+      {isDark ? <Sun size={15} /> : <Moon size={15} />}
     </button>
   );
 }
 
 function BottomBar(props: {
   activeWorkspace: Workspace | null;
-  repo: import("@citadel/contracts").Repo | null;
+  activeSession: import("@citadel/contracts").AgentSession | null;
   sessions: import("@citadel/contracts").AgentSession[];
 }) {
   const [now, setNow] = useState(() => formatClock(new Date()));
@@ -445,32 +448,44 @@ function BottomBar(props: {
     return () => window.clearInterval(id);
   }, []);
 
-  const running = props.sessions.some((s) => s.status === "running");
-  const branch = props.activeWorkspace?.branch ?? "";
-  const repoName = props.repo?.name ?? "";
+  const shellCount = props.sessions.filter((session) => session.runtimeId === "shell").length;
+  const autoMode = props.sessions.some((s) => s.status === "running" || s.status === "waiting");
+
+  // Read the head commit of the active workspace so the status bar mirrors the
+  // redesign's "* <message>" hint. Falls back silently if the workspace isn't
+  // yet usable.
+  const recent = useQuery<WorkspaceRecentCommits>({
+    queryKey: ["recent-commits", props.activeWorkspace?.id, 1],
+    queryFn: () => api<WorkspaceRecentCommits>(`/api/workspaces/${props.activeWorkspace?.id}/recent-commits?limit=1`),
+    enabled: Boolean(props.activeWorkspace?.id),
+    staleTime: 30_000,
+  });
+  const headCommitMessage = recent.data?.commits[0]?.message ?? "";
+  const tmuxLabel = props.activeSession?.tmuxSessionName ?? null;
 
   return (
-    <footer className="bottom-bar" aria-label="Status bar">
-      <div className="bottom-bar-left">
-        <span className={`bottom-bar-pill ${running ? "tone-running" : "tone-idle"}`}>
-          <span className={`cit-pulse ${running ? "cit-pulse-run" : "cit-pulse-ok"}`} aria-hidden="true" />
-          {running ? "Running" : "Idle"}
+    <footer className="cit-bottombar" aria-label="Status bar">
+      <div className="cit-bb-left">
+        <span className="cit-bb-pill">
+          <span className={`cit-pulse ${autoMode ? "cit-pulse-run" : "cit-pulse-ok"}`} aria-hidden="true" />
+          auto mode {autoMode ? "running" : "on"}
         </span>
-        {repoName ? (
-          <>
-            <span className="bottom-bar-divider" aria-hidden="true" />
-            <span className="bottom-bar-item bottom-bar-mono">{repoName}</span>
-          </>
-        ) : null}
-        {branch ? (
-          <>
-            <span className="bottom-bar-divider" aria-hidden="true" />
-            <span className="bottom-bar-item bottom-bar-branch">{branch}</span>
-          </>
-        ) : null}
+        <span className="cit-bb-divider" aria-hidden="true" />
+        <span className="cit-bb-item">
+          <span className="cit-bb-mono">{shellCount}</span> {shellCount === 1 ? "shell" : "shells"}
+        </span>
+        <span className="cit-bb-divider" aria-hidden="true" />
+        <span className="cit-bb-item cit-bb-muted">
+          <kbd>ctrl</kbd>+<kbd>k</kbd> palette
+        </span>
+        <span className="cit-bb-item cit-bb-muted">
+          <kbd>c</kbd> new workspace
+        </span>
       </div>
-      <div className="bottom-bar-right">
-        <span className="bottom-bar-item bottom-bar-muted">{now}</span>
+      <div className="cit-bb-right">
+        {tmuxLabel ? <span className="cit-bb-tmux">[{tmuxLabel}]</span> : null}
+        {headCommitMessage ? <span className="cit-bb-commit">* {headCommitMessage}</span> : null}
+        <span className="cit-bb-time">{now}</span>
       </div>
     </footer>
   );

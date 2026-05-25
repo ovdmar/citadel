@@ -11,11 +11,15 @@ import {
   IssueTrackerSummarySchema,
   IssueTransitionActionResultSchema,
   OperationSchema,
+  PrReviewerSchema,
   ProviderHealthSchema,
+  PullRequestSummarySchema,
+  RecentCommitSchema,
   RepoSchema,
   RuntimeUsageSummarySchema,
   VersionControlSummarySchema,
   WorkspaceDiffSchema,
+  WorkspaceRecentCommitsSchema,
   WorkspaceSchema,
 } from "./index.js";
 
@@ -199,5 +203,56 @@ describe("contract schemas", () => {
         checkedAt: timestamp,
       }).transition,
     ).toBe("31");
+  });
+
+  it("parses PR reviewer + recent-commits schemas with their defaults and rejects malformed inputs", () => {
+    // PrReviewer: name defaults to null, login is required, state is constrained.
+    expect(PrReviewerSchema.parse({ login: "ovi", state: "approved" })).toEqual({
+      login: "ovi",
+      name: null,
+      state: "approved",
+    });
+    expect(() => PrReviewerSchema.parse({ login: "ovi", state: "APPROVED" })).toThrow();
+    expect(() => PrReviewerSchema.parse({ login: "", state: "approved" })).toThrow();
+
+    // PullRequest reviewers defaults to []; an empty array round-trips.
+    const prWithoutReviewers = PullRequestSummarySchema.parse({
+      number: 1,
+      title: "Test",
+      url: "https://example.test/pr/1",
+      state: "OPEN",
+      draft: false,
+      reviewDecision: null,
+      checks: [],
+    });
+    expect(prWithoutReviewers.reviewers).toEqual([]);
+
+    // RecentCommit enforces sha length bounds.
+    expect(() =>
+      RecentCommitSchema.parse({
+        sha: "short",
+        shortSha: "abcd",
+        message: "",
+        author: "",
+        relativeTime: "",
+        isoTime: "",
+      }),
+    ).toThrow();
+    expect(() =>
+      RecentCommitSchema.parse({
+        sha: "1234567890abcdef",
+        shortSha: "abc",
+        message: "",
+        author: "",
+        relativeTime: "",
+        isoTime: "",
+      }),
+    ).toThrow();
+
+    // WorkspaceRecentCommits accepts an empty commit list.
+    expect(WorkspaceRecentCommitsSchema.parse({ workspaceId: "ws_test", commits: [] })).toEqual({
+      workspaceId: "ws_test",
+      commits: [],
+    });
   });
 });

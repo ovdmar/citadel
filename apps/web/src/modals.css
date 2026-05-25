@@ -265,38 +265,6 @@
   width: max-content;
 }
 
-.group-by-overlay {
-  width: 220px;
-}
-
-.group-by-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--c-fg-2);
-  font-size: 12px;
-  font-weight: 500;
-  cursor: grab;
-}
-
-.group-by-row:hover {
-  background: var(--c-line-1);
-  color: var(--c-fg-1);
-}
-
-.group-by-row.dragging {
-  opacity: 0.6;
-}
-
-.group-by-row input[type="checkbox"] {
-  margin: 0;
-  accent-color: var(--c-fg-1);
-}
-
 .popover {
   position: absolute;
   top: calc(100% + 4px);

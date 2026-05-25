@@ -255,9 +255,9 @@ a:hover {
   background: var(--surface);
 }
 
-/* Top bar */
+/* Top bar — cit-* tokens shared with the Citadel redesign */
 
-.top-bar {
+.cit-topbar {
   position: sticky;
   top: 0;
   z-index: 6;
@@ -272,21 +272,32 @@ a:hover {
   border-bottom: 0.5px solid var(--c-line-2);
 }
 
-.top-bar-brand {
+.cit-topbar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(to right, transparent, var(--c-line-1) 20%, var(--c-line-1) 80%, transparent);
+  pointer-events: none;
+}
+
+.cit-brand {
   display: inline-flex;
   align-items: center;
   gap: 10px;
   color: var(--c-fg-1);
 }
 
-.top-bar-brand-text {
+.cit-brand-text {
   display: flex;
   flex-direction: column;
   gap: 0;
   line-height: 1.05;
 }
 
-.top-bar-brand-name {
+.cit-brand-name {
   font-family: var(--font-serif);
   font-size: 18px;
   font-weight: 400;
@@ -294,37 +305,20 @@ a:hover {
   color: var(--c-fg-1);
 }
 
-.top-bar-brand-org {
+.cit-brand-org {
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--c-fg-3);
   letter-spacing: 0.02em;
 }
 
-.top-bar-brand-mark {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--c-on-dark);
-  background: var(--c-dark);
-  box-shadow: var(--sh-1);
-  flex: 0 0 auto;
-}
-
-.top-bar-brand-mark svg {
-  width: 14px;
-  height: 14px;
-}
-
-.top-bar-search-wrap {
+.cit-search-wrap {
   display: flex;
   justify-content: center;
 }
 
-.top-bar-search {
+.cit-search {
+  appearance: none;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -341,21 +335,22 @@ a:hover {
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.top-bar-search:hover {
+.cit-search:hover {
   border-color: var(--c-line-3);
 }
 
-.top-bar-search:focus-within {
+.cit-search:focus-within {
   border-color: rgba(36, 28, 14, 0.22);
   box-shadow: 0 0 0 3px rgba(36, 28, 14, 0.04), var(--sh-1);
 }
 
-.top-bar-search > span:not(.top-bar-search-shortcut) {
+.cit-search .cit-search-placeholder {
   flex: 1;
   color: var(--c-fg-4);
+  text-align: left;
 }
 
-.top-bar-search-shortcut {
+.cit-kbd {
   margin-left: auto;
   padding: 1px 5px;
   border-radius: 5px;
@@ -366,14 +361,14 @@ a:hover {
   background: transparent;
 }
 
-.top-bar-actions {
+.cit-top-right {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 4px;
 }
 
-.top-bar-icon {
+.cit-icon-btn {
   appearance: none;
   display: inline-flex;
   align-items: center;
@@ -385,30 +380,22 @@ a:hover {
   background: transparent;
   color: var(--c-fg-3);
   cursor: pointer;
+  position: relative;
   transition: background 0.12s, color 0.12s;
   text-decoration: none;
 }
 
-.top-bar-icon:hover {
+.cit-icon-btn:hover {
   background: var(--c-line-1);
   color: var(--c-fg-1);
   text-decoration: none;
 }
 
-.top-bar-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
-  background: linear-gradient(135deg, #44403a, #1a1814);
-  color: #f2eee2;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: 6px;
-  box-shadow: var(--sh-1);
+.cit-icon-btn--sm {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: var(--c-fg-3);
 }
 
 /* Pulse / dots — shared across sidebar, tabs, deploys, bottom bar */
@@ -729,7 +716,8 @@ a:hover {
 
 /* Bottom status bar */
 
-.bottom-bar {
+.cit-bottombar {
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -739,69 +727,74 @@ a:hover {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--c-fg-3);
-  height: 28px;
 }
 
-.bottom-bar-left,
-.bottom-bar-right {
+.cit-bb-left,
+.cit-bb-right {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
 
-.bottom-bar-pill {
+.cit-bb-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 1px 8px;
   border-radius: 999px;
-  font-weight: 500;
-  font-family: var(--font-mono);
-  font-size: 11px;
-}
-
-.bottom-bar-pill.tone-running {
-  background: var(--c-warn-bg);
-  color: var(--c-warn);
-}
-
-.bottom-bar-pill.tone-idle {
   background: var(--c-ok-bg);
   color: var(--c-ok);
+  font-weight: 500;
 }
 
-.bottom-bar-pulse {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 25%, transparent);
-}
-
-.bottom-bar-divider {
+.cit-bb-divider {
   width: 0.5px;
   height: 12px;
   background: var(--c-line-3);
 }
 
-.bottom-bar-item {
+.cit-bb-item {
   display: inline-flex;
-  align-items: center;
   gap: 5px;
+  align-items: center;
 }
 
-.bottom-bar-mono {
-  color: var(--c-fg-1);
-  font-weight: 500;
-}
-
-.bottom-bar-branch {
-  color: var(--c-fg-2);
-}
-
-.bottom-bar-muted {
+.cit-bb-muted {
   color: var(--c-fg-4);
+}
+
+.cit-bb-mono {
+  color: var(--c-fg-1);
+  font-weight: 600;
+}
+
+.cit-bb-tmux {
+  color: var(--c-fg-2);
+  white-space: nowrap;
+}
+
+.cit-bb-commit {
+  color: var(--c-fg-3);
+  font-style: italic;
+  max-width: 280px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cit-bb-time {
+  color: var(--c-fg-4);
+}
+
+.cit-bb-left kbd,
+.cit-bb-right kbd {
+  font-size: 9.5px;
+  background: var(--c-line-1);
+  color: var(--c-fg-3);
+  border: 0.5px solid var(--c-line-2);
+  border-radius: 4px;
+  padding: 0 4px;
 }
 
 /* Generic blocks reused across views */
@@ -957,36 +950,30 @@ a:hover {
   }
 
   /* Top bar shrinks: drop the centered search hint and shortcut chip. */
-  .top-bar {
+  .cit-topbar {
     grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 8px;
     padding: 0 8px;
   }
 
-  .top-bar-brand {
+  .cit-brand {
     gap: 0;
     font-size: 0;
   }
 
-  .top-bar-brand-mark {
-    width: 22px;
-    height: 22px;
-    font-size: 12px;
-  }
-
-  .top-bar-search {
+  .cit-search {
     height: 30px;
     padding: 0 10px;
   }
 
-  .top-bar-search > span:not(.top-bar-search-shortcut) {
+  .cit-search .cit-search-placeholder {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     min-width: 0;
   }
 
-  .top-bar-search-shortcut {
+  .cit-search .cit-kbd {
     display: none;
   }
 }

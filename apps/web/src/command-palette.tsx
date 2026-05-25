@@ -145,7 +145,7 @@ export function CommandPalette(props: CommandPaletteProps) {
             placeholder="Search workspaces by title, branch, issue, PR, repo, or status"
             aria-label="Search workspaces"
           />
-          <kbd className="top-bar-search-shortcut">Esc</kbd>
+          <kbd className="cit-kbd">Esc</kbd>
         </div>
         <div className="command-results">
           {results.length ? <div className="command-section-label">Workspaces</div> : null}
