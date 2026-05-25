@@ -11,6 +11,7 @@ import type {
   ScheduledAgent,
   Workspace,
 } from "@citadel/contracts";
+import { SCRATCHPAD_TOOL_DEFINITIONS, type ScratchpadToolName } from "./scratchpad-tools.js";
 
 export type AgentSessionSummary = AgentSession & {
   namespaceId: string | null;
@@ -50,9 +51,7 @@ export type McpToolName =
   | "archive_namespace"
   | "restore_namespace"
   | "assign_workspace_to_namespace"
-  | "read_scratchpad"
-  | "write_scratchpad"
-  | "append_scratchpad"
+  | ScratchpadToolName
   | "list_deployed_apps"
   | "redeploy_app"
   | "read_agent_history"
@@ -405,37 +404,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       inputSchema: { type: "object", additionalProperties: false },
       destructive: true,
     },
-    {
-      name: "read_scratchpad",
-      description:
-        "Read the user's scratchpad. The user notes thoughts and TODOs here for orchestrator agents to pick up. Returns { content, updatedAt }.",
-      inputSchema: { type: "object", additionalProperties: false },
-      destructive: false,
-    },
-    {
-      name: "write_scratchpad",
-      description:
-        "Overwrite the scratchpad. Replaces all existing content. Returns the new { content, updatedAt }. Prefer append_scratchpad to add notes without clobbering.",
-      inputSchema: {
-        type: "object",
-        required: ["content"],
-        properties: { content: { type: "string" } },
-        additionalProperties: false,
-      },
-      destructive: false,
-    },
-    {
-      name: "append_scratchpad",
-      description:
-        "Append to the scratchpad without losing existing content. Inserts a blank-line separator before the new chunk. Returns { content, updatedAt }.",
-      inputSchema: {
-        type: "object",
-        required: ["content"],
-        properties: { content: { type: "string", minLength: 1 } },
-        additionalProperties: false,
-      },
-      destructive: false,
-    },
+    ...SCRATCHPAD_TOOL_DEFINITIONS,
     {
       name: "list_deployed_apps",
       description:
@@ -706,6 +675,10 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
       // route these to the daemon path explicitly.
       return { error: "session_tool_requires_daemon" };
     case "read_scratchpad":
+    case "list_blocks":
+    case "add_block":
+    case "update_block":
+    case "delete_block":
       // The scratchpad lives on disk under the daemon's data dir; the snapshot
       // path has no fs access, so route through the daemon explicitly.
       return { error: "scratchpad_tool_requires_daemon" };
