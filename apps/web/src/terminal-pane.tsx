@@ -34,6 +34,11 @@ const RUNBOOK_URL = "/docs/operations/terminal-runbook";
 export type TerminalHandle = {
   url: string | null;
   reload: () => void;
+  // Focus the iframe element programmatically. The ttyd payload is
+  // cross-origin (separate port) so this only focuses the iframe itself —
+  // xterm keyboard capture still requires one click inside the terminal
+  // area. See spec B.2 §Center Stage Sessions / select-focuses-terminal.
+  focusIframe: () => void;
 };
 
 const REGISTRY = new Map<string, TerminalHandle>();
@@ -54,6 +59,23 @@ export function subscribeTerminalHandle(listener: (sessionId: string) => void): 
   return () => LISTENERS.delete(listener);
 }
 
+// Focus the iframe of an active session. No-op when:
+//   - sessionId is null/undefined (workspace has no active session)
+//   - no handle is registered (session not yet mounted)
+//   - document.activeElement is a text input or contenteditable (don't steal
+//     focus while the user is typing — e.g. inline workspace-title rename).
+// The cross-origin ttyd iframe means this delivers focus to the iframe
+// element only; xterm needs one click inside the pane to capture the keyboard.
+export function focusActiveTerminal(sessionId: string | null | undefined): void {
+  if (!sessionId) return;
+  const handle = REGISTRY.get(sessionId);
+  if (!handle) return;
+  const active = typeof document !== "undefined" ? document.activeElement : null;
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
+  if (active instanceof HTMLElement && active.isContentEditable) return;
+  handle.focusIframe();
+}
+
 export function TerminalPane(props: { session: AgentSession }) {
   const sessionId = props.session.id;
   const theme = useResolvedTheme();
@@ -70,6 +92,7 @@ export function TerminalPane(props: { session: AgentSession }) {
   const [pending, setPending] = useState(true);
   const [iframeKey, setIframeKey] = useState(0);
   const requestSeqRef = useRef(0);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   const ensure = useCallback(
     async (options: { bumpFrame?: boolean; force?: boolean } = {}) => {
@@ -137,23 +160,34 @@ export function TerminalPane(props: { session: AgentSession }) {
     void ensure({ bumpFrame: true, force: true });
   }, [ensure]);
 
-  // Publish the live URL + reload callback so the stage tab can drive them.
-  // The status bar used to render these affordances inside the pane; that was
-  // removed in favour of the tab actions, but the state still lives here.
+  // Focus the iframe element (NOT contentWindow — the ttyd payload is on a
+  // different origin so contentWindow.focus() cannot deliver xterm
+  // keyboard focus). preventScroll keeps the cockpit layout stable when
+  // selecting a workspace far down the nav.
+  const focusIframe = useCallback(() => {
+    iframeRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  // Publish the live URL + reload + focus callbacks so the stage tab and
+  // workspace-card onClick can drive them.
   useEffect(() => {
-    publish(sessionId, { url, reload });
+    publish(sessionId, { url, reload, focusIframe });
     return () => publish(sessionId, null);
-  }, [sessionId, url, reload]);
+  }, [sessionId, url, reload, focusIframe]);
   return (
     <div className="terminal-shell">
       <div className="terminal-surface terminal-surface-iframe">
         {url ? (
           <iframe
+            ref={iframeRef}
             key={`${sessionId}-${iframeKey}`}
             className="terminal-iframe"
             src={url}
             title={`Terminal ${props.session.displayName}`}
             allow="clipboard-read; clipboard-write"
+            // tabIndex makes the iframe a programmatic-focus target without
+            // adding it to the natural tab order.
+            tabIndex={-1}
           />
         ) : error ? (
           <TerminalErrorState error={error} onRetry={retry} retrying={pending} />

@@ -21,16 +21,30 @@ type GroupByMenuProps = {
   value: GroupKey;
   onChange: (next: GroupKey) => void;
   onClose: () => void;
+  // When provided, the click-outside check uses this container instead of
+  // the menu's inner ref. The wrapping container in the navigator includes
+  // BOTH the menu and its trigger button, so clicking the trigger doesn't
+  // fire onClose just before the trigger's own onClick toggles state back
+  // on (the bug the user reported as "doesn't close when clicking outside").
+  containerRef?: { current: HTMLElement | null };
 };
 
 export function GroupByMenu(props: GroupByMenuProps) {
   const ref = useRef<HTMLDivElement | null>(null);
+  // Re-read on every event from the ref objects, not from the props closure,
+  // so the listener installs once. Capturing props in the effect deps caused
+  // the effect to re-run every render (props is a fresh object identity).
+  const onCloseRef = useRef(props.onClose);
+  onCloseRef.current = props.onClose;
+  const containerRefProp = props.containerRef;
   useEffect(() => {
     const onDocClick = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) props.onClose();
+      const target = event.target as Node;
+      const container = containerRefProp?.current ?? ref.current;
+      if (container && !container.contains(target)) onCloseRef.current();
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") props.onClose();
+      if (event.key === "Escape") onCloseRef.current();
     };
     document.addEventListener("mousedown", onDocClick);
     document.addEventListener("keydown", onKey);
@@ -38,7 +52,7 @@ export function GroupByMenu(props: GroupByMenuProps) {
       document.removeEventListener("mousedown", onDocClick);
       document.removeEventListener("keydown", onKey);
     };
-  }, [props]);
+  }, [containerRefProp]);
   return (
     <div ref={ref} className="cit-gb-menu" role="menu" aria-label="Group workspaces">
       <div className="cit-gb-menu-head">Group workspaces by</div>

@@ -12,7 +12,7 @@ import {
   Plus,
   Settings2,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { AddRepoModal, CreateWorkspaceModal, GroupByMenu, type GroupKey } from "./modals.js";
 import {
@@ -96,6 +96,7 @@ export function Navigator(props: {
   }, []);
 
   const [showGroupBy, setShowGroupBy] = useState(false);
+  const groupByContainerRef = useRef<HTMLDivElement | null>(null);
   const [showAddRepo, setShowAddRepo] = useState(false);
 
   // Intentionally exclude props.activeSummary from buildGroupTree: status sections
@@ -234,7 +235,7 @@ export function Navigator(props: {
         <div className="nav-section">
           <strong>Workspaces</strong>
           <div className="nav-section-icons">
-            <div className="cit-gb">
+            <div className="cit-gb" ref={groupByContainerRef}>
               <button
                 type="button"
                 className={`cit-icon-btn cit-icon-btn--sm cit-gb-btn ${showGroupBy ? "is-open" : ""}`}
@@ -245,7 +246,12 @@ export function Navigator(props: {
                 <Settings2 size={12} />
               </button>
               {showGroupBy ? (
-                <GroupByMenu value={grouping} onChange={setGrouping} onClose={() => setShowGroupBy(false)} />
+                <GroupByMenu
+                  value={grouping}
+                  onChange={setGrouping}
+                  onClose={() => setShowGroupBy(false)}
+                  containerRef={groupByContainerRef}
+                />
               ) : null}
             </div>
             <button

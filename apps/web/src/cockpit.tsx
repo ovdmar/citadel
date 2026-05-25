@@ -11,6 +11,7 @@ import { CommandPalette } from "./command-palette.js";
 import { Inspector } from "./inspector.js";
 import { Navigator } from "./navigator.js";
 import { Stage } from "./stage.js";
+import { focusActiveTerminal } from "./terminal-pane.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
 import { useResolvedTheme } from "./use-resolved-theme.js";
@@ -121,6 +122,15 @@ export function Cockpit() {
   const focusWorkspace = (workspace: Workspace) => {
     setActiveWorkspaceId(workspace.id);
     setMobileView("stage");
+    // Focus the workspace's currently-active session's terminal iframe so
+    // the user lands one click away from typing into xterm. Cross-origin
+    // limitation: xterm keyboard capture still needs a click inside the
+    // pane. Scheduled in a microtask so React's commit (mounting the new
+    // active terminal) completes before we try to focus.
+    const targetSessionId = activeSessionByWorkspace[workspace.id];
+    if (targetSessionId) {
+      queueMicrotask(() => focusActiveTerminal(targetSessionId));
+    }
   };
 
   const repoNames = useMemo(() => {

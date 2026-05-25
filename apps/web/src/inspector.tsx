@@ -7,7 +7,18 @@ import type {
   WorkspaceRecentCommits,
 } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown, ExternalLink, GitPullRequest, Hash, Loader2, Plus, RefreshCw, X } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  ExternalLink,
+  GitPullRequest,
+  Hash,
+  Loader2,
+  PanelRightClose,
+  Plus,
+  RefreshCw,
+  X,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { DeployedAppsPanel } from "./deployed-apps.js";
@@ -61,7 +72,7 @@ export function Inspector(props: {
           aria-label="Collapse inspector"
           title="Collapse inspector"
         >
-          <X size={12} />
+          <PanelRightClose size={14} />
         </button>
       </div>
       <div className="column-body">

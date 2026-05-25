@@ -232,6 +232,16 @@ export function Stage(props: {
                     aria-label="Stop session"
                     onClick={(event) => {
                       event.stopPropagation();
+                      // Pre-pick the next active tab BEFORE mutating so the
+                      // 4s `keepPending` grace never opens a blank window on
+                      // close. Prefer the LEFT sibling; fall back to the
+                      // right sibling. If this is the only tab, leave the
+                      // active pointer alone (Stage falls back to "no
+                      // session yet" empty state).
+                      if (tab.session.id === activeSession?.session.id && tabs.length > 1) {
+                        const next = tabs[index - 1] ?? tabs[index + 1];
+                        if (next) props.onActiveSession(next.session.id);
+                      }
                       stopSession.mutate(tab.session.id);
                     }}
                     title="Stop session"
