@@ -14,6 +14,7 @@ import {
   type WorkspaceCockpitSummary,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
+import { resolveFixConflictsPrompt } from "@citadel/hooks";
 import { mcpStatus, mcpToolDefinitions } from "@citadel/mcp";
 import { OperationService } from "@citadel/operations";
 import {
@@ -525,6 +526,48 @@ export function createDaemonApp(input: {
       ttyd.release(sessionId);
       emit("agent.updated", { sessionId });
       res.status(202).json(result);
+    }),
+  );
+
+  // Launch a fresh agent to resolve a PR's merge conflicts. Always spawns a new
+  // session (no de-duplication) per the design — operators can click multiple
+  // times if they want multiple agents trying. The prompt is taken from a repo
+  // `.citadel/hooks/fixconflicts` hook when present, else a hardcoded default
+  // that references Citadel's non-fast-forward policy.
+  app.post(
+    "/api/workspaces/:workspaceId/fix-conflicts",
+    asyncRoute(async (req, res) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
+      const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+      if (!repo) return res.status(404).json({ error: "repo_not_found" });
+      const runtimeId = typeof req.body?.runtimeId === "string" ? req.body.runtimeId : config.runtimes[0]?.id;
+      const runtime = config.runtimes.find((candidate) => candidate.id === runtimeId);
+      if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
+      const resolved = await resolveFixConflictsPrompt({
+        workspacePath: workspace.path,
+        workspaceId: workspace.id,
+        workspaceBranch: workspace.branch,
+        repoId: repo.id,
+      });
+      const session = await operations.createAgentSession(
+        {
+          workspaceId: workspace.id,
+          runtimeId: runtime.id,
+          displayName: "Fix conflicts",
+          prompt: resolved.prompt,
+        },
+        {
+          command: runtime.command,
+          args: runtime.args,
+          displayName: runtime.displayName,
+          promptArg: runtime.promptArg ?? null,
+        },
+      );
+      emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
+      res.status(202).json({ session, promptSource: resolved.source, diagnostic: resolved.diagnostic });
     }),
   );
 

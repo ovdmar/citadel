@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 import type {
+  ActivityEvent,
   CreateAgentSessionInput,
   CreateNamespaceInput,
   CreateWorkspaceInput,
@@ -278,6 +279,7 @@ export class OperationService {
   createAgentSession = (
     input: CreateAgentSessionInput,
     runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
+    options: { activitySource?: ActivityEvent["source"] } = {},
   ) => {
     if (input.namespaceId) {
       const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
@@ -294,6 +296,7 @@ export class OperationService {
       },
       input,
       runtime,
+      options,
     );
   };
 
@@ -743,7 +746,7 @@ export class OperationService {
 
   private activity(
     type: string,
-    source: "user" | "system" | "hook",
+    source: ActivityEvent["source"],
     message: string,
     repoId: string | null,
     workspaceId: string | null,

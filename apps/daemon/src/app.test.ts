@@ -689,6 +689,80 @@ describe("createDaemonApp", () => {
       await closeServer(server);
     }
   });
+
+  it("launches a Fix-conflicts agent through POST /api/workspaces/:id/fix-conflicts with the default prompt", async () => {
+    const fixture = createFixture();
+    const git = createGitRepo(fixture.config.dataDir);
+    const now = new Date().toISOString();
+    fixture.store.insertRepo({
+      id: "repo_fc",
+      name: "FC Repo",
+      rootPath: git.repoPath,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: ["github-gh"],
+      deployHookCommand: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fixture.store.insertWorkspace({
+      id: "ws_fc",
+      repoId: "repo_fc",
+      name: "FC Workspace",
+      path: git.repoPath,
+      branch: "feature",
+      baseBranch: "main",
+      source: "scratch",
+      kind: "worktree",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      namespaceId: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      // No hook file → default prompt; both POSTs accepted (no 409 / dedupe by design).
+      const first = await postJson<{
+        session: { id: string; displayName: string; workspaceId: string };
+        promptSource: string;
+        diagnostic: string | null;
+      }>(`${baseUrl}/api/workspaces/ws_fc/fix-conflicts`, {});
+      expect(first.session.displayName).toBe("Fix conflicts");
+      expect(first.session.workspaceId).toBe("ws_fc");
+      expect(first.promptSource).toBe("default");
+      expect(first.diagnostic).toBeNull();
+
+      const second = await postJson<{ session: { id: string } }>(
+        `${baseUrl}/api/workspaces/ws_fc/fix-conflicts`,
+        {},
+      );
+      // Distinct session IDs prove "always launch new" — no 409 deduplication.
+      expect(second.session.id).not.toBe(first.session.id);
+
+      // Activity log records source=user for the operator-triggered launch.
+      const fixActivities = fixture.store
+        .listActivity("ws_fc")
+        .filter((event) => event.message?.includes("Fix conflicts"));
+      expect(fixActivities.length).toBeGreaterThanOrEqual(2);
+      for (const event of fixActivities) expect(event.source).toBe("user");
+    } finally {
+      await closeServer(server);
+    }
+  }, 20_000);
 });
 
 // Local sugar: pre-bind the `dirs` array shared across this test file so

@@ -1,4 +1,4 @@
-import type { AgentSession, CreateAgentSessionInput, Repo, Workspace } from "@citadel/contracts";
+import type { ActivityEvent, AgentSession, CreateAgentSessionInput, Repo, Workspace } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { ensureTmuxSession, submitPrompt } from "@citadel/terminal";
@@ -9,7 +9,7 @@ export type CreateAgentSessionDeps = {
   store: SqliteStore;
   activity: (
     type: string,
-    source: "user" | "system" | "hook",
+    source: ActivityEvent["source"],
     message: string,
     repoId: string | null,
     workspaceId: string | null,
@@ -28,6 +28,7 @@ export async function createAgentSession(
   deps: CreateAgentSessionDeps,
   input: CreateAgentSessionInput,
   runtime: RuntimeDescriptor,
+  options: { activitySource?: ActivityEvent["source"] } = {},
 ): Promise<AgentSession> {
   const { store } = deps;
   const workspace = store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
@@ -97,7 +98,15 @@ export async function createAgentSession(
   // because we passed it as a CLI flag (claude-code, codex) or because we
   // pasted it into the tmux pane. read_agent_history surfaces it via the
   // transcript adapter, so we don't double-record it here.
-  deps.activity("agent.started", "user", `Started ${session.displayName}`, workspace.repoId, workspace.id, null);
+  const activitySource = options.activitySource ?? "user";
+  deps.activity(
+    "agent.started",
+    activitySource,
+    `Started ${session.displayName}`,
+    workspace.repoId,
+    workspace.id,
+    null,
+  );
   const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
   if (repo) await deps.runNotificationHooks("agent.started", repo, workspace, null, { repo, workspace, session });
   return session;

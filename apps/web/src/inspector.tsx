@@ -145,6 +145,9 @@ function StatsTab(props: {
                   </span>
                 </div>
                 <div className="ins-pr-title">{pr.title}</div>
+                {props.summary?.readiness.state === "pr-conflicts" ? (
+                  <FixConflictsButton workspaceId={props.workspace.id} />
+                ) : null}
                 <div className="ins-pr-stats">
                   <div className="ins-stat">
                     <div className="ins-stat-num">{diffFiles}</div>
@@ -323,6 +326,39 @@ function StatsTab(props: {
         </section>
       </div>
     </>
+  );
+}
+
+function FixConflictsButton(props: { workspaceId: string }) {
+  const mutation = useMutation({
+    mutationFn: () =>
+      api<{ session: { id: string }; promptSource: string }>(`/api/workspaces/${props.workspaceId}/fix-conflicts`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      queryClient.invalidateQueries({ queryKey: ["cockpit-summary", props.workspaceId] });
+    },
+  });
+  return (
+    <div className="ins-pr-fix">
+      <button
+        type="button"
+        className="cit-btn cit-btn-danger"
+        onClick={() => mutation.mutate()}
+        disabled={mutation.isPending}
+        title="Launch a fresh agent to resolve PR conflicts against main"
+      >
+        {mutation.isPending ? <Loader2 size={11} className="spin" /> : <GitPullRequest size={11} />}
+        {mutation.isPending ? "Launching…" : "Fix conflicts"}
+      </button>
+      {mutation.isError ? (
+        <span className="ins-pr-fix-err">
+          {mutation.error instanceof Error ? mutation.error.message : "Failed to launch agent"}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
