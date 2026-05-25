@@ -1,0 +1,14 @@
+❯ start a long-running background bash task: run `sleep 120` with
+  run_in_background=true. After it's running, just say "background started"
+  and don't do anything else.
+
+  Ran 1 shell command
+
+● background started
+
+✻ Baked for 5s · 1 shell still running
+                                Update available! Run: brew upgrade claude-code
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on · 1 shell · ↓ to manage

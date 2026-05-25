@@ -1,0 +1,24 @@
+› Write a detailed 4-paragraph explanation of how distributed consensus works
+  (Paxos, Raft). Take your time, be thorough.
+
+
+• Distributed consensus is the problem of getting a group of machines to agree
+  on one value or one ordered sequence of values even when some machines crash,
+  messages are delayed, messages arrive out of order, or parts of the network
+  temporarily cannot communicate. The hard part is not agreement when everything
+  works; it is preserving safety when everything is ambiguous. A server may not
+  know whether another server is slow, disconnected, or dead, and two groups of
+  servers may each believe they should make progress. Consensus protocols solve
+  this by requiring decisions to be supported by overlapping majorities, or
+  quorums. In a cluster of five, any majority has at least three nodes, and any
+  two majorities must share at least one node. That overlap is crucial: it
+  prevents two conflicting values from both being chosen, because at least one
+  participant would have knowledge of the earlier decision or promise that
+  constrains later decisions. Most consensus systems assume crash faults, not
+  Byzantine faults, meaning nodes may stop or restart but do not lie
+  maliciously.
+
+
+› Use /skills to list available skills
+
+  gpt-5.5 default · ~/Workspace/citadel-worktrees/new-owrk

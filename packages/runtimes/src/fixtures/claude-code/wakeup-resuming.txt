@@ -1,0 +1,13 @@
+✻ Brewed for 40m 33s
+
+✻ Claude resuming /loop wakeup (May 25 8:52am)
+
+● CI already completed green for the latest commit ebb847c on new-owrk (run 26391939462, conclusion: success). PR #21 is caught up with main and CI-clean.
+
+· Cogitating… (3s · ↑ 120 tokens)
+  ⎿  Tip: Share Claude Code and earn €10 of extra usage · /passes
+                                                               ● high · /effort
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt

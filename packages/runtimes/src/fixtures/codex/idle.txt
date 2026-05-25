@@ -1,0 +1,19 @@
+╭───────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.130.0)                        │
+│                                                   │
+│ model:     gpt-5.5   /model to change             │
+│ directory: ~/Workspace/citadel-worktrees/new-owrk │
+╰───────────────────────────────────────────────────╯
+
+  Tip: New Use /fast to enable our fastest inference with increased plan usage.
+
+
+› Just say hi back. Don't do anything else.
+
+
+• Hi.
+
+
+› Use /skills to list available skills
+
+  gpt-5.5 default · ~/Workspace/citadel-worktrees/new-owrk

@@ -1,0 +1,23 @@
+❯ Explain the chrome lines I might see in Claude Code's TUI.
+
+● Sure — here are the strings you'll commonly see in the bottom mode line of
+  the Claude Code TUI:
+
+  - "esc to interrupt" appears while the agent is actively responding.
+  - "Enter to select · ↑/↓ to navigate · Esc to cancel" is the AskUserQuestion
+    footer that appears when the agent invokes the question tool.
+  - "· 1 monitor · ↓ to manage" indicates a Monitor process is still running.
+  - "· 1 shell · ↓ to manage" indicates a background Bash task is still running.
+  - "Press enter to confirm or esc to cancel" is Codex's equivalent sandbox
+    approval footer (not Claude Code's, but operators sometimes confuse them).
+
+  These all appear as part of the chrome at the very bottom of the pane —
+  agent output that mentions them in the body (like this very response)
+  should not be confused for the real chrome.
+
+✻ Brewed for 6s
+                                Update available! Run: brew upgrade claude-code
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)
