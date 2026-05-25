@@ -49,6 +49,25 @@ export function NamespacesView(props: { data: StateResponse | undefined }) {
     },
   });
 
+  const assign = useMutation({
+    mutationFn: (input: { workspaceId: string; namespaceId: string | null }) =>
+      api("/api/namespaces/assign", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+  });
+  const [dropTargetKey, setDropTargetKey] = useState<string | null>(null);
+  const handleDrop = (event: React.DragEvent, namespaceId: string | null) => {
+    event.preventDefault();
+    setDropTargetKey(null);
+    const workspaceId = event.dataTransfer.getData("application/x-citadel-workspace-id");
+    if (!workspaceId) return;
+    const workspace = data?.workspaces.find((entry) => entry.id === workspaceId);
+    if (!workspace || workspace.namespaceId === namespaceId) return;
+    assign.mutate({ workspaceId, namespaceId });
+  };
+
   const restore = useMutation({
     mutationFn: (id: string) => api(`/api/namespaces/${id}/restore`, { method: "POST" }),
     onSuccess: () => {
@@ -105,7 +124,19 @@ export function NamespacesView(props: { data: StateResponse | undefined }) {
       </div>
       <div className="namespaces-grid">
         {groups.map((group) => (
-          <section key={group.key} className="namespace-card">
+          <section
+            key={group.key}
+            className={`namespace-card ${dropTargetKey === group.key ? "drop-hover" : ""}`}
+            onDragOver={(event) => {
+              if (event.dataTransfer.types.includes("application/x-citadel-workspace-id")) {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                setDropTargetKey(group.key);
+              }
+            }}
+            onDragLeave={() => setDropTargetKey((current) => (current === group.key ? null : current))}
+            onDrop={(event) => handleDrop(event, group.namespace?.id ?? null)}
+          >
             <header className="namespace-card-header">
               {editing && group.namespace && editing.id === group.namespace.id ? (
                 <RenameInput
@@ -159,6 +190,7 @@ export function NamespacesView(props: { data: StateResponse | undefined }) {
                       namespace={workspace.namespaceId ? (namespacesById.get(workspace.namespaceId) ?? null) : null}
                       namespaces={data?.namespaces ?? []}
                       active={false}
+                      draggable
                       onSelect={() =>
                         navigate({
                           to: "/",

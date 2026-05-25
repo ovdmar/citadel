@@ -34,7 +34,9 @@ export type WorkspaceCardData = {
 export type PrTone = "missing" | "pending" | "passing" | "failing" | "merged";
 export type ApprovalTone = "none" | "pending" | "changes" | "approved";
 
-export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSelect: () => void }) {
+export function WorkspaceCard(
+  props: WorkspaceCardData & { active: boolean; onSelect: () => void; draggable?: boolean },
+) {
   const { workspace, sessions, pullRequest } = props;
   const titleDisplay = workspaceDisplayTitle(workspace);
   const agentState = deriveAgentState(sessions);
@@ -78,8 +80,20 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
     },
   });
 
+  // Drag payload: the workspace id, so namespace drop targets can reassign it
+  // via /api/namespaces/assign. Opt-in per call site (only the nav/dashboard
+  // namespace views enable it) to avoid accidental drags elsewhere.
+  const dragHandlers = props.draggable
+    ? {
+        draggable: true,
+        onDragStart: (event: React.DragEvent) => {
+          event.dataTransfer.setData("application/x-citadel-workspace-id", workspace.id);
+          event.dataTransfer.effectAllowed = "move";
+        },
+      }
+    : {};
   return (
-    <div className="workspace-card-wrap">
+    <div className="workspace-card-wrap" {...dragHandlers}>
       <button
         type="button"
         className={`workspace-card ${props.active ? "active" : ""}`}

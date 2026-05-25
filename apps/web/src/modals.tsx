@@ -9,6 +9,17 @@ export type GroupKey = "repo" | "status" | "namespace";
 
 const GROUP_KEYS: GroupKey[] = ["repo", "status", "namespace"];
 
+// "namespace" without "repo" produces ambiguous groups when two repos both
+// have a workspace named "main" sitting in Uncategorized. Force repo on
+// whenever namespace is selected so the second grouping level always
+// disambiguates by source repo.
+export function normalizeGrouping(grouping: GroupKey[]): GroupKey[] {
+  if (!grouping.includes("namespace") || grouping.includes("repo")) return grouping;
+  // Put repo first so the namespace heading nests under repo (e.g. "Citadel ·
+  // epic-revamp") — that read order matches how the user thinks about it.
+  return ["repo", ...grouping];
+}
+
 type GroupByOverlayProps = {
   value: GroupKey[];
   onChange: (next: GroupKey[]) => void;
@@ -24,9 +35,12 @@ export function GroupByOverlay(props: GroupByOverlayProps) {
   };
   const ordered = props.value;
   const inactive = GROUP_KEYS.filter((key) => !ordered.includes(key));
+  const namespaceActive = ordered.includes("namespace");
+  const isLocked = (key: GroupKey) => key === "repo" && namespaceActive;
   const toggle = (key: GroupKey) => {
-    if (ordered.includes(key)) props.onChange(ordered.filter((entry) => entry !== key));
-    else props.onChange([...ordered, key]);
+    if (isLocked(key)) return;
+    if (ordered.includes(key)) props.onChange(normalizeGrouping(ordered.filter((entry) => entry !== key)));
+    else props.onChange(normalizeGrouping([...ordered, key]));
   };
   const reorder = (source: GroupKey, target: GroupKey) => {
     if (source === target) return;
@@ -36,7 +50,7 @@ export function GroupByOverlay(props: GroupByOverlayProps) {
     if (sourceIndex < 0 || targetIndex < 0) return;
     next.splice(sourceIndex, 1);
     next.splice(targetIndex, 0, source);
-    props.onChange(next);
+    props.onChange(normalizeGrouping(next));
   };
   return (
     <div className="popover group-by-overlay" aria-label="Group workspaces">
@@ -44,7 +58,7 @@ export function GroupByOverlay(props: GroupByOverlayProps) {
       {ordered.map((key) => (
         <div
           key={key}
-          className={`group-by-row ${dragging === key ? "dragging" : ""}`}
+          className={`group-by-row ${dragging === key ? "dragging" : ""} ${isLocked(key) ? "locked" : ""}`}
           draggable
           onDragStart={() => setDragging(key)}
           onDragEnd={() => setDragging(null)}
@@ -56,17 +70,22 @@ export function GroupByOverlay(props: GroupByOverlayProps) {
         >
           <GripVertical size={12} />
           <input type="checkbox" checked readOnly aria-label={`${labels[key]} grouping enabled`} />
-          <span>{labels[key]}</span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={() => toggle(key)}
-            aria-label={`Remove ${labels[key]} grouping`}
-            title={`Remove ${labels[key]} grouping`}
-          >
-            <X size={11} />
-          </Button>
+          <span>
+            {labels[key]}
+            {isLocked(key) ? <em className="group-by-required"> (required by Namespace)</em> : null}
+          </span>
+          {isLocked(key) ? null : (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={() => toggle(key)}
+              aria-label={`Remove ${labels[key]} grouping`}
+              title={`Remove ${labels[key]} grouping`}
+            >
+              <X size={11} />
+            </Button>
+          )}
         </div>
       ))}
       {inactive.map((key) => (
