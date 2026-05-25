@@ -100,8 +100,21 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
   }): Promise<TtydEntry> {
     const desiredTheme: TtydTheme = args.theme ?? "dark";
     const existing = entries.get(args.key);
-    if (existing && existing.child.exitCode === null) {
-      if (!args.force && (await portOpen(existing.port))) return toEntry(existing);
+    // Trust the child-process liveness signal rather than probing the port.
+    // The `child.on('exit')` handler below deletes the entry as soon as the
+    // ttyd process dies, so `existing.child.exitCode === null` is sufficient
+    // proof that the ttyd is alive and reachable.
+    //
+    // An earlier version did `await portOpen(existing.port)` as a defensive
+    // double-check. portOpen has a 150ms localhost TCP connect timeout, which
+    // localhost normally returns under 1ms — but under spawn-storm load
+    // (e.g. `pnpm check` forking node/tsx/tsc workers) the kernel can take
+    // longer to schedule the SYN. The probe returns false for a live ttyd,
+    // the daemon then SIGTERMs the live ttyd and respawns it, the cockpit's
+    // WebSocket drops → "Reconnecting/Reconnected" overlay storm, repeats
+    // per session for every ensure() call landing during the burst.
+    if (existing && existing.child.exitCode === null && !existing.child.killed) {
+      if (!args.force) return toEntry(existing);
       try {
         existing.child.kill("SIGTERM");
       } catch {
