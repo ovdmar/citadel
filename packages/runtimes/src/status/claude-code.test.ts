@@ -61,6 +61,15 @@ describe("claudeCodeStatusAdapter", () => {
       );
     });
 
+    it("classifies waiting-for-input-ask-question-tab-arrow.txt as waiting_for_input (new Tab/Arrow nav hint)", () => {
+      // Claude Code reworded the AskUserQuestion footer from
+      // `↑/↓ to navigate` to `Tab/Arrow keys to navigate`. The detector
+      // anchors on the stable `Enter to select` and `Esc to cancel` endpoints.
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("waiting-for-input-ask-question-tab-arrow")))).toBe(
+        "waiting_for_input",
+      );
+    });
+
     it("classifies wakeup-resuming.txt as running (esc to interrupt visible in mid-resume)", () => {
       expect(claudeCodeStatusAdapter.observe(state, ctx(load("wakeup-resuming")))).toBe("running");
     });

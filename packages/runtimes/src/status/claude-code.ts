@@ -3,10 +3,14 @@ import type { ObservationContext, PaneObservation, RuntimeStatusAdapter, Session
 // Claude Code v2.1.x detection (verified 2026-05-25 against v2.1.133).
 //
 // Detection anchors:
-//   - AskUserQuestion: footer line `Enter to select · ↑/↓ to navigate · Esc to cancel`
-//     scanned over the last ~12 visible lines (the question UI sits between
-//     separators and may have rows below it, but the footer is unique enough
-//     that whole-window scan is safe).
+//   - AskUserQuestion: footer line beginning with `Enter to select` and ending
+//     with `Esc to cancel`, separated by a navigation hint. Claude Code has
+//     shipped at least two phrasings of that middle segment (`↑/↓ to navigate`
+//     in older builds, `Tab/Arrow keys to navigate` in newer ones), so we
+//     anchor on the stable endpoints and let the middle float. Scanned over
+//     the last ~12 visible lines (the question UI sits between separators and
+//     may have rows below it, but the footer is unique enough that whole-window
+//     scan is safe).
 //   - Mode line: the bottommost line whose trimmed form starts with `⏵⏵`.
 //     This is the unique prefix of Claude Code's mode-line widget. Subagent
 //     management panels and other widgets can render BELOW the mode line, so
@@ -15,8 +19,9 @@ import type { ObservationContext, PaneObservation, RuntimeStatusAdapter, Session
 // See `packages/runtimes/src/fixtures/claude-code/*.txt` for the empirical
 // captures these regexes were calibrated against.
 
-// AskUserQuestion footer.
-const ASK_USER_QUESTION_FOOTER = "Enter to select · ↑/↓ to navigate · Esc to cancel";
+// AskUserQuestion footer — endpoints fixed, navigation hint floats across
+// Claude Code releases. The `·` separator is U+00B7 (middle dot).
+const ASK_USER_QUESTION_FOOTER_REGEX = /^Enter to select\s+·\s+.+?\s+·\s+Esc to cancel$/;
 
 // Mode-line prefix — distinctive unicode glyph pair, very unlikely to appear
 // in agent output body.
@@ -52,11 +57,11 @@ function findModeLine(paneCapture: string): string | null {
   return null;
 }
 
-// Find any line whose trimmed form exactly equals the AskUserQuestion footer.
+// Find any line whose trimmed form matches the AskUserQuestion footer shape.
 function hasAskUserQuestionFooter(paneCapture: string): boolean {
   const lines = bottomLines(paneCapture, CHROME_SCAN_LINES);
   for (const line of lines) {
-    if (line.trim() === ASK_USER_QUESTION_FOOTER) return true;
+    if (ASK_USER_QUESTION_FOOTER_REGEX.test(line.trim())) return true;
   }
   return false;
 }
