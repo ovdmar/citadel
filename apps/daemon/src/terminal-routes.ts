@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import type http from "node:http";
+import path from "node:path";
 import type { Duplex } from "node:stream";
 import type { AgentSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
@@ -29,6 +31,8 @@ export function registerTerminalRoutes(input: {
   server: http.Server;
   store: SqliteStore;
   ttyd: TtydManager;
+  /** Where to persist per-session preferences (theme prefs sidecar). */
+  dataDir: string;
   emit?: (type: string, payload: unknown) => void;
   /** Recreate the tmux session a terminal needs. Returns the live tmux name/id. */
   respawnTmux?: (session: AgentSession) => Promise<{ tmuxSessionName: string; tmuxSessionId: string } | null>;
@@ -88,9 +92,14 @@ export function registerTerminalRoutes(input: {
   // Remember the last theme the cockpit asked for, per sessionId. When a
   // websocket auto-reconnect (e.g. laptop wake) hits the daemon AFTER the
   // entry has been reaped — daemon restart, ttyd crash — `reviveProxyTarget`
-  // calls ensure() without a request body, so without this map it would
+  // calls ensure() without a request body, so without persistence we'd
   // default to "dark" and silently respawn ttyd with the wrong palette.
-  const themePreferences = new Map<string, Theme>();
+  //
+  // The map is mirrored to a JSON sidecar so a daemon restart (which wipes
+  // both the in-memory ttyd entries AND any in-process Map) doesn't lose the
+  // user's theme selection across the revive path that runs on first
+  // reconnect after restart.
+  const themePreferences = new ThemePrefStore(input.dataDir);
 
   proxy.on("error", (error, _req, target) => {
     const message = error instanceof Error ? error.message : "terminal_proxy_failed";
@@ -280,6 +289,57 @@ export function registerTerminalRoutes(input: {
     ttyd.shutdown();
     proxy.close();
   });
+}
+
+// Disk-backed map of `sessionId → "light" | "dark"` for the terminal palette
+// the cockpit last asked for. Survives daemon restarts so `reviveProxyTarget`
+// (which fires when a websocket auto-reconnect arrives after the ttyd entry
+// map has been wiped) can hand the user's chosen theme to ttyd.ensure()
+// instead of falling back to "dark".
+//
+// File format is a flat JSON object — values are validated narrowly so a
+// stray manual edit can't crash the daemon. Writes are best-effort and never
+// throw: failing to persist a theme preference must not break terminal
+// reconnects.
+class ThemePrefStore {
+  private readonly file: string;
+  private readonly cache = new Map<string, Theme>();
+
+  constructor(dataDir: string) {
+    this.file = path.join(dataDir, "terminal-theme-prefs.json");
+    try {
+      if (fs.existsSync(this.file)) {
+        const raw = JSON.parse(fs.readFileSync(this.file, "utf8")) as Record<string, unknown>;
+        for (const [key, value] of Object.entries(raw)) {
+          const theme = parseTheme(value);
+          if (theme) this.cache.set(key, theme);
+        }
+      }
+    } catch {
+      // Corrupt or unreadable — start clean. The first set() will rewrite the file.
+    }
+  }
+
+  get(sessionId: string): Theme | undefined {
+    return this.cache.get(sessionId);
+  }
+
+  set(sessionId: string, theme: Theme): void {
+    if (this.cache.get(sessionId) === theme) return;
+    this.cache.set(sessionId, theme);
+    this.persist();
+  }
+
+  private persist(): void {
+    try {
+      fs.mkdirSync(path.dirname(this.file), { recursive: true });
+      const payload = JSON.stringify(Object.fromEntries(this.cache.entries()));
+      fs.writeFileSync(this.file, payload, { mode: 0o600 });
+    } catch {
+      // Sidecar is a cache, not a source of truth — caller already has the
+      // value in-memory for the current request. Drop the persistence error.
+    }
+  }
 }
 
 function terminalDto(entry: TtydEntry, url: string) {

@@ -489,9 +489,13 @@ export async function submitPrompt(
     if (options.runtimeReadyPredicate) {
       await waitForPaneCommand(sessionName, options.runtimeReadyPredicate, { timeoutMs: waitForReadyMs });
     }
-    // 2. Pane settle pre-paste. Use the silence hook (idleMs >= 1s) to lean
-    //    on tmux's event loop rather than busy-polling capture-pane.
-    await waitForTerminalIdle(sessionName, { timeoutMs: waitForReadyMs, idleMs: 1000 });
+    // 2. Pane settle pre-paste. Use the silence hook for long waits (TUI cold
+    //    start budgets ≥ 5 s where a 1 s silence threshold is cheap insurance),
+    //    fall back to fast capture-pane diffing when the caller passed a tight
+    //    budget — shell sessions are quiet within milliseconds and shouldn't
+    //    have to wait for the silence hook's whole-second minimum.
+    const preIdleMs = waitForReadyMs >= 5000 ? 1000 : 200;
+    await waitForTerminalIdle(sessionName, { timeoutMs: waitForReadyMs, idleMs: preIdleMs });
 
     // Trim trailing newlines so the paste itself never carries an LF the
     // runtime might treat as the submit keystroke — we always rely on the
