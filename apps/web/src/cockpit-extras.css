@@ -244,6 +244,27 @@
   position: relative;
 }
 
+/* Intra-group drag-reorder indicator: a thin accent line above or below
+ * the card during a hover-over-drop. The wrap is `position: relative`
+ * already, so absolute lines slot in without affecting layout. */
+.workspace-card-wrap.is-drop-above::before,
+.workspace-card-wrap.is-drop-below::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  background: var(--c-accent, #5b8df8);
+  border-radius: 1px;
+  pointer-events: none;
+}
+.workspace-card-wrap.is-drop-above::before {
+  top: -1px;
+}
+.workspace-card-wrap.is-drop-below::after {
+  bottom: -1px;
+}
+
 .workspace-card {
   width: 100%;
   display: grid;

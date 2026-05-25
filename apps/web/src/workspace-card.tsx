@@ -5,6 +5,7 @@ import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, Shiel
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { useStateQuery } from "./app-state.js";
+import { encodeReorderMimeType, findReorderMimeType, parseReorderMimeType } from "./navigator-order.js";
 import "./workspace-status-dot.css";
 
 export type WorkspaceCardData = {
@@ -44,8 +45,29 @@ function citPulseClass(tone: WorkspaceAgentTone): string {
   return "cit-pulse-idle";
 }
 
+export type WorkspaceReorderProps = {
+  groupPath: string;
+  visibleIds: readonly string[];
+  onReorder: (draggedId: string, targetIndex: number) => void;
+};
+
 export function WorkspaceCard(
-  props: WorkspaceCardData & { active: boolean; onSelect: () => void; draggable?: boolean },
+  props: WorkspaceCardData & {
+    active: boolean;
+    onSelect: () => void;
+    // `"namespace"` enables the legacy namespace-drop drag payload used to
+    // reassign workspaces between namespace buckets. `null` (or absent) keeps
+    // the namespace-drop disabled while intra-group reorder remains available.
+    dropTarget?: "namespace" | null;
+    // When provided, the card joins the intra-group reorder flow: drags emit
+    // a reorder mime type encoding the source group path, and drops on this
+    // card splice the dragged workspace into the visible-id sequence.
+    reorder?: WorkspaceReorderProps;
+    // Back-compat shim — kept so dashboard.tsx (which still passes
+    // `draggable={true}`) doesn't have to change in this PR. Internally
+    // treated as `dropTarget: "namespace"` to preserve existing behavior.
+    draggable?: boolean;
+  },
 ) {
   const { workspace, pullRequest } = props;
   const titleDisplay = workspaceDisplayTitle(workspace);
@@ -94,20 +116,91 @@ export function WorkspaceCard(
     },
   });
 
-  // Drag payload: workspace id, so namespace drop targets in the nav and
-  // dashboard can reassign via /api/namespaces/assign. Opt-in so accidental
-  // drags elsewhere stay no-ops.
-  const dragHandlers = props.draggable
+  // Hover indicator state for intra-group reorder drops. `null` means no
+  // drop pending; `"above"` / `"below"` controls a CSS line above or below
+  // the card via the `is-drop-above` / `is-drop-below` class.
+  const [reorderIndicator, setReorderIndicator] = useState<"above" | "below" | null>(null);
+
+  const namespaceMode = props.dropTarget === "namespace" || props.draggable === true;
+  const reorder = props.reorder;
+  // Drag payload:
+  //   - In namespace mode: emit `application/x-citadel-workspace-id` so
+  //     namespace drop targets in the nav/dashboard can reassign via
+  //     /api/namespaces/assign. Existing behavior.
+  //   - In reorder mode: emit `application/x-citadel-workspace-reorder+<groupPath>`
+  //     so other cards in the SAME group accept the drop. The group path
+  //     lives in the mime-type suffix because `dataTransfer.getData` is
+  //     restricted to the `drop` event, but `dataTransfer.types` IS readable
+  //     on `dragover` (needed for the cross-group early-exit).
+  const canDrag = namespaceMode || Boolean(reorder);
+  const dragHandlers = canDrag
     ? {
         draggable: true,
         onDragStart: (event: React.DragEvent) => {
-          event.dataTransfer.setData("application/x-citadel-workspace-id", workspace.id);
+          if (namespaceMode) {
+            event.dataTransfer.setData("application/x-citadel-workspace-id", workspace.id);
+          }
+          if (reorder) {
+            event.dataTransfer.setData(encodeReorderMimeType(reorder.groupPath), workspace.id);
+          }
           event.dataTransfer.effectAllowed = "move";
         },
       }
     : {};
+
+  // Drop handlers for intra-group reorder. The container detects an
+  // incoming reorder drag via `dataTransfer.types` (which IS available on
+  // `dragover`), early-exits when the source group path differs from this
+  // card's group path, and otherwise renders an above/below indicator
+  // based on the cursor's Y position relative to the card midpoint.
+  const reorderDropHandlers = reorder
+    ? {
+        onDragOver: (event: React.DragEvent) => {
+          const sourceMime = findReorderMimeType(Array.from(event.dataTransfer.types));
+          if (!sourceMime) return;
+          const sourceGroup = parseReorderMimeType(sourceMime);
+          if (sourceGroup !== reorder.groupPath) return; // cross-group drop — silently ignored
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+          const rect = event.currentTarget.getBoundingClientRect();
+          const midpoint = rect.top + rect.height / 2;
+          setReorderIndicator(event.clientY < midpoint ? "above" : "below");
+        },
+        onDragLeave: () => setReorderIndicator(null),
+        onDrop: (event: React.DragEvent) => {
+          const sourceMime = findReorderMimeType(Array.from(event.dataTransfer.types));
+          if (!sourceMime) return;
+          const sourceGroup = parseReorderMimeType(sourceMime);
+          if (sourceGroup !== reorder.groupPath) return;
+          event.preventDefault();
+          const draggedId = event.dataTransfer.getData(sourceMime);
+          if (!draggedId || draggedId === workspace.id) {
+            setReorderIndicator(null);
+            return;
+          }
+          const targetVisibleIndex = reorder.visibleIds.indexOf(workspace.id);
+          if (targetVisibleIndex === -1) {
+            setReorderIndicator(null);
+            return;
+          }
+          // "above" → land before the target card; "below" → land after.
+          const insertIndex = reorderIndicator === "below" ? targetVisibleIndex + 1 : targetVisibleIndex;
+          reorder.onReorder(draggedId, insertIndex);
+          setReorderIndicator(null);
+        },
+      }
+    : {};
+
+  const wrapClassName = [
+    "workspace-card-wrap",
+    reorderIndicator === "above" ? "is-drop-above" : null,
+    reorderIndicator === "below" ? "is-drop-below" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div className="workspace-card-wrap" {...dragHandlers}>
+    <div className={wrapClassName} {...dragHandlers} {...reorderDropHandlers}>
       <button
         type="button"
         className={`workspace-card ${props.active ? "active" : ""}`}
