@@ -385,6 +385,15 @@ export class SqliteStore {
       .run(lifecycle, dirty ? 1 : 0, now, now, workspaceId);
   }
 
+  // Hard-delete a workspace row and its agent sessions. Used when a worktree
+  // was actually removed from disk so the (repo_id, name) UNIQUE slot can be
+  // reused immediately — archiveWorkspace leaves the row in place and would
+  // block recreation under the same name.
+  deleteWorkspace(workspaceId: string) {
+    this.database.prepare("DELETE FROM agent_sessions WHERE workspace_id = ?").run(workspaceId);
+    this.database.prepare("DELETE FROM workspaces WHERE id = ?").run(workspaceId);
+  }
+
   listArchivedWorkspaces(): Workspace[] {
     const rows = this.database
       .prepare("SELECT * FROM workspaces WHERE archived_at IS NOT NULL ORDER BY archived_at DESC")

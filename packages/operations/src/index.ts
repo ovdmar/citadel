@@ -40,12 +40,25 @@ import {
   redeployApp as redeployAppImpl,
 } from "./deploy.js";
 import {
+  BranchInUseByWorktreeError,
+  RemoteRefMissingError,
+  WorkspaceNameTakenError,
+  addWorktree,
   cancelOperationInStore,
+  classifyWorktreeError,
   discoverDefaultBranch,
+  isUniqueWorkspaceNameViolation,
   listHookDiagnostics,
   reconcileStore,
   tryRunGit,
   workspaceIsDirty,
+} from "./helpers.js";
+
+export {
+  BranchInUseByWorktreeError,
+  RemoteRefMissingError,
+  WorkspaceInUseError,
+  WorkspaceNameTakenError,
 } from "./helpers.js";
 import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
 import {
@@ -139,7 +152,8 @@ export class OperationService {
     }
     const now = nowIso();
     const operation = this.operation("workspace.create", "running", repo.id, null, 5, "Validating workspace request");
-    const branch = workspaceBranchName(input);
+    const newBranch = input.newBranch?.trim() || null;
+    const branch = newBranch ?? workspaceBranchName(input);
     const workspacePath = path.join(repo.worktreeParent, branch);
     const baseBranch = input.baseBranch?.trim() || repo.defaultBranch;
     const existingBranch = input.existingBranch?.trim() || null;
@@ -166,7 +180,21 @@ export class OperationService {
       updatedAt: now,
       archivedAt: null,
     };
-    this.store.insertWorkspace(workspace);
+    try {
+      this.store.insertWorkspace(workspace);
+    } catch (error) {
+      if (isUniqueWorkspaceNameViolation(error)) {
+        this.store.upsertOperation({
+          ...operation,
+          status: "failed",
+          progress: 100,
+          error: `workspace_name_taken: ${input.name}`,
+          updatedAt: nowIso(),
+        });
+        throw new WorkspaceNameTakenError(repo.id, input.name);
+      }
+      throw error;
+    }
     this.logOp(
       operation.id,
       "info",
@@ -182,34 +210,16 @@ export class OperationService {
     try {
       tryRunGit(repo.rootPath, ["fetch", "--prune", repo.defaultRemote]);
       this.logOp(operation.id, "info", `Fetched ${repo.defaultRemote} (prune)`);
-      if (existingBranch) {
-        try {
-          tryRunGit(repo.rootPath, ["worktree", "add", workspacePath, existingBranch]);
-          this.logOp(operation.id, "info", `Added worktree at ${workspacePath} on branch ${existingBranch}`);
-        } catch {
-          tryRunGit(repo.rootPath, [
-            "worktree",
-            "add",
-            "-B",
-            existingBranch,
-            workspacePath,
-            `${repo.defaultRemote}/${existingBranch}`,
-          ]);
-          this.logOp(
-            operation.id,
-            "info",
-            `Added worktree at ${workspacePath} tracking ${repo.defaultRemote}/${existingBranch}`,
-          );
-        }
-      } else {
-        const startPoint = `${repo.defaultRemote}/${baseBranch}`;
-        tryRunGit(repo.rootPath, ["worktree", "add", "-b", branch, workspacePath, startPoint]);
-        this.logOp(
-          operation.id,
-          "info",
-          `Added worktree at ${workspacePath} (new branch ${branch} from ${startPoint})`,
-        );
-      }
+      const added = addWorktree(repo.rootPath, workspacePath, repo.defaultRemote, baseBranch, branch, existingBranch);
+      this.logOp(
+        operation.id,
+        "info",
+        added.mode === "checkout"
+          ? `Added worktree at ${workspacePath} on branch ${existingBranch}`
+          : added.mode === "tracking"
+            ? `Added worktree at ${workspacePath} tracking ${added.startPoint}`
+            : `Added worktree at ${workspacePath} (new branch ${existingBranch ?? branch} from ${added.startPoint})`,
+      );
       this.store.upsertOperation({
         ...operation,
         workspaceId: workspace.id,
@@ -253,6 +263,10 @@ export class OperationService {
         error: errorMessage,
         updatedAt: nowIso(),
       });
+      const classified = classifyWorktreeError(errorMessage);
+      if (classified) throw new BranchInUseByWorktreeError(classified.branch, classified.worktreePath);
+      if (/invalid reference: \S+/i.test(errorMessage) && existingBranch)
+        throw new RemoteRefMissingError(existingBranch, repo.defaultRemote);
     }
     return { operationId: operation.id, workspaceId: workspace.id };
   }
@@ -465,9 +479,13 @@ export class OperationService {
       tryRunGit(repo.rootPath, ["worktree", "remove", "--force", workspace.path]);
       this.logOp(operation.id, "info", `Removed worktree at ${workspace.path}`);
     }
-    const lifecycle = input.archiveOnly ? "archived" : "removed";
-    this.store.archiveWorkspace(workspace.id, lifecycle, dirty);
-    this.logOp(operation.id, "info", `Marked workspace ${workspace.name} as ${lifecycle}`);
+    if (input.archiveOnly) {
+      this.store.archiveWorkspace(workspace.id, "archived", dirty);
+      this.logOp(operation.id, "info", `Marked workspace ${workspace.name} as archived`);
+    } else {
+      this.store.deleteWorkspace(workspace.id);
+      this.logOp(operation.id, "info", `Deleted workspace ${workspace.name} (name slot freed)`);
+    }
     this.store.upsertOperation({
       ...operation,
       status: "succeeded",

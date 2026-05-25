@@ -1,0 +1,26 @@
+# Citadel agent profile — consumed by SDLC skills (see PROTOCOL.md in the skills repo)
+
+project_name: citadel
+default_branch: main
+
+# Per-skill behavioral knobs
+review-pr:
+  reviewer_model: gpt-5.5
+
+review-tech-plan:
+  reviewer_2_model: opus
+  max_rounds: 5
+
+create-pr:
+  auditor_model: opus
+  max_ci_retries: 3
+
+# Extension declarations
+skills:
+  extend:
+    do-tech-plan:        .agents/skills/extensions/do-tech-plan.md
+    review-tech-plan:    .agents/skills/extensions/review-tech-plan.md
+    implement-task:      .agents/skills/extensions/implement-task.md
+    audit-test-coverage: .agents/skills/extensions/audit-test-coverage.md
+    review-pr:           .agents/skills/extensions/review-pr.md
+    create-pr:           .agents/skills/extensions/create-pr.md

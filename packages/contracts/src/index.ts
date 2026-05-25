@@ -474,6 +474,7 @@ export const CreateWorkspaceInputSchema = z.object({
   prUrl: z.string().url().optional(),
   baseBranch: z.string().min(1).optional(),
   existingBranch: z.string().min(1).optional(),
+  newBranch: z.string().min(1).optional(),
   namespaceId: IdSchema.optional(),
 });
 
