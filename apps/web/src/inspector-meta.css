@@ -1,0 +1,242 @@
+/* GroupBy dropdown (single-select) — Navigator workspaces section */
+
+.cit-gb {
+  position: relative;
+  display: inline-flex;
+}
+
+.cit-gb-btn.is-open {
+  background: var(--c-line-2);
+  color: var(--c-fg-1);
+}
+
+.cit-gb-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  width: 220px;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--c-elev);
+  border: 0.5px solid var(--c-line-3);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 8px 24px -4px rgba(20, 12, 0, 0.18), 0 2px 6px
+    rgba(20, 12, 0, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cit-gb-menu-head {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--c-fg-4);
+  padding: 6px 8px 4px;
+}
+
+.cit-gb-opt {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--c-fg-2);
+}
+
+.cit-gb-opt:hover {
+  background: var(--c-line-1);
+  color: var(--c-fg-1);
+}
+
+.cit-gb-opt.is-active {
+  color: var(--c-fg-1);
+}
+
+.cit-gb-opt-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--c-fg-1);
+}
+
+.cit-gb-opt-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.cit-gb-opt-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.cit-gb-opt-hint {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--c-fg-4);
+  margin-top: 1px;
+}
+
+/* Counts attached to nav links (e.g. History) */
+
+.cit-nav-count {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--c-fg-4);
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  padding-left: 8px;
+}
+
+/* Generic chip used for "Re-run all" and similar small actions */
+
+.cit-chip {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 0.5px solid var(--c-line-2);
+  background: var(--c-card);
+  color: var(--c-fg-2);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: var(--sh-1);
+}
+
+.cit-chip:hover {
+  background: var(--c-elev);
+  color: var(--c-fg-1);
+  border-color: var(--c-line-3);
+}
+
+.cit-chip-ghost {
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Recent commits list — sha · message · short relative time per row */
+
+.ins-recent {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ins-recent li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 4px;
+  border-bottom: 0.5px solid var(--c-line-1);
+  font-size: 11.5px;
+}
+
+.ins-recent li:last-child {
+  border-bottom: 0;
+}
+
+.ins-recent-sha {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--c-fg-3);
+}
+
+.ins-recent-msg {
+  color: var(--c-fg-1);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ins-recent-time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--c-fg-4);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Inspector tabs row gets a small collapse affordance pinned to the right */
+
+.inspector-tabs-collapse {
+  margin-left: 6px;
+  flex: 0 0 auto;
+}
+
+/* PR meta empty-state hint and avatar row alignment */
+
+.ins-pr-meta-empty {
+  color: var(--c-fg-4);
+  font-style: italic;
+}
+
+.ins-pr-avatars {
+  display: inline-flex;
+}
+
+.ins-pr-avatars:empty {
+  display: none;
+}
+
+.ins-av {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--c-card);
+  margin-left: -6px;
+  letter-spacing: 0.02em;
+}
+
+.ins-av:first-child {
+  margin-left: 0;
+}
+
+.ins-av-more {
+  background: var(--c-line-2);
+  color: var(--c-fg-2);
+}
+
+/* Avatar tone borders so dark/light hint at review state without color noise */
+
+.ins-av--approved {
+  outline: 1.5px solid var(--c-ok);
+  outline-offset: -1.5px;
+}
+
+.ins-av--changes_requested {
+  outline: 1.5px solid var(--c-bad);
+  outline-offset: -1.5px;
+}
+
+.ins-pr-meta-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--c-fg-3);
+}
+
+.ins-deploy-sep {
+  color: var(--c-fg-4);
+}

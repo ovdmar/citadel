@@ -1,12 +1,18 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import type http from "node:http";
-import os from "node:os";
 import path from "node:path";
-import { loadConfig } from "@citadel/config";
-import { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  closeServer,
+  createFixture as createFixtureBase,
+  createGitFixtureWithRemote as createGitFixtureWithRemoteBase,
+  createGitRepo as createGitRepoBase,
+  getJson,
+  listen,
+  postJson,
+  putJson,
+} from "./app-test-helpers.js";
 import { createDaemonApp } from "./app.js";
 
 const dirs: string[] = [];
@@ -679,181 +685,11 @@ describe("createDaemonApp", () => {
       await closeServer(server);
     }
   });
-
-  it("GET /api/workspaces/:id/recent-commits returns 404 for unknown ids and clamps the `limit` query param", async () => {
-    const fixture = createFixture();
-    const git = createGitRepo(String(fixture.config.dataDir));
-    // Build a small history so we can prove clamping picks N commits.
-    for (let i = 0; i < 4; i += 1) {
-      fs.writeFileSync(path.join(git.repoPath, "tracked.txt"), `commit ${i}\n`);
-      execFileSync("git", ["add", "."], { cwd: git.repoPath, stdio: "pipe" });
-      execFileSync("git", ["commit", "-m", `commit ${i}`], { cwd: git.repoPath, stdio: "pipe" });
-    }
-    const now = new Date().toISOString();
-    fixture.store.insertRepo({
-      id: "repo_recent",
-      name: "recent",
-      rootPath: git.repoPath,
-      defaultBranch: "main",
-      defaultRemote: "origin",
-      worktreeParent: String(fixture.config.dataDir),
-      setupHookIds: [],
-      teardownHookIds: [],
-      providerIds: [],
-      deployHookCommand: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-    });
-    fixture.store.insertWorkspace({
-      id: "ws_recent",
-      repoId: "repo_recent",
-      name: "recent",
-      path: git.repoPath,
-      branch: "main",
-      baseBranch: "main",
-      source: "scratch",
-      kind: "worktree",
-      prUrl: null,
-      issueKey: null,
-      issueTitle: null,
-      issueUrl: null,
-      slackThreadUrl: null,
-      section: "backlog",
-      pinned: false,
-      lifecycle: "ready",
-      dirty: false,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-    });
-    const { server } = createDaemonApp(fixture);
-    const baseUrl = await listen(server);
-    try {
-      const notFound = await fetch(`${baseUrl}/api/workspaces/ws_missing/recent-commits`);
-      expect(notFound.status).toBe(404);
-      expect(await notFound.json()).toEqual({ error: "workspace_not_found" });
-
-      const defaultLimit = await getJson<{ workspaceId: string; commits: unknown[] }>(
-        `${baseUrl}/api/workspaces/ws_recent/recent-commits`,
-      );
-      expect(defaultLimit.workspaceId).toBe("ws_recent");
-      // Repo has 5 commits (initial + 4); default limit is 8 so we get all 5.
-      expect(defaultLimit.commits).toHaveLength(5);
-
-      const capped = await getJson<{ commits: unknown[] }>(
-        `${baseUrl}/api/workspaces/ws_recent/recent-commits?limit=2`,
-      );
-      expect(capped.commits).toHaveLength(2);
-
-      // Invalid/negative/oversized limits fall back to the default ceiling.
-      for (const probe of ["abc", "0", "-3"]) {
-        const fallback = await getJson<{ commits: unknown[] }>(
-          `${baseUrl}/api/workspaces/ws_recent/recent-commits?limit=${probe}`,
-        );
-        expect(fallback.commits).toHaveLength(5);
-      }
-      const clamped = await getJson<{ commits: unknown[] }>(
-        `${baseUrl}/api/workspaces/ws_recent/recent-commits?limit=9999`,
-      );
-      // Limit is clamped to 50 (then bounded by actual commit count = 5).
-      expect(clamped.commits).toHaveLength(5);
-    } finally {
-      await closeServer(server);
-    }
-  });
 });
 
-function createFixture() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-daemon-"));
-  dirs.push(dir);
-  const configPath = path.join(dir, "citadel.config.json");
-  const config = loadConfig(configPath);
-  config.dataDir = dir;
-  config.databasePath = path.join(dir, "citadel.sqlite");
-  config.providers = {
-    github: { enabled: false, command: "gh" },
-    jira: { enabled: false, command: "jtk" },
-  };
-  config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
-  const store = new SqliteStore(config.databasePath);
-  store.migrate();
-  return { config, configPath, store };
-}
-
-function createGitFixtureWithRemote(parent: string) {
-  const dir = fs.mkdtempSync(path.join(parent, "citadel-remote-"));
-  const remotePath = path.join(dir, "remote.git");
-  const repoPath = path.join(dir, "repo");
-  execFileSync("git", ["init", "--bare", remotePath], { stdio: "pipe" });
-  execFileSync("git", ["clone", remotePath, repoPath], { stdio: "pipe" });
-  execFileSync("git", ["config", "user.email", "test@example.test"], { cwd: repoPath, stdio: "pipe" });
-  execFileSync("git", ["config", "user.name", "Citadel Test"], { cwd: repoPath, stdio: "pipe" });
-  fs.writeFileSync(path.join(repoPath, "README.md"), "# fixture\n");
-  execFileSync("git", ["add", "README.md"], { cwd: repoPath, stdio: "pipe" });
-  execFileSync("git", ["commit", "-m", "initial"], { cwd: repoPath, stdio: "pipe" });
-  execFileSync("git", ["branch", "-M", "main"], { cwd: repoPath, stdio: "pipe" });
-  execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoPath, stdio: "pipe" });
-  execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], {
-    cwd: repoPath,
-    stdio: "pipe",
-  });
-  return { repoPath };
-}
-
-function createGitRepo(dir: string) {
-  const repoPath = path.join(dir, `repo-${Date.now().toString(36)}`);
-  fs.mkdirSync(repoPath, { recursive: true });
-  execFileSync("git", ["init"], { cwd: repoPath, stdio: "pipe" });
-  execFileSync("git", ["config", "user.email", "test@example.test"], { cwd: repoPath, stdio: "pipe" });
-  execFileSync("git", ["config", "user.name", "Citadel Test"], { cwd: repoPath, stdio: "pipe" });
-  fs.writeFileSync(path.join(repoPath, "README.md"), "# fixture\n");
-  execFileSync("git", ["add", "README.md"], { cwd: repoPath, stdio: "pipe" });
-  execFileSync("git", ["commit", "-m", "initial"], { cwd: repoPath, stdio: "pipe" });
-  execFileSync("git", ["branch", "-M", "main"], { cwd: repoPath, stdio: "pipe" });
-  return { repoPath };
-}
-
-function listen(server: http.Server) {
-  return new Promise<string>((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") throw new Error("Expected TCP test server address");
-      resolve(`http://127.0.0.1:${address.port}`);
-    });
-  });
-}
-
-function closeServer(server: http.Server) {
-  return new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
-
-async function getJson<T>(url: string) {
-  const response = await fetch(url);
-  expect(response.ok).toBe(true);
-  return response.json() as Promise<T>;
-}
-
-async function putJson<T>(url: string, body: unknown) {
-  const response = await fetch(url, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const text = await response.clone().text();
-  expect(response.ok, text).toBe(true);
-  return response.json() as Promise<T>;
-}
-
-async function postJson<T>(url: string, body: unknown) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const text = await response.clone().text();
-  expect(response.ok, text).toBe(true);
-  return response.json() as Promise<T>;
-}
+// Local sugar: pre-bind the `dirs` array shared across this test file so
+// individual `it()` blocks can keep calling `createFixture()` without
+// threading the cleanup list through every helper site.
+const createFixture = () => createFixtureBase(dirs);
+const createGitFixtureWithRemote = (parent: string) => createGitFixtureWithRemoteBase(parent);
+const createGitRepo = (dir: string) => createGitRepoBase(dir);
