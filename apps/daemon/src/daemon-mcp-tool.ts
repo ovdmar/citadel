@@ -161,6 +161,14 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     if (result.ok) emit("agent.updated", { sessionId });
     return result;
   }
+  if (call.name === "read_agent_history") {
+    const sessionId = typeof call.arguments?.sessionId === "string" ? call.arguments.sessionId : "";
+    if (!sessionId) return { ok: false, error: "session_id_required" };
+    const input: { sessionId: string; limit?: number; maxChars?: number } = { sessionId };
+    if (typeof call.arguments?.limit === "number") input.limit = call.arguments.limit;
+    if (typeof call.arguments?.maxChars === "number") input.maxChars = call.arguments.maxChars;
+    return operations.readAgentHistory(input);
+  }
   const providerHealth = await collectProviderHealth(config.providers);
   return callMcpTool(call, {
     repos: store.listRepos(),
@@ -170,5 +178,9 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     activity: store.listActivity(),
     providerHealth,
     runtimes: listRuntimeHealth(config.runtimes),
+    // Per-session summary comes from the runtime's own transcript via the
+    // adapter dispatcher. mtime pre-filter inside each adapter keeps list
+    // calls cheap even on big project dirs.
+    sessionPromptSummary: (sessionId) => operations.getSessionPromptSummary(sessionId),
   });
 }

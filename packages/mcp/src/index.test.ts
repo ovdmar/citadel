@@ -189,7 +189,7 @@ describe("mcp helpers", () => {
       workspaces: context.workspaces,
     });
     expect(callMcpTool({ name: "list_agent_sessions", arguments: { workspaceId: "ws_test" } }, context)).toEqual({
-      sessions: context.sessions,
+      sessions: context.sessions.map((session) => ({ ...session, initialPrompt: null, messageCount: 0 })),
     });
     expect(callMcpTool({ name: "list_provider_health" }, context)).toEqual({
       providerHealth: context.providerHealth,

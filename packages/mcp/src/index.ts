@@ -10,6 +10,11 @@ import type {
   Workspace,
 } from "@citadel/contracts";
 
+export type AgentSessionSummary = AgentSession & {
+  initialPrompt: string | null;
+  messageCount: number;
+};
+
 export type McpStatusSnapshot = {
   enabled: boolean;
   resources: string[];
@@ -39,7 +44,8 @@ export type McpToolName =
   | "write_scratchpad"
   | "append_scratchpad"
   | "list_deployed_apps"
-  | "redeploy_app";
+  | "redeploy_app"
+  | "read_agent_history";
 
 export type McpToolDefinition = {
   name: McpToolName;
@@ -56,7 +62,10 @@ export type McpToolContext = {
   activity: ActivityEvent[];
   providerHealth: ProviderHealth[];
   runtimes: AgentRuntime[];
+  sessionPromptSummary?: (sessionId: string) => { initialPrompt: string | null; messageCount: number };
 };
+
+const INITIAL_PROMPT_PREVIEW_CHARS = 200;
 
 export type McpToolCall = {
   name: McpToolName;
@@ -94,7 +103,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     {
       name: "list_agent_sessions",
       description:
-        "List agent sessions with status, runtime, and tmux session metadata. Optionally filter by workspaceId.",
+        "List agent sessions with status, runtime, and tmux session metadata. Each entry includes a truncated initialPrompt and a messageCount so callers can see what the agent was asked to do and how much follow-up steering it has received. Use read_agent_history for the full text. Optionally filter by workspaceId.",
       inputSchema: { type: "object", properties: { workspaceId: { type: "string" } }, additionalProperties: false },
       destructive: false,
     },
@@ -109,6 +118,22 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
           sessionId: { type: "string" },
           lines: { type: "integer", minimum: 1, maximum: 2000, default: 200 },
           maxChars: { type: "integer", minimum: 256, maximum: 200000, default: 16000 },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "read_agent_history",
+      description:
+        "Read the ordered list of user-authored prompts sent to an agent session: the initial prompt that started it plus every follow-up sent via send_agent_message. For Claude Code sessions, the .jsonl transcript is parsed on demand and merged in so messages typed directly in the terminal are included. Limit and maxChars cap the returned slice; older messages are dropped first.",
+      inputSchema: {
+        type: "object",
+        required: ["sessionId"],
+        properties: {
+          sessionId: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 2000, default: 200 },
+          maxChars: { type: "integer", minimum: 256, maximum: 1000000, default: 64000 },
         },
         additionalProperties: false,
       },
@@ -354,10 +379,19 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
       return {
         workspaces: filterByRepo(context.workspaces, call.arguments?.repoId),
       };
-    case "list_agent_sessions":
-      return {
-        sessions: filterByWorkspace(context.sessions, call.arguments?.workspaceId),
-      };
+    case "list_agent_sessions": {
+      const filtered = filterByWorkspace(context.sessions, call.arguments?.workspaceId);
+      const summarize = context.sessionPromptSummary;
+      const sessions: AgentSessionSummary[] = filtered.map((session) => {
+        const summary = summarize?.(session.id) ?? { initialPrompt: null, messageCount: 0 };
+        return {
+          ...session,
+          initialPrompt: truncatePrompt(summary.initialPrompt),
+          messageCount: summary.messageCount,
+        };
+      });
+      return { sessions };
+    }
     case "list_provider_health":
       return { providerHealth: context.providerHealth };
     case "list_runtimes":
@@ -392,6 +426,7 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
       return { error: "mutating_tool_requires_daemon" };
     case "read_agent_output":
     case "send_agent_message":
+    case "read_agent_history":
       // These read or write the live tmux pane backing an agent session, so
       // they cannot run from the in-memory snapshot — only the daemon owns the
       // tmux/terminal manager. Return a stable sentinel so MCP transports can
@@ -443,6 +478,12 @@ export function listWorkspaceLinks(activity: ActivityEvent[], workspaceId: unkno
     );
   }
   return { links, actions };
+}
+
+function truncatePrompt(text: string | null) {
+  if (!text) return null;
+  if (text.length <= INITIAL_PROMPT_PREVIEW_CHARS) return text;
+  return `${text.slice(0, INITIAL_PROMPT_PREVIEW_CHARS)}…`;
 }
 
 function filterByRepo(workspaces: Workspace[], repoId: unknown) {

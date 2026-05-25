@@ -1,0 +1,131 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { codexAdapter, findCodexRolloutForSession, parseCodexRollout } from "./codex.js";
+
+const dirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+function writeRollout(filePath: string, lines: unknown[]) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+}
+
+describe("parseCodexRollout", () => {
+  it("returns session_meta + user input_text prompts, skipping environment_context", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-codex-"));
+    dirs.push(dir);
+    const file = path.join(dir, "rollout.jsonl");
+    writeRollout(file, [
+      {
+        timestamp: "2026-05-23T10:00:00.000Z",
+        type: "session_meta",
+        payload: { id: "codex-1", cwd: "/tmp/ws", timestamp: "2026-05-23T10:00:00.000Z" },
+      },
+      {
+        timestamp: "2026-05-23T10:00:01.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "<environment_context>cwd</environment_context>" }],
+        },
+      },
+      {
+        timestamp: "2026-05-23T10:00:02.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "do the migration" }],
+        },
+      },
+      {
+        timestamp: "2026-05-23T10:00:03.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "on it" }],
+        },
+      },
+      {
+        timestamp: "2026-05-23T10:00:04.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "also rebase" }],
+        },
+      },
+    ]);
+    const result = parseCodexRollout(file);
+    expect(result.meta).toEqual({ id: "codex-1", cwd: "/tmp/ws", timestamp: "2026-05-23T10:00:00.000Z" });
+    expect(result.prompts.map((entry) => entry.text)).toEqual(["do the migration", "also rebase"]);
+    expect(result.prompts[0]?.externalId).toBe("codex-1:0");
+    expect(result.prompts[1]?.externalId).toBe("codex-1:1");
+  });
+});
+
+describe("findCodexRolloutForSession + adapter", () => {
+  it("matches by cwd and session-start window", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-codex-home-"));
+    dirs.push(home);
+    const workspacePath = "/tmp/codex-ws";
+    const sessionsRoot = path.join(home, ".codex", "sessions", "2026", "05", "23");
+    // Stale: cwd matches but starts in the past — should be rejected by start window.
+    const staleFile = path.join(sessionsRoot, "rollout-stale.jsonl");
+    writeRollout(staleFile, [
+      { type: "session_meta", payload: { id: "stale", cwd: workspacePath, timestamp: "2026-05-01T00:00:00.000Z" } },
+      {
+        type: "response_item",
+        timestamp: "2026-05-01T00:00:01.000Z",
+        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "old" }] },
+      },
+    ]);
+    // Wrong-cwd file: would otherwise match by time, but cwd differs.
+    const wrongCwd = path.join(sessionsRoot, "rollout-wrong.jsonl");
+    writeRollout(wrongCwd, [
+      { type: "session_meta", payload: { id: "wrong", cwd: "/somewhere/else", timestamp: "2026-05-23T10:00:01.000Z" } },
+    ]);
+    // Match.
+    const matchFile = path.join(sessionsRoot, "rollout-match.jsonl");
+    writeRollout(matchFile, [
+      { type: "session_meta", payload: { id: "match", cwd: workspacePath, timestamp: "2026-05-23T10:00:02.000Z" } },
+      {
+        type: "response_item",
+        timestamp: "2026-05-23T10:00:03.000Z",
+        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
+      },
+    ]);
+
+    expect(
+      findCodexRolloutForSession({
+        workspacePath,
+        sessionStartedAt: "2026-05-23T10:00:00.000Z",
+        home,
+      }),
+    ).toBe(matchFile);
+
+    const prompts = codexAdapter.getUserPrompts({
+      workspacePath,
+      sessionStartedAt: "2026-05-23T10:00:00.000Z",
+      home,
+    });
+    expect(prompts.map((entry) => entry.text)).toEqual(["hi"]);
+  });
+
+  it("returns null when the codex sessions root does not exist", () => {
+    expect(
+      findCodexRolloutForSession({
+        workspacePath: "/tmp/x",
+        sessionStartedAt: "2026-05-23T10:00:00.000Z",
+        home: "/nonexistent-citadel-codex-home",
+      }),
+    ).toBeNull();
+  });
+});
