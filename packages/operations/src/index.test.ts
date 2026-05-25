@@ -368,6 +368,61 @@ describe("OperationService", () => {
     expect(store.listActivity().find((event) => event.type === "agent.stopped")).toBeTruthy();
   });
 
+  it("createWorkspace falls back to baseBranch when origin lacks the named branch", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({
+      repoId: repo.id,
+      name: "brand-new-branch",
+      source: "scratch",
+      existingBranch: "fb-not-on-remote",
+    });
+    const workspace = store.listWorkspaces().find((w) => w.id === created.workspaceId);
+    expect(workspace?.lifecycle).toBe("ready");
+    expect(workspace?.branch).toBe("fb-not-on-remote");
+    const branchOnDisk = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+      cwd: workspace?.path ?? "",
+      encoding: "utf8",
+    }).trim();
+    expect(branchOnDisk).toBe("fb-not-on-remote");
+  });
+
+  it("removeWorkspace (non-archive) frees the (repo,name) slot for reuse", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const first = await service.createWorkspace({ repoId: repo.id, name: "reusable", source: "scratch" });
+    const removed = await service.removeWorkspace({ workspaceId: first.workspaceId });
+    expect(removed).toMatchObject({ removed: true, archived: false });
+    // Row must be hard-deleted (not archived) so the UNIQUE(repo_id, name) index lets us recreate.
+    expect(store.listArchivedWorkspaces().find((w) => w.id === first.workspaceId)).toBeUndefined();
+    expect(store.listWorkspaces().find((w) => w.id === first.workspaceId)).toBeUndefined();
+    // Re-creating under the same name no longer trips the unique index. Pass a
+    // distinct branch via existingBranch so this assertion isolates the DB slot
+    // contract (the git-side branch leftover is intentionally not in scope).
+    const second = await service.createWorkspace({
+      repoId: repo.id,
+      name: "reusable",
+      source: "imported",
+      existingBranch: "reusable-take-2",
+    });
+    expect(second.workspaceId).not.toBe(first.workspaceId);
+    expect(store.listWorkspaces().find((w) => w.id === second.workspaceId)?.lifecycle).toBe("ready");
+  });
+
   it("creates a workspace from an existing branch", async () => {
     const fixture = createGitFixture();
     // Seed an additional branch on the origin remote.
@@ -550,7 +605,7 @@ describe("OperationService", () => {
     expect(session?.displayName).toBe("describe the repo in one sentence");
   });
 
-  it("launchAgent resolves repo by id and accepts namespaceId as a pass-through warning", async () => {
+  it("launchAgent resolves repo by id and assigns the workspace to the given namespace", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
@@ -560,13 +615,14 @@ describe("OperationService", () => {
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const { namespace } = service.createNamespace({ name: "team-a" });
 
     const result = await service.launchAgent(
       {
         repoId: repo.id,
         prompt: "investigate the failing build",
         runtimeId: "shell",
-        namespaceId: "team-a",
+        namespaceId: namespace.id,
         workspaceName: "investigate-build",
         displayName: "Build Triage",
       },
@@ -577,12 +633,9 @@ describe("OperationService", () => {
 
     expect(result.error).toBeUndefined();
     expect(session?.displayName).toBe("Build Triage");
-    expect(store.listWorkspaces().find((candidate) => candidate.id === result.workspaceId)?.name).toBe(
-      "investigate-build",
-    );
-    // namespaceId is accepted but ignored — we surface it as an activity event
-    // so orchestrators can see it didn't take effect.
-    expect(store.listActivity().some((event) => event.type === "launch_agent.namespace_ignored")).toBe(true);
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === result.workspaceId);
+    expect(workspace?.name).toBe("investigate-build");
+    expect(workspace?.namespaceId).toBe(namespace.id);
   });
 
   it("launchAgent throws when the named repo doesn't exist (no workspace gets created)", async () => {

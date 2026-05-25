@@ -10,6 +10,7 @@ import { HistoryView } from "./routes/history.js";
 import { OnboardingView } from "./routes/onboarding.js";
 import { OperationsView } from "./routes/operations.js";
 import { RepoSettingsView } from "./routes/repo-settings.js";
+import { ScheduledAgentsView } from "./routes/scheduled-agents.js";
 import { ScratchpadView } from "./routes/scratchpad.js";
 import { SettingsView } from "./routes/settings.js";
 import "./styles.css";
@@ -21,9 +22,12 @@ import "./inspector-deploy.css";
 import "./inspector-meta.css";
 import "./cockpit-tools.css";
 import "./modals.css";
+import "./namespaces.css";
 import "./operations.css";
 import "./settings.css";
 import "./settings-ia.css";
+import "./scheduled-agents.css";
+import "./scheduled-agents-shell.css";
 import "./runtime-usage.css";
 import "./scratchpad.css";
 import "./responsive.css";
@@ -91,6 +95,12 @@ const scratchpadRoute = createRoute({
   component: ScratchpadView,
 });
 
+const scheduledAgentsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/scheduled-agents",
+  component: ScheduledAgentsView,
+});
+
 function Shell() {
   return (
     <div className="app-root">
@@ -134,6 +144,7 @@ const router = createRouter({
     dashboardRoute,
     historyRoute,
     scratchpadRoute,
+    scheduledAgentsRoute,
   ]),
   defaultNotFoundComponent: NotFoundView,
 });

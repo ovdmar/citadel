@@ -1,11 +1,13 @@
 import type {
   ActivityEvent,
   AgentSession,
+  BackgroundAgentSession,
   HookOutput,
   Operation,
   OperationLogEntry,
   Repo,
   ScheduledAgent,
+  ScheduledAgentRun,
   Workspace,
 } from "@citadel/contracts";
 
@@ -60,6 +62,7 @@ export function workspaceFromRow(row: Record<string, unknown>): Workspace {
     pinned: Number(row.pinned) === 1,
     lifecycle: asString(row, "lifecycle") as Workspace["lifecycle"],
     dirty: Number(row.dirty) === 1,
+    namespaceId: row.namespace_id ? asString(row, "namespace_id") : null,
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
     archivedAt: row.archived_at ? asString(row, "archived_at") : null,
@@ -109,23 +112,64 @@ export function operationFromRow(row: Record<string, unknown>): Operation {
 }
 
 export function scheduledAgentFromRow(row: Record<string, unknown>): ScheduledAgent {
+  const scheduleType = (
+    row.schedule_type ? asString(row, "schedule_type") : "recurring"
+  ) as ScheduledAgent["scheduleType"];
+  // cron is NOT NULL in the table; one-shot rows store a placeholder there and
+  // we surface it as null on the typed object so callers don't act on it.
+  const cronRaw = row.cron ? asString(row, "cron") : null;
   return {
     id: asString(row, "id"),
     name: asString(row, "name"),
     description: row.description ? asString(row, "description") : null,
-    cron: asString(row, "cron"),
+    scheduleType,
+    cron: scheduleType === "once" ? null : cronRaw,
+    runAt: row.run_at ? asString(row, "run_at") : null,
     repoId: asString(row, "repo_id"),
     runtimeId: asString(row, "runtime_id"),
     prompt: row.prompt ? asString(row, "prompt") : null,
     workspaceStrategy: asString(row, "workspace_strategy") as ScheduledAgent["workspaceStrategy"],
     workspaceName: asString(row, "workspace_name"),
     baseBranch: row.base_branch ? asString(row, "base_branch") : null,
+    runMode: (row.run_mode ? asString(row, "run_mode") : "workspace") as ScheduledAgent["runMode"],
+    backgroundCwd: row.background_cwd ? asString(row, "background_cwd") : null,
+    overlapPolicy: (row.overlap_policy ? asString(row, "overlap_policy") : "skip") as ScheduledAgent["overlapPolicy"],
     enabled: Number(row.enabled) === 1,
     lastRunAt: row.last_run_at ? asString(row, "last_run_at") : null,
     lastRunStatus: asString(row, "last_run_status") as ScheduledAgent["lastRunStatus"],
     lastRunMessage: row.last_run_message ? asString(row, "last_run_message") : null,
     lastWorkspaceId: row.last_workspace_id ? asString(row, "last_workspace_id") : null,
     lastSessionId: row.last_session_id ? asString(row, "last_session_id") : null,
+    createdAt: asString(row, "created_at"),
+    updatedAt: asString(row, "updated_at"),
+  };
+}
+
+export function scheduledAgentRunFromRow(row: Record<string, unknown>): ScheduledAgentRun {
+  return {
+    id: asString(row, "id"),
+    scheduledAgentId: asString(row, "scheduled_agent_id"),
+    status: asString(row, "status") as ScheduledAgentRun["status"],
+    enqueuedAt: asString(row, "enqueued_at"),
+    startedAt: row.started_at ? asString(row, "started_at") : null,
+    endedAt: row.ended_at ? asString(row, "ended_at") : null,
+    message: row.message ? asString(row, "message") : null,
+    workspaceId: row.workspace_id ? asString(row, "workspace_id") : null,
+    sessionId: row.session_id ? asString(row, "session_id") : null,
+    backgroundSessionId: row.background_session_id ? asString(row, "background_session_id") : null,
+    logFilePath: row.log_file_path ? asString(row, "log_file_path") : null,
+  };
+}
+
+export function backgroundSessionFromRow(row: Record<string, unknown>): BackgroundAgentSession {
+  return {
+    id: asString(row, "id"),
+    scheduledAgentId: row.scheduled_agent_id ? asString(row, "scheduled_agent_id") : null,
+    cwd: asString(row, "cwd"),
+    logFilePath: asString(row, "log_file_path"),
+    tmuxSessionName: asString(row, "tmux_session_name"),
+    tmuxSessionId: asString(row, "tmux_session_id"),
+    status: asString(row, "status") as BackgroundAgentSession["status"],
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
   };

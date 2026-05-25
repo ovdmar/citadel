@@ -10,6 +10,16 @@ describe("mcp helpers", () => {
     expect(status.tools).toContain("inspect_status");
     expect(status.tools).toContain("start_agent_session");
     expect(status.tools).toContain("launch_agent");
+    expect(status.tools).toContain("list_scheduled_agents");
+    expect(status.tools).toContain("create_scheduled_agent");
+    expect(status.tools).toContain("update_scheduled_agent");
+    expect(status.tools).toContain("delete_scheduled_agent");
+    expect(status.tools).toContain("run_scheduled_agent_now");
+    const createScheduled = mcpToolDefinitions().find((tool) => tool.name === "create_scheduled_agent");
+    expect(createScheduled?.inputSchema).toMatchObject({
+      required: ["name", "repoId", "runtimeId", "workspaceStrategy", "workspaceName"],
+    });
+    expect(mcpToolDefinitions().find((tool) => tool.name === "delete_scheduled_agent")?.destructive).toBe(true);
     expect(status.tools).toContain("list_workspace_links");
     expect(status.tools).toContain("read_agent_output");
     expect(status.tools).toContain("send_agent_message");
@@ -97,6 +107,7 @@ describe("mcp helpers", () => {
           pinned: false,
           lifecycle: "ready",
           dirty: false,
+          namespaceId: null,
           createdAt: "2026-05-17T00:00:00.000Z",
           updatedAt: "2026-05-17T00:00:00.000Z",
           archivedAt: null,
@@ -177,24 +188,42 @@ describe("mcp helpers", () => {
             supportsNonInteractiveGoal: false,
             supportsShell: true,
             supportsUsage: false,
+            supportsTui: false,
           },
         },
       ],
+      namespaces: [],
     } satisfies McpToolContext;
 
     const result = callMcpTool({ name: "inspect_status" }, context);
     expect(result).toMatchObject({ repos: 1, workspaces: 1, sessions: 1 });
     expect(callMcpTool({ name: "list_repos" }, context)).toEqual({ repos: context.repos });
     expect(callMcpTool({ name: "list_workspaces", arguments: { repoId: "repo_test" } }, context)).toEqual({
-      workspaces: context.workspaces,
+      workspaces: context.workspaces.map((workspace) => ({ ...workspace, namespaceName: null })),
     });
     expect(callMcpTool({ name: "list_agent_sessions", arguments: { workspaceId: "ws_test" } }, context)).toEqual({
-      sessions: context.sessions.map((session) => ({ ...session, initialPrompt: null, messageCount: 0 })),
+      sessions: context.sessions.map((session) => ({
+        ...session,
+        namespaceId: null,
+        namespaceName: null,
+        initialPrompt: null,
+        messageCount: 0,
+      })),
     });
     expect(callMcpTool({ name: "list_provider_health" }, context)).toEqual({
       providerHealth: context.providerHealth,
     });
     expect(callMcpTool({ name: "list_runtimes" }, context)).toEqual({ runtimes: context.runtimes });
+    expect(callMcpTool({ name: "list_scheduled_agents" }, context)).toEqual({ scheduledAgents: [] });
+    expect(callMcpTool({ name: "create_scheduled_agent" }, context)).toEqual({
+      error: "mutating_tool_requires_daemon",
+    });
+    expect(callMcpTool({ name: "delete_scheduled_agent", arguments: { id: "sched_x" } }, context)).toEqual({
+      error: "mutating_tool_requires_daemon",
+    });
+    expect(callMcpTool({ name: "run_scheduled_agent_now", arguments: { id: "sched_x" } }, context)).toEqual({
+      error: "mutating_tool_requires_daemon",
+    });
     expect(callMcpTool({ name: "list_workspace_links", arguments: { workspaceId: "ws_test" } }, context)).toEqual({
       links: [expect.objectContaining({ label: "Preview", workspaceId: "ws_test" })],
       actions: [expect.objectContaining({ id: "redeploy", workspaceId: "ws_test" })],

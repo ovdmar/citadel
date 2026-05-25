@@ -35,13 +35,18 @@ import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
+import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
+import { backfillIfEmpty } from "./scratchpad-history.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
+import { scratchpadPath } from "./scratchpad.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
-import { readWorkspaceDiff, readWorkspaceGitStatus, readWorkspaceRecentCommits } from "./workspace-diff.js";
+import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
+import { readWorkspaceGitStatus } from "./workspace-diff.js";
+import { createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
 
 export type DaemonApp = {
   app: express.Express;
@@ -85,6 +90,7 @@ export function createDaemonApp(input: {
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
 
+  let fsWatchers: { reconcile: () => void; close: () => void } | null = null;
   const emit = (type: string, payload: unknown) => {
     const event: AppEvent = {
       id: `sse_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -94,12 +100,14 @@ export function createDaemonApp(input: {
       payload,
     };
     for (const client of sseClients) client.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
+    if (fsWatchers && (type === "workspace.updated" || type === "state.reconciled" || type === "repo.updated")) {
+      fsWatchers.reconcile();
+    }
   };
 
   // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
   const initialTerminalCleanup = ttyd.cleanupStale();
   if (initialTerminalCleanup.killed > 0) emit("terminal.cleanup", initialTerminalCleanup);
-  // Self-heal: when a terminal's tmux session is gone (restart, manual kill), recreate it from the recorded runtime.
   const respawnTmux = async (session: import("@citadel/contracts").AgentSession) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     const runtime = config.runtimes.find((candidate) => candidate.id === session.runtimeId);
@@ -147,6 +155,7 @@ export function createDaemonApp(input: {
         runtimes: listRuntimeHealth(config.runtimes),
         mcp: mcpStatus(config.mcp.enabled),
         scheduledAgents: scheduledAgents.list(),
+        namespaces: store.listNamespaces(),
       });
     }),
   );
@@ -650,9 +659,26 @@ export function createDaemonApp(input: {
     }),
   );
 
-  const scheduledAgents = registerScheduledAgentRoutes({ app, server, store, operations, config, emit, asyncRoute });
+  const { runner: scheduledAgents, service: scheduledAgentService } = registerScheduledAgentRoutes({
+    app,
+    server,
+    store,
+    operations,
+    config,
+    emit,
+    asyncRoute,
+  });
+  // Boot-sweep: close any 'running' run rows that were in flight when the
+  // daemon last died, sync the denormalized lastRunStatus cache on the
+  // affected agents, kill orphan background tmux sessions, and drain queued
+  // rows that were waiting on the failed in-flight predecessors. Best-effort:
+  // we don't want a sweep failure to block startup, but we DO want a signal
+  // because a silent failure leaves orphaned 'running' rows behind.
+  void scheduledAgents.recoverInFlightRuns().catch((error) => {
+    console.error("[citadel] scheduledAgents.recoverInFlightRuns failed:", error);
+  });
 
-  const mcpDeps = { config, store, operations, ttyd, providerCache, emit };
+  const mcpDeps = { config, store, operations, ttyd, scheduledAgents, scheduledAgentService, providerCache, emit };
   registerMcpRoutes(app, asyncRoute, {
     config,
     store,
@@ -661,26 +687,30 @@ export function createDaemonApp(input: {
   });
 
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations });
+  registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit });
+  try {
+    const spPath = scratchpadPath(config.dataDir);
+    if (fs.existsSync(spPath)) {
+      const content = fs.readFileSync(spPath, "utf8");
+      if (content.length > 0) {
+        const stat = fs.statSync(spPath);
+        backfillIfEmpty(config.dataDir, { content, updatedAt: stat.mtime.toISOString() });
+      }
+    }
+  } catch {
+    /* non-fatal */
+  }
 
-  app.get("/api/workspaces/:workspaceId/diff", (req, res) => {
-    const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-    if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-    if (!path.resolve(workspace.path).startsWith(path.resolve(workspace.path)))
-      return res.status(400).json({ error: "invalid_path" });
-    res.json(readWorkspaceDiff(workspace.id, workspace.path));
+  fsWatchers = createWorkspaceFsWatchers({
+    listWorkspaces: () => store.listWorkspaces(),
+    providerCache,
+    emit,
   });
+  fsWatchers.reconcile();
+  server.on("close", () => fsWatchers?.close());
 
-  app.get(
-    "/api/workspaces/:workspaceId/recent-commits",
-    asyncRoute(async (req, res) => {
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      const limitParam = Number.parseInt(String(req.query.limit ?? "8"), 10);
-      const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 50) : 8;
-      res.json(readWorkspaceRecentCommits(workspace.id, workspace.path, limit));
-    }),
-  );
+  registerWorkspaceDiffRoutes({ app, store, asyncRoute });
 
   app.get("/events", (req, res) => {
     req.socket.setTimeout(0);

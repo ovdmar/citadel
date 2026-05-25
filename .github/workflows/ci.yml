@@ -37,13 +37,30 @@ jobs:
         run: pnpm e2e
 
       - name: Startup and performance smoke
+        env:
+          # CI is a sandboxed checkout — pick its own non-production port so
+          # nothing here touches the systemd-reserved :4010. Also point vite's
+          # /api proxy at the daemon and override smoke's base URL.
+          CITADEL_PORT: "4337"
+          CITADEL_WEB_PORT: "5173"
+          CITADEL_DAEMON_URL: "http://127.0.0.1:4337"
+          CITADEL_BASE_URL: "http://127.0.0.1:4337"
         run: |
           pnpm dev > /tmp/citadel-dev.log 2>&1 &
           for attempt in {1..60}; do
-            if curl -fsS http://127.0.0.1:4337/api/health >/dev/null && curl -fsS http://127.0.0.1:5173 >/dev/null; then
+            if curl -fsS "$CITADEL_BASE_URL/api/health" >/dev/null && curl -fsS "http://127.0.0.1:$CITADEL_WEB_PORT" >/dev/null; then
               break
             fi
             sleep 1
           done
           make smoke
           pnpm performance
+      - name: Dump dev log on failure
+        if: failure()
+        run: |
+          echo "=== /tmp/citadel-dev.log ==="
+          cat /tmp/citadel-dev.log || echo "(no dev log)"
+          echo "=== ss -tlnp ==="
+          ss -tlnp 2>/dev/null | head -20 || true
+          echo "=== ls .citadel ==="
+          ls -la .citadel 2>&1 || true

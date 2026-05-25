@@ -6,6 +6,7 @@ export {
   claudeProjectsDir,
   parseClaudeTranscript,
   findClaudeTranscriptForSession,
+  renderClaudeTranscriptAsText,
   claudeCodeAdapter,
   codexAdapter,
   cursorAgentAdapter,
@@ -46,6 +47,10 @@ const baseCapabilities = {
   supportsNonInteractiveGoal: false,
   supportsShell: true,
   supportsUsage: false,
+  // Default is false (shell-style runtimes emit line-buffered text). The
+  // builtin overrides below flip it on for the known TUI runtimes so the
+  // scheduled-agents UI can disable runMode='background' for them.
+  supportsTui: false,
 };
 
 // Built-in capability defaults applied to known runtime IDs.
@@ -58,16 +63,19 @@ const builtinCapabilities: Record<string, Partial<typeof baseCapabilities>> = {
     supportsTranscript: true,
     supportsNonInteractiveGoal: true,
     supportsUsage: true,
+    supportsTui: true,
   },
   codex: {
     supportsPrompt: true,
     supportsResume: true,
     supportsNonInteractiveGoal: true,
+    supportsTui: true,
     supportsUsage: true,
   },
   "cursor-agent": {
     supportsPrompt: true,
     supportsNonInteractiveGoal: true,
+    supportsTui: true,
   },
   pi: {
     supportsPrompt: true,

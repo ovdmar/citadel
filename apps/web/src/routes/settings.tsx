@@ -1,25 +1,15 @@
 import type { AgentRuntime, ProviderHealth } from "@citadel/contracts";
 import { Link } from "@tanstack/react-router";
-import {
-  AlarmClock,
-  ArrowLeft,
-  Cable,
-  CheckCircle2,
-  FolderGit2,
-  HeartPulse,
-  Server,
-  Settings as SettingsIcon,
-} from "lucide-react";
+import { ArrowLeft, Cable, CheckCircle2, FolderGit2, HeartPulse, Server, Settings as SettingsIcon } from "lucide-react";
 import { useState } from "react";
 import { useStateQuery } from "../app-state.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { AgentsPanel } from "../settings-runtimes.js";
-import { ScheduledAgentsPanel } from "../settings-scheduled-agents.js";
 import { StructuredConfig } from "../structured-config.js";
 import { ThemeControls } from "../theme-controls.js";
 
-type SectionId = "overview" | "providers" | "agents" | "scheduled-agents" | "repositories" | "mcp" | "advanced";
+type SectionId = "overview" | "providers" | "agents" | "repositories" | "mcp" | "advanced";
 
 type Section = {
   id: SectionId;
@@ -37,12 +27,6 @@ const SECTIONS: Section[] = [
   },
   { id: "providers", label: "Providers", description: "Tickets, Git server, CI", icon: <HeartPulse size={14} /> },
   { id: "agents", label: "Agents", description: "Platform and custom agents", icon: <Server size={14} /> },
-  {
-    id: "scheduled-agents",
-    label: "Scheduled agents",
-    description: "Cron-driven agent runs",
-    icon: <AlarmClock size={14} />,
-  },
   {
     id: "repositories",
     label: "Repositories",
@@ -116,7 +100,6 @@ export function SettingsView() {
           ) : null}
           {section === "providers" ? <ProvidersPanel providerHealth={state.data?.providerHealth ?? []} /> : null}
           {section === "agents" ? <AgentsPanel runtimes={state.data?.runtimes ?? []} /> : null}
-          {section === "scheduled-agents" ? <ScheduledAgentsPanel state={state.data} /> : null}
           {section === "repositories" ? <RepositoriesPanel state={state.data} /> : null}
           {section === "mcp" ? <McpSection mcpEnabled={Boolean(state.data?.mcp.enabled)} /> : null}
           {section === "advanced" ? <StructuredConfig /> : null}
@@ -164,11 +147,16 @@ function OverviewCard(props: { label: string; value: string; ready: boolean }) {
 }
 
 function McpSection(props: { mcpEnabled: boolean }) {
+  // Derived at render time so the example matches *this* cockpit's daemon —
+  // important in worktree dev where the port is derived from the worktree path
+  // and the systemd main daemon is also running on :4010.
+  const mcpUrl =
+    typeof window !== "undefined" ? `${window.location.origin}/api/mcp/rpc` : "http://127.0.0.1:4010/api/mcp/rpc";
   const example = JSON.stringify(
     {
       mcpServers: {
         citadel: {
-          url: "http://127.0.0.1:4010/mcp",
+          url: mcpUrl,
         },
       },
     },

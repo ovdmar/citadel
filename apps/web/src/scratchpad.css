@@ -15,6 +15,7 @@
   display: flex;
   padding: 16px;
   min-height: 0;
+  gap: 16px;
 }
 
 .scratchpad-textarea {
@@ -55,4 +56,322 @@
   background: var(--panel);
   color: inherit;
   cursor: pointer;
+}
+
+.scratchpad-history {
+  width: 280px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.scratchpad-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-fg-1, inherit);
+}
+
+.scratchpad-history-count {
+  font-weight: 400;
+  color: var(--c-fg-3, inherit);
+  font-size: 11px;
+}
+
+.scratchpad-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+
+.scratchpad-history-empty {
+  padding: 12px;
+  font-size: 12px;
+  color: var(--c-fg-3, inherit);
+}
+
+.scratchpad-history-row {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 8px 12px;
+  color: inherit;
+  cursor: pointer;
+  gap: 4px;
+}
+
+.scratchpad-history-row:hover {
+  background: var(--c-line-1, rgba(255, 255, 255, 0.04));
+}
+
+.scratchpad-history-row.is-selected {
+  background: var(--c-elev, rgba(255, 255, 255, 0.06));
+}
+
+.scratchpad-history-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.scratchpad-history-time {
+  color: var(--c-fg-2, inherit);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scratchpad-history-size {
+  color: var(--c-fg-3, inherit);
+  font-variant-numeric: tabular-nums;
+}
+
+.scratchpad-history-pill {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--c-line-2, rgba(255, 255, 255, 0.08));
+  color: var(--c-fg-1, inherit);
+}
+
+.scratchpad-history-pill.source-ui {
+  background: rgba(80, 140, 230, 0.18);
+  color: #6ea8ff;
+}
+
+.scratchpad-history-pill.source-mcp-write,
+.scratchpad-history-pill.source-mcp-append {
+  background: rgba(140, 80, 220, 0.18);
+  color: #b794f4;
+}
+
+.scratchpad-history-pill.source-backfill {
+  background: rgba(120, 120, 120, 0.22);
+  color: #cccccc;
+}
+
+.scratchpad-history-pill.source-restore {
+  background: rgba(80, 200, 120, 0.18);
+  color: #76d199;
+}
+
+.scratchpad-history-preview {
+  font-size: 11px;
+  color: var(--c-fg-3, inherit);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.scratchpad-diff-overlay {
+  /* Override native <dialog> defaults (top-left positioning, narrow width) */
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.scratchpad-diff-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.scratchpad-diff-panel {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  width: min(95vw, 1200px);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  z-index: 1;
+}
+
+.scratchpad-diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.scratchpad-diff-close {
+  background: transparent;
+  color: inherit;
+  border: 0;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.scratchpad-diff-close:hover {
+  background: var(--c-line-1, rgba(255, 255, 255, 0.06));
+}
+
+.scratchpad-diff-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--line);
+  background: var(--c-line-1, rgba(255, 255, 255, 0.03));
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-fg-3, inherit);
+}
+
+.scratchpad-diff-col-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 14px;
+  min-height: 32px;
+}
+
+.scratchpad-diff-col-label + .scratchpad-diff-col-label {
+  border-left: 1px solid var(--line);
+}
+
+.scratchpad-diff-body {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 0;
+}
+
+.scratchpad-diff-grid {
+  display: flex;
+  flex-direction: column;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.scratchpad-diff-row {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px 1fr;
+  align-items: stretch;
+}
+
+.scratchpad-diff-row + .scratchpad-diff-row {
+  border-top: 1px solid transparent;
+}
+
+.scratchpad-diff-no {
+  padding: 0 8px;
+  text-align: right;
+  color: var(--c-fg-3, inherit);
+  background: var(--c-line-1, rgba(255, 255, 255, 0.02));
+  border-right: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.scratchpad-diff-cell {
+  margin: 0;
+  padding: 0 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.scratchpad-diff-cell.is-empty {
+  background: rgba(120, 120, 120, 0.06);
+}
+
+.scratchpad-diff-cell.side-add {
+  background: rgba(80, 200, 120, 0.16);
+  color: #76d199;
+}
+
+.scratchpad-diff-cell.side-remove {
+  background: rgba(230, 80, 100, 0.16);
+  color: #f08097;
+}
+
+.scratchpad-diff-skip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 12px;
+  background: var(--c-line-1, rgba(255, 255, 255, 0.04));
+  color: var(--c-fg-3, inherit);
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.scratchpad-diff-empty,
+.scratchpad-diff-loading,
+.scratchpad-diff-error {
+  padding: 14px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.scratchpad-diff-error {
+  color: var(--color-danger);
+}
+
+.scratchpad-restore-btn {
+  padding: 4px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--line-strong, var(--line));
+  background: var(--panel);
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.scratchpad-restore-btn:hover:not(:disabled) {
+  background: var(--c-line-1, rgba(255, 255, 255, 0.06));
+}
+
+.scratchpad-restore-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }

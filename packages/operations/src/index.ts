@@ -3,12 +3,15 @@ import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 import type {
   CreateAgentSessionInput,
+  CreateNamespaceInput,
   CreateWorkspaceInput,
   HookAction,
   HookOutput,
   LaunchAgentInput,
+  Namespace,
   Operation,
   Repo,
+  UpdateNamespaceInput,
   Workspace,
 } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
@@ -18,20 +21,12 @@ import * as agentHistory from "./agent-history.js";
 import * as agentMessages from "./agent-messages.js";
 import { createAgentSession as createAgentSessionImpl } from "./create-agent-session.js";
 import { launchAgent as launchAgentImpl } from "./launch-agent.js";
+import * as namespaceOps from "./namespaces.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
 export type { LaunchAgentResult } from "./launch-agent.js";
+export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
 export type { AgentHistoryResult, AgentHistoryErrorResult } from "./agent-history.js";
-export { reduceStatus, LAST_OUTPUT_DEBOUNCE_MS } from "./agent-status.js";
-export type { StatusSignal, StatusUpdate, ReducerPrev, TmuxMissingReason } from "./agent-status.js";
-export { runStatusMonitorTick, startStatusMonitor } from "./status-monitor.js";
-export type {
-  MonitorTickDeps,
-  MonitorTickOptions,
-  MonitorTickResult,
-  MonitorSessionState,
-  SentinelReading,
-  StatusMonitorHandle,
-} from "./status-monitor.js";
+export * from "./status.js";
 export {
   ScheduledAgentRunner,
   parseCronExpression,
@@ -40,18 +35,33 @@ export {
   describeCron,
 } from "./scheduled-agents.js";
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
+export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
+export { createBackgroundAgentSession } from "./create-background-agent-session.js";
 import {
   type DeployOpsDeps,
   listDeployedApps as listDeployedAppsImpl,
   redeployApp as redeployAppImpl,
 } from "./deploy.js";
 import {
+  BranchInUseByWorktreeError,
+  RemoteRefMissingError,
+  WorkspaceNameTakenError,
+  addWorktree,
   cancelOperationInStore,
+  classifyWorktreeError,
   discoverDefaultBranch,
+  isUniqueWorkspaceNameViolation,
   listHookDiagnostics,
   reconcileStore,
   tryRunGit,
   workspaceIsDirty,
+} from "./helpers.js";
+
+export {
+  BranchInUseByWorktreeError,
+  RemoteRefMissingError,
+  WorkspaceInUseError,
+  WorkspaceNameTakenError,
 } from "./helpers.js";
 import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
 import {
@@ -115,6 +125,7 @@ export class OperationService {
       pinned: true,
       lifecycle: "ready",
       dirty: false,
+      namespaceId: null,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
@@ -129,18 +140,23 @@ export class OperationService {
         rootWorkspace.id,
         null,
       );
-    } catch {
-      // ignore — root already present (re-register or migration backfill)
-    }
+    } catch {} // root already present (re-register or migration backfill)
     return repo;
   }
 
   async createWorkspace(input: CreateWorkspaceInput) {
     const repo = this.store.listRepos().find((candidate) => candidate.id === input.repoId);
     if (!repo) throw new Error(`Unknown repo: ${input.repoId}`);
+    const namespaceId = input.namespaceId ?? null;
+    if (namespaceId) {
+      const namespace = this.store.findNamespace(namespaceId);
+      if (!namespace) throw new Error(`Unknown namespace: ${namespaceId}`);
+      if (namespace.archivedAt) throw new Error(`Namespace is archived: ${namespaceId}`);
+    }
     const now = nowIso();
     const operation = this.operation("workspace.create", "running", repo.id, null, 5, "Validating workspace request");
-    const branch = workspaceBranchName(input);
+    const newBranch = input.newBranch?.trim() || null;
+    const branch = newBranch ?? workspaceBranchName(input);
     const workspacePath = path.join(repo.worktreeParent, branch);
     const baseBranch = input.baseBranch?.trim() || repo.defaultBranch;
     const existingBranch = input.existingBranch?.trim() || null;
@@ -162,11 +178,26 @@ export class OperationService {
       pinned: false,
       lifecycle: "creating",
       dirty: false,
+      namespaceId,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
     };
-    this.store.insertWorkspace(workspace);
+    try {
+      this.store.insertWorkspace(workspace);
+    } catch (error) {
+      if (isUniqueWorkspaceNameViolation(error)) {
+        this.store.upsertOperation({
+          ...operation,
+          status: "failed",
+          progress: 100,
+          error: `workspace_name_taken: ${input.name}`,
+          updatedAt: nowIso(),
+        });
+        throw new WorkspaceNameTakenError(repo.id, input.name);
+      }
+      throw error;
+    }
     this.logOp(
       operation.id,
       "info",
@@ -182,35 +213,16 @@ export class OperationService {
     try {
       tryRunGit(repo.rootPath, ["fetch", "--prune", repo.defaultRemote]);
       this.logOp(operation.id, "info", `Fetched ${repo.defaultRemote} (prune)`);
-      if (existingBranch) {
-        // Try to add a worktree pointing at the existing branch (local or remote).
-        try {
-          tryRunGit(repo.rootPath, ["worktree", "add", workspacePath, existingBranch]);
-          this.logOp(operation.id, "info", `Added worktree at ${workspacePath} on branch ${existingBranch}`);
-        } catch {
-          tryRunGit(repo.rootPath, [
-            "worktree",
-            "add",
-            "-B",
-            existingBranch,
-            workspacePath,
-            `${repo.defaultRemote}/${existingBranch}`,
-          ]);
-          this.logOp(
-            operation.id,
-            "info",
-            `Added worktree at ${workspacePath} tracking ${repo.defaultRemote}/${existingBranch}`,
-          );
-        }
-      } else {
-        const startPoint = `${repo.defaultRemote}/${baseBranch}`;
-        tryRunGit(repo.rootPath, ["worktree", "add", "-b", branch, workspacePath, startPoint]);
-        this.logOp(
-          operation.id,
-          "info",
-          `Added worktree at ${workspacePath} (new branch ${branch} from ${startPoint})`,
-        );
-      }
+      const added = addWorktree(repo.rootPath, workspacePath, repo.defaultRemote, baseBranch, branch, existingBranch);
+      this.logOp(
+        operation.id,
+        "info",
+        added.mode === "checkout"
+          ? `Added worktree at ${workspacePath} on branch ${existingBranch}`
+          : added.mode === "tracking"
+            ? `Added worktree at ${workspacePath} tracking ${added.startPoint}`
+            : `Added worktree at ${workspacePath} (new branch ${existingBranch ?? branch} from ${added.startPoint})`,
+      );
       this.store.upsertOperation({
         ...operation,
         workspaceId: workspace.id,
@@ -254,6 +266,10 @@ export class OperationService {
         error: errorMessage,
         updatedAt: nowIso(),
       });
+      const classified = classifyWorktreeError(errorMessage);
+      if (classified) throw new BranchInUseByWorktreeError(classified.branch, classified.worktreePath);
+      if (/invalid reference: \S+/i.test(errorMessage) && existingBranch)
+        throw new RemoteRefMissingError(existingBranch, repo.defaultRemote);
     }
     return { operationId: operation.id, workspaceId: workspace.id };
   }
@@ -261,8 +277,14 @@ export class OperationService {
   createAgentSession = (
     input: CreateAgentSessionInput,
     runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
-  ) =>
-    createAgentSessionImpl(
+  ) => {
+    if (input.namespaceId) {
+      const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+      if (workspace && input.namespaceId !== workspace.namespaceId) {
+        this.assignWorkspaceToNamespace({ workspaceId: workspace.id, namespaceId: input.namespaceId });
+      }
+    }
+    return createAgentSessionImpl(
       {
         store: this.store,
         activity: (...args) => this.activity(...args),
@@ -272,6 +294,7 @@ export class OperationService {
       input,
       runtime,
     );
+  };
 
   launchAgent = (
     input: LaunchAgentInput,
@@ -459,14 +482,13 @@ export class OperationService {
       tryRunGit(repo.rootPath, ["worktree", "remove", "--force", workspace.path]);
       this.logOp(operation.id, "info", `Removed worktree at ${workspace.path}`);
     }
-    this.store.archiveWorkspace(workspace.id, input.archiveOnly ? "archived" : "removed", dirty);
-    this.logOp(
-      operation.id,
-      "info",
-      input.archiveOnly
-        ? `Marked workspace ${workspace.name} as archived`
-        : `Marked workspace ${workspace.name} as removed`,
-    );
+    if (input.archiveOnly) {
+      this.store.archiveWorkspace(workspace.id, "archived", dirty);
+      this.logOp(operation.id, "info", `Marked workspace ${workspace.name} as archived`);
+    } else {
+      this.store.deleteWorkspace(workspace.id);
+      this.logOp(operation.id, "info", `Deleted workspace ${workspace.name} (name slot freed)`);
+    }
     this.store.upsertOperation({
       ...operation,
       status: "succeeded",
@@ -655,19 +677,27 @@ export class OperationService {
     newOperation: (...args) => this.operation(...args),
   });
 
-  // Bundle the dependencies the workspace-apps module needs without leaking
-  // `this` into another file. Recomputed per call; the surface is tiny.
-  private workspaceAppsDeps(): WorkspaceAppsDeps {
-    return {
-      store: this.store,
-      config: this.config,
-      activity: (...args) => this.activity(...args),
-      newOperation: (...args) => this.operation(...args),
-    };
-  }
+  private workspaceAppsDeps = (): WorkspaceAppsDeps => ({
+    store: this.store,
+    config: this.config,
+    activity: (...args) => this.activity(...args),
+    newOperation: (...args) => this.operation(...args),
+  });
 
-  hookDiagnostics(repo: Repo, workspace?: Workspace | null) {
-    return listHookDiagnostics({
+  listNamespaces = (includeArchived = false): Namespace[] => this.store.listNamespaces(includeArchived);
+  createNamespace = (input: CreateNamespaceInput) => namespaceOps.createNamespace(this.nsDeps(), input);
+  renameNamespace = (id: string, patch: UpdateNamespaceInput) => namespaceOps.renameNamespace(this.nsDeps(), id, patch);
+  archiveNamespace = (id: string) => namespaceOps.archiveNamespace(this.nsDeps(), id);
+  restoreNamespace = (id: string) => namespaceOps.restoreNamespace(this.nsDeps(), id);
+  assignWorkspaceToNamespace = (input: { workspaceId: string; namespaceId: string | null }) =>
+    namespaceOps.assignWorkspaceToNamespace(this.nsDeps(), input);
+  private nsDeps = (): namespaceOps.NamespaceServiceDeps => ({
+    store: this.store,
+    activity: (type, message) => this.activity(type, "user", message, null, null, null),
+  });
+
+  hookDiagnostics = (repo: Repo, workspace?: Workspace | null) =>
+    listHookDiagnostics({
       repo,
       workspace,
       hooks: this.config?.hooks ?? [],
@@ -675,7 +705,6 @@ export class OperationService {
       actionHookIds: this.config?.repoDefaults.actionHookIds ?? [],
       hookTimeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
     });
-  }
 
   private operation(
     type: string,
@@ -705,14 +734,8 @@ export class OperationService {
     return operation;
   }
 
-  // Append a structured log entry to an operation. Captures meaningful audit
-  // detail (which path, which branch, which hook) alongside the status updates.
   private logOp(operationId: string, level: "info" | "warn" | "error", message: string) {
-    this.store.appendOperationLog(operationId, {
-      level,
-      message,
-      at: nowIso(),
-    });
+    this.store.appendOperationLog(operationId, { level, message, at: nowIso() });
   }
 
   private activity(
@@ -737,14 +760,14 @@ export class OperationService {
     });
   }
 
-  private async runWorkspaceHooks(
+  private runWorkspaceHooks = (
     event: HookConfig["event"],
     hookIds: string[],
     repo: Repo,
     workspace: Workspace,
     operationId: string,
-  ) {
-    await runWorkspaceHooks({
+  ) =>
+    runWorkspaceHooks({
       config: this.config,
       activity: (...args) => this.activity(...args),
       event,
@@ -753,16 +776,15 @@ export class OperationService {
       workspace,
       operationId,
     });
-  }
 
-  private async runNotificationHooks(
+  private runNotificationHooks = (
     event: HookConfig["event"],
     repo: Repo,
     workspace: Workspace,
     operationId: string | null,
     payload: unknown,
-  ) {
-    await runNotificationHooks({
+  ) =>
+    runNotificationHooks({
       config: this.config,
       activity: (...args) => this.activity(...args),
       event,
@@ -771,5 +793,4 @@ export class OperationService {
       operationId,
       payload,
     });
-  }
 }

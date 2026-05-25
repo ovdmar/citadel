@@ -1,4 +1,4 @@
-import type { AgentSession, Operation, Repo, Workspace } from "@citadel/contracts";
+import type { AgentSession, Namespace, Operation, Repo, Workspace } from "@citadel/contracts";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { formatLabel } from "./labels.js";
 import type { GroupKey } from "./modals.js";
@@ -13,23 +13,55 @@ export type WorkspaceEntry = { workspace: Workspace; sessions: AgentSession[] };
 
 export type GroupNode =
   | { kind: "group"; id: string; path: string; label: string; count: number; children: GroupNode[] }
-  | { kind: "leaf"; id: string; path: string; label: string; count: number; workspaces: WorkspaceEntry[] };
+  | {
+      kind: "leaf";
+      id: string;
+      path: string;
+      label: string;
+      count: number;
+      workspaces: WorkspaceEntry[];
+      // Present when the leaf is keyed by namespace. `null` is the explicit
+      // "no namespace assigned" bucket (Uncategorized). Absent on other leaves
+      // (repo, status) so DnD only attaches where it makes sense.
+      namespaceId?: string | null;
+    };
 
-type EnrichedWorkspace = WorkspaceEntry & { repo: Repo | undefined; section: string };
+type EnrichedWorkspace = WorkspaceEntry & {
+  repo: Repo | undefined;
+  section: string;
+  namespace: Namespace | null;
+};
+
+const UNCATEGORIZED_KEY = "__uncategorized__";
 
 function rawBucketKey(entry: EnrichedWorkspace, field: GroupableKey): string {
-  return field === "repo" ? (entry.repo?.name ?? "Unknown repo") : (entry.section ?? "idle");
+  if (field === "repo") return entry.repo?.name ?? "Unknown repo";
+  if (field === "namespace") return entry.namespace ? entry.namespace.id : UNCATEGORIZED_KEY;
+  return entry.section ?? "idle";
 }
 
-function bucketLabel(rawKey: string, field: GroupableKey): string {
-  return field === "repo" ? rawKey : formatLabel(rawKey);
+function bucketLabel(rawKey: string, field: GroupableKey, namespaces: Namespace[]): string {
+  if (field === "repo") return rawKey;
+  if (field === "namespace") {
+    if (rawKey === UNCATEGORIZED_KEY) return "Uncategorized";
+    return namespaces.find((entry) => entry.id === rawKey)?.name ?? rawKey;
+  }
+  return formatLabel(rawKey);
 }
 
-function compareKeys(a: string, b: string, field: GroupableKey): number {
+function compareKeys(a: string, b: string, field: GroupableKey, namespaces: Namespace[]): number {
   if (field === "status") {
     const ai = SECTION_ORDER.indexOf(a);
     const bi = SECTION_ORDER.indexOf(b);
     return (ai < 0 ? SECTION_ORDER.length : ai) - (bi < 0 ? SECTION_ORDER.length : bi);
+  }
+  if (field === "namespace") {
+    // Float Uncategorized to the bottom; sort named namespaces by display name.
+    if (a === UNCATEGORIZED_KEY) return 1;
+    if (b === UNCATEGORIZED_KEY) return -1;
+    const an = namespaces.find((entry) => entry.id === a)?.name ?? a;
+    const bn = namespaces.find((entry) => entry.id === b)?.name ?? b;
+    return an.localeCompare(bn);
   }
   return a.localeCompare(b);
 }
@@ -38,12 +70,16 @@ function compareKeys(a: string, b: string, field: GroupableKey): number {
 // operations, workspace.lifecycle/dirty) — never from the per-workspace
 // /cockpit-summary readiness. Mixing the two made the active workspace's nav
 // card jump between sections each time the summary refetched.
+//
+// `namespaces` is optional: only consulted when "namespace" appears in the
+// grouping. Pass it whenever the caller might use namespace mode.
 export function buildGroupTree(
   workspaces: Workspace[],
   repos: Repo[],
   sessions: AgentSession[],
   operations: Operation[],
   grouping: GroupableKey[],
+  namespaces: Namespace[] = [],
 ): GroupNode[] {
   if (!grouping.length) return [];
 
@@ -55,11 +91,14 @@ export function buildGroupTree(
       operations: workspaceOps,
     });
     const repo = repos.find((entry) => entry.id === workspace.repoId);
-    return { workspace, sessions: workspaceSessions, repo, section: attention.section };
+    const namespace = workspace.namespaceId
+      ? (namespaces.find((entry) => entry.id === workspace.namespaceId) ?? null)
+      : null;
+    return { workspace, sessions: workspaceSessions, repo, namespace, section: attention.section };
   });
 
   const build = (entries: EnrichedWorkspace[], levels: GroupableKey[], parentPath: string): GroupNode[] => {
-    if (!entries.length || !levels.length) return [];
+    if (!levels.length) return [];
     const head = levels[0] as GroupableKey;
     const rest = levels.slice(1);
     const buckets = new Map<string, EnrichedWorkspace[]>();
@@ -69,23 +108,32 @@ export function buildGroupTree(
       list.push(entry);
       buckets.set(key, list);
     }
-    const ordered = Array.from(buckets.keys()).sort((a, b) => compareKeys(a, b, head));
+    // Seed an Uncategorized bucket for namespace leaves even when empty, so
+    // the user always has a target to drag onto when grouping by namespace.
+    if (head === "namespace" && !buckets.has(UNCATEGORIZED_KEY)) {
+      buckets.set(UNCATEGORIZED_KEY, []);
+    }
+    const ordered = Array.from(buckets.keys()).sort((a, b) => compareKeys(a, b, head, namespaces));
     const nodes: GroupNode[] = [];
     for (const rawKey of ordered) {
       const items = buckets.get(rawKey);
-      if (!items?.length) continue;
+      if (!items) continue;
       const segment = `${head}=${rawKey}`;
       const nodePath = parentPath ? `${parentPath}/${segment}` : segment;
-      const label = bucketLabel(rawKey, head);
+      const label = bucketLabel(rawKey, head, namespaces);
       if (rest.length === 0) {
-        nodes.push({
+        const leaf: GroupNode = {
           kind: "leaf",
           id: nodePath,
           path: nodePath,
           label,
           count: items.length,
           workspaces: items.map(({ workspace, sessions: ws }) => ({ workspace, sessions: ws })),
-        });
+        };
+        if (head === "namespace") {
+          (leaf as { namespaceId?: string | null }).namespaceId = rawKey === UNCATEGORIZED_KEY ? null : rawKey;
+        }
+        nodes.push(leaf);
       } else {
         const children = build(items, rest, nodePath);
         if (!children.length) continue;

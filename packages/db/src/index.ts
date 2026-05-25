@@ -5,12 +5,15 @@ import type {
   ActivityEvent,
   AgentSession,
   HookOutput,
+  Namespace,
   Operation,
   OperationLogEntry,
   Repo,
   ScheduledAgent,
   Workspace,
 } from "@citadel/contracts";
+import { runMigrations } from "./migrate.js";
+import * as namespaces from "./namespaces.js";
 import {
   activityFromRow,
   operationFromRow,
@@ -23,16 +26,22 @@ import {
 // Avoid a static `import "node:sqlite"` so vite-based test runners do not
 // try to bundle the built-in. Resolved through `createRequire` at runtime.
 type DatabaseSyncCtor = new (path: string, options?: { open?: boolean; readOnly?: boolean }) => SqliteDatabase;
-type SqliteDatabase = {
+export type SqliteDatabase = {
   exec(sql: string): void;
   prepare(sql: string): SqliteStatement;
   close(): void;
 };
-type SqliteStatement = {
+export type SqliteStatement = {
   all(...params: unknown[]): unknown[];
   get(...params: unknown[]): unknown;
   run(...params: unknown[]): { changes: number };
 };
+
+// Sentinel cron written for one-shot rows. Must never match a real minute:
+// dom=31 + mon=2 with dow wild yields cronMatches() === false for every date
+// (Feb has no 31st). Earlier "0 0 31 2 0" was unsafe because dom/dow
+// non-wild use OR semantics and would fire every Sunday in February.
+const ONE_SHOT_CRON_PLACEHOLDER = "0 0 31 2 *";
 
 let DatabaseSyncCtor: DatabaseSyncCtor | null = null;
 function loadDatabaseSync(): DatabaseSyncCtor {
@@ -51,7 +60,10 @@ export class SqliteStore {
     this.databasePath = databasePath;
   }
 
-  private get database(): SqliteDatabase {
+  /** @internal Module-augmenting files in this package access the underlying
+   * database through this getter; external callers should go through the
+   * named class methods instead. */
+  get database(): SqliteDatabase {
     if (!this.db) {
       fs.mkdirSync(path.dirname(this.databasePath), { recursive: true });
       const Ctor = loadDatabaseSync();
@@ -73,156 +85,7 @@ export class SqliteStore {
   }
 
   migrate() {
-    const db = this.database;
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        version INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        applied_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS repos (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        root_path TEXT NOT NULL UNIQUE,
-        default_branch TEXT NOT NULL,
-        default_remote TEXT NOT NULL,
-        worktree_parent TEXT NOT NULL,
-        setup_hook_ids TEXT NOT NULL,
-        teardown_hook_ids TEXT NOT NULL,
-        provider_ids TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        archived_at TEXT
-      );
-      CREATE TABLE IF NOT EXISTS workspaces (
-        id TEXT PRIMARY KEY,
-        repo_id TEXT NOT NULL REFERENCES repos(id),
-        name TEXT NOT NULL,
-        path TEXT NOT NULL UNIQUE,
-        branch TEXT NOT NULL,
-        base_branch TEXT NOT NULL,
-        source TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'worktree',
-        pr_url TEXT,
-        issue_key TEXT,
-        issue_title TEXT,
-        section TEXT NOT NULL,
-        pinned INTEGER NOT NULL,
-        lifecycle TEXT NOT NULL,
-        dirty INTEGER NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        archived_at TEXT,
-        UNIQUE(repo_id, name)
-      );
-      CREATE TABLE IF NOT EXISTS agent_sessions (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-        runtime_id TEXT NOT NULL,
-        display_name TEXT NOT NULL,
-        status TEXT NOT NULL,
-        status_reason TEXT,
-        last_status_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
-        last_output_at TEXT,
-        ended_at TEXT,
-        exit_code INTEGER,
-        transport TEXT NOT NULL,
-        tmux_session_name TEXT,
-        tmux_session_id TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS operations (
-        id TEXT PRIMARY KEY,
-        type TEXT NOT NULL,
-        status TEXT NOT NULL,
-        repo_id TEXT,
-        workspace_id TEXT,
-        progress INTEGER NOT NULL,
-        message TEXT,
-        error TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS activity_events (
-        id TEXT PRIMARY KEY,
-        type TEXT NOT NULL,
-        source TEXT NOT NULL,
-        repo_id TEXT,
-        workspace_id TEXT,
-        operation_id TEXT,
-        message TEXT NOT NULL,
-        hook_output TEXT,
-        created_at TEXT NOT NULL
-      );
-      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-      VALUES (1, 'initial-local-first-schema', datetime('now'));
-    `);
-    this.ensureColumn("activity_events", "hook_output", "TEXT");
-    this.ensureColumn("operations", "logs", "TEXT");
-    this.ensureColumn("operations", "retriable", "INTEGER NOT NULL DEFAULT 0");
-    this.ensureColumn("operations", "retry_input", "TEXT");
-    this.ensureColumn("workspaces", "issue_url", "TEXT");
-    this.ensureColumn("workspaces", "slack_thread_url", "TEXT");
-    this.ensureColumn("workspaces", "kind", "TEXT NOT NULL DEFAULT 'worktree'");
-    this.ensureColumn("repos", "deploy_hook_command", "TEXT");
-    // Agent-status migration (canonical enum + tracking fields). All additive;
-    // status remaps below are idempotent. Wrapped in a transaction so a crash
-    // mid-migration leaves rows untouched. See specs/B.3 for canonical values.
-    this.ensureColumn("agent_sessions", "status_reason", "TEXT");
-    this.ensureColumn("agent_sessions", "last_status_at", "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z'");
-    this.ensureColumn("agent_sessions", "last_output_at", "TEXT");
-    this.ensureColumn("agent_sessions", "ended_at", "TEXT");
-    this.ensureColumn("agent_sessions", "exit_code", "INTEGER");
-    db.exec("BEGIN IMMEDIATE");
-    try {
-      db.exec(
-        "UPDATE agent_sessions SET last_status_at = updated_at WHERE last_status_at = '1970-01-01T00:00:00.000Z'",
-      );
-      db.exec(
-        "UPDATE agent_sessions SET status = 'running', status_reason = 'migrated_from_waiting' WHERE status = 'waiting'",
-      );
-      db.exec(
-        "UPDATE agent_sessions SET status = 'unknown', status_reason = 'migrated_from_orphaned' WHERE status = 'orphaned'",
-      );
-      db.exec(
-        "UPDATE agent_sessions SET status_reason = 'migrated_legacy_idle' WHERE status = 'idle' AND status_reason IS NULL",
-      );
-      db.exec("COMMIT");
-    } catch (err) {
-      db.exec("ROLLBACK");
-      throw err;
-    }
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS scheduled_agents (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT,
-        cron TEXT NOT NULL,
-        repo_id TEXT NOT NULL,
-        runtime_id TEXT NOT NULL,
-        prompt TEXT,
-        workspace_strategy TEXT NOT NULL,
-        workspace_name TEXT NOT NULL,
-        base_branch TEXT,
-        enabled INTEGER NOT NULL DEFAULT 1,
-        last_run_at TEXT,
-        last_run_status TEXT NOT NULL DEFAULT 'never',
-        last_run_message TEXT,
-        last_workspace_id TEXT,
-        last_session_id TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-      VALUES (2, 'activity-hook-output', datetime('now'));
-      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-      VALUES (3, 'operation-logs-retry', datetime('now'));
-      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-      VALUES (4, 'workspace-linked-urls', datetime('now'));
-      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-      VALUES (5, 'scheduled-agents', datetime('now'));
-    `);
+    runMigrations(this.database, (table, column, definition) => this.ensureColumn(table, column, definition));
   }
 
   exec(sql: string) {
@@ -317,8 +180,8 @@ export class SqliteStore {
     this.database
       .prepare(
         `INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, kind, pr_url,
-          issue_key, issue_title, issue_url, slack_thread_url, section, pinned, lifecycle, dirty, created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          issue_key, issue_title, issue_url, slack_thread_url, section, pinned, lifecycle, dirty, namespace_id, created_at, updated_at, archived_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         workspace.id,
@@ -338,11 +201,23 @@ export class SqliteStore {
         workspace.pinned ? 1 : 0,
         workspace.lifecycle,
         workspace.dirty ? 1 : 0,
+        workspace.namespaceId ?? null,
         workspace.createdAt,
         workspace.updatedAt,
         workspace.archivedAt ?? null,
       );
   }
+
+  setWorkspaceNamespace = (id: string, n: string | null) => namespaces.setWorkspaceNamespace(this.database, id, n);
+  listNamespaces = (includeArchived = false) => namespaces.listNamespaces(this.database, includeArchived);
+  findNamespace = (id: string) => namespaces.findNamespace(this.database, id);
+  findNamespaceByName = (n: string) => namespaces.findNamespaceByName(this.database, n);
+  insertNamespace = (n: Namespace) => namespaces.insertNamespace(this.database, n);
+  updateNamespace = (id: string, p: Partial<Pick<Namespace, "name" | "color">>) =>
+    namespaces.updateNamespace(this.database, id, p);
+  archiveNamespace = (id: string) => namespaces.archiveNamespace(this.database, id);
+  restoreNamespace = (id: string, p?: { color?: string | null }) =>
+    namespaces.restoreNamespace(this.database, id, p ?? {});
 
   updateWorkspaceLifecycle(workspaceId: string, lifecycle: Workspace["lifecycle"], dirty = false) {
     this.database
@@ -392,6 +267,15 @@ export class SqliteStore {
     this.database
       .prepare("UPDATE workspaces SET lifecycle = ?, dirty = ?, archived_at = ?, updated_at = ? WHERE id = ?")
       .run(lifecycle, dirty ? 1 : 0, now, now, workspaceId);
+  }
+
+  // Hard-delete a workspace row and its agent sessions. Used when a worktree
+  // was actually removed from disk so the (repo_id, name) UNIQUE slot can be
+  // reused immediately — archiveWorkspace leaves the row in place and would
+  // block recreation under the same name.
+  deleteWorkspace(workspaceId: string) {
+    this.database.prepare("DELETE FROM agent_sessions WHERE workspace_id = ?").run(workspaceId);
+    this.database.prepare("DELETE FROM workspaces WHERE id = ?").run(workspaceId);
   }
 
   listArchivedWorkspaces(): Workspace[] {
@@ -606,24 +490,33 @@ export class SqliteStore {
   }
 
   insertScheduledAgent(agent: ScheduledAgent) {
+    // cron is NOT NULL at the DB level. One-shot rows store a sentinel that
+    // never matches a real minute so the recurring tick is a no-op for them.
+    const cronColumn = agent.cron ?? ONE_SHOT_CRON_PLACEHOLDER;
     this.database
       .prepare(
-        `INSERT INTO scheduled_agents (id, name, description, cron, repo_id, runtime_id, prompt,
-          workspace_strategy, workspace_name, base_branch, enabled, last_run_at, last_run_status,
+        `INSERT INTO scheduled_agents (id, name, description, cron, schedule_type, run_at, repo_id, runtime_id, prompt,
+          workspace_strategy, workspace_name, base_branch, run_mode, background_cwd, overlap_policy,
+          enabled, last_run_at, last_run_status,
           last_run_message, last_workspace_id, last_session_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
         agent.name,
         agent.description ?? null,
-        agent.cron,
+        cronColumn,
+        agent.scheduleType,
+        agent.runAt ?? null,
         agent.repoId,
         agent.runtimeId,
         agent.prompt ?? null,
         agent.workspaceStrategy,
         agent.workspaceName,
         agent.baseBranch ?? null,
+        agent.runMode,
+        agent.backgroundCwd ?? null,
+        agent.overlapPolicy,
         agent.enabled ? 1 : 0,
         agent.lastRunAt ?? null,
         agent.lastRunStatus,
@@ -642,13 +535,18 @@ export class SqliteStore {
         ScheduledAgent,
         | "name"
         | "description"
+        | "scheduleType"
         | "cron"
+        | "runAt"
         | "repoId"
         | "runtimeId"
         | "prompt"
         | "workspaceStrategy"
         | "workspaceName"
         | "baseBranch"
+        | "runMode"
+        | "backgroundCwd"
+        | "overlapPolicy"
         | "enabled"
       >
     >,
@@ -661,24 +559,34 @@ export class SqliteStore {
       description: patch.description !== undefined ? patch.description : existing.description,
       prompt: patch.prompt !== undefined ? patch.prompt : existing.prompt,
       baseBranch: patch.baseBranch !== undefined ? patch.baseBranch : existing.baseBranch,
+      runAt: patch.runAt !== undefined ? patch.runAt : existing.runAt,
+      cron: patch.cron !== undefined ? patch.cron : existing.cron,
+      backgroundCwd: patch.backgroundCwd !== undefined ? patch.backgroundCwd : existing.backgroundCwd,
       updatedAt: new Date().toISOString(),
     };
+    const cronColumn = next.cron ?? ONE_SHOT_CRON_PLACEHOLDER;
     this.database
       .prepare(
-        `UPDATE scheduled_agents SET name = ?, description = ?, cron = ?, repo_id = ?, runtime_id = ?,
-          prompt = ?, workspace_strategy = ?, workspace_name = ?, base_branch = ?, enabled = ?,
-          updated_at = ? WHERE id = ?`,
+        `UPDATE scheduled_agents SET name = ?, description = ?, cron = ?, schedule_type = ?, run_at = ?,
+          repo_id = ?, runtime_id = ?, prompt = ?, workspace_strategy = ?, workspace_name = ?,
+          base_branch = ?, run_mode = ?, background_cwd = ?, overlap_policy = ?, enabled = ?, updated_at = ?
+          WHERE id = ?`,
       )
       .run(
         next.name,
         next.description ?? null,
-        next.cron,
+        cronColumn,
+        next.scheduleType,
+        next.runAt ?? null,
         next.repoId,
         next.runtimeId,
         next.prompt ?? null,
         next.workspaceStrategy,
         next.workspaceName,
         next.baseBranch ?? null,
+        next.runMode,
+        next.backgroundCwd ?? null,
+        next.overlapPolicy,
         next.enabled ? 1 : 0,
         next.updatedAt,
         id,
@@ -728,6 +636,32 @@ export class SqliteStore {
     this.database.prepare("DELETE FROM scheduled_agents WHERE id = ?").run(id);
   }
 
+  /**
+   * Reset the run tracking on a scheduled agent without recording a new run.
+   * Used when the user PATCHes a one-shot's schedule and we need the tick
+   * guard to treat the agent as un-fired again.
+   */
+  resetScheduledAgentRun(id: string): ScheduledAgent | null {
+    const existing = this.findScheduledAgent(id);
+    if (!existing) return null;
+    const next: ScheduledAgent = {
+      ...existing,
+      lastRunAt: null,
+      lastRunStatus: "never",
+      lastRunMessage: null,
+      lastWorkspaceId: null,
+      lastSessionId: null,
+      updatedAt: new Date().toISOString(),
+    };
+    this.database
+      .prepare(
+        `UPDATE scheduled_agents SET last_run_at = NULL, last_run_status = 'never', last_run_message = NULL,
+          last_workspace_id = NULL, last_session_id = NULL, updated_at = ? WHERE id = ?`,
+      )
+      .run(next.updatedAt, id);
+    return next;
+  }
+
   private ensureColumn(table: string, column: string, definition: string) {
     const cols = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (!cols.some((entry) => entry.name === column)) {
@@ -735,3 +669,12 @@ export class SqliteStore {
     }
   }
 }
+
+// Attach the scheduled_agent_runs and background_sessions methods to
+// SqliteStore.prototype. The implementations live in scheduled-run-store.ts
+// (kept separate to stay under the per-file line budget); the type
+// declarations there augment this class via `declare module`. We can't do
+// the assignment inside scheduled-run-store.ts itself because ES module
+// hoisting would run it before this class declaration completes.
+import { scheduledRunStoreMethods } from "./scheduled-run-store.js";
+Object.assign(SqliteStore.prototype, scheduledRunStoreMethods);
