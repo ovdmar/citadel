@@ -788,6 +788,9 @@ export type {
   ScratchpadHistorySource,
   ScratchpadHistoryEntry,
   ScratchpadHistorySummary,
+  ScratchpadBlock,
+  ScratchpadBlockSummary,
+  ScratchpadBlockPosition,
 } from "./scratchpad.js";
 
 export type ApiError = {

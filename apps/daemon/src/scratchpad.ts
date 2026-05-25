@@ -5,7 +5,7 @@ import { type HistoryOptions, type HistorySource, recordHistoryWrite } from "./s
 
 export const SCRATCHPAD_FILENAME = "scratchpad.md";
 export const SCRATCHPAD_MAX_BYTES = 1_000_000;
-const DEFAULT_STUB = "# Scratchpad\n\n";
+export const DEFAULT_STUB = "# Scratchpad\n\n";
 
 export type { ScratchpadSnapshot };
 
