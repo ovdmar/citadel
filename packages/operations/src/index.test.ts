@@ -244,6 +244,45 @@ describe("OperationService", () => {
     expect(operation?.status).toBe("succeeded");
   });
 
+  it("force-removes the directory when git no longer tracks it as a worktree", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "Detached Worktree", source: "scratch" });
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === created.workspaceId);
+    expect(workspace).toBeDefined();
+
+    // Reproduce the broken state: leftover directory on disk with a real
+    // `.git` dir inside (so the dirty-status probe sees a valid repo), but
+    // the parent repo's worktree refs have been pruned — so
+    // `git worktree remove` errors with "is not a working tree". This
+    // matches what we observed in the wild after a partial cleanup.
+    const workspacePath = workspace?.path ?? "";
+    fs.rmSync(workspacePath, { recursive: true, force: true });
+    execFileSync("git", ["worktree", "prune"], { cwd: fixture.repoPath, stdio: "pipe" });
+    fs.mkdirSync(workspacePath, { recursive: true });
+    execFileSync("git", ["init", "--quiet"], { cwd: workspacePath, stdio: "pipe" });
+    fs.writeFileSync(path.join(workspacePath, "leftover.txt"), "stale\n");
+
+    // Force-remove so the bare leftover dir doesn't trip the dirty-status
+    // probe (which expects a real git working tree). The cockpit calls this
+    // path when the user clicks "force remove".
+    const removed = await service.removeWorkspace({ workspaceId: created.workspaceId, force: true });
+    expect(removed).toMatchObject({ removed: true, archived: false });
+    expect(fs.existsSync(workspacePath)).toBe(false);
+    expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
+
+    const operation = store.listOperations().find((op) => op.id === removed.operationId);
+    expect(operation?.status).toBe("succeeded");
+  });
+
   it("records notification hook failures without blocking workspace readiness", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));

@@ -40,8 +40,23 @@ export function cleanupWorktree(
   worktreePath: string,
 ): { action: "removed" | "pruned"; warning?: string } {
   if (fs.existsSync(worktreePath)) {
-    tryRunGit(repoRoot, ["worktree", "remove", "--force", worktreePath]);
-    return { action: "removed" };
+    try {
+      tryRunGit(repoRoot, ["worktree", "remove", "--force", worktreePath]);
+      return { action: "removed" };
+    } catch (error) {
+      // Git no longer tracks this path as a worktree (already pruned, or its
+      // .git stub was replaced by a real .git dir). The directory itself is
+      // still under our managed worktreeParent — rm it ourselves so the
+      // workspace can actually be removed, then sweep git's bookkeeping.
+      fs.rmSync(worktreePath, { recursive: true, force: true });
+      try {
+        tryRunGit(repoRoot, ["worktree", "prune"]);
+      } catch {
+        // best-effort; the workspace is gone from disk either way
+      }
+      const reason = error instanceof Error ? error.message.trim() : String(error);
+      return { action: "removed", warning: `git worktree remove rejected (${reason}); cleaned up directory manually` };
+    }
   }
   try {
     tryRunGit(repoRoot, ["worktree", "prune"]);
