@@ -134,9 +134,21 @@ deploy:
 	@echo "   daemon  → http://localhost:$(WORKTREE_PORT)  (tsx watch)"
 	@echo "   data    → $(WORKTREE_DATA_DIR)"
 	@echo "   log     → $(WORKTREE_LOG)"
+	@# WORKTREE ISOLATION: scrub any CITADEL_* env vars inherited from the
+	@# parent (systemd unit, shell rc, cockpit Redeploy chain). Without this,
+	@# CITADEL_CONFIG and CITADEL_DATA_DIR from the prod systemd service leak
+	@# into the worktree daemon and it ends up reading/writing the prod data
+	@# dir. `env -u` removes the var from the child environment; we then set
+	@# only the worktree-scoped values explicitly.
 	@set -e; \
 		: > $(WORKTREE_LOG); \
 		setsid nohup env \
+			-u CITADEL_CONFIG \
+			-u CITADEL_DATA_DIR \
+			-u CITADEL_DAEMON_URL \
+			-u CITADEL_PORT \
+			-u CITADEL_WEB_PORT \
+			-u CITADEL_BIND_HOST \
 			CITADEL_PORT=$(WORKTREE_PORT) \
 			CITADEL_DATA_DIR=$(WORKTREE_DATA_DIR) \
 			CITADEL_DAEMON_URL=http://127.0.0.1:$(WORKTREE_PORT) \

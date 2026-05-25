@@ -38,6 +38,43 @@ describe("mcp helpers", () => {
     expect(mcpToolDefinitions().find((tool) => tool.name === "read_agent_output")?.inputSchema).toMatchObject({
       required: ["sessionId"],
     });
+
+    // Scratchpad block tools live in scratchpad-tools.ts and are spread into the registry.
+    for (const name of [
+      "read_scratchpad",
+      "write_scratchpad",
+      "append_scratchpad",
+      "list_blocks",
+      "add_block",
+      "update_block",
+      "delete_block",
+    ]) {
+      expect(status.tools).toContain(name);
+    }
+    expect(mcpToolDefinitions().find((tool) => tool.name === "delete_block")?.destructive).toBe(true);
+    const appendDef = mcpToolDefinitions().find((tool) => tool.name === "append_scratchpad");
+    // The append description now states one-call-one-block semantics rather than "blank-line separator".
+    expect(appendDef?.description).toMatch(/new block/);
+    expect(appendDef?.description).not.toMatch(/blank-line/);
+    const addBlockDef = mcpToolDefinitions().find((tool) => tool.name === "add_block");
+    expect(addBlockDef?.inputSchema).toMatchObject({ required: ["text"] });
+  });
+
+  it("snapshot dispatcher routes block tools to the daemon", () => {
+    const context: McpToolContext = {
+      repos: [],
+      workspaces: [],
+      sessions: [],
+      operations: [],
+      activity: [],
+      providerHealth: [],
+      runtimes: [],
+      namespaces: [],
+      scheduledAgents: [],
+    };
+    for (const name of ["read_scratchpad", "list_blocks", "add_block", "update_block", "delete_block"] as const) {
+      expect(callMcpTool({ name }, context)).toEqual({ error: "scratchpad_tool_requires_daemon" });
+    }
   });
 
   it("serializes normalized workspace resources without raw terminal transport", () => {

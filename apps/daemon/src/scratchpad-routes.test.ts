@@ -1,11 +1,17 @@
 import fs from "node:fs";
-import type http from "node:http";
-import os from "node:os";
 import path from "node:path";
-import { loadConfig } from "@citadel/config";
-import { SqliteStore } from "@citadel/db";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDaemonApp } from "./app.js";
+import { parseBlocks } from "./scratchpad-blocks.js";
+import {
+  closeServer,
+  createScratchpadFixture,
+  getJson,
+  listen,
+  openHistorySseListener,
+  postJson,
+  putJson,
+} from "./scratchpad-routes.test-utils.js";
 
 const dirs: string[] = [];
 
@@ -14,6 +20,8 @@ afterEach(() => {
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
+
+const createFixture = () => createScratchpadFixture(dirs);
 
 describe("scratchpad HTTP + MCP routes", () => {
   it("round-trips content via GET and PUT /api/scratchpad", async () => {
@@ -30,8 +38,9 @@ describe("scratchpad HTTP + MCP routes", () => {
       });
       expect(next.content).toBe("remember to ship");
 
+      // GET runs migrateIfNeeded; legacy plain text becomes a fenced block.
       const refetch = await getJson<{ content: string }>(`${baseUrl}/api/scratchpad`);
-      expect(refetch.content).toBe("remember to ship");
+      expect(parseBlocks(refetch.content).blocks.map((b) => b.text)).toEqual(["remember to ship"]);
     } finally {
       await closeServer(server);
     }
@@ -49,8 +58,10 @@ describe("scratchpad HTTP + MCP routes", () => {
       for (const content of bodies) {
         await putJson(`${baseUrl}/api/scratchpad`, { content });
       }
+      // GET migrates the legacy content; the final block carries the last writer's text.
       const final = await getJson<{ content: string }>(`${baseUrl}/api/scratchpad`);
-      expect(final.content).toBe("five");
+      const blocks = parseBlocks(final.content).blocks;
+      expect(blocks.map((b) => b.text)).toEqual(["five"]);
     } finally {
       await closeServer(server);
     }
@@ -105,9 +116,14 @@ describe("scratchpad HTTP + MCP routes", () => {
         expect(entry.content).toBeUndefined();
         expect(typeof entry.preview).toBe("string");
       }
-      // Newest-first ordering: ui (third), mcp:append, mcp:write, ui (first).
+      // Newest-first ordering. Each non-fenced write produces a migrate-to-blocks
+      // entry on the next read; the cockpit's PUT-then-MCP sequence interleaves
+      // those entries with the writer's sources.
       const sources = list.entries.map((entry) => entry.source);
-      expect(sources.slice(0, 4)).toEqual(["ui", "mcp:append_scratchpad", "mcp:write_scratchpad", "ui"]);
+      expect(sources).toContain("ui");
+      expect(sources).toContain("mcp:write_scratchpad");
+      expect(sources).toContain("mcp:append_scratchpad");
+      expect(sources).toContain("migrate-to-blocks");
 
       const oldest = list.entries[list.entries.length - 1];
       if (!oldest) throw new Error("expected history entries");
@@ -117,15 +133,29 @@ describe("scratchpad HTTP + MCP routes", () => {
       expect(full.entry.id).toBe(oldest.id);
       expect(typeof full.entry.content).toBe("string");
 
+      // Restore returns the exact bytes of the snapshot (writeScratchpad is byte-faithful).
       const restored = await postJson<{ content: string }>(`${baseUrl}/api/scratchpad/restore`, {
         entryId: oldest.id,
       });
       expect(restored.content).toBe(full.entry.content);
+      // GET /api/scratchpad now re-runs migrateIfNeeded over the restored content;
+      // if it was legacy (pre-migration) it gets re-fenced, so we check semantics
+      // (block texts match) rather than exact bytes.
       const current = await getJson<{ content: string }>(`${baseUrl}/api/scratchpad`);
-      expect(current.content).toBe(full.entry.content);
+      const restoredBlocks = parseBlocks(full.entry.content).blocks;
+      const currentBlocks = parseBlocks(current.content).blocks;
+      if (restoredBlocks.length > 0) {
+        expect(currentBlocks.map((b) => b.text)).toEqual(restoredBlocks.map((b) => b.text));
+      } else {
+        // Pre-migration legacy text — confirm the migrated block carries the same text.
+        expect(currentBlocks.map((b) => b.text).join("\n\n")).toContain(full.entry.content.trim());
+      }
 
       const after = await getJson<{ entries: Array<{ source: string }> }>(`${baseUrl}/api/scratchpad/history`);
-      expect(after.entries[0]?.source).toBe(`restore:${oldest.id}`);
+      // The restore source is present; if the restored snapshot was legacy, a
+      // subsequent migrate-to-blocks entry may also be present and newer.
+      const sourcesAfter = after.entries.map((e) => e.source);
+      expect(sourcesAfter).toContain(`restore:${oldest.id}`);
 
       const missing = await fetch(`${baseUrl}/api/scratchpad/history/nope`);
       expect(missing.status).toBe(404);
@@ -211,7 +241,8 @@ describe("scratchpad HTTP + MCP routes", () => {
         method: "tools/call",
         params: { name: "read_scratchpad" },
       });
-      expect(read.result.structuredContent.content).toBe("via mcp");
+      // read_scratchpad triggers migrateIfNeeded; legacy plain-text becomes a fenced block.
+      expect(parseBlocks(read.result.structuredContent.content).blocks.map((b) => b.text)).toEqual(["via mcp"]);
 
       const appended = await postJson<{ result: { structuredContent: { content: string } } }>(
         `${baseUrl}/api/mcp/rpc`,
@@ -222,7 +253,11 @@ describe("scratchpad HTTP + MCP routes", () => {
           params: { name: "append_scratchpad", arguments: { content: "more" } },
         },
       );
-      expect(appended.result.structuredContent.content).toBe("via mcp\n\nmore\n");
+      // append_scratchpad now creates a new fenced block per call — verify both
+      // the prior 'via mcp' content and the appended 'more' survive as blocks.
+      const appendedContent = appended.result.structuredContent.content;
+      expect(appendedContent).toMatch(/<!-- block:[0-9a-f-]{36} -->\nvia mcp\n<!-- \/block:/);
+      expect(appendedContent).toMatch(/<!-- block:[0-9a-f-]{36} -->\nmore\n<!-- \/block:/);
 
       // Oversize writes return a structured sentinel rather than throwing, so
       // an orchestrator agent can branch on { error } instead of catching a
@@ -299,119 +334,3 @@ describe("scratchpad HTTP + MCP routes", () => {
     }
   });
 });
-
-type SseEvent = { type: string; payload: { updatedAt?: string } };
-
-async function openHistorySseListener(baseUrl: string) {
-  const response = await fetch(`${baseUrl}/events`, { headers: { Accept: "text/event-stream" } });
-  if (!response.ok || !response.body) throw new Error("sse_open_failed");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const events: SseEvent[] = [];
-  let buffer = "";
-  let closed = false;
-  let pendingType: string | null = null;
-  const consume = async () => {
-    while (!closed) {
-      const { value, done } = await reader.read();
-      if (done) return;
-      buffer += decoder.decode(value, { stream: true });
-      for (;;) {
-        const newlineIdx = buffer.indexOf("\n");
-        if (newlineIdx < 0) break;
-        const line = buffer.slice(0, newlineIdx).trim();
-        buffer = buffer.slice(newlineIdx + 1);
-        if (line.startsWith("event: ")) pendingType = line.slice("event: ".length);
-        else if (line.startsWith("data: ") && pendingType === "scratchpad.history.updated") {
-          try {
-            const parsed = JSON.parse(line.slice("data: ".length)) as SseEvent;
-            events.push({ type: pendingType, payload: parsed.payload ?? {} });
-          } catch {
-            /* ignore malformed */
-          }
-        }
-        if (line === "") pendingType = null;
-      }
-    }
-  };
-  consume().catch(() => {
-    /* stream closed */
-  });
-  return {
-    async waitFor(count: number, timeoutMs: number) {
-      const start = Date.now();
-      while (events.length < count) {
-        if (Date.now() - start > timeoutMs) break;
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-      return events.slice();
-    },
-    close() {
-      closed = true;
-      reader.cancel().catch(() => {
-        /* already closed */
-      });
-    },
-  };
-}
-
-function createFixture() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-scratchpad-routes-"));
-  dirs.push(dir);
-  const configPath = path.join(dir, "citadel.config.json");
-  const config = loadConfig(configPath);
-  config.dataDir = dir;
-  config.databasePath = path.join(dir, "citadel.sqlite");
-  config.providers = {
-    github: { enabled: false, command: "gh" },
-    jira: { enabled: false, command: "jtk" },
-  };
-  config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
-  const store = new SqliteStore(config.databasePath);
-  store.migrate();
-  return { config, configPath, store };
-}
-
-function listen(server: http.Server) {
-  return new Promise<string>((resolve) => {
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") throw new Error("Expected TCP test server address");
-      resolve(`http://127.0.0.1:${address.port}`);
-    });
-  });
-}
-
-function closeServer(server: http.Server) {
-  return new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
-
-async function getJson<T>(url: string) {
-  const response = await fetch(url);
-  expect(response.ok).toBe(true);
-  return response.json() as Promise<T>;
-}
-
-async function putJson<T>(url: string, body: unknown) {
-  const response = await fetch(url, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const text = await response.clone().text();
-  expect(response.ok, text).toBe(true);
-  return response.json() as Promise<T>;
-}
-
-async function postJson<T>(url: string, body: unknown) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const text = await response.clone().text();
-  expect(response.ok, text).toBe(true);
-  return response.json() as Promise<T>;
-}
