@@ -11,7 +11,6 @@ import {
   CreateWorkspaceInputSchema,
   HookActionSchema,
   TransitionIssueInputSchema,
-  type WorkspaceCockpitSummary,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { mcpStatus, mcpToolDefinitions } from "@citadel/mcp";
@@ -33,20 +32,21 @@ import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
+import { registerCockpitSummaryRoute } from "./cockpit-summary-route.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
-import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
+import { workspaceAppHookSample } from "./readiness.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { backfillIfEmpty } from "./scratchpad-history.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { scratchpadPath } from "./scratchpad.js";
+import { registerStateRoute } from "./state-route.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
-import { readWorkspaceGitStatus } from "./workspace-diff.js";
 import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
 
 export type DaemonApp = {
@@ -160,28 +160,6 @@ export function createDaemonApp(input: {
         providerHealth,
         mcp: mcpStatus(config.mcp.enabled),
         now: new Date().toISOString(),
-      });
-    }),
-  );
-
-  app.get(
-    "/api/state",
-    asyncRoute(async (_req, res) => {
-      const repos = store.listRepos();
-      const workspaces = store.listWorkspaces();
-      const sessions = store.listSessions();
-      const providerHealth = await cachedProviderHealth();
-      res.json({
-        repos,
-        workspaces,
-        sessions,
-        operations: store.listOperations(),
-        activity: store.listActivity(),
-        providerHealth,
-        runtimes: listRuntimeHealth(config.runtimes),
-        mcp: mcpStatus(config.mcp.enabled),
-        scheduledAgents: scheduledAgents.list(),
-        namespaces: store.listNamespaces(),
       });
     }),
   );
@@ -383,59 +361,6 @@ export function createDaemonApp(input: {
         providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
       );
       res.json({ issueTracker });
-    }),
-  );
-
-  app.get(
-    "/api/workspaces/:workspaceId/cockpit-summary",
-    asyncRoute(async (req, res) => {
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-
-      const [git, versionControl, ci, issueTracker, apps] = await Promise.all([
-        cachedProvider(
-          `git:${workspace.id}:${workspace.updatedAt}`,
-          () => readWorkspaceGitStatus(workspace.path),
-          3000,
-        ),
-        cachedProvider(`vc:${workspace.id}:${workspace.updatedAt}`, () =>
-          providers.collectGitHubVersionControlSummary(workspace.path),
-        ),
-        cachedProvider(`ci:${workspace.id}:${workspace.updatedAt}`, () =>
-          providers.collectGitHubCiRuns(workspace.path),
-        ),
-        workspace.issueKey
-          ? cachedProvider(`issue:${workspace.issueKey}`, () =>
-              providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
-            )
-          : Promise.resolve(null),
-        cachedProvider(
-          `apps:${workspace.id}:${workspace.updatedAt}`,
-          () => operations.discoverWorkspaceApps({ repo, workspace }),
-          60_000,
-        ),
-      ]);
-      const summary: WorkspaceCockpitSummary = {
-        workspaceId: workspace.id,
-        readiness: deriveReadiness({
-          workspace,
-          sessions: store.listSessions(workspace.id),
-          operations: store.listOperations().filter((operation) => operation.workspaceId === workspace.id),
-          providerHealth: await cachedProviderHealth(),
-          git,
-          versionControl,
-          ci,
-          apps,
-        }),
-        git,
-        versionControl,
-        ci,
-        issueTracker,
-        apps,
-      };
-      res.json(summary);
     }),
   );
 
@@ -688,6 +613,19 @@ export function createDaemonApp(input: {
     operations,
     config,
     emit,
+    asyncRoute,
+  });
+  // Extracted route registrations live here (post-scheduledAgents init) so the
+  // /api/state handler can close over a fully-initialized runner. app.ts hit
+  // the 800-line size gate, hence the extraction.
+  registerStateRoute({ app, store, config, scheduledAgents, cachedProviderHealth, asyncRoute });
+  registerCockpitSummaryRoute({
+    app,
+    store,
+    operations,
+    providers,
+    cachedProvider,
+    cachedProviderHealth,
     asyncRoute,
   });
   // Boot-sweep: close any 'running' run rows that were in flight when the
