@@ -41,14 +41,20 @@ export function bustCacheByPrefixes(providerCache: ProviderCache, prefixes: stri
 }
 
 export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
-  const watchers = new Map<string, fs.FSWatcher>();
+  // One workspace = many non-recursive inotify watches (one per non-ignored
+  // directory). We avoided fs.watch({recursive:true}) because on Linux that
+  // descends into IGNORED_TOP_LEVEL dirs anyway — isIgnored() only filters
+  // the *callback*, not the watch installation. With node_modules included
+  // a single workspace can hold thousands of watches; tests churning files
+  // in node_modules then flood the event loop with ignored callbacks and
+  // ttyd's WS keepalive starts missing pings (visible as the cockpit's
+  // Reconnecting/Reconnected overlay storm).
+  const watchers = new Map<string, fs.FSWatcher[]>();
   const debounces = new Map<string, ReturnType<typeof setTimeout>>();
   const failed = new Set<string>();
 
-  const onChange = (workspaceId: string) => (_eventType: string, filename: string | Buffer | null) => {
-    if (!filename) return;
-    const rel = typeof filename === "string" ? filename : filename.toString();
-    if (isIgnored(rel)) return;
+  const onChange = (workspaceId: string) => (rel: string) => {
+    if (!rel || isIgnored(rel)) return;
     const existing = debounces.get(workspaceId);
     if (existing) clearTimeout(existing);
     debounces.set(
@@ -61,6 +67,56 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
     );
   };
 
+  const watchTree = (rootPath: string, callback: (rel: string) => void): fs.FSWatcher[] => {
+    const acc: fs.FSWatcher[] = [];
+    const walk = (absDir: string, relDir: string) => {
+      if (relDir) {
+        const parts = relDir.split(path.sep);
+        const top = parts[0];
+        if (top && IGNORED_TOP_LEVEL.has(top)) return;
+        if (top === ".git" && parts[1] && IGNORED_GIT_INTERNAL.has(parts[1])) return;
+      }
+      try {
+        const w = fs.watch(absDir, { persistent: false }, (_eventType, filename) => {
+          if (filename == null) return;
+          const name = typeof filename === "string" ? filename : String(filename);
+          if (!name) return;
+          callback(relDir ? path.join(relDir, name) : name);
+        });
+        w.on("error", () => {
+          /* skip errors per-dir; the workspace-level error handler reports the aggregate failure */
+        });
+        acc.push(w);
+      } catch {
+        // ENOSPC or perms — skip this dir and continue with siblings.
+        return;
+      }
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(absDir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (entry.isDirectory() && !entry.isSymbolicLink()) {
+          walk(path.join(absDir, entry.name), relDir ? path.join(relDir, entry.name) : entry.name);
+        }
+      }
+    };
+    walk(rootPath, "");
+    return acc;
+  };
+
+  const closeFor = (id: string) => {
+    const ws = watchers.get(id);
+    if (ws) for (const w of ws) w.close();
+    watchers.delete(id);
+    const d = debounces.get(id);
+    if (d) clearTimeout(d);
+    debounces.delete(id);
+    failed.delete(id);
+  };
+
   const reconcile = () => {
     const current = new Map<string, Workspace>();
     for (const ws of deps.listWorkspaces()) {
@@ -68,26 +124,19 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
       if (!fs.existsSync(ws.path)) continue;
       current.set(ws.id, ws);
     }
-    for (const [id, watcher] of watchers) {
-      if (!current.has(id)) {
-        watcher.close();
-        watchers.delete(id);
-        const d = debounces.get(id);
-        if (d) clearTimeout(d);
-        debounces.delete(id);
-        failed.delete(id);
-      }
+    for (const id of Array.from(watchers.keys())) {
+      if (!current.has(id)) closeFor(id);
     }
     for (const [id, ws] of current) {
       if (watchers.has(id) || failed.has(id)) continue;
       try {
-        const watcher = fs.watch(ws.path, { recursive: true, persistent: false }, onChange(id));
-        watcher.on("error", (err) => {
-          console.error(`[fs-watch] ${id}: ${err instanceof Error ? err.message : err}`);
-          watchers.delete(id);
+        const set = watchTree(ws.path, onChange(id));
+        if (set.length === 0) {
           failed.add(id);
-        });
-        watchers.set(id, watcher);
+          console.error(`[fs-watch] failed to install any watch for ${ws.path}`);
+          continue;
+        }
+        watchers.set(id, set);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[fs-watch] failed to watch ${ws.path}: ${message}`);
@@ -97,9 +146,9 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
   };
 
   const close = () => {
-    for (const [, watcher] of watchers) watcher.close();
+    for (const set of watchers.values()) for (const w of set) w.close();
     watchers.clear();
-    for (const [, d] of debounces) clearTimeout(d);
+    for (const d of debounces.values()) clearTimeout(d);
     debounces.clear();
     failed.clear();
   };
