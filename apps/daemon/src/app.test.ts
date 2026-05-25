@@ -746,10 +746,7 @@ describe("createDaemonApp", () => {
       expect(first.promptSource).toBe("default");
       expect(first.diagnostic).toBeNull();
 
-      const second = await postJson<{ session: { id: string } }>(
-        `${baseUrl}/api/workspaces/ws_fc/fix-conflicts`,
-        {},
-      );
+      const second = await postJson<{ session: { id: string } }>(`${baseUrl}/api/workspaces/ws_fc/fix-conflicts`, {});
       // Distinct session IDs prove "always launch new" — no 409 deduplication.
       expect(second.session.id).not.toBe(first.session.id);
 

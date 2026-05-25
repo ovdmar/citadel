@@ -34,6 +34,7 @@ import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
+import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
@@ -837,6 +838,16 @@ export function createDaemonApp(input: {
   const statusMonitor = startDaemonStatusMonitor(store, emit);
   if (statusMonitor) {
     server.on("close", () => statusMonitor.stop());
+  }
+
+  // Auto-recovery — periodic (default 60s) tick that auto-launches a fix-CI
+  // agent when a workspace's PR has been failing CI with no agent activity
+  // for the idle window, deduped per PR-head-SHA + debounce window. Disabled
+  // by CITADEL_AUTO_RECOVERY_DISABLED=1; default knobs documented in
+  // specs/B.7 and auto-recovery-wiring.ts.
+  const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({ store, config, operations, emit });
+  if (autoRecoveryMonitor) {
+    server.on("close", () => autoRecoveryMonitor.stop());
   }
 
   return { app, server, emit };

@@ -205,4 +205,10 @@ export function runMigrations(
   ensureColumn("scheduled_agents", "run_mode", "TEXT NOT NULL DEFAULT 'workspace'");
   ensureColumn("scheduled_agents", "background_cwd", "TEXT");
   ensureColumn("scheduled_agents", "overlap_policy", "TEXT NOT NULL DEFAULT 'skip'");
+  // Per-SHA dedupe + debounce state for the CI auto-recovery tick. Both are
+  // nullable; "never auto-recovered" reads as both NULL. Additive columns
+  // follow the trailing-ensureColumn convention (no new schema_migrations
+  // row required — they ride the latest baseline version).
+  ensureColumn("workspaces", "auto_recovery_last_ci_sha", "TEXT");
+  ensureColumn("workspaces", "auto_recovery_last_attempt_at", "TEXT");
 }

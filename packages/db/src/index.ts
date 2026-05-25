@@ -292,6 +292,46 @@ export class SqliteStore {
       .run(now, workspaceId);
   }
 
+  // Internal — read the auto-recovery dedupe state for a workspace. Used by
+  // the auto-recovery monitor; not exposed via the contract Workspace type
+  // because operators don't see this directly.
+  getWorkspaceAutoRecoveryState(
+    workspaceId: string,
+  ): { lastCiSha: string | null; lastAttemptAt: string | null } | null {
+    const row = this.database
+      .prepare(
+        "SELECT auto_recovery_last_ci_sha AS lastCiSha, auto_recovery_last_attempt_at AS lastAttemptAt FROM workspaces WHERE id = ?",
+      )
+      .get(workspaceId) as { lastCiSha: string | null; lastAttemptAt: string | null } | undefined;
+    if (!row) return null;
+    return { lastCiSha: row.lastCiSha ?? null, lastAttemptAt: row.lastAttemptAt ?? null };
+  }
+
+  // Internal — atomic claim of the next auto-recovery slot for a workspace.
+  // Returns true iff the row was actually updated. The WHERE clause filters
+  // on the same SHA-or-debounce predicate as decideAutoRecoveryAction so a
+  // concurrent tick (or a manual same-SHA retry within the debounce window)
+  // sees zero affected rows and the caller knows to skip the spawn.
+  tryRecordAutoRecoveryAttempt(input: {
+    workspaceId: string;
+    sha: string;
+    now: string;
+    debounceCutoff: string;
+  }): boolean {
+    const result = this.database
+      .prepare(
+        `UPDATE workspaces
+         SET auto_recovery_last_ci_sha = ?, auto_recovery_last_attempt_at = ?
+         WHERE id = ?
+           AND (auto_recovery_last_ci_sha IS NULL
+                OR auto_recovery_last_ci_sha != ?
+                OR auto_recovery_last_attempt_at IS NULL
+                OR auto_recovery_last_attempt_at < ?)`,
+      )
+      .run(input.sha, input.now, input.workspaceId, input.sha, input.debounceCutoff);
+    return result.changes > 0;
+  }
+
   archiveRepo(repoId: string) {
     const now = new Date().toISOString();
     this.database.prepare("UPDATE repos SET archived_at = ?, updated_at = ? WHERE id = ?").run(now, now, repoId);

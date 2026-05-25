@@ -90,10 +90,7 @@ describe("resolveFixConflictsPrompt", () => {
     const ws = makeWorkspace();
     const hookPath = path.join(ws.path, FIX_CONFLICTS_HOOK_RELATIVE_PATH);
     // Write 40 KB of repeating bytes; we expect the result to be ≤ 32 KB.
-    fs.writeFileSync(
-      hookPath,
-      "#!/bin/sh\nyes \"line\" | head -c 40960\n",
-    );
+    fs.writeFileSync(hookPath, '#!/bin/sh\nyes "line" | head -c 40960\n');
     fs.chmodSync(hookPath, 0o755);
     const result = await resolveFixConflictsPrompt({ workspacePath: ws.path, ...ws.envBase });
     expect(result.source).toBe("hook");
