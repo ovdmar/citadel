@@ -174,6 +174,77 @@ describe("SqliteStore", () => {
     ]);
   });
 
+  it("deleteWorkspace hard-removes the row and its sessions so the name slot can be reused", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
+    dirs.push(dir);
+    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    store.migrate();
+    const repo = {
+      id: "repo_delete",
+      name: "Repo",
+      rootPath: path.join(dir, "repo"),
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(dir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      deployHookCommand: null,
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+      archivedAt: null,
+    };
+    store.insertRepo(repo);
+    const workspaceBase = {
+      repoId: repo.id,
+      name: "reusable",
+      branch: "reusable",
+      baseBranch: "main",
+      source: "scratch" as const,
+      kind: "worktree" as const,
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready" as const,
+      dirty: false,
+      namespaceId: null,
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+      archivedAt: null,
+    };
+    store.insertWorkspace({ ...workspaceBase, id: "ws_delete", path: path.join(dir, "worktrees", "reusable") });
+    store.insertSession({
+      id: "sess_delete",
+      workspaceId: "ws_delete",
+      runtimeId: "shell",
+      displayName: "Shell",
+      status: "running",
+      transport: "disconnected",
+      tmuxSessionName: null,
+      tmuxSessionId: null,
+      createdAt: "2026-05-17T00:00:00.000Z",
+      updatedAt: "2026-05-17T00:00:00.000Z",
+    });
+
+    store.deleteWorkspace("ws_delete");
+
+    expect(store.listWorkspaces(repo.id)).toEqual([]);
+    expect(store.listArchivedWorkspaces().find((w) => w.id === "ws_delete")).toBeUndefined();
+    expect(store.listSessions("ws_delete")).toEqual([]);
+    // Slot is free — re-inserting the same (repo_id, name) succeeds.
+    expect(() =>
+      store.insertWorkspace({
+        ...workspaceBase,
+        id: "ws_delete_2",
+        path: path.join(dir, "worktrees", "reusable-2"),
+      }),
+    ).not.toThrow();
+  });
+
   it("archives repositories and hides their active workspaces", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
