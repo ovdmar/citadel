@@ -77,6 +77,39 @@ describe("mcp helpers", () => {
     }
   });
 
+  it("snapshot dispatcher routes ALL eight agent launcher tools through the daemon", () => {
+    const context: McpToolContext = {
+      repos: [],
+      workspaces: [],
+      sessions: [],
+      operations: [],
+      activity: [],
+      providerHealth: [],
+      runtimes: [],
+      namespaces: [],
+      scheduledAgents: [],
+    };
+    const names = [
+      "launch_implementation_agent",
+      "launch_prototype_agent",
+      "launch_pm_agent",
+      "launch_architect_agent",
+      "list_custom_agents",
+      "launch_custom_agent",
+      "register_plan",
+      "launch_handoff_agent",
+    ] as const;
+    for (const name of names) {
+      expect(callMcpTool({ name }, context)).toEqual({ error: "agent_launcher_requires_daemon" });
+    }
+    const tools = mcpToolDefinitions().map((tool) => tool.name);
+    for (const name of names) expect(tools).toContain(name);
+    const handoff = mcpToolDefinitions().find((tool) => tool.name === "launch_handoff_agent");
+    expect(handoff?.inputSchema).toMatchObject({ required: ["workspaceId"] });
+    const registerPlan = mcpToolDefinitions().find((tool) => tool.name === "register_plan");
+    expect(registerPlan?.inputSchema).toMatchObject({ required: ["workspaceId", "path"] });
+  });
+
   it("serializes normalized workspace resources without raw terminal transport", () => {
     const resource = serializeWorkspaceResource({
       repos: [],

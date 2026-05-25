@@ -11,6 +11,7 @@ import type {
   ScheduledAgent,
   Workspace,
 } from "@citadel/contracts";
+import { agentLauncherToolDefinitions } from "./agent-launcher-tools.js";
 import { SCRATCHPAD_TOOL_DEFINITIONS, type ScratchpadToolName } from "./scratchpad-tools.js";
 
 export type AgentSessionSummary = AgentSession & {
@@ -61,7 +62,15 @@ export type McpToolName =
   | "delete_scheduled_agent"
   | "run_scheduled_agent_now"
   | "list_scheduled_agent_runs"
-  | "read_scheduled_agent_run_log";
+  | "read_scheduled_agent_run_log"
+  | "launch_implementation_agent"
+  | "launch_prototype_agent"
+  | "launch_pm_agent"
+  | "launch_architect_agent"
+  | "list_custom_agents"
+  | "launch_custom_agent"
+  | "register_plan"
+  | "launch_handoff_agent";
 
 export type McpToolDefinition = {
   name: McpToolName;
@@ -572,6 +581,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       },
       destructive: false,
     },
+    ...agentLauncherToolDefinitions(),
   ];
 }
 
@@ -682,6 +692,18 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
       // The scratchpad lives on disk under the daemon's data dir; the snapshot
       // path has no fs access, so route through the daemon explicitly.
       return { error: "scratchpad_tool_requires_daemon" };
+    case "launch_implementation_agent":
+    case "launch_prototype_agent":
+    case "launch_pm_agent":
+    case "launch_architect_agent":
+    case "list_custom_agents":
+    case "launch_custom_agent":
+    case "register_plan":
+    case "launch_handoff_agent":
+      // Agent definitions live on disk under ~/.citadel/agents/ and launches
+      // depend on operations.launchAgent; snapshot path has neither. Route
+      // through the daemon.
+      return { error: "agent_launcher_requires_daemon" };
     default:
       return assertNever(call.name);
   }
