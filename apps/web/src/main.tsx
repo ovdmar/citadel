@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
 import { Cockpit } from "./cockpit.js";
 import { bootstrapLastRoute, clearLastRoute, saveLastRoute } from "./lib/last-route.js";
+import { setupReThemeOrchestrator } from "./re-theme-orchestrator.js";
 import { DashboardView } from "./routes/dashboard.js";
 import { HistoryView } from "./routes/history.js";
 import { OnboardingView } from "./routes/onboarding.js";
@@ -13,6 +14,7 @@ import { RepoSettingsView } from "./routes/repo-settings.js";
 import { ScheduledAgentsView } from "./routes/scheduled-agents.js";
 import { ScratchpadView } from "./routes/scratchpad.js";
 import { SettingsView } from "./routes/settings.js";
+import { listTerminalHandles } from "./terminal-pane.js";
 import "./styles.css";
 import "./chrome.css";
 import "./stage-terminal.css";
@@ -45,6 +47,20 @@ import "./responsive.css";
     document.documentElement.dataset.theme = stored;
   }
 })();
+
+// Mount the live re-theme orchestrator BEFORE React renders so the
+// subscription is live before any terminal handles register and before the
+// first matchMedia change can fire. HMR-safe: a prior cleanup is invoked on
+// module re-import so we never end up with two active subscriptions.
+declare global {
+  // eslint-disable-next-line no-var
+  var __citadelReThemeCleanup: (() => void) | undefined;
+}
+if (typeof window !== "undefined") {
+  globalThis.__citadelReThemeCleanup?.();
+  const handle = setupReThemeOrchestrator({ getHandles: listTerminalHandles });
+  globalThis.__citadelReThemeCleanup = handle.cleanup;
+}
 
 const rootRoute = createRootRoute({
   component: () => <Shell />,

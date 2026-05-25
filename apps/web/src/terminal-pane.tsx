@@ -2,7 +2,7 @@ import type { AgentSession } from "@citadel/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "./api.js";
 import { Button } from "./components/ui/button.js";
-import { useResolvedTheme } from "./use-resolved-theme.js";
+import { type ResolvedTheme, useResolvedTheme } from "./use-resolved-theme.js";
 
 type EnsureResponse = {
   terminal: {
@@ -33,7 +33,19 @@ const RUNBOOK_URL = "/docs/operations/terminal-runbook";
  */
 export type TerminalHandle = {
   url: string | null;
-  reload: () => void;
+  /**
+   * Force a respawn. Optional `theme` overrides the pane's own `themeRef` —
+   * used by the live-re-theme orchestrator so the new theme reaches ensure()
+   * without waiting for the React effect that syncs the ref. When called
+   * without a theme (manual tab reload), the pane uses its current ref value
+   * and the call is NOT subject to the orchestrator's `lastKnownTheme`
+   * idempotency check — manual reload always respawns.
+   */
+  reload: (theme?: ResolvedTheme) => void;
+  /** Theme the underlying ttyd was most recently spawned with (post successful
+   * ensure). Null until the first ensure resolves. Read by the orchestrator
+   * to skip no-op respawns. */
+  lastKnownTheme: ResolvedTheme | null;
 };
 
 const REGISTRY = new Map<string, TerminalHandle>();
@@ -47,6 +59,10 @@ function publish(id: string, handle: TerminalHandle | null) {
 
 export function getTerminalHandle(sessionId: string): TerminalHandle | undefined {
   return REGISTRY.get(sessionId);
+}
+
+export function listTerminalHandles(): Array<[string, TerminalHandle]> {
+  return Array.from(REGISTRY.entries());
 }
 
 export function subscribeTerminalHandle(listener: (sessionId: string) => void): () => void {
@@ -70,14 +86,19 @@ export function TerminalPane(props: { session: AgentSession }) {
   const [pending, setPending] = useState(true);
   const [iframeKey, setIframeKey] = useState(0);
   const requestSeqRef = useRef(0);
+  // Track the theme the underlying ttyd was last spawned with, so the live
+  // re-theme orchestrator can skip no-op respawns. Updated only AFTER a
+  // successful ensure() resolves with the requested theme.
+  const lastKnownThemeRef = useRef<ResolvedTheme | null>(null);
 
   const ensure = useCallback(
-    async (options: { bumpFrame?: boolean; force?: boolean } = {}) => {
+    async (options: { bumpFrame?: boolean; force?: boolean; theme?: ResolvedTheme } = {}) => {
       const seq = ++requestSeqRef.current;
       setPending(true);
       setError(null);
+      const requestedTheme = options.theme ?? themeRef.current;
       try {
-        const params = new URLSearchParams({ theme: themeRef.current });
+        const params = new URLSearchParams({ theme: requestedTheme });
         if (options.force) params.set("force", "true");
         const response = await api<EnsureResponse>(`/api/agent-sessions/${sessionId}/terminal?${params.toString()}`, {
           method: "POST",
@@ -85,6 +106,7 @@ export function TerminalPane(props: { session: AgentSession }) {
         if (requestSeqRef.current !== seq) return;
         setUrl(response.terminal.url);
         setError(null);
+        lastKnownThemeRef.current = requestedTheme;
         if (options.bumpFrame) setIframeKey((value) => value + 1);
       } catch (raw) {
         if (requestSeqRef.current !== seq) return;
@@ -128,22 +150,33 @@ export function TerminalPane(props: { session: AgentSession }) {
   }, [ensure]);
 
   // Reload re-runs ensure() with force=true so the daemon respawns ttyd with
-  // the current cockpit theme. ttyd bakes the xterm palette at spawn time, so
-  // this is the only way to repaint a live session after a theme toggle. It
-  // also self-heals stale entries from daemon restarts / orphan kills.
-  // Bumping the iframe key forces React to remount even if the URL is the
-  // same — the underlying ttyd process is new, so reconnecting is required.
-  const reload = useCallback(() => {
-    void ensure({ bumpFrame: true, force: true });
-  }, [ensure]);
+  // the requested theme. ttyd bakes the xterm palette at spawn time, so this
+  // is the only way to repaint a live session after a theme toggle. It also
+  // self-heals stale entries from daemon restarts / orphan kills. Bumping
+  // the iframe key forces React to remount even if the URL is the same — the
+  // underlying ttyd process is new, so reconnecting is required.
+  //
+  // The optional `theme` arg is the orchestrator's escape hatch: passing it
+  // explicitly skips the `themeRef` read so the new theme reaches ensure()
+  // even if React hasn't yet replayed the effect that updates the ref.
+  const reload = useCallback(
+    (theme?: ResolvedTheme) => {
+      void ensure({ bumpFrame: true, force: true, ...(theme ? { theme } : {}) });
+    },
+    [ensure],
+  );
 
-  // Publish the live URL + reload callback so the stage tab can drive them.
-  // The status bar used to render these affordances inside the pane; that was
-  // removed in favour of the tab actions, but the state still lives here.
+  // Publish the live URL + reload callback + lastKnownTheme so the stage tab
+  // and the live re-theme orchestrator can drive them. The status bar used
+  // to render these affordances inside the pane; that was removed in favour
+  // of the tab actions, but the state still lives here.
   useEffect(() => {
-    publish(sessionId, { url, reload });
+    publish(sessionId, { url, reload, lastKnownTheme: lastKnownThemeRef.current });
     return () => publish(sessionId, null);
-  }, [sessionId, url, reload]);
+    // We deliberately depend on `theme` (not lastKnownThemeRef.current — refs
+    // aren't reactive). When the resolved theme changes, the pane re-renders
+    // and republishes with the latest lastKnownTheme.
+  }, [sessionId, url, reload, theme]);
   return (
     <div className="terminal-shell">
       <div className="terminal-surface terminal-surface-iframe">
