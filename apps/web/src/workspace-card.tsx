@@ -19,6 +19,9 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
   const titleDisplay = workspaceDisplayTitle(workspace);
   const prTone = pullRequest ? prToneFor(pullRequest) : "missing";
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
+  const additions = pullRequest?.additions ?? null;
+  const deletions = pullRequest?.deletions ?? null;
+  const hasDiff = additions !== null || deletions !== null;
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(titleDisplay);
@@ -104,6 +107,12 @@ export function WorkspaceCard(props: WorkspaceCardData & { active: boolean; onSe
           </span>
         </span>
         <span className="workspace-card-right" aria-hidden>
+          {hasDiff ? (
+            <span className="workspace-card-diff" title="Lines changed in this PR">
+              <span className="diff-add">+{additions ?? 0}</span>
+              <span className="diff-del">-{deletions ?? 0}</span>
+            </span>
+          ) : null}
           <span className={`approval-pill tone-${approvalTone}`} title={`Approval: ${approvalTone}`}>
             {approvalTone === "approved" ? (
               <ShieldCheck size={13} />
