@@ -50,6 +50,7 @@ import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
 import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
+import { registerWorkspacesPrStateRoute } from "./workspaces-pr-state-route.js";
 
 export type DaemonApp = {
   app: express.Express;
@@ -633,6 +634,7 @@ export async function createDaemonApp(input: {
   // /api/state handler can close over a fully-initialized runner. app.ts hit
   // the 800-line size gate, hence the extraction.
   registerStateRoute({ app, store, config, scheduledAgents, cachedProviderHealth, asyncRoute });
+  registerWorkspacesPrStateRoute({ app, store, providerCache, asyncRoute });
   registerCockpitSummaryRoute({
     app,
     store,
