@@ -39,11 +39,22 @@ jobs:
       - name: Startup and performance smoke
         run: |
           pnpm dev > /tmp/citadel-dev.log 2>&1 &
+          # Daemon's actual default is :4010 (config schema); the previous :4337
+          # was a stale legacy doc value that made this loop run out 60s every time.
           for attempt in {1..60}; do
-            if curl -fsS http://127.0.0.1:4337/api/health >/dev/null && curl -fsS http://127.0.0.1:5173 >/dev/null; then
+            if curl -fsS http://127.0.0.1:4010/api/health >/dev/null && curl -fsS http://127.0.0.1:5173 >/dev/null; then
               break
             fi
             sleep 1
           done
           make smoke
           pnpm performance
+      - name: Dump dev log on failure
+        if: failure()
+        run: |
+          echo "=== /tmp/citadel-dev.log ==="
+          cat /tmp/citadel-dev.log || echo "(no dev log)"
+          echo "=== ss -tlnp ==="
+          ss -tlnp 2>/dev/null | head -20 || true
+          echo "=== ls .citadel ==="
+          ls -la .citadel 2>&1 || true
