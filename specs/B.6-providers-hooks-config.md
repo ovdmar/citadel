@@ -13,7 +13,7 @@
 [ ] 5. Usage provider is provider/hook based.
 [ ] 6. Provider health is visible per provider AND per interaction method.
 [ ] 7. Provider degraded state explains missing/stale data.
-[ ] 8. Provider data includes refresh age.
+[~] 8. Provider data includes refresh age.
 [ ] 9. Citadel prefers existing external tool auth for the first production baseline.
 
 ## Provider Category Model (source of truth)
