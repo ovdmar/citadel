@@ -474,6 +474,185 @@ describe("scratchpad HTTP + MCP routes", () => {
     }
   });
 
+  it("block routes emit scratchpad.updated on every mutation (used by the cockpit refresh)", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    const listener = await openSseListener(baseUrl, "scratchpad.updated");
+    try {
+      const a = await postJson<{ block: { id: string } }>(`${baseUrl}/api/scratchpad/blocks`, { text: "first" });
+      await putJson(`${baseUrl}/api/scratchpad/blocks/${a.block.id}`, { text: "second" });
+      await fetch(`${baseUrl}/api/scratchpad/blocks/${a.block.id}`, { method: "DELETE" });
+      const events = await listener.waitFor(3, 2_000);
+      expect(events.length).toBeGreaterThanOrEqual(3);
+    } finally {
+      listener.close();
+      await closeServer(server);
+    }
+  });
+
+  it("POST /api/scratchpad/blocks returns 413 when adding a block would push past the size cap", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      // Seed a block that occupies most of the cap.
+      await postJson(`${baseUrl}/api/scratchpad/blocks`, { text: "x".repeat(999_500) });
+      // The next add would overflow the 1MB cap.
+      const oversize = await fetch(`${baseUrl}/api/scratchpad/blocks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "y".repeat(2_000) }),
+      });
+      expect(oversize.status).toBe(413);
+      const body = (await oversize.json()) as { error: string; limit?: number };
+      expect(body.error).toBe("scratchpad_too_large");
+      expect(body.limit).toBe(1_000_000);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("PUT /api/scratchpad/blocks/:id returns 413 when updating would push past the size cap", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const a = await postJson<{ block: { id: string } }>(`${baseUrl}/api/scratchpad/blocks`, { text: "small" });
+      const oversize = await fetch(`${baseUrl}/api/scratchpad/blocks/${a.block.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "x".repeat(1_000_001) }),
+      });
+      expect(oversize.status).toBe(413);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("update_block via MCP returns block on non-empty edit and labels delete with mcp:delete_block source", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const added = await postJson<{ result: { structuredContent: { block: { id: string } } } }>(
+        `${baseUrl}/api/mcp/rpc`,
+        {
+          jsonrpc: "2.0",
+          id: "add",
+          method: "tools/call",
+          params: { name: "add_block", arguments: { text: "v1" } },
+        },
+      );
+      const id = added.result.structuredContent.block.id;
+      const updated = await postJson<{ result: { structuredContent: { block: { id: string; text: string } } } }>(
+        `${baseUrl}/api/mcp/rpc`,
+        {
+          jsonrpc: "2.0",
+          id: "up",
+          method: "tools/call",
+          params: { name: "update_block", arguments: { id, text: "v2" } },
+        },
+      );
+      expect(updated.result.structuredContent.block.id).toBe(id);
+      expect(updated.result.structuredContent.block.text).toBe("v2");
+
+      // Now delete via update_block with empty text — the history entry should be sourced mcp:delete_block.
+      await postJson(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "del-via-update",
+        method: "tools/call",
+        params: { name: "update_block", arguments: { id, text: "" } },
+      });
+      const list = await getJson<{ entries: Array<{ source: string }> }>(`${baseUrl}/api/scratchpad/history`);
+      expect(list.entries[0]?.source).toBe("mcp:delete_block");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("add_block via MCP supports position.afterId and surfaces position_invalid + block_id_required", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const a = await postJson<{ result: { structuredContent: { block: { id: string } } } }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "a",
+        method: "tools/call",
+        params: { name: "add_block", arguments: { text: "a" } },
+      });
+      await postJson(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "c",
+        method: "tools/call",
+        params: { name: "add_block", arguments: { text: "c" } },
+      });
+      // Insert between via afterId.
+      await postJson(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "b",
+        method: "tools/call",
+        params: {
+          name: "add_block",
+          arguments: { text: "b", position: { afterId: a.result.structuredContent.block.id } },
+        },
+      });
+      const listed = await postJson<{ result: { structuredContent: { blocks: Array<{ text: string }> } } }>(
+        `${baseUrl}/api/mcp/rpc`,
+        { jsonrpc: "2.0", id: "ls", method: "tools/call", params: { name: "list_blocks" } },
+      );
+      expect(listed.result.structuredContent.blocks.map((b) => b.text)).toEqual(["a", "b", "c"]);
+
+      // Empty afterId is rejected as position_invalid (mirrors HTTP route behavior post-refactor).
+      const invalid = await postJson<{ result: { structuredContent: { error: string } } }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "inv",
+        method: "tools/call",
+        params: { name: "add_block", arguments: { text: "x", position: { afterId: "" } } },
+      });
+      expect(invalid.result.structuredContent.error).toBe("position_invalid");
+
+      // update_block/delete_block both surface block_id_required when id is empty/missing.
+      const updMissing = await postJson<{ result: { structuredContent: { error: string } } }>(
+        `${baseUrl}/api/mcp/rpc`,
+        {
+          jsonrpc: "2.0",
+          id: "um",
+          method: "tools/call",
+          params: { name: "update_block", arguments: { id: "", text: "anything" } },
+        },
+      );
+      expect(updMissing.result.structuredContent.error).toBe("block_id_required");
+      const delMissing = await postJson<{ result: { structuredContent: { error: string } } }>(
+        `${baseUrl}/api/mcp/rpc`,
+        {
+          jsonrpc: "2.0",
+          id: "dm",
+          method: "tools/call",
+          params: { name: "delete_block", arguments: { id: "" } },
+        },
+      );
+      expect(delMissing.result.structuredContent.error).toBe("block_id_required");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("PUT /api/scratchpad/blocks/:id with empty text records source ui:delete_block in history", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const a = await postJson<{ block: { id: string } }>(`${baseUrl}/api/scratchpad/blocks`, { text: "tmp" });
+      await putJson(`${baseUrl}/api/scratchpad/blocks/${a.block.id}`, { text: "   " });
+      const list = await getJson<{ entries: Array<{ source: string }> }>(`${baseUrl}/api/scratchpad/history`);
+      expect(list.entries[0]?.source).toBe("ui:delete_block");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("emits scratchpad.history.updated on every mutation path", async () => {
     const fixture = createFixture();
     const { server } = createDaemonApp(fixture);
@@ -512,6 +691,10 @@ describe("scratchpad HTTP + MCP routes", () => {
 type SseEvent = { type: string; payload: { updatedAt?: string } };
 
 async function openHistorySseListener(baseUrl: string) {
+  return openSseListener(baseUrl, "scratchpad.history.updated");
+}
+
+async function openSseListener(baseUrl: string, eventName: string) {
   const response = await fetch(`${baseUrl}/events`, { headers: { Accept: "text/event-stream" } });
   if (!response.ok || !response.body) throw new Error("sse_open_failed");
   const reader = response.body.getReader();
@@ -531,7 +714,7 @@ async function openHistorySseListener(baseUrl: string) {
         const line = buffer.slice(0, newlineIdx).trim();
         buffer = buffer.slice(newlineIdx + 1);
         if (line.startsWith("event: ")) pendingType = line.slice("event: ".length);
-        else if (line.startsWith("data: ") && pendingType === "scratchpad.history.updated") {
+        else if (line.startsWith("data: ") && pendingType === eventName) {
           try {
             const parsed = JSON.parse(line.slice("data: ".length)) as SseEvent;
             events.push({ type: pendingType, payload: parsed.payload ?? {} });

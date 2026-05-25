@@ -64,6 +64,33 @@ test.describe("scratchpad blocks", () => {
     await expect(page.locator(".scratchpad-block-rendered").first()).toContainText("rewritten");
   });
 
+  test("composer blur with non-empty content creates a block", async ({ page, request }) => {
+    await page.goto("/scratchpad");
+    const composer = page.locator(".scratchpad-composer-input");
+    await composer.focus();
+    await composer.fill("blur should save this");
+    // Defocus by clicking elsewhere — onBlur should fire and submit.
+    await page.locator(".dashboard-title").click();
+    await expect(page.locator(".scratchpad-block-list").getByText("blur should save this")).toBeVisible();
+    const list = await request.get(`${API_BASE}/api/scratchpad/blocks`);
+    const body = (await list.json()) as { blocks: Array<{ text: string }> };
+    expect(body.blocks.map((b) => b.text)).toContain("blur should save this");
+  });
+
+  test("editing a block to empty deletes it", async ({ page, request }) => {
+    await request.post(`${API_BASE}/api/scratchpad/blocks`, { data: { text: "delete me via empty edit" } });
+    await page.goto("/scratchpad");
+    const block = page.locator(".scratchpad-block").first();
+    await block.getByRole("button", { name: "Edit block" }).click();
+    const textarea = block.locator("textarea");
+    await textarea.fill("");
+    await textarea.press("ControlOrMeta+Enter");
+    await expect(page.getByText("delete me via empty edit")).toHaveCount(0);
+    const list = await request.get(`${API_BASE}/api/scratchpad/blocks`);
+    const body = (await list.json()) as { blocks: unknown[] };
+    expect(body.blocks).toHaveLength(0);
+  });
+
   test("hover-delete removes a block; undo restores it", async ({ page, request }) => {
     await request.post(`${API_BASE}/api/scratchpad/blocks`, { data: { text: "block to delete" } });
     await page.goto("/scratchpad");

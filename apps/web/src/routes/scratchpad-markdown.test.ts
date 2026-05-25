@@ -44,13 +44,23 @@ describe("renderBlockMarkdown", () => {
     expect(html2).not.toMatch(/attacker\.example/);
   });
 
-  it("renders markdown links as anchors with safe rel attributes", () => {
+  it("renders markdown links as anchors with safe rel + target attributes", () => {
     const html = renderBlockMarkdown("[Click](https://example.test/path)");
-    // DOMPurify strips arbitrary rel attributes by default, but the href is preserved.
-    // Hook into render to ensure href is on the anchor; rel='noopener' is added by
-    // DOMPurify's hook in our pipeline.
     expect(html).toMatch(/<a[^>]*href="https:\/\/example\.test\/path"/);
     expect(html).toMatch(/<a[^>]*rel="noopener noreferrer"/);
+    // afterSanitizeAttributes hook also sets target so block links open in a new tab.
+    expect(html).toMatch(/<a[^>]*target="_blank"/);
+  });
+
+  it("strips javascript: URLs in both markdown and raw HTML links", () => {
+    // Markdown link with javascript: scheme — DOMPurify removes the href entirely.
+    const html1 = renderBlockMarkdown("[click](javascript:alert(1))");
+    expect(html1).not.toMatch(/href="javascript:/i);
+    expect(html1).not.toMatch(/alert\(1\)/);
+    // Raw HTML link with javascript: scheme — same.
+    const html2 = renderBlockMarkdown(`<a href="javascript:alert(1)">go</a>`);
+    expect(html2).not.toMatch(/href="javascript:/i);
+    expect(html2).not.toMatch(/alert\(1\)/);
   });
 
   it("returns empty string for empty input", () => {
