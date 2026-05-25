@@ -1,0 +1,391 @@
+/* Scheduled agents page — redesign-aligned warm-cream card layout.
+ * Uses the --c-* / --sh-* / --font-* tokens introduced by the cockpit
+ * reskin so this surface visually fits with the inspector cards,
+ * deploy chips, and stage chrome. */
+
+.sched-page {
+  background: var(--c-canvas);
+}
+
+.sched-page .dashboard-header {
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--c-app);
+  border-bottom: 0.5px solid var(--c-line-2);
+  min-height: 44px;
+}
+
+.sched-page .dashboard-title {
+  font-family: var(--font-serif);
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  text-transform: none;
+  color: var(--c-fg-1);
+}
+
+.sched-page .dashboard-back {
+  border: 0.5px solid var(--c-line-2);
+  background: var(--c-card);
+  border-radius: 6px;
+  color: var(--c-fg-2);
+  box-shadow: var(--sh-1);
+}
+
+.sched-page .dashboard-back:hover {
+  border-color: var(--c-line-3);
+  color: var(--c-fg-1);
+}
+
+.sched-body {
+  overflow: auto;
+  padding: 20px;
+}
+
+.sched-body > .settings-stack {
+  max-width: 920px;
+  margin: 0 auto;
+  gap: 14px;
+}
+
+/* Card-style sections, scoped to this page so the rest of settings stays put. */
+
+.sched-page .settings-card {
+  background: var(--c-card);
+  border: 0.5px solid var(--c-line-2);
+  border-radius: 10px;
+  box-shadow: var(--sh-card);
+  padding: 14px 16px;
+  gap: 12px;
+}
+
+.sched-page .settings-card-header h3 {
+  font-family: var(--font-serif);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  text-transform: none;
+  color: var(--c-fg-1);
+}
+
+.sched-page .settings-card-header p {
+  color: var(--c-fg-3);
+  font-size: 12px;
+}
+
+.sched-page .settings-hint {
+  color: var(--c-fg-3);
+}
+
+/* Form */
+
+.scheduled-agent-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.scheduled-agent-field {
+  display: grid;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--c-fg-3);
+  min-width: 0;
+}
+
+.scheduled-agent-field.wide {
+  grid-column: 1 / -1;
+}
+
+.scheduled-agent-field input,
+.scheduled-agent-field select,
+.scheduled-agent-field textarea {
+  min-height: 30px;
+  min-width: 0;
+  padding: 5px 9px;
+  border-radius: 6px;
+  border: 0.5px solid var(--c-line-2);
+  background: var(--c-elev);
+  color: var(--c-fg-1);
+  font-size: 12.5px;
+  font-family: inherit;
+  box-shadow: var(--sh-1);
+}
+
+.scheduled-agent-field input:focus,
+.scheduled-agent-field select:focus,
+.scheduled-agent-field textarea:focus {
+  outline: none;
+  border-color: var(--c-fg-3);
+}
+
+.scheduled-agent-field textarea {
+  resize: vertical;
+  min-height: 64px;
+}
+
+.scheduled-agent-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--c-fg-2);
+  grid-column: 1 / -1;
+}
+
+.scheduled-agent-form-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.scheduled-agent-cron-summary {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--c-elev);
+  border: 0.5px solid var(--c-line-2);
+  box-shadow: var(--sh-1);
+}
+
+.scheduled-agent-cron-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12.5px;
+  color: var(--c-fg-1);
+}
+
+.scheduled-agent-cron-summary small {
+  color: var(--c-fg-3);
+  font-size: 11px;
+}
+
+/* List of active schedules — each row is its own elevated card. */
+
+.scheduled-agent-list {
+  display: grid;
+  gap: 10px;
+}
+
+.scheduled-agent-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 0.5px solid var(--c-line-2);
+  border-radius: 9px;
+  background: var(--c-card);
+  box-shadow: var(--sh-card);
+  align-items: center;
+  transition: border-color 120ms ease;
+}
+
+.scheduled-agent-row:hover {
+  border-color: var(--c-line-3);
+}
+
+.scheduled-agent-row.failed {
+  box-shadow: inset 3px 0 0 var(--c-bad), var(--sh-card);
+}
+
+.scheduled-agent-row.succeeded {
+  box-shadow: inset 3px 0 0 var(--c-ok), var(--sh-card);
+}
+
+.scheduled-agent-row.running {
+  box-shadow: inset 3px 0 0 var(--c-info), var(--sh-card);
+}
+
+.scheduled-agent-row.never {
+  box-shadow: inset 3px 0 0 var(--c-line-3), var(--sh-card);
+}
+
+.scheduled-agent-row-main {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding-left: 4px;
+}
+
+.scheduled-agent-row-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-serif);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--c-fg-1);
+  letter-spacing: -0.005em;
+}
+
+.scheduled-agent-cron {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-fg-2);
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 0.5px solid var(--c-line-2);
+  background: var(--c-elev);
+}
+
+.scheduled-agent-paused {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--c-warn);
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: var(--c-warn-bg);
+}
+
+.scheduled-agent-status {
+  font-size: 11.5px;
+  color: var(--c-fg-3);
+}
+
+.scheduled-agent-status.failed {
+  color: var(--c-bad);
+}
+
+.scheduled-agent-status.succeeded {
+  color: var(--c-ok);
+}
+
+.scheduled-agent-row-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.scheduled-agent-run-feedback {
+  font-size: 11px;
+  color: var(--c-fg-3);
+  padding: 0 4px;
+}
+
+/* History drawer + table */
+
+.scheduled-agent-history {
+  grid-column: 1 / -1;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: var(--c-elev);
+  border: 0.5px solid var(--c-line-2);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.scheduled-agent-history.empty {
+  color: var(--c-fg-3);
+  text-align: center;
+  padding: 14px;
+}
+
+.scheduled-agent-history-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.scheduled-agent-history-table th,
+.scheduled-agent-history-table td {
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 0.5px solid var(--c-line-1);
+  color: var(--c-fg-1);
+}
+
+.scheduled-agent-history-table tr:last-child > td {
+  border-bottom: 0;
+}
+
+.scheduled-agent-history-table th {
+  font-weight: 500;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--c-fg-4);
+}
+
+/* Status pills shared by row + history. Each variant uses the warm-cream
+ * status bg + foreground pair from the redesign palette so they sit
+ * comfortably on either --c-card or --c-elev surfaces. */
+
+.scheduled-agent-status-badge {
+  display: inline-block;
+  padding: 1px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  line-height: 1.6;
+}
+
+.scheduled-agent-status-badge.queued {
+  background: var(--c-info-bg);
+  color: var(--c-info);
+}
+
+.scheduled-agent-status-badge.running {
+  background: var(--c-warn-bg);
+  color: var(--c-warn);
+}
+
+.scheduled-agent-status-badge.succeeded {
+  background: var(--c-ok-bg);
+  color: var(--c-ok);
+}
+
+.scheduled-agent-status-badge.failed {
+  background: var(--c-bad-bg);
+  color: var(--c-bad);
+}
+
+.scheduled-agent-history-log-row td {
+  padding: 0;
+  border-bottom: 0;
+}
+
+/* Terminal-style log block sits on the dark surface from the design system
+ * so it reads as "this is a terminal" without inventing a new colour. */
+
+.scheduled-agent-run-log {
+  max-height: 400px;
+  overflow: auto;
+  background: var(--c-dark);
+  color: var(--c-on-dark);
+  padding: 10px 12px;
+  margin: 6px 0 2px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.scheduled-agent-run-log.error {
+  color: var(--c-bad);
+}
+
+@media (max-width: 768px) {
+  .sched-body {
+    padding: 12px;
+  }
+
+  .scheduled-agent-form {
+    grid-template-columns: 1fr;
+  }
+
+  .scheduled-agent-row {
+    grid-template-columns: 1fr;
+  }
+}

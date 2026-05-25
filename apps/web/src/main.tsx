@@ -25,6 +25,7 @@ import "./modals.css";
 import "./operations.css";
 import "./settings.css";
 import "./settings-ia.css";
+import "./scheduled-agents.css";
 import "./scratchpad.css";
 import "./responsive.css";
 
