@@ -2,6 +2,7 @@ import type { ActivityEvent } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { captureTranscript, submitPrompt } from "@citadel/terminal";
+import { reduceStatus } from "./agent-status.js";
 
 export type TranscriptResult = {
   ok: true;
@@ -35,7 +36,7 @@ export type SendMessageResult = {
   error?: string;
 };
 
-const acceptingStates = new Set(["starting", "running", "waiting", "idle"]);
+const acceptingStates = new Set(["starting", "running", "waiting_for_input", "idle"]);
 
 export function readAgentTranscript(
   store: SqliteStore,
@@ -88,6 +89,25 @@ export async function sendAgentMessage(
       createdAt: nowIso(),
     };
     store.addActivity(event);
+    // Optimistic state transition: if the agent was idle or waiting_for_input,
+    // immediately flip to running with the sentinel reason "optimistic_send".
+    // The next monitor tick reconciles (real pane observation overwrites the
+    // reason to pane:claude-code:active). This eliminates the ~2s lag between
+    // a user clicking submit and the pulsing-green workspace dot appearing.
+    if (session.status === "idle" || session.status === "waiting_for_input") {
+      const update = reduceStatus(
+        { status: session.status, lastOutputAt: session.lastOutputAt, statusReason: session.statusReason },
+        { type: "optimistic_send" },
+        nowIso,
+      );
+      if (update) {
+        store.updateSessionStatus(session.id, {
+          status: update.status,
+          ...(update.reason !== undefined ? { statusReason: update.reason } : {}),
+          ...(update.lastStatusAt !== undefined ? { lastStatusAt: update.lastStatusAt } : {}),
+        });
+      }
+    }
   }
   const response: SendMessageResult = {
     ok: result.ok,
