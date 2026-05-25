@@ -26,12 +26,14 @@ import {
   setJiraCommand,
   transitionJiraIssue,
 } from "@citadel/providers";
-import { listRuntimeHealth } from "@citadel/runtimes";
+import { listRuntimeHealth, runtimeModelListers } from "@citadel/runtimes";
 import { attachTerminalWebSocket, createTtydManager, ensureTmuxSession } from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
+import { createAgentDefinitionsStorage } from "./agent-definitions/storage.js";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
+import { registerAgentsRoutes } from "./agents-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
@@ -339,36 +341,16 @@ export function createDaemonApp(input: {
         const { execFile: execFileCb } = await import("node:child_process");
         const { promisify } = await import("node:util");
         const exec = promisify(execFileCb);
-        const local = await exec("git", ["branch", "--list", "--format=%(refname:short)"], {
-          cwd: repo.rootPath,
-          timeout: 6000,
-        });
-        const remote = await exec("git", ["branch", "--remotes", "--list", "--format=%(refname:short)"], {
-          cwd: repo.rootPath,
-          timeout: 6000,
-        });
-        const localBranches = local.stdout
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean);
-        const remoteBranches = remote.stdout
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean)
+        const opts = { cwd: repo.rootPath, timeout: 6000 };
+        const local = await exec("git", ["branch", "--list", "--format=%(refname:short)"], opts);
+        const remote = await exec("git", ["branch", "--remotes", "--list", "--format=%(refname:short)"], opts);
+        const lines = (s: string) => s.split("\n").map((line) => line.trim()).filter(Boolean);
+        const remoteBranches = lines(remote.stdout)
           .filter((line) => !line.endsWith("/HEAD"))
           .map((line) => (line.includes("/") ? line.split("/").slice(1).join("/") : line));
-        return res.json({
-          defaultBranch: repo.defaultBranch,
-          local: localBranches,
-          remote: Array.from(new Set(remoteBranches)),
-        });
+        return res.json({ defaultBranch: repo.defaultBranch, local: lines(local.stdout), remote: Array.from(new Set(remoteBranches)) });
       } catch (error) {
-        return res.json({
-          defaultBranch: repo.defaultBranch,
-          local: [],
-          remote: [],
-          error: error instanceof Error ? error.message : "git_branches_failed",
-        });
+        return res.json({ defaultBranch: repo.defaultBranch, local: [], remote: [], error: error instanceof Error ? error.message : "git_branches_failed" });
       }
     }),
   );
@@ -710,6 +692,9 @@ export function createDaemonApp(input: {
 
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
+  const agentDefinitions = createAgentDefinitionsStorage();
+  registerAgentsRoutes({ app, asyncRoute, agentDefinitions, modelListers: runtimeModelListers,
+    runtimes: () => config.runtimes.map((r) => ({ id: r.id, command: r.command, args: r.args })) });
   registerScratchpadRoutes({ app, config, emit });
   try {
     const spPath = scratchpadPath(config.dataDir);
