@@ -92,9 +92,23 @@ The file remains a regular markdown file so external tooling (git, editors, grep
 - `add_block(text, position?)` — `position` is `'end'` (default) or `{ afterId: string }`.
 - `update_block(id, text)` — empty text deletes the block.
 - `delete_block(id)`.
+- `fuzzy_search_scratchpad(query, limit?)` → `{ matches: [{ block, score, matches: [{ indices: [start, end][] }] }] }`. Searches block text only via `fuse.js` (threshold ~0.3); `limit` defaults to 20, clamped to 1..50. Shares the same scoring logic as the cockpit's floating searchbar (`fuzzySearchBlocks` in `@citadel/core`).
+- `refine_scratchpad(repoId?, repoName?, prompt?)` → discriminated union `{ ok: true, workspaceId, sessionId, warning? } | { ok: false, error, detail, workspaceId? }`. Thin convenience over `launch_agent` that resolves the saved `refine-scratchpad` Citadel Action prompt (override via `prompt`), validates runtime+repo, and launches a workspace named `refine-scratchpad-<ISO-minute>`. The MCP handler dispatches over HTTP to `POST /api/scratchpad/refine` — it does not import daemon modules (architecture-boundary compliance).
 
 All block-level tools go through the same version-history coalesce path; sources are `mcp:add_block`, `mcp:update_block`, `mcp:delete_block` (or `ui:*_block` from the cockpit). Empty blocks are never persisted.
 
+**HTTP endpoints** (daemon side, consumed by the cockpit and the MCP convenience tools):
+
+- `GET /api/scratchpad/blocks/search?q=&limit=` → ranked fuzzy matches over block text.
+- `POST /api/scratchpad/refine` body `{ prompt?, repoId? }` → discriminated union response (see `refine_scratchpad` above). Degradation: returns `400 runtime_unavailable` if `claude-code` isn't registered, `400 repo_required` if no repo can be resolved, `502 launch_failed` (with `workspaceId` if the orphan worktree is dirty and was left in place) on `OperationService.launchAgent` exceptions. Response includes a `warning` field when the relevant provider's health is `unavailable` or when the prompt does not contain the substring `in-progress` (case-insensitive — soft safeguard for blocks owned by other agents per the in-progress annotation convention).
+- `GET /api/citadel-actions` → list configured actions (built-in + custom).
+- `POST /api/citadel-actions` → create a custom action.
+- `PUT /api/citadel-actions/:id` body must include `updatedAt`; returns `409 stale_updated_at` if the stored `updatedAt` is newer.
+- `DELETE /api/citadel-actions/:id` → 409 for built-ins.
+- `POST /api/citadel-actions/:id/reset` → restore a built-in to its frozen default.
+
+**Citadel Actions storage.** `<dataDir>/citadel-actions.json` lives next to `scratchpad.md`. Seeded with built-in `refine-scratchpad` on first read. All writes go through a daemon-side mutex (one promise queue per dataDir); the `updatedAt` field provides stale-write protection on top of mutex serialization.
+
 ---
 
-keywords: operations, activity, audit, progress, logs, mcp, automation, agents, scratchpad
+keywords: operations, activity, audit, progress, logs, mcp, automation, agents, scratchpad, fuzzy search, refine, citadel actions
