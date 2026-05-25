@@ -12,7 +12,10 @@ test.describe("scratchpad blocks", () => {
     await request.put(`${API_BASE}/api/scratchpad`, { data: { content: "" } });
   });
 
-  test("migrates legacy content on first read and shows migrate-to-blocks in history", async ({ page, request }, testInfo) => {
+  test("migrates legacy content on first read and shows migrate-to-blocks in history", async ({
+    page,
+    request,
+  }, testInfo) => {
     // Seed legacy content via byte-faithful PUT.
     await request.put(`${API_BASE}/api/scratchpad`, { data: { content: "first idea\n\nsecond idea\n" } });
 
