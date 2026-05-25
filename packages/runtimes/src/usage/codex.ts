@@ -77,6 +77,17 @@ export function parseCodexUsageCategories(panelLines: string[]): RuntimeUsageCat
 // Enter to be sent as SEPARATE send-keys calls — otherwise both land inside
 // the input box without submitting. We do `sendText` then `sleep(500)` then
 // `sendKey("Enter")`.
+// Marker codex emits while it's refreshing the limits on the server side. The
+// first /status after a cold start shows this; a second /status a few seconds
+// later renders the real numbers.
+const LIMITS_REFRESHING_MARKER = "refresh requested; run /status again";
+
+async function sendStatus(tmux: { sendText: (text: string) => void; sendKey: (key: string) => void }) {
+  tmux.sendText("/status");
+  await sleep(500);
+  tmux.sendKey("Enter");
+}
+
 export async function fetchCodexUsageCategories(input: {
   command: string;
   args?: string[];
@@ -91,13 +102,31 @@ export async function fetchCodexUsageCategories(input: {
   });
   try {
     await tmux.waitFor((text) => text.includes(READY_MARKER), { timeoutMs: 40_000 });
-    tmux.sendText("/status");
-    await sleep(500);
-    tmux.sendKey("Enter");
-    await tmux.waitFor((text) => text.includes("5h limit") || text.includes("Weekly limit"), {
-      timeoutMs: 15_000,
-      intervalMs: 300,
-    });
+    await sendStatus(tmux);
+    // Wait for either the real numbers OR codex's "refreshing" placeholder.
+    const first = await tmux.waitFor(
+      (text) => text.includes("5h limit") || text.includes("Weekly limit") || text.includes(LIMITS_REFRESHING_MARKER),
+      { timeoutMs: 15_000, intervalMs: 300 },
+    );
+
+    // If codex told us to retry, send /status again and wait for the real
+    // panel. This is the path you hit on a cold codex start — codex queues a
+    // server-side refresh and the actual limits land a few seconds later.
+    if (first.includes(LIMITS_REFRESHING_MARKER)) {
+      await sleep(2_000);
+      await sendStatus(tmux);
+      await tmux.waitFor(
+        (text) => {
+          // Stop waiting only once the refresh placeholder is gone AND a real
+          // limit row has rendered — otherwise we capture the stale panel.
+          if (text.includes(LIMITS_REFRESHING_MARKER)) return false;
+          return text.includes("5h limit") || text.includes("Weekly limit");
+        },
+        { timeoutMs: 20_000, intervalMs: 500 },
+      );
+    }
+
+    // Let the panel finish painting (animated bars/percentages) before capture.
     await sleep(1_000);
     const panel = extractCodexStatusPanel(tmux.capture());
     return parseCodexUsageCategories(panel);

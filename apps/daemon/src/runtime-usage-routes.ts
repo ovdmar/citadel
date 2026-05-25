@@ -1,32 +1,38 @@
-import type { RuntimeConfig, UsageProviderConfig } from "@citadel/config";
+import type { CitadelConfig } from "@citadel/config";
 import { collectRuntimeUsage } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import type express from "express";
 
-type AsyncHandler = (
+type AsyncRoute = (
   handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>,
 ) => (req: express.Request, res: express.Response, next: express.NextFunction) => void;
 
+type ProviderCache = {
+  delete(key: string): void;
+};
+
 type CachedProvider = <T>(key: string, load: () => T | Promise<T>, ttlMs?: number) => Promise<T>;
 
-// Returns an Express handler factory for GET / POST runtime usage endpoints.
-// Extracted from app.ts so the routes don't push the file past the size
-// budget; the closure over config/cache stays explicit via the deps arg.
-export function runtimeUsageHandlerFactory(deps: {
-  runtimes: RuntimeConfig[];
-  usageProviders: UsageProviderConfig[];
-  providerCache: Map<string, { expiresAt: number; value: unknown }>;
+// Health- and capability-gated runtime usage routes (GET reads through the
+// cache, POST /refresh forces a re-fetch). Kept in its own module so app.ts
+// stays under the project's 800-line ceiling.
+export function registerRuntimeUsageRoutes(input: {
+  app: express.Express;
+  config: CitadelConfig;
+  asyncRoute: AsyncRoute;
+  providerCache: ProviderCache;
   cachedProvider: CachedProvider;
-  asyncRoute: AsyncHandler;
-}) {
-  return (options: { force: boolean }) =>
-    deps.asyncRoute(async (req, res) => {
+}): void {
+  const { app, config, asyncRoute, providerCache, cachedProvider } = input;
+
+  const handler = (options: { force: boolean }) =>
+    asyncRoute(async (req, res) => {
       const runtimeId = req.params.runtimeId;
       if (typeof runtimeId !== "string") return res.status(400).json({ error: "runtime_id_required" });
-      const runtime = deps.runtimes.find((candidate) => candidate.id === runtimeId);
+      const runtime = config.runtimes.find((candidate) => candidate.id === runtimeId);
       if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
 
-      const runtimeHealth = listRuntimeHealth(deps.runtimes).find((entry) => entry.id === runtimeId);
+      const runtimeHealth = listRuntimeHealth(config.runtimes).find((entry) => entry.id === runtimeId);
       const checkedAt = new Date().toISOString();
       // Health gate: a runtime that isn't healthy has no usage to fetch. We
       // short-circuit BEFORE spawning anything (tmux, PTY, external command).
@@ -59,10 +65,10 @@ export function runtimeUsageHandlerFactory(deps: {
         });
       }
 
-      const provider = deps.usageProviders.find((candidate) => candidate.runtimeId === runtimeId);
+      const provider = config.usageProviders.find((candidate) => candidate.runtimeId === runtimeId);
       const cacheKey = `usage:${runtimeId}:${provider?.id ?? "builtin"}`;
-      if (options.force) deps.providerCache.delete(cacheKey);
-      const usage = await deps.cachedProvider(
+      if (options.force) providerCache.delete(cacheKey);
+      const usage = await cachedProvider(
         cacheKey,
         () =>
           collectRuntimeUsage({
@@ -75,4 +81,7 @@ export function runtimeUsageHandlerFactory(deps: {
       );
       res.json({ usage });
     });
+
+  app.get("/api/runtimes/:runtimeId/usage", handler({ force: false }));
+  app.post("/api/runtimes/:runtimeId/usage/refresh", handler({ force: true }));
 }

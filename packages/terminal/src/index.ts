@@ -10,6 +10,10 @@ export { createTtydManager, TtydUnavailableError } from "./ttyd.js";
 export type { TtydEntry, TtydManager, TtydManagerConfig, TtydTheme } from "./ttyd.js";
 export { submitPrompt } from "./submit-prompt.js";
 
+import { tokenizeTerminalInput } from "./input-tokens.js";
+export { keyForControlCharacter, keyForEscapeSequence, tokenizeTerminalInput } from "./input-tokens.js";
+export type { InputToken } from "./input-tokens.js";
+
 const execFileAsync = promisify(execFile);
 
 export type TerminalSessionRequest = {
@@ -676,76 +680,4 @@ export function parseTmuxControlOutput(line: string) {
 
 export function decodeTmuxControlValue(value: string) {
   return value.replace(/\\([0-7]{3})/g, (_match, octal: string) => String.fromCharCode(Number.parseInt(octal, 8)));
-}
-
-function tokenizeTerminalInput(input: string) {
-  const tokens: { literal: boolean; value: string }[] = [];
-  let literal = "";
-  const flush = () => {
-    if (literal) {
-      tokens.push({ literal: true, value: literal });
-      literal = "";
-    }
-  };
-
-  for (let index = 0; index < input.length; index += 1) {
-    const rest = input.slice(index);
-    const escapeKey = keyForEscapeSequence(rest);
-    if (escapeKey) {
-      flush();
-      tokens.push({ literal: false, value: escapeKey.key });
-      index += escapeKey.length - 1;
-      continue;
-    }
-
-    const key = keyForControlCharacter(input[index] ?? "");
-    if (key) {
-      flush();
-      tokens.push({ literal: false, value: key });
-      continue;
-    }
-    literal += input[index];
-  }
-  flush();
-  return tokens;
-}
-
-function keyForControlCharacter(char: string) {
-  switch (char) {
-    case "\r":
-    case "\n":
-      return "Enter";
-    case "\t":
-      return "Tab";
-    case "\u0003":
-      return "C-c";
-    case "\u0004":
-      return "C-d";
-    case "\u001a":
-      return "C-z";
-    case "\u001b":
-      return "Escape";
-    case "\u007f":
-      return "BSpace";
-    default:
-      return null;
-  }
-}
-
-function keyForEscapeSequence(input: string) {
-  const sequences: Record<string, string> = {
-    "\u001b[A": "Up",
-    "\u001b[B": "Down",
-    "\u001b[C": "Right",
-    "\u001b[D": "Left",
-    "\u001b[H": "Home",
-    "\u001b[F": "End",
-    "\u001b[3~": "Delete",
-    "\u001b[5~": "PageUp",
-    "\u001b[6~": "PageDown",
-  };
-  for (const [sequence, key] of Object.entries(sequences)) {
-    if (input.startsWith(sequence)) return { key, length: sequence.length };
-  }
-  return null;
 }

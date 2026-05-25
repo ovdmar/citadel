@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadConfig, mergeConfigPatch, saveConfig } from "./index.js";
+import { defaultConfigPath, detectWorktree, loadConfig, mergeConfigPatch, saveConfig } from "./index.js";
 
 const dirs: string[] = [];
 
@@ -99,6 +99,78 @@ describe("loadConfig", () => {
     );
 
     expect(() => loadConfig(configPath)).toThrow("Hook cwd must be an absolute path");
+  });
+
+  it("detectWorktree resolves a git worktree to its name (via .git file pointing under main/.git/worktrees)", () => {
+    // Simulate a layout: <root>/main has a .git directory, <root>/wt-foo has a
+    // .git file pointing at <root>/main/.git/worktrees/wt-foo.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-worktree-"));
+    dirs.push(root);
+    const mainGit = path.join(root, "main", ".git");
+    fs.mkdirSync(path.join(mainGit, "worktrees", "wt-foo"), { recursive: true });
+    const worktreeDir = path.join(root, "wt-foo");
+    fs.mkdirSync(worktreeDir, { recursive: true });
+    fs.writeFileSync(path.join(worktreeDir, ".git"), `gitdir: ${path.join(mainGit, "worktrees", "wt-foo")}\n`);
+
+    expect(detectWorktree(worktreeDir)).toEqual({
+      name: "wt-foo",
+      gitDir: path.join(mainGit, "worktrees", "wt-foo"),
+    });
+    // The main repo (where .git is a directory) is NOT a worktree.
+    expect(detectWorktree(path.join(root, "main"))).toBeNull();
+  });
+
+  it("defaultConfigPath scopes to <dataDir>/worktrees/<name> when cwd is inside a worktree", () => {
+    // CITADEL_CONFIG overrides everything; clear it to exercise the auto path.
+    const prevConfig = process.env.CITADEL_CONFIG;
+    const prevData = process.env.CITADEL_DATA_DIR;
+    const prevCwd = process.cwd();
+    // biome-ignore lint/performance/noDelete: `delete` is the only real way to unset a process.env key — `= undefined` coerces to "undefined".
+    delete process.env.CITADEL_CONFIG;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-scope-"));
+    dirs.push(root);
+    const dataDir = path.join(root, "data");
+    process.env.CITADEL_DATA_DIR = dataDir;
+    const mainGit = path.join(root, "repo", ".git");
+    fs.mkdirSync(path.join(mainGit, "worktrees", "feat-x"), { recursive: true });
+    const worktreeDir = path.join(root, "feat-x");
+    fs.mkdirSync(worktreeDir, { recursive: true });
+    fs.writeFileSync(path.join(worktreeDir, ".git"), `gitdir: ${path.join(mainGit, "worktrees", "feat-x")}\n`);
+    try {
+      process.chdir(worktreeDir);
+      expect(defaultConfigPath()).toBe(path.join(dataDir, "worktrees", "feat-x", "citadel.config.json"));
+    } finally {
+      process.chdir(prevCwd);
+      // biome-ignore lint/performance/noDelete: `delete` is the only real way to unset a process.env key.
+      if (prevConfig === undefined) delete process.env.CITADEL_CONFIG;
+      else process.env.CITADEL_CONFIG = prevConfig;
+      // biome-ignore lint/performance/noDelete: see above.
+      if (prevData === undefined) delete process.env.CITADEL_DATA_DIR;
+      else process.env.CITADEL_DATA_DIR = prevData;
+    }
+  });
+
+  it("defaultConfigPath honors CITADEL_CONFIG even when cwd is a worktree (production path is sacred)", () => {
+    const prevConfig = process.env.CITADEL_CONFIG;
+    const prevCwd = process.cwd();
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-scope-"));
+    dirs.push(root);
+    const mainGit = path.join(root, "repo", ".git");
+    fs.mkdirSync(path.join(mainGit, "worktrees", "feat-y"), { recursive: true });
+    const worktreeDir = path.join(root, "feat-y");
+    fs.mkdirSync(worktreeDir, { recursive: true });
+    fs.writeFileSync(path.join(worktreeDir, ".git"), `gitdir: ${path.join(mainGit, "worktrees", "feat-y")}\n`);
+    const explicit = path.join(root, "production-config.json");
+    process.env.CITADEL_CONFIG = explicit;
+    try {
+      process.chdir(worktreeDir);
+      expect(defaultConfigPath()).toBe(explicit);
+    } finally {
+      process.chdir(prevCwd);
+      // biome-ignore lint/performance/noDelete: see above.
+      if (prevConfig === undefined) delete process.env.CITADEL_CONFIG;
+      else process.env.CITADEL_CONFIG = prevConfig;
+    }
   });
 
   it("merges and saves operator config updates", () => {
