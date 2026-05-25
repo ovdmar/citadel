@@ -112,6 +112,12 @@ export function WorkspaceCard(
       <button
         type="button"
         className={`workspace-card ${props.active ? "active" : ""}`}
+        // The .active state paints the card with a dark navy background
+        // regardless of cockpit theme. Mark it as on-dark so descendants
+        // (e.g. .workspace-card-issue chip whose color tracks --color-action,
+        // which is also dark navy on light cockpit) can flip to a light-fg
+        // variant via [data-cit-on-dark="true"] selectors.
+        data-cit-on-dark={props.active ? "true" : undefined}
         onClick={() => {
           if (!editing) props.onSelect();
         }}

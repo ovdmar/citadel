@@ -586,3 +586,12 @@
   background: color-mix(in srgb, var(--color-action) 14%, transparent);
   color: var(--color-action);
 }
+
+/* On a deliberately-dark surface (e.g. the active workspace card under a
+ * light cockpit), --color-action resolves to the same dark navy as the
+ * card background, making the chip text invisible. Flip the chip to a
+ * light fill on dark contexts regardless of cockpit theme. */
+[data-cit-on-dark="true"] .workspace-card-issue {
+  background: color-mix(in srgb, var(--c-on-dark) 14%, transparent);
+  color: var(--c-on-dark);
+}
