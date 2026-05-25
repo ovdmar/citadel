@@ -54,6 +54,11 @@ export function Cockpit() {
     if (typeof window === "undefined") return;
     if (!shouldOpenNewWorkspaceModal(window.location.search)) return;
     setCreateWorkspaceOpen(true);
+    // The Create Workspace modal lives inside the Navigator column. On mobile
+    // the column has `display: none` by default (mobileView starts at 'stage'),
+    // which would hide the modal — switch the mobile view to navigator so the
+    // modal is actually rendered. On desktop this is a no-op.
+    setMobileView("navigator");
     consumeNewWorkspaceDeeplink({
       pathname: window.location.pathname,
       search: window.location.search,
