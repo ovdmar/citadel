@@ -164,8 +164,16 @@ export const CitadelConfigSchema = z
         intervals: z
           .object({
             prCiMs: z.number().int().min(15_000).default(60_000),
-            jiraMs: z.number().int().min(30_000).default(5 * 60_000),
-            usageMs: z.number().int().min(30_000).default(5 * 60_000),
+            jiraMs: z
+              .number()
+              .int()
+              .min(30_000)
+              .default(5 * 60_000),
+            usageMs: z
+              .number()
+              .int()
+              .min(30_000)
+              .default(5 * 60_000),
           })
           .default({ prCiMs: 60_000, jiraMs: 5 * 60_000, usageMs: 5 * 60_000 }),
         focusRefreshThresholdMs: z.number().int().min(5_000).default(30_000),
