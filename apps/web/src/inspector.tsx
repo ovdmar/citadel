@@ -11,6 +11,7 @@ import { Check, ChevronDown, ExternalLink, GitPullRequest, Hash, Loader2, Plus, 
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { DeployedAppsPanel } from "./deployed-apps.js";
+import { ReviewTab } from "./inspector-review.js";
 import { ReviewerAvatars, aggregateReviewerCounts } from "./inspector-reviewers.js";
 import { formatLabel } from "./labels.js";
 import { prToneFor } from "./workspace-card.js";
@@ -18,7 +19,7 @@ import { prToneFor } from "./workspace-card.js";
 // Re-export so existing consumers (incl. inspector.test.ts) keep working.
 export { aggregateReviewerCounts } from "./inspector-reviewers.js";
 
-type InspectorTab = "stats" | "diff";
+type InspectorTab = "stats" | "diff" | "review";
 
 export function Inspector(props: {
   workspace: Workspace;
@@ -53,6 +54,14 @@ export function Inspector(props: {
           Diff
           {fileCount !== null && fileCount > 0 ? <span className="inspector-tab-count">{fileCount}</span> : null}
         </button>
+        <button
+          type="button"
+          className={`inspector-tab ${tab === "review" ? "active" : ""}`}
+          onClick={() => setTab("review")}
+          title="Request review and read citadel-native comments"
+        >
+          Review
+        </button>
         <span className="inspector-tab-indicator" data-tab={tab} aria-hidden />
         <button
           type="button"
@@ -67,8 +76,16 @@ export function Inspector(props: {
       <div className="column-body">
         {tab === "stats" ? (
           <StatsTab workspace={props.workspace} repo={props.repo} summary={props.summary} diff={diff.data} />
-        ) : (
+        ) : tab === "diff" ? (
           <DiffTab workspace={props.workspace} summary={props.summary} diff={diff.data} />
+        ) : (
+          <ReviewTab
+            workspace={props.workspace}
+            diff={diff.data}
+            hasRequestReviewHook={
+              (props.repo?.requestReviewHookIds?.length ?? 0) > 0
+            }
+          />
         )}
       </div>
     </>
