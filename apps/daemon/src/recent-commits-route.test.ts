@@ -60,7 +60,7 @@ describe("recent-commits route", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const notFound = await fetch(`${baseUrl}/api/workspaces/ws_missing/recent-commits`);

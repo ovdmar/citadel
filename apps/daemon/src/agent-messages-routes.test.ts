@@ -43,7 +43,7 @@ describe("agent message MCP + REST routes", () => {
         };
       },
     } as unknown as OperationService;
-    const { server } = createDaemonApp({ ...fixture, operations });
+    const { server } = await createDaemonApp({ ...fixture, operations });
     const baseUrl = await listen(server);
     try {
       const list = await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
@@ -105,7 +105,7 @@ describe("agent message MCP + REST routes", () => {
         };
       },
     } as unknown as OperationService;
-    const { server } = createDaemonApp({ ...fixture, operations });
+    const { server } = await createDaemonApp({ ...fixture, operations });
     const baseUrl = await listen(server);
     try {
       const list = await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
@@ -150,7 +150,7 @@ describe("agent message MCP + REST routes", () => {
         throw new Error("should not be called");
       },
     } as unknown as OperationService;
-    const { server } = createDaemonApp({ ...fixture, operations });
+    const { server } = await createDaemonApp({ ...fixture, operations });
     const baseUrl = await listen(server);
     try {
       const response = await fetch(`${baseUrl}/api/mcp/rpc`, {
@@ -198,7 +198,7 @@ describe("agent message MCP + REST routes", () => {
         };
       },
     } as unknown as OperationService;
-    const { server } = createDaemonApp({ ...fixture, operations });
+    const { server } = await createDaemonApp({ ...fixture, operations });
     const baseUrl = await listen(server);
     try {
       const list = await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
@@ -266,7 +266,7 @@ describe("agent message MCP + REST routes", () => {
         return history;
       },
     } as unknown as OperationService;
-    const { server } = createDaemonApp({ ...fixture, operations });
+    const { server } = await createDaemonApp({ ...fixture, operations });
     const baseUrl = await listen(server);
     try {
       const list = await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
@@ -380,7 +380,7 @@ describe("agent message MCP + REST routes", () => {
       ].join("\n"),
     );
 
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     const originalHome = process.env.HOME;
     process.env.HOME = home;
@@ -440,7 +440,7 @@ describe("agent message MCP + REST routes", () => {
             };
       },
     } as unknown as OperationService;
-    const { server } = createDaemonApp({ ...fixture, operations });
+    const { server } = await createDaemonApp({ ...fixture, operations });
     const baseUrl = await listen(server);
     try {
       const output = await getJson<{ ok: boolean; text: string }>(`${baseUrl}/api/agent-sessions/sess_x/output`);

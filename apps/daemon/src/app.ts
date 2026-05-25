@@ -31,12 +31,13 @@ import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
-import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
+import { asyncRoute, cachedProviderValue, cachedProviderWithStaleFallback } from "./app-helpers.js";
 import { registerCockpitSummaryRoute } from "./cockpit-summary-route.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
+import { createProviderCache } from "./provider-cache.js";
 import { workspaceAppHookSample } from "./readiness.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
@@ -63,13 +64,13 @@ type ProviderCollectors = {
   transitionJiraIssue: typeof transitionJiraIssue;
 };
 
-export function createDaemonApp(input: {
+export async function createDaemonApp(input: {
   config: CitadelConfig;
   configPath: string;
   store: SqliteStore;
   operations?: OperationService;
   providers?: Partial<ProviderCollectors>;
-}): DaemonApp {
+}): Promise<DaemonApp> {
   const { config, configPath, store } = input;
   setGithubCommand(config.providers.github.command);
   setJiraCommand(config.providers.jira.command);
@@ -85,7 +86,14 @@ export function createDaemonApp(input: {
   const app = express();
   const server = http.createServer(app);
   const sseClients = new Set<express.Response>();
-  const providerCache = new Map<string, { expiresAt: number; value: unknown; cachedAt: number }>();
+  const providerCache = createProviderCache({
+    dataDir: config.dataDir,
+    listWorkspaces: () => store.listWorkspaces(),
+  });
+  // Hydrate the persisted cache BEFORE any route is registered so the first
+  // post-restart request can hit warm cache. The load() is bounded by a 500ms
+  // hard timeout — slow disks degrade to an empty cache but never block boot.
+  await providerCache.load();
   // Per-daemon ttyd port slice. Boot-time cleanupStale() blanket-SIGTERMs
   // every ttyd in this range, so any two daemons that share a range will
   // trample each other's live terminals (worktree daemons under tsx watch
@@ -269,7 +277,7 @@ export function createDaemonApp(input: {
       if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const versionControl = await cachedProvider(`vc:${repo.id}:${repo.updatedAt}`, () =>
+      const versionControl = await cachedProviderSwr(`vc:${repo.id}:${repo.updatedAt}`, () =>
         providers.collectGitHubVersionControlSummary(repo.rootPath),
       );
       res.json({ versionControl });
@@ -283,7 +291,7 @@ export function createDaemonApp(input: {
       if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const ci = await cachedProvider(`ci:${repo.id}:${repo.updatedAt}`, () =>
+      const ci = await cachedProviderSwr(`ci:${repo.id}:${repo.updatedAt}`, () =>
         providers.collectGitHubCiRuns(repo.rootPath),
       );
       res.json({ ci });
@@ -357,7 +365,7 @@ export function createDaemonApp(input: {
       const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
       if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
       if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
-      const issueTracker = await cachedProvider(`issue:${workspace.issueKey}`, () =>
+      const issueTracker = await cachedProviderSwr(`issue:${workspace.issueKey}`, () =>
         providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
       );
       res.json({ issueTracker });
@@ -625,6 +633,7 @@ export function createDaemonApp(input: {
     operations,
     providers,
     cachedProvider,
+    cachedProviderSwr,
     cachedProviderHealth,
     asyncRoute,
   });
@@ -669,6 +678,11 @@ export function createDaemonApp(input: {
   });
   fsWatchers.reconcile();
   server.on("close", () => fsWatchers?.close());
+  server.on("close", () => {
+    // Final synchronous flush so the persisted cache reflects in-memory state
+    // at shutdown. Errors are logged inside dispose() and not re-thrown.
+    void providerCache.dispose();
+  });
 
   registerWorkspaceDiffRoutes({ app, store, asyncRoute });
 
@@ -738,5 +752,12 @@ export function createDaemonApp(input: {
 
   function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderValue(providerCache, key, load, ttlMs);
+  }
+  // Stale-while-revalidate variant used by the per-workspace provider routes
+  // (vc:*, ci:*, issue:*). Strict cachedProvider is preserved for provider-
+  // health, git:*, apps:* — they need authoritative freshness or have their
+  // own TTL semantics.
+  function cachedProviderSwr<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
+    return cachedProviderWithStaleFallback({ cache: providerCache, key, load, ttlMs });
   }
 }

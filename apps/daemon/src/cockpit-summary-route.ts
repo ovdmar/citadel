@@ -31,10 +31,12 @@ export function registerCockpitSummaryRoute(input: {
   operations: OperationService;
   providers: Providers;
   cachedProvider: CachedProvider;
+  cachedProviderSwr: CachedProvider;
   cachedProviderHealth: () => Promise<ProviderHealth[]>;
   asyncRoute: typeof AsyncRoute;
 }): void {
-  const { app, store, operations, providers, cachedProvider, cachedProviderHealth, asyncRoute } = input;
+  const { app, store, operations, providers, cachedProvider, cachedProviderSwr, cachedProviderHealth, asyncRoute } =
+    input;
   app.get(
     "/api/workspaces/:workspaceId/cockpit-summary",
     asyncRoute(async (req, res) => {
@@ -49,14 +51,14 @@ export function registerCockpitSummaryRoute(input: {
           () => readWorkspaceGitStatus(workspace.path),
           3000,
         ),
-        cachedProvider<VersionControlSummary>(`vc:${workspace.id}:${workspace.updatedAt}`, () =>
+        cachedProviderSwr<VersionControlSummary>(`vc:${workspace.id}:${workspace.updatedAt}`, () =>
           providers.collectGitHubVersionControlSummary(workspace.path),
         ),
-        cachedProvider<CiProviderSummary>(`ci:${workspace.id}:${workspace.updatedAt}`, () =>
+        cachedProviderSwr<CiProviderSummary>(`ci:${workspace.id}:${workspace.updatedAt}`, () =>
           providers.collectGitHubCiRuns(workspace.path),
         ),
         workspace.issueKey
-          ? cachedProvider<IssueTrackerSummary>(`issue:${workspace.issueKey}`, () =>
+          ? cachedProviderSwr<IssueTrackerSummary>(`issue:${workspace.issueKey}`, () =>
               providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
             )
           : Promise.resolve(null),

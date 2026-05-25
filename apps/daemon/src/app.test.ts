@@ -27,7 +27,7 @@ process.env.CITADEL_DISABLE_SCHEDULER = "1";
 describe("createDaemonApp", () => {
   it("serves config, runtime, MCP, and error endpoints without starting the production listener", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const configResponse = await getJson<{ configPath: string; config: { mcp: { enabled: boolean } } }>(
@@ -87,7 +87,7 @@ describe("createDaemonApp", () => {
 
   it("serves read-only state resources and normalized API errors", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       expect(await getJson<{ ok: boolean; degradedProviders: number }>(`${baseUrl}/api/health`)).toMatchObject({
@@ -276,7 +276,7 @@ describe("createDaemonApp", () => {
       archivedAt: null,
     });
     let calls = 0;
-    const { server } = createDaemonApp({
+    const { server } = await createDaemonApp({
       ...fixture,
       providers: {
         collectGitHubVersionControlSummary: async () => {
@@ -333,7 +333,7 @@ describe("createDaemonApp", () => {
         };
       },
     } as unknown as OperationService;
-    const { server } = createDaemonApp({ ...fixture, operations });
+    const { server } = await createDaemonApp({ ...fixture, operations });
     const baseUrl = await listen(server);
     try {
       const response = await postJson<{ result: { structuredContent: { session: { id: string } } } }>(
@@ -413,7 +413,7 @@ describe("createDaemonApp", () => {
       archivedAt: null,
     });
     fs.writeFileSync(path.join(git.repoPath, "dirty.txt"), "dirty\n");
-    const { server } = createDaemonApp({
+    const { server } = await createDaemonApp({
       ...fixture,
       providers: {
         collectGitHubVersionControlSummary: async () => ({
@@ -484,7 +484,7 @@ describe("createDaemonApp", () => {
   it("PATCH /api/repos/:id updates name and worktree parent", async () => {
     const fixture = createFixture();
     const { repoPath } = createGitFixtureWithRemote(fixture.config.dataDir);
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const repoResp = await postJson<{ repo: { id: string; name: string } }>(`${baseUrl}/api/repos`, {
@@ -507,7 +507,7 @@ describe("createDaemonApp", () => {
 
   it("operation cancel and retry endpoints return 202 / 409 appropriately", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       // Seed a fake cancellable operation.
@@ -542,7 +542,7 @@ describe("createDaemonApp", () => {
   it("inspects a path, lists branches, refreshes provider caches, and reconciles ghost state", async () => {
     const fixture = createFixture();
     const { repoPath } = createGitRepo(fixture.config.dataDir);
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const inspect = await postJson<{ isGit: boolean; defaultBranch: string | null; providerCandidates: unknown[] }>(
@@ -575,7 +575,7 @@ describe("createDaemonApp", () => {
   it("stops and removes an agent session through DELETE /api/agent-sessions/:id", async () => {
     const fixture = createFixture();
     const { repoPath } = createGitFixtureWithRemote(fixture.config.dataDir);
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const repoResp = await postJson<{ repo: { id: string } }>(`${baseUrl}/api/repos`, { rootPath: repoPath });
@@ -665,7 +665,7 @@ describe("createDaemonApp", () => {
       createdAt: now,
       updatedAt: now,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const blocked = await fetch(`${baseUrl}/api/repos/repo_remove`, { method: "DELETE" });

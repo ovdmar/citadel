@@ -37,7 +37,7 @@ describe("scheduled agent routes", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const empty = await getJson<{ scheduledAgents: unknown[] }>(`${baseUrl}/api/scheduled-agents`);
@@ -146,7 +146,7 @@ describe("scheduled agent routes", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const created = await postJson<{ scheduledAgent: { id: string } }>(`${baseUrl}/api/scheduled-agents`, {
@@ -229,7 +229,7 @@ describe("scheduled agent routes", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       // Skip-policy agent: in-flight run + POST /run → 409.
@@ -328,7 +328,7 @@ describe("scheduled agent routes", () => {
       updatedAt: new Date().toISOString(),
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const created = await postJson<{ scheduledAgent: { id: string } }>(`${baseUrl}/api/scheduled-agents`, {

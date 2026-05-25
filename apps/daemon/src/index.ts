@@ -60,7 +60,7 @@ const store = new SqliteStore(config.databasePath);
 store.migrate();
 const operations = new OperationService(store, config);
 operations.reconcile();
-const { server } = createDaemonApp({ config, configPath, store, operations });
+const { server } = await createDaemonApp({ config, configPath, store, operations });
 
 // Try to bind; on EADDRINUSE, walk the next 10 ports so worktree-derived ports
 // that happen to collide (cksum-mod-100 birthday hits at ~15 worktrees) don't

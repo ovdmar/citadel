@@ -210,6 +210,10 @@ export class PersistentProviderCache extends Map<string, ProviderCacheEntry> {
       await fs.promises.chmod(this.filePath, this.mode);
     });
     this.flushChain = next.catch((error) => {
+      // ENOENT during teardown (operator deleted dataDir while daemon was
+      // running, or vitest cleanup races the debounce) is noise, not a real
+      // failure. Anything else surfaces.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       console.error(`[provider-cache] flush failed: ${error instanceof Error ? error.message : String(error)}`);
     });
   }

@@ -41,7 +41,7 @@ describe("namespace routes + MCP integration", () => {
       archivedAt: null,
     });
 
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       // 1. Empty list to start.
@@ -155,7 +155,7 @@ describe("namespace routes + MCP integration", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const missing = await fetch(`${baseUrl}/api/namespaces/ns_missing`, { method: "DELETE" });

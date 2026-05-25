@@ -26,7 +26,7 @@ const createFixture = () => createScratchpadFixture(dirs);
 describe("scratchpad HTTP + MCP routes", () => {
   it("round-trips content via GET and PUT /api/scratchpad", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const initial = await getJson<{ content: string; updatedAt: string }>(`${baseUrl}/api/scratchpad`);
@@ -51,7 +51,7 @@ describe("scratchpad HTTP + MCP routes", () => {
     // back-to-back PUTs, the final disk state must match the final body —
     // catches regressions where an out-of-order write would clobber the latest.
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const bodies = ["one", "two", "three", "four", "five"];
@@ -69,7 +69,7 @@ describe("scratchpad HTTP + MCP routes", () => {
 
   it("rejects PUT bodies that try to spoof a non-ui source", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const response = await fetch(`${baseUrl}/api/scratchpad`, {
@@ -87,7 +87,7 @@ describe("scratchpad HTTP + MCP routes", () => {
 
   it("exposes scratchpad history and supports restore", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       await putJson(`${baseUrl}/api/scratchpad`, { content: "first" });
@@ -174,7 +174,7 @@ describe("scratchpad HTTP + MCP routes", () => {
     const fixture = createFixture();
     const spPath = path.join(fixture.config.dataDir, "scratchpad.md");
     fs.writeFileSync(spPath, "pre-existing notes");
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const list = await getJson<{ entries: Array<{ source: string; preview: string }> }>(
@@ -187,7 +187,7 @@ describe("scratchpad HTTP + MCP routes", () => {
       await closeServer(server);
     }
 
-    const { server: server2 } = createDaemonApp(fixture);
+    const { server: server2 } = await createDaemonApp(fixture);
     const baseUrl2 = await listen(server2);
     try {
       const list = await getJson<{ entries: unknown[] }>(`${baseUrl2}/api/scratchpad/history`);
@@ -199,7 +199,7 @@ describe("scratchpad HTTP + MCP routes", () => {
 
   it("rejects oversize PUT bodies", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const tooLarge = "x".repeat(1_000_001);
@@ -216,7 +216,7 @@ describe("scratchpad HTTP + MCP routes", () => {
 
   it("exposes read_scratchpad and write_scratchpad through MCP", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const list = await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
@@ -302,7 +302,7 @@ describe("scratchpad HTTP + MCP routes", () => {
 
   it("emits scratchpad.history.updated on every mutation path", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     const listener = await openHistorySseListener(baseUrl);
     try {
