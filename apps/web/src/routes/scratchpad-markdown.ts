@@ -14,7 +14,25 @@ function configure() {
       node.setAttribute("target", "_blank");
     }
   });
+  // Escape inline raw-HTML so bare `<word>` in user text renders as literal
+  // text instead of being tokenized as an unknown HTML tag and then stripped
+  // by DOMPurify — that round trip previously deleted `<user_id>`-style tokens
+  // from blocks even though the stored markdown was intact. Autolinks
+  // (`<https://…>`, `<foo@bar>`) are tokenized as `link` not `html`, so they
+  // continue to render. Block-level html (`<script>…</script>` etc.) passes
+  // through to DOMPurify for sanitization, so XSS hardening is unchanged.
+  marked.use({
+    renderer: {
+      html({ text, block }) {
+        return block ? text : escapeHtml(text);
+      },
+    },
+  });
   configured = true;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 export function renderBlockMarkdown(text: string): string {
