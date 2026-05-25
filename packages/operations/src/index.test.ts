@@ -208,6 +208,42 @@ describe("OperationService", () => {
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
 
+  it("skips teardown hooks and prunes when the worktree directory is already gone", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [
+        {
+          id: "teardown-fails",
+          kind: "command",
+          event: "workspace.teardown",
+          command: "node",
+          args: ["-e", "process.stderr.write('teardown denied'); process.exit(13)"],
+          blocking: true,
+        },
+      ],
+      repoDefaults: { setupHookIds: [], teardownHookIds: ["teardown-fails"] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "Stale Worktree", source: "scratch" });
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === created.workspaceId);
+    expect(workspace).toBeDefined();
+
+    // Simulate the worktree directory disappearing out from under citadel
+    // (e.g. it was removed manually, or by a parallel `git worktree remove`).
+    fs.rmSync(workspace?.path ?? "", { recursive: true, force: true });
+
+    const removed = await service.removeWorkspace({ workspaceId: created.workspaceId });
+    expect(removed).toMatchObject({ removed: true, archived: false });
+    expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
+
+    const operation = store.listOperations().find((op) => op.id === removed.operationId);
+    expect(operation?.status).toBe("succeeded");
+  });
+
   it("records notification hook failures without blocking workspace readiness", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));

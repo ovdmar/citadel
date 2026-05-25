@@ -35,6 +35,22 @@ export function tryRunGit(cwd: string, args: string[]) {
   execFileSync("git", args, { cwd, encoding: "utf8", stdio: "pipe" });
 }
 
+export function cleanupWorktree(
+  repoRoot: string,
+  worktreePath: string,
+): { action: "removed" | "pruned"; warning?: string } {
+  if (fs.existsSync(worktreePath)) {
+    tryRunGit(repoRoot, ["worktree", "remove", "--force", worktreePath]);
+    return { action: "removed" };
+  }
+  try {
+    tryRunGit(repoRoot, ["worktree", "prune"]);
+    return { action: "pruned" };
+  } catch (error) {
+    return { action: "pruned", warning: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export class WorkspaceNameTakenError extends Error {
   constructor(
     readonly repoId: string,

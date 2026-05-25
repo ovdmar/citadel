@@ -49,6 +49,7 @@ import {
   addWorktree,
   cancelOperationInStore,
   classifyWorktreeError,
+  cleanupWorktree,
   discoverDefaultBranch,
   isUniqueWorkspaceNameViolation,
   listHookDiagnostics,
@@ -448,7 +449,8 @@ export class OperationService {
       this.logOp(operation.id, "info", `Killed ${ownedSessions.length} tmux session(s) attached to workspace`);
     }
 
-    if (!input.archiveOnly) {
+    const worktreeMissing = !input.archiveOnly && !fs.existsSync(workspace.path);
+    if (!input.archiveOnly && !worktreeMissing) {
       try {
         this.logOp(
           operation.id,
@@ -478,9 +480,10 @@ export class OperationService {
       }
     }
 
-    if (!input.archiveOnly && fs.existsSync(workspace.path)) {
-      tryRunGit(repo.rootPath, ["worktree", "remove", "--force", workspace.path]);
-      this.logOp(operation.id, "info", `Removed worktree at ${workspace.path}`);
+    if (!input.archiveOnly) {
+      const cleanup = cleanupWorktree(repo.rootPath, workspace.path);
+      this.logOp(operation.id, "info", `${cleanup.action} worktree at ${workspace.path}`);
+      if (cleanup.warning) this.logOp(operation.id, "warn", `git worktree prune failed: ${cleanup.warning}`);
     }
     if (input.archiveOnly) {
       this.store.archiveWorkspace(workspace.id, "archived", dirty);
