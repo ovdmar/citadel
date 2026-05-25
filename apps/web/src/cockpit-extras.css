@@ -41,7 +41,9 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 6px 8px;
+  /* No left padding — the inner <a> uses the same padding as sibling nav
+     links so Dashboard's icon/text line up vertically with them. */
+  padding: 4px 6px 8px 0;
 }
 
 .nav-primary .nav-row > a {

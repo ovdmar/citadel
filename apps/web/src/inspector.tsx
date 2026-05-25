@@ -244,11 +244,11 @@ function StatsTab(props: {
                   )}
                 </div>
                 {checksOpen ? (
-                  <div className="check-list">
+                  <ul className="ch-list">
                     {checks.map((check) => (
                       <CheckRow key={`${check.name}-${check.conclusion ?? check.status}`} check={check} />
                     ))}
-                  </div>
+                  </ul>
                 ) : null}
               </>
             ) : pr ? (
@@ -678,6 +678,44 @@ function checkTone(check: { conclusion: string | null; status: string }) {
   return "pending";
 }
 
+function CheckStatusIcon({ tone, running }: { tone: "success" | "failure" | "pending"; running: boolean }) {
+  if (running) {
+    return (
+      <span className="ch-status ch-status-run" aria-hidden>
+        <Loader2 size={11} className="spin" />
+      </span>
+    );
+  }
+  if (tone === "failure") {
+    return (
+      <span className="ch-status ch-status-bad" aria-hidden>
+        <X size={11} />
+      </span>
+    );
+  }
+  if (tone === "success") {
+    return (
+      <span className="ch-status ch-status-ok" aria-hidden>
+        <Check size={11} />
+      </span>
+    );
+  }
+  return (
+    <span className="ch-status ch-status-skip" aria-hidden>
+      <Hash size={11} />
+    </span>
+  );
+}
+
+function splitCheckName(name: string) {
+  // GitHub-style "suite / job" names show the suite separately so the eye can
+  // group rows from the same workflow. Names without " / " are treated as the
+  // job (no suite).
+  const idx = name.indexOf(" / ");
+  if (idx < 0) return { suite: null as string | null, job: name };
+  return { suite: name.slice(0, idx), job: name.slice(idx + 3) };
+}
+
 function CheckRow(props: {
   check: {
     name: string;
@@ -694,30 +732,43 @@ function CheckRow(props: {
   const now = useNow(isRunning ? 1000 : null);
   const duration = formatCheckDuration(check, isRunning, now);
   const label = formatLabel(check.conclusion ?? check.status);
-  const iconTone = isRunning ? "pending" : tone === "failure" ? "failure" : "success";
+  const { suite, job } = splitCheckName(check.name);
   return (
-    <a
-      className={`check-row ${tone}`}
-      href={check.url ?? undefined}
-      target="_blank"
-      rel="noreferrer"
+    <li
+      className={`ch-row ch-row--${tone}`}
       aria-label={`${check.name} — ${label}${duration ? ` — ${duration}` : ""}`}
       title={`${check.name} — ${label}`}
     >
-      <span className={`check-icon tone-${iconTone}`} aria-hidden>
-        {isRunning ? (
-          <Loader2 size={14} className="spin" />
-        ) : tone === "failure" ? (
-          <X size={14} />
-        ) : (
-          <Check size={14} />
-        )}
+      <CheckStatusIcon tone={tone} running={isRunning} />
+      <span className="ch-provider" title="GitHub Actions">
+        <svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor" role="img" aria-label="GitHub Actions">
+          <title>GitHub Actions</title>
+          <path d="M8 0a8 8 0 100 16A8 8 0 008 0zm3.6 6.4l-4.2 4.2a.6.6 0 01-.85 0L4.4 8.45a.6.6 0 01.85-.85l1.78 1.78L10.75 5.55a.6.6 0 01.85.85z" />
+        </svg>
       </span>
-      <span className="check-name" title={check.name}>
-        {check.name}
+      <span className="ch-name">
+        {suite ? (
+          <>
+            <span className="ch-name-suite">{suite}</span>
+            <span className="ch-name-sep">/</span>
+          </>
+        ) : null}
+        <span className="ch-name-job" title={check.name}>
+          {job}
+        </span>
       </span>
-      <span className="check-duration command-result-meta">{duration || "—"}</span>
-    </a>
+      <span className="ch-time">{duration || "—"}</span>
+      <span className="ch-row-action" aria-hidden />
+      {check.url ? (
+        <a className="ch-details" href={check.url} target="_blank" rel="noreferrer">
+          Details
+        </a>
+      ) : (
+        <span className="ch-details" style={{ visibility: "hidden" }}>
+          Details
+        </span>
+      )}
+    </li>
   );
 }
 
