@@ -5,12 +5,14 @@ import type {
   ActivityEvent,
   AgentSession,
   HookOutput,
+  Namespace,
   Operation,
   OperationLogEntry,
   Repo,
   ScheduledAgent,
   Workspace,
 } from "@citadel/contracts";
+import * as namespaces from "./namespaces.js";
 import {
   activityFromRow,
   operationFromRow,
@@ -162,6 +164,17 @@ export class SqliteStore {
     this.ensureColumn("workspaces", "kind", "TEXT NOT NULL DEFAULT 'worktree'");
     this.ensureColumn("repos", "deploy_hook_command", "TEXT");
     db.exec(`
+      CREATE TABLE IF NOT EXISTS namespaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        color TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+      );
+    `);
+    this.ensureColumn("workspaces", "namespace_id", "TEXT REFERENCES namespaces(id)");
+    db.exec(`
       CREATE TABLE IF NOT EXISTS scheduled_agents (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -182,14 +195,12 @@ export class SqliteStore {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
-      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-      VALUES (2, 'activity-hook-output', datetime('now'));
-      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-      VALUES (3, 'operation-logs-retry', datetime('now'));
-      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-      VALUES (4, 'workspace-linked-urls', datetime('now'));
-      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
-      VALUES (5, 'scheduled-agents', datetime('now'));
+      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+        (2, 'activity-hook-output', datetime('now')),
+        (3, 'operation-logs-retry', datetime('now')),
+        (4, 'workspace-linked-urls', datetime('now')),
+        (5, 'scheduled-agents', datetime('now')),
+        (6, 'namespaces', datetime('now'));
     `);
   }
 
@@ -285,8 +296,8 @@ export class SqliteStore {
     this.database
       .prepare(
         `INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, kind, pr_url,
-          issue_key, issue_title, issue_url, slack_thread_url, section, pinned, lifecycle, dirty, created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          issue_key, issue_title, issue_url, slack_thread_url, section, pinned, lifecycle, dirty, namespace_id, created_at, updated_at, archived_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         workspace.id,
@@ -306,11 +317,23 @@ export class SqliteStore {
         workspace.pinned ? 1 : 0,
         workspace.lifecycle,
         workspace.dirty ? 1 : 0,
+        workspace.namespaceId ?? null,
         workspace.createdAt,
         workspace.updatedAt,
         workspace.archivedAt ?? null,
       );
   }
+
+  setWorkspaceNamespace = (id: string, n: string | null) => namespaces.setWorkspaceNamespace(this.database, id, n);
+  listNamespaces = (includeArchived = false) => namespaces.listNamespaces(this.database, includeArchived);
+  findNamespace = (id: string) => namespaces.findNamespace(this.database, id);
+  findNamespaceByName = (n: string) => namespaces.findNamespaceByName(this.database, n);
+  insertNamespace = (n: Namespace) => namespaces.insertNamespace(this.database, n);
+  updateNamespace = (id: string, p: Partial<Pick<Namespace, "name" | "color">>) =>
+    namespaces.updateNamespace(this.database, id, p);
+  archiveNamespace = (id: string) => namespaces.archiveNamespace(this.database, id);
+  restoreNamespace = (id: string, p?: { color?: string | null }) =>
+    namespaces.restoreNamespace(this.database, id, p ?? {});
 
   updateWorkspaceLifecycle(workspaceId: string, lifecycle: Workspace["lifecycle"], dirty = false) {
     this.database

@@ -339,6 +339,7 @@ describe("agent message MCP + REST routes", () => {
       pinned: false,
       lifecycle: "ready",
       dirty: false,
+      namespaceId: null,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,

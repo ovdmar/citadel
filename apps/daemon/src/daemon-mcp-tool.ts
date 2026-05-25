@@ -1,9 +1,12 @@
 import type { CitadelConfig } from "@citadel/config";
 import {
+  AssignWorkspaceToNamespaceInputSchema,
   CreateAgentSessionInputSchema,
+  CreateNamespaceInputSchema,
   CreateRepoInputSchema,
   CreateWorkspaceInputSchema,
   LaunchAgentInputSchema,
+  UpdateNamespaceInputSchema,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, serializeWorkspaceResource } from "@citadel/mcp";
@@ -35,6 +38,7 @@ export async function readMcpResource(store: SqliteStore, config: CitadelConfig,
   if (uri === "citadel://workspaces") return workspaceResource(store);
   if (uri === "citadel://provider-health") return { providerHealth: await collectProviderHealth(config.providers) };
   if (uri === "citadel://activity") return { activity: store.listActivity() };
+  if (uri === "citadel://namespaces") return { namespaces: store.listNamespaces() };
   return null;
 }
 
@@ -112,6 +116,50 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     if (typeof call.arguments?.maxChars === "number") input.maxChars = call.arguments.maxChars;
     return operations.readAgentTranscript(input);
   }
+  if (call.name === "create_namespace") {
+    const result = operations.createNamespace(CreateNamespaceInputSchema.parse(call.arguments ?? {}));
+    emit("namespace.updated", { namespaceId: result.namespace.id });
+    return { namespace: result.namespace, created: result.created };
+  }
+  if (call.name === "update_namespace") {
+    const namespaceId = typeof call.arguments?.namespaceId === "string" ? call.arguments.namespaceId : "";
+    if (!namespaceId) return { error: "namespace_id_required" };
+    const { namespaceId: _ignored, ...rest } = (call.arguments ?? {}) as Record<string, unknown>;
+    const patch = UpdateNamespaceInputSchema.parse(rest);
+    const namespace = operations.renameNamespace(namespaceId, patch);
+    if (!namespace) return { error: "namespace_not_found", namespaceId };
+    emit("namespace.updated", { namespaceId });
+    return { namespace };
+  }
+  if (call.name === "archive_namespace") {
+    const namespaceId = typeof call.arguments?.namespaceId === "string" ? call.arguments.namespaceId : "";
+    if (!namespaceId) return { error: "namespace_id_required" };
+    const namespace = operations.archiveNamespace(namespaceId);
+    if (!namespace) return { error: "namespace_not_found", namespaceId };
+    emit("namespace.updated", { namespaceId });
+    return { namespace };
+  }
+  if (call.name === "restore_namespace") {
+    const namespaceId = typeof call.arguments?.namespaceId === "string" ? call.arguments.namespaceId : "";
+    if (!namespaceId) return { error: "namespace_id_required" };
+    const namespace = operations.restoreNamespace(namespaceId);
+    if (!namespace) return { error: "namespace_not_found", namespaceId };
+    emit("namespace.updated", { namespaceId });
+    return { namespace };
+  }
+  if (call.name === "assign_workspace_to_namespace") {
+    const input = AssignWorkspaceToNamespaceInputSchema.parse(call.arguments ?? {});
+    const result = operations.assignWorkspaceToNamespace(input);
+    if (result.assigned) {
+      emit("namespace.updated", { workspaceId: input.workspaceId, namespaceId: input.namespaceId });
+      emit("workspace.updated", { workspaceId: input.workspaceId });
+    }
+    return result;
+  }
+  if (call.name === "list_namespaces") {
+    const includeArchived = call.arguments?.includeArchived === true;
+    return { namespaces: store.listNamespaces(includeArchived) };
+  }
   if (call.name === "read_scratchpad") {
     return readScratchpad(config.dataDir);
   }
@@ -178,9 +226,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     activity: store.listActivity(),
     providerHealth,
     runtimes: listRuntimeHealth(config.runtimes),
-    // Per-session summary comes from the runtime's own transcript via the
-    // adapter dispatcher. mtime pre-filter inside each adapter keeps list
-    // calls cheap even on big project dirs.
+    namespaces: store.listNamespaces(),
     sessionPromptSummary: (sessionId) => operations.getSessionPromptSummary(sessionId),
   });
 }

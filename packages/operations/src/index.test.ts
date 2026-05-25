@@ -545,7 +545,7 @@ describe("OperationService", () => {
     expect(session?.displayName).toBe("describe the repo in one sentence");
   });
 
-  it("launchAgent resolves repo by id and accepts namespaceId as a pass-through warning", async () => {
+  it("launchAgent resolves repo by id and assigns the workspace to the given namespace", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
@@ -555,13 +555,14 @@ describe("OperationService", () => {
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const { namespace } = service.createNamespace({ name: "team-a" });
 
     const result = await service.launchAgent(
       {
         repoId: repo.id,
         prompt: "investigate the failing build",
         runtimeId: "shell",
-        namespaceId: "team-a",
+        namespaceId: namespace.id,
         workspaceName: "investigate-build",
         displayName: "Build Triage",
       },
@@ -572,12 +573,9 @@ describe("OperationService", () => {
 
     expect(result.error).toBeUndefined();
     expect(session?.displayName).toBe("Build Triage");
-    expect(store.listWorkspaces().find((candidate) => candidate.id === result.workspaceId)?.name).toBe(
-      "investigate-build",
-    );
-    // namespaceId is accepted but ignored — we surface it as an activity event
-    // so orchestrators can see it didn't take effect.
-    expect(store.listActivity().some((event) => event.type === "launch_agent.namespace_ignored")).toBe(true);
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === result.workspaceId);
+    expect(workspace?.name).toBe("investigate-build");
+    expect(workspace?.namespaceId).toBe(namespace.id);
   });
 
   it("launchAgent throws when the named repo doesn't exist (no workspace gets created)", async () => {

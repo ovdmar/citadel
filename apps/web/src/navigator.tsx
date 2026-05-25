@@ -1,4 +1,5 @@
-import type { AgentSession, Operation, Repo, Workspace, WorkspaceCockpitSummary } from "@citadel/contracts";
+import type { AgentSession, Namespace, Operation, Repo, Workspace, WorkspaceCockpitSummary } from "@citadel/contracts";
+import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
   ChevronRight,
@@ -11,6 +12,7 @@ import {
   Settings2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { api, queryClient } from "./api.js";
 import { AddRepoModal, CreateWorkspaceModal, GroupByMenu, type GroupKey } from "./modals.js";
 import {
   type GroupNode,
@@ -36,6 +38,7 @@ export function Navigator(props: {
   activeSummary: WorkspaceCockpitSummary | undefined;
   activeWorkspaceId: string;
   runtimes: import("@citadel/contracts").AgentRuntime[];
+  namespaces: Namespace[];
   lastRepoId: string | undefined;
   createWorkspaceOpen: boolean;
   onOpenCreateWorkspace: () => void;
@@ -48,14 +51,14 @@ export function Navigator(props: {
   const [grouping, setGrouping] = useState<GroupKey>(() => {
     if (typeof window === "undefined") return "repo";
     const raw = window.localStorage.getItem(GROUP_STORAGE);
-    if (raw === "repo" || raw === "status" || raw === "none") return raw;
+    if (raw === "repo" || raw === "status" || raw === "namespace" || raw === "none") return raw;
     // Migration: legacy storage held an array like ["repo","status"]; collapse
     // to the first entry, otherwise default to "repo".
     if (raw?.startsWith("[")) {
       try {
         const parsed = JSON.parse(raw) as unknown[];
         const first = parsed[0];
-        if (first === "repo" || first === "status" || first === "none") return first;
+        if (first === "repo" || first === "status" || first === "namespace" || first === "none") return first;
       } catch {
         // fall through to default
       }
@@ -97,10 +100,17 @@ export function Navigator(props: {
   // Intentionally exclude props.activeSummary from buildGroupTree: status sections
   // are derived from /api/state only, so the active workspace doesn't drift
   // between sections each time the per-workspace cockpit-summary refetches.
-  const treeGrouping = useMemo<GroupableKey[]>(() => (grouping === "none" ? [] : [grouping]), [grouping]);
+  // Namespace mode renders as a two-level tree (repo → namespace) so two
+  // workspaces named "main" in different repos don't collapse into a single
+  // ambiguous bucket. The tree builder handles namespace bucketing natively.
+  const treeGrouping = useMemo<GroupableKey[]>(
+    () => (grouping === "none" ? [] : grouping === "namespace" ? ["repo", "namespace"] : [grouping as GroupableKey]),
+    [grouping],
+  );
   const tree = useMemo(
-    () => buildGroupTree(props.workspaces, props.repos, props.sessions, props.operations, treeGrouping),
-    [props.workspaces, props.repos, props.sessions, props.operations, treeGrouping],
+    () =>
+      buildGroupTree(props.workspaces, props.repos, props.sessions, props.operations, treeGrouping, props.namespaces),
+    [props.workspaces, props.repos, props.sessions, props.operations, treeGrouping, props.namespaces],
   );
   const historyCount = props.operations.length;
 
@@ -123,6 +133,35 @@ export function Navigator(props: {
     });
   }, [tree, treeGrouping]);
 
+  const namespacesById = useMemo(() => {
+    const map = new Map<string, Namespace>();
+    for (const namespace of props.namespaces) map.set(namespace.id, namespace);
+    return map;
+  }, [props.namespaces]);
+
+  const assignNamespace = useMutation({
+    mutationFn: (input: { workspaceId: string; namespaceId: string | null }) =>
+      api("/api/namespaces/assign", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+  });
+
+  const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
+  const onDropOnNamespace = useCallback(
+    (event: React.DragEvent, namespaceId: string | null) => {
+      event.preventDefault();
+      setDropTargetPath(null);
+      const workspaceId = event.dataTransfer.getData("application/x-citadel-workspace-id");
+      if (!workspaceId) return;
+      const workspace = props.workspaces.find((entry) => entry.id === workspaceId);
+      if (!workspace || workspace.namespaceId === namespaceId) return;
+      assignNamespace.mutate({ workspaceId, namespaceId });
+    },
+    [assignNamespace, props.workspaces],
+  );
+
   const renderWorkspace = useCallback(
     ({ workspace, sessions }: WorkspaceEntry) => (
       <WorkspaceCard
@@ -134,11 +173,14 @@ export function Navigator(props: {
             ? (props.activeSummary.versionControl.pullRequest ?? null)
             : null
         }
+        namespace={workspace.namespaceId ? (namespacesById.get(workspace.namespaceId) ?? null) : null}
+        namespaces={props.namespaces}
         active={workspace.id === props.activeWorkspaceId}
+        draggable={grouping === "namespace"}
         onSelect={() => props.onPickWorkspace(workspace)}
       />
     ),
-    [props.activeSummary, props.activeWorkspaceId, props.onPickWorkspace],
+    [props.activeSummary, props.activeWorkspaceId, props.onPickWorkspace, props.namespaces, namespacesById, grouping],
   );
 
   const flatEntries = useMemo<WorkspaceEntry[]>(
@@ -228,11 +270,18 @@ export function Navigator(props: {
                 collapsed={collapsed}
                 onToggle={toggleCollapsed}
                 renderWorkspace={renderWorkspace}
+                dropTargetPath={dropTargetPath}
+                onDropTargetChange={setDropTargetPath}
+                onDropOnNamespace={onDropOnNamespace}
               />
             ))
           )}
           {!props.workspaces.length ? (
-            <div className="empty compact">No workspaces yet. Use the plus button above to create one.</div>
+            <div className="empty compact">
+              {props.repos.length
+                ? "No workspaces yet. Use the plus button above to create one."
+                : "No repositories registered yet. Use the folder button above to register one."}
+            </div>
           ) : null}
         </div>
         <div className="nav-foot">
@@ -258,6 +307,7 @@ export function Navigator(props: {
           repos={props.repos}
           {...(props.lastRepoId ? { lastRepoId: props.lastRepoId } : {})}
           runtimes={props.runtimes}
+          namespaces={props.namespaces}
           onClose={props.onCloseCreateWorkspace}
           onCreated={(workspaceId) => {
             props.onCloseCreateWorkspace();
@@ -272,22 +322,46 @@ export function Navigator(props: {
 
 const DEPTH_INDENT_PX = 10;
 
-function GroupNodeView(props: {
+type GroupNodeViewProps = {
   node: GroupNode;
   depth: number;
   collapsed: Record<string, boolean>;
   onToggle: (path: string) => void;
   renderWorkspace: (entry: WorkspaceEntry) => React.ReactNode;
-}) {
-  const { node, depth, collapsed, onToggle, renderWorkspace } = props;
+  // Namespace leaves accept workspace drops; non-namespace groupings simply
+  // ignore these.
+  dropTargetPath: string | null;
+  onDropTargetChange: (path: string | null) => void;
+  onDropOnNamespace: (event: React.DragEvent, namespaceId: string | null) => void;
+};
+
+function GroupNodeView(props: GroupNodeViewProps) {
+  const { node, depth, collapsed, onToggle, renderWorkspace, dropTargetPath, onDropTargetChange, onDropOnNamespace } =
+    props;
   const isCollapsed = collapsed[node.path] === true;
   // encodeURIComponent keeps DOM ids unique even when group labels contain spaces,
   // slashes, or other characters that would otherwise collapse to the same id.
   const headerId = `nav-group-${encodeURIComponent(node.path)}`;
   const bodyId = `${headerId}-body`;
   const style = depth > 0 ? { paddingLeft: depth * DEPTH_INDENT_PX } : undefined;
+  // Namespace leaves carry namespaceId (null === "Uncategorized" drop target).
+  const acceptsDrop = node.kind === "leaf" && node.namespaceId !== undefined;
+  const isDropHover = acceptsDrop && dropTargetPath === node.path;
+  const dropHandlers = acceptsDrop
+    ? {
+        onDragOver: (event: React.DragEvent) => {
+          if (event.dataTransfer.types.includes("application/x-citadel-workspace-id")) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+            onDropTargetChange(node.path);
+          }
+        },
+        onDragLeave: () => onDropTargetChange(null),
+        onDrop: (event: React.DragEvent) => onDropOnNamespace(event, node.namespaceId ?? null),
+      }
+    : {};
   return (
-    <div className="nav-group" style={style}>
+    <div className={`nav-group ${isDropHover ? "drop-hover" : ""}`} style={style} {...dropHandlers}>
       <button
         type="button"
         id={headerId}
@@ -304,18 +378,25 @@ function GroupNodeView(props: {
       </button>
       {isCollapsed ? null : (
         <div id={bodyId} className="nav-group-body">
-          {node.kind === "group"
-            ? node.children.map((child) => (
-                <GroupNodeView
-                  key={child.id}
-                  node={child}
-                  depth={depth + 1}
-                  collapsed={collapsed}
-                  onToggle={onToggle}
-                  renderWorkspace={renderWorkspace}
-                />
-              ))
-            : node.workspaces.map((entry) => renderWorkspace(entry))}
+          {node.kind === "group" ? (
+            node.children.map((child) => (
+              <GroupNodeView
+                key={child.id}
+                node={child}
+                depth={depth + 1}
+                collapsed={collapsed}
+                onToggle={onToggle}
+                renderWorkspace={renderWorkspace}
+                dropTargetPath={dropTargetPath}
+                onDropTargetChange={onDropTargetChange}
+                onDropOnNamespace={onDropOnNamespace}
+              />
+            ))
+          ) : node.workspaces.length ? (
+            node.workspaces.map((entry) => renderWorkspace(entry))
+          ) : acceptsDrop ? (
+            <div className="nav-group-empty">Drop a workspace here</div>
+          ) : null}
         </div>
       )}
     </div>

@@ -210,6 +210,7 @@ export function Cockpit() {
               activeSummary={cockpitSummary.data}
               activeWorkspaceId={activeWorkspace?.id ?? ""}
               runtimes={data?.runtimes ?? []}
+              namespaces={data?.namespaces ?? []}
               lastRepoId={lastRepoId || undefined}
               createWorkspaceOpen={createWorkspaceOpen}
               onOpenCreateWorkspace={() => setCreateWorkspaceOpen(true)}

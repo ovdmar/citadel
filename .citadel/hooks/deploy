@@ -9,15 +9,14 @@
 #                           stdout/stderr stream back to the cockpit operation log.
 #
 # What this hook starts:
-#   The worktree-local daemon (apps/daemon) on a derived port. The daemon also
-#   serves the bundled cockpit (apps/web/dist) from the same origin, so the UI
-#   and the /api routes always come from this branch's build — no Vite proxy,
-#   no risk of the cockpit hitting a different daemon (e.g. the systemd main
-#   one on 4010) and seeing routes from a different branch.
+#   The worktree-local HMR dev stack via `make -s deploy`: a daemon (tsx watch)
+#   on a derived port + vite (HMR) on another derived port, both detached under
+#   one process group. The advertised URL is the vite cockpit URL — that's the
+#   one with HMR, so subsequent source edits show up live without re-clicking
+#   Redeploy.
 #
-# Delegates the actual build+start to `make -s deploy-worktree`, which is the
-# canonical worktree deploy path. This hook exists so the cockpit's "Redeploy"
-# button reuses the same flow.
+# Delegates to `make -s deploy` so the cockpit's Redeploy chip and a developer
+# in a terminal trigger the exact same flow.
 #
 # Environment provided by Citadel:
 #   CITADEL_WORKSPACE_ID    — opaque workspace id
@@ -32,19 +31,41 @@
 #                            multiple NICs and you want a specific one in the
 #                            cockpit chip.
 #
-# Port derivation: 4110 + (cksum($WORKTREE_PATH) mod 100) — same formula the
-# Makefile uses, so `make deploy` and the cockpit's Redeploy land on the same
-# port for a given worktree.
+# Port derivation: prefer ports persisted in .citadel/dev.json (the daemon
+# writes the daemon port on boot; the Makefile seeds webPort the first time
+# `make deploy` runs). Fall back to cksum-derived defaults when dev.json is
+# missing (no daemon has booted from this worktree yet). We advertise the
+# *web* port — that's the vite cockpit with HMR; the daemon port is plumbing.
 
 set -euo pipefail
 
 APP_NAME="citadel"
 WORKTREE="${CITADEL_WORKSPACE_PATH:-$(pwd)}"
 
+dev_state_field() {
+  local field="$1"
+  local file="$WORKTREE/.citadel/dev.json"
+  if [[ -r "$file" ]] && command -v jq >/dev/null 2>&1; then
+    jq -r ".$field // empty" "$file" 2>/dev/null || true
+  fi
+}
+
 derive_port() {
+  local persisted
+  persisted=$(dev_state_field port)
+  if [[ -n "$persisted" ]]; then printf '%d' "$persisted"; return; fi
   local sum
   sum=$(printf '%s' "$WORKTREE" | cksum | awk '{print $1}')
   printf '%d' $(( 4110 + (sum % 100) ))
+}
+
+derive_web_port() {
+  local persisted
+  persisted=$(dev_state_field webPort)
+  if [[ -n "$persisted" ]]; then printf '%d' "$persisted"; return; fi
+  local sum
+  sum=$(printf '%s' "$WORKTREE/web" | cksum | awk '{print $1}')
+  printf '%d' $(( 5210 + (sum % 100) ))
 }
 
 derive_host() {
@@ -65,9 +86,9 @@ derive_host() {
   printf '%s' "${ip:-127.0.0.1}"
 }
 
-PORT="$(derive_port)"
+WEB_PORT="$(derive_web_port)"
 HOST="$(derive_host)"
-URL="http://${HOST}:${PORT}"
+URL="http://${HOST}:${WEB_PORT}"
 
 case "${1:-}" in
   list)
@@ -84,12 +105,15 @@ case "${1:-}" in
       exit 127
     fi
     cd "$WORKTREE"
-    echo "→ Delegating to 'make deploy-worktree' (worktree=${WORKTREE})"
-    # deploy-worktree handles: build, stop prior daemon, free the port, start
-    # the new daemon detached via setsid+nohup, record pgid under .citadel/logs.
-    # Streams progress to this hook's stdout/stderr so the cockpit operation
-    # log shows the live build + boot output.
-    make -s deploy-worktree
+    echo "→ Delegating to 'make deploy' (worktree=${WORKTREE})"
+    # `make deploy` is the canonical dev command for both terminals and this
+    # hook. It's detached HMR: stops the previous pgid, starts daemon (tsx
+    # watch) + vite under one process group, polls the daemon's /api/state
+    # until ready, then returns. Streams progress to this hook's stdout/stderr
+    # so the cockpit operation log shows the live boot output. Subsequent
+    # source edits hot-reload — clicking Redeploy again only matters when you
+    # want a clean restart.
+    make -s deploy
     echo "${APP_NAME} reachable at ${URL}"
     ;;
   ""|--help|-h|help)

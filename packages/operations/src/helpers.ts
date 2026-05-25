@@ -148,6 +148,7 @@ export function reconcileStore(
           pinned: true,
           lifecycle: "ready",
           dirty: false,
+          namespaceId: null,
           createdAt: now,
           updatedAt: now,
           archivedAt: null,

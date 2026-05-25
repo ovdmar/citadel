@@ -20,6 +20,7 @@ const baseWorkspace: Workspace = {
   pinned: false,
   lifecycle: "ready",
   dirty: false,
+  namespaceId: null,
   createdAt: "2026-05-23T00:00:00.000Z",
   updatedAt: "2026-05-23T00:00:00.000Z",
   archivedAt: null,

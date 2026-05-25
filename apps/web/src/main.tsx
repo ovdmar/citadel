@@ -21,6 +21,7 @@ import "./inspector-deploy.css";
 import "./inspector-meta.css";
 import "./cockpit-tools.css";
 import "./modals.css";
+import "./namespaces.css";
 import "./operations.css";
 import "./settings.css";
 import "./settings-ia.css";

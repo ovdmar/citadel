@@ -46,18 +46,6 @@ export async function launchAgent(
   runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
 ): Promise<LaunchAgentResult> {
   const repo = resolveRepo(deps.store, input);
-  if (input.namespaceId) {
-    // namespaces are not implemented yet; accept but flag so the orchestrator
-    // sees that we ignored it rather than silently dropping it.
-    deps.activity({
-      type: "launch_agent.namespace_ignored",
-      source: "system",
-      message: `launch_agent received namespaceId=${input.namespaceId} but namespaces are not yet implemented`,
-      repoId: repo.id,
-      workspaceId: null,
-      operationId: null,
-    });
-  }
   const workspaceName = input.workspaceName ?? `agent-${createId("ws").slice(-8)}`;
   const branchOverride = input.branchName?.trim();
   const workspaceInput: CreateWorkspaceInput = {
@@ -65,6 +53,7 @@ export async function launchAgent(
     name: workspaceName,
     source: "scratch",
     ...(branchOverride ? { existingBranch: branchOverride } : {}),
+    ...(input.namespaceId ? { namespaceId: input.namespaceId } : {}),
   };
   const { operationId, workspaceId } = await deps.createWorkspace(workspaceInput);
   const created = findWorkspace(deps.store, workspaceId);
@@ -84,6 +73,7 @@ export async function launchAgent(
     runtimeId: input.runtimeId,
     displayName: input.displayName ?? deriveAgentDisplayName(input.prompt),
     prompt: input.prompt,
+    ...(input.namespaceId ? { namespaceId: input.namespaceId } : {}),
   };
   try {
     const session = await deps.createAgentSession(sessionInput, runtime);

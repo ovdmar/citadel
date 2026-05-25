@@ -60,6 +60,7 @@ export function workspaceFromRow(row: Record<string, unknown>): Workspace {
     pinned: Number(row.pinned) === 1,
     lifecycle: asString(row, "lifecycle") as Workspace["lifecycle"],
     dirty: Number(row.dirty) === 1,
+    namespaceId: row.namespace_id ? asString(row, "namespace_id") : null,
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
     archivedAt: row.archived_at ? asString(row, "archived_at") : null,
