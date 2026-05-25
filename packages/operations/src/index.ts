@@ -65,7 +65,7 @@ export {
   WorkspaceNameTakenError,
 } from "./helpers.js";
 import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
-export type { RequestReviewResult, UpdateReviewCommentResult } from "./review-system.js";
+export { addReviewComment, deleteReviewComment, listReviewComments, requestReviewForWorkspace, updateReviewComment } from "./review-system.js";
 import {
   type WorkspaceAppsDeps,
   discoverWorkspaceApps as discoverWorkspaceAppsImpl,
