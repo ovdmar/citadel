@@ -70,11 +70,11 @@ try {
     });
     await time("workspace_settings_switch", 1000, async () => {
       await page.getByRole("link", { name: "Settings" }).first().click();
+      await page.waitForURL("**/settings");
       await page.getByRole("heading", { name: "Settings", exact: true }).waitFor();
-      await page
-        .locator(".settings-header-actions")
-        .getByRole("link", { name: /workspaces/i })
-        .click();
+      // The Settings redesign dropped the duplicate "Workspaces" top-right
+      // link; the back-to-cockpit chip in the topbar is the canonical exit.
+      await page.locator("a.set-back").click();
       await page.locator("main[aria-label='Agent stage']").waitFor();
     });
   } finally {

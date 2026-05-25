@@ -27,6 +27,8 @@ import "./namespaces.css";
 import "./operations.css";
 import "./settings.css";
 import "./settings-ia.css";
+import "./settings-cards.css";
+import "./settings-rows.css";
 import "./scheduled-agents.css";
 import "./scheduled-agents-shell.css";
 import "./runtime-usage.css";
