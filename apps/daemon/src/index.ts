@@ -12,8 +12,35 @@ import { createDaemonApp } from "./app.js";
 // fires when someone runs `node dist/index.js` raw without setting up env.
 const worktreeRoot = resolveWorktreeRoot();
 const devState = worktreeRoot ? loadDevState(worktreeRoot) : null;
-if (worktreeRoot && !process.env.CITADEL_DATA_DIR) {
-  process.env.CITADEL_DATA_DIR = `${worktreeRoot}/.citadel/data`;
+// In worktree mode, FORCE-isolate from inherited env that could point at the
+// prod install. The systemd unit sets CITADEL_CONFIG and CITADEL_DATA_DIR at
+// the prod paths; when the cockpit (running under systemd) invokes `make
+// deploy` from a worktree, those vars are inherited by the make subprocess
+// and would otherwise leak into the worktree daemon, causing it to read/write
+// the prod config + data. Wiping them here is defense in depth — the
+// Makefile also scrubs them, but this guarantees correct behavior regardless
+// of how the worktree daemon was launched.
+if (worktreeRoot) {
+  // CITADEL_CONFIG: only honored when it points inside this worktree.
+  // Otherwise we ignore it and let defaultConfigPath derive a worktree-scoped
+  // path from CITADEL_DATA_DIR.
+  if (process.env.CITADEL_CONFIG && !process.env.CITADEL_CONFIG.startsWith(`${worktreeRoot}/`)) {
+    console.warn(
+      `Ignoring inherited CITADEL_CONFIG=${process.env.CITADEL_CONFIG} — points outside the worktree (${worktreeRoot}). Worktree daemons must use worktree-scoped config.`,
+    );
+    process.env.CITADEL_CONFIG = "";
+  }
+  // CITADEL_DATA_DIR: same rule — must be inside the worktree, otherwise
+  // force the worktree-local path.
+  const expectedDataDir = `${worktreeRoot}/.citadel/data`;
+  if (process.env.CITADEL_DATA_DIR && !process.env.CITADEL_DATA_DIR.startsWith(`${worktreeRoot}/`)) {
+    console.warn(
+      `Ignoring inherited CITADEL_DATA_DIR=${process.env.CITADEL_DATA_DIR} — points outside the worktree (${worktreeRoot}). Using ${expectedDataDir} instead.`,
+    );
+    process.env.CITADEL_DATA_DIR = expectedDataDir;
+  } else if (!process.env.CITADEL_DATA_DIR) {
+    process.env.CITADEL_DATA_DIR = expectedDataDir;
+  }
 }
 if (devState && !process.env.CITADEL_PORT) {
   process.env.CITADEL_PORT = String(devState.port);
