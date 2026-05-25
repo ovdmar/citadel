@@ -685,3 +685,152 @@
 [data-theme="dark"] .ch-pill-bad {
   color: oklch(75% 0.16 25);
 }
+
+.ch-pill-run {
+  background: oklch(70% 0.13 70 / 0.22);
+  color: oklch(45% 0.14 70);
+}
+
+.ch-pill-skip {
+  background: var(--c-line-2);
+  color: var(--c-fg-3);
+}
+
+[data-theme="dark"] .ch-pill-run {
+  color: oklch(80% 0.13 70);
+}
+
+.ch-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--c-card);
+  border: 0.5px solid var(--c-line-2);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: var(--sh-card);
+}
+
+.ch-row {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-top: 0.5px solid var(--c-line-1);
+  font-size: 11.5px;
+  position: relative;
+  color: var(--c-fg-1);
+}
+
+.ch-row:first-child {
+  border-top: 0;
+}
+
+.ch-row:hover {
+  background: var(--c-elev);
+}
+
+.ch-row-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+}
+
+.ch-provider {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--c-line-1);
+  color: var(--c-fg-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.ch-name {
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.ch-name-suite {
+  color: var(--c-fg-3);
+  font-size: 10.5px;
+}
+
+.ch-name-sep {
+  color: var(--c-fg-4);
+}
+
+.ch-name-job {
+  color: var(--c-fg-1);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ch-required {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--c-fg-3);
+  background: var(--c-line-1);
+  border: 0.5px solid var(--c-line-2);
+  padding: 1px 5px;
+  border-radius: 4px;
+  margin-left: 4px;
+}
+
+.ch-time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--c-fg-4);
+  font-variant-numeric: tabular-nums;
+}
+
+.ch-details {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: oklch(50% 0.12 240);
+  padding: 1px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-decoration: none;
+  opacity: 0.6;
+}
+
+.ch-row:hover .ch-details {
+  opacity: 1;
+}
+
+.ch-details:hover {
+  background: var(--c-line-1);
+  text-decoration: underline;
+}
+
+[data-theme="dark"] .ch-details {
+  color: oklch(72% 0.12 240);
+}
+
+.ch-status .spin,
+.ch-spin {
+  animation: ch-spin 1.2s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes ch-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
