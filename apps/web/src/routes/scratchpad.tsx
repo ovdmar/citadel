@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { ArrowLeft, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
+import { VoiceCaptureButton } from "../components/voice-capture-button.js";
 import { sideBySideDiff } from "./scratchpad-diff.js";
 import { formatBytes, pillLabel, pillSlug } from "./scratchpad-helpers.js";
 import { renderBlockMarkdown } from "./scratchpad-markdown.js";
@@ -460,23 +461,30 @@ export function ScratchpadView() {
                     {composerError}
                   </p>
                 ) : null}
-                <textarea
-                  ref={composerRef}
-                  className="scratchpad-composer-input"
-                  aria-label="New scratchpad block"
-                  placeholder="Add a note. ⌘/Ctrl-Enter creates a new block."
-                  value={composer}
-                  onChange={(event) => setComposer(event.target.value)}
-                  onInput={(event) => {
-                    const el = event.currentTarget;
-                    el.style.height = "auto";
-                    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-                  }}
-                  onKeyDown={onComposerKey}
-                  onBlur={onComposerBlur}
-                  disabled={!loaded}
-                  rows={2}
-                />
+                <div className="scratchpad-composer-row">
+                  <textarea
+                    ref={composerRef}
+                    className="scratchpad-composer-input"
+                    aria-label="New scratchpad block"
+                    placeholder="Add a note. ⌘/Ctrl-Enter creates a new block."
+                    value={composer}
+                    onChange={(event) => setComposer(event.target.value)}
+                    onInput={(event) => {
+                      const el = event.currentTarget;
+                      el.style.height = "auto";
+                      el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+                    }}
+                    onKeyDown={onComposerKey}
+                    onBlur={onComposerBlur}
+                    disabled={!loaded}
+                    rows={2}
+                  />
+                  <VoiceCaptureButton
+                    onTranscript={(text) =>
+                      setComposer((prev) => (prev.trim().length === 0 ? text : `${prev.trim()} ${text}`))
+                    }
+                  />
+                </div>
               </div>
               {undo ? (
                 <output className="scratchpad-undo-toast">
@@ -651,16 +659,24 @@ function BlockItem(props: BlockItemProps) {
   if (block.isEditing) {
     return (
       <div className="scratchpad-block scratchpad-block-editing">
-        <textarea
-          ref={editorRef}
-          className="scratchpad-block-textarea"
-          aria-label="Edit block"
-          value={block.draft}
-          onInput={onTextareaInput}
-          onChange={(event) => onChange(block.id, event.target.value)}
-          onBlur={(event) => onBlur(block.id, event.target.value)}
-          onKeyDown={(event) => onKey(block.id, event)}
-        />
+        <div className="scratchpad-block-edit-row">
+          <textarea
+            ref={editorRef}
+            className="scratchpad-block-textarea"
+            aria-label="Edit block"
+            value={block.draft}
+            onInput={onTextareaInput}
+            onChange={(event) => onChange(block.id, event.target.value)}
+            onBlur={(event) => onBlur(block.id, event.target.value)}
+            onKeyDown={(event) => onKey(block.id, event)}
+          />
+          <VoiceCaptureButton
+            onTranscript={(text) => {
+              const merged = block.draft.trim().length === 0 ? text : `${block.draft.trim()} ${text}`;
+              onChange(block.id, merged);
+            }}
+          />
+        </div>
       </div>
     );
   }

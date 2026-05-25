@@ -273,6 +273,51 @@
   color: var(--color-danger, #f08097);
 }
 
+.scratchpad-composer-row,
+.scratchpad-block-edit-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  width: 100%;
+}
+
+.scratchpad-composer-row > .scratchpad-composer-input,
+.scratchpad-block-edit-row > .scratchpad-block-textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Voice capture mic toggle — rendered next to the composer textarea and per-block editor. */
+.scratchpad-mic {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: inherit;
+  cursor: pointer;
+}
+
+.scratchpad-mic:hover {
+  background: var(--panel-strong, var(--panel));
+}
+
+.scratchpad-mic.is-listening {
+  background: var(--color-action, #4f8cff);
+  color: var(--topbar-bg, #fff);
+  border-color: var(--color-action, #4f8cff);
+  animation: scratchpad-mic-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes scratchpad-mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(79, 140, 255, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(79, 140, 255, 0); }
+}
+
 /* Undo toast for optimistic-delete. */
 .scratchpad-undo-toast {
   position: fixed;
