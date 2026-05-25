@@ -109,4 +109,32 @@ test.describe("cockpit theme audit", () => {
     await page.screenshot({ path: `docs/campaigns/theme-dark-${testInfo.project.name}-settings.png`, fullPage: true });
     expect(await collectOffenders(page, PURE_WHITE_OFFENDER)).toEqual([]);
   });
+
+  test("theme button cycles light → dark → system across three clicks", async ({ page }) => {
+    // Start from light so the cycle is observable: light → dark → system → light.
+    await forceTheme(page, "light");
+    await page.goto("/settings");
+    const themeButton = page.getByRole("button", { name: /^Theme: /i });
+    await expect(themeButton).toBeVisible();
+
+    // Light → Dark
+    await expect(themeButton).toHaveAttribute("aria-label", /Theme: Light\. Click for Dark\./);
+    await themeButton.click();
+    await expect(themeButton).toHaveAttribute("aria-label", /Theme: Dark\. Click for System\./);
+    expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("dark");
+    expect(await page.evaluate(() => localStorage.getItem("citadel.theme"))).toBe("dark");
+
+    // Dark → System (the data-theme attribute should be removed; resolved theme
+    // is then governed by matchMedia, not asserted here)
+    await themeButton.click();
+    await expect(themeButton).toHaveAttribute("aria-label", /Theme: System\. Click for Light\./);
+    expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBeUndefined();
+    expect(await page.evaluate(() => localStorage.getItem("citadel.theme"))).toBe("system");
+
+    // System → Light (full loop)
+    await themeButton.click();
+    await expect(themeButton).toHaveAttribute("aria-label", /Theme: Light\. Click for Dark\./);
+    expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe("light");
+    expect(await page.evaluate(() => localStorage.getItem("citadel.theme"))).toBe("light");
+  });
 });
