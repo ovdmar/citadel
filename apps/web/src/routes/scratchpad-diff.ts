@@ -1,5 +1,11 @@
 export type DiffLine = { kind: "context" | "add" | "remove"; text: string };
 
+export type SideRow =
+  | { kind: "context"; oldNo: number; newNo: number; text: string }
+  | { kind: "add"; newNo: number; text: string }
+  | { kind: "remove"; oldNo: number; text: string }
+  | { kind: "skip"; hiddenCount: number };
+
 export function lineDiff(oldText: string, newText: string): DiffLine[] {
   const a = oldText.split("\n");
   const b = newText.split("\n");
@@ -40,6 +46,61 @@ export function lineDiff(oldText: string, newText: string): DiffLine[] {
   while (j < m) {
     out.push({ kind: "add", text: b[j] ?? "" });
     j += 1;
+  }
+  return out;
+}
+
+export function sideBySideDiff(oldText: string, newText: string, contextLines = 3): SideRow[] {
+  const lines = lineDiff(oldText, newText);
+  const expanded: SideRow[] = [];
+  let oldNo = 0;
+  let newNo = 0;
+  for (const line of lines) {
+    if (line.kind === "context") {
+      oldNo += 1;
+      newNo += 1;
+      expanded.push({ kind: "context", oldNo, newNo, text: line.text });
+    } else if (line.kind === "add") {
+      newNo += 1;
+      expanded.push({ kind: "add", newNo, text: line.text });
+    } else {
+      oldNo += 1;
+      expanded.push({ kind: "remove", oldNo, text: line.text });
+    }
+  }
+  const out: SideRow[] = [];
+  let i = 0;
+  while (i < expanded.length) {
+    const current = expanded[i];
+    if (!current || current.kind !== "context") {
+      if (current) out.push(current);
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (j < expanded.length && expanded[j]?.kind === "context") j += 1;
+    const runLen = j - i;
+    const isStart = out.length === 0;
+    const isEnd = j === expanded.length;
+    const lead = isStart ? 0 : contextLines;
+    const trail = isEnd ? 0 : contextLines;
+    if (runLen <= lead + trail) {
+      for (let k = i; k < j; k += 1) {
+        const row = expanded[k];
+        if (row) out.push(row);
+      }
+    } else {
+      for (let k = i; k < i + lead; k += 1) {
+        const row = expanded[k];
+        if (row) out.push(row);
+      }
+      out.push({ kind: "skip", hiddenCount: runLen - lead - trail });
+      for (let k = j - trail; k < j; k += 1) {
+        const row = expanded[k];
+        if (row) out.push(row);
+      }
+    }
+    i = j;
   }
   return out;
 }

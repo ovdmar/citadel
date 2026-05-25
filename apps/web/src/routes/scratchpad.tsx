@@ -2,7 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { ArrowLeft, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
-import { lineDiff } from "./scratchpad-diff.js";
+import { sideBySideDiff } from "./scratchpad-diff.js";
 
 type ScratchpadSnapshot = { content: string; updatedAt: string };
 type HistorySummary = {
@@ -193,7 +193,25 @@ export function ScratchpadView() {
 
   const diff = useMemo(() => {
     if (selectedContent === null) return null;
-    return lineDiff(selectedContent, content);
+    const rows = sideBySideDiff(selectedContent, content);
+    let lastOld = 0;
+    let lastNew = 0;
+    return rows.map((row) => {
+      if (row.kind === "skip") {
+        return { row, key: `skip-${lastOld}-${lastNew}-${row.hiddenCount}` as string };
+      }
+      if (row.kind === "context") {
+        lastOld = row.oldNo;
+        lastNew = row.newNo;
+        return { row, key: `ctx-${row.oldNo}-${row.newNo}` };
+      }
+      if (row.kind === "remove") {
+        lastOld = row.oldNo;
+        return { row, key: `rem-${row.oldNo}` };
+      }
+      lastNew = row.newNo;
+      return { row, key: `add-${row.newNo}` };
+    });
   }, [selectedContent, content]);
 
   return (
@@ -259,13 +277,27 @@ export function ScratchpadView() {
       </div>
       {selectedEntryId ? (
         <dialog className="scratchpad-diff-overlay" open aria-modal="true" aria-label="Scratchpad version diff">
+          <div
+            className="scratchpad-diff-backdrop"
+            onClick={closeDiff}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") closeDiff();
+            }}
+            role="button"
+            tabIndex={-1}
+            aria-label="Close diff"
+          />
           <div className="scratchpad-diff-panel">
             <header className="scratchpad-diff-header">
-              <span>Compare with current</span>
+              <span>Older version vs current</span>
               <button type="button" className="scratchpad-diff-close" onClick={closeDiff} aria-label="Close diff">
                 <X size={14} />
               </button>
             </header>
+            <div className="scratchpad-diff-columns" aria-hidden="true">
+              <div className="scratchpad-diff-col-label">Older version</div>
+              <div className="scratchpad-diff-col-label">Current</div>
+            </div>
             <div className="scratchpad-diff-body">
               {diffError ? (
                 <p className="scratchpad-diff-error">{diffError}</p>
@@ -274,16 +306,45 @@ export function ScratchpadView() {
               ) : diff.length === 0 ? (
                 <p className="scratchpad-diff-empty">No differences.</p>
               ) : (
-                <pre className="scratchpad-diff-pre">
-                  {diff.map((line, idx) => (
-                    <div key={`${idx}-${line.kind}-${line.text}`} className={`scratchpad-diff-line kind-${line.kind}`}>
-                      <span className="scratchpad-diff-sigil">
-                        {line.kind === "add" ? "+" : line.kind === "remove" ? "−" : " "}
-                      </span>
-                      <span className="scratchpad-diff-text">{line.text}</span>
-                    </div>
-                  ))}
-                </pre>
+                <div className="scratchpad-diff-grid">
+                  {diff.map(({ row, key }) => {
+                    if (row.kind === "skip") {
+                      return (
+                        <div key={key} className="scratchpad-diff-skip">
+                          ··· {row.hiddenCount} unchanged {row.hiddenCount === 1 ? "line" : "lines"} ···
+                        </div>
+                      );
+                    }
+                    if (row.kind === "context") {
+                      return (
+                        <div key={key} className="scratchpad-diff-row kind-context">
+                          <span className="scratchpad-diff-no">{row.oldNo}</span>
+                          <pre className="scratchpad-diff-cell">{row.text}</pre>
+                          <span className="scratchpad-diff-no">{row.newNo}</span>
+                          <pre className="scratchpad-diff-cell">{row.text}</pre>
+                        </div>
+                      );
+                    }
+                    if (row.kind === "remove") {
+                      return (
+                        <div key={key} className="scratchpad-diff-row kind-remove">
+                          <span className="scratchpad-diff-no">{row.oldNo}</span>
+                          <pre className="scratchpad-diff-cell side-remove">{row.text}</pre>
+                          <span className="scratchpad-diff-no" />
+                          <pre className="scratchpad-diff-cell is-empty" />
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={key} className="scratchpad-diff-row kind-add">
+                        <span className="scratchpad-diff-no" />
+                        <pre className="scratchpad-diff-cell is-empty" />
+                        <span className="scratchpad-diff-no">{row.newNo}</span>
+                        <pre className="scratchpad-diff-cell side-add">{row.text}</pre>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
             <footer className="scratchpad-diff-footer">

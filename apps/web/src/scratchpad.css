@@ -184,23 +184,42 @@
 }
 
 .scratchpad-diff-overlay {
+  /* Override native <dialog> defaults (top-left positioning, narrow width) */
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 100;
 }
 
+.scratchpad-diff-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
 .scratchpad-diff-panel {
+  position: relative;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
-  width: min(80vw, 900px);
-  max-height: 80vh;
+  width: min(95vw, 1200px);
+  max-height: 85vh;
   display: flex;
   flex-direction: column;
+  z-index: 1;
 }
 
 .scratchpad-diff-header {
@@ -226,47 +245,97 @@
   background: var(--c-line-1, rgba(255, 255, 255, 0.06));
 }
 
+.scratchpad-diff-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-bottom: 1px solid var(--line);
+  background: var(--c-line-1, rgba(255, 255, 255, 0.03));
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-fg-3, inherit);
+}
+
+.scratchpad-diff-col-label {
+  padding: 6px 14px;
+}
+
+.scratchpad-diff-col-label + .scratchpad-diff-col-label {
+  border-left: 1px solid var(--line);
+}
+
 .scratchpad-diff-body {
   flex: 1 1 auto;
   overflow: auto;
-  padding: 8px 0;
+  padding: 0;
 }
 
-.scratchpad-diff-pre {
-  margin: 0;
+.scratchpad-diff-grid {
+  display: flex;
+  flex-direction: column;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
   line-height: 1.5;
 }
 
-.scratchpad-diff-line {
-  display: flex;
-  gap: 6px;
-  padding: 0 12px;
-  white-space: pre-wrap;
-  word-break: break-word;
+.scratchpad-diff-row {
+  display: grid;
+  grid-template-columns: 44px 1fr 44px 1fr;
+  align-items: stretch;
 }
 
-.scratchpad-diff-line.kind-add {
-  background: rgba(80, 200, 120, 0.12);
+.scratchpad-diff-row + .scratchpad-diff-row {
+  border-top: 1px solid transparent;
+}
+
+.scratchpad-diff-no {
+  padding: 0 8px;
+  text-align: right;
+  color: var(--c-fg-3, inherit);
+  background: var(--c-line-1, rgba(255, 255, 255, 0.02));
+  border-right: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.scratchpad-diff-cell {
+  margin: 0;
+  padding: 0 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.scratchpad-diff-cell.is-empty {
+  background: rgba(120, 120, 120, 0.06);
+}
+
+.scratchpad-diff-cell.side-add {
+  background: rgba(80, 200, 120, 0.16);
   color: #76d199;
 }
 
-.scratchpad-diff-line.kind-remove {
-  background: rgba(230, 80, 100, 0.12);
+.scratchpad-diff-cell.side-remove {
+  background: rgba(230, 80, 100, 0.16);
   color: #f08097;
 }
 
-.scratchpad-diff-sigil {
-  flex: 0 0 auto;
-  width: 12px;
-  text-align: center;
+.scratchpad-diff-skip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 12px;
+  background: var(--c-line-1, rgba(255, 255, 255, 0.04));
   color: var(--c-fg-3, inherit);
-}
-
-.scratchpad-diff-text {
-  flex: 1 1 auto;
-  min-width: 0;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
 }
 
 .scratchpad-diff-empty,
