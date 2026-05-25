@@ -1,5 +1,11 @@
 import { spawn } from "node:child_process";
-import { type HookDiagnostic, type HookOutput, HookOutputSchema } from "@citadel/contracts";
+import {
+  type HookDiagnostic,
+  type HookOutput,
+  HookOutputSchema,
+  type ReviewSuggestionsOutput,
+  ReviewSuggestionsOutputSchema,
+} from "@citadel/contracts";
 
 export {
   DEPLOY_HOOK_RELATIVE_PATH,
@@ -75,6 +81,12 @@ export function parseHookOutput(stdout: string): HookOutput | null {
   const trimmed = stdout.trim();
   if (!trimmed) return null;
   return HookOutputSchema.parse(JSON.parse(trimmed));
+}
+
+export function parseReviewSuggestionsOutput(stdout: string): ReviewSuggestionsOutput | null {
+  const trimmed = stdout.trim();
+  if (!trimmed) return null;
+  return ReviewSuggestionsOutputSchema.parse(JSON.parse(trimmed));
 }
 
 export function hookDiagnostic(input: {

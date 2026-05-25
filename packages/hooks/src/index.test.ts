@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseHookOutput, runCommandHook } from "./index.js";
+import { parseHookOutput, parseReviewSuggestionsOutput, runCommandHook } from "./index.js";
 
 describe("runCommandHook", () => {
   it("passes JSON input to command hooks and captures bounded output", async () => {
@@ -62,5 +62,36 @@ describe("runCommandHook", () => {
         }),
       ),
     ).toMatchObject({ links: [{ label: "Preview" }], actions: [{ id: "redeploy" }] });
+  });
+});
+
+describe("parseReviewSuggestionsOutput", () => {
+  it("returns null for empty stdout", () => {
+    expect(parseReviewSuggestionsOutput("")).toBeNull();
+    expect(parseReviewSuggestionsOutput("   \n\n")).toBeNull();
+  });
+
+  it("parses a valid payload and defaults missing fields", () => {
+    const parsed = parseReviewSuggestionsOutput(
+      JSON.stringify({
+        suggestions: [{ id: "s", kind: "reviewer", label: "@alice" }],
+      }),
+    );
+    expect(parsed?.suggestions).toHaveLength(1);
+    expect(parsed?.generatedAt).toBeNull();
+    expect(parsed?.metadata).toEqual({});
+  });
+
+  it("throws on malformed JSON", () => {
+    expect(() => parseReviewSuggestionsOutput("{not json}")).toThrow();
+  });
+
+  it("throws on schema-invalid JSON", () => {
+    expect(() => parseReviewSuggestionsOutput(JSON.stringify({ suggestions: "nope" }))).toThrow();
+  });
+
+  it("surfaces a truncation-style error when the leading edge is sliced", () => {
+    const truncated = '{"suggestions":[{"id":"s","kind":"note","label":"x"}]}'.slice(5);
+    expect(() => parseReviewSuggestionsOutput(truncated)).toThrow();
   });
 });
