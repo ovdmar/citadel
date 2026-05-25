@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
 import { formatLabel } from "./labels.js";
+import { categoryKey } from "./lib/usage-format.js";
 
 type RuntimeConfig = {
   id: string;
@@ -17,6 +18,7 @@ type RuntimeConfig = {
   supportsPrompt?: boolean;
   supportsModelSelection?: boolean;
   showUsageInTopBar?: boolean;
+  topBarCategoryKey?: string;
 };
 
 type ConfigResponse = { config: { runtimes: RuntimeConfig[] } };
@@ -84,6 +86,17 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
     setDrafts((current) => current.map((runtime) => (runtime.id === id ? { ...runtime, ...patch } : runtime)));
   };
 
+  // Apply a patch and immediately persist — used by the in-row "Show in top
+  // bar" toggle and the category-pin radio so the change reaches the cockpit
+  // without a separate Save click. We compute `next` synchronously and pass
+  // it to both setDrafts and save.mutate so the mutation never sees stale
+  // state (queueMicrotask would still capture the pre-setState `drafts`).
+  const updateDraftAndPersist = (id: string, patch: Partial<RuntimeConfig>) => {
+    const next = drafts.map((runtime) => (runtime.id === id ? { ...runtime, ...patch } : runtime));
+    setDrafts(next);
+    save.mutate(next);
+  };
+
   const removeDraft = (id: string) => {
     setDrafts((current) => current.filter((runtime) => runtime.id !== id));
   };
@@ -125,8 +138,8 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
               runtime={runtime}
               platform
               draft={drafts.find((entry) => entry.id === runtime.id)}
-              onToggleTopBar={(next) => updateDraft(runtime.id, { showUsageInTopBar: next })}
-              onSaveDrafts={() => save.mutate(drafts)}
+              onToggleTopBar={(next) => updateDraftAndPersist(runtime.id, { showUsageInTopBar: next })}
+              onPickTopBarCategory={(key) => updateDraftAndPersist(runtime.id, { topBarCategoryKey: key })}
               saving={save.isPending}
             />
           ))}
@@ -238,8 +251,8 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
                 runtime={runtime}
                 platform={false}
                 draft={drafts.find((entry) => entry.id === runtime.id)}
-                onToggleTopBar={(next) => updateDraft(runtime.id, { showUsageInTopBar: next })}
-                onSaveDrafts={() => save.mutate(drafts)}
+                onToggleTopBar={(next) => updateDraftAndPersist(runtime.id, { showUsageInTopBar: next })}
+                onPickTopBarCategory={(key) => updateDraftAndPersist(runtime.id, { topBarCategoryKey: key })}
                 saving={save.isPending}
               />
             ))}
@@ -257,7 +270,7 @@ function RuntimeRow(props: {
   platform: boolean;
   draft: RuntimeConfig | undefined;
   onToggleTopBar: (next: boolean) => void;
-  onSaveDrafts: () => void;
+  onPickTopBarCategory: (key: string) => void;
   saving: boolean;
 }) {
   const platformMeta = props.platform ? PLATFORM_AGENTS[props.runtime.id] : undefined;
@@ -284,11 +297,9 @@ function RuntimeRow(props: {
         <RuntimeUsagePanel
           runtimeId={props.runtime.id}
           showInTopBar={props.draft?.showUsageInTopBar ?? false}
-          onToggleTopBar={(next) => {
-            props.onToggleTopBar(next);
-            // Persist immediately so the top-bar pill appears without a manual Save.
-            queueMicrotask(props.onSaveDrafts);
-          }}
+          topBarCategoryKey={props.draft?.topBarCategoryKey}
+          onToggleTopBar={props.onToggleTopBar}
+          onPickTopBarCategory={props.onPickTopBarCategory}
           disabled={props.saving}
         />
       ) : null}
@@ -299,7 +310,9 @@ function RuntimeRow(props: {
 function RuntimeUsagePanel(props: {
   runtimeId: string;
   showInTopBar: boolean;
+  topBarCategoryKey: string | undefined;
   onToggleTopBar: (next: boolean) => void;
+  onPickTopBarCategory: (key: string) => void;
   disabled: boolean;
 }) {
   const usage = useQuery({
@@ -317,6 +330,11 @@ function RuntimeUsagePanel(props: {
   });
   const summary = usage.data?.usage;
   const loading = usage.isLoading || refresh.isPending;
+  // Default-pin to the first category when the operator hasn't picked one yet.
+  // This matches what the cockpit pill renders, so the radio reflects reality
+  // before the user has touched anything.
+  const effectiveKey =
+    props.topBarCategoryKey ?? (summary?.categories[0] ? categoryKey(summary.categories[0]) : undefined);
   return (
     <div className={`runtime-usage-panel ${summary?.status ?? "loading"}`}>
       <div className="runtime-usage-header">
@@ -340,21 +358,40 @@ function RuntimeUsagePanel(props: {
       ) : null}
       {summary && summary.categories.length > 0 ? (
         <ul className="runtime-usage-list">
-          {summary.categories.map((category, index) => (
-            <li key={`${category.section ?? ""}:${category.label}:${index}`} className="runtime-usage-row">
-              <div className="runtime-usage-label">
-                {category.section ? <small className="runtime-usage-section">{category.section}</small> : null}
-                <span>{category.label}</span>
-              </div>
-              <div className="runtime-usage-bar" aria-hidden>
-                <div className="runtime-usage-bar-fill" style={{ width: `${Math.min(100, category.percentUsed)}%` }} />
-              </div>
-              <div className="runtime-usage-meta">
-                <strong>{category.percentUsed}%</strong>
-                {category.reset ? <small>resets {category.reset}</small> : null}
-              </div>
-            </li>
-          ))}
+          {summary.categories.map((category, index) => {
+            const key = categoryKey(category);
+            const pinned = key === effectiveKey;
+            return (
+              <li
+                key={`${category.section ?? ""}:${category.label}:${index}`}
+                className={`runtime-usage-row ${pinned ? "pinned" : ""}`}
+              >
+                <label className="runtime-usage-pin" title="Show this limit in the top bar">
+                  <input
+                    type="radio"
+                    name={`top-bar-category-${props.runtimeId}`}
+                    checked={pinned}
+                    onChange={() => props.onPickTopBarCategory(key)}
+                    disabled={props.disabled || !props.showInTopBar}
+                  />
+                </label>
+                <div className="runtime-usage-label">
+                  {category.section ? <small className="runtime-usage-section">{category.section}</small> : null}
+                  <span>{category.label}</span>
+                </div>
+                <div className="runtime-usage-bar" aria-hidden>
+                  <div
+                    className="runtime-usage-bar-fill"
+                    style={{ width: `${Math.min(100, category.percentUsed)}%` }}
+                  />
+                </div>
+                <div className="runtime-usage-meta">
+                  <strong>{category.percentUsed}%</strong>
+                  {category.reset ? <small>resets {category.reset}</small> : null}
+                </div>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
       <label className="runtime-usage-toggle">

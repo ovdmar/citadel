@@ -17,6 +17,11 @@ export const RuntimeConfigSchema = z.object({
   // the Settings icon for this runtime. Health-gated: a runtime that isn't
   // healthy is silently dropped from the bar regardless of this flag.
   showUsageInTopBar: z.boolean().optional(),
+  // Identifies which usage category drives the top-bar pill — by default the
+  // first category from the fetcher. Key shape is `<section>/<label>` when the
+  // category sits inside a section, else just `<label>`. Stale keys (provider
+  // renamed a row) silently fall back to the first available category.
+  topBarCategoryKey: z.string().min(1).max(200).optional(),
 });
 
 export const UsageProviderConfigSchema = z.object({

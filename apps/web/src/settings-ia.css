@@ -553,9 +553,31 @@
 
 .runtime-usage-row {
   display: grid;
-  grid-template-columns: minmax(120px, 1fr) minmax(80px, 2fr) auto;
+  grid-template-columns: auto minmax(120px, 1fr) minmax(80px, 2fr) auto;
   gap: 8px;
   align-items: center;
+}
+
+.runtime-usage-pin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.runtime-usage-pin input {
+  margin: 0;
+  cursor: pointer;
+}
+
+.runtime-usage-pin input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.runtime-usage-row.pinned .runtime-usage-label > span {
+  font-weight: 600;
+  color: var(--c-fg-1, currentColor);
 }
 
 .runtime-usage-label {
