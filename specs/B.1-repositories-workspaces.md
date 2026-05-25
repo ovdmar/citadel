@@ -81,6 +81,7 @@
 [ ] 13. The `From branch` tab lists recent local and remote branches with an inline branch search.
 [ ] 14. The modal supports an optional initial agent task that auto-launches a chosen runtime when the workspace is created.
 [ ] 15. When the workspace is created from this modal and a default agent runtime exists for the repo, Citadel opens that agent in the center column immediately.
+[ ] 16. The create-workspace modal accepts a deeplink entry: navigating the cockpit to `/?modal=new-workspace` auto-opens this modal on mount and strips the query parameter from the URL so a page refresh does not re-open it. This entry point lets external helpers (e.g., the Mac satellite shortcut) jump straight into workspace creation without the user clicking through the navigator.
 
 ## Archive And Remove Workspace
 

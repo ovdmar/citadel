@@ -99,6 +99,7 @@
 [~] 6. make check is the release-readiness gate.
 [ ] 7. make check includes architecture boundaries, file size checks, typecheck, lint, tests, coverage, dependency policy, and production build.
 [ ] 8. Performance smoke remains part of release confidence for the ADE cockpit.
+[ ] 9. `scripts/mac-satellite/` hosts macOS-only helper scripts (Spotlight-style quick-capture launcher, new-workspace launcher) that wrap daemon HTTP endpoints; the directory is intentionally outside `make check` because the scripts depend on macOS-only tooling (`open`, `osascript`, AppleScript, Chrome `--app=`) that cannot run in Linux CI.
 
 ## Dependency Policy
 
