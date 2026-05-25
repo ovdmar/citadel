@@ -87,7 +87,10 @@ function ScheduledAgentRunRow(props: { agentId: string; run: ScheduledAgentRun }
     : run.workspaceId
       ? `ws ${run.workspaceId.slice(0, 10)}`
       : "—";
-  const canViewLog = !!run.logFilePath && run.status !== "queued";
+  // The server falls back to the session's pipe-pane log when logFilePath
+  // isn't on disk (workspace-mode runs), so we expose the button as long as
+  // there's *some* log source to try. Queued runs haven't produced output yet.
+  const canViewLog = (!!run.logFilePath || !!run.sessionId) && run.status !== "queued";
   return (
     <>
       <tr className={`scheduled-agent-history-row ${run.status}`}>
@@ -128,11 +131,23 @@ function ScheduledAgentRunLog(props: { agentId: string; runId: string }) {
       ),
   });
   if (log.isLoading) return <pre className="scheduled-agent-run-log">Loading…</pre>;
-  if (log.error) return <pre className="scheduled-agent-run-log error">Error: {String(log.error)}</pre>;
+  if (log.error) return <pre className="scheduled-agent-run-log error">{friendlyLogError(log.error)}</pre>;
   return (
     <pre className="scheduled-agent-run-log">
       {log.data?.content ?? ""}
       {log.data?.truncated ? "\n— truncated; fetch more via offset —" : ""}
     </pre>
   );
+}
+
+// Same code-to-text mapping used by the global timeline. Inlined here to
+// keep the component standalone (this file is reused by the per-agent
+// editor and we don't want a cross-file dep for one helper).
+function friendlyLogError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === "log_file_missing")
+    return "Log file is no longer on disk — it may have been cleaned up after the run finished.";
+  if (message === "log_not_available") return "This run didn't produce a log file.";
+  if (message === "run_not_found") return "This run no longer exists.";
+  return message;
 }

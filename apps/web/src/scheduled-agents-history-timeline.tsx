@@ -87,7 +87,10 @@ function TimelineRow(props: {
   const [logOpen, setLogOpen] = useState(false);
   const { run, agent } = props;
   const duration = computeDuration(run);
-  const canViewLog = !!run.logFilePath && run.status !== "queued";
+  // The server falls back to the session's pipe-pane log when logFilePath
+  // isn't on disk (workspace-mode runs), so we expose the button as long as
+  // there's *some* log source to try. Queued runs haven't produced output yet.
+  const canViewLog = (!!run.logFilePath || !!run.sessionId) && run.status !== "queued";
   const isOneShot = agent.scheduleType === "once";
 
   return (
@@ -130,13 +133,25 @@ function TimelineRunLog(props: { agentId: string; runId: string }) {
       ),
   });
   if (log.isLoading) return <pre className="scheduled-agent-run-log">Loading…</pre>;
-  if (log.error) return <pre className="scheduled-agent-run-log error">Error: {String(log.error)}</pre>;
+  if (log.error) return <pre className="scheduled-agent-run-log error">{friendlyLogError(log.error)}</pre>;
   return (
     <pre className="scheduled-agent-run-log">
       {log.data?.content ?? ""}
       {log.data?.truncated ? "\n— truncated; fetch more via offset —" : ""}
     </pre>
   );
+}
+
+// Map the daemon's error codes to user-readable messages. Anything not
+// in this table falls through to the raw message so unknown failures aren't
+// hidden from the user.
+function friendlyLogError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message === "log_file_missing")
+    return "Log file is no longer on disk — it may have been cleaned up after the run finished.";
+  if (message === "log_not_available") return "This run didn't produce a log file.";
+  if (message === "run_not_found") return "This run no longer exists.";
+  return message;
 }
 
 function computeDuration(run: ScheduledAgentRun): string {

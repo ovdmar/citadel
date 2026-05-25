@@ -3,7 +3,7 @@ import type { CitadelConfig } from "@citadel/config";
 import { CreateScheduledAgentInputSchema, UpdateScheduledAgentInputSchema } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type OperationService, ScheduledAgentRunner, createBackgroundAgentSession } from "@citadel/operations";
-import { killTmuxSession } from "@citadel/terminal";
+import { killTmuxSession, pipePaneLogPath } from "@citadel/terminal";
 import type express from "express";
 import { LOG_SLICE_DEFAULT_BYTES, readLogSlice } from "./log-slice.js";
 import { ScheduledAgentService } from "./scheduled-agent-service.js";
@@ -197,14 +197,29 @@ export function registerScheduledAgentRoutes(input: {
     const run = store.findScheduledAgentRun(runId);
     // 404 if either the run doesn't exist OR doesn't belong to this agent.
     if (!run || run.scheduledAgentId !== id) return res.status(404).json({ error: "run_not_found" });
-    if (!run.logFilePath) return res.status(404).json({ error: "log_not_available" });
     const offset = parseQueryInt(req.query.offset, { default: 0, min: 0 });
     if (offset.kind === "error") return res.status(400).json({ error: offset.error, field: "offset" });
     const maxBytes = parseQueryInt(req.query.maxBytes, { default: LOG_SLICE_DEFAULT_BYTES, min: 256, max: 200 * 1024 });
     if (maxBytes.kind === "error") return res.status(400).json({ error: maxBytes.error, field: "maxBytes" });
-    const slice = readLogSlice(run.logFilePath, { offset: offset.value, maxBytes: maxBytes.value });
-    if ("kind" in slice) return res.status(404).json({ error: "log_file_missing" });
-    res.json(slice);
+
+    // Resolve which on-disk file to read. Background runs pipe directly to
+    // run.logFilePath. Workspace runs don't — their output lands in tmux's
+    // pipe-pane side-channel log (keyed by tmux session name), so fall back
+    // to that when the recorded path is missing. As a last resort, look up
+    // the session via run.sessionId for older runs whose logFilePath wasn't
+    // set at all.
+    const candidates: string[] = [];
+    if (run.logFilePath) candidates.push(run.logFilePath);
+    if (run.sessionId) {
+      const session = store.listSessions().find((candidate) => candidate.id === run.sessionId);
+      if (session?.tmuxSessionName) candidates.push(pipePaneLogPath(session.tmuxSessionName));
+    }
+    if (!candidates.length) return res.status(404).json({ error: "log_not_available" });
+    for (const candidate of candidates) {
+      const slice = readLogSlice(candidate, { offset: offset.value, maxBytes: maxBytes.value });
+      if (!("kind" in slice)) return res.json(slice);
+    }
+    return res.status(404).json({ error: "log_file_missing" });
   });
 
   return { runner: scheduledAgents, service };

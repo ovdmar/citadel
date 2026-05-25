@@ -25,7 +25,6 @@
   border-radius: 9px;
   background: var(--c-elev);
   border: 0.5px solid var(--c-line-2);
-  box-shadow: var(--sh-1);
 }
 
 .sched-tab {
@@ -51,7 +50,6 @@
 .sched-tab.active {
   background: var(--c-card);
   color: var(--c-fg-1);
-  box-shadow: var(--sh-card);
 }
 
 .sched-tab-count {
@@ -93,7 +91,6 @@
   border-radius: 10px;
   background: var(--c-elev);
   border: 0.5px solid var(--c-line-2);
-  box-shadow: var(--sh-1);
 }
 
 .sched-list-item {
@@ -116,25 +113,18 @@
 .sched-list-item.active {
   background: var(--c-card);
   border-color: var(--c-line-2);
-  box-shadow: var(--sh-card);
 }
 
 .sched-list-item.failed {
-  box-shadow: inset 3px 0 0 var(--c-bad), var(--sh-card);
-}
-
-.sched-list-item.active.failed,
-.sched-list-item.active.succeeded,
-.sched-list-item.active.running {
-  border-color: transparent;
+  box-shadow: inset 3px 0 0 var(--c-bad);
 }
 
 .sched-list-item.succeeded {
-  box-shadow: inset 3px 0 0 var(--c-ok), var(--sh-card);
+  box-shadow: inset 3px 0 0 var(--c-ok);
 }
 
 .sched-list-item.running {
-  box-shadow: inset 3px 0 0 var(--c-info), var(--sh-card);
+  box-shadow: inset 3px 0 0 var(--c-info);
 }
 
 .sched-list-item-title {
@@ -178,7 +168,6 @@
   border-radius: 10px;
   border: 0.5px solid var(--c-line-2);
   background: var(--c-card);
-  box-shadow: var(--sh-card);
 }
 
 .sched-editor-title-row {
@@ -220,7 +209,6 @@
   border-radius: 10px;
   border: 0.5px solid var(--c-line-2);
   background: var(--c-card);
-  box-shadow: var(--sh-card);
 }
 
 /* ============================================================
@@ -266,23 +254,22 @@
   border-radius: 9px;
   border: 0.5px solid var(--c-line-2);
   background: var(--c-card);
-  box-shadow: var(--sh-card);
 }
 
 .sched-timeline-row.failed {
-  box-shadow: inset 3px 0 0 var(--c-bad), var(--sh-card);
+  box-shadow: inset 3px 0 0 var(--c-bad);
 }
 
 .sched-timeline-row.succeeded {
-  box-shadow: inset 3px 0 0 var(--c-ok), var(--sh-card);
+  box-shadow: inset 3px 0 0 var(--c-ok);
 }
 
 .sched-timeline-row.running {
-  box-shadow: inset 3px 0 0 var(--c-info), var(--sh-card);
+  box-shadow: inset 3px 0 0 var(--c-info);
 }
 
 .sched-timeline-row.queued {
-  box-shadow: inset 3px 0 0 var(--c-warn), var(--sh-card);
+  box-shadow: inset 3px 0 0 var(--c-warn);
 }
 
 .sched-timeline-time {
@@ -364,7 +351,6 @@
   border-radius: 12px;
   background: var(--c-card);
   color: var(--c-fg-1);
-  box-shadow: var(--sh-2), 0 24px 64px -16px rgba(20, 12, 0, 0.25);
 }
 
 .sched-delete-dialog strong {

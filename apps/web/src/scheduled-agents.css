@@ -29,7 +29,6 @@
   background: var(--c-card);
   border-radius: 6px;
   color: var(--c-fg-2);
-  box-shadow: var(--sh-1);
 }
 
 .sched-page .dashboard-back:hover {
@@ -54,7 +53,6 @@
   background: var(--c-card);
   border: 0.5px solid var(--c-line-2);
   border-radius: 10px;
-  box-shadow: var(--sh-card);
   padding: 14px 16px;
   gap: 12px;
 }
@@ -109,7 +107,6 @@
   color: var(--c-fg-1);
   font-size: 12.5px;
   font-family: inherit;
-  box-shadow: var(--sh-1);
 }
 
 .scheduled-agent-field input:focus,
@@ -150,7 +147,6 @@
   border-radius: 8px;
   background: var(--c-elev);
   border: 0.5px solid var(--c-line-2);
-  box-shadow: var(--sh-1);
 }
 
 .scheduled-agent-cron-summary > div {
@@ -181,7 +177,6 @@
   border: 0.5px solid var(--c-line-2);
   border-radius: 9px;
   background: var(--c-card);
-  box-shadow: var(--sh-card);
   align-items: center;
   transition: border-color 120ms ease;
 }
@@ -191,19 +186,19 @@
 }
 
 .scheduled-agent-row.failed {
-  box-shadow: inset 3px 0 0 var(--c-bad), var(--sh-card);
+  box-shadow: inset 3px 0 0 var(--c-bad);
 }
 
 .scheduled-agent-row.succeeded {
-  box-shadow: inset 3px 0 0 var(--c-ok), var(--sh-card);
+  box-shadow: inset 3px 0 0 var(--c-ok);
 }
 
 .scheduled-agent-row.running {
-  box-shadow: inset 3px 0 0 var(--c-info), var(--sh-card);
+  box-shadow: inset 3px 0 0 var(--c-info);
 }
 
 .scheduled-agent-row.never {
-  box-shadow: inset 3px 0 0 var(--c-line-3), var(--sh-card);
+  box-shadow: inset 3px 0 0 var(--c-line-3);
 }
 
 .scheduled-agent-row-main {
