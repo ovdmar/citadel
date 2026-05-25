@@ -20,10 +20,16 @@ type ResolvedSession = {
   worktreePath: string | null;
 };
 
-type Theme = "light" | "dark";
+export type Theme = "light" | "dark";
 
-function parseTheme(value: unknown): Theme | undefined {
-  return value === "light" || value === "dark" ? value : undefined;
+export function parseTheme(value: unknown): Theme | undefined {
+  if (value === "light" || value === "dark") return value;
+  if (value === undefined || value === null || value === "") return undefined;
+  // Unrecognized value: log loudly so a cockpit refactor that sends a stale
+  // value (e.g. "system" before resolving) is visible in the daemon log rather
+  // than silently falling through to the boundary "dark" default.
+  console.warn(`[terminal] unrecognized theme value: ${JSON.stringify(value)}`);
+  return undefined;
 }
 
 export function registerTerminalRoutes(input: {
@@ -155,18 +161,32 @@ export function registerTerminalRoutes(input: {
     }
   };
 
+  // Resolve the theme that gets baked into ttyd at spawn. The manager itself
+  // refuses calls without a theme so the boundary fallback is here, at the
+  // HTTP route, where we can log it: if a session has never seen a `?theme=`
+  // query AND has nothing in the persisted store, this is "first paint before
+  // the cockpit has resolved its own theme", which is rare and should be a
+  // visible signal — never a silent dark spawn.
+  const resolveTheme = (sessionId: string, requested?: Theme): Theme => {
+    if (requested) return requested;
+    const stored = themePreferences.get(sessionId);
+    if (stored) return stored;
+    console.warn(
+      `[terminal] no theme available for session ${sessionId}, defaulting to dark — this is a bug if it happens after first paint`,
+    );
+    return "dark";
+  };
+
   // Try ensure(); if tmux disappeared (system reboot, manual kill), call the
   // injected respawnTmux hook to bring the underlying tmux session back, then
   // retry. Returns null if no self-heal was possible.
   const ensureWithHeal = async (session: ResolvedSession, theme?: Theme, force?: boolean): Promise<TtydEntry> => {
-    const base = {
+    const resolved = resolveTheme(session.sessionId, theme);
+    const ensureArgs = {
       key: session.sessionId,
       tmuxSession: session.tmuxSession,
       worktreePath: session.worktreePath,
-    };
-    const ensureArgs = {
-      ...base,
-      ...(theme ? { theme } : {}),
+      theme: resolved,
       ...(force ? { force: true } : {}),
     };
     try {
@@ -182,7 +202,7 @@ export function registerTerminalRoutes(input: {
         key: session.sessionId,
         tmuxSession: respawn.tmuxSessionName,
         worktreePath: session.worktreePath,
-        ...(theme ? { theme } : {}),
+        theme: resolved,
         ...(force ? { force: true } : {}),
       };
       return await ttyd.ensure(healArgs);
@@ -320,7 +340,7 @@ export function registerTerminalRoutes(input: {
 // stray manual edit can't crash the daemon. Writes are best-effort and never
 // throw: failing to persist a theme preference must not break terminal
 // reconnects.
-class ThemePrefStore {
+export class ThemePrefStore {
   private readonly file: string;
   private readonly cache = new Map<string, Theme>();
 

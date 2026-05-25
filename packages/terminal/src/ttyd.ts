@@ -56,8 +56,13 @@ export type TtydManager = {
     key: string;
     tmuxSession: string;
     worktreePath?: string | null;
-    /** Cockpit-resolved theme used to spawn ttyd with the matching xterm palette. Defaults to "dark". */
-    theme?: TtydTheme;
+    /** Cockpit-resolved theme used to spawn ttyd with the matching xterm palette.
+     * Required — callers must source from the daemon's per-session theme store.
+     * The manager has no fallback: a missing theme used to silently produce a
+     * dark ttyd even when the cockpit was on light, causing "starts correct,
+     * randomly falls back" mid-session bugs. The boundary "dark" default lives
+     * at the HTTP route layer so callers are loud, not silent. */
+    theme: TtydTheme;
     /** When true, kill any existing ttyd for this key and spawn a fresh one. */
     force?: boolean;
   }): Promise<TtydEntry>;
@@ -89,16 +94,14 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     key: string;
     tmuxSession: string;
     worktreePath?: string | null;
-    theme?: TtydTheme;
+    theme: TtydTheme;
     /** Kill the existing ttyd (if any) and spawn a fresh process. Used by the
      * cockpit's reload affordance so theme/palette changes take effect — ttyd
      * bakes the xterm palette at spawn time, so an explicit respawn is the
-     * only way to repaint a live session. We don't auto-respawn on theme
-     * drift to avoid reconnect storms when the user just toggles the cockpit
-     * theme; respawn is opt-in via this flag. */
+     * only way to repaint a live session. */
     force?: boolean;
   }): Promise<TtydEntry> {
-    const desiredTheme: TtydTheme = args.theme ?? "dark";
+    const desiredTheme: TtydTheme = args.theme;
     const existing = entries.get(args.key);
     // Trust the child-process liveness signal rather than probing the port.
     // The `child.on('exit')` handler below deletes the entry as soon as the
@@ -283,7 +286,7 @@ function ttydThemeArgs(theme: TtydTheme): string[] {
 // same hue as before, just dropped in lightness so it reads cleanly on a
 // light background — pulling the bright variants down at the same time so
 // the "bright" tier stays distinguishable from base without going pastel.
-const LIGHT_XTERM_THEME = {
+export const LIGHT_XTERM_THEME = {
   background: "#f5f1e8",
   foreground: "#1a1814",
   cursor: "#14171f",
@@ -307,7 +310,7 @@ const LIGHT_XTERM_THEME = {
   brightWhite: "#0c0a06",
 };
 
-const DARK_XTERM_THEME = {
+export const DARK_XTERM_THEME = {
   background: "#1a1814",
   foreground: "#e8e3d3",
   cursor: "#f0ebdd",

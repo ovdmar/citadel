@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { WebSocketServer } from "ws";
 
-export { createTtydManager, TtydUnavailableError } from "./ttyd.js";
+export { createTtydManager, DARK_XTERM_THEME, LIGHT_XTERM_THEME, TtydUnavailableError } from "./ttyd.js";
 export type { TtydEntry, TtydManager, TtydManagerConfig, TtydTheme } from "./ttyd.js";
 export { submitPrompt } from "./submit-prompt.js";
 
