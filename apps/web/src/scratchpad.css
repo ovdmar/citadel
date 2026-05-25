@@ -256,7 +256,12 @@
 }
 
 .scratchpad-diff-col-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 6px 14px;
+  min-height: 32px;
 }
 
 .scratchpad-diff-col-label + .scratchpad-diff-col-label {
@@ -350,22 +355,16 @@
   color: var(--color-danger);
 }
 
-.scratchpad-diff-footer {
-  padding: 10px 14px;
-  border-top: 1px solid var(--line);
-  display: flex;
-  justify-content: flex-end;
-}
-
 .scratchpad-restore-btn {
-  padding: 6px 14px;
+  padding: 4px 10px;
   border-radius: 4px;
   border: 1px solid var(--line-strong, var(--line));
   background: var(--panel);
   color: inherit;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .scratchpad-restore-btn:hover:not(:disabled) {

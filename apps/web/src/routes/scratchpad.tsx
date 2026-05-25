@@ -294,9 +294,21 @@ export function ScratchpadView() {
                 <X size={14} />
               </button>
             </header>
-            <div className="scratchpad-diff-columns" aria-hidden="true">
-              <div className="scratchpad-diff-col-label">Older version</div>
-              <div className="scratchpad-diff-col-label">Current</div>
+            <div className="scratchpad-diff-columns">
+              <div className="scratchpad-diff-col-label">
+                <span>Older version</span>
+                <button
+                  type="button"
+                  className="scratchpad-restore-btn"
+                  onClick={() => void restoreSelected()}
+                  disabled={restoring || selectedContent === null}
+                >
+                  {restoring ? "Restoring…" : "Restore this version"}
+                </button>
+              </div>
+              <div className="scratchpad-diff-col-label">
+                <span>Current</span>
+              </div>
             </div>
             <div className="scratchpad-diff-body">
               {diffError ? (
@@ -347,16 +359,6 @@ export function ScratchpadView() {
                 </div>
               )}
             </div>
-            <footer className="scratchpad-diff-footer">
-              <button
-                type="button"
-                className="scratchpad-restore-btn"
-                onClick={() => void restoreSelected()}
-                disabled={restoring || selectedContent === null}
-              >
-                {restoring ? "Restoring…" : "Restore this version"}
-              </button>
-            </footer>
           </div>
         </dialog>
       ) : null}
