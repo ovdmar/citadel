@@ -27,6 +27,9 @@ export function WorkspaceCard(
   const titleDisplay = workspaceDisplayTitle(workspace);
   const prTone = pullRequest ? prToneFor(pullRequest) : "missing";
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
+  const additions = pullRequest?.additions ?? null;
+  const deletions = pullRequest?.deletions ?? null;
+  const hasDiff = additions !== null || deletions !== null;
 
   // Only hit the global state query when callers haven't already passed the
   // resolved namespace / namespace list in via props.
@@ -148,6 +151,12 @@ export function WorkspaceCard(
               style={namespace.color ? { background: namespace.color, color: "#fff" } : undefined}
             >
               <Folder size={10} /> {namespace.name}
+            </span>
+          ) : null}
+          {hasDiff ? (
+            <span className="workspace-card-diff" title="Lines changed in this PR">
+              <span className="diff-add">+{additions ?? 0}</span>
+              <span className="diff-del">-{deletions ?? 0}</span>
             </span>
           ) : null}
           <span className={`approval-pill tone-${approvalTone}`} title={`Approval: ${approvalTone}`}>
