@@ -35,6 +35,7 @@ import "./scheduled-agents.css";
 import "./scheduled-agents-shell.css";
 import "./runtime-usage.css";
 import "./scratchpad.css";
+import "./scratchpad-drawer.css";
 import "./responsive.css";
 
 // Seed data-theme on <html> BEFORE React renders so any component that
