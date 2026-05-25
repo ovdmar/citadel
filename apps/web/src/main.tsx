@@ -25,6 +25,7 @@ import "./namespaces.css";
 import "./operations.css";
 import "./settings.css";
 import "./settings-ia.css";
+import "./settings-runtimes.css";
 import "./scratchpad.css";
 import "./responsive.css";
 

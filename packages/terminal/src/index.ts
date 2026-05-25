@@ -118,24 +118,13 @@ export function isAgentLive(sessionName: string) {
   return fs.existsSync(agentLiveSentinelPath(sessionName));
 }
 
-// Wrap the agent invocation so the tmux pane survives the agent's exit.
-//
-// Today pressing Ctrl+C inside a running agent (e.g. Claude Code) leaves an
-// unusable terminal: the pane becomes dead because the agent process was PID 1
-// of the pane. The wrapper drops the user back into a fresh interactive login
-// shell rooted at the workspace cwd so they can run any command, including
-// `claude resume <sessionId>`.
-//
-// A sentinel file under tmpdir marks "agent currently live"; the reconciler
-// consults it to flip the session status to "stopped" without killing the
-// pane.
-//
-// Outer shell is intentionally non-login (`bash -c`, not `bash -lc`) so the
-// agent's environment matches what tmux delivered before this wrapper
-// existed — we don't want to silently start sourcing `~/.bash_profile` for
-// every agent. The *fallback* shell the user sees after the agent exits IS a
-// login shell (so they get their normal interactive setup) and respects
-// `$SHELL` so zsh/fish users aren't forced into bash.
+// Wrap the agent so the tmux pane survives its exit: Ctrl+C in Claude Code
+// would otherwise kill PID 1 of the pane. After exit we drop into a fresh
+// interactive login shell at the workspace cwd. A tmpdir sentinel marks
+// "agent live" so the reconciler can flip session status without killing the
+// pane. Outer shell is non-login (`bash -c`) so we don't silently source
+// ~/.bash_profile per agent; the post-exit fallback IS a login shell and
+// respects $SHELL so zsh/fish users aren't forced into bash.
 function terminalCommand(sessionName: string, command: string, args: string[]) {
   const argv = [command, ...args].map(shellQuote).join(" ");
   const envPrefix = "env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor FORCE_COLOR=1 CLICOLOR_FORCE=1";
@@ -447,25 +436,11 @@ function safeCapture(sessionName: string): string {
 }
 
 // Submit a prompt or follow-up message into a tmux-backed runtime.
-//
-// Step-by-step, with the "why" for each:
-//   1. Wait until the runtime's process is the foreground command in the pane
-//      (`#{pane_current_command}` ≠ wrapper bash). This rules out the "we
-//      sent keys while `bash -c …` was still doing setup" failure mode that
-//      visual idle-detection can't see.
-//   2. Wait for the pane to settle (silence-hook + capture-pane fallback).
-//   3. Paste the prompt as a BRACKETED paste so the runtime sees one atomic
-//      "this is text, not keystrokes" event. Solves the case where the
-//      runtime's bracketed-paste mode flips on between our trim and our paste.
-//   4. Verify by capture-pane that our prompt text actually appears in the
-//      bottom rows of the pane (input area). If not, re-paste once.
-//   5. Send Enter as a SEPARATE tmux call so it lands outside the paste
-//      region.
-//   6. Verify the prompt is no longer pending in the input area. If it is,
-//      the Enter did not take (most common cause: runtime hadn't finished
-//      committing the paste to input state). Send Enter again, up to 2
-//      retries.
-// Returns ok=false with an error string if any step exhausts its budget.
+// Steps: (1) wait until runtime is foreground command in pane, (2) wait for
+// settle, (3) bracketed-paste the prompt atomically, (4) verify text appears
+// in input area (re-paste once if not), (5) send Enter separately so it lands
+// outside the paste region, (6) verify pending prompt cleared; retry Enter up
+// to 2x. Returns ok=false with an error string if any step exhausts its budget.
 export async function submitPrompt(
   sessionName: string,
   prompt: string,
