@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
 import { formatLabel } from "./labels.js";
-import { categoryKey } from "./lib/usage-format.js";
+import { categoryKey, formatLocalReset } from "./lib/usage-format.js";
 
 type RuntimeConfig = {
   id: string;
@@ -387,7 +387,9 @@ function RuntimeUsagePanel(props: {
                 </div>
                 <div className="runtime-usage-meta">
                   <strong>{category.percentUsed}%</strong>
-                  {category.reset ? <small>resets {category.reset}</small> : null}
+                  {category.reset ? (
+                    <small title={category.reset}>resets {formatLocalReset(category.reset)}</small>
+                  ) : null}
                 </div>
               </li>
             );

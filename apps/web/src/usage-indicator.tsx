@@ -2,7 +2,7 @@ import type { AgentRuntime, RuntimeUsageSummary } from "@citadel/contracts";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { api } from "./api.js";
-import { categoryKey, formatTimeUntilReset, pickTopBarCategory } from "./lib/usage-format.js";
+import { categoryKey, formatLocalReset, formatTimeUntilReset, pickTopBarCategory } from "./lib/usage-format.js";
 import { RuntimeMark } from "./runtime-mark.js";
 
 type RuntimeConfigEntry = {
@@ -102,7 +102,8 @@ function buildTooltip(
   const selectedKey = selected ? categoryKey(selected) : null;
   const lines = summary.categories.map((category) => {
     const sectionPrefix = category.section ? `[${category.section}] ` : "";
-    const resetSuffix = category.reset ? ` · resets ${category.reset}` : "";
+    const localReset = formatLocalReset(category.reset);
+    const resetSuffix = localReset ? ` · resets ${localReset}` : "";
     const marker = categoryKey(category) === selectedKey ? "★ " : "  ";
     return `${marker}${sectionPrefix}${category.label}: ${category.percentUsed}% used${resetSuffix}`;
   });

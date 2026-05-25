@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { categoryKey, formatTimeUntilReset, parseResetTime, pickTopBarCategory } from "./usage-format.js";
+import {
+  categoryKey,
+  formatLocalReset,
+  formatTimeUntilReset,
+  parseResetTime,
+  pickTopBarCategory,
+} from "./usage-format.js";
 
 describe("categoryKey", () => {
   it("prefixes the section when present and falls back to bare label otherwise", () => {
@@ -85,5 +91,36 @@ describe("formatTimeUntilReset", () => {
   it("rolls a past same-day claude time forward by 24h", () => {
     // 8am UTC < 9am NOW → tomorrow at 8am, so 23 hours away
     expect(formatTimeUntilReset("8am (UTC)", NOW_UTC)).toBe("23h 0m");
+  });
+});
+
+describe("formatLocalReset", () => {
+  const NOW_UTC = new Date(Date.UTC(2026, 4, 25, 9, 0, 0));
+
+  it("returns null for falsy input and the raw string for unparseable input", () => {
+    expect(formatLocalReset(null, NOW_UTC)).toBeNull();
+    expect(formatLocalReset("", NOW_UTC)).toBeNull();
+    // Unparseable strings fall through verbatim so we never lose information.
+    expect(formatLocalReset("sometime soon", NOW_UTC)).toBe("sometime soon");
+  });
+
+  it("formats a UTC reset using the runtime's local timezone", () => {
+    // The exact rendered hour depends on the test runner's local TZ. We
+    // verify the structure ("today HH:MM AM/PM") and that the literal "(UTC)"
+    // is gone — operators were complaining about UTC noise.
+    const out = formatLocalReset("11am (UTC)", NOW_UTC);
+    expect(out).toMatch(/^today \d{1,2}:\d{2}(?: | )?(?:AM|PM)$/i);
+    expect(out).not.toMatch(/UTC/i);
+  });
+
+  it("labels next-day resets as 'tomorrow' and further-out ones with a date", () => {
+    // 8am UTC < 9am NOW → rolls forward to May 26 at 08:00 UTC (= tomorrow).
+    const tomorrow = formatLocalReset("8am (UTC)", NOW_UTC);
+    expect(tomorrow).toMatch(/^tomorrow /);
+
+    // Two-day-out reset → not "today"/"tomorrow"; should include a date phrase.
+    const later = formatLocalReset("May 27, 12pm (UTC)", NOW_UTC);
+    expect(later).not.toMatch(/^(today|tomorrow) /);
+    expect(later).toMatch(/\d{1,2}/);
   });
 });

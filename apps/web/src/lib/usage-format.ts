@@ -127,6 +127,43 @@ export function formatTimeUntilReset(reset: string | null | undefined, now: Date
   return `${minutes}m`;
 }
 
+// Render a reset string in the operator's local timezone — Citadel is used
+// from anywhere in the world, but providers report UTC (claude-code) or the
+// daemon's local zone (codex). Single-host installs put daemon + browser in
+// the same zone, so reading the browser's TZ via Intl is enough for the
+// common case. Returns the raw string verbatim when we can't parse it (so
+// the user still sees *something* useful instead of "null").
+//
+// Same-day → "today 8:00 AM". Tomorrow → "tomorrow 8:00 AM".
+// Anything further out → "Wed May 27, 8:00 AM".
+export function formatLocalReset(reset: string | null | undefined, now: Date = new Date()): string | null {
+  if (!reset) return null;
+  const at = parseResetTime(reset, now);
+  if (!at) return reset;
+
+  const timeStr = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(at);
+
+  if (isSameLocalDay(at, now)) return `today ${timeStr}`;
+  if (isSameLocalDay(at, addDays(now, 1))) return `tomorrow ${timeStr}`;
+
+  const dateStr = new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(at);
+  return `${dateStr}, ${timeStr}`;
+}
+
+function isSameLocalDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+function addDays(date: Date, days: number): Date {
+  const copy = new Date(date.getTime());
+  copy.setDate(copy.getDate() + days);
+  return copy;
+}
+
 function monthIndex(name: string): number | null {
   const normalized = name.trim().slice(0, 3).toLowerCase();
   const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
