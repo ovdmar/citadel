@@ -25,16 +25,22 @@ import {
 // Avoid a static `import "node:sqlite"` so vite-based test runners do not
 // try to bundle the built-in. Resolved through `createRequire` at runtime.
 type DatabaseSyncCtor = new (path: string, options?: { open?: boolean; readOnly?: boolean }) => SqliteDatabase;
-type SqliteDatabase = {
+export type SqliteDatabase = {
   exec(sql: string): void;
   prepare(sql: string): SqliteStatement;
   close(): void;
 };
-type SqliteStatement = {
+export type SqliteStatement = {
   all(...params: unknown[]): unknown[];
   get(...params: unknown[]): unknown;
   run(...params: unknown[]): { changes: number };
 };
+
+// Sentinel cron written for one-shot rows. Must never match a real minute:
+// dom=31 + mon=2 with dow wild yields cronMatches() === false for every date
+// (Feb has no 31st). Earlier "0 0 31 2 0" was unsafe because dom/dow
+// non-wild use OR semantics and would fire every Sunday in February.
+const ONE_SHOT_CRON_PLACEHOLDER = "0 0 31 2 *";
 
 let DatabaseSyncCtor: DatabaseSyncCtor | null = null;
 function loadDatabaseSync(): DatabaseSyncCtor {
@@ -53,7 +59,10 @@ export class SqliteStore {
     this.databasePath = databasePath;
   }
 
-  private get database(): SqliteDatabase {
+  /** @internal Module-augmenting files in this package access the underlying
+   * database through this getter; external callers should go through the
+   * named class methods instead. */
+  get database(): SqliteDatabase {
     if (!this.db) {
       fs.mkdirSync(path.dirname(this.databasePath), { recursive: true });
       const Ctor = loadDatabaseSync();
@@ -195,13 +204,49 @@ export class SqliteStore {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS scheduled_agent_runs (
+        id TEXT PRIMARY KEY,
+        scheduled_agent_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        enqueued_at TEXT NOT NULL,
+        started_at TEXT,
+        ended_at TEXT,
+        message TEXT,
+        workspace_id TEXT,
+        session_id TEXT,
+        background_session_id TEXT,
+        log_file_path TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_scheduled_agent_runs_agent_enqueued
+        ON scheduled_agent_runs(scheduled_agent_id, enqueued_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_scheduled_agent_runs_status
+        ON scheduled_agent_runs(scheduled_agent_id, status);
+      CREATE TABLE IF NOT EXISTS background_sessions (
+        id TEXT PRIMARY KEY,
+        scheduled_agent_id TEXT,
+        cwd TEXT NOT NULL,
+        log_file_path TEXT NOT NULL,
+        tmux_session_name TEXT NOT NULL,
+        tmux_session_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_background_sessions_scheduled_agent
+        ON background_sessions(scheduled_agent_id);
       INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
         (2, 'activity-hook-output', datetime('now')),
         (3, 'operation-logs-retry', datetime('now')),
         (4, 'workspace-linked-urls', datetime('now')),
         (5, 'scheduled-agents', datetime('now')),
-        (6, 'namespaces', datetime('now'));
+        (6, 'namespaces', datetime('now')),
+        (7, 'background-sessions-and-runs', datetime('now'));
     `);
+    this.ensureColumn("scheduled_agents", "schedule_type", "TEXT NOT NULL DEFAULT 'recurring'");
+    this.ensureColumn("scheduled_agents", "run_at", "TEXT");
+    this.ensureColumn("scheduled_agents", "run_mode", "TEXT NOT NULL DEFAULT 'workspace'");
+    this.ensureColumn("scheduled_agents", "background_cwd", "TEXT");
+    this.ensureColumn("scheduled_agents", "overlap_policy", "TEXT NOT NULL DEFAULT 'skip'");
   }
 
   exec(sql: string) {
@@ -554,24 +599,33 @@ export class SqliteStore {
   }
 
   insertScheduledAgent(agent: ScheduledAgent) {
+    // cron is NOT NULL at the DB level. One-shot rows store a sentinel that
+    // never matches a real minute so the recurring tick is a no-op for them.
+    const cronColumn = agent.cron ?? ONE_SHOT_CRON_PLACEHOLDER;
     this.database
       .prepare(
-        `INSERT INTO scheduled_agents (id, name, description, cron, repo_id, runtime_id, prompt,
-          workspace_strategy, workspace_name, base_branch, enabled, last_run_at, last_run_status,
+        `INSERT INTO scheduled_agents (id, name, description, cron, schedule_type, run_at, repo_id, runtime_id, prompt,
+          workspace_strategy, workspace_name, base_branch, run_mode, background_cwd, overlap_policy,
+          enabled, last_run_at, last_run_status,
           last_run_message, last_workspace_id, last_session_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         agent.id,
         agent.name,
         agent.description ?? null,
-        agent.cron,
+        cronColumn,
+        agent.scheduleType,
+        agent.runAt ?? null,
         agent.repoId,
         agent.runtimeId,
         agent.prompt ?? null,
         agent.workspaceStrategy,
         agent.workspaceName,
         agent.baseBranch ?? null,
+        agent.runMode,
+        agent.backgroundCwd ?? null,
+        agent.overlapPolicy,
         agent.enabled ? 1 : 0,
         agent.lastRunAt ?? null,
         agent.lastRunStatus,
@@ -590,13 +644,18 @@ export class SqliteStore {
         ScheduledAgent,
         | "name"
         | "description"
+        | "scheduleType"
         | "cron"
+        | "runAt"
         | "repoId"
         | "runtimeId"
         | "prompt"
         | "workspaceStrategy"
         | "workspaceName"
         | "baseBranch"
+        | "runMode"
+        | "backgroundCwd"
+        | "overlapPolicy"
         | "enabled"
       >
     >,
@@ -609,24 +668,34 @@ export class SqliteStore {
       description: patch.description !== undefined ? patch.description : existing.description,
       prompt: patch.prompt !== undefined ? patch.prompt : existing.prompt,
       baseBranch: patch.baseBranch !== undefined ? patch.baseBranch : existing.baseBranch,
+      runAt: patch.runAt !== undefined ? patch.runAt : existing.runAt,
+      cron: patch.cron !== undefined ? patch.cron : existing.cron,
+      backgroundCwd: patch.backgroundCwd !== undefined ? patch.backgroundCwd : existing.backgroundCwd,
       updatedAt: new Date().toISOString(),
     };
+    const cronColumn = next.cron ?? ONE_SHOT_CRON_PLACEHOLDER;
     this.database
       .prepare(
-        `UPDATE scheduled_agents SET name = ?, description = ?, cron = ?, repo_id = ?, runtime_id = ?,
-          prompt = ?, workspace_strategy = ?, workspace_name = ?, base_branch = ?, enabled = ?,
-          updated_at = ? WHERE id = ?`,
+        `UPDATE scheduled_agents SET name = ?, description = ?, cron = ?, schedule_type = ?, run_at = ?,
+          repo_id = ?, runtime_id = ?, prompt = ?, workspace_strategy = ?, workspace_name = ?,
+          base_branch = ?, run_mode = ?, background_cwd = ?, overlap_policy = ?, enabled = ?, updated_at = ?
+          WHERE id = ?`,
       )
       .run(
         next.name,
         next.description ?? null,
-        next.cron,
+        cronColumn,
+        next.scheduleType,
+        next.runAt ?? null,
         next.repoId,
         next.runtimeId,
         next.prompt ?? null,
         next.workspaceStrategy,
         next.workspaceName,
         next.baseBranch ?? null,
+        next.runMode,
+        next.backgroundCwd ?? null,
+        next.overlapPolicy,
         next.enabled ? 1 : 0,
         next.updatedAt,
         id,
@@ -676,6 +745,32 @@ export class SqliteStore {
     this.database.prepare("DELETE FROM scheduled_agents WHERE id = ?").run(id);
   }
 
+  /**
+   * Reset the run tracking on a scheduled agent without recording a new run.
+   * Used when the user PATCHes a one-shot's schedule and we need the tick
+   * guard to treat the agent as un-fired again.
+   */
+  resetScheduledAgentRun(id: string): ScheduledAgent | null {
+    const existing = this.findScheduledAgent(id);
+    if (!existing) return null;
+    const next: ScheduledAgent = {
+      ...existing,
+      lastRunAt: null,
+      lastRunStatus: "never",
+      lastRunMessage: null,
+      lastWorkspaceId: null,
+      lastSessionId: null,
+      updatedAt: new Date().toISOString(),
+    };
+    this.database
+      .prepare(
+        `UPDATE scheduled_agents SET last_run_at = NULL, last_run_status = 'never', last_run_message = NULL,
+          last_workspace_id = NULL, last_session_id = NULL, updated_at = ? WHERE id = ?`,
+      )
+      .run(next.updatedAt, id);
+    return next;
+  }
+
   private ensureColumn(table: string, column: string, definition: string) {
     const cols = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (!cols.some((entry) => entry.name === column)) {
@@ -683,3 +778,12 @@ export class SqliteStore {
     }
   }
 }
+
+// Attach the scheduled_agent_runs and background_sessions methods to
+// SqliteStore.prototype. The implementations live in scheduled-run-store.ts
+// (kept separate to stay under the per-file line budget); the type
+// declarations there augment this class via `declare module`. We can't do
+// the assignment inside scheduled-run-store.ts itself because ES module
+// hoisting would run it before this class declaration completes.
+import { scheduledRunStoreMethods } from "./scheduled-run-store.js";
+Object.assign(SqliteStore.prototype, scheduledRunStoreMethods);

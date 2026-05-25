@@ -9,6 +9,7 @@ export {
   claudeProjectsDir,
   findClaudeTranscriptForSession,
   parseClaudeTranscript,
+  renderClaudeTranscriptAsText,
 } from "./claude-code.js";
 export { codexAdapter, codexSessionsRoot, findCodexRolloutForSession, parseCodexRollout } from "./codex.js";
 export { cursorAgentAdapter } from "./cursor-agent.js";

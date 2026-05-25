@@ -8,6 +8,7 @@ import type {
   Operation,
   ProviderHealth,
   Repo,
+  ScheduledAgent,
   Workspace,
 } from "@citadel/contracts";
 
@@ -54,7 +55,14 @@ export type McpToolName =
   | "append_scratchpad"
   | "list_deployed_apps"
   | "redeploy_app"
-  | "read_agent_history";
+  | "read_agent_history"
+  | "list_scheduled_agents"
+  | "create_scheduled_agent"
+  | "update_scheduled_agent"
+  | "delete_scheduled_agent"
+  | "run_scheduled_agent_now"
+  | "list_scheduled_agent_runs"
+  | "read_scheduled_agent_run_log";
 
 export type McpToolDefinition = {
   name: McpToolName;
@@ -71,6 +79,7 @@ export type McpToolContext = {
   activity: ActivityEvent[];
   providerHealth: ProviderHealth[];
   runtimes: AgentRuntime[];
+  scheduledAgents?: ScheduledAgent[];
   namespaces: Namespace[];
   sessionPromptSummary?: (sessionId: string) => { initialPrompt: string | null; messageCount: number };
 };
@@ -459,6 +468,131 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       destructive: true,
     },
     {
+      name: "list_scheduled_agents",
+      description:
+        "List all configured scheduled agents. Each entry includes cron, repo, runtime, workspace strategy, enabled flag, and the last run status/timestamp.",
+      inputSchema: { type: "object", additionalProperties: false },
+      destructive: false,
+    },
+    {
+      name: "create_scheduled_agent",
+      description:
+        "Create a scheduled agent. scheduleType='recurring' (default) requires a 5-field cron expression. scheduleType='once' requires runAt (ISO 8601 with offset, e.g. 2026-05-23T09:00:00Z); one-shots auto-disable after firing. workspaceStrategy='new' creates a fresh workspace per run (workspaceName is a prefix; timestamp appended). workspaceStrategy='existing' reuses the workspace with the exact name. runMode='workspace' (default) keeps the current workspace-per-run behavior; runMode='background' runs the runtime in backgroundCwd (or repo.rootPath) without creating a workspace — intended for non-TUI scripts. overlapPolicy='skip' (default) drops fires that overlap an in-flight run; overlapPolicy='queue' enqueues up to 10 then drops with 'queue_full'. Returns { scheduledAgent }.",
+      inputSchema: {
+        type: "object",
+        required: ["name", "repoId", "runtimeId", "workspaceStrategy", "workspaceName"],
+        properties: {
+          name: { type: "string", minLength: 1, maxLength: 80 },
+          description: { type: "string", maxLength: 280 },
+          scheduleType: { type: "string", enum: ["recurring", "once"], default: "recurring" },
+          cron: { type: "string", minLength: 1, maxLength: 120, description: "Five-field cron (recurring only)." },
+          runAt: { type: "string", format: "date-time", description: "ISO 8601 timestamp (one-shot only)." },
+          repoId: { type: "string" },
+          runtimeId: { type: "string" },
+          prompt: { type: "string", maxLength: 8000 },
+          workspaceStrategy: { type: "string", enum: ["new", "existing"] },
+          workspaceName: { type: "string", minLength: 1, maxLength: 80 },
+          baseBranch: { type: "string", minLength: 1, maxLength: 120 },
+          runMode: { type: "string", enum: ["workspace", "background"], default: "workspace" },
+          backgroundCwd: {
+            type: "string",
+            minLength: 1,
+            maxLength: 4000,
+            description: "Absolute directory for runMode='background'. Defaults to the repo's rootPath at run time.",
+          },
+          overlapPolicy: { type: "string", enum: ["skip", "queue"], default: "skip" },
+          enabled: { type: "boolean" },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "update_scheduled_agent",
+      description:
+        "Patch fields of an existing scheduled agent. All non-id fields are optional; only those provided are changed. To convert a recurring agent into a one-shot, set scheduleType='once' and runAt; the previous cron is cleared. Switching runMode does NOT delete previously-created workspaces. Returns { scheduledAgent } or { error: 'scheduled_agent_not_found' }.",
+      inputSchema: {
+        type: "object",
+        required: ["id"],
+        properties: {
+          id: { type: "string" },
+          name: { type: "string", minLength: 1, maxLength: 80 },
+          description: { type: "string", maxLength: 280 },
+          scheduleType: { type: "string", enum: ["recurring", "once"] },
+          cron: { type: "string", minLength: 1, maxLength: 120 },
+          runAt: { type: "string", format: "date-time" },
+          repoId: { type: "string" },
+          runtimeId: { type: "string" },
+          prompt: { type: "string", maxLength: 8000 },
+          workspaceStrategy: { type: "string", enum: ["new", "existing"] },
+          workspaceName: { type: "string", minLength: 1, maxLength: 80 },
+          baseBranch: { type: "string", minLength: 1, maxLength: 120 },
+          runMode: { type: "string", enum: ["workspace", "background"] },
+          backgroundCwd: { type: "string", minLength: 1, maxLength: 4000 },
+          overlapPolicy: { type: "string", enum: ["skip", "queue"] },
+          enabled: { type: "boolean" },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "delete_scheduled_agent",
+      description:
+        "Delete a scheduled agent. Cascades: kills any background tmux panes, deletes per-run log files on disk, removes scheduled_agent_runs + background_sessions rows, then deletes the agent. Returns { removed: true } or { error: 'scheduled_agent_not_found' } or { error: 'in_flight_run' } when a run is currently executing — wait for the run to finish or for the reconciler to terminate the orphan, then retry.",
+      inputSchema: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string" } },
+        additionalProperties: false,
+      },
+      destructive: true,
+    },
+    {
+      name: "run_scheduled_agent_now",
+      description:
+        "Trigger a single run of a scheduled agent immediately, regardless of cron. Behavior under overlap depends on the agent's overlapPolicy: with 'skip' returns { error: 'run_already_in_progress' } when in-flight; with 'queue' returns { queued: true, runId, queuePosition } (or { error: 'queue_full', limit: 10 } when the queue is full). When no run is in flight, returns { status, runId, message, workspaceId, sessionId, backgroundSessionId, scheduledAgent }.",
+      inputSchema: {
+        type: "object",
+        required: ["id"],
+        properties: { id: { type: "string" } },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "list_scheduled_agent_runs",
+      description:
+        "Return the run history for a scheduled agent, most recent first by enqueued_at. Each row includes status (queued|running|succeeded|failed), enqueuedAt, startedAt (null for queued), endedAt, message, the workspaceId/sessionId/backgroundSessionId of the spawn (when applicable), and logFilePath (populated for runs that produced a log). Pagination via limit (default 50, max 500) and offset.",
+      inputSchema: {
+        type: "object",
+        required: ["scheduledAgentId"],
+        properties: {
+          scheduledAgentId: { type: "string" },
+          limit: { type: "integer", minimum: 1, maximum: 500, default: 50 },
+          offset: { type: "integer", minimum: 0, default: 0 },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
+      name: "read_scheduled_agent_run_log",
+      description:
+        "Read a byte slice of a scheduled-agent run's log file. Returns { content, bytesRead, nextOffset, truncated }. `content` is the UTF-8 decode of [offset, offset+maxBytes) bytes; `bytesRead` is the byte count consumed (NOT content.length — use it to compute nextOffset). Slice boundaries may split a UTF-8 codepoint or ANSI escape; re-fetching from offset=0 is always correct. 404-class errors come back as { error: 'run_not_found' | 'log_not_available' | 'log_file_missing' }.",
+      inputSchema: {
+        type: "object",
+        required: ["runId"],
+        properties: {
+          runId: { type: "string" },
+          offset: { type: "integer", minimum: 0, default: 0 },
+          maxBytes: { type: "integer", minimum: 256, maximum: 200_000, default: 16_000 },
+        },
+        additionalProperties: false,
+      },
+      destructive: false,
+    },
+    {
       name: "inspect_readiness",
       description: "Return the readiness state and next-action hint for a workspace.",
       inputSchema: {
@@ -510,6 +644,8 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     }
     case "list_provider_health":
       return { providerHealth: context.providerHealth };
+    case "list_scheduled_agents":
+      return { scheduledAgents: context.scheduledAgents ?? [] };
     case "list_runtimes":
       return { runtimes: context.runtimes };
     case "list_workspace_links":
@@ -553,7 +689,14 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "append_scratchpad":
     case "list_deployed_apps":
     case "redeploy_app":
+    case "create_scheduled_agent":
+    case "update_scheduled_agent":
+    case "delete_scheduled_agent":
+    case "run_scheduled_agent_now":
       return { error: "mutating_tool_requires_daemon" };
+    case "list_scheduled_agent_runs":
+    case "read_scheduled_agent_run_log":
+      return { error: "scheduled_agent_run_tool_requires_daemon" };
     case "read_agent_output":
     case "send_agent_message":
     case "read_agent_history":

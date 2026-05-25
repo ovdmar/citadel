@@ -4,9 +4,11 @@ import {
   CreateAgentSessionInputSchema,
   CreateNamespaceInputSchema,
   CreateRepoInputSchema,
+  CreateScheduledAgentInputSchema,
   CreateWorkspaceInputSchema,
   LaunchAgentInputSchema,
   UpdateNamespaceInputSchema,
+  UpdateScheduledAgentInputSchema,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, serializeWorkspaceResource } from "@citadel/mcp";
@@ -14,12 +16,15 @@ import {
   BranchInUseByWorktreeError,
   type OperationService,
   RemoteRefMissingError,
+  type ScheduledAgentRunner,
   WorkspaceInUseError,
   WorkspaceNameTakenError,
 } from "@citadel/operations";
 import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import type { TtydManager } from "@citadel/terminal";
+import { readLogSlice } from "./log-slice.js";
+import type { ScheduledAgentService } from "./scheduled-agent-service.js";
 import { ScratchpadTooLargeError, appendScratchpad, readScratchpad, writeScratchpad } from "./scratchpad.js";
 
 export type DaemonMcpDeps = {
@@ -27,6 +32,8 @@ export type DaemonMcpDeps = {
   store: SqliteStore;
   operations: OperationService;
   ttyd: TtydManager;
+  scheduledAgents: ScheduledAgentRunner;
+  scheduledAgentService: ScheduledAgentService;
   providerCache: Map<string, { expiresAt: number; value: unknown }>;
   emit: (type: string, payload: unknown) => void;
 };
@@ -61,7 +68,7 @@ function structuredWorkspaceError(error: unknown): { error: string; [key: string
 }
 
 export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) {
-  const { config, store, operations, ttyd, providerCache, emit } = deps;
+  const { config, store, operations, ttyd, scheduledAgents, scheduledAgentService, providerCache, emit } = deps;
   if (call.name === "register_repo") {
     const input = CreateRepoInputSchema.parse(call.arguments ?? {});
     const repo = operations.registerRepo(input);
@@ -249,6 +256,75 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     if (typeof call.arguments?.maxChars === "number") input.maxChars = call.arguments.maxChars;
     return operations.readAgentHistory(input);
   }
+  if (call.name === "create_scheduled_agent") {
+    const parsed = CreateScheduledAgentInputSchema.parse(call.arguments ?? {});
+    const result = scheduledAgentService.create(parsed);
+    return result.ok ? { scheduledAgent: result.value } : { error: result.error };
+  }
+  if (call.name === "update_scheduled_agent") {
+    const id = typeof call.arguments?.id === "string" ? call.arguments.id : "";
+    if (!id) return { error: "id_required" };
+    const { id: _ignored, ...rest } = (call.arguments ?? {}) as Record<string, unknown>;
+    const parsed = UpdateScheduledAgentInputSchema.parse(rest);
+    const result = scheduledAgentService.update(id, parsed);
+    return result.ok ? { scheduledAgent: result.value } : { error: result.error };
+  }
+  if (call.name === "delete_scheduled_agent") {
+    const id = typeof call.arguments?.id === "string" ? call.arguments.id : "";
+    if (!id) return { error: "id_required" };
+    const result = scheduledAgentService.delete(id);
+    return result.ok ? { removed: true } : { error: result.error };
+  }
+  if (call.name === "run_scheduled_agent_now") {
+    const id = typeof call.arguments?.id === "string" ? call.arguments.id : "";
+    if (!id) return { error: "id_required" };
+    const result = await scheduledAgentService.runNow(id);
+    if (!result.ok) return { error: result.error };
+    const value = result.value;
+    if (value.kind === "ran") {
+      return {
+        status: value.status,
+        runId: value.runId,
+        message: value.message,
+        workspaceId: value.workspaceId,
+        sessionId: value.sessionId,
+        backgroundSessionId: value.backgroundSessionId,
+        scheduledAgent: value.scheduledAgent,
+      };
+    }
+    if (value.kind === "queued") {
+      return {
+        queued: true,
+        runId: value.runId,
+        queuePosition: value.queuePosition,
+        scheduledAgent: value.scheduledAgent,
+      };
+    }
+    if (value.kind === "skipped_overlap") {
+      return { error: "run_already_in_progress", scheduledAgent: value.scheduledAgent };
+    }
+    return { error: "queue_full", limit: value.limit, scheduledAgent: value.scheduledAgent };
+  }
+  if (call.name === "list_scheduled_agent_runs") {
+    const agentId = typeof call.arguments?.scheduledAgentId === "string" ? call.arguments.scheduledAgentId : "";
+    if (!agentId) return { error: "scheduled_agent_id_required" };
+    if (!scheduledAgents.find(agentId)) return { error: "scheduled_agent_not_found" };
+    const limit = Math.max(1, Math.min(typeof call.arguments?.limit === "number" ? call.arguments.limit : 50, 500));
+    const offset = Math.max(0, typeof call.arguments?.offset === "number" ? call.arguments.offset : 0);
+    return { runs: store.listScheduledAgentRuns(agentId, { limit, offset }) };
+  }
+  if (call.name === "read_scheduled_agent_run_log") {
+    const runId = typeof call.arguments?.runId === "string" ? call.arguments.runId : "";
+    if (!runId) return { error: "run_id_required" };
+    const run = store.findScheduledAgentRun(runId);
+    if (!run) return { error: "run_not_found" };
+    if (!run.logFilePath) return { error: "log_not_available" };
+    const offset = typeof call.arguments?.offset === "number" ? call.arguments.offset : 0;
+    const maxBytes = typeof call.arguments?.maxBytes === "number" ? call.arguments.maxBytes : undefined;
+    const slice = readLogSlice(run.logFilePath, { offset, ...(maxBytes !== undefined ? { maxBytes } : {}) });
+    if ("kind" in slice) return { error: "log_file_missing" };
+    return slice;
+  }
   const providerHealth = await collectProviderHealth(config.providers);
   return callMcpTool(call, {
     repos: store.listRepos(),
@@ -258,7 +334,11 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     activity: store.listActivity(),
     providerHealth,
     runtimes: listRuntimeHealth(config.runtimes),
+    scheduledAgents: scheduledAgents.list(),
     namespaces: store.listNamespaces(),
+    // Per-session summary comes from the runtime's own transcript via the
+    // adapter dispatcher. mtime pre-filter inside each adapter keeps list
+    // calls cheap even on big project dirs.
     sessionPromptSummary: (sessionId) => operations.getSessionPromptSummary(sessionId),
   });
 }
