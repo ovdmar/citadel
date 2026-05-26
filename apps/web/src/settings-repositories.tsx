@@ -5,6 +5,7 @@ import { ExternalLink, FolderGit2, FolderPlus, Search, Settings as SettingsIcon,
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import type { StateResponse } from "./app-state.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 
 type RepoInspectResult = {
   rootPath: string;
@@ -187,6 +188,7 @@ function RepoCard(props: {
 }
 
 function AddRepoModal(props: { onClose: () => void }) {
+  useOverlayPresent();
   const [rootPath, setRootPath] = useState("");
   const [name, setName] = useState("");
   const pathRef = useRef<HTMLInputElement>(null);

@@ -9,6 +9,15 @@ export const SECTION_ORDER = ["blocked", "needs-review", "working", "dirty", "id
 // the navigator's flat-list mode and never reaches buildGroupTree.
 export type GroupableKey = Exclude<GroupKey, "none">;
 
+// Translate the user-facing grouping mode into the level sequence buildGroupTree
+// consumes. Mirrors the inline mapping inside navigator.tsx so cockpit-side
+// callers (Ctrl+1..9 workspace nav) can derive the exact same tree.
+export function treeGroupingFor(grouping: GroupKey): GroupableKey[] {
+  if (grouping === "none") return [];
+  if (grouping === "namespace") return ["repo", "namespace"];
+  return [grouping];
+}
+
 export type WorkspaceEntry = { workspace: Workspace; sessions: AgentSession[] };
 
 export type GroupNode =

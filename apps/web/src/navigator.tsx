@@ -16,20 +16,20 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { AddRepoModal, CreateWorkspaceModal, GroupByMenu, type GroupKey } from "./modals.js";
 import {
+  COLLAPSE_STORAGE_KEY as COLLAPSE_STORAGE,
+  GROUP_STORAGE_KEY as GROUP_STORAGE,
+  readCollapsedMap,
+  subscribeToCollapseChanges,
+} from "./navigator-collapse-store.js";
+import {
   type GroupNode,
   type GroupableKey,
   type WorkspaceEntry,
   buildGroupTree,
   collectGroupPaths,
+  treeGroupingFor,
 } from "./navigator-groups.js";
 import { WorkspaceCard } from "./workspace-card.js";
-
-const GROUP_STORAGE = "citadel.navigator-group";
-import {
-  COLLAPSE_STORAGE_KEY as COLLAPSE_STORAGE,
-  readCollapsedMap,
-  subscribeToCollapseChanges,
-} from "./navigator-collapse-store.js";
 
 function runningCount(sessions: AgentSession[]): number {
   return sessions.filter((session) => session.status === "running").length;
@@ -102,10 +102,7 @@ export function Navigator(props: {
   // Namespace mode renders as a two-level tree (repo → namespace) so two
   // workspaces named "main" in different repos don't collapse into a single
   // ambiguous bucket. The tree builder handles namespace bucketing natively.
-  const treeGrouping = useMemo<GroupableKey[]>(
-    () => (grouping === "none" ? [] : grouping === "namespace" ? ["repo", "namespace"] : [grouping as GroupableKey]),
-    [grouping],
-  );
+  const treeGrouping = useMemo<GroupableKey[]>(() => treeGroupingFor(grouping), [grouping]);
   const tree = useMemo(
     () =>
       buildGroupTree(props.workspaces, props.repos, props.sessions, props.operations, treeGrouping, props.namespaces),

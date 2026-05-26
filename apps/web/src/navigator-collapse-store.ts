@@ -1,4 +1,4 @@
-// Cross-component bridge for the Navigator's "collapsed groups" state.
+// Cross-component bridge for Navigator state (grouping mode + collapsed paths).
 // Navigator owns the React state authoritatively, but Cockpit's nav
 // shortcuts (Ctrl+N) need to be able to uncollapse a group from outside the
 // component. The bridge stores the truth in localStorage (same key Navigator
@@ -6,7 +6,21 @@
 // react immediately without waiting for a remount.
 
 export const COLLAPSE_STORAGE_KEY = "citadel.navigator-group-collapsed";
+export const GROUP_STORAGE_KEY = "citadel.navigator-group";
 export const NAVIGATOR_COLLAPSE_EVENT = "citadel:navigator-collapse-changed";
+
+export type NavigatorGrouping = "repo" | "status" | "namespace" | "none";
+
+export function readNavigatorGrouping(): NavigatorGrouping {
+  if (typeof window === "undefined") return "none";
+  try {
+    const raw = window.localStorage.getItem(GROUP_STORAGE_KEY) ?? "";
+    if (raw === "repo" || raw === "status" || raw === "namespace" || raw === "none") return raw;
+  } catch {
+    // fall through
+  }
+  return "none";
+}
 
 type CollapsedMap = Record<string, boolean>;
 

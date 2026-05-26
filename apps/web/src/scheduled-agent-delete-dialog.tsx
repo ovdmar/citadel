@@ -2,12 +2,14 @@ import type { ScheduledAgent } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { api, queryClient } from "./api.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 
 export function DeleteScheduledAgentDialog(props: {
   agent: ScheduledAgent;
   onClose: () => void;
   onDeleted?: () => void;
 }) {
+  useOverlayPresent();
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") props.onClose();

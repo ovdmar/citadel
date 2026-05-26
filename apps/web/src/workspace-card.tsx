@@ -5,6 +5,7 @@ import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, Shiel
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { useStateQuery } from "./app-state.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 import "./workspace-status-dot.css";
 
 export type WorkspaceCardData = {
@@ -230,6 +231,7 @@ export function WorkspaceCard(
 }
 
 function NamespacePickerDialog(props: { workspace: Workspace; namespaces: Namespace[]; onClose: () => void }) {
+  useOverlayPresent();
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -371,6 +373,7 @@ type DropResult = {
 };
 
 function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void }) {
+  useOverlayPresent();
   const drop = useMutation({
     mutationFn: async (): Promise<DropResult> => {
       const response = await fetch(`/api/workspaces/${props.workspace.id}`, {

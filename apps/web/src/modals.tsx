@@ -5,6 +5,7 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
 import { defaultAgentRuntimeId } from "./runtime-defaults.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 
 export type GroupKey = "repo" | "status" | "namespace" | "none";
 
@@ -79,6 +80,7 @@ type AddRepoModalProps = {
 };
 
 export function AddRepoModal(props: AddRepoModalProps) {
+  useOverlayPresent();
   const [mode, setMode] = useState<"path" | "url" | "search">("path");
   const [path, setPath] = useState("");
   const [url, setUrl] = useState("");
@@ -329,6 +331,7 @@ function defaultNamePreview(linked: LinkedContext): string {
 }
 
 export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
+  useOverlayPresent();
   const initialRepo = props.repos.find((repo) => repo.id === props.lastRepoId)?.id ?? props.repos[0]?.id ?? "";
   const [repoId, setRepoId] = useState(initialRepo);
   const [prompt, setPrompt] = useState("");

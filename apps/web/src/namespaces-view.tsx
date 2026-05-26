@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import type { StateResponse } from "./app-state.js";
 import { Button } from "./components/ui/button.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 import { WorkspaceCard } from "./workspace-card.js";
 
 export function NamespacesView(props: { data: StateResponse | undefined }) {
@@ -263,6 +264,7 @@ function ConfirmArchiveDialog(props: {
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  useOverlayPresent();
   return (
     <div className="drop-workspace-backdrop" onMouseDown={props.onCancel}>
       <dialog
