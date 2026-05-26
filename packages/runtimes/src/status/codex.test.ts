@@ -32,7 +32,7 @@ describe("codexStatusAdapter", () => {
 
   describe("fixture coverage", () => {
     it("classifies waiting-for-input-sandbox.txt as waiting_for_input", () => {
-      expect(codexStatusAdapter.observe(state, ctx(load("waiting-for-input-sandbox")))).toBe("waiting_for_input");
+      expect(codexStatusAdapter.observe(state, ctx(load("waiting-for-input-sandbox")))).toEqual({ kind: "waiting_for_input" });
     });
 
     it("classifies idle.txt as idle when ≥2 stable ticks and observed", () => {
@@ -42,7 +42,7 @@ describe("codexStatusAdapter", () => {
           state,
           ctx(pane, { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 2 }),
         ),
-      ).toBe("idle");
+      ).toEqual({ kind: "idle" });
     });
 
     it("classifies running-mid-stream.txt as running when activity recent", () => {
@@ -51,7 +51,7 @@ describe("codexStatusAdapter", () => {
           state,
           ctx(load("running-mid-stream"), { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 }),
         ),
-      ).toBe("running");
+      ).toEqual({ kind: "running" });
     });
   });
 
@@ -59,7 +59,7 @@ describe("codexStatusAdapter", () => {
     it("tmuxActivityChangedSinceLastTick → running regardless of stability", () => {
       expect(
         codexStatusAdapter.observe(state, ctx("some pane content", { tmuxActivityChangedSinceLastTick: true })),
-      ).toBe("running");
+      ).toEqual({ kind: "running" });
     });
 
     it("stability of exactly 1 tick → null (not yet enough to call idle)", () => {
@@ -77,7 +77,7 @@ describe("codexStatusAdapter", () => {
           state,
           ctx("some pane content", { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 2 }),
         ),
-      ).toBe("idle");
+      ).toEqual({ kind: "idle" });
     });
 
     it("stability of 5 ticks → idle (still)", () => {
@@ -86,7 +86,7 @@ describe("codexStatusAdapter", () => {
           state,
           ctx("some pane content", { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 5 }),
         ),
-      ).toBe("idle");
+      ).toEqual({ kind: "idle" });
     });
   });
 
@@ -115,13 +115,13 @@ describe("codexStatusAdapter", () => {
           state,
           ctx("some pane content", { source: "tick", ticksSinceActivityChange: 2, hasObservedSinceBoot: true }),
         ),
-      ).toBe("idle");
+      ).toEqual({ kind: "idle" });
     });
 
     it("source=boot but waiting_for_input footer still applies (sandbox approval is sticky)", () => {
       const pane = "something\nPress enter to confirm or esc to cancel";
-      expect(codexStatusAdapter.observe(state, ctx(pane, { source: "boot", hasObservedSinceBoot: false }))).toBe(
-        "waiting_for_input",
+      expect(codexStatusAdapter.observe(state, ctx(pane, { source: "boot", hasObservedSinceBoot: false }))).toEqual(
+        { kind: "waiting_for_input" },
       );
     });
   });
@@ -133,7 +133,7 @@ describe("codexStatusAdapter", () => {
           state,
           ctx(load("false-positive-prompt-text"), { ticksSinceActivityChange: 2, hasObservedSinceBoot: true }),
         ),
-      ).toBe("idle");
+      ).toEqual({ kind: "idle" });
     });
   });
 

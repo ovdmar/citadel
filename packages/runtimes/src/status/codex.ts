@@ -1,5 +1,13 @@
-import type { ObservationContext, PaneObservation, RuntimeStatusAdapter, SessionAdapterState } from "./index.js";
-import { lastNonEmptyLine } from "./index.js";
+import {
+  lastNonEmptyLine,
+  observeIdle,
+  observeRunning,
+  observeWaitingForInput,
+  type ObservationContext,
+  type PaneObservation,
+  type RuntimeStatusAdapter,
+  type SessionAdapterState,
+} from "./index.js";
 
 // Codex v0.130.0 detection.
 //
@@ -35,16 +43,22 @@ export const codexStatusAdapter: RuntimeStatusAdapter = {
   observe(state: SessionAdapterState, ctx: ObservationContext): PaneObservation | null {
     state.ticksObserved += 1;
 
+    // Priority 0: rate-limit banner.
+    const rateLimit = codexStatusAdapter.detectRateLimit(ctx.paneCapture);
+    if (rateLimit !== null) {
+      return { kind: "rate_limited", resetAt: rateLimit.resetAt };
+    }
+
     const bottom = lastNonEmptyLine(ctx.paneCapture);
 
     // Priority 1: sandbox approval footer.
     if (bottom === SANDBOX_APPROVAL_FOOTER) {
-      return "waiting_for_input";
+      return observeWaitingForInput();
     }
 
     // Priority 2: pane activity changed → running.
     if (ctx.tmuxActivityChangedSinceLastTick) {
-      return "running";
+      return observeRunning();
     }
 
     // Priority 3: stable for ≥ IDLE_STABLE_TICKS — idle.
@@ -55,10 +69,16 @@ export const codexStatusAdapter: RuntimeStatusAdapter = {
       return null;
     }
     if (ctx.ticksSinceActivityChange >= IDLE_STABLE_TICKS) {
-      return "idle";
+      return observeIdle();
     }
 
     // Stability of exactly 1 — not yet enough to call idle.
+    return null;
+  },
+
+  // Stateless rate-limit detection. STUB during the Scope contingency —
+  // real captures + calibrated regex land in a follow-up PR.
+  detectRateLimit(_paneCapture: string): { resetAt: string | null } | null {
     return null;
   },
 };

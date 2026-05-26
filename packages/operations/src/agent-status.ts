@@ -18,6 +18,7 @@ export type StatusSignal =
   | { type: "exited_failed"; exitCode: number; endedAt: string }
   | { type: "active"; lastOutputAt: string }
   | { type: "pane_observation"; observed: "running" | "idle" | "waiting_for_input"; reason?: string }
+  | { type: "pane_rate_limited"; resetAt: string | null }
   | { type: "optimistic_send" };
 
 // Subset of AgentSession the reducer needs. Callers can pass the full row.
@@ -160,6 +161,26 @@ export function reduceStatus(prev: ReducerPrev, signal: StatusSignal, now: () =>
         return null;
       }
       return statusUpdate(prev, target, reason, t);
+    }
+
+    case "pane_rate_limited": {
+      // The statusReason format is parseable by parseRateLimitReason in
+      // @citadel/core: "rate_limited:<ISO>" or "rate_limited:unknown_reset".
+      const newReason = signal.resetAt === null ? "rate_limited:unknown_reset" : `rate_limited:${signal.resetAt}`;
+      if (prev.status === "rate_limited") {
+        // Same-status refinement. ISO equality uses Date.parse to avoid
+        // string-equality fragility ("…00:00.000Z" vs "…00:00Z" compare equal).
+        const prevReset = prev.statusReason?.startsWith("rate_limited:") && prev.statusReason !== "rate_limited:unknown_reset"
+          ? prev.statusReason.slice("rate_limited:".length)
+          : null;
+        const isPrevUnknown = prev.statusReason === "rate_limited:unknown_reset";
+        const equal = signal.resetAt === null
+          ? isPrevUnknown
+          : prevReset !== null && Date.parse(prevReset) === Date.parse(signal.resetAt);
+        if (equal) return null; // no-op — same effective reset
+        return { status: "rate_limited", reason: newReason }; // reason refinement, no lastStatusAt bump
+      }
+      return statusUpdate(prev, "rate_limited", newReason, t);
     }
 
     case "optimistic_send": {

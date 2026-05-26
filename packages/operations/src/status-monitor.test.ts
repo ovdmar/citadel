@@ -31,6 +31,7 @@ function makeAdapter(observed: ReturnType<RuntimeStatusAdapter["observe"]>): Run
     runtimeId: "claude-code",
     createSessionState: () => ({ ticksObserved: 0, lastPaneHash: null }),
     observe: vi.fn(() => observed),
+    detectRateLimit: vi.fn(() => null),
   };
 }
 
@@ -103,7 +104,7 @@ describe("runStatusMonitorTick", () => {
     });
 
     it("processes unknown sessions (reason can refine, resurrection possible)", async () => {
-      const adapter = makeAdapter("running");
+      const adapter = makeAdapter({ kind: "running" });
       const { deps, updates } = makeDeps({
         sessions: [makeSession({ id: "s_unk", status: "unknown", statusReason: "tmux_missing" })],
         tmuxActivities: new Map([["citadel_test_1", 1700000000000]]),
@@ -203,7 +204,7 @@ describe("runStatusMonitorTick", () => {
 
   describe("adapter integration — pane_observation drives status", () => {
     it("calls adapter.observe with the pane capture", async () => {
-      const adapter = makeAdapter("idle");
+      const adapter = makeAdapter({ kind: "idle" });
       const { deps } = makeDeps({
         sessions: [makeSession({ status: "running" })],
         tmuxActivities: new Map([["citadel_test_1", 1700000000000]]),
@@ -217,7 +218,7 @@ describe("runStatusMonitorTick", () => {
     });
 
     it("running × adapter says idle → idle transition", async () => {
-      const adapter = makeAdapter("idle");
+      const adapter = makeAdapter({ kind: "idle" });
       const { deps, updates } = makeDeps({
         sessions: [makeSession({ status: "running" })],
         tmuxActivities: new Map([["citadel_test_1", 1700000000000]]),

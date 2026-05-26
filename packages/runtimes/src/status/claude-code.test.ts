@@ -32,46 +32,46 @@ describe("claudeCodeStatusAdapter", () => {
 
   describe("fixture coverage", () => {
     it("classifies idle.txt as idle", () => {
-      expect(claudeCodeStatusAdapter.observe(state, ctx(load("idle")))).toBe("idle");
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("idle")))).toEqual({ kind: "idle" });
     });
 
     it("classifies running-mid-stream.txt as running (esc to interrupt visible)", () => {
-      expect(claudeCodeStatusAdapter.observe(state, ctx(load("running-mid-stream")))).toBe("running");
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("running-mid-stream")))).toEqual({ kind: "running" });
     });
 
     it("classifies running-with-spinner-verb.txt as running", () => {
-      expect(claudeCodeStatusAdapter.observe(state, ctx(load("running-with-spinner-verb")))).toBe("running");
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("running-with-spinner-verb")))).toEqual({ kind: "running" });
     });
 
     it("classifies running-with-monitor.txt as running (bg work suppresses completion)", () => {
-      expect(claudeCodeStatusAdapter.observe(state, ctx(load("running-with-monitor")))).toBe("running");
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("running-with-monitor")))).toEqual({ kind: "running" });
     });
 
     it("classifies running-with-shell.txt as running", () => {
-      expect(claudeCodeStatusAdapter.observe(state, ctx(load("running-with-shell")))).toBe("running");
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("running-with-shell")))).toEqual({ kind: "running" });
     });
 
     it("classifies running-with-local-agent.txt as running (subagent + esc to interrupt)", () => {
-      expect(claudeCodeStatusAdapter.observe(state, ctx(load("running-with-local-agent")))).toBe("running");
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("running-with-local-agent")))).toEqual({ kind: "running" });
     });
 
     it("classifies waiting-for-input-ask-question.txt as waiting_for_input", () => {
-      expect(claudeCodeStatusAdapter.observe(state, ctx(load("waiting-for-input-ask-question")))).toBe(
-        "waiting_for_input",
-      );
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("waiting-for-input-ask-question")))).toEqual({
+        kind: "waiting_for_input",
+      });
     });
 
     it("classifies waiting-for-input-ask-question-tab-arrow.txt as waiting_for_input (new Tab/Arrow nav hint)", () => {
       // Claude Code reworded the AskUserQuestion footer from
       // `↑/↓ to navigate` to `Tab/Arrow keys to navigate`. The detector
       // anchors on the stable `Enter to select` and `Esc to cancel` endpoints.
-      expect(claudeCodeStatusAdapter.observe(state, ctx(load("waiting-for-input-ask-question-tab-arrow")))).toBe(
-        "waiting_for_input",
-      );
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("waiting-for-input-ask-question-tab-arrow")))).toEqual({
+        kind: "waiting_for_input",
+      });
     });
 
     it("classifies wakeup-resuming.txt as running (esc to interrupt visible in mid-resume)", () => {
-      expect(claudeCodeStatusAdapter.observe(state, ctx(load("wakeup-resuming")))).toBe("running");
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("wakeup-resuming")))).toEqual({ kind: "running" });
     });
   });
 
@@ -80,7 +80,7 @@ describe("claudeCodeStatusAdapter", () => {
       // The fixture has the agent describing ALL four chrome strings in its
       // response body, but the bottom mode line is the bare idle baseline.
       // Anchoring to lastNonEmptyLine rejects the false positives.
-      expect(claudeCodeStatusAdapter.observe(state, ctx(load("false-positive-prompt-text")))).toBe("idle");
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("false-positive-prompt-text")))).toEqual({ kind: "idle" });
     });
   });
 
@@ -101,17 +101,17 @@ describe("claudeCodeStatusAdapter", () => {
 
     it("matches local-agent suffix without esc to interrupt (subagent waiting)", () => {
       const pane = "agent output\n  ⏵⏵ auto mode on · 2 local agent · ↓ to manage";
-      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("running");
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toEqual({ kind: "running" });
     });
 
     it("matches monitor suffix without esc to interrupt", () => {
       const pane = "x\n  ⏵⏵ auto mode on · 1 monitor · ↓ to manage";
-      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("running");
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toEqual({ kind: "running" });
     });
 
     it("matches multi-digit background counts", () => {
       const pane = "x\n  ⏵⏵ auto mode on · 12 shell · ↓ to manage";
-      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("running");
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toEqual({ kind: "running" });
     });
   });
 

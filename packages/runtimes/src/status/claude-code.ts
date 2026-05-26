@@ -1,4 +1,12 @@
-import type { ObservationContext, PaneObservation, RuntimeStatusAdapter, SessionAdapterState } from "./index.js";
+import {
+  observeIdle,
+  observeRunning,
+  observeWaitingForInput,
+  type ObservationContext,
+  type PaneObservation,
+  type RuntimeStatusAdapter,
+  type SessionAdapterState,
+} from "./index.js";
 
 // Claude Code v2.1.x detection (verified 2026-05-25 against v2.1.133).
 //
@@ -76,9 +84,16 @@ export const claudeCodeStatusAdapter: RuntimeStatusAdapter = {
   observe(state: SessionAdapterState, ctx: ObservationContext): PaneObservation | null {
     state.ticksObserved += 1;
 
+    // Priority 0: rate-limit banner — trumps every other state. Detection
+    // lives in detectRateLimit() so the resumer can re-use it statelessly.
+    const rateLimit = claudeCodeStatusAdapter.detectRateLimit(ctx.paneCapture);
+    if (rateLimit !== null) {
+      return { kind: "rate_limited", resetAt: rateLimit.resetAt };
+    }
+
     // Priority 1: AskUserQuestion footer — replaces the normal mode line.
     if (hasAskUserQuestionFooter(ctx.paneCapture)) {
-      return "waiting_for_input";
+      return observeWaitingForInput();
     }
 
     const modeLine = findModeLine(ctx.paneCapture);
@@ -90,20 +105,33 @@ export const claudeCodeStatusAdapter: RuntimeStatusAdapter = {
 
     // Priority 2: active turn (with or without background work).
     if (modeLine.includes(ESC_TO_INTERRUPT_SUBSTRING)) {
-      return "running";
+      return observeRunning();
     }
 
     // Priority 3: background work without an active main turn — still alive.
     if (BACKGROUND_WORK_REGEX.test(modeLine)) {
-      return "running";
+      return observeRunning();
     }
 
     // Priority 4: bare idle mode line — turn truly complete.
     if (modeLine === IDLE_MODE_LINE) {
-      return "idle";
+      return observeIdle();
     }
 
     // Mode line present but unmatched — runtime UI drift. No opinion.
+    return null;
+  },
+
+  // Stateless rate-limit detection. Returns the parsed reset time when a
+  // rate-limit banner is visible in the pane (or null resetAt when the banner
+  // text is present but unparseable). Returns null overall when no banner is
+  // visible.
+  //
+  // SCOPE CONTINGENCY: this PR ships the infrastructure without committed
+  // real fixtures, so the regex below is currently a STUB that never matches.
+  // Real captures + calibrated regex land in a follow-up PR — see the plan's
+  // "Scope contingency" section.
+  detectRateLimit(_paneCapture: string): { resetAt: string | null } | null {
     return null;
   },
 };

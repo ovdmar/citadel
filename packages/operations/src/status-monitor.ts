@@ -9,6 +9,19 @@ export interface MonitorSessionState {
   lastActivityMs: number | null;
   ticksSinceActivityChange: number;
   hasObservedSinceBoot: boolean;
+  // Number of consecutive observation ticks where the adapter returned a
+  // non-rate_limited PaneObservation while prev.status is rate_limited.
+  // Resets to 0 on any pane_rate_limited observation. The exit transition
+  // from rate_limited is only forwarded to the reducer at ≥2 — protects
+  // against false-positive flips when the banner scrolls off-screen for a
+  // single tick.
+  consecutiveNonRateLimitedTicks: number;
+  // Flips to true at the END of runStatusMonitorTick (after observation +
+  // persistence + the rate-limit scheduler tick). Initial false. The
+  // rate-limit scheduler gates BOTH schedule and execute phases on this flag
+  // so a pending row from a previous daemon run never fires on the very
+  // first post-boot tick. See AC8 in .agents/plans/rate-limit-handling.md.
+  hasCompletedFirstTick: boolean;
 }
 
 export interface SentinelReading {
@@ -63,7 +76,13 @@ export interface MonitorTickResult {
 const TERMINAL_STATUSES = new Set<AgentSession["status"]>(["stopped", "failed"]);
 
 function makeMonitorState(): MonitorSessionState {
-  return { lastActivityMs: null, ticksSinceActivityChange: 0, hasObservedSinceBoot: false };
+  return {
+    lastActivityMs: null,
+    ticksSinceActivityChange: 0,
+    hasObservedSinceBoot: false,
+    consecutiveNonRateLimitedTicks: 0,
+    hasCompletedFirstTick: false,
+  };
 }
 
 // Walks non-terminal sessions and applies one round of status detection.
@@ -174,7 +193,23 @@ export async function runStatusMonitorTick(
       );
       monitorState.hasObservedSinceBoot = true;
       if (observation !== null) {
-        signals.push({ type: "pane_observation", observed: observation });
+        if (observation.kind === "rate_limited") {
+          signals.push({ type: "pane_rate_limited", resetAt: observation.resetAt });
+          monitorState.consecutiveNonRateLimitedTicks = 0;
+        } else {
+          // Exit-from-rate_limited hysteresis: only forward the pane_observation
+          // signal to the reducer when the counter reaches ≥2 consecutive
+          // non-rate_limited ticks while prev.status is rate_limited.
+          const exitingRateLimited = session.status === "rate_limited";
+          if (exitingRateLimited) {
+            monitorState.consecutiveNonRateLimitedTicks += 1;
+          } else {
+            monitorState.consecutiveNonRateLimitedTicks = 0;
+          }
+          if (!exitingRateLimited || monitorState.consecutiveNonRateLimitedTicks >= 2) {
+            signals.push({ type: "pane_observation", observed: observation.kind });
+          }
+        }
       }
     }
 
