@@ -23,14 +23,17 @@ export type WorkspaceCardData = {
 export type PrTone = "missing" | "pending" | "passing" | "failing" | "merged";
 export type ApprovalTone = "none" | "pending" | "changes" | "approved";
 
-export type WorkspaceAgentTone = "attention" | "running" | "idle";
+export type WorkspaceAgentTone = "attention" | "rate_limited" | "running" | "idle";
 
 // Aggregates the per-agent statuses for a workspace into one tone for the
-// status dot. Priority: attention > running > idle. Shell sessions are
-// excluded — they're plain terminals, not agents.
+// status dot. Priority: attention > rate_limited > running > idle. Shell
+// sessions are excluded — they're plain terminals, not agents. usage_limited
+// (account-wide cap, waits for a known reset) collapses into the same blue
+// `rate_limited` tone since both mean "stalled, will recover".
 export function deriveWorkspaceAgentTone(sessions: AgentSession[]): WorkspaceAgentTone {
   const agentSessions = sessions.filter((s) => s.runtimeId !== "shell");
   if (agentSessions.some((s) => s.status === "waiting_for_input" || sessionNeedsAttention(s))) return "attention";
+  if (agentSessions.some((s) => s.status === "rate_limited" || s.status === "usage_limited")) return "rate_limited";
   if (agentSessions.some((s) => s.status === "starting" || s.status === "running")) return "running";
   return "idle";
 }
@@ -41,6 +44,7 @@ export function deriveWorkspaceAgentTone(sessions: AgentSession[]): WorkspaceAge
 // consistent with the rest of the app.
 function citPulseClass(tone: WorkspaceAgentTone): string {
   if (tone === "attention") return "cit-pulse-bad";
+  if (tone === "rate_limited") return "cit-pulse-info";
   if (tone === "running") return "cit-pulse-run";
   return "cit-pulse-idle";
 }

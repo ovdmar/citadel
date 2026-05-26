@@ -1,19 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
-import type {
-  CreateAgentSessionInput,
-  CreateNamespaceInput,
-  CreateWorkspaceInput,
-  HookAction,
-  HookOutput,
-  LaunchAgentInput,
-  Namespace,
-  Operation,
-  Repo,
-  UpdateNamespaceInput,
-  Workspace,
-} from "@citadel/contracts";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+import type { CreateAgentSessionInput, CreateNamespaceInput, CreateWorkspaceInput, HookAction, HookOutput, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
@@ -27,21 +16,17 @@ export type { LaunchAgentResult } from "./launch-agent.js";
 export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
 export type { AgentHistoryResult, AgentHistoryErrorResult } from "./agent-history.js";
 export * from "./status.js";
-export {
-  ScheduledAgentRunner,
-  parseCronExpression,
-  cronMatches,
-  nextCronRun,
-  describeCron,
-} from "./scheduled-agents.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+export { ScheduledAgentRunner, parseCronExpression, cronMatches, nextCronRun, describeCron } from "./scheduled-agents.js";
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
-import {
-  type DeployOpsDeps,
-  listDeployedApps as listDeployedAppsImpl,
-  redeployApp as redeployAppImpl,
-} from "./deploy.js";
+export { parseUsageLimitResetFromReason, deriveAccountUsageLimit } from "./usage-limit.js";
+export type { AccountRateLimitInfo } from "./usage-limit.js";
+export { DEFAULT_AUTO_RESUME_INTERVAL_MS, startAutoResumeLoop } from "./auto-resume.js";
+export type { AutoResumeDeps, AutoResumeLoopHandle } from "./auto-resume.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+import { type DeployOpsDeps, listDeployedApps as listDeployedAppsImpl, redeployApp as redeployAppImpl } from "./deploy.js";
 import {
   BranchInUseByWorktreeError,
   RemoteRefMissingError,
@@ -58,12 +43,8 @@ import {
   workspaceIsDirty,
 } from "./helpers.js";
 
-export {
-  BranchInUseByWorktreeError,
-  RemoteRefMissingError,
-  WorkspaceInUseError,
-  WorkspaceNameTakenError,
-} from "./helpers.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+export { BranchInUseByWorktreeError, RemoteRefMissingError, WorkspaceInUseError, WorkspaceNameTakenError } from "./helpers.js";
 import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
 import {
   type WorkspaceAppsDeps,
@@ -329,7 +310,8 @@ export class OperationService {
 
   readAgentTranscript = (i: { sessionId: string; lines?: number; maxChars?: number }) =>
     agentMessages.readAgentTranscript(this.store, i);
-  sendAgentMessage = (i: { sessionId: string; message: string }) => agentMessages.sendAgentMessage(this.store, i);
+  sendAgentMessage = (i: Parameters<typeof agentMessages.sendAgentMessage>[1]) =>
+    agentMessages.sendAgentMessage(this.store, i);
   readAgentHistory = (i: { sessionId: string; limit?: number; maxChars?: number }) =>
     agentHistory.readAgentHistory(this.store, i);
   getSessionPromptSummary = (sessionId: string) => agentHistory.getSessionPromptSummary(this.store, sessionId);
@@ -539,7 +521,7 @@ export class OperationService {
       .listSessions()
       .filter((session) => workspaces.some((workspace) => workspace.id === session.workspaceId));
     const activeSessions = sessions.filter((session) =>
-      ["starting", "running", "waiting_for_input", "idle"].includes(session.status),
+      ["starting", "running", "waiting_for_input", "rate_limited", "usage_limited", "idle"].includes(session.status),
     );
     const runningOperations = this.store
       .listOperations()

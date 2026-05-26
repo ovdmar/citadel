@@ -33,6 +33,8 @@ import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
+import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
+import { getBootRestoreSummary } from "./boot-restore.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
@@ -45,7 +47,9 @@ import { backfillIfEmpty } from "./scratchpad-history.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { scratchpadPath } from "./scratchpad.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
+import { startTerminalReaper } from "./terminal-reaper.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
+import { resolveTtydPortRange } from "./ttyd-slot.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
 import { readWorkspaceGitStatus } from "./workspace-diff.js";
 import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
@@ -87,24 +91,7 @@ export function createDaemonApp(input: {
   const server = http.createServer(app);
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
-  // Per-daemon ttyd port slice. Boot-time cleanupStale() blanket-SIGTERMs
-  // every ttyd in this range, so any two daemons that share a range will
-  // trample each other's live terminals (worktree daemons under tsx watch
-  // restart on file save, and each restart killed the systemd install's
-  // ttyds — that's where the "Reconnecting/Reconnected" storm came from).
-  //
-  // Slot = ((daemonPort - 4010) mod 11) * 200 gives 11 disjoint 200-port
-  // slices, each deterministic per HTTP port. The base is shifted to 7721
-  // (just above the legacy hardcoded ceiling of 7720) so daemons running
-  // OLD pre-slot code — whose cleanupStale still targets the legacy
-  // 7681..7720 range — physically cannot reach new daemons' terminals.
-  // Env overrides still win so operators can pin the range explicitly.
-  const ttydSlot = (((config.port - 4010) % 11) + 11) % 11;
-  const envTtydBase = Number.parseInt(process.env.CITADEL_TTYD_PORT_BASE ?? "", 10);
-  const envTtydMax = Number.parseInt(process.env.CITADEL_TTYD_PORT_MAX ?? "", 10);
-  const ttydPortBase = Number.isFinite(envTtydBase) && envTtydBase > 0 ? envTtydBase : 7721 + 200 * ttydSlot;
-  const ttydPortMax = Number.isFinite(envTtydMax) && envTtydMax > 0 ? envTtydMax : ttydPortBase + 199;
-  const ttyd = createTtydManager({ portBase: ttydPortBase, portMax: ttydPortMax });
+  const ttyd = createTtydManager(resolveTtydPortRange(config.port));
 
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
@@ -183,6 +170,7 @@ export function createDaemonApp(input: {
         mcp: mcpStatus(config.mcp.enabled),
         scheduledAgents: scheduledAgents.list(),
         namespaces: store.listNamespaces(),
+        bootRestore: getBootRestoreSummary(),
       });
     }),
   );
@@ -791,14 +779,14 @@ export function createDaemonApp(input: {
     server.on("close", () => clearInterval(reaper));
   }
 
-  // Status monitor — 2s tick observing tmux activity + bash-wrapper sentinels
-  // and asking the runtime adapter for pane-derived status observations.
-  // Updates agent_sessions.status and emits agent.updated SSE events. Wiring
-  // lives in status-monitor-wiring.ts to keep this file under the 800-line gate.
+  // Status monitor / auto-resume / terminal reaper: see their own modules for context.
   const statusMonitor = startDaemonStatusMonitor(store, emit);
-  if (statusMonitor) {
-    server.on("close", () => statusMonitor.stop());
-  }
+  if (statusMonitor) server.on("close", () => statusMonitor.stop());
+
+  const autoResume = startDaemonAutoResumeLoop(store, operations);
+  if (autoResume) server.on("close", () => autoResume.stop());
+  const terminalReaper = startTerminalReaper();
+  server.on("close", () => terminalReaper.stop());
 
   return { app, server, emit };
 

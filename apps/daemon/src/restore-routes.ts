@@ -9,10 +9,13 @@
 // which threads the UUID through the runtime's `resumeArg` (`--resume <uuid>`
 // for claude-code).
 
+import fs from "node:fs";
+import path from "node:path";
 import type { CitadelConfig } from "@citadel/config";
 import type { AgentSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
+import { claudeProjectsDir, parseClaudeTranscript } from "@citadel/runtimes";
 import type express from "express";
 
 type AsyncRoute = (
@@ -100,16 +103,72 @@ export function registerRestoreRoutes(app: express.Express, deps: Deps) {
         },
       );
       emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
-      res.status(202).json({ session, restoredFrom: candidate.id });
+      // Consolidate: if the user (or muscle memory) already opened an empty
+      // Claude pane in this workspace, stop it so they don't end up with two
+      // panes for the same conversation. "Empty" = a claude-code session
+      // whose transcript on disk has zero user prompts (i.e. nothing was
+      // actually said in it yet). Best-effort and never blocks the response.
+      const absorbed = absorbEmptyClaudePanesInWorkspace(workspace, session.id, store, operations);
+      for (const id of absorbed) emit("agent.updated", { workspaceId: workspace.id, sessionId: id });
+      res.status(202).json({ session, restoredFrom: candidate.id, absorbed });
     }),
   );
 }
 
+// Find claude-code sessions in `workspace` (other than the freshly-restored
+// `keepSessionId`) whose Claude transcript on disk has zero user prompts —
+// the pane is hosting a fresh Claude with no actual conversation in it.
+// Stop those. Returns the stopped session ids for SSE emission.
+function absorbEmptyClaudePanesInWorkspace(
+  workspace: { id: string; path: string },
+  keepSessionId: string,
+  store: SqliteStore,
+  operations: OperationService,
+): string[] {
+  const absorbed: string[] = [];
+  const sessions = store.listSessions(workspace.id);
+  for (const session of sessions) {
+    if (session.id === keepSessionId) continue;
+    if (session.runtimeId !== "claude-code") continue;
+    if (!isLive(session)) continue;
+    if (!isEmptyClaudeSession(workspace.path, session)) continue;
+    try {
+      operations.stopAgentSession({ sessionId: session.id });
+      absorbed.push(session.id);
+    } catch {
+      // best-effort
+    }
+  }
+  return absorbed;
+}
+
+// "Empty" claude session: the on-disk JSONL transcript exists for this
+// session's UUID but has zero user-authored prompts. If we can't locate the
+// transcript at all (UUID unset, file missing) we treat the pane as empty
+// too — that's the brand-new-just-spawned case where Claude hasn't written
+// anything yet.
+function isEmptyClaudeSession(workspacePath: string, session: AgentSession): boolean {
+  const uuid = session.runtimeSessionId;
+  if (!uuid) return true;
+  const transcriptPath = path.join(claudeProjectsDir(workspacePath), `${uuid}.jsonl`);
+  if (!fs.existsSync(transcriptPath)) return true;
+  const prompts = parseClaudeTranscript(transcriptPath);
+  return prompts.length === 0;
+}
+
 // A session "occupies" its UUID when it's still attached to a live tmux
-// pane — `idle` and `waiting_for_input` are just "agent hasn't typed in a
-// while" / "agent is asking the user", not dead.
+// pane — `idle`, `waiting_for_input`, and `rate_limited` are just "agent
+// hasn't typed in a while" / "agent is asking the user" / "agent is stalled
+// on a server rate limit", not dead.
 function isLive(s: AgentSession): boolean {
-  return s.status === "running" || s.status === "starting" || s.status === "idle" || s.status === "waiting_for_input";
+  return (
+    s.status === "running" ||
+    s.status === "starting" ||
+    s.status === "idle" ||
+    s.status === "waiting_for_input" ||
+    s.status === "rate_limited" ||
+    s.status === "usage_limited"
+  );
 }
 
 export function collectRestoreCandidates(store: SqliteStore): RestoreCandidate[] {
