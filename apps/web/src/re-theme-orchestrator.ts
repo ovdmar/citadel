@@ -1,4 +1,4 @@
-import { type ResolvedTheme, readResolvedTheme, subscribeResolvedTheme } from "./use-resolved-theme.js";
+import { type ResolvedTheme, subscribeResolvedTheme } from "./use-resolved-theme.js";
 
 /**
  * Orchestrates live re-theming of running terminals when the cockpit theme
@@ -45,8 +45,6 @@ export type OrchestratorOptions = {
   getHandles: HandleSource;
   /** Subscribe-on-theme-change. Returns a cleanup. Defaults to subscribeResolvedTheme. */
   subscribe?: (callback: (theme: ResolvedTheme) => void) => () => void;
-  /** Compute the current resolved theme synchronously. Defaults to readResolvedTheme. */
-  readNow?: () => ResolvedTheme;
   /** Sleep between handle respawns. Defaults to setTimeout. */
   delay?: Delay;
   /** Stagger duration in ms. Defaults to 80ms. */
@@ -69,7 +67,6 @@ export type OrchestratorHandle = {
  */
 export function setupReThemeOrchestrator(options: OrchestratorOptions): OrchestratorHandle {
   const subscribe = options.subscribe ?? subscribeResolvedTheme;
-  const readNow = options.readNow ?? readResolvedTheme;
   const delay = options.delay ?? defaultDelay;
   const staggerMs = options.staggerMs ?? DEFAULT_STAGGER_MS;
   const onError = options.onError ?? defaultOnError;
@@ -102,12 +99,9 @@ export function setupReThemeOrchestrator(options: OrchestratorOptions): Orchestr
     }
   };
 
-  // Seed `lastEmitted` inside the subscribe channel by reading once. We do
-  // not kick off a run for the initial value — the assumption is that any
-  // already-mounted terminal was spawned with the right theme by its own
-  // first ensure() call. We only respawn on CHANGES.
-  void readNow();
-
+  // We do NOT kick off an initial run — already-mounted terminals were spawned
+  // with the correct theme by their own first ensure() call. We only respawn
+  // on CHANGES, which `subscribeResolvedTheme` deduplicates internally.
   teardown = subscribe((next) => {
     void runFor(next);
   });

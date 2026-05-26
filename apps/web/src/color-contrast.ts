@@ -11,7 +11,7 @@
 
 const HEX_PATTERN = /^#([a-f0-9]{3}|[a-f0-9]{6})$/i;
 
-export type Foreground = "#000" | "#fff";
+type Foreground = "#000" | "#fff";
 
 /**
  * Parse a hex color string into normalized sRGB channels in [0, 1].
@@ -40,7 +40,7 @@ function srgbToLinear(channel: number): number {
 }
 
 /** WCAG 2.1 relative luminance. Range [0, 1]; black = 0, white = 1. */
-export function relativeLuminance(hex: string): number {
+function relativeLuminance(hex: string): number {
   const rgb = parseHex(hex);
   if (!rgb) return 0;
   const [r, g, b] = rgb.map(srgbToLinear) as [number, number, number];

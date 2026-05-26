@@ -1,7 +1,7 @@
 import type { Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
-import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, Search as SearchIcon, Settings as SettingsIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
 import { useEventRefresh, useStateQuery } from "./app-state.js";
@@ -11,9 +11,9 @@ import { CommandPalette } from "./command-palette.js";
 import { Inspector } from "./inspector.js";
 import { Navigator } from "./navigator.js";
 import { Stage } from "./stage.js";
+import { ThemeControls } from "./theme-controls.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
-import { useResolvedTheme } from "./use-resolved-theme.js";
 import { prToneFor } from "./workspace-card.js";
 
 const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";
@@ -412,37 +412,12 @@ function TopBar(props: {
       </div>
       <div className="cit-top-right">
         <UsageIndicator runtimes={props.runtimes} />
-        <ThemeToggle />
+        <ThemeControls />
         <Link className="cit-icon-btn" to="/settings" aria-label="Settings" title="Open settings">
           <SettingsIcon size={15} />
         </Link>
       </div>
     </header>
-  );
-}
-
-function ThemeToggle() {
-  const resolved = useResolvedTheme();
-  const isDark = resolved === "dark";
-  const toggle = () => {
-    const next = isDark ? "light" : "dark";
-    document.documentElement.dataset.theme = next;
-    try {
-      localStorage.setItem("citadel.theme", next);
-    } catch {
-      // localStorage is best-effort
-    }
-  };
-  return (
-    <button
-      type="button"
-      className="cit-icon-btn"
-      onClick={toggle}
-      aria-label="Toggle theme"
-      title={isDark ? "Switch to light theme" : "Switch to dark theme"}
-    >
-      {isDark ? <Sun size={15} /> : <Moon size={15} />}
-    </button>
   );
 }
 

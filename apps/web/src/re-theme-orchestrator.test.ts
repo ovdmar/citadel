@@ -74,7 +74,6 @@ describe("setupReThemeOrchestrator", () => {
         ["b", h2.handle],
       ],
       subscribe: subscriber.subscribe.bind(subscriber),
-      readNow: () => "dark",
       delay: fakeDelay,
       staggerMs: 80,
       shuffle: (items) => items, // pin order for deterministic assertion
@@ -97,7 +96,6 @@ describe("setupReThemeOrchestrator", () => {
         ["current", current.handle],
       ],
       subscribe: subscriber.subscribe.bind(subscriber),
-      readNow: () => "dark",
       delay: fakeDelay,
       shuffle: (items) => items,
     });
@@ -123,7 +121,6 @@ describe("setupReThemeOrchestrator", () => {
         ["c", h3.handle],
       ],
       subscribe: subscriber.subscribe.bind(subscriber),
-      readNow: () => "dark",
       delay: fakeDelay,
       staggerMs: 80,
       shuffle: (items) => items,
@@ -160,7 +157,6 @@ describe("setupReThemeOrchestrator", () => {
         ["c", h3.handle],
       ],
       subscribe: subscriber.subscribe.bind(subscriber),
-      readNow: () => "dark",
       delay: fakeDelay,
       staggerMs: 80,
       shuffle: (items) => items,
@@ -191,7 +187,6 @@ describe("setupReThemeOrchestrator", () => {
     setupReThemeOrchestrator({
       getHandles: () => handles.map((h) => [h.key, h.handle] as [string, ReThemeableHandle]),
       subscribe: subscriber.subscribe.bind(subscriber),
-      readNow: () => "dark",
       delay: fakeDelay,
       staggerMs: 80,
       // Random shuffle is correct under sustained toggling — pin to a known
@@ -242,7 +237,6 @@ describe("setupReThemeOrchestrator", () => {
         ["ok2", ok2.handle],
       ],
       subscribe: subscriber.subscribe.bind(subscriber),
-      readNow: () => "dark",
       delay: fakeDelay,
       shuffle: (items) => items,
       onError,
@@ -266,7 +260,6 @@ describe("setupReThemeOrchestrator", () => {
         ["b", h2.handle],
       ],
       subscribe: subscriber.subscribe.bind(subscriber),
-      readNow: () => "dark",
       delay: fakeDelay,
       shuffle: (items) => items,
     });
@@ -289,7 +282,6 @@ describe("setupReThemeOrchestrator", () => {
     const { cleanup } = setupReThemeOrchestrator({
       getHandles: () => [],
       subscribe: subscriber.subscribe.bind(subscriber),
-      readNow: () => "dark",
       delay: fakeDelay,
     });
     expect(subscriber.isSubscribed()).toBe(true);
@@ -299,7 +291,6 @@ describe("setupReThemeOrchestrator", () => {
     const { cleanup: cleanup2 } = setupReThemeOrchestrator({
       getHandles: () => [],
       subscribe: subscriber.subscribe.bind(subscriber),
-      readNow: () => "dark",
       delay: fakeDelay,
     });
     expect(subscriber.isSubscribed()).toBe(true);

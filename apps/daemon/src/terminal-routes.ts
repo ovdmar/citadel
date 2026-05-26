@@ -20,7 +20,7 @@ type ResolvedSession = {
   worktreePath: string | null;
 };
 
-export type Theme = "light" | "dark";
+type Theme = "light" | "dark";
 
 export function parseTheme(value: unknown): Theme | undefined {
   if (value === "light" || value === "dark") return value;

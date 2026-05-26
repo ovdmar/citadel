@@ -74,11 +74,11 @@ export function TerminalPane(props: { session: AgentSession }) {
   const sessionId = props.session.id;
   const theme = useResolvedTheme();
   // Capture the theme in a ref so ensure() reads the current value without
-  // re-creating its identity on every theme change. We deliberately do NOT
-  // auto-respawn on theme change — that would trigger reconnect storms when
-  // the cockpit theme toggles. The user picks up a new palette by clicking
-  // the tab's reload button, which calls ensure({ force: true }) and forces
-  // the daemon to spawn a fresh ttyd with the current themeRef value.
+  // re-creating its identity on every theme change. Live auto-respawn on
+  // theme change is the live-re-theme orchestrator's job (re-theme-
+  // orchestrator.ts) — it iterates registered handles, staggers spawns, and
+  // coalesces rapid toggles to guard against the cleanup-storm regression
+  // class. Manual tab-action reload still uses ensure({ force: true }).
   const themeRef = useRef(theme);
   themeRef.current = theme;
   const [url, setUrl] = useState<string | null>(null);
