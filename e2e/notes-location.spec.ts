@@ -30,18 +30,17 @@ test.describe("notes location", () => {
     tmpFiles.push(tmpNotes);
 
     await page.goto("/settings");
+    await page.getByRole("button", { name: "Notes" }).click();
 
-    // The Notes section sits inside the structured-config form.
     const input = page.locator('[data-testid="notes-location-input"]');
     await expect(input).toBeVisible();
     await input.fill(tmpNotes);
 
-    // The form's primary Save button submits the whole structured config.
-    const form = page.locator("form.config-form");
-    await form.getByRole("button", { name: /save/i }).first().click();
+    await page.getByRole("button", { name: /^save$/i }).click();
 
     // Reload — the field round-trips through PUT /api/config.
     await page.reload();
+    await page.getByRole("button", { name: "Notes" }).click();
     await expect(page.locator('[data-testid="notes-location-input"]')).toHaveValue(tmpNotes);
 
     // Daemon-side: /api/scratchpad now reads/writes at the configured path.
@@ -73,15 +72,16 @@ test.describe("notes location", () => {
     await request.put(`${API_BASE}/api/config`, { data: { scratchpad: { path: tmpNotes } } });
 
     await page.goto("/settings");
+    await page.getByRole("button", { name: "Notes" }).click();
     const input = page.locator('[data-testid="notes-location-input"]');
     await expect(input).toHaveValue(tmpNotes);
 
     // Clear and save.
     await input.fill("");
-    const form = page.locator("form.config-form");
-    await form.getByRole("button", { name: /save/i }).first().click();
+    await page.getByRole("button", { name: /^save$/i }).click();
 
     await page.reload();
+    await page.getByRole("button", { name: "Notes" }).click();
     await expect(page.locator('[data-testid="notes-location-input"]')).toHaveValue("");
 
     // Daemon-side: path resolves back to a non-tmp location under dataDir.
