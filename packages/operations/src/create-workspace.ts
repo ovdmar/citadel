@@ -2,6 +2,13 @@
 // (`scripts/checks/file-size.ts`) and to colocate the funny-name retry
 // loop + provisioning shape with the future async-create event emitter
 // (Step 6 in workspace-nav-lifecycle plan).
+//
+// TODO(implement-task): AC3 (async create + setup-progress UI) is deferred
+// to a follow-up PR. The plan's Step 6 splits this function into
+// `beginCreateWorkspace` + `runWorkspaceProvisioning` + `createWorkspaceAndWait`,
+// adds a `workspace.setup.stage` SSE event, and renders an inline progress
+// overlay on the workspace card. Out of scope here to keep the PR
+// reviewable — see .agents/plans/workspace-nav-lifecycle.md §Step 6.
 
 import fs from "node:fs";
 import path from "node:path";
