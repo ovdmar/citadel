@@ -14,6 +14,8 @@ export const AgentSessionStatusSchema = z.enum([
   "starting",
   "running",
   "waiting_for_input",
+  "rate_limited",
+  "usage_limited",
   "idle",
   "stopped",
   "failed",
@@ -142,6 +144,19 @@ export const AgentSessionSchema = z.object({
   transport: TransportStatusSchema,
   tmuxSessionName: z.string().nullable(),
   tmuxSessionId: z.string().nullable(),
+  // Runtime-native session UUID (e.g. Claude Code's --session-id). Populated at
+  // spawn time so we can resume the same conversation across daemon and machine
+  // restarts, and so the Settings restore flow has a stable handle.
+  runtimeSessionId: z.string().nullable().optional(),
+  // Auto-resume bookkeeping for sessions that hit a global API rate limit.
+  // The daemon's auto-resume loop populates these so backoff state survives
+  // daemon restarts: `rateLimitResumeAttempts` is the consecutive resume-send
+  // count used for exponential backoff, `nextResumeAt` is when the loop is
+  // allowed to attempt the next resume (null = unscheduled), and
+  // `lastResumeFromRateLimitAt` records the most recent auto-resume submit.
+  rateLimitResumeAttempts: z.number().int().nonnegative().optional(),
+  nextResumeAt: z.string().nullable().optional(),
+  lastResumeFromRateLimitAt: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -502,6 +517,11 @@ export const CreateAgentSessionInputSchema = z.object({
   displayName: z.string().min(1).optional(),
   prompt: z.string().optional(),
   namespaceId: IdSchema.optional(),
+  // When set, the spawn uses `--resume <uuid>` (via the runtime's resumeArg)
+  // instead of generating a fresh UUID via `--session-id`. The runtime
+  // session's transcript on disk must exist; the caller is responsible for
+  // validating that (see the Settings restore flow / backfill).
+  resumeRuntimeSessionId: z.string().uuid().optional(),
 });
 
 // High-level one-shot launcher used by MCP orchestrators: create a workspace
@@ -788,12 +808,7 @@ export type BackgroundAgentSession = z.infer<typeof BackgroundAgentSessionSchema
 export type CreateScheduledAgentInput = z.infer<typeof CreateScheduledAgentInputSchema>;
 export type UpdateScheduledAgentInput = z.infer<typeof UpdateScheduledAgentInputSchema>;
 
-export type { ScratchpadSnapshot, ScratchpadHistorySource } from "./scratchpad.js";
-export type { ScratchpadHistoryEntry, ScratchpadHistorySummary } from "./scratchpad.js";
-export type { ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+export type { ScratchpadSnapshot, ScratchpadHistorySource, ScratchpadHistoryEntry, ScratchpadHistorySummary, ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
 
-export type ApiError = {
-  error: string;
-  detail?: string;
-  fieldErrors?: Record<string, string[]>;
-};
+export type ApiError = { error: string; detail?: string; fieldErrors?: Record<string, string[]> };

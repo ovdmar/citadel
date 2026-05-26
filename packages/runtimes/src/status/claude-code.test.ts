@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it } from "vitest";
-import { claudeCodeStatusAdapter } from "./claude-code.js";
+import { claudeCodeStatusAdapter, parseUsageLimitReset } from "./claude-code.js";
 import type { ObservationContext, SessionAdapterState } from "./index.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +19,7 @@ function ctx(paneCapture: string, over: Partial<ObservationContext> = {}): Obser
     ticksSinceActivityChange: 0,
     source: "tick",
     hasObservedSinceBoot: true,
+    now: () => new Date("2026-05-26T05:00:00.000Z"),
     ...over,
   };
 }
@@ -61,8 +62,81 @@ describe("claudeCodeStatusAdapter", () => {
       );
     });
 
+    it("classifies waiting-for-input-ask-question-tab-arrow.txt as waiting_for_input (new Tab/Arrow nav hint)", () => {
+      // Claude Code reworded the AskUserQuestion footer from
+      // `↑/↓ to navigate` to `Tab/Arrow keys to navigate`. The detector
+      // anchors on the stable `Enter to select` and `Esc to cancel` endpoints.
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("waiting-for-input-ask-question-tab-arrow")))).toBe(
+        "waiting_for_input",
+      );
+    });
+
+    it("classifies waiting-for-input-ask-question-confirm.txt as waiting_for_input (free-text confirm footer)", () => {
+      // When the user picks "Type something" / Other in AskUserQuestion, the
+      // footer collapses to `Enter to confirm · Esc to cancel` (different verb,
+      // no middle nav hint). Detector anchors on `Enter to <verb>` start and
+      // `Esc to cancel` end with optional middle segments.
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("waiting-for-input-ask-question-confirm")))).toBe(
+        "waiting_for_input",
+      );
+    });
+
     it("classifies wakeup-resuming.txt as running (esc to interrupt visible in mid-resume)", () => {
       expect(claudeCodeStatusAdapter.observe(state, ctx(load("wakeup-resuming")))).toBe("running");
+    });
+
+    it("classifies usage-limited.txt as usage_limited with parsed resetAt in reason", () => {
+      // The pane shows `You're out of extra usage · resets 7:50am (UTC)`.
+      // With now=05:00 UTC, the next 07:50 UTC is later the same day.
+      const result = claudeCodeStatusAdapter.observe(state, ctx(load("usage-limited")));
+      expect(result).not.toBeNull();
+      if (typeof result === "string" || result === null) throw new Error("expected object result");
+      expect(result.observed).toBe("usage_limited");
+      expect(result.reason).toBe("pane:usage_limited:reset=2026-05-26T07:50:00.000Z");
+    });
+
+    it("usage_limited reset that has already passed today rolls over to tomorrow", () => {
+      const pane = "⎿  You're out of extra usage · resets 3:15am (UTC)\n  ⏵⏵ auto mode on (shift+tab to cycle)";
+      const result = claudeCodeStatusAdapter.observe(state, ctx(pane));
+      if (typeof result === "string" || result === null) throw new Error("expected object result");
+      expect(result.reason).toBe("pane:usage_limited:reset=2026-05-27T03:15:00.000Z");
+    });
+
+    it("usage_limited with unknown timezone falls back to reset=unknown", () => {
+      const pane = "⎿  You're out of extra usage · resets 7:50am (PST)\n  ⏵⏵ auto mode on (shift+tab to cycle)";
+      const result = claudeCodeStatusAdapter.observe(state, ctx(pane));
+      if (typeof result === "string" || result === null) throw new Error("expected object result");
+      expect(result.reason).toBe("pane:usage_limited:reset=unknown");
+    });
+
+    it("classifies rate-limited-server.txt as rate_limited (server rate-limit error visible, idle mode line)", () => {
+      // The agent printed `API Error: Server is temporarily limiting requests
+      // (not your usage limit) · Rate limited` as a tool-result block, then
+      // stalled — mode line is back to the bare idle baseline with no
+      // `esc to interrupt`. Without this rule we'd report `idle` and silently
+      // hide the stall from the operator.
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("rate-limited-server")))).toBe("rate_limited");
+    });
+
+    it("active turn beats a stale rate-limit message (esc to interrupt re-armed during retry)", () => {
+      // If Claude Code's internal retry succeeded, the mode line re-arms with
+      // `esc to interrupt` while the rate-limit text still scrolls above.
+      // Active-turn priority must win over rate_limited so the dot returns
+      // to running.
+      const pane =
+        "⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited\n" +
+        "✻ Brewing… (esc to interrupt)\n" +
+        "  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt";
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("running");
+    });
+
+    it("classifies idle-with-tasks-visible.txt as idle (Ctrl+C with task panel still on screen)", () => {
+      // Real capture from a session where the user pressed Ctrl+C while a
+      // TodoWrite task panel was visible. Mode line is
+      // `⏵⏵ auto mode on (shift+tab to cycle) · ctrl+t to hide tasks` with
+      // no `esc to interrupt`. Previously fell through to `return null`,
+      // leaving the session stuck in `running` indefinitely.
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("idle-with-tasks-visible")))).toBe("idle");
     });
   });
 
@@ -103,6 +177,45 @@ describe("claudeCodeStatusAdapter", () => {
     it("matches multi-digit background counts", () => {
       const pane = "x\n  ⏵⏵ auto mode on · 12 shell · ↓ to manage";
       expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("running");
+    });
+
+    it("treats `<idle prefix> · ctrl+t to hide tasks` as idle (post-interrupt with task panel)", () => {
+      const pane = "x\n  ⏵⏵ auto mode on (shift+tab to cycle) · ctrl+t to hide tasks";
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("idle");
+    });
+
+    it("treats `<idle prefix> · <unknown suffix>` (no esc to interrupt, no bg work) as idle", () => {
+      // Forward-compat: any future post-turn chrome hint that hangs off the
+      // idle prefix should still classify as idle, since priorities 2/3
+      // already ruled out the active and background-work cases.
+      const pane = "x\n  ⏵⏵ auto mode on (shift+tab to cycle) · some future hint";
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("idle");
+    });
+  });
+
+  describe("parseUsageLimitReset", () => {
+    const now = new Date("2026-05-26T05:00:00.000Z");
+
+    it("parses 'resets 7:50am (UTC)' to today's 07:50 UTC", () => {
+      expect(parseUsageLimitReset("You're out of extra usage · resets 7:50am (UTC)", now)).toBe(
+        "2026-05-26T07:50:00.000Z",
+      );
+    });
+
+    it("parses 'resets 11:30pm (UTC)' to 23:30 UTC", () => {
+      expect(parseUsageLimitReset("resets 11:30pm (UTC)", now)).toBe("2026-05-26T23:30:00.000Z");
+    });
+
+    it("parses '12:00am (UTC)' to midnight (hour=0) — rolls to tomorrow when now is past midnight", () => {
+      expect(parseUsageLimitReset("resets 12:00am (UTC)", now)).toBe("2026-05-27T00:00:00.000Z");
+    });
+
+    it("returns null for non-UTC timezone (we'd risk DST drift)", () => {
+      expect(parseUsageLimitReset("resets 7:50am (PST)", now)).toBeNull();
+    });
+
+    it("returns null when the line doesn't contain a reset clause", () => {
+      expect(parseUsageLimitReset("You're out of extra usage", now)).toBeNull();
     });
   });
 

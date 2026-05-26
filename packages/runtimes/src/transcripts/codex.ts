@@ -121,6 +121,48 @@ function listCandidateRollouts(root: string, startMs: number): string[] {
   return out;
 }
 
+/**
+ * Poll `~/.codex/sessions` for a rollout file freshly written by a just-spawned
+ * codex session, and return its UUID (`session_meta.payload.id`). Used by
+ * Citadel right after `ensureTmuxSession` to register the runtime's auto-
+ * generated session id so subsequent restarts can `codex resume <uuid>`.
+ *
+ * Codex auto-generates the UUID at spawn — no `--session-id` flag exists
+ * (issue openai/codex#3492, closed not-planned), and the interactive TUI
+ * doesn't expose it on stdout. Filesystem polling is the only reliable
+ * channel for the TUI flow Citadel uses.
+ *
+ * `timeoutMs` is conservative (5 s default): on a cold codex startup the
+ * rollout file appears within ~1 s; on a busy host it can take longer.
+ * Best-effort — returns null on timeout so the caller can decide whether
+ * to retry, log, or just live without registration for this session.
+ */
+export async function discoverCodexSessionId(opts: {
+  workspacePath: string;
+  spawnTimeMs: number;
+  timeoutMs?: number;
+  pollMs?: number;
+  home?: string;
+}): Promise<string | null> {
+  const timeoutMs = opts.timeoutMs ?? 5000;
+  const pollMs = opts.pollMs ?? 200;
+  const deadline = Date.now() + timeoutMs;
+  const sessionStartedAt = new Date(opts.spawnTimeMs).toISOString();
+  while (Date.now() < deadline) {
+    const file = findCodexRolloutForSession({
+      workspacePath: opts.workspacePath,
+      sessionStartedAt,
+      ...(opts.home ? { home: opts.home } : {}),
+    });
+    if (file) {
+      const { meta } = parseCodexRollout(file);
+      if (meta.id) return meta.id;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  return null;
+}
+
 export function findCodexRolloutForSession(input: GetUserPromptsInput): string | null {
   const root = codexSessionsRoot(input.home ?? os.homedir());
   const startMs = Date.parse(input.sessionStartedAt);

@@ -1,0 +1,23 @@
+● wakeup scheduled
+
+✻ Crunched for 5s · 1 shell still running
+
+❯ - ignore the "cancel the wakeup" typed text. Instead: use your
+  AskUserQuestion tool to ask me a simple question with 2-3 options. The
+  question should be "what color do you prefer?" with options "red", "blue",
+────────────────────────────────────────────────────────────────────────────────
+ ☐ Color
+
+What color do you prefer?
+
+❯ 1. red
+     The color red
+  2. blue
+     The color blue
+  3. green
+     The color green
+  4. Type something.
+────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
