@@ -123,6 +123,32 @@ export function TerminalPane(props: { session: AgentSession }) {
     void ensure();
   }, [ensure]);
 
+  // Debug: trace mount / unmount / iframeKey bumps so we can correlate a
+  // user-visible terminal "flash" with whether the pane itself remounted,
+  // the iframe key changed, or just the underlying WS reconnected.
+  // Gated on a global flag so it stays silent in normal use:
+  //   localStorage.setItem("citadel.debug.terminalPane", "1") in DevTools.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.localStorage?.getItem("citadel.debug.terminalPane") !== "1") return;
+    const stamp = new Date().toISOString();
+    // biome-ignore lint/suspicious/noConsole: deliberate diagnostic channel
+    console.log(`[TerminalPane ${stamp}] MOUNT sessionId=${sessionId}`);
+    return () => {
+      const out = new Date().toISOString();
+      // biome-ignore lint/suspicious/noConsole: deliberate diagnostic channel
+      console.log(`[TerminalPane ${out}] UNMOUNT sessionId=${sessionId}`);
+    };
+  }, [sessionId]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (window.localStorage?.getItem("citadel.debug.terminalPane") !== "1") return;
+    if (iframeKey === 0) return;
+    const stamp = new Date().toISOString();
+    // biome-ignore lint/suspicious/noConsole: deliberate diagnostic channel
+    console.log(`[TerminalPane ${stamp}] iframeKey bumped to ${iframeKey} sessionId=${sessionId}`);
+  }, [iframeKey, sessionId]);
+
   const retry = useCallback(() => {
     void ensure();
   }, [ensure]);
