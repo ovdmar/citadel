@@ -124,3 +124,4 @@ curl -sS -X DELETE http://127.0.0.1:4010/api/agent-sessions/<sessionId>/terminal
 **Diagnostic xterm gateway:** `/terminal/:sessionId` still exposes the legacy xterm/WebSocket bridge for tooling and tests. It is not used by the cockpit and is not the default renderer.
 
 **Trade-offs accepted:** one external ttyd process per active terminal, dynamic loopback ports, and a proxy hop, in exchange for unmodified terminal fidelity (alt-screen TUIs like Claude Code, full colour, cursor, shortcut passthrough, paste).
+
