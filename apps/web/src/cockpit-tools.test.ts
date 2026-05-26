@@ -6,6 +6,7 @@ import {
   filterPollableWorkspaceIds,
   nextPollInterval,
   prMapFromSummaries,
+  selectActiveGhCooldown,
 } from "./cockpit-tools.js";
 
 const workspace = (overrides: Partial<Workspace>): Workspace =>
@@ -59,6 +60,7 @@ const makeSummary = (
   id: string,
   status: "healthy" | "degraded",
   pr: PullRequestSummary | null = null,
+  cooldownUntil: string | null = null,
 ): WorkspaceCockpitSummary =>
   ({
     workspaceId: id,
@@ -73,6 +75,7 @@ const makeSummary = (
       remotes: ["origin"],
       pullRequest: pr,
       checkedAt: new Date().toISOString(),
+      ...(cooldownUntil !== null ? { cooldownUntil } : {}),
     },
     ci: { providerId: "github-gh", status: "healthy", reason: null, runs: [], checkedAt: new Date().toISOString() },
     issueTracker: null,
@@ -98,8 +101,8 @@ describe("filterPollableWorkspaceIds", () => {
 });
 
 describe("nextPollInterval", () => {
-  it("polls every 30s when the tab is visible", () => {
-    expect(nextPollInterval("visible")).toBe(30_000);
+  it("polls every 60s when the tab is visible", () => {
+    expect(nextPollInterval("visible")).toBe(60_000);
   });
 
   it("returns false (pause) when the tab is hidden so daemon spawn pressure goes to zero", () => {
@@ -107,7 +110,7 @@ describe("nextPollInterval", () => {
   });
 
   it("falls back to polling when visibilityState is undefined (non-browser host)", () => {
-    expect(nextPollInterval(undefined)).toBe(30_000);
+    expect(nextPollInterval(undefined)).toBe(60_000);
   });
 });
 
@@ -194,5 +197,53 @@ describe("prMapFromSummaries", () => {
     const cache = new Map<string, WorkspaceCockpitSummary>();
     cache.set("ws_nopr", makeSummary("ws_nopr", "healthy", null));
     expect(prMapFromSummaries(cache).get("ws_nopr")).toBeNull();
+  });
+});
+
+describe("selectActiveGhCooldown", () => {
+  it("returns null when no workspace carries a cooldownUntil", () => {
+    const cache = new Map<string, WorkspaceCockpitSummary>();
+    cache.set("ws_a", makeSummary("ws_a", "healthy", makePr()));
+    expect(selectActiveGhCooldown(cache)).toBeNull();
+  });
+
+  it("returns null when cooldownUntil is in the past (stale, ignore)", () => {
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const cache = new Map<string, WorkspaceCockpitSummary>();
+    cache.set("ws_a", makeSummary("ws_a", "degraded", null, past));
+    expect(selectActiveGhCooldown(cache)).toBeNull();
+  });
+
+  it("returns the soonest active cooldownUntil across workspaces", () => {
+    const now = Date.now();
+    const soonerIso = new Date(now + 5 * 60_000).toISOString();
+    const laterIso = new Date(now + 14 * 60_000).toISOString();
+    const cache = new Map<string, WorkspaceCockpitSummary>();
+    cache.set("ws_a", makeSummary("ws_a", "degraded", null, laterIso));
+    cache.set("ws_b", makeSummary("ws_b", "degraded", null, soonerIso));
+    cache.set("ws_c", makeSummary("ws_c", "healthy", makePr())); // no cooldown
+    expect(selectActiveGhCooldown(cache, now)).toEqual({
+      until: Date.parse(soonerIso),
+      iso: soonerIso,
+    });
+  });
+
+  it("skips invalid (unparseable) cooldownUntil values", () => {
+    const cache = new Map<string, WorkspaceCockpitSummary>();
+    cache.set("ws_a", makeSummary("ws_a", "degraded", null, "not-a-date"));
+    expect(selectActiveGhCooldown(cache)).toBeNull();
+  });
+});
+
+describe("applyStickyUpdates + cooldownUntil (R2 SUG-1)", () => {
+  it("preserves cooldownUntil through a healthy cached entry", () => {
+    const cache = new Map<string, WorkspaceCockpitSummary>();
+    const cooldownIso = new Date(Date.now() + 10 * 60_000).toISOString();
+    const summary = makeSummary("ws_a", "healthy", makePr({ number: 7 }), cooldownIso);
+    const batch: WorkspaceCockpitSummaryBatchResponse = {
+      summaries: [{ workspaceId: "ws_a", ok: true, summary }],
+    };
+    applyStickyUpdates(cache, new Set(["ws_a"]), batch);
+    expect(cache.get("ws_a")?.versionControl.cooldownUntil).toBe(cooldownIso);
   });
 });

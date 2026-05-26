@@ -19,7 +19,10 @@ export function useWorkspaceCockpitSummary(
   return useQuery({
     queryKey: ["workspace-cockpit", workspace?.id],
     enabled: Boolean(workspace),
-    refetchInterval: 10_000,
+    // Bumped from 10s → 30s as part of the gh-quota optimization. The daemon
+    // serves from a 60s cache for most requests; polling faster than that
+    // just spends FE→daemon round-trips for no fresh data.
+    refetchInterval: 30_000,
     queryFn: () => api<WorkspaceCockpitSummary>(`/api/workspaces/${workspace?.id}/cockpit-summary`),
     // Conditional spread — exactOptionalPropertyTypes disallows passing
     // `undefined` explicitly, but omitting the key is fine.
@@ -37,9 +40,13 @@ export function filterPollableWorkspaceIds(workspaces: Workspace[]) {
 // Decide the batch poll's refetch interval. Pauses when the cockpit tab is
 // hidden so the daemon doesn't burn gh subprocesses while the user is away.
 // Returning `false` from refetchInterval (react-query v5) pauses polling.
-export function nextPollInterval(visibilityState: "visible" | "hidden" | undefined): 30_000 | false {
+export function nextPollInterval(visibilityState: "visible" | "hidden" | undefined): 60_000 | false {
   if (visibilityState === "hidden") return false;
-  return 30_000;
+  // Bumped from 30s → 60s. The daemon's per-PR adaptive scheduler decides
+  // whether to actually call gh; polling at 60s lines up with the default
+  // scheduler cadence + cache TTL so steady-state load is one round trip
+  // per minute per workspace.
+  return 60_000;
 }
 
 // Always-on cross-workspace PR poll. Stable queryKey so workspace adds/removes
@@ -146,4 +153,24 @@ export function prMapFromSummaries(
     map.set(id, summary.versionControl.pullRequest ?? null);
   }
   return map;
+}
+
+// Find the soonest active gh-cooldown ISO timestamp across every workspace's
+// versionControl.cooldownUntil. Returns null when no cooldown is active.
+// "Active" = the ISO parses to a future time relative to `now`. Used by the
+// top-of-cockpit banner so the operator sees "GitHub rate-limited — retrying
+// at HH:MM" instead of an opaque generic-degraded state.
+export function selectActiveGhCooldown(
+  summaries: Map<string, WorkspaceCockpitSummary>,
+  now: number = Date.now(),
+): { until: number; iso: string } | null {
+  let soonest: { until: number; iso: string } | null = null;
+  for (const summary of summaries.values()) {
+    const iso = summary.versionControl.cooldownUntil;
+    if (!iso) continue;
+    const until = Date.parse(iso);
+    if (!Number.isFinite(until) || until <= now) continue;
+    if (!soonest || until < soonest.until) soonest = { until, iso };
+  }
+  return soonest;
 }
