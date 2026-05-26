@@ -43,7 +43,85 @@ describe("SqliteStore", () => {
       { version: 6 },
       { version: 7 },
       { version: 8 },
+      { version: 9 },
     ]);
+  });
+
+  it("round-trips agent_sessions.status_reason_at via updateSessionStatus", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
+    dirs.push(dir);
+    const store = new SqliteStore(path.join(dir, "test.sqlite"));
+    store.migrate();
+    store.insertRepo({
+      id: "repo_srr",
+      name: "Repo",
+      rootPath: dir,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: dir,
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      deployHookCommand: null,
+      createdAt: "2026-05-26T00:00:00.000Z",
+      updatedAt: "2026-05-26T00:00:00.000Z",
+      archivedAt: null,
+    });
+    store.insertWorkspace({
+      id: "ws_srr",
+      repoId: "repo_srr",
+      name: "ws",
+      path: dir,
+      branch: "main",
+      baseBranch: "main",
+      source: "imported",
+      kind: "root",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      namespaceId: null,
+      createdAt: "2026-05-26T00:00:00.000Z",
+      updatedAt: "2026-05-26T00:00:00.000Z",
+      archivedAt: null,
+    });
+    store.insertSession({
+      id: "sess_srr",
+      workspaceId: "ws_srr",
+      runtimeId: "shell",
+      displayName: "Shell",
+      status: "running",
+      statusReason: null,
+      lastStatusAt: "2026-05-26T00:00:00.000Z",
+      lastOutputAt: null,
+      endedAt: null,
+      exitCode: null,
+      transport: "connected",
+      tmuxSessionName: "citadel_srr",
+      tmuxSessionId: "$1",
+      createdAt: "2026-05-26T00:00:00.000Z",
+      updatedAt: "2026-05-26T00:00:00.000Z",
+    });
+    // Newly-created rows: statusReasonAt is null.
+    expect(store.listSessions().find((s) => s.id === "sess_srr")?.statusReasonAt).toBeNull();
+
+    // updateSessionStatus accepts statusReasonAt as a partial update.
+    const reasonAt = "2026-05-26T01:00:00.000Z";
+    store.updateSessionStatus("sess_srr", {
+      status: "idle",
+      statusReason: "idle_after_unexpected_exit",
+      statusReasonAt: reasonAt,
+    });
+    expect(store.listSessions().find((s) => s.id === "sess_srr")?.statusReasonAt).toBe(reasonAt);
+
+    // Setting statusReasonAt to null clears it (auto-clear path).
+    store.updateSessionStatus("sess_srr", { statusReason: null, statusReasonAt: null });
+    expect(store.listSessions().find((s) => s.id === "sess_srr")?.statusReasonAt).toBeNull();
   });
 
   it("round-trips workspace, session, operation, and activity state", () => {

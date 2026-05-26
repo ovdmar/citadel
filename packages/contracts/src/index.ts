@@ -105,6 +105,13 @@ export const AgentSessionSchema = z.object({
   // Status-tracking fields written by the DB layer; optional at the TS level
   // so older test fixtures still typecheck.
   statusReason: z.string().nullable().optional(),
+  // ISO timestamp of when `statusReason` was last written, independent of
+  // `lastStatusAt` (which is reset on every status touch — including benign
+  // sub-status flips from the runtime adapter). The status-monitor uses this
+  // to drive the 30-minute auto-clear of `idle_after_unexpected_exit`: when
+  // the reason persists past the window with no operator Restart, the
+  // attention pulse fades naturally.
+  statusReasonAt: z.string().nullable().optional(),
   lastStatusAt: z.string().optional(),
   lastOutputAt: z.string().nullable().optional(),
   endedAt: z.string().nullable().optional(),

@@ -227,4 +227,16 @@ export function runMigrations(
     INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
       (8, 'agent-sessions-auto-resume-backoff', datetime('now'));
   `);
+
+  // status_reason_at: ISO timestamp of when status_reason was last written.
+  // Drives the 30-min auto-clear of `idle_after_unexpected_exit` (shell-first
+  // pane lifecycle) independent of last_status_at — the latter is reset by
+  // every benign sub-status flip from runtime adapters and is therefore not
+  // a reliable clock for the auto-clear. Additive nullable column; existing
+  // rows get NULL.
+  ensureColumn("agent_sessions", "status_reason_at", "TEXT");
+  db.exec(`
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (9, 'agent-sessions-status-reason-at', datetime('now'));
+  `);
 }
