@@ -46,7 +46,13 @@ export function startTerminalReaper(options: StartTerminalReaperOptions = {}): {
   const detachClient = options.detachClient ?? defaultDetachClient;
   const sweep = options.sweepPtyLogs ?? defaultSweepPtyLogs;
 
-  const reaperTimer = setInterval(() => reapOrphanedClients(listClients, detachClient), reapIntervalMs);
+  const reaperTimer = setInterval(() => {
+    try {
+      reapOrphanedClients(listClients, detachClient);
+    } catch {
+      /* non-fatal — never let a stray exception crash the daemon */
+    }
+  }, reapIntervalMs);
   reaperTimer.unref();
   const rotateTimer = setInterval(() => {
     try {
