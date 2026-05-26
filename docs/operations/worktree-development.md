@@ -48,6 +48,53 @@ the next free port on `EADDRINUSE` and persists it to `.citadel/dev.json`.
 The Makefile and the deploy hook both read `dev.json` first, so URLs always
 match where the stack is actually listening.
 
+## Worktree isolation: how it works
+
+A worktree dev stack must never accidentally talk to the systemd long-term
+daemon at `:4010`. Five hard isolation points enforce that contract — if any
+of them regress, the cockpit silently routes to the wrong daemon and new
+backend routes appear to 404. Audit-friendly file:line citations:
+
+- **Makefile env scrub** — `Makefile:145-157`. Before launching `pnpm dev`,
+  `env -u`s every inherited `CITADEL_*` variable and then re-sets
+  `CITADEL_WORKTREE=1`, `CITADEL_PORT`, `CITADEL_WEB_PORT`, `CITADEL_DATA_DIR`,
+  and `CITADEL_DAEMON_URL` to worktree-pinned values. This is the primary
+  isolation seam.
+- **Daemon env validation** — `apps/daemon/src/index.ts:26-43`. When
+  `CITADEL_WORKTREE=1`, the daemon rejects any inherited `CITADEL_CONFIG` or
+  `CITADEL_DATA_DIR` that points outside the worktree, and forces the data dir
+  to `${worktreeRoot}/.citadel/data`. Defense in depth against a leaked env.
+- **Daemon refusal to bind `:4010`** — `apps/daemon/src/index.ts:47-52`. A
+  worktree daemon with no `CITADEL_PORT` exits non-zero rather than clobber
+  the systemd-reserved port.
+- **ttyd slot disjointness** — `apps/daemon/src/app.ts:95-101`. Each daemon
+  computes a per-instance ttyd port slot from `(((config.port - 4010) % 11) + 11) % 11`
+  (200 ports wide). The systemd daemon and worktree daemons land in disjoint
+  slots so ttyd ports never collide.
+- **Vite proxy reads `CITADEL_DAEMON_URL`** — `apps/web/vite.config.ts:21-32`.
+  Every proxy target (`/api`, `/events`, `/terminals`, `/terminal`) reads the
+  env var. `make deploy` sets it explicitly, so the cockpit always reaches its
+  own daemon.
+
+### Where `:4010` legitimately appears
+
+Production-code references to `:4010` are intentional and must not be
+"cleaned up" — removing them breaks the systemd path. The audit's full
+classification:
+
+| File:line | Code | Verdict |
+|---|---|---|
+| `apps/web/vite.config.ts:21,22,25,31` | `process.env.CITADEL_DAEMON_URL \|\| "http://127.0.0.1:4010"` | Intentional. Bare `pnpm dev` (no `make deploy`) is a supported UI-only workflow that targets the systemd daemon. `make deploy` always sets the env var. Keep. |
+| `apps/daemon/src/app.ts:95,101,130` | ttyd slot math + comment | Intentional. Modular origin for disjoint port slots. Keep. |
+| `apps/daemon/src/index.ts:8,49` | Comment + error message | Intentional. Refuses to bind `:4010` from a worktree daemon. Keep. |
+| `packages/config/src/index.ts:76` | `port: …default(4010)` | Intentional. Schema default for the systemd unit. Keep. |
+| `scripts/dev/smoke.ts:1`, `scripts/dev/performance-smoke.ts:8` | `process.env.CITADEL_BASE_URL \|\| "http://127.0.0.1:4010"` | Intentional. Smoke scripts target the systemd daemon by default; overridable via env var. Keep. |
+| `scripts/install-systemd.sh:45,48` | `Environment=CITADEL_PORT=4010` | Intentional. Systemd unit. Keep. |
+| `packages/config/src/index.test.ts:219,227,262,269` | Test fixtures | Intentional. Test data. Keep. |
+
+Doc/README references to `:4010` describe the systemd port for operators —
+they are not leaks. Don't grep-and-replace them.
+
 ## Typical flows
 
 **Fresh clone or new worktree — get me running:**
