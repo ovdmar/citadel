@@ -41,6 +41,7 @@ import {
   updateBlock,
   writeScratchpad,
 } from "./scratchpad.js";
+import { readWorkspaceDiffSummary } from "./workspace-diff.js";
 
 export type DaemonMcpDeps = {
   config: CitadelConfig;
@@ -524,7 +525,6 @@ async function handleReviewTool(deps: DaemonMcpDeps, call: McpToolCall): Promise
     const repos = store.listRepos();
     const repo = repos.find((r) => r.id === workspace.repoId);
     if (!repo) return { error: "repo_not_found" };
-    const { readWorkspaceDiffSummary } = await import("./workspace-diff.js");
     const result = await requestReviewForWorkspace({
       store,
       config: { hooks: config.hooks, commandPolicy: config.commandPolicy },

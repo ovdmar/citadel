@@ -84,7 +84,8 @@ export function Inspector(props: {
             diff={diff.data}
             hasRequestReviewHook={(props.repo?.requestReviewHookIds?.length ?? 0) > 0}
             hasReviewableContext={
-              Boolean(props.workspace.prUrl) || props.workspace.branch !== (props.repo?.defaultBranch ?? "main")
+              Boolean(props.workspace.prUrl) ||
+              (Boolean(props.repo) && props.workspace.branch !== props.repo?.defaultBranch)
             }
           />
         )}

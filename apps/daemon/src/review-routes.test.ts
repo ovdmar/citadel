@@ -95,6 +95,47 @@ describe("review routes — comments", () => {
     expect(repoId).toMatch(/^repo_/);
   });
 
+  it("re-DELETE on a soft-deleted comment: stale token → 409, fresh token (post-tombstone) → 204", async () => {
+    const fixture = createFixture();
+    const { workspaceId } = seedRepoAndWorkspace(fixture);
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const created = await postJson<{ comment: { id: string; updatedAt: string } }>(
+        `${baseUrl}/api/workspaces/${workspaceId}/review-comments`,
+        { body: "comment to delete twice" },
+      );
+      // First DELETE with the original token → 204.
+      const first = await fetch(`${baseUrl}/api/review-comments/${created.comment.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ifUpdatedAtMatches: created.comment.updatedAt }),
+      });
+      expect(first.status).toBe(204);
+
+      // Re-DELETE with the same (now-stale) token → 409 with the tombstone.
+      const staleAgain = await fetch(`${baseUrl}/api/review-comments/${created.comment.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ifUpdatedAtMatches: created.comment.updatedAt }),
+      });
+      expect(staleAgain.status).toBe(409);
+      const conflictBody = (await staleAgain.json()) as { latest: { updatedAt: string } };
+      const postTombstoneUpdatedAt = conflictBody.latest.updatedAt;
+      expect(postTombstoneUpdatedAt).not.toBe(created.comment.updatedAt);
+
+      // Re-DELETE with the post-tombstone token → idempotent 204.
+      const second = await fetch(`${baseUrl}/api/review-comments/${created.comment.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ifUpdatedAtMatches: postTombstoneUpdatedAt }),
+      });
+      expect(second.status).toBe(204);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("rejects an add request that supplies an author field", async () => {
     const fixture = createFixture();
     const { workspaceId } = seedRepoAndWorkspace(fixture);
