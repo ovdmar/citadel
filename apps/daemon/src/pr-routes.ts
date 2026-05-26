@@ -5,12 +5,18 @@ import {
   type collectGitHubCiRunLog,
   type collectGitHubCiRuns,
   type collectGitHubVersionControlSummary,
+  fetchCommitChecks,
   mergePr,
   pLimit,
 } from "@citadel/providers";
 import type express from "express";
 import { ZodError } from "zod";
 import { bustCacheByPrefixes } from "./workspace-fs-watcher.js";
+
+// Cap per-PR per-commit check fetches at the most recent N commits. A 50-commit
+// PR otherwise spends 50 gh-api calls per refresh; capping bounds the rate-limit
+// footprint and keeps the polling cadence sustainable.
+const COMMIT_CHECK_CAP = 10;
 
 type ProviderCollectors = {
   collectGitHubVersionControlSummary: typeof collectGitHubVersionControlSummary;
@@ -44,6 +50,52 @@ export function registerPrRoutes(input: {
   buildWorkspaceCockpitSummary: (workspaceId: string) => Promise<WorkspaceCockpitSummary | null>;
 }) {
   const { app, store, providers, asyncRoute, cachedProvider, providerCache, buildWorkspaceCockpitSummary } = input;
+
+  // Enrich PR commits with per-sha check rollups. Capped at the most recent N
+  // commits to bound gh-api rate-limit pressure. Each per-sha lookup is cached
+  // for 60s under `commit-checks:${nameWithOwner}:${sha}` so successive polls
+  // mostly hit cache. Failures degrade to empty checks (per-PR display still
+  // works; missing checks just render as neutral dots).
+  async function enrichCommitChecks(
+    workspacePath: string,
+    summary: WorkspaceCockpitSummary,
+  ): Promise<WorkspaceCockpitSummary> {
+    const pr = summary.versionControl.pullRequest;
+    if (!pr || pr.commits.length === 0) return summary;
+    // Derive nameWithOwner from the PR URL — gh's pr-view json gives us the
+    // URL but not the headRepository name on the PR object itself. Pattern:
+    // https://<host>/<owner>/<repo>/pull/<n>
+    const ownerRepoMatch = pr.url.match(/^https?:\/\/[^/]+\/([^/]+)\/([^/]+)\/pull\//);
+    if (!ownerRepoMatch) return summary;
+    const nameWithOwner = `${ownerRepoMatch[1]}/${ownerRepoMatch[2]}`;
+    const limit = pLimit(4);
+    const recent = pr.commits.slice(-COMMIT_CHECK_CAP);
+    const enriched = await Promise.all(
+      recent.map((commit) =>
+        limit(() =>
+          cachedProvider(
+            `commit-checks:${nameWithOwner}:${commit.sha}`,
+            () => fetchCommitChecks(workspacePath, nameWithOwner, commit.sha),
+            60_000,
+          ),
+        ),
+      ),
+    );
+    const enrichedBySha = new Map(recent.map((commit, idx) => [commit.sha, enriched[idx] ?? []]));
+    return {
+      ...summary,
+      versionControl: {
+        ...summary.versionControl,
+        pullRequest: {
+          ...pr,
+          commits: pr.commits.map((commit) => ({
+            ...commit,
+            checks: enrichedBySha.get(commit.sha) ?? commit.checks,
+          })),
+        },
+      },
+    };
+  }
 
   app.get(
     "/api/repos/:repoId/provider-summary",
@@ -115,7 +167,8 @@ export function registerPrRoutes(input: {
               // client doesn't render a "loading" placeholder for them forever.
               if (summary.versionControl.remotes.length === 0)
                 return { workspaceId, ok: false as const, reason: "no-remote" };
-              return { workspaceId, ok: true as const, summary };
+              const enriched = await enrichCommitChecks(workspace.path, summary);
+              return { workspaceId, ok: true as const, summary: enriched };
             } catch (error) {
               const reason = error instanceof Error ? error.message : "summary_failed";
               return { workspaceId, ok: false as const, reason };

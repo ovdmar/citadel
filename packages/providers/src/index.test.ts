@@ -403,6 +403,39 @@ describe("PR display helpers", () => {
     const result = await mergePr({ rootPath: "/tmp/x", number: 8, strategy: "merge" }, async () => "");
     expect(result).toEqual({ ok: true });
   });
+
+  it("mergePr classifies gh failure messages into structured reasons", async () => {
+    const auth = await mergePr({ rootPath: "/tmp/x", number: 1, strategy: "squash" }, async () => {
+      throw new Error("gh: not authorized");
+    });
+    expect(auth).toMatchObject({ ok: false, reason: "gh_auth" });
+
+    const strategy = await mergePr({ rootPath: "/tmp/x", number: 1, strategy: "rebase" }, async () => {
+      throw new Error("rebase merge is not allowed by repository");
+    });
+    expect(strategy).toMatchObject({ ok: false, reason: "strategy_disallowed" });
+
+    const unknown = await mergePr({ rootPath: "/tmp/x", number: 1, strategy: "merge" }, async () => {
+      throw new Error("network something happened");
+    });
+    expect(unknown).toMatchObject({ ok: false, reason: "gh_error" });
+  });
+
+  it("detectParentPr accepts both string and {nameWithOwner} headRepository shapes (gh JSON returns the object)", () => {
+    const candidates = [
+      {
+        number: 50,
+        url: "https://x.test/pr/50",
+        headRefName: "feature/ship",
+        state: "OPEN",
+        headRepository: { nameWithOwner: "org/repo" },
+      },
+    ];
+    expect(detectParentPr({ baseRefName: "feature/ship", headRepository: "org/repo" }, candidates)).toMatchObject({
+      number: 50,
+      state: "OPEN",
+    });
+  });
 });
 
 function createGitFixture() {

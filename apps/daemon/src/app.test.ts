@@ -444,6 +444,7 @@ describe("createDaemonApp", () => {
             ],
             reviewers: [],
             commits: [],
+            headRefName: "feature",
             parentPr: null,
             mergeable: "unknown" as const,
             allowedMergeStrategies: [],

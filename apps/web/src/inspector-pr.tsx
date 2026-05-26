@@ -1,6 +1,6 @@
-import type { PullRequestSummary, Workspace } from "@citadel/contracts";
+import type { ProviderHealth, PullRequestSummary, Workspace } from "@citadel/contracts";
 import type { PrMergeStrategy } from "@citadel/contracts/pr-routes";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   ArrowUp,
   Check,
@@ -35,6 +35,9 @@ export function InspectorPrSection(props: {
   const checksSummary = summarizeChecks(checks);
   const reviewerAggregate = aggregateReviewerCounts(pr?.reviewers ?? []);
   const elapsed = useElapsed(checkedAt);
+  const [commitsExpanded, setCommitsExpanded] = useState(false);
+  const commits = pr?.commits ?? [];
+  const visibleCommits = commitsExpanded ? commits : commits.slice(0, 5);
   const refresh = useMutation({
     mutationFn: () => api(`/api/workspaces/${workspace.id}/pr-refresh`, { method: "POST", body: JSON.stringify({}) }),
     onSuccess: () => {
@@ -42,8 +45,12 @@ export function InspectorPrSection(props: {
       queryClient.invalidateQueries({ queryKey: ["workspaces-pr-batch"] });
     },
   });
+  // Copies the PR's head ref (from gh) — NOT workspace.branch. If the local
+  // branch was renamed but the PR head hasn't moved, the operator pastes the
+  // correct ref into `git push origin <ref>` and friends.
+  const headRef = pr?.headRefName ?? workspace.branch;
   const copyHead = () => {
-    if (typeof navigator !== "undefined" && navigator.clipboard) navigator.clipboard.writeText(workspace.branch);
+    if (typeof navigator !== "undefined" && navigator.clipboard) navigator.clipboard.writeText(headRef);
   };
 
   return (
@@ -84,13 +91,13 @@ export function InspectorPrSection(props: {
                 <span className="ins-pr-base">
                   <span className="ins-mono">{workspace.baseBranch}</span>
                   <span className="ins-pr-arrow">←</span>
-                  <span className="ins-mono">{workspace.branch}</span>
+                  <span className="ins-mono">{headRef}</span>
                   <button
                     type="button"
                     className="ins-pr-copy"
                     onClick={copyHead}
-                    aria-label={`Copy head branch ${workspace.branch}`}
-                    title={`Copy head branch ${workspace.branch}`}
+                    aria-label={`Copy head branch ${headRef}`}
+                    title={`Copy head branch ${headRef}`}
                   >
                     <Copy size={10} />
                   </button>
@@ -229,8 +236,60 @@ export function InspectorPrSection(props: {
           )}
         </div>
       </section>
+
+      {pr ? (
+        <section className="ins-section">
+          <div className="ins-section-head">
+            <span className="ins-section-label">Commits</span>
+          </div>
+          <div className="ins-section-body">
+            {commits.length === 0 ? (
+              <div className="ins-empty">
+                <div className="ins-empty-text">No commits yet.</div>
+              </div>
+            ) : (
+              <>
+                <ul className="ins-pr-commits">
+                  {visibleCommits.map((commit) => (
+                    <li key={commit.sha} className="ins-pr-commit" title={commit.message}>
+                      <span className={`ins-pr-commit-dot tone-${commitTone(commit.checks)}`} aria-hidden />
+                      <span className="ins-pr-commit-sha">{commit.shortSha}</span>
+                      <span className="ins-pr-commit-msg">{commit.message}</span>
+                    </li>
+                  ))}
+                </ul>
+                {commits.length > 5 ? (
+                  <button type="button" className="ins-pr-commits-more" onClick={() => setCommitsExpanded((v) => !v)}>
+                    {commitsExpanded ? "Show fewer" : `Show ${commits.length - 5} more`}
+                  </button>
+                ) : null}
+              </>
+            )}
+          </div>
+        </section>
+      ) : null}
     </>
   );
+}
+
+// Roll up the per-commit checks into a single tone for the dot. Mirror the
+// PR-level prToneFor logic: failing > pending > passing.
+function commitTone(
+  checks: PullRequestSummary["commits"][number]["checks"],
+): "failing" | "pending" | "passing" | "missing" {
+  if (!checks || checks.length === 0) return "missing";
+  if (
+    checks.some((c) =>
+      ["failure", "cancelled", "timed_out", "action_required"].includes((c.conclusion ?? "").toLowerCase()),
+    )
+  ) {
+    return "failing";
+  }
+  if (checks.some((c) => ["queued", "in_progress", "pending"].includes(c.status.toLowerCase()))) {
+    return "pending";
+  }
+  if (checks.every((c) => (c.conclusion ?? "").toLowerCase() === "success")) return "passing";
+  return "pending";
 }
 
 function CheckSummaryIcon({ tone }: { tone: "ok" | "bad" | "run" | "mixed" }) {
@@ -471,7 +530,16 @@ function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
   const allowed: PrMergeStrategy[] = pr.allowedMergeStrategies.length
     ? pr.allowedMergeStrategies
     : (["squash", "merge", "rebase"] as const).filter(() => false);
-  const canMerge = pr.mergeable === "mergeable" && allowed.length > 0;
+  // Gate on the daemon's GitHub provider health. If gh isn't healthy we
+  // disable the button and surface the reason — don't let the operator click
+  // through to a confusing gh-merge failure.
+  const providerHealth = useQuery<{ providerHealth: ProviderHealth[] }>({
+    queryKey: ["provider-health"],
+    queryFn: () => api<{ providerHealth: ProviderHealth[] }>("/api/health"),
+    refetchInterval: 60_000,
+  });
+  const ghHealthy = providerHealth.data?.providerHealth.find((entry) => entry.id === "github-gh")?.status === "healthy";
+  const canMerge = pr.mergeable === "mergeable" && allowed.length > 0 && ghHealthy === true;
   const merge = useMutation({
     mutationFn: (strategy: PrMergeStrategy) =>
       api(`/api/workspaces/${workspace.id}/pr-merge`, {
@@ -485,11 +553,13 @@ function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
     },
   });
   const disabledReason =
-    pr.mergeable !== "mergeable"
-      ? "PR is not mergeable (conflicts or unknown state)"
-      : allowed.length === 0
-        ? "Repository allows no merge strategies via gh"
-        : null;
+    ghHealthy === false
+      ? "GitHub CLI unavailable"
+      : pr.mergeable !== "mergeable"
+        ? "PR is not mergeable (conflicts or unknown state)"
+        : allowed.length === 0
+          ? "Repository allows no merge strategies via gh"
+          : null;
   return (
     <span className="ins-pr-merge-wrap">
       <button

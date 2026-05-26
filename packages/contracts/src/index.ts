@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { ParentPrSchema, PrCommitSchema, PrMergeStrategySchema } from "./pr-routes.js";
-
 export const IdSchema = z
   .string()
   .min(2)
@@ -224,6 +223,7 @@ export const PullRequestSummarySchema = z.object({
   deletions: z.number().nullable().default(null),
   reviewers: z.array(PrReviewerSchema).default([]),
   commits: z.array(PrCommitSchema).default([]),
+  headRefName: z.string().nullable().default(null),
   parentPr: ParentPrSchema.nullable().default(null),
   mergeable: z.enum(["mergeable", "conflicting", "unknown"]).default("unknown"),
   allowedMergeStrategies: z.array(PrMergeStrategySchema).default([]),

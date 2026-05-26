@@ -265,9 +265,12 @@ function WorkspaceCardPrStrip(props: {
       </div>
     );
   }
+  // Copy the PR's head ref, not workspace.branch — they can diverge if the
+  // local branch was renamed after the PR was opened.
+  const headRef = pullRequest.headRefName ?? workspace.branch;
   const copyHead = (event: React.MouseEvent) => {
     event.stopPropagation();
-    if (typeof navigator !== "undefined" && navigator.clipboard) navigator.clipboard.writeText(workspace.branch);
+    if (typeof navigator !== "undefined" && navigator.clipboard) navigator.clipboard.writeText(headRef);
   };
   return (
     <div className="workspace-card-pr" data-tone={prTone}>
@@ -314,14 +317,14 @@ function WorkspaceCardPrStrip(props: {
         <span className="workspace-card-pr-base">
           <span className="workspace-card-pr-mono">{workspace.baseBranch}</span>
           <span className="workspace-card-pr-arrow">←</span>
-          <span className="workspace-card-pr-mono">{workspace.branch}</span>
+          <span className="workspace-card-pr-mono">{headRef}</span>
         </span>
         <button
           type="button"
           className="workspace-card-pr-copy"
           onClick={copyHead}
-          aria-label={`Copy head branch ${workspace.branch}`}
-          title={`Copy head branch ${workspace.branch}`}
+          aria-label={`Copy head branch ${headRef}`}
+          title={`Copy head branch ${headRef}`}
         >
           <Copy size={10} />
         </button>

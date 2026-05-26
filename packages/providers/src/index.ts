@@ -7,9 +7,6 @@ import type {
   CheckSummary,
   CiProviderSummary,
   CiRunSummary,
-  IssueTrackerSummary,
-  IssueTransition,
-  IssueTransitionActionResult,
   PrReviewerState,
   ProviderHealth,
   RuntimeUsageCategory,
@@ -320,103 +317,13 @@ export function normalizeCiRunList(output: string) {
   return (JSON.parse(output) as Array<Record<string, unknown>>).map(normalizeCiRun);
 }
 
-export async function collectJiraIssueSummary(issueKey: string): Promise<IssueTrackerSummary> {
-  const checkedAt = new Date().toISOString();
-  const key = issueKey.trim().toUpperCase();
-  try {
-    const issue = parseJiraIssueOutput(
-      await jtk(["issues", "get", key, "--fields", "Summary,Status,Assignee,Updated", "--no-color"]),
-    );
-    const transitions = parseJiraTransitionsOutput(await jtk(["transitions", "list", key, "--no-color"]));
-    return {
-      providerId: "jira-jtk",
-      status: "healthy",
-      reason: null,
-      key,
-      summary: issue.summary,
-      issueStatus: issue.issueStatus,
-      assignee: issue.assignee,
-      updated: issue.updated,
-      url: null,
-      transitions,
-      checkedAt,
-    };
-  } catch (error) {
-    return {
-      providerId: "jira-jtk",
-      status: "degraded",
-      reason: error instanceof Error ? error.message : "Jira issue summary failed",
-      key,
-      summary: null,
-      issueStatus: null,
-      assignee: null,
-      updated: null,
-      url: null,
-      transitions: [],
-      checkedAt,
-    };
-  }
-}
-
-export function parseJiraIssueOutput(output: string) {
-  const values = new Map<string, string>();
-  for (const line of output.split("\n")) {
-    const match = line.match(/^([^:]+):\s*(.*)$/);
-    if (match?.[1]) values.set(match[1].trim().toLowerCase(), match[2]?.trim() ?? "");
-  }
-  return {
-    key: values.get("key") ?? null,
-    summary: values.get("summary") ?? null,
-    issueStatus: values.get("status") ?? null,
-    assignee: values.get("assignee") ?? null,
-    updated: values.get("updated") ?? null,
-  };
-}
-
-export function parseJiraTransitionsOutput(output: string): IssueTransition[] {
-  return output
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("ID |"))
-    .map((line) => line.split("|").map((part) => part.trim()))
-    .filter((parts) => parts.length >= 3 && Boolean(parts[0]))
-    .map(([id, name, toStatus]) => ({
-      id: id ?? "",
-      name: name ?? "",
-      toStatus: toStatus ?? "",
-    }));
-}
-
-export async function transitionJiraIssue(input: {
-  issueKey: string;
-  transition: string;
-  fields?: Record<string, string>;
-}): Promise<IssueTransitionActionResult> {
-  const checkedAt = new Date().toISOString();
-  const key = input.issueKey.trim().toUpperCase();
-  const transition = input.transition.trim();
-  try {
-    const fieldArgs = Object.entries(input.fields ?? {}).flatMap(([field, value]) => ["--field", `${field}=${value}`]);
-    await jtk(["transitions", "do", key, transition, ...fieldArgs, "--no-color"]);
-    return {
-      providerId: "jira-jtk",
-      status: "healthy",
-      reason: null,
-      key,
-      transition,
-      checkedAt,
-    };
-  } catch (error) {
-    return {
-      providerId: "jira-jtk",
-      status: "degraded",
-      reason: error instanceof Error ? error.message : "Jira transition failed",
-      key,
-      transition,
-      checkedAt,
-    };
-  }
-}
+export {
+  collectJiraIssueSummary,
+  parseJiraIssueOutput,
+  parseJiraTransitionsOutput,
+  setJiraCommand,
+  transitionJiraIssue,
+} from "./jira.js";
 
 async function discoverDefaultBranch(rootPath: string) {
   const originHead = await gitOptional(rootPath, ["rev-parse", "--abbrev-ref", "origin/HEAD"]);
@@ -440,7 +347,7 @@ async function currentPullRequest(rootPath: string) {
       "pr",
       "view",
       "--json",
-      "number,title,url,state,isDraft,reviewDecision,statusCheckRollup,additions,deletions,reviews,reviewRequests",
+      "number,title,url,state,isDraft,reviewDecision,statusCheckRollup,additions,deletions,reviews,reviewRequests,commits,baseRefName,headRefName,headRepository,mergeable",
     ]);
     const parsed = JSON.parse(raw) as {
       number: number;
@@ -454,7 +361,21 @@ async function currentPullRequest(rootPath: string) {
       deletions?: number | null;
       reviews?: GhReview[];
       reviewRequests?: GhReviewRequest[];
+      commits?: Array<Record<string, unknown>>;
+      baseRefName?: string;
+      headRefName?: string;
+      headRepository?: { nameWithOwner?: string } | null;
+      mergeable?: string;
     };
+    // Repo merge config + parent-PR detection run in parallel — both can fail
+    // independently and degrade to safe defaults, so don't block the PR view
+    // on either.
+    const [allowedMergeStrategies, parentPr] = await Promise.all([
+      fetchAllowedMergeStrategies(rootPath),
+      parsed.baseRefName && parsed.headRepository?.nameWithOwner
+        ? fetchParentPr(rootPath, parsed.baseRefName, parsed.headRepository.nameWithOwner)
+        : Promise.resolve(null),
+    ]);
     return {
       number: parsed.number,
       title: parsed.title,
@@ -466,11 +387,68 @@ async function currentPullRequest(rootPath: string) {
       additions: typeof parsed.additions === "number" ? parsed.additions : null,
       deletions: typeof parsed.deletions === "number" ? parsed.deletions : null,
       reviewers: aggregateReviewers(parsed.reviews ?? [], parsed.reviewRequests ?? []),
-      commits: [],
-      parentPr: null,
-      mergeable: "unknown" as const,
-      allowedMergeStrategies: [],
+      commits: (parsed.commits ?? []).map(normalizePrCommit),
+      headRefName: parsed.headRefName ?? null,
+      parentPr,
+      mergeable: normalizeMergeable(parsed.mergeable),
+      allowedMergeStrategies,
     };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeMergeable(raw: string | undefined): "mergeable" | "conflicting" | "unknown" {
+  if (!raw) return "unknown";
+  const upper = raw.toUpperCase();
+  if (upper === "MERGEABLE") return "mergeable";
+  if (upper === "CONFLICTING") return "conflicting";
+  return "unknown";
+}
+
+async function fetchAllowedMergeStrategies(rootPath: string): Promise<Array<"squash" | "merge" | "rebase">> {
+  try {
+    const raw = await gh(rootPath, [
+      "repo",
+      "view",
+      "--json",
+      "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed",
+    ]);
+    const parsed = JSON.parse(raw) as {
+      mergeCommitAllowed?: boolean;
+      squashMergeAllowed?: boolean;
+      rebaseMergeAllowed?: boolean;
+    };
+    const allowed: Array<"squash" | "merge" | "rebase"> = [];
+    if (parsed.squashMergeAllowed) allowed.push("squash");
+    if (parsed.mergeCommitAllowed) allowed.push("merge");
+    if (parsed.rebaseMergeAllowed) allowed.push("rebase");
+    return allowed;
+  } catch {
+    return [];
+  }
+}
+
+async function fetchParentPr(rootPath: string, baseRefName: string, headRepository: string): Promise<ParentPr | null> {
+  try {
+    const raw = await gh(rootPath, [
+      "pr",
+      "list",
+      "--state",
+      "all",
+      "--limit",
+      "50",
+      "--json",
+      "number,url,headRefName,headRepository,state",
+    ]);
+    const candidates = JSON.parse(raw) as Array<{
+      number: number;
+      url: string;
+      headRefName: string;
+      headRepository?: string | { nameWithOwner?: string } | null;
+      state: string;
+    }>;
+    return detectParentPr({ baseRefName, headRepository }, candidates);
   } catch {
     return null;
   }
@@ -558,20 +536,6 @@ export function setGithubCommand(command: string | undefined) {
 async function gh(rootPath: string, args: string[]) {
   const result = await execFileAsync(githubCommandOverride, args, {
     cwd: rootPath,
-    timeout: 12000,
-    maxBuffer: 1024 * 1024,
-  });
-  return result.stdout.trim();
-}
-
-let jiraCommandOverride = "jtk";
-
-export function setJiraCommand(command: string | undefined) {
-  jiraCommandOverride = command?.length ? command : "jtk";
-}
-
-async function jtk(args: string[]) {
-  const result = await execFileAsync(jiraCommandOverride, args, {
     timeout: 12000,
     maxBuffer: 1024 * 1024,
   });

@@ -14,6 +14,7 @@ const basePr = (over: Partial<PullRequestSummary> = {}): PullRequestSummary => (
   deletions: 0,
   reviewers: [],
   commits: [],
+  headRefName: null,
   parentPr: null,
   mergeable: "unknown",
   allowedMergeStrategies: [],
