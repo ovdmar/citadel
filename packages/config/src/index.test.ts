@@ -481,14 +481,12 @@ describe("scratchpad.path config field", () => {
     const configWithoutOverride = {
       dataDir: dir,
       scratchpad: { path: undefined as string | undefined },
-      // biome-ignore lint/suspicious/noExplicitAny: minimal stub for the helper.
-    } as any;
+    };
     expect(effectiveNotesPath(configWithoutOverride)).toBe(path.join(dir, "scratchpad.md"));
     expect(defaultNotesPath(dir)).toBe(path.join(dir, "scratchpad.md"));
 
     const override = path.join(dir, "elsewhere", "notes.md");
     const configWithOverride = { dataDir: dir, scratchpad: { path: override } };
-    // biome-ignore lint/suspicious/noExplicitAny: same.
-    expect(effectiveNotesPath(configWithOverride as any)).toBe(override);
+    expect(effectiveNotesPath(configWithOverride)).toBe(override);
   });
 });

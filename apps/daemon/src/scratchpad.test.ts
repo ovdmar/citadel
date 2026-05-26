@@ -98,7 +98,9 @@ describe("scratchpad storage", () => {
   it("rejects appends that would push past the cap with a typed error", () => {
     const dir = tmpDir();
     writeScratchpad(paths(dir), "x".repeat(SCRATCHPAD_MAX_BYTES - 10), "ui");
-    expect(() => appendScratchpad(paths(dir), "y".repeat(100), "mcp:append_scratchpad")).toThrow(ScratchpadTooLargeError);
+    expect(() => appendScratchpad(paths(dir), "y".repeat(100), "mcp:append_scratchpad")).toThrow(
+      ScratchpadTooLargeError,
+    );
   });
 });
 

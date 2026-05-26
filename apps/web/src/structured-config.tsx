@@ -217,11 +217,11 @@ export function StructuredConfig() {
               data-testid="notes-location-input"
               value={scratchpadPath}
               onChange={(event) => setScratchpadPath(event.target.value)}
-              placeholder={`Default: <dataDir>/scratchpad.md`}
+              placeholder="Default: <dataDir>/scratchpad.md"
             />
             <small>
-              Absolute path. Leave empty to use the default under the data directory. <code>~/</code> is expanded to your
-              home directory.
+              Absolute path. Leave empty to use the default under the data directory. <code>~/</code> is expanded to
+              your home directory.
             </small>
           </label>
         </div>
