@@ -13,9 +13,14 @@ test.describe("notes location", () => {
   const tmpFiles: string[] = [];
 
   test.afterEach(async ({ request }) => {
-    // Always reset to the default location so subsequent tests aren't pinned
+    // Reset to the default notes location so subsequent tests aren't pinned
     // to a tmp path that may have been deleted.
     await request.put(`${API_BASE}/api/config`, { data: { scratchpad: { path: undefined } } });
+    // Also empty the default scratchpad — otherwise leftover content here can
+    // trigger a `migrate-to-blocks` history entry on the next test's first
+    // read, which double-counts pills in scratchpad-blocks.spec.ts. Test
+    // isolation only goes as deep as the shared daemon state allows.
+    await request.put(`${API_BASE}/api/scratchpad`, { data: { content: "" } });
     for (const file of tmpFiles.splice(0)) {
       try {
         fs.rmSync(file, { force: true });
