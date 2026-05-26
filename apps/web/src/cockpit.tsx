@@ -1,4 +1,5 @@
 import type { Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
+import { isInteractiveStatus } from "@citadel/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
@@ -458,9 +459,7 @@ function BottomBar(props: {
   }, []);
 
   const shellCount = props.sessions.filter((session) => session.runtimeId === "shell").length;
-  const autoMode = props.sessions.some(
-    (s) => s.status === "running" || s.status === "starting" || s.status === "waiting_for_input",
-  );
+  const autoMode = props.sessions.some((s) => isInteractiveStatus(s.status));
 
   // Read the head commit of the active workspace so the status bar mirrors the
   // redesign's "* <message>" hint. Falls back silently if the workspace isn't

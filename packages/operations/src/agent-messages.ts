@@ -1,4 +1,5 @@
 import type { ActivityEvent } from "@citadel/contracts";
+import { isAcceptingInputStatus } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { captureTranscript, submitPrompt } from "@citadel/terminal";
@@ -36,7 +37,10 @@ export type SendMessageResult = {
   error?: string;
 };
 
-const acceptingStates = new Set(["starting", "running", "waiting_for_input", "idle"]);
+// Operator messages are routed through this helper. Sessions in rate_limited
+// status reject with `session_not_accepting_input` — the runtime can't process
+// any input until reset. The auto-resumer uses the lower-level pressEnter
+// path that intentionally bypasses this gate.
 
 export function readAgentTranscript(
   store: SqliteStore,
@@ -67,7 +71,7 @@ export async function sendAgentMessage(
   const session = store.listSessions().find((candidate) => candidate.id === input.sessionId);
   if (!session) return { ok: false, error: "session_not_found" };
   if (!session.tmuxSessionName) return { ok: false, error: "session_has_no_terminal" };
-  if (!acceptingStates.has(session.status)) {
+  if (!isAcceptingInputStatus(session.status)) {
     return { ok: false, sessionId: session.id, status: session.status, error: "session_not_accepting_input" };
   }
   const result = await submitPrompt(session.tmuxSessionName, input.message);

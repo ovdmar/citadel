@@ -1,4 +1,5 @@
 import type { AgentSession, Namespace, PullRequestSummary, Workspace } from "@citadel/contracts";
+import { isInteractiveStatus } from "@citadel/contracts";
 import { sessionNeedsAttention } from "@citadel/core";
 import { useMutation } from "@tanstack/react-query";
 import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
@@ -30,7 +31,7 @@ export type WorkspaceAgentTone = "attention" | "running" | "idle";
 export function deriveWorkspaceAgentTone(sessions: AgentSession[]): WorkspaceAgentTone {
   const agentSessions = sessions.filter((s) => s.runtimeId !== "shell");
   if (agentSessions.some((s) => s.status === "waiting_for_input" || sessionNeedsAttention(s))) return "attention";
-  if (agentSessions.some((s) => s.status === "starting" || s.status === "running")) return "running";
+  if (agentSessions.some((s) => isInteractiveStatus(s.status))) return "running";
   return "idle";
 }
 

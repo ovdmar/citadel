@@ -14,6 +14,7 @@ import type {
   UpdateNamespaceInput,
   Workspace,
 } from "@citadel/contracts";
+import { isAcceptingInputStatus } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
@@ -528,9 +529,7 @@ export class OperationService {
     const sessions = this.store
       .listSessions()
       .filter((session) => workspaces.some((workspace) => workspace.id === session.workspaceId));
-    const activeSessions = sessions.filter((session) =>
-      ["starting", "running", "waiting_for_input", "idle"].includes(session.status),
-    );
+    const activeSessions = sessions.filter((session) => isAcceptingInputStatus(session.status));
     const runningOperations = this.store
       .listOperations()
       .filter((operation) => operation.repoId === repo.id && ["queued", "running"].includes(operation.status));

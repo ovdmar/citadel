@@ -1,4 +1,5 @@
-import type { WorkspaceReadiness } from "@citadel/contracts";
+import type { AgentSessionStatus, WorkspaceReadiness } from "@citadel/contracts";
+import { isInteractiveStatus } from "@citadel/contracts";
 import { sessionNeedsAttention } from "@citadel/core";
 
 export function deriveReadiness(input: {
@@ -37,7 +38,7 @@ export function deriveReadiness(input: {
     input.versionControl.status !== "healthy" || input.ci.status !== "healthy" || input.apps.status !== "healthy";
   const runningOperation = input.operations.some((operation) => ["queued", "running"].includes(operation.status));
   const activeAgentSession = input.sessions.some(
-    (session) => session.runtimeId !== "shell" && ["starting", "running"].includes(session.status),
+    (session) => session.runtimeId !== "shell" && isInteractiveStatus(session.status as AgentSessionStatus),
   );
   // Loose-typed (this signature accepts plain strings); cast to the canonical
   // shape for the shared predicate. Any non-canonical status will return false.

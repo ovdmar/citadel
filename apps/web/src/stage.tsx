@@ -1,4 +1,5 @@
 import type { AgentRuntime, AgentSession, Workspace } from "@citadel/contracts";
+import { sessionNeedsAttention } from "@citadel/core";
 import { useMutation } from "@tanstack/react-query";
 import { ExternalLink, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -9,6 +10,15 @@ type StageTab = {
   session: AgentSession;
   label: string;
 };
+
+// Per-session tone class for the session-tab pulse. Mirrors the priority used
+// in deriveWorkspaceAgentTone: attention (rate_limited / failed / unknown-with-
+// tmux-gone reason) > running (starting/running) > idle.
+export function agentTonePulseClass(session: AgentSession): string {
+  if (sessionNeedsAttention(session)) return "cit-pulse-bad";
+  if (session.status === "starting" || session.status === "running") return "cit-pulse-run";
+  return "cit-pulse-idle";
+}
 
 // Each daemon allocates 20 ttyd ports (one per active terminal) — see the
 // per-daemon ttyd slice in apps/daemon/src/app.ts. We cap per workspace at
@@ -150,7 +160,7 @@ export function Stage(props: {
         <div className="stage-tabs">
           {tabs.map((tab, index) => {
             const isActive = tab.session.id === activeSession?.session.id;
-            const isRunning = tab.session.status === "running";
+            const pulseClass = agentTonePulseClass(tab.session);
             return (
               <div key={tab.session.id} className={`stage-tab ${isActive ? "active" : ""}`}>
                 <button
@@ -171,7 +181,7 @@ export function Stage(props: {
                       </kbd>
                     ) : null}
                     <span className="stage-tab-icon" aria-hidden>
-                      <span className={`cit-pulse cit-pulse-sm ${isRunning ? "cit-pulse-run" : "cit-pulse-idle"}`} />
+                      <span className={`cit-pulse cit-pulse-sm ${pulseClass}`} />
                     </span>
                     {editingId === tab.session.id ? (
                       <input

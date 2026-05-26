@@ -1,4 +1,5 @@
 import type { AgentSession, Operation, Workspace } from "@citadel/contracts";
+import { isInteractiveStatus } from "@citadel/contracts";
 import { sessionNeedsAttention } from "@citadel/core";
 
 export type WorkspaceAttention = {
@@ -23,7 +24,7 @@ export function readinessForWorkspace(
   const failedOperation = input.operations.some((operation) => operation.status === "failed");
   const runningOperation = input.operations.some((operation) => ["queued", "running"].includes(operation.status));
   const activeAgentSession = input.sessions.some(
-    (session) => session.runtimeId !== "shell" && ["starting", "running"].includes(session.status),
+    (session) => session.runtimeId !== "shell" && isInteractiveStatus(session.status),
   );
   const failedSession = input.sessions.some(sessionNeedsAttention);
   if (workspace.lifecycle === "failed" || failedOperation || failedSession) {

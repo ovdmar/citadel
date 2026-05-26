@@ -74,6 +74,20 @@ describe("deriveWorkspaceAgentTone", () => {
     expect(deriveWorkspaceAgentTone([session({ status: "idle" })])).toBe("idle");
   });
 
+  it("rate_limited session → attention", () => {
+    expect(
+      deriveWorkspaceAgentTone([
+        session({ status: "rate_limited", statusReason: "rate_limited:2026-05-26T10:00:00.000Z" }),
+      ]),
+    ).toBe("attention");
+  });
+
+  it("attention beats running when both are present", () => {
+    expect(
+      deriveWorkspaceAgentTone([session({ id: "a", status: "running" }), session({ id: "b", status: "rate_limited" })]),
+    ).toBe("attention");
+  });
+
   it("shell-runtime sessions are excluded — running shell does NOT count as agent running", () => {
     expect(deriveWorkspaceAgentTone([session({ status: "running", runtimeId: "shell" })])).toBe("idle");
   });
