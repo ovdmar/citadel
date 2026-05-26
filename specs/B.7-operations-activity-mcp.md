@@ -20,6 +20,7 @@
 [ ] 12. Running and failed workspace-specific operations are visible in the workspace cockpit.
 [ ] 13. Operations support retry/cancel when safe.
 [~] 14. When a workspace's PR has failing CI and no agent session has been active for the configured idle window, Citadel may auto-launch a `fix-ci` agent. Auto-launches are deduplicated per-PR-head-SHA and debounced by a minimum-interval window; activity events emitted by such launches use `source: "automatic-rule"`.
+[~] 15. `AutoRecoveryMonitorOptions` accepts an optional `shouldRun?: () => boolean` predicate. When provided, the monitor consults it at the top of every tick and short-circuits the tick (no provider calls, no agent spawn decisions) when it returns false. The daemon wires this to its viewer-gate predicate so auto-recovery doesn't consume GitHub quota when no cockpit tab is connected.
 
 ## Activity
 
