@@ -1,13 +1,25 @@
 import type { AgentRuntime, ProviderHealth, Repo } from "@citadel/contracts";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, Cable, CheckCircle2, ChevronRight, FolderGit2, Moon, Server, Sun, Workflow } from "lucide-react";
+import {
+  ArrowLeft,
+  Cable,
+  CheckCircle2,
+  ChevronRight,
+  FolderGit2,
+  History,
+  Moon,
+  Server,
+  Sun,
+  Workflow,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { useStateQuery } from "../app-state.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
+import { RestorePanel } from "../settings-restore.js";
 import { AgentsPanel } from "../settings-runtimes.js";
 
-type SectionId = "overview" | "providers" | "agents" | "repositories" | "mcp";
+type SectionId = "overview" | "providers" | "agents" | "repositories" | "restore" | "mcp";
 
 type Section = {
   id: SectionId;
@@ -35,6 +47,12 @@ const SECTIONS: Section[] = [
     label: "Repositories",
     description: "Registered repos and tracking.",
     icon: FolderGit2,
+  },
+  {
+    id: "restore",
+    label: "Restore sessions",
+    description: "Resume conversations whose agent died.",
+    icon: History,
   },
   { id: "mcp", label: "MCP", description: "Model Context Protocol servers Citadel exposes to agents.", icon: Workflow },
 ];
@@ -134,6 +152,16 @@ export function SettingsView() {
                 help="Removing tracking preserves the local repo and worktrees on disk — Citadel only forgets about them. Each repo has its own hook bindings inside its Repo settings."
               />
               <RepositoriesPanel state={data} />
+            </>
+          ) : null}
+          {section === "restore" ? (
+            <>
+              <PageHead
+                title="Restore lost sessions"
+                sub="Resume conversations whose agent died."
+                help="When the daemon restarts or a tmux pane gets killed, the runtime's transcript on disk survives. Citadel registers a UUID at spawn (claude-code --session-id, codex post-spawn discovery), so any workspace whose latest session row has a UUID but no live pane can be brought back via `--resume <uuid>`. Empty here means nothing to restore."
+              />
+              <RestorePanel />
             </>
           ) : null}
           {section === "mcp" ? (

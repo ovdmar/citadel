@@ -28,3 +28,23 @@ export async function cachedProviderValue<T>(
   cache.set(key, { expiresAt: now + ttlMs, value });
   return value;
 }
+
+// Narrows a RuntimeConfig down to the spawn-arg subset OperationService wants,
+// and coerces optionals to `null` so exactOptionalPropertyTypes stays happy.
+export function runtimeSpawnArgs(runtime: {
+  command: string;
+  args: string[];
+  displayName: string;
+  promptArg?: string | undefined;
+  sessionIdArg?: string | undefined;
+  resumeArg?: string | undefined;
+}) {
+  return {
+    command: runtime.command,
+    args: runtime.args,
+    displayName: runtime.displayName,
+    promptArg: runtime.promptArg ?? null,
+    sessionIdArg: runtime.sessionIdArg ?? null,
+    resumeArg: runtime.resumeArg ?? null,
+  };
+}

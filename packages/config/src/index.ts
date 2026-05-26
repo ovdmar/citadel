@@ -13,6 +13,12 @@ export const RuntimeConfigSchema = z.object({
   args: z.array(z.string()).default([]),
   promptArg: z.string().optional(),
   resumeArg: z.string().optional(),
+  // Flag (e.g. "--session-id") this runtime accepts to pin a caller-chosen
+  // UUID on a fresh session. Citadel generates the UUID up front, persists
+  // it, and uses `resumeArg` to continue the same conversation on respawn.
+  // Set only for runtimes that support it (claude-code today); others rely
+  // on post-spawn discovery from their transcript directory.
+  sessionIdArg: z.string().optional(),
   supportsResume: z.boolean().optional(),
   supportsPrompt: z.boolean().optional(),
   supportsModelSelection: z.boolean().optional(),
@@ -108,6 +114,7 @@ export const CitadelConfigSchema = z
         // want. Interactive prompts are injected into the tmux pane after the
         // runtime is ready (see operations.createAgentSession).
         resumeArg: "--resume",
+        sessionIdArg: "--session-id",
         supportsResume: true,
         supportsPrompt: true,
         supportsModelSelection: true,

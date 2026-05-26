@@ -64,6 +64,15 @@ import {
   runWorkspaceAction as runWorkspaceActionImpl,
 } from "./workspace-apps.js";
 
+type RuntimeSpawnArgs = {
+  command: string;
+  args: string[];
+  displayName: string;
+  promptArg?: string | null;
+  sessionIdArg?: string | null;
+  resumeArg?: string | null;
+};
+
 export class OperationService {
   constructor(
     private readonly store: SqliteStore,
@@ -270,10 +279,7 @@ export class OperationService {
     return { operationId: operation.id, workspaceId: workspace.id };
   }
 
-  createAgentSession = (
-    input: CreateAgentSessionInput,
-    runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
-  ) => {
+  createAgentSession = (input: CreateAgentSessionInput, runtime: RuntimeSpawnArgs) => {
     if (input.namespaceId) {
       const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
       if (workspace && input.namespaceId !== workspace.namespaceId) {
@@ -292,10 +298,7 @@ export class OperationService {
     );
   };
 
-  launchAgent = (
-    input: LaunchAgentInput,
-    runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
-  ) =>
+  launchAgent = (input: LaunchAgentInput, runtime: RuntimeSpawnArgs) =>
     launchAgentImpl(
       {
         store: this.store,

@@ -143,6 +143,7 @@ export const AgentSessionSchema = z.object({
   transport: TransportStatusSchema,
   tmuxSessionName: z.string().nullable(),
   tmuxSessionId: z.string().nullable(),
+  runtimeSessionId: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -498,6 +499,7 @@ export const CreateAgentSessionInputSchema = z.object({
   displayName: z.string().min(1).optional(),
   prompt: z.string().optional(),
   namespaceId: IdSchema.optional(),
+  resumeRuntimeSessionId: z.string().uuid().optional(),
 });
 
 // High-level one-shot launcher used by MCP orchestrators: create a workspace
