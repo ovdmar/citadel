@@ -1,13 +1,48 @@
+import type { AgentSession, PullRequestSummary } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
 import {
   assertUniqueRepoPath,
   assertUniqueWorkspaceName,
   createId,
+  deriveAgentLifecycleTone,
+  deriveWorkspaceLifecycleTone,
   repoDisplayName,
   slugify,
   summarizeWorkspaceState,
   workspaceBranchName,
 } from "./index.js";
+
+function makeAgent(overrides: Partial<AgentSession> = {}): AgentSession {
+  return {
+    id: "sess_x",
+    workspaceId: "ws_x",
+    runtimeId: "claude-code",
+    displayName: "Claude",
+    status: "running",
+    transport: "connected",
+    tmuxSessionName: "citadel_x",
+    tmuxSessionId: "$1",
+    createdAt: "2026-05-26T00:00:00.000Z",
+    updatedAt: "2026-05-26T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function makePr(overrides: Partial<PullRequestSummary> = {}): PullRequestSummary {
+  return {
+    number: 1,
+    title: "WIP",
+    url: "https://example/pr/1",
+    state: "OPEN",
+    draft: false,
+    reviewDecision: null,
+    checks: [],
+    additions: null,
+    deletions: null,
+    reviewers: [],
+    ...overrides,
+  };
+}
 
 describe("workspace naming", () => {
   it("creates issue-backed branch names with issue key and dashified title", () => {
@@ -159,6 +194,164 @@ describe("workspace state summary", () => {
         ],
       }).reasons,
     ).toContain("Provider data is degraded or unavailable");
+  });
+});
+
+describe("deriveAgentLifecycleTone", () => {
+  it("maps active lifecycle states to running", () => {
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "starting" }))).toBe("running");
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "running" }))).toBe("running");
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "idle" }))).toBe("running");
+  });
+
+  it("maps waiting_for_input to attention", () => {
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "waiting_for_input" }))).toBe("attention");
+  });
+
+  it("treats clean and operator-initiated stops as done", () => {
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "stopped", exitCode: 0 }))).toBe("done");
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "stopped", exitCode: null }))).toBe("done");
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "stopped", exitCode: 130 }))).toBe("done");
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "stopped", exitCode: 143 }))).toBe("done");
+  });
+
+  it("treats genuinely failed exit codes as attention", () => {
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "stopped", exitCode: 1 }))).toBe("attention");
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "stopped", exitCode: 127 }))).toBe("attention");
+  });
+
+  it("maps failed to attention", () => {
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "failed" }))).toBe("attention");
+  });
+
+  it("classifies unknown by status reason", () => {
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "unknown", statusReason: "tmux_missing" }))).toBe("attention");
+    expect(
+      deriveAgentLifecycleTone(makeAgent({ status: "unknown", statusReason: "sentinel_missing_tmux_alive" })),
+    ).toBe("attention");
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "unknown", statusReason: "migrated_from_orphaned" }))).toBe(
+      "attention",
+    );
+    expect(
+      deriveAgentLifecycleTone(makeAgent({ status: "unknown", statusReason: "daemon_restart_indeterminate" })),
+    ).toBe("running");
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "unknown", statusReason: null }))).toBe("running");
+  });
+
+  it("never returns never-started at the per-agent layer", () => {
+    const allStatuses: AgentSession["status"][] = [
+      "starting",
+      "running",
+      "waiting_for_input",
+      "idle",
+      "stopped",
+      "failed",
+      "unknown",
+    ];
+    for (const status of allStatuses) {
+      const tone = deriveAgentLifecycleTone(makeAgent({ status }));
+      expect(tone).not.toBe("never-started");
+    }
+  });
+});
+
+describe("deriveWorkspaceLifecycleTone", () => {
+  it("never-started when no agent sessions are present", () => {
+    expect(deriveWorkspaceLifecycleTone({ sessions: [] })).toBe("never-started");
+  });
+
+  it("never-started when only shell sessions are present", () => {
+    expect(
+      deriveWorkspaceLifecycleTone({
+        sessions: [makeAgent({ runtimeId: "shell", status: "running" })],
+      }),
+    ).toBe("never-started");
+  });
+
+  it("running when at least one agent is active and no failures", () => {
+    expect(
+      deriveWorkspaceLifecycleTone({
+        sessions: [makeAgent({ status: "running" })],
+      }),
+    ).toBe("running");
+  });
+
+  it("attention wins over running across agents", () => {
+    expect(
+      deriveWorkspaceLifecycleTone({
+        sessions: [makeAgent({ id: "a", status: "failed" }), makeAgent({ id: "b", status: "running" })],
+      }),
+    ).toBe("attention");
+  });
+
+  it("done when all agents finished cleanly and no PR", () => {
+    expect(
+      deriveWorkspaceLifecycleTone({
+        sessions: [makeAgent({ status: "stopped", exitCode: 0 })],
+      }),
+    ).toBe("done");
+  });
+
+  it("done when all agents finished and PR checks all success", () => {
+    expect(
+      deriveWorkspaceLifecycleTone({
+        sessions: [makeAgent({ status: "stopped", exitCode: 0 })],
+        pullRequest: makePr({
+          checks: [
+            { name: "ci", status: "completed", conclusion: "success", url: null, startedAt: null, completedAt: null },
+          ],
+        }),
+      }),
+    ).toBe("done");
+  });
+
+  it("attention when PR has any failure-class check (override agent aggregate)", () => {
+    expect(
+      deriveWorkspaceLifecycleTone({
+        sessions: [makeAgent({ status: "stopped", exitCode: 0 })],
+        pullRequest: makePr({
+          checks: [
+            { name: "ok", status: "completed", conclusion: "success", url: null, startedAt: null, completedAt: null },
+            { name: "ci", status: "completed", conclusion: "failure", url: null, startedAt: null, completedAt: null },
+          ],
+        }),
+      }),
+    ).toBe("attention");
+  });
+
+  it("running agent + failing PR still escalates to attention", () => {
+    expect(
+      deriveWorkspaceLifecycleTone({
+        sessions: [makeAgent({ status: "running" })],
+        pullRequest: makePr({
+          checks: [
+            { name: "ci", status: "completed", conclusion: "failure", url: null, startedAt: null, completedAt: null },
+          ],
+        }),
+      }),
+    ).toBe("attention");
+  });
+
+  it("empty PR checks does not override agent aggregate", () => {
+    expect(
+      deriveWorkspaceLifecycleTone({
+        sessions: [makeAgent({ status: "stopped", exitCode: 0 })],
+        pullRequest: makePr({ checks: [] }),
+      }),
+    ).toBe("done");
+  });
+
+  it("pending PR check (conclusion null) does not override done", () => {
+    expect(
+      deriveWorkspaceLifecycleTone({
+        sessions: [makeAgent({ status: "stopped", exitCode: 0 })],
+        pullRequest: makePr({
+          checks: [
+            { name: "ci", status: "in_progress", conclusion: null, url: null, startedAt: null, completedAt: null },
+          ],
+        }),
+      }),
+    ).toBe("done");
   });
 });
 
