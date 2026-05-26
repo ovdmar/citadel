@@ -131,6 +131,7 @@ function pr(over: Partial<PullRequestSummary> = {}): PullRequestSummary {
     checks: [],
     mergeable: null,
     mergeStateStatus: null,
+    headSha: null,
     ...over,
   };
 }

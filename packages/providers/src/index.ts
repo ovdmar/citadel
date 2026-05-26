@@ -440,7 +440,7 @@ async function currentPullRequest(rootPath: string) {
       "pr",
       "view",
       "--json",
-      "number,title,url,state,isDraft,reviewDecision,statusCheckRollup,additions,deletions,reviews,reviewRequests,mergeable,mergeStateStatus",
+      "number,title,url,state,isDraft,reviewDecision,statusCheckRollup,additions,deletions,reviews,reviewRequests,mergeable,mergeStateStatus,headRefOid",
     ]);
     const parsed = JSON.parse(raw) as {
       number: number;
@@ -456,6 +456,7 @@ async function currentPullRequest(rootPath: string) {
       reviewRequests?: GhReviewRequest[];
       mergeable?: string | null;
       mergeStateStatus?: string | null;
+      headRefOid?: string | null;
     };
     return {
       number: parsed.number,
@@ -474,6 +475,7 @@ async function currentPullRequest(rootPath: string) {
       mergeable: parsed.mergeable == null ? null : PrMergeableSchema.parse(parsed.mergeable),
       mergeStateStatus:
         parsed.mergeStateStatus == null ? null : PrMergeStateStatusSchema.parse(parsed.mergeStateStatus),
+      headSha: parsed.headRefOid ?? null,
     };
   } catch {
     return null;

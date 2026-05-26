@@ -27,8 +27,11 @@ export type AutoRecoveryDecisionInput = {
     autoRecoveryLastCiSha: string | null;
     autoRecoveryLastAttemptAt: string | null;
   };
-  // The latest activity timestamp across this workspace's sessions
-  // (max of lastOutputAt/lastStatusAt/updatedAt — caller computes).
+  // The latest meaningful activity timestamp across this workspace's
+  // sessions (max of lastOutputAt/lastStatusAt — caller computes). NOTE:
+  // session.updatedAt is intentionally excluded because the status reducer
+  // bumps it on the final stopped/failed transition too, which would
+  // artificially extend the idle window after a session ends.
   sessions: Array<{ status: string; runtimeId: string | null; lastActivityAt: string | null }>;
   pr: {
     headSha: string | null;

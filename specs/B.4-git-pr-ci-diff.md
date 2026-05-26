@@ -27,8 +27,8 @@
 [ ] 7. Workspace cards render the PR icon with lifecycle color: grey when no PR exists, yellow when the PR exists and checks are pending, green when checks pass, red when any check fails.
 [ ] 8. The PR icon on a workspace card links directly to the provider PR URL.
 [ ] 9. Workspace cards render a separate approval icon to the right of the PR icon: grey when no reviewer is requested, yellow when reviewers are pending, red when changes are requested or comments are unresolved, green check when at least one approval exists.
-[~] 10. GitHub's `mergeable` and `mergeStateStatus` fields are surfaced through `PullRequestSummary` and gate the `ready-to-merge` readiness state.
-[~] 11. When `mergeable === "CONFLICTING"` (or `mergeStateStatus === "DIRTY"`), the workspace enters the dedicated `pr-conflicts` readiness state, distinct from the local working-tree `conflicts` state and from `checks-failing`.
+[~] 10. GitHub's `mergeable` and `mergeStateStatus` fields are surfaced through `PullRequestSummary`. `mergeable !== "CONFLICTING"` is required for the `ready-to-merge` readiness state; `mergeStateStatus` informs the workspace-card tone only.
+[~] 11. When `mergeable === "CONFLICTING"`, the workspace enters the dedicated `pr-conflicts` readiness state, distinct from the local working-tree `conflicts` state and from `checks-failing`. The workspace-card tone also flips to `conflicting` when `mergeStateStatus === "DIRTY"`, but the readiness state itself remains scoped to `mergeable === "CONFLICTING"`.
 
 ## Checks And CI
 

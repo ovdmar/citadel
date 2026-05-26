@@ -109,11 +109,15 @@ export async function runAutoRecoveryTick(deps: AutoRecoveryMonitorDeps, now: Da
       sessions: sessions.map((session) => ({
         status: session.status,
         runtimeId: session.runtimeId,
-        lastActivityAt: mostRecent(session.lastOutputAt, session.lastStatusAt, session.updatedAt),
+        // updatedAt is bumped on every status-reducer write (including the
+        // final stopped/failed transition), so including it would inflate the
+        // idle window after a session ends. Use only timestamps that track
+        // genuine activity.
+        lastActivityAt: mostRecent(session.lastOutputAt, session.lastStatusAt),
       })),
       pr: vc.pullRequest
         ? {
-            headSha: extractHeadSha(ci),
+            headSha: vc.pullRequest.headSha ?? null,
             mergeable: vc.pullRequest.mergeable ?? null,
             checks: vc.pullRequest.checks ?? [],
           }
@@ -147,20 +151,6 @@ export async function runAutoRecoveryTick(deps: AutoRecoveryMonitorDeps, now: Da
       // retry-storm. Operators see the error in the activity log.
     }
   }
-}
-
-// Extract the head SHA from the CI provider summary. gh runs include
-// headSha but it's not in the normalized CiRunSummary contract — fall back
-// to null when missing (the decide function skips on null).
-function extractHeadSha(ci: CiProviderSummary): string | null {
-  const run = ci.runs[0];
-  if (!run) return null;
-  // The raw gh output has headSha; our CiRunSummary doesn't carry it
-  // explicitly today. Cast through a loose shape — when not present, return
-  // null and let the decide function skip.
-  const loose = run as Record<string, unknown>;
-  const headSha = loose.headSha;
-  return typeof headSha === "string" ? headSha : null;
 }
 
 export function startAutoRecoveryMonitor(

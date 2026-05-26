@@ -98,6 +98,7 @@ const FAILING_VC: VersionControlSummary = {
     checks: [{ name: "ci", status: "completed", conclusion: "failure", url: null, startedAt: null, completedAt: null }],
     mergeable: "MERGEABLE",
     mergeStateStatus: "CLEAN",
+    headSha: "sha_one",
   },
   checkedAt: "2026-05-25T12:00:00.000Z",
 };
@@ -117,9 +118,7 @@ const FAILING_CI: CiProviderSummary = {
       event: "push",
       url: "https://example.test/run/100",
       createdAt: "2026-05-25T11:55:00.000Z",
-      // headSha is loose-typed on the run; the monitor extracts it dynamically.
-      ...({ headSha: "sha_one" } as Record<string, unknown>),
-    } as never,
+    },
   ],
   checkedAt: "2026-05-25T12:00:00.000Z",
 };

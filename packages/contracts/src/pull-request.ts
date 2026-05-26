@@ -32,4 +32,8 @@ export const PullRequestSummarySchema = z.object({
   reviewers: z.array(PrReviewerSchema).default([]),
   mergeable: PrMergeableSchema.nullable().default(null),
   mergeStateStatus: PrMergeStateStatusSchema.nullable().default(null),
+  // gh `pr view --json headRefOid` — the SHA of the PR's head commit. Used
+  // by the CI auto-recovery tick to dedupe per-SHA so we don't re-launch on
+  // CI re-runs of the same commit.
+  headSha: z.string().nullable().default(null),
 });
