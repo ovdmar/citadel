@@ -1,0 +1,85 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { expect, test } from "@playwright/test";
+
+const API_BASE =
+  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "4012"}`;
+
+// End-to-end coverage for the configurable notes location. Exercises the round
+// trip Settings → daemon config → /api/scratchpad → cockpit, plus the fallback
+// when the user clears the override.
+test.describe("notes location", () => {
+  const tmpFiles: string[] = [];
+
+  test.afterEach(async ({ request }) => {
+    // Always reset to the default location so subsequent tests aren't pinned
+    // to a tmp path that may have been deleted.
+    await request.put(`${API_BASE}/api/config`, { data: { scratchpad: { path: undefined } } });
+    for (const file of tmpFiles.splice(0)) {
+      try {
+        fs.rmSync(file, { force: true });
+      } catch {
+        /* best-effort */
+      }
+    }
+  });
+
+  test("Settings round-trips a custom notes path and the daemon honors it", async ({ page, request }) => {
+    const tmpNotes = path.join(os.tmpdir(), `citadel-e2e-notes-${Date.now()}.md`);
+    tmpFiles.push(tmpNotes);
+
+    await page.goto("/settings");
+
+    // The Notes section sits inside the structured-config form.
+    const input = page.locator('[data-testid="notes-location-input"]');
+    await expect(input).toBeVisible();
+    await input.fill(tmpNotes);
+
+    // The form's primary Save button submits the whole structured config.
+    const form = page.locator("form.config-form");
+    await form.getByRole("button", { name: /save/i }).first().click();
+
+    // Reload — the field round-trips through PUT /api/config.
+    await page.reload();
+    await expect(page.locator('[data-testid="notes-location-input"]')).toHaveValue(tmpNotes);
+
+    // Daemon-side: /api/scratchpad now reads/writes at the configured path.
+    const snapshot = (await (await request.get(`${API_BASE}/api/scratchpad`)).json()) as {
+      content: string;
+      path: string;
+    };
+    expect(snapshot.path).toBe(tmpNotes);
+
+    // Cockpit displays the resolved path in the scratchpad header subtitle.
+    await page.goto("/scratchpad");
+    await expect(page.locator('[data-testid="scratchpad-path"]')).toHaveText(tmpNotes);
+  });
+
+  test("clearing the field falls back to the default <dataDir>/scratchpad.md", async ({ page, request }) => {
+    const tmpNotes = path.join(os.tmpdir(), `citadel-e2e-notes-${Date.now()}-fallback.md`);
+    tmpFiles.push(tmpNotes);
+
+    // First set a custom path so there's something to clear.
+    await request.put(`${API_BASE}/api/config`, { data: { scratchpad: { path: tmpNotes } } });
+
+    await page.goto("/settings");
+    const input = page.locator('[data-testid="notes-location-input"]');
+    await expect(input).toHaveValue(tmpNotes);
+
+    // Clear and save.
+    await input.fill("");
+    const form = page.locator("form.config-form");
+    await form.getByRole("button", { name: /save/i }).first().click();
+
+    await page.reload();
+    await expect(page.locator('[data-testid="notes-location-input"]')).toHaveValue("");
+
+    // Daemon-side: path resolves back to a non-tmp location under dataDir.
+    const snapshot = (await (await request.get(`${API_BASE}/api/scratchpad`)).json()) as {
+      path: string;
+    };
+    expect(snapshot.path).not.toBe(tmpNotes);
+    expect(snapshot.path.endsWith("scratchpad.md")).toBe(true);
+  });
+});
