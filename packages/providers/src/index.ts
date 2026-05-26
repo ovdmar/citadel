@@ -10,6 +10,10 @@ import type {
   IssueTrackerSummary,
   IssueTransition,
   IssueTransitionActionResult,
+  ParentPr,
+  PrCommit,
+  PrMergeResponse,
+  PrMergeStrategy,
   PrReviewerState,
   ProviderHealth,
   RuntimeUsageCategory,
@@ -575,4 +579,164 @@ async function jtk(args: string[]) {
     maxBuffer: 1024 * 1024,
   });
   return result.stdout.trim();
+}
+
+// PR display helpers — used by the daemon's PR routes for the always-on
+// cross-workspace poll, force-refresh, merge button, and stacked-PR detection.
+
+// Hand-rolled concurrency limiter. Kept here (not as a dependency) to avoid
+// touching pnpm-lock.yaml for ~10 lines of logic.
+export function pLimit(concurrency: number) {
+  if (concurrency < 1) throw new Error("pLimit concurrency must be >= 1");
+  const queue: Array<() => void> = [];
+  let active = 0;
+  const next = () => {
+    if (active >= concurrency) return;
+    const job = queue.shift();
+    if (job) {
+      active += 1;
+      job();
+    }
+  };
+  return <T>(task: () => Promise<T>): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      queue.push(() => {
+        task()
+          .then((value) => {
+            active -= 1;
+            resolve(value);
+            next();
+          })
+          .catch((error) => {
+            active -= 1;
+            reject(error);
+            next();
+          });
+      });
+      next();
+    });
+}
+
+type RawCommit = {
+  oid?: string;
+  sha?: string;
+  messageHeadline?: string;
+  message?: string;
+};
+
+export function normalizePrCommit(raw: RawCommit): PrCommit {
+  const sha = String(raw.oid ?? raw.sha ?? "");
+  const headline =
+    typeof raw.messageHeadline === "string" && raw.messageHeadline.length > 0
+      ? raw.messageHeadline
+      : ((raw.message ?? "").split("\n")[0]?.trim() ?? "");
+  return {
+    sha,
+    shortSha: sha.slice(0, 7),
+    message: headline,
+    checks: [],
+  };
+}
+
+// Pure: caller (daemon) provides the cache wrapper. Returns the per-commit
+// check rollup from the GitHub API; tolerates failure with an empty array so
+// one bad commit doesn't poison the PR summary.
+export async function fetchCommitChecks(rootPath: string, nameWithOwner: string, sha: string): Promise<CheckSummary[]> {
+  try {
+    const raw = await gh(rootPath, [
+      "api",
+      "-H",
+      "Accept: application/vnd.github+json",
+      `/repos/${nameWithOwner}/commits/${sha}/check-runs`,
+    ]);
+    const parsed = JSON.parse(raw) as { check_runs?: Array<Record<string, unknown>> };
+    return (parsed.check_runs ?? []).map((entry) =>
+      normalizeCheck({
+        name: entry.name,
+        status: entry.status,
+        conclusion: entry.conclusion,
+        detailsUrl: entry.details_url ?? entry.html_url,
+        startedAt: entry.started_at,
+        completedAt: entry.completed_at,
+      }),
+    );
+  } catch {
+    return [];
+  }
+}
+
+type ParentPrCandidate = {
+  number: number;
+  url: string;
+  headRefName: string;
+  state: string;
+  headRepository?: string | { nameWithOwner?: string } | null;
+};
+
+// Match by both head ref name AND head repository so same-named branches in
+// different forks don't false-positive. Open PRs win over merged when both
+// match the same repo (right-after-merge case still surfaces a merged parent
+// via its own MERGED state).
+export function detectParentPr(
+  query: { baseRefName: string; headRepository: string },
+  candidates: ParentPrCandidate[],
+): ParentPr | null {
+  const matches = candidates.filter((candidate) => {
+    if (candidate.headRefName !== query.baseRefName) return false;
+    const repo =
+      typeof candidate.headRepository === "string" ? candidate.headRepository : candidate.headRepository?.nameWithOwner;
+    return repo === query.headRepository;
+  });
+  if (matches.length === 0) return null;
+  const open = matches.find((m) => m.state.toUpperCase() === "OPEN");
+  const choice = open ?? matches[0];
+  if (!choice) return null;
+  return { number: choice.number, url: choice.url, headRefName: choice.headRefName, state: choice.state };
+}
+
+type GhRunner = (args: string[]) => Promise<string>;
+
+// Internal seam: tests inject a fake runner; production calls gh() in this
+// module. NO --delete-branch is ever passed — branch deletion is a separate
+// opt-in flow that's intentionally not part of the night's scope.
+export async function mergePr(
+  input: { rootPath: string; number: number; strategy: PrMergeStrategy },
+  runner?: GhRunner,
+): Promise<PrMergeResponse> {
+  const run: GhRunner = runner ?? ((args) => gh(input.rootPath, args));
+  const args = ["pr", "merge", String(input.number), `--${input.strategy}`];
+  try {
+    await run(args);
+    return { ok: true };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { ok: false, reason: classifyMergeFailure(detail), detail };
+  }
+}
+
+function classifyMergeFailure(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("not mergeable") || lower.includes("merge conflict")) return "not_mergeable";
+  if (lower.includes("not authorized") || lower.includes("authentication")) return "gh_auth";
+  if (lower.includes("not allowed") || lower.includes("disabled")) return "strategy_disallowed";
+  return "gh_error";
+}
+
+// isGhAvailable returns whether `gh auth status` succeeded recently for the
+// given rootPath. Caches the answer for 60s so the merge button doesn't spawn
+// gh on every render.
+const ghAvailableCache = new Map<string, { expiresAt: number; available: boolean }>();
+
+export async function isGhAvailable(rootPath: string): Promise<boolean> {
+  const cached = ghAvailableCache.get(rootPath);
+  if (cached && cached.expiresAt > Date.now()) return cached.available;
+  let available = false;
+  try {
+    await gh(rootPath, ["auth", "status"]);
+    available = true;
+  } catch {
+    available = false;
+  }
+  ghAvailableCache.set(rootPath, { expiresAt: Date.now() + 60_000, available });
+  return available;
 }
