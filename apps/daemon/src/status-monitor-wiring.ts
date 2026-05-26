@@ -14,7 +14,13 @@ import {
 } from "@citadel/operations";
 import type { RuntimeStatusAdapter, SessionAdapterState } from "@citadel/runtimes";
 import { getStatusAdapter } from "@citadel/runtimes";
-import { agentExitSentinelPath, agentLiveSentinelPath, captureTmux, readAgentExitCode } from "@citadel/terminal";
+import {
+  agentExitSentinelPath,
+  agentLiveSentinelPath,
+  captureTmux,
+  readAgentExitCode,
+  tmuxPrefix,
+} from "@citadel/terminal";
 
 // Dedupe monitor-side failures so a persistent tmux outage doesn't flood
 // stderr at 2 Hz. Key is `kind:message` so distinct error messages are still
@@ -57,10 +63,14 @@ export function buildStatusMonitorDeps(
     // logs without flooding stderr at 2 Hz.
     tmuxActivities: () => {
       try {
-        const out = execFileSync("tmux", ["list-sessions", "-F", "#{session_name} #{session_activity}"], {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-        });
+        const out = execFileSync(
+          "tmux",
+          [...tmuxPrefix(), "list-sessions", "-F", "#{session_name} #{session_activity}"],
+          {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
+          },
+        );
         const map = new Map<string, number>();
         for (const line of out.split("\n")) {
           const [name, secs] = line.trim().split(/\s+/);
@@ -88,11 +98,18 @@ export function buildStatusMonitorDeps(
         fsPromises.stat(agentLiveSentinelPath(name)).catch(() => null),
         fsPromises.stat(agentExitSentinelPath(name)).catch(() => null),
       ]);
-      const exitCode = exitStat ? readAgentExitCode(name) : null;
+      // Stale-.exit guard: if both files exist and .live is newer than .exit,
+      // the .exit is leftover from a prior wrapper incarnation with the same
+      // tmux session name (e.g., daemon restart re-spawned the session before
+      // /tmp was cleared). Treat the exit signal as absent so the live agent
+      // doesn't get marked stopped.
+      const liveNewerThanExit =
+        liveStat !== null && exitStat !== null && liveStat.mtimeMs > exitStat.mtimeMs;
+      const exitCode = exitStat && !liveNewerThanExit ? readAgentExitCode(name) : null;
       return {
         live: liveStat !== null,
         exitCode,
-        exitedAt: exitStat ? exitStat.ctime.toISOString() : null,
+        exitedAt: exitStat && !liveNewerThanExit ? exitStat.ctime.toISOString() : null,
       };
     },
     getAdapter: (runtimeId): RuntimeStatusAdapter => getStatusAdapter(runtimeId),

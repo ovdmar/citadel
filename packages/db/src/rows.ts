@@ -86,6 +86,7 @@ export function sessionFromRow(row: Record<string, unknown>): AgentSession {
     transport: asString(row, "transport") as AgentSession["transport"],
     tmuxSessionName: row.tmux_session_name ? asString(row, "tmux_session_name") : null,
     tmuxSessionId: row.tmux_session_id ? asString(row, "tmux_session_id") : null,
+    runtimeSessionId: row.runtime_session_id ? asString(row, "runtime_session_id") : null,
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
   };
