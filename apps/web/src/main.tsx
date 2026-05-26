@@ -1,5 +1,14 @@
+/// <reference types="vite/client" />
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Link, Outlet, RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import {
+  type AnyRoute,
+  Link,
+  Outlet,
+  RouterProvider,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
@@ -139,18 +148,35 @@ if (typeof window !== "undefined") {
   bootstrapLastRoute(window.location, window.history);
 }
 
+// Base routes always shipped. Dev-only routes are appended below behind a
+// static `if (import.meta.env.DEV)` guard which Vite tree-shakes out of
+// production bundles — the dynamic `import()` inside the branch never
+// emits a chunk for prod builds because the entire branch is dead code
+// when DEV is replaced with the literal `false`.
+const childRoutes: AnyRoute[] = [
+  indexRoute,
+  settingsRoute,
+  repoSettingsRoute,
+  operationsRoute,
+  onboardingRoute,
+  dashboardRoute,
+  historyRoute,
+  scratchpadRoute,
+  scheduledAgentsRoute,
+];
+
+if (import.meta.env.DEV) {
+  const { DesignSystemShowcase } = await import("./routes/design-system/index.js");
+  const designSystemRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/design-system",
+    component: DesignSystemShowcase,
+  });
+  childRoutes.push(designSystemRoute);
+}
+
 const router = createRouter({
-  routeTree: rootRoute.addChildren([
-    indexRoute,
-    settingsRoute,
-    repoSettingsRoute,
-    operationsRoute,
-    onboardingRoute,
-    dashboardRoute,
-    historyRoute,
-    scratchpadRoute,
-    scheduledAgentsRoute,
-  ]),
+  routeTree: rootRoute.addChildren(childRoutes),
   defaultNotFoundComponent: NotFoundView,
 });
 
