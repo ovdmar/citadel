@@ -37,6 +37,16 @@ Rules:
 - Health is reported per method; the existing per-provider health record stays valid but should be read as "health for the active method".
 - New providers/methods are added by extending `CATEGORIES` in `settings-providers.tsx` and (when wired) the corresponding `@citadel/providers` collector.
 
+## Auto-transitions
+
+Issue-tracker providers may declare auto-transitions that fire on lifecycle events to keep tickets in sync with operator activity. The Jira provider supports this via `providers.jira.autoTransitions: Array<{ event, transition }>` in `CitadelConfig`.
+
+- **Supported events:** `agent.started`, `workspace.issue_attached`, `workspace.archived`, `workspace.removed`. `workspace.created` is deliberately excluded (fires before any issue can be attached); `workspace.updated` is deliberately excluded (multi-fire — would burst the provider). Misconfiguration is rejected at config parse.
+- **`transition` semantics:** names the **target status** the issue should end up in (e.g., `"In Progress"`, `"Done"`), not the underlying transition name. The runtime picks the available transition whose `toStatus` matches case-insensitively.
+- **Idempotency:** before transitioning, the runtime reads the issue's current status. If it already equals the target status, the call is skipped and recorded as `provider.issue_transition.auto.skip` in the activity log.
+- **Degradation:** auto-transition failures (provider unavailable, transition unresolved, etc.) log to `activity_events` (`provider.issue_transition.auto.unresolved` for resolution failures; `provider.issue_transition.auto` with `status: "degraded"` for transition failures) and **never block the originating operation**. The agent or workspace lifecycle the event came from still completes.
+- **SSE event name:** successful auto-transitions re-emit a distinct SSE event `provider.issue_transition.auto` (not `provider.issue_transition`, which the manual transition route uses). Cockpit consumers listen for both; the operations layer must never subscribe to either to avoid feedback loops.
+
 ## Provider Setup
 
 [ ] 1. First-run config shows available provider types.
