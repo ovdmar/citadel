@@ -1,8 +1,8 @@
 import type { AgentSession, RateLimitResumption } from "@citadel/contracts";
 import { createId, nowIso, parseRateLimitReason } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
-import type { MonitorSessionState } from "./status-monitor.js";
 import type { ResumeOutcome } from "./rate-limit-resumer.js";
+import type { MonitorSessionState } from "./status-monitor.js";
 
 // One-minute delay added on top of the earliest reset time. Operators can
 // override at the resumer level (e.g. a longer floor when the runtime is

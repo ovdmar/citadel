@@ -53,9 +53,7 @@ export async function resumeRateLimitedSession(
   input: { sessionId: string },
 ): Promise<ResumeOutcome> {
   const now = deps.now ?? nowIso;
-  const session = deps.store
-    .listSessions()
-    .find((candidate: AgentSession) => candidate.id === input.sessionId);
+  const session = deps.store.listSessions().find((candidate: AgentSession) => candidate.id === input.sessionId);
   if (!session) return { resumed: false, reason: "session_not_found" };
   if (session.status !== "rate_limited") return { resumed: false, reason: "session_not_rate_limited" };
   if (!session.tmuxSessionName) return { resumed: false, reason: "session_has_no_terminal" };

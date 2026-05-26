@@ -348,7 +348,16 @@ describe("contract schemas", () => {
   });
 
   it("validates the canonical AgentSessionStatus enum and round-trips rate_limited", () => {
-    const allValues = ["starting", "running", "waiting_for_input", "idle", "rate_limited", "stopped", "failed", "unknown"];
+    const allValues = [
+      "starting",
+      "running",
+      "waiting_for_input",
+      "idle",
+      "rate_limited",
+      "stopped",
+      "failed",
+      "unknown",
+    ];
     for (const value of allValues) {
       expect(AgentSessionStatusSchema.parse(value)).toBe(value);
     }

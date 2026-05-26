@@ -1,4 +1,4 @@
-import type { AgentSession, ActivityEvent, Workspace } from "@citadel/contracts";
+import type { ActivityEvent, AgentSession, Workspace } from "@citadel/contracts";
 import type { RuntimeStatusAdapter } from "@citadel/runtimes";
 import { describe, expect, it, vi } from "vitest";
 import { resumeRateLimitedSession } from "./rate-limit-resumer.js";
@@ -24,7 +24,9 @@ function makeSession(over: Partial<AgentSession> = {}): AgentSession {
   };
 }
 
-function makeAdapter(detect: () => { resetAt: string | null } | null = () => ({ resetAt: null })): RuntimeStatusAdapter {
+function makeAdapter(
+  detect: () => { resetAt: string | null } | null = () => ({ resetAt: null }),
+): RuntimeStatusAdapter {
   return {
     runtimeId: "claude-code",
     createSessionState: () => ({ ticksObserved: 0, lastPaneHash: null }),

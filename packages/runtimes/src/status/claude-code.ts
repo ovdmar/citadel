@@ -1,11 +1,11 @@
 import {
-  observeIdle,
-  observeRunning,
-  observeWaitingForInput,
   type ObservationContext,
   type PaneObservation,
   type RuntimeStatusAdapter,
   type SessionAdapterState,
+  observeIdle,
+  observeRunning,
+  observeWaitingForInput,
 } from "./index.js";
 
 // Claude Code v2.1.x detection (verified 2026-05-25 against v2.1.133).

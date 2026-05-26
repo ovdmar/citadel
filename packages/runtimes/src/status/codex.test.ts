@@ -32,7 +32,9 @@ describe("codexStatusAdapter", () => {
 
   describe("fixture coverage", () => {
     it("classifies waiting-for-input-sandbox.txt as waiting_for_input", () => {
-      expect(codexStatusAdapter.observe(state, ctx(load("waiting-for-input-sandbox")))).toEqual({ kind: "waiting_for_input" });
+      expect(codexStatusAdapter.observe(state, ctx(load("waiting-for-input-sandbox")))).toEqual({
+        kind: "waiting_for_input",
+      });
     });
 
     it("classifies idle.txt as idle when ≥2 stable ticks and observed", () => {
@@ -120,9 +122,9 @@ describe("codexStatusAdapter", () => {
 
     it("source=boot but waiting_for_input footer still applies (sandbox approval is sticky)", () => {
       const pane = "something\nPress enter to confirm or esc to cancel";
-      expect(codexStatusAdapter.observe(state, ctx(pane, { source: "boot", hasObservedSinceBoot: false }))).toEqual(
-        { kind: "waiting_for_input" },
-      );
+      expect(codexStatusAdapter.observe(state, ctx(pane, { source: "boot", hasObservedSinceBoot: false }))).toEqual({
+        kind: "waiting_for_input",
+      });
     });
   });
 

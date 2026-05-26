@@ -40,7 +40,9 @@ describe("claudeCodeStatusAdapter", () => {
     });
 
     it("classifies running-with-spinner-verb.txt as running", () => {
-      expect(claudeCodeStatusAdapter.observe(state, ctx(load("running-with-spinner-verb")))).toEqual({ kind: "running" });
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("running-with-spinner-verb")))).toEqual({
+        kind: "running",
+      });
     });
 
     it("classifies running-with-monitor.txt as running (bg work suppresses completion)", () => {
@@ -52,7 +54,9 @@ describe("claudeCodeStatusAdapter", () => {
     });
 
     it("classifies running-with-local-agent.txt as running (subagent + esc to interrupt)", () => {
-      expect(claudeCodeStatusAdapter.observe(state, ctx(load("running-with-local-agent")))).toEqual({ kind: "running" });
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("running-with-local-agent")))).toEqual({
+        kind: "running",
+      });
     });
 
     it("classifies waiting-for-input-ask-question.txt as waiting_for_input", () => {

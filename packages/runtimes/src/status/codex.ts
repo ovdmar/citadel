@@ -1,12 +1,12 @@
 import {
-  lastNonEmptyLine,
-  observeIdle,
-  observeRunning,
-  observeWaitingForInput,
   type ObservationContext,
   type PaneObservation,
   type RuntimeStatusAdapter,
   type SessionAdapterState,
+  lastNonEmptyLine,
+  observeIdle,
+  observeRunning,
+  observeWaitingForInput,
 } from "./index.js";
 
 // Codex v0.130.0 detection.

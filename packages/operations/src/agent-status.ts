@@ -170,13 +170,15 @@ export function reduceStatus(prev: ReducerPrev, signal: StatusSignal, now: () =>
       if (prev.status === "rate_limited") {
         // Same-status refinement. ISO equality uses Date.parse to avoid
         // string-equality fragility ("…00:00.000Z" vs "…00:00Z" compare equal).
-        const prevReset = prev.statusReason?.startsWith("rate_limited:") && prev.statusReason !== "rate_limited:unknown_reset"
-          ? prev.statusReason.slice("rate_limited:".length)
-          : null;
+        const prevReset =
+          prev.statusReason?.startsWith("rate_limited:") && prev.statusReason !== "rate_limited:unknown_reset"
+            ? prev.statusReason.slice("rate_limited:".length)
+            : null;
         const isPrevUnknown = prev.statusReason === "rate_limited:unknown_reset";
-        const equal = signal.resetAt === null
-          ? isPrevUnknown
-          : prevReset !== null && Date.parse(prevReset) === Date.parse(signal.resetAt);
+        const equal =
+          signal.resetAt === null
+            ? isPrevUnknown
+            : prevReset !== null && Date.parse(prevReset) === Date.parse(signal.resetAt);
         if (equal) return null; // no-op — same effective reset
         return { status: "rate_limited", reason: newReason }; // reason refinement, no lastStatusAt bump
       }

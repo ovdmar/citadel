@@ -1,7 +1,7 @@
 import type { AgentSession, BackgroundAgentSession, RateLimitResumption } from "@citadel/contracts";
 import { describe, expect, it, vi } from "vitest";
-import type { MonitorSessionState } from "./status-monitor.js";
 import { runRateLimitSchedulerTick } from "./rate-limit-scheduler.js";
+import type { MonitorSessionState } from "./status-monitor.js";
 
 function rlSession(over: Partial<AgentSession> = {}): AgentSession {
   return {

@@ -114,8 +114,7 @@ function RepoCard(props: {
   const [confirming, setConfirming] = useState(false);
   const workspaceIds = new Set(props.workspaces.map((workspace) => workspace.id));
   const activeSessions = props.sessions.filter(
-    (session) =>
-      workspaceIds.has(session.workspaceId) && isInteractiveStatus(session.status),
+    (session) => workspaceIds.has(session.workspaceId) && isInteractiveStatus(session.status),
   ).length;
   const runningOperations = props.operations.filter(
     (operation) => operation.repoId === props.repo.id && ["queued", "running"].includes(operation.status),

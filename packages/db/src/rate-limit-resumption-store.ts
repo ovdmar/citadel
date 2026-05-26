@@ -37,9 +37,7 @@ export const rateLimitResumptionStoreMethods = {
     }
   },
   findPendingRateLimitResumption(this: SqliteStore): RateLimitResumption | null {
-    const result = this.database
-      .prepare("SELECT * FROM rate_limit_resumptions WHERE status = 'pending' LIMIT 1")
-      .get();
+    const result = this.database.prepare("SELECT * FROM rate_limit_resumptions WHERE status = 'pending' LIMIT 1").get();
     if (!result) return null;
     return rateLimitResumptionFromRow(result as Record<string, unknown>);
   },
@@ -51,11 +49,7 @@ export const rateLimitResumptionStoreMethods = {
       .all(now) as Array<Record<string, unknown>>;
     return rows.map(rateLimitResumptionFromRow);
   },
-  markRateLimitResumptionExecuted(
-    this: SqliteStore,
-    id: string,
-    executedAt: string,
-  ): RateLimitResumption | null {
+  markRateLimitResumptionExecuted(this: SqliteStore, id: string, executedAt: string): RateLimitResumption | null {
     this.database
       .prepare(
         "UPDATE rate_limit_resumptions SET status = 'executed', executed_at = ? WHERE id = ? AND status = 'pending'",

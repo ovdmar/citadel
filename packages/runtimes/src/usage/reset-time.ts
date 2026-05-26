@@ -84,9 +84,7 @@ const MONTHS: Record<string, number> = {
 // time-of-day-only inputs with (UTC) or (local) markers.
 function nextOccurrence(now: Date, hour: number, minute: number, tz: Tz): Date {
   if (tz === "utc") {
-    const candidate = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, minute, 0, 0),
-    );
+    const candidate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, minute, 0, 0));
     if (candidate.getTime() <= now.getTime()) {
       candidate.setUTCDate(candidate.getUTCDate() + 1);
     }
@@ -101,11 +99,7 @@ function nextOccurrence(now: Date, hour: number, minute: number, tz: Tz): Date {
 }
 
 // Try to parse "<month> <day>, <clock>" shape (Claude-style absolute).
-function parseAbsoluteMonthFirst(
-  text: string,
-  now: Date,
-  tz: Tz,
-): Date | null {
+function parseAbsoluteMonthFirst(text: string, now: Date, tz: Tz): Date | null {
   const match = text.match(/^([A-Za-z]+)\s+(\d{1,2})\s*,\s*(.+)$/);
   if (!match) return null;
   const monthKey = (match[1] ?? "").toLowerCase();
@@ -120,11 +114,7 @@ function parseAbsoluteMonthFirst(
 }
 
 // Try to parse "<clock> on <day> <month>" shape (Codex-style absolute).
-function parseAbsoluteDayFirst(
-  text: string,
-  now: Date,
-  tz: Tz,
-): Date | null {
+function parseAbsoluteDayFirst(text: string, now: Date, tz: Tz): Date | null {
   const match = text.match(/^(.+?)\s+on\s+(\d{1,2})\s+([A-Za-z]+)$/i);
   if (!match) return null;
   const clock = parseClock((match[1] ?? "").trim());
@@ -135,14 +125,7 @@ function parseAbsoluteDayFirst(
   return resolveAbsolute(now, monthIdx, day, clock.hour, clock.minute, tz);
 }
 
-function resolveAbsolute(
-  now: Date,
-  monthIdx: number,
-  day: number,
-  hour: number,
-  minute: number,
-  tz: Tz,
-): Date {
+function resolveAbsolute(now: Date, monthIdx: number, day: number, hour: number, minute: number, tz: Tz): Date {
   if (tz === "utc") {
     let year = now.getUTCFullYear();
     let candidate = new Date(Date.UTC(year, monthIdx, day, hour, minute, 0, 0));
