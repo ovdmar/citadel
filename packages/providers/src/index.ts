@@ -577,13 +577,83 @@ export function setGithubCommand(command: string | undefined) {
   githubCommandOverride = command?.length ? command : "gh";
 }
 
+// Global gh rate-limit circuit breaker. When gh reports
+// "API rate limit ... exceeded", we stop spawning gh subprocesses entirely
+// until the cooldown clears. Every gh-touching code path goes through gh(),
+// so a single gate here covers PR view, commit checks, run list, auth status,
+// merge, etc. without each call site needing its own retry logic.
+//
+// Why a flat 15-minute default: gh CLI errors do not consistently expose the
+// X-RateLimit-Reset header, and the user's primary rate budget is GraphQL
+// (REST + GraphQL share quota but reset on different windows). 15 minutes is
+// long enough to avoid hammering during the cooldown and short enough that a
+// stale cooldown self-heals if we mis-classify.
+const DEFAULT_GH_COOLDOWN_MS = 15 * 60 * 1000;
+let ghCooldownUntil = 0;
+let ghCooldownReason: string | null = null;
+
+export class GhRateLimitedError extends Error {
+  readonly until: number;
+  constructor(until: number, reason: string) {
+    super(`gh rate-limited; cooling until ${new Date(until).toISOString()}: ${reason}`);
+    this.name = "GhRateLimitedError";
+    this.until = until;
+  }
+}
+
+export function getGhCooldown(): { until: number; reason: string } | null {
+  if (ghCooldownUntil <= Date.now()) return null;
+  return { until: ghCooldownUntil, reason: ghCooldownReason ?? "rate limit" };
+}
+
+// Exposed so tests / explicit user actions ("retry now" button) can clear
+// the cooldown without restarting the daemon.
+export function clearGhCooldown(): void {
+  ghCooldownUntil = 0;
+  ghCooldownReason = null;
+}
+
+export function isRateLimitError(error: unknown): false | string {
+  const candidates: string[] = [];
+  if (typeof error === "string") candidates.push(error);
+  else if (error && typeof error === "object") {
+    const obj = error as { message?: unknown; stderr?: unknown; stdout?: unknown };
+    if (typeof obj.message === "string") candidates.push(obj.message);
+    if (typeof obj.stderr === "string") candidates.push(obj.stderr);
+    if (typeof obj.stdout === "string") candidates.push(obj.stdout);
+  }
+  for (const text of candidates) {
+    // gh prints variants like:
+    //   "API rate limit exceeded for user ID 12345"
+    //   "GraphQL: API rate limit already exceeded for user ID ..."
+    //   "You have exceeded a secondary rate limit"
+    if (/rate[- ]limit (already )?exceeded|secondary rate[- ]limit|abuse[- ]rate[- ]limit/i.test(text)) {
+      return text.trim().slice(0, 240);
+    }
+  }
+  return false;
+}
+
 async function gh(rootPath: string, args: string[]) {
-  const result = await execFileAsync(githubCommandOverride, args, {
-    cwd: rootPath,
-    timeout: 12000,
-    maxBuffer: 1024 * 1024,
-  });
-  return result.stdout.trim();
+  if (ghCooldownUntil > Date.now()) {
+    throw new GhRateLimitedError(ghCooldownUntil, ghCooldownReason ?? "rate limit");
+  }
+  try {
+    const result = await execFileAsync(githubCommandOverride, args, {
+      cwd: rootPath,
+      timeout: 12000,
+      maxBuffer: 1024 * 1024,
+    });
+    return result.stdout.trim();
+  } catch (error) {
+    const reason = isRateLimitError(error);
+    if (reason) {
+      ghCooldownUntil = Date.now() + DEFAULT_GH_COOLDOWN_MS;
+      ghCooldownReason = reason;
+      throw new GhRateLimitedError(ghCooldownUntil, reason);
+    }
+    throw error;
+  }
 }
 
 // PR display helpers — used by the daemon's PR routes for the always-on
@@ -735,11 +805,17 @@ const ghAvailableCache = new Map<string, { expiresAt: number; available: boolean
 export async function isGhAvailable(rootPath: string): Promise<boolean> {
   const cached = ghAvailableCache.get(rootPath);
   if (cached && cached.expiresAt > Date.now()) return cached.available;
+  // During gh cooldown, don't spawn `gh auth status` — we already know any gh
+  // call will throw. Preserve the previous cached answer (assume gh was wired
+  // up before we hit the rate limit) so the merge button doesn't disappear
+  // mid-cooldown. If we never had a cached answer, fall back to false.
+  if (getGhCooldown()) return cached?.available ?? false;
   let available = false;
   try {
     await gh(rootPath, ["auth", "status"]);
     available = true;
-  } catch {
+  } catch (error) {
+    if (error instanceof GhRateLimitedError) return cached?.available ?? false;
     available = false;
   }
   ghAvailableCache.set(rootPath, { expiresAt: Date.now() + 60_000, available });

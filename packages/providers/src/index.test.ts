@@ -13,6 +13,7 @@ import {
   commandHealth,
   detectParentPr,
   isGhNoPullRequestError,
+  isRateLimitError,
   mergePr,
   normalizeCheck,
   normalizeCiRun,
@@ -447,6 +448,32 @@ describe("PR display helpers", () => {
     expect(isGhNoPullRequestError(new Error("HTTP 502 from api.github.com"))).toBe(false);
     expect(isGhNoPullRequestError(new Error("gh auth status: not logged in"))).toBe(false);
     expect(isGhNoPullRequestError(undefined)).toBe(false);
+  });
+});
+
+describe("isRateLimitError", () => {
+  it("matches the GraphQL rate-limit message gh prints in stderr", () => {
+    expect(
+      isRateLimitError({
+        stderr:
+          "could not load events: failed to get current username: GraphQL: API rate limit already exceeded for user ID 15231070",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("matches the REST rate-limit message", () => {
+    expect(isRateLimitError({ stderr: "API rate limit exceeded for user ID 1." })).toBeTruthy();
+  });
+
+  it("matches secondary/abuse rate-limit messages", () => {
+    expect(isRateLimitError({ stderr: "You have exceeded a secondary rate limit." })).toBeTruthy();
+    expect(isRateLimitError({ stderr: "abuse-rate-limit triggered" })).toBeTruthy();
+  });
+
+  it("does not match unrelated gh errors", () => {
+    expect(isRateLimitError({ stderr: "no pull requests found for branch" })).toBe(false);
+    expect(isRateLimitError({ stderr: "could not resolve host: api.github.com" })).toBe(false);
+    expect(isRateLimitError(undefined)).toBe(false);
   });
 });
 
