@@ -227,4 +227,20 @@ export function runMigrations(
     INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
       (8, 'agent-sessions-auto-resume-backoff', datetime('now'));
   `);
+  // Per-workspace PR snapshot. Survives daemon restart so the gh-scheduler can
+  // hydrate cadence state (especially merged → never-poll) without burning a
+  // boot-time gh call per workspace. All columns nullable; existing rows read
+  // NULL → scheduler treats as "never fetched, eligible now". Versioned via
+  // schema_migrations so downstream tooling/tests can assert on the row.
+  ensureColumn("workspaces", "pr_number", "INTEGER");
+  ensureColumn("workspaces", "pr_state", "TEXT"); // 'open' | 'closed' | 'merged'
+  ensureColumn("workspaces", "pr_last_fetch_at", "TEXT");
+  ensureColumn("workspaces", "pr_last_checks_green_at", "TEXT");
+  ensureColumn("workspaces", "pr_last_head_sha", "TEXT");
+  ensureColumn("workspaces", "pr_last_head_sha_changed_at", "TEXT");
+  ensureColumn("workspaces", "pr_last_merge_state_status", "TEXT");
+  db.exec(`
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (9, 'workspaces-pr-snapshot', datetime('now'));
+  `);
 }
