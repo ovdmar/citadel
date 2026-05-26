@@ -3,14 +3,14 @@ import type { ObservationContext, PaneObservation, RuntimeStatusAdapter, Session
 // Claude Code v2.1.x detection (verified 2026-05-25 against v2.1.133).
 //
 // Detection anchors:
-//   - AskUserQuestion: footer line beginning with `Enter to select` and ending
-//     with `Esc to cancel`, separated by a navigation hint. Claude Code has
-//     shipped at least two phrasings of that middle segment (`↑/↓ to navigate`
-//     in older builds, `Tab/Arrow keys to navigate` in newer ones), so we
-//     anchor on the stable endpoints and let the middle float. Scanned over
-//     the last ~12 visible lines (the question UI sits between separators and
-//     may have rows below it, but the footer is unique enough that whole-window
-//     scan is safe).
+//   - Prompt footer: line beginning with `Enter to <verb>` and ending with
+//     `Esc to cancel`. Covers both the AskUserQuestion picker
+//     (`Enter to select · <nav hint> · Esc to cancel` — middle hint has shipped
+//     as `↑/↓ to navigate` and `Tab/Arrow keys to navigate`) and the free-text
+//     confirm variant (`Enter to confirm · Esc to cancel`, used when the user
+//     picks "Type something" or for plain text prompts). Anchored on the stable
+//     endpoints with an optional `·`-separated middle so future verbs/hints
+//     still classify as waiting. Scanned over the last ~12 visible lines.
 //   - Mode line: the bottommost line whose trimmed form starts with `⏵⏵`.
 //     This is the unique prefix of Claude Code's mode-line widget. Subagent
 //     management panels and other widgets can render BELOW the mode line, so
@@ -19,9 +19,9 @@ import type { ObservationContext, PaneObservation, RuntimeStatusAdapter, Session
 // See `packages/runtimes/src/fixtures/claude-code/*.txt` for the empirical
 // captures these regexes were calibrated against.
 
-// AskUserQuestion footer — endpoints fixed, navigation hint floats across
-// Claude Code releases. The `·` separator is U+00B7 (middle dot).
-const ASK_USER_QUESTION_FOOTER_REGEX = /^Enter to select\s+·\s+.+?\s+·\s+Esc to cancel$/;
+// Prompt footer — `Enter to <verb> [· <hint>]* · Esc to cancel`. Endpoints
+// fixed, middle segments float. The `·` separator is U+00B7 (middle dot).
+const PROMPT_FOOTER_REGEX = /^Enter to \S+(?:\s+·\s+.+?)*\s+·\s+Esc to cancel$/;
 
 // Mode-line prefix — distinctive unicode glyph pair, very unlikely to appear
 // in agent output body.
@@ -64,11 +64,12 @@ function findModeLine(paneCapture: string): string | null {
   return null;
 }
 
-// Find any line whose trimmed form matches the AskUserQuestion footer shape.
-function hasAskUserQuestionFooter(paneCapture: string): boolean {
+// Find any line whose trimmed form matches the prompt footer shape
+// (`Enter to <verb> [· …] · Esc to cancel`).
+function hasPromptFooter(paneCapture: string): boolean {
   const lines = bottomLines(paneCapture, CHROME_SCAN_LINES);
   for (const line of lines) {
-    if (ASK_USER_QUESTION_FOOTER_REGEX.test(line.trim())) return true;
+    if (PROMPT_FOOTER_REGEX.test(line.trim())) return true;
   }
   return false;
 }
@@ -83,8 +84,9 @@ export const claudeCodeStatusAdapter: RuntimeStatusAdapter = {
   observe(state: SessionAdapterState, ctx: ObservationContext): PaneObservation | null {
     state.ticksObserved += 1;
 
-    // Priority 1: AskUserQuestion footer — replaces the normal mode line.
-    if (hasAskUserQuestionFooter(ctx.paneCapture)) {
+    // Priority 1: prompt footer (AskUserQuestion picker or free-text confirm)
+    // — replaces the normal mode line.
+    if (hasPromptFooter(ctx.paneCapture)) {
       return "waiting_for_input";
     }
 

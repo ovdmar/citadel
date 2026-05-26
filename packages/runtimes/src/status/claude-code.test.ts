@@ -70,6 +70,16 @@ describe("claudeCodeStatusAdapter", () => {
       );
     });
 
+    it("classifies waiting-for-input-ask-question-confirm.txt as waiting_for_input (free-text confirm footer)", () => {
+      // When the user picks "Type something" / Other in AskUserQuestion, the
+      // footer collapses to `Enter to confirm · Esc to cancel` (different verb,
+      // no middle nav hint). Detector anchors on `Enter to <verb>` start and
+      // `Esc to cancel` end with optional middle segments.
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("waiting-for-input-ask-question-confirm")))).toBe(
+        "waiting_for_input",
+      );
+    });
+
     it("classifies wakeup-resuming.txt as running (esc to interrupt visible in mid-resume)", () => {
       expect(claudeCodeStatusAdapter.observe(state, ctx(load("wakeup-resuming")))).toBe("running");
     });
