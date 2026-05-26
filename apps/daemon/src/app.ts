@@ -32,13 +32,14 @@ import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
-import { registerRestoreRoutes } from "./restore-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
+import { getBootRestoreSummary } from "./boot-restore.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
+import { registerRestoreRoutes } from "./restore-routes.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { backfillIfEmpty } from "./scratchpad-history.js";
@@ -183,6 +184,7 @@ export function createDaemonApp(input: {
         mcp: mcpStatus(config.mcp.enabled),
         scheduledAgents: scheduledAgents.list(),
         namespaces: store.listNamespaces(),
+        bootRestore: getBootRestoreSummary(),
       });
     }),
   );
