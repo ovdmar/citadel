@@ -40,6 +40,10 @@ const rules: Rule[] = [
 const violations: string[] = [];
 for (const rule of rules) {
   for (const file of walk(path.join(root, rule.scope))) {
+    // Test files always execute under Node (vitest runs in Node), so they
+    // legitimately import node:* APIs even when the production bundle for
+    // the same package must not. Skip *.test.* files in boundary checks.
+    if (/\.test\.(ts|tsx|js|jsx)$/.test(file)) continue;
     const text = fs.readFileSync(file, "utf8");
     for (const forbidden of rule.forbidden) {
       if (text.includes(`from "${forbidden}`) || text.includes(`from '${forbidden}`)) {
