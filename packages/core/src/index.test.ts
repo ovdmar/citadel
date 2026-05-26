@@ -3,7 +3,9 @@ import {
   assertUniqueRepoPath,
   assertUniqueWorkspaceName,
   createId,
+  parseRateLimitReason,
   repoDisplayName,
+  sessionNeedsAttention,
   slugify,
   summarizeWorkspaceState,
   workspaceBranchName,
@@ -159,6 +161,34 @@ describe("workspace state summary", () => {
         ],
       }).reasons,
     ).toContain("Provider data is degraded or unavailable");
+  });
+});
+
+describe("rate-limit status helpers", () => {
+  it("parseRateLimitReason accepts the two canonical shapes and rejects everything else", () => {
+    expect(parseRateLimitReason("rate_limited:2026-05-26T10:00:00.000Z")).toEqual({
+      resetAt: "2026-05-26T10:00:00.000Z",
+    });
+    expect(parseRateLimitReason("rate_limited:unknown_reset")).toEqual({ resetAt: null });
+    // Reject non-rate-limited prefixes.
+    expect(parseRateLimitReason("pane:active:running")).toBeNull();
+    expect(parseRateLimitReason("rate-limited:2026-05-26T10:00:00.000Z")).toBeNull();
+    // Reject malformed ISO payload.
+    expect(parseRateLimitReason("rate_limited:nonsense")).toBeNull();
+    // Empty payload is malformed.
+    expect(parseRateLimitReason("rate_limited:")).toBeNull();
+  });
+
+  it("sessionNeedsAttention is true for rate_limited, failed, and tmux-gone unknown", () => {
+    const base = {
+      statusReason: null,
+    };
+    expect(sessionNeedsAttention({ ...base, status: "rate_limited" })).toBe(true);
+    expect(sessionNeedsAttention({ ...base, status: "failed" })).toBe(true);
+    expect(sessionNeedsAttention({ status: "unknown", statusReason: "tmux_missing" })).toBe(true);
+    expect(sessionNeedsAttention({ status: "unknown", statusReason: "daemon_restart_indeterminate" })).toBe(false);
+    expect(sessionNeedsAttention({ ...base, status: "idle" })).toBe(false);
+    expect(sessionNeedsAttention({ ...base, status: "running" })).toBe(false);
   });
 });
 
