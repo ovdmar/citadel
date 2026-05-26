@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { ArrowLeft, Cable, CheckCircle2, ChevronRight, FolderGit2, Moon, Server, Sun, Workflow } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useStateQuery } from "../app-state.js";
+import { mcpUrlFromOrigin } from "../lib/mcp-url.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { AgentsPanel } from "../settings-runtimes.js";
@@ -429,8 +430,7 @@ function buildAttention(props: {
 
 // ─── MCP section ───────────────────────────────────────────────────────────
 function McpSection(props: { mcpEnabled: boolean }) {
-  const mcpUrl =
-    typeof window !== "undefined" ? `${window.location.origin}/api/mcp/rpc` : "http://127.0.0.1:4010/api/mcp/rpc";
+  const mcpUrl = mcpUrlFromOrigin(window.location.origin);
   const example = JSON.stringify(
     {
       mcpServers: {
