@@ -291,6 +291,12 @@ a:hover {
   box-shadow: 0 0 0 3px var(--c-ok-bg);
   --cit-pulse-ripple: var(--c-ok);
 }
+/* Shared ripple animation for the "something is happening" pulse modifiers.
+   Each modifier sets --cit-pulse-ripple to its own color via the rules above.
+   Note: applying the ripple to cit-pulse-bad universally (not just lifecycle
+   dots) means the inspector's "down" deploy chip at inspector.tsx:283 now
+   pulses too — that is intentional. Red pulse = attention is the design
+   language; a "down" app is an attention state. */
 .cit-pulse-run::after,
 .cit-pulse-done::after,
 .cit-pulse-bad::after {
