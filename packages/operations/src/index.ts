@@ -49,13 +49,11 @@ import {
   addWorktree,
   cancelOperationInStore,
   classifyWorktreeError,
-  cleanupWorktree,
   discoverDefaultBranch,
   isUniqueWorkspaceNameViolation,
   listHookDiagnostics,
   reconcileStore,
   tryRunGit,
-  workspaceIsDirty,
 } from "./helpers.js";
 
 export {
@@ -70,6 +68,12 @@ import {
   discoverWorkspaceApps as discoverWorkspaceAppsImpl,
   runWorkspaceAction as runWorkspaceActionImpl,
 } from "./workspace-apps.js";
+import {
+  type RemoveWorkspaceInput,
+  type WorkspaceLifecycleDeps,
+  removeWorkspace as removeWorkspaceImpl,
+} from "./workspace-lifecycle.js";
+export type { RemoveWorkspaceInput, RemoveWorkspaceResult } from "./workspace-lifecycle.js";
 
 export class OperationService {
   constructor(
@@ -389,133 +393,18 @@ export class OperationService {
     );
   }
 
-  async removeWorkspace(input: { workspaceId: string; force?: boolean; archiveOnly?: boolean }) {
-    const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
-    if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
-    const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-    if (!repo) throw new Error(`Workspace repo is missing: ${workspace.repoId}`);
-    if (workspace.kind === "root") {
-      // The root workspace tracks the repo's main checkout; it can only be
-      // removed by removing the repository itself.
-      const operation = this.operation(
-        "workspace.remove",
-        "failed",
-        workspace.repoId,
-        workspace.id,
-        100,
-        "Cannot drop the root workspace",
-      );
-      this.store.upsertOperation({
-        ...operation,
-        error: "Root workspace is non-removable. Remove the repository to drop it.",
-        updatedAt: nowIso(),
-      });
-      return { operationId: operation.id, removed: false, archived: false, dirty: false };
-    }
-    const operation = this.operation(
-      "workspace.remove",
-      "running",
-      workspace.repoId,
-      workspace.id,
-      10,
-      "Checking workspace status",
-    );
-    const dirty = workspaceIsDirty(workspace.path);
-    if (dirty && !input.force && !input.archiveOnly) {
-      this.store.updateWorkspaceLifecycle(workspace.id, "ready", true);
-      this.store.upsertOperation({
-        ...operation,
-        status: "failed",
-        progress: 100,
-        error: "Workspace has uncommitted changes. Use metadata archive or explicit force cleanup.",
-        updatedAt: nowIso(),
-      });
-      this.activity(
-        "workspace.remove.blocked",
-        "system",
-        `Removal blocked because ${workspace.name} has dirty git status`,
-        workspace.repoId,
-        workspace.id,
-        operation.id,
-      );
-      return { operationId: operation.id, removed: false, archived: false, dirty };
-    }
-
-    const ownedSessions = this.store.listSessions(workspace.id);
-    for (const session of ownedSessions) {
-      if (session.tmuxSessionName && !input.archiveOnly) killTmuxSession(session.tmuxSessionName);
-    }
-    if (ownedSessions.length && !input.archiveOnly) {
-      this.logOp(operation.id, "info", `Killed ${ownedSessions.length} tmux session(s) attached to workspace`);
-    }
-
-    const worktreeMissing = !input.archiveOnly && !fs.existsSync(workspace.path);
-    if (!input.archiveOnly && !worktreeMissing) {
-      try {
-        this.logOp(
-          operation.id,
-          "info",
-          `Running ${repo.teardownHookIds.length} teardown hook(s): ${repo.teardownHookIds.join(", ") || "(none)"}`,
-        );
-        await this.runWorkspaceHooks("workspace.teardown", repo.teardownHookIds, repo, workspace, operation.id);
-      } catch (error) {
-        if (!input.force) {
-          this.store.upsertOperation({
-            ...operation,
-            status: "failed",
-            progress: 100,
-            error: error instanceof Error ? error.message : "workspace_teardown_failed",
-            updatedAt: nowIso(),
-          });
-          this.activity(
-            "workspace.remove.blocked",
-            "system",
-            `Removal blocked because teardown failed for ${workspace.name}`,
-            workspace.repoId,
-            workspace.id,
-            operation.id,
-          );
-          return { operationId: operation.id, removed: false, archived: false, dirty };
-        }
-      }
-    }
-
-    if (!input.archiveOnly) {
-      const cleanup = cleanupWorktree(repo.rootPath, workspace.path);
-      this.logOp(operation.id, "info", `${cleanup.action} worktree at ${workspace.path}`);
-      if (cleanup.warning) this.logOp(operation.id, "warn", `git worktree prune failed: ${cleanup.warning}`);
-    }
-    if (input.archiveOnly) {
-      this.store.archiveWorkspace(workspace.id, "archived", dirty);
-      this.logOp(operation.id, "info", `Marked workspace ${workspace.name} as archived`);
-    } else {
-      this.store.deleteWorkspace(workspace.id);
-      this.logOp(operation.id, "info", `Deleted workspace ${workspace.name} (name slot freed)`);
-    }
-    this.store.upsertOperation({
-      ...operation,
-      status: "succeeded",
-      progress: 100,
-      message: input.archiveOnly ? "Workspace metadata archived" : "Workspace removed",
-      updatedAt: nowIso(),
-    });
-    this.activity(
-      input.archiveOnly ? "workspace.archived" : "workspace.removed",
-      "user",
-      input.archiveOnly ? `Archived ${workspace.name}` : `Removed ${workspace.name}`,
-      workspace.repoId,
-      workspace.id,
-      operation.id,
-    );
-    await this.runNotificationHooks(
-      input.archiveOnly ? "workspace.archived" : "workspace.removed",
-      repo,
-      workspace,
-      operation.id,
-      { repo, workspace, result: { removed: !input.archiveOnly, archived: Boolean(input.archiveOnly), dirty } },
-    );
-    return { operationId: operation.id, removed: !input.archiveOnly, archived: Boolean(input.archiveOnly), dirty };
+  async removeWorkspace(input: RemoveWorkspaceInput) {
+    return removeWorkspaceImpl(this.workspaceLifecycleDeps(), input);
   }
+
+  private workspaceLifecycleDeps = (): WorkspaceLifecycleDeps => ({
+    store: this.store,
+    newOperation: (...args) => this.operation(...args),
+    logOp: (...args) => this.logOp(...args),
+    activity: (...args) => this.activity(...args),
+    runWorkspaceHooks: (...args) => this.runWorkspaceHooks(...args),
+    runNotificationHooks: (...args) => this.runNotificationHooks(...args),
+  });
 
   async removeRepo(input: { repoId: string; force?: boolean; cleanupWorktrees?: boolean }) {
     const repo = this.store.listRepos().find((candidate) => candidate.id === input.repoId);
