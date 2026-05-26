@@ -146,8 +146,21 @@ export async function runAutoResumeTick(deps: AutoResumeDeps): Promise<AutoResum
       // next reset and we re-enter this branch.
       const resetAt = parseUsageLimitResetFromReason(session.statusReason);
       if (resetAt === null) continue; // Unknown reset — let the wall clock catch up.
-      if (Date.parse(resetAt) > nowMs) continue;
+      const resetMs = Date.parse(resetAt);
+      if (resetMs > nowMs) continue; // Reset still in the future — wait.
+      // Idempotency gate: if we already nudged for this reset cycle (the
+      // banner is stale because Claude doesn't auto-refresh once the reset
+      // has elapsed), skip. The pane observation will re-stamp statusReason
+      // with a newer reset if the agent is still capped — that newer reset
+      // will be > lastResumeFromRateLimitAt and we'll consider nudging
+      // again at that point.
+      const last = session.lastResumeFromRateLimitAt;
+      if (last !== null && last !== undefined) {
+        const lastMs = Date.parse(last);
+        if (Number.isFinite(lastMs) && lastMs >= resetMs) continue;
+      }
       const prompt = pickResumePrompt(rng);
+      let sendOk = false;
       try {
         const sendResult = await deps.sendAgentMessage({
           sessionId: session.id,
@@ -155,13 +168,16 @@ export async function runAutoResumeTick(deps: AutoResumeDeps): Promise<AutoResum
           source: "system",
           optimistic: false,
         });
-        if (sendResult.ok) {
-          result.resumed += 1;
-        } else {
+        sendOk = Boolean(sendResult.ok);
+        if (!sendOk) {
           deps.logger?.warn?.(`[auto-resume] usage-limit nudge failed for ${session.id}: ${sendResult.error ?? "?"}`);
         }
       } catch (err) {
         deps.logger?.warn?.(`[auto-resume] usage-limit nudge threw for ${session.id}: ${String(err)}`);
+      }
+      if (sendOk) {
+        deps.updateRateLimitResume(session.id, { lastResumeFromRateLimitAt: nowDate.toISOString() });
+        result.resumed += 1;
       }
       continue;
     }

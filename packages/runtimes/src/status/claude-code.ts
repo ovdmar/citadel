@@ -97,10 +97,17 @@ export function parseUsageLimitReset(line: string, now: Date): string | null {
   const minute = Number.parseInt(mm ?? "", 10);
   if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
   const candidate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, minute, 0, 0));
-  // If the named time has already passed today, the reset is tomorrow.
-  if (candidate.getTime() <= now.getTime()) {
-    candidate.setUTCDate(candidate.getUTCDate() + 1);
-  }
+  // Past timestamps are surfaced as-is — they are overwhelmingly STALE
+  // banners (Claude doesn't auto-refresh the line once the reset has
+  // elapsed) and the auto-resume loop needs to see them as already-due in
+  // order to nudge the agent back to life. The previous "bump to tomorrow"
+  // heuristic created a perpetual stall: every 2s the status monitor would
+  // re-parse the same past time, write `reset=<tomorrow>` into
+  // statusReason, the auto-resume loop would see a future reset and wait,
+  // and the cycle repeated forever. The auto-resume tick has an
+  // idempotency gate (lastResumeFromRateLimitAt > resetAt → skip) that
+  // prevents re-nudging the same reset cycle if the banner sticks after
+  // we already nudged once.
   return candidate.toISOString();
 }
 

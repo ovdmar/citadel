@@ -95,11 +95,17 @@ describe("claudeCodeStatusAdapter", () => {
       expect(result.reason).toBe("pane:usage_limited:reset=2026-05-26T07:50:00.000Z");
     });
 
-    it("usage_limited reset that has already passed today rolls over to tomorrow", () => {
+    it("usage_limited reset that has already passed surfaces as today's past moment (auto-resume will nudge)", () => {
+      // The banner is stale — Claude doesn't auto-refresh once the reset
+      // has elapsed. Surfacing the past time lets the auto-resume loop
+      // submit a nudge instead of waiting another 24h. The previous
+      // "bump to tomorrow" heuristic caused stuck sessions to perpetually
+      // postpone (every 2s the adapter parsed the same past time and
+      // pushed it forward a day).
       const pane = "⎿  You're out of extra usage · resets 3:15am (UTC)\n  ⏵⏵ auto mode on (shift+tab to cycle)";
       const result = claudeCodeStatusAdapter.observe(state, ctx(pane));
       if (typeof result === "string" || result === null) throw new Error("expected object result");
-      expect(result.reason).toBe("pane:usage_limited:reset=2026-05-27T03:15:00.000Z");
+      expect(result.reason).toBe("pane:usage_limited:reset=2026-05-26T03:15:00.000Z");
     });
 
     it("usage_limited with unknown timezone falls back to reset=unknown", () => {
@@ -206,8 +212,8 @@ describe("claudeCodeStatusAdapter", () => {
       expect(parseUsageLimitReset("resets 11:30pm (UTC)", now)).toBe("2026-05-26T23:30:00.000Z");
     });
 
-    it("parses '12:00am (UTC)' to midnight (hour=0) — rolls to tomorrow when now is past midnight", () => {
-      expect(parseUsageLimitReset("resets 12:00am (UTC)", now)).toBe("2026-05-27T00:00:00.000Z");
+    it("parses '12:00am (UTC)' to midnight (hour=0); past times surface as-is for the auto-resume loop", () => {
+      expect(parseUsageLimitReset("resets 12:00am (UTC)", now)).toBe("2026-05-26T00:00:00.000Z");
     });
 
     it("returns null for non-UTC timezone (we'd risk DST drift)", () => {

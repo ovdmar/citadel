@@ -557,7 +557,7 @@ describe("runAutoResumeTick — usage_limited branch", () => {
     expect(result.resumed).toBe(0);
   });
 
-  it("nudges once after the reset wall-clock has passed", async () => {
+  it("nudges once after the reset wall-clock has passed; stamps lastResumeFromRateLimitAt", async () => {
     const past = new Date(NOW_MS - 1).toISOString();
     const sessions = [session({ status: "usage_limited", statusReason: `pane:usage_limited:reset=${past}` })];
     const deps = makeDeps({ sessions });
@@ -566,6 +566,45 @@ describe("runAutoResumeTick — usage_limited branch", () => {
     expect(deps.sendCalls[0]?.source).toBe("system");
     expect(deps.sendCalls[0]?.optimistic).toBe(false);
     expect(result.resumed).toBe(1);
+    // The successful send must stamp lastResumeFromRateLimitAt so the next
+    // tick's idempotency gate knows we already nudged this reset cycle.
+    const update = deps.updates.at(-1)?.update;
+    expect(update?.lastResumeFromRateLimitAt).toBe(new Date(NOW_MS).toISOString());
+  });
+
+  it("does NOT re-nudge the same reset cycle even if banner stays stuck (idempotency gate)", async () => {
+    const past = new Date(NOW_MS - 1).toISOString();
+    // Simulate: we already nudged 30s after the reset, banner is still
+    // showing the SAME reset (Claude didn't refresh).
+    const sessions = [
+      session({
+        status: "usage_limited",
+        statusReason: `pane:usage_limited:reset=${past}`,
+        lastResumeFromRateLimitAt: new Date(Date.parse(past) + 30_000).toISOString(),
+      }),
+    ];
+    const deps = makeDeps({ sessions });
+    await runAutoResumeTick(deps);
+    expect(deps.sendCalls).toHaveLength(0);
+  });
+
+  it("re-nudges when banner refreshes with a NEWER reset that has since also passed", async () => {
+    // First reset was at NOW-2h, we nudged at NOW-90min. Banner refreshed
+    // and now shows a NEWER reset (NOW-30min) — which is also in the past.
+    // The gate compares lastResumeFromRateLimitAt against the new reset
+    // (NOW-30min) and lets us nudge again because lastResume < newReset.
+    const newerReset = new Date(NOW_MS - 30 * 60_000).toISOString();
+    const previousNudge = new Date(NOW_MS - 90 * 60_000).toISOString();
+    const sessions = [
+      session({
+        status: "usage_limited",
+        statusReason: `pane:usage_limited:reset=${newerReset}`,
+        lastResumeFromRateLimitAt: previousNudge,
+      }),
+    ];
+    const deps = makeDeps({ sessions });
+    await runAutoResumeTick(deps);
+    expect(deps.sendCalls).toHaveLength(1);
   });
 
   it("skips when statusReason is reset=unknown (no horizon to wait against)", async () => {
