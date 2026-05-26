@@ -15,6 +15,7 @@ export {
   parseCodexRollout,
   findCodexRolloutForSession,
   codexSessionsRoot,
+  discoverCodexSessionId,
 } from "./transcripts/index.js";
 export type { RuntimeUserPrompt, RuntimeTranscriptAdapter, GetUserPromptsInput } from "./transcripts/index.js";
 

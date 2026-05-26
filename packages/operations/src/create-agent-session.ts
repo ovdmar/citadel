@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentSession, CreateAgentSessionInput, Repo, Workspace } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
+import { discoverCodexSessionId } from "@citadel/runtimes";
 import { ensureTmuxSession, submitPrompt } from "@citadel/terminal";
 
 export type RuntimeDescriptor = {
@@ -125,6 +126,24 @@ export async function createAgentSession(
     updatedAt: now,
   };
   store.insertSession(session);
+  // Codex (and similarly runtimes without `sessionIdArg`) auto-generates its
+  // UUID at spawn — we can't pin it via a CLI flag, so kick off a best-effort
+  // background poll of ~/.codex/sessions/ to find the rollout this spawn
+  // produced, then write its session_meta.id back onto the row. Fire-and-
+  // forget: the user's create call returns immediately; the UUID lands in
+  // the DB within a few seconds and any subsequent restore picks it up.
+  if (!runtimeSessionId && input.runtimeId === "codex") {
+    const spawnTimeMs = Date.now();
+    void (async () => {
+      try {
+        const found = await discoverCodexSessionId({ workspacePath: workspace.path, spawnTimeMs });
+        if (found) store.setSessionRuntimeSessionId(session.id, found);
+      } catch {
+        // Discovery is best-effort — codex still works, just isn't resumable
+        // until the next spawn picks up an existing rollout.
+      }
+    })();
+  }
   // The runtime records the initial prompt in its own transcript — either
   // because we passed it as a CLI flag (claude-code, codex) or because we
   // pasted it into the tmux pane. read_agent_history surfaces it via the

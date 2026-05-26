@@ -32,6 +32,7 @@ import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
+import { registerRestoreRoutes } from "./restore-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
@@ -531,6 +532,7 @@ export function createDaemonApp(input: {
   );
 
   registerAgentSessionRoutes(app, { operations, emit, asyncRoute });
+  registerRestoreRoutes(app, { store, operations, config, emit, asyncRoute });
 
   app.post(
     "/api/reconcile",
