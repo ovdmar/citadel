@@ -95,6 +95,21 @@ The file remains a regular markdown file so external tooling (git, editors, grep
 
 All block-level tools go through the same version-history coalesce path; sources are `mcp:add_block`, `mcp:update_block`, `mcp:delete_block` (or `ui:*_block` from the cockpit). Empty blocks are never persisted.
 
+**Configurable location.** The notes file path is configurable via the `scratchpad.path` field on `CitadelConfig`. Defaults to `<dataDir>/scratchpad.md` (preserving the legacy location for every existing install). Configurable to any absolute path; the schema tilde-expands leading `~/` against `os.homedir()` before validating absoluteness. Settable from the cockpit's structured config form ("Notes location") and persisted via `PUT /api/config`. Edits take effect on the next request — no daemon restart.
+
+Both `read_scratchpad` and `inspect_status` expose the resolved absolute path so MCP-using agents can discover where notes live without a separate config call:
+
+- `read_scratchpad()` → `{ content, updatedAt, path }`.
+- `inspect_status()` → `{ ..., scratchpad: { path } }`.
+
+The `path` field is always populated on the daemon-dispatched MCP path (`scratchpadPath` is a required field on the daemon's `McpToolContext`). The snapshot-fallback response for `read_scratchpad` continues to be `{ error: "scratchpad_tool_requires_daemon" }` — unchanged.
+
+**Worktree-mode strip.** In worktree mode (`CITADEL_WORKTREE=1`), `scratchpad.path` is stripped from the raw config on **load** the same way `dataDir`/`databasePath` are stripped today, preventing a worktree daemon from inheriting a prod-installed notes path through a shared config file. A `PUT /api/config` from a worktree daemon may still persist `scratchpad.path` to its worktree-scoped config file in memory and on disk; the next `loadConfig` drops it. This asymmetry matches existing dataDir/databasePath behavior and is intentional — strip-on-load is the load-bearing defense; the worktree's config is scoped under `<dataDir>/worktrees/<name>/citadel.config.json` and cannot pollute the prod install's file regardless.
+
+**History stays in `<dataDir>`.** The version-history JSONL (`scratchpad-history.jsonl`) remains under `<dataDir>` even when the notes file is configured to live elsewhere. History is internal daemon state, not user-facing markdown: keeping it pinned to `<dataDir>` matches the database, runtime logs, and other internal state, and avoids leaking daemon internals into user-controlled sync folders.
+
+**First-read migration on a user-supplied file.** If `scratchpad.path` points at a pre-existing non-fenced markdown file, the first read triggers `migrateIfNeeded` and rewrites it to fenced-block form (history entry: `migrate-to-blocks`). The daemon emits a single `console.warn` line naming the path so the rewrite is not silent. A UI banner is **future polish** — not in the initial implementation.
+
 ---
 
 keywords: operations, activity, audit, progress, logs, mcp, automation, agents, scratchpad
