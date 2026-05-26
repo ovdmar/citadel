@@ -71,6 +71,10 @@ export function createDaemonApp(input: {
   providers?: Partial<ProviderCollectors>;
 }): DaemonApp {
   const { config, configPath, store } = input;
+  // Identity token for this daemon process. Watchdogs (e.g. the redeploy
+  // chip's network-drop fallback) use strict inequality to detect a restart;
+  // do NOT use this for time arithmetic.
+  const daemonStartedAt = new Date().toISOString();
   setGithubCommand(config.providers.github.command);
   setJiraCommand(config.providers.jira.command);
   const operations = input.operations ?? new OperationService(store, config);
@@ -182,6 +186,7 @@ export function createDaemonApp(input: {
         mcp: mcpStatus(config.mcp.enabled),
         scheduledAgents: scheduledAgents.list(),
         namespaces: store.listNamespaces(),
+        daemonStartedAt,
       });
     }),
   );

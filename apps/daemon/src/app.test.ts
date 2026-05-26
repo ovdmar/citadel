@@ -94,13 +94,14 @@ describe("createDaemonApp", () => {
         ok: true,
         degradedProviders: 2,
       });
-      expect(
-        await getJson<{ repos: unknown[]; workspaces: unknown[]; sessions: unknown[] }>(`${baseUrl}/api/state`),
-      ).toMatchObject({
-        repos: [],
-        workspaces: [],
-        sessions: [],
-      });
+      const state = await getJson<{
+        repos: unknown[];
+        workspaces: unknown[];
+        sessions: unknown[];
+        daemonStartedAt: string;
+      }>(`${baseUrl}/api/state`);
+      expect(state).toMatchObject({ repos: [], workspaces: [], sessions: [] });
+      expect(state.daemonStartedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
       expect(await getJson<{ repos: unknown[] }>(`${baseUrl}/api/repos`)).toEqual({ repos: [] });
       expect(await getJson<{ workspaces: unknown[] }>(`${baseUrl}/api/workspaces`)).toEqual({ workspaces: [] });
       expect(await getJson<{ repos: unknown[] }>(`${baseUrl}/api/mcp/resources/repos`)).toEqual({ repos: [] });
