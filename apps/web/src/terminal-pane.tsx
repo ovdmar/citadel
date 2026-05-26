@@ -170,12 +170,14 @@ export function TerminalPane(props: { session: AgentSession }) {
   // and the live re-theme orchestrator can drive them. The status bar used
   // to render these affordances inside the pane; that was removed in favour
   // of the tab actions, but the state still lives here.
+  // `theme` is intentionally tracked so the publish() call re-fires when the
+  // resolved theme changes — it pulls the latest lastKnownThemeRef.current
+  // (which isn't itself reactive) into the published handle. Without `theme`,
+  // the orchestrator's skip check sees a stale lastKnownTheme.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see comment above
   useEffect(() => {
     publish(sessionId, { url, reload, lastKnownTheme: lastKnownThemeRef.current });
     return () => publish(sessionId, null);
-    // We deliberately depend on `theme` (not lastKnownThemeRef.current — refs
-    // aren't reactive). When the resolved theme changes, the pane re-renders
-    // and republishes with the latest lastKnownTheme.
   }, [sessionId, url, reload, theme]);
   return (
     <div className="terminal-shell">

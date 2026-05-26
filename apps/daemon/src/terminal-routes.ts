@@ -286,7 +286,10 @@ export function registerTerminalRoutes(input: {
           return;
         }
       }
-      res.status(502).type("text/plain").send(error instanceof Error ? error.message : "terminal_proxy_failed");
+      res
+        .status(502)
+        .type("text/plain")
+        .send(error instanceof Error ? error.message : "terminal_proxy_failed");
     });
   });
 

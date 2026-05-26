@@ -63,13 +63,7 @@ export function ThemeControls() {
   const label = `Theme: ${describe(theme)}. Click for ${describe(next)}.`;
 
   return (
-    <button
-      type="button"
-      className="set-icon-btn"
-      onClick={() => setTheme(next)}
-      aria-label={label}
-      title={label}
-    >
+    <button type="button" className="set-icon-btn" onClick={() => setTheme(next)} aria-label={label} title={label}>
       <ThemeIcon theme={theme} />
     </button>
   );
