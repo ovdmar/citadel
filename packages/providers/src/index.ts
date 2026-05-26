@@ -106,7 +106,7 @@ export async function collectGitHubVersionControlSummary(rootPath: string): Prom
     const defaultBranch = await discoverDefaultBranch(rootPath);
     const currentBranch = await gitOptional(rootPath, ["branch", "--show-current"]);
     const remotes = await gitOptional(rootPath, ["remote"]).then((value) => value.split("\n").filter(Boolean));
-    const pullRequest = await currentPullRequest(rootPath);
+    const pullRequest = await currentPullRequest(rootPath, remotes);
     return {
       providerId: "github-gh",
       status: "healthy",
@@ -341,14 +341,31 @@ type GhReview = {
 };
 type GhReviewRequest = { login?: string | null; name?: string | null };
 
-async function currentPullRequest(rootPath: string) {
+async function currentPullRequest(rootPath: string, remotes: string[] = []) {
+  // No upstream means there is no PR to look up — short-circuit so a local-
+  // only repo (or a worktree that hasn't pushed yet) reads as "no PR" instead
+  // of degrading the whole VC provider. Avoids spending a gh subprocess on a
+  // call we know would fail with a non-distinguishable error.
+  if (remotes.length === 0) return null;
+  let raw: string;
   try {
-    const raw = await gh(rootPath, [
+    raw = await gh(rootPath, [
       "pr",
       "view",
       "--json",
       "number,title,url,state,isDraft,reviewDecision,statusCheckRollup,additions,deletions,reviews,reviewRequests,commits,baseRefName,headRefName,headRepository,mergeable",
     ]);
+  } catch (error) {
+    // Distinguish "no PR exists for this branch" (authoritative null) from
+    // transient gh failures (rate limit, network, auth wobble). gh prints
+    // "no pull requests found for branch ..." in the first case; everything
+    // else is propagated so collectGitHubVersionControlSummary marks the
+    // VC summary as `degraded` and the client preserves the last-known PR
+    // instead of dropping it from the navbar.
+    if (isGhNoPullRequestError(error)) return null;
+    throw error;
+  }
+  try {
     const parsed = JSON.parse(raw) as {
       number: number;
       title: string;
@@ -394,8 +411,27 @@ async function currentPullRequest(rootPath: string) {
       allowedMergeStrategies,
     };
   } catch {
-    return null;
+    // JSON parse / shape failure: not a "no PR" signal — treat as transient
+    // so the VC summary degrades and the client preserves cached data.
+    throw new Error("gh pr view returned unparseable output");
   }
+}
+
+// gh prints "no pull requests found for branch ..." (or "no open pull
+// requests found ...") when the branch genuinely has no PR. Match loosely on
+// the error's stderr/message so we don't get tripped up by minor wording
+// changes across gh versions.
+export function isGhNoPullRequestError(error: unknown): boolean {
+  if (!error) return false;
+  const candidates: string[] = [];
+  if (typeof error === "string") candidates.push(error);
+  else if (typeof error === "object") {
+    const obj = error as { message?: unknown; stderr?: unknown; stdout?: unknown };
+    if (typeof obj.message === "string") candidates.push(obj.message);
+    if (typeof obj.stderr === "string") candidates.push(obj.stderr);
+    if (typeof obj.stdout === "string") candidates.push(obj.stdout);
+  }
+  return candidates.some((text) => /no (open )?pull requests? (found|matching)/i.test(text));
 }
 
 function normalizeMergeable(raw: string | undefined): "mergeable" | "conflicting" | "unknown" {

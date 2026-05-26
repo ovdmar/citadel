@@ -157,12 +157,13 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
 }
 
 function bustWorkspaceCaches(providerCache: ProviderCache, workspaceId: string) {
-  bustCacheByPrefixes(providerCache, [
-    `git:${workspaceId}`,
-    `vc:${workspaceId}`,
-    `ci:${workspaceId}`,
-    `apps:${workspaceId}`,
-  ]);
+  // Only invalidate caches whose freshness actually depends on the local
+  // working tree. `vc:` (PR) and `ci:` (workflow runs) are remote state — they
+  // don't change because an agent wrote a file. Busting them on every fs blip
+  // forces a fresh `gh pr view` on the next batch poll, which under load
+  // pushes gh into rate limits and surfaces as PR icons disappearing from the
+  // navbar. The 10s / 30s polls already keep this data fresh enough.
+  bustCacheByPrefixes(providerCache, [`git:${workspaceId}`, `apps:${workspaceId}`]);
 }
 
 function isIgnored(rel: string): boolean {
