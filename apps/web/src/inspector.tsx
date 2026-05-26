@@ -115,6 +115,7 @@ function StatsTab(props: {
           diffFiles={diffFiles}
           diffAdded={diffAdded}
           diffRemoved={diffRemoved}
+          checkedAt={props.summary?.versionControl.checkedAt}
         />
 
         {apps?.applications.length ? (

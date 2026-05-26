@@ -1,6 +1,21 @@
 import type { PullRequestSummary, Workspace } from "@citadel/contracts";
-import { Check, ChevronDown, ExternalLink, GitPullRequest, Hash, Loader2, RefreshCw, X } from "lucide-react";
+import type { PrMergeStrategy } from "@citadel/contracts/pr-routes";
+import { useMutation } from "@tanstack/react-query";
+import {
+  ArrowUp,
+  Check,
+  ChevronDown,
+  Copy,
+  ExternalLink,
+  GitMerge,
+  GitPullRequest,
+  Hash,
+  Loader2,
+  RefreshCw,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
+import { api, queryClient } from "./api.js";
 import { ReviewerAvatars, aggregateReviewerCounts } from "./inspector-reviewers.js";
 import { formatLabel } from "./labels.js";
 import { prToneFor } from "./workspace-card.js";
@@ -11,13 +26,25 @@ export function InspectorPrSection(props: {
   diffFiles: number;
   diffAdded: number;
   diffRemoved: number;
+  checkedAt: string | undefined;
 }) {
-  const { workspace, pr, diffFiles, diffAdded, diffRemoved } = props;
+  const { workspace, pr, diffFiles, diffAdded, diffRemoved, checkedAt } = props;
   const prTone = prToneFor(pr);
   const checks = pr?.checks ?? [];
   const [checksOpen, setChecksOpen] = useState(false);
   const checksSummary = summarizeChecks(checks);
   const reviewerAggregate = aggregateReviewerCounts(pr?.reviewers ?? []);
+  const elapsed = useElapsed(checkedAt);
+  const refresh = useMutation({
+    mutationFn: () => api(`/api/workspaces/${workspace.id}/pr-refresh`, { method: "POST", body: JSON.stringify({}) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["workspace-cockpit", workspace.id] });
+      queryClient.invalidateQueries({ queryKey: ["workspaces-pr-batch"] });
+    },
+  });
+  const copyHead = () => {
+    if (typeof navigator !== "undefined" && navigator.clipboard) navigator.clipboard.writeText(workspace.branch);
+  };
 
   return (
     <>
@@ -28,6 +55,18 @@ export function InspectorPrSection(props: {
         <div className="ins-section-body">
           {pr ? (
             <div className="ins-pr">
+              {pr.parentPr ? (
+                <a
+                  className="ins-pr-parent"
+                  href={pr.parentPr.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  data-state={pr.parentPr.state.toLowerCase() === "merged" ? "merged" : "open"}
+                  title={`Parent PR #${pr.parentPr.number} (${pr.parentPr.state})`}
+                >
+                  <ArrowUp size={10} /> #{pr.parentPr.number}
+                </a>
+              ) : null}
               <div className="ins-pr-head">
                 <span className={`ins-pr-badge tone-${prTone}`}>
                   <GitPullRequest size={10} />
@@ -43,10 +82,20 @@ export function InspectorPrSection(props: {
                   #{pr.number} <ExternalLink size={9} />
                 </a>
                 <span className="ins-pr-base">
-                  <span className="ins-mono">{workspace.branch}</span>
-                  <span className="ins-pr-arrow">→</span>
                   <span className="ins-mono">{workspace.baseBranch}</span>
+                  <span className="ins-pr-arrow">←</span>
+                  <span className="ins-mono">{workspace.branch}</span>
+                  <button
+                    type="button"
+                    className="ins-pr-copy"
+                    onClick={copyHead}
+                    aria-label={`Copy head branch ${workspace.branch}`}
+                    title={`Copy head branch ${workspace.branch}`}
+                  >
+                    <Copy size={10} />
+                  </button>
                 </span>
+                <MergeButton workspace={workspace} pr={pr} />
               </div>
               <div className="ins-pr-title">{pr.title}</div>
               <div className="ins-pr-stats">
@@ -111,6 +160,21 @@ export function InspectorPrSection(props: {
       <section className="ins-section">
         <div className="ins-section-head">
           <span className="ins-section-label">Checks</span>
+          {checkedAt ? (
+            <span className="ins-pr-elapsed" title={`Last fetched ${new Date(checkedAt).toLocaleString()}`}>
+              {elapsed} ago
+            </span>
+          ) : null}
+          <button
+            type="button"
+            className="ch-toggle ins-pr-refresh"
+            onClick={() => refresh.mutate()}
+            disabled={refresh.isPending}
+            aria-label="Force-refresh PR and check state"
+            title="Force-refresh PR and check state"
+          >
+            <RefreshCw size={11} className={refresh.isPending ? "spin" : undefined} />
+          </button>
           {pr && checks.length ? (
             <button
               type="button"
@@ -382,4 +446,78 @@ function formatDurationMs(ms: number) {
   const hours = Math.floor(minutes / 60);
   const remMin = minutes % 60;
   return remMin ? `${hours}h ${remMin}m` : `${hours}h`;
+}
+
+// "Last fetched X ago" auto-tick. Re-renders every minute so the displayed
+// elapsed string doesn't go stale while the inspector is open. Returns a
+// short string like "30s", "5m", "2h" — matches the visual density of
+// other ins-* timestamps.
+function useElapsed(isoTime: string | undefined): string {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isoTime) return;
+    const id = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(id);
+  }, [isoTime]);
+  if (!isoTime) return "";
+  const then = Date.parse(isoTime);
+  if (!Number.isFinite(then)) return "";
+  return formatDurationMs(Math.max(0, now - then));
+}
+
+function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
+  const { workspace, pr } = props;
+  const [open, setOpen] = useState(false);
+  const allowed: PrMergeStrategy[] = pr.allowedMergeStrategies.length
+    ? pr.allowedMergeStrategies
+    : (["squash", "merge", "rebase"] as const).filter(() => false);
+  const canMerge = pr.mergeable === "mergeable" && allowed.length > 0;
+  const merge = useMutation({
+    mutationFn: (strategy: PrMergeStrategy) =>
+      api(`/api/workspaces/${workspace.id}/pr-merge`, {
+        method: "POST",
+        body: JSON.stringify({ strategy }),
+      }),
+    onSuccess: () => {
+      setOpen(false);
+      queryClient.invalidateQueries({ queryKey: ["workspace-cockpit", workspace.id] });
+      queryClient.invalidateQueries({ queryKey: ["workspaces-pr-batch"] });
+    },
+  });
+  const disabledReason =
+    pr.mergeable !== "mergeable"
+      ? "PR is not mergeable (conflicts or unknown state)"
+      : allowed.length === 0
+        ? "Repository allows no merge strategies via gh"
+        : null;
+  return (
+    <span className="ins-pr-merge-wrap">
+      <button
+        type="button"
+        className="ins-pr-merge"
+        onClick={() => canMerge && setOpen((v) => !v)}
+        disabled={!canMerge || merge.isPending}
+        aria-disabled={!canMerge}
+        title={disabledReason ?? `Merge PR #${pr.number}`}
+      >
+        <GitMerge size={10} /> Merge
+      </button>
+      {open && canMerge ? (
+        <div className="ins-pr-merge-menu" role="menu">
+          {allowed.map((strategy) => (
+            <button
+              key={strategy}
+              type="button"
+              className="ins-pr-merge-strategy"
+              onClick={() => merge.mutate(strategy)}
+              disabled={merge.isPending}
+              role="menuitem"
+            >
+              {strategy === "squash" ? "Squash & merge" : strategy === "rebase" ? "Rebase & merge" : "Merge commit"}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </span>
+  );
 }
