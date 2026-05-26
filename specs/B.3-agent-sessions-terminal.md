@@ -53,6 +53,10 @@
 [ ] 3. A future remote daemon can stream remote terminal sessions to web or desktop clients.
 [ ] 4. Local and remote sessions share the same session identity model.
 
+## Composing system prompts on launch
+
+The MCP launchers (`launch_implementation_agent`, etc., and `launch_custom_agent`) compose the launching prompt by prepending the agent definition's system prompt to the caller's user prompt under `## System` / `## User prompt` headers. Composition is uniform across all runtimes — no runtime-specific `--system-prompt` flags in v1. Both create-and-launch and reuse-existing-workspace paths route through the same `composeAndLaunchAgent` seam so the system prompt cannot be silently dropped on one path.
+
 ---
 
-keywords: agent sessions, runtime adapters, terminal, tmux, xterm, websocket, reconnect, native terminal
+keywords: agent sessions, runtime adapters, terminal, tmux, xterm, websocket, reconnect, native terminal, system prompt composition

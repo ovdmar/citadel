@@ -2,6 +2,8 @@ import { z } from "zod";
 import { IdSchema } from "./primitives.js";
 export { IdSchema } from "./primitives.js";
 
+export * from "./agents.js";
+
 export const ProviderStatusSchema = z.enum(["healthy", "degraded", "unavailable", "unknown"]);
 export const WorkspaceLifecycleSchema = z.enum(["creating", "ready", "failed", "removing", "archived", "removed"]);
 export const WorkspaceSourceSchema = z.enum(["scratch", "pr", "issue", "imported"]);

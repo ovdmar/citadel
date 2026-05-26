@@ -192,13 +192,25 @@ export function runMigrations(
     );
     CREATE INDEX IF NOT EXISTS idx_background_sessions_scheduled_agent
       ON background_sessions(scheduled_agent_id);
+    CREATE TABLE IF NOT EXISTS plan_registrations (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      path TEXT NOT NULL,
+      summary TEXT,
+      registered_at TEXT NOT NULL,
+      registered_by_session_id TEXT,
+      FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_plan_registrations_workspace
+      ON plan_registrations(workspace_id);
     INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
       (2, 'activity-hook-output', datetime('now')),
       (3, 'operation-logs-retry', datetime('now')),
       (4, 'workspace-linked-urls', datetime('now')),
       (5, 'scheduled-agents', datetime('now')),
       (6, 'namespaces', datetime('now')),
-      (7, 'background-sessions-and-runs', datetime('now'));
+      (7, 'background-sessions-and-runs', datetime('now')),
+      (9, 'plan-registrations', datetime('now'));
   `);
   ensureColumn("scheduled_agents", "schedule_type", "TEXT NOT NULL DEFAULT 'recurring'");
   ensureColumn("scheduled_agents", "run_at", "TEXT");

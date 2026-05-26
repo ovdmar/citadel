@@ -116,6 +116,17 @@ The cockpit's scratchpad view renders the per-workspace `scratchpad.md` (see B.7
 [ ] 7. The version history sidebar continues to show whole-file snapshots, including the `migrate-to-blocks` entry that runs on the first read after upgrade.
 [ ] 8. No drag-drop reorder, no typed blocks (code/todo/heading), no per-block diff in v1 — out of scope.
 
+## Agents nav
+
+The cockpit exposes a dedicated "Agents" entry in the left navigation, immediately above "History". Selecting it opens a master/detail editor for agent definitions.
+
+[ ] 1. Left rail lists four predefined agents (`implementation`, `prototype`, `pm`, `architect`) followed by any user-defined custom agents, with a "+ New custom agent" button.
+[ ] 2. Right pane is the editor: name (read-only for predefined), system prompt (multiline), runtime (selector populated from `list_runtimes`), model (selector populated from the chosen runtime's `listModels()` adapter).
+[ ] 3. Predefined agents are non-deletable but editable; each exposes a "Reset to citadel defaults" affordance that overwrites only that definition with its seeded value. Reset uses citadel-authored defaults, NOT the user's current `defaultRuntime` setting.
+[ ] 4. Custom agents support full CRUD. Save/Delete invalidate `["agents"]` and `["state"]` query keys.
+[ ] 5. Errors render as a banner above the form (`predefined_agent_cannot_be_deleted`, `name_collides`, `agent_storage_unavailable`).
+[ ] 6. The model selector shows a `probeError` banner when the runtime's model probe fails, and renders the fallback list so save still works. A small "↻ Refresh" affordance forces a re-probe (`?refresh=1`).
+
 ---
 
-keywords: ade, cockpit, readiness, next action, workspace detail, operator, attention state, scratchpad, blocks
+keywords: ade, cockpit, readiness, next action, workspace detail, operator, attention state, agents, agent definitions, scratchpad, blocks

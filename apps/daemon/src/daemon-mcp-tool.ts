@@ -23,6 +23,8 @@ import {
 import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import type { TtydManager } from "@citadel/terminal";
+import { type AgentDefinitionsStorage, createAgentDefinitionsStorage } from "./agent-definitions/storage.js";
+import { composeAgentLaunchInput, resolveCustomAgent, resolvePredefinedAgent } from "./agent-launcher.js";
 import { readLogSlice } from "./log-slice.js";
 import type { ScheduledAgentService } from "./scheduled-agent-service.js";
 import {
@@ -46,7 +48,15 @@ export type DaemonMcpDeps = {
   scheduledAgentService: ScheduledAgentService;
   providerCache: Map<string, { expiresAt: number; value: unknown }>;
   emit: (type: string, payload: unknown) => void;
+  agentDefinitions?: AgentDefinitionsStorage;
 };
+
+const PREDEFINED_LAUNCHER_BY_NAME = {
+  launch_implementation_agent: "implementation",
+  launch_prototype_agent: "prototype",
+  launch_pm_agent: "pm",
+  launch_architect_agent: "architect",
+} as const;
 
 export function workspaceResource(store: SqliteStore) {
   return serializeWorkspaceResource({
@@ -381,6 +391,59 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     const slice = readLogSlice(run.logFilePath, { offset, ...(maxBytes !== undefined ? { maxBytes } : {}) });
     if ("kind" in slice) return { error: "log_file_missing" };
     return slice;
+  }
+  const agentDefinitions = deps.agentDefinitions ?? createAgentDefinitionsStorage();
+  if (call.name in PREDEFINED_LAUNCHER_BY_NAME || call.name === "launch_custom_agent") {
+    const args = (call.arguments ?? {}) as Record<string, unknown>;
+    const userPrompt = typeof args.prompt === "string" ? args.prompt : "";
+    if (!userPrompt) return { error: "prompt_required" };
+    const isCustom = call.name === "launch_custom_agent";
+    const resolution = isCustom
+      ? resolveCustomAgent(agentDefinitions, typeof args.agentId === "string" ? args.agentId : "")
+      : resolvePredefinedAgent(
+          agentDefinitions,
+          PREDEFINED_LAUNCHER_BY_NAME[call.name as keyof typeof PREDEFINED_LAUNCHER_BY_NAME],
+        );
+    if ("error" in resolution) return resolution;
+    const composed = composeAgentLaunchInput({
+      definition: resolution.definition,
+      userPrompt,
+      ...(typeof args.repoId === "string" ? { repoId: args.repoId } : {}),
+      ...(typeof args.repoName === "string" ? { repoName: args.repoName } : {}),
+      ...(typeof args.namespaceId === "string" ? { namespaceId: args.namespaceId } : {}),
+      ...(typeof args.displayName === "string" ? { displayName: args.displayName } : {}),
+      ...(typeof args.workspaceName === "string" ? { workspaceName: args.workspaceName } : {}),
+      ...(typeof args.branchName === "string" ? { branchName: args.branchName } : {}),
+      defaultRuntime: agentDefinitions.readConfig().defaultRuntime,
+    });
+    const input = LaunchAgentInputSchema.parse(composed);
+    const runtime = config.runtimes.find((r) => r.id === input.runtimeId);
+    if (!runtime) return { error: "runtime_not_configured", runtimeId: input.runtimeId };
+    try {
+      const result = await operations.launchAgent(input, {
+        command: runtime.command,
+        args: runtime.args,
+        displayName: runtime.displayName,
+        promptArg: runtime.promptArg ?? null,
+      });
+      emit("workspace.updated", { workspaceId: result.workspaceId, operationId: result.operationId });
+      if (result.sessionId) emit("agent.updated", { workspaceId: result.workspaceId, sessionId: result.sessionId });
+      return result;
+    } catch (error) {
+      const structured = structuredWorkspaceError(error);
+      if (structured) return structured;
+      throw error;
+    }
+  }
+  if (call.name === "list_custom_agents") {
+    if (agentDefinitions.state() === "unavailable") return { error: "agent_storage_unavailable" };
+    return { agents: agentDefinitions.list().filter((d) => d.kind === "custom") };
+  }
+  if (call.name === "register_plan" || call.name === "launch_handoff_agent") {
+    // The fs-validation + plan-resolution layer for these tools is intentionally
+    // deferred to a follow-up PR; the daemon-side dispatch lands here only as
+    // a stable error so callers don't fall through to the snapshot sentinel.
+    return { error: "not_yet_implemented_in_v1" };
   }
   const providerHealth = await collectProviderHealth(config.providers);
   return callMcpTool(call, {

@@ -84,6 +84,22 @@ Sections:
 
 Hooks are edited from repository settings, because hook bindings are repo-specific. The structured-config form is intentionally retained as the escape hatch for fields the curated sections do not yet cover.
 
+## Runtime model discovery
+
+Each runtime adapter exposes an optional `listModels()` function that returns the model identifiers the runtime can launch with.
+
+[ ] 1. The daemon serves `/api/runtimes/:id/models` → `{ models: RuntimeModelDescriptor[], probeError? }`. Results cache per `runtimeId` for **1 hour** (claude-code/codex CLI upgrades happen out-of-band; daemon-lifetime caching would surface stale models).
+[ ] 2. `?refresh=1` forces a fresh probe. The cockpit's model selector renders a "↻ Refresh" affordance that hits this knob.
+[ ] 3. Adapters return a `probeError` string AND a conservative fallback list when probing fails — the UI surfaces the error but still lets the user save with a fallback model.
+[ ] 4. For runtimes without a non-interactive list flag (claude-code), the adapter scrapes the interactive TUI (`/models`) using `tmux-pty.ts`. The probe wraps in a hard 5s timeout AND a try/finally `killSession` cleanup to avoid leaked tmux sessions.
+
+## Default agent runtime
+
+A global `~/.citadel/agents.config.json` records the user's default agent runtime. Surfaced as a single Settings row in the existing Agents/Runtimes panel.
+
+[ ] 1. `GET /api/agents/config` returns the current config; `PUT` writes it.
+[ ] 2. New agent definitions created via the Agents nav default to this runtime when the user does not explicitly choose one.
+
 ---
 
-keywords: providers, hooks, config, settings, first run, github, jira, usage, secrets, health checks
+keywords: providers, hooks, config, settings, first run, github, jira, usage, secrets, health checks, runtime models, default agent runtime

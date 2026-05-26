@@ -8,6 +8,7 @@ import type {
   Namespace,
   Operation,
   OperationLogEntry,
+  PlanRegistration,
   Repo,
   ScheduledAgent,
   Workspace,
@@ -709,12 +710,55 @@ export class SqliteStore {
     return next;
   }
 
+  insertPlanRegistration(row: PlanRegistration) {
+    this.database
+      .prepare(
+        `INSERT INTO plan_registrations (id, workspace_id, path, summary, registered_at, registered_by_session_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(row.id, row.workspaceId, row.path, row.summary, row.registeredAt, row.registeredBySessionId);
+  }
+
+  findPlanRegistration(id: string): PlanRegistration | null {
+    const row = this.database.prepare("SELECT * FROM plan_registrations WHERE id = ?").get(id) as
+      | Record<string, unknown>
+      | undefined;
+    if (!row) return null;
+    return planRegistrationFromRow(row);
+  }
+
+  listPlanRegistrationsForWorkspace(workspaceId: string): PlanRegistration[] {
+    const rows = this.database
+      .prepare("SELECT * FROM plan_registrations WHERE workspace_id = ? ORDER BY registered_at DESC")
+      .all(workspaceId) as Array<Record<string, unknown>>;
+    return rows.map(planRegistrationFromRow);
+  }
+
+  deletePlanRegistration(id: string): boolean {
+    const result = this.database.prepare("DELETE FROM plan_registrations WHERE id = ?").run(id);
+    return (result.changes ?? 0) > 0;
+  }
+
   private ensureColumn(table: string, column: string, definition: string) {
     const cols = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (!cols.some((entry) => entry.name === column)) {
       this.database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
   }
+}
+
+function planRegistrationFromRow(row: Record<string, unknown>): PlanRegistration {
+  return {
+    id: String(row.id),
+    workspaceId: String(row.workspace_id),
+    path: String(row.path),
+    summary: row.summary === null || row.summary === undefined ? null : String(row.summary),
+    registeredAt: String(row.registered_at),
+    registeredBySessionId:
+      row.registered_by_session_id === null || row.registered_by_session_id === undefined
+        ? null
+        : String(row.registered_by_session_id),
+  };
 }
 
 // Attach the scheduled_agent_runs and background_sessions methods to

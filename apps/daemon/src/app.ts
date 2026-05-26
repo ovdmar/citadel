@@ -32,6 +32,7 @@ import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
+import { wireAgents } from "./agents-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
@@ -328,27 +329,20 @@ export function createDaemonApp(input: {
         const { execFile: execFileCb } = await import("node:child_process");
         const { promisify } = await import("node:util");
         const exec = promisify(execFileCb);
-        const local = await exec("git", ["branch", "--list", "--format=%(refname:short)"], {
-          cwd: repo.rootPath,
-          timeout: 6000,
-        });
-        const remote = await exec("git", ["branch", "--remotes", "--list", "--format=%(refname:short)"], {
-          cwd: repo.rootPath,
-          timeout: 6000,
-        });
-        const localBranches = local.stdout
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean);
-        const remoteBranches = remote.stdout
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean)
+        const opts = { cwd: repo.rootPath, timeout: 6000 };
+        const local = await exec("git", ["branch", "--list", "--format=%(refname:short)"], opts);
+        const remote = await exec("git", ["branch", "--remotes", "--list", "--format=%(refname:short)"], opts);
+        const lines = (s: string) =>
+          s
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean);
+        const remoteBranches = lines(remote.stdout)
           .filter((line) => !line.endsWith("/HEAD"))
           .map((line) => (line.includes("/") ? line.split("/").slice(1).join("/") : line));
         return res.json({
           defaultBranch: repo.defaultBranch,
-          local: localBranches,
+          local: lines(local.stdout),
           remote: Array.from(new Set(remoteBranches)),
         });
       } catch (error) {
@@ -702,6 +696,7 @@ export function createDaemonApp(input: {
 
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
+  wireAgents(app, asyncRoute, config);
   registerScratchpadRoutes({ app, config, emit });
   try {
     const spPath = scratchpadPath(config.dataDir);

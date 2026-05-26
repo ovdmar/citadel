@@ -31,6 +31,18 @@ export {
 } from "./usage/index.js";
 export type { RuntimeUsageFetcher } from "./usage/index.js";
 
+export {
+  runtimeModelListers,
+  hasRuntimeModelLister,
+  fetchClaudeCodeModels,
+  parseClaudeCodeModelsList,
+  CLAUDE_CODE_MODELS_FALLBACK,
+  fetchCodexModels,
+  fetchCursorAgentModels,
+  fetchPiModels,
+} from "./models/index.js";
+export type { RuntimeModelLister, RuntimeModelListerResult } from "./models/index.js";
+
 export { getStatusAdapter, claudeCodeStatusAdapter, codexStatusAdapter, lastNonEmptyLine } from "./status/index.js";
 export type {
   RuntimeStatusAdapter,

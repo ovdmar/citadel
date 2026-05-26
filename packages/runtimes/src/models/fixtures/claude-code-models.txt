@@ -1,0 +1,12 @@
+Welcome to Claude Code v1.0.0
+
+╭──────────────────────────────────────────╮
+│ Select model                             │
+├──────────────────────────────────────────┤
+│ > claude-opus-4-7        (Opus 4.7)      │
+│   claude-sonnet-4-6      (Sonnet 4.6)    │
+│   claude-haiku-4-5       (Haiku 4.5)     │
+│   claude-sonnet-4-5      (Sonnet 4.5)    │
+╰──────────────────────────────────────────╯
+
+  ↑/↓ to navigate · Enter to select · Esc to cancel
