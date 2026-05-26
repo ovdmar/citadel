@@ -38,13 +38,15 @@ export function RestorePanel() {
   const [error, setError] = useState<string | null>(null);
 
   const restore = useMutation({
-    mutationFn: async (workspaceId: string) => {
-      setInFlight(workspaceId);
+    mutationFn: async (input: { workspaceId: string; runtimeSessionId: string }) => {
+      // Key the in-flight indicator by UUID so multiple candidates from the
+      // same workspace don't all flip to "Restoring…" when one is clicked.
+      setInFlight(input.runtimeSessionId);
       setError(null);
       try {
         return await api<{ session: { id: string } }>("/api/restore/run", {
           method: "POST",
-          body: JSON.stringify({ workspaceId }),
+          body: JSON.stringify(input),
         });
       } finally {
         setInFlight(null);
@@ -99,9 +101,14 @@ export function RestorePanel() {
             <RestoreRow
               key={candidate.sourceSessionId}
               candidate={candidate}
-              busy={inFlight === candidate.workspaceId}
+              busy={inFlight === candidate.runtimeSessionId}
               disabled={inFlight !== null}
-              onRestore={() => restore.mutate(candidate.workspaceId)}
+              onRestore={() =>
+                restore.mutate({
+                  workspaceId: candidate.workspaceId,
+                  runtimeSessionId: candidate.runtimeSessionId,
+                })
+              }
             />
           ))}
         </div>

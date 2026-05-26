@@ -53,19 +53,26 @@ export function registerRestoreRoutes(app: express.Express, deps: Deps) {
     "/api/restore/run",
     asyncRoute(async (req, res) => {
       const workspaceId = typeof req.body?.workspaceId === "string" ? (req.body.workspaceId as string) : "";
+      // Optional: caller can name a specific UUID when a workspace has more
+      // than one recoverable conversation. Omitted = "the latest restorable
+      // row" (back-compat with single-candidate-per-workspace callers).
+      const requestedUuid =
+        typeof req.body?.runtimeSessionId === "string" ? (req.body.runtimeSessionId as string) : null;
       if (!workspaceId) return res.status(400).json({ error: "workspace_id_required" });
       const workspace = store.listWorkspaces().find((w) => w.id === workspaceId);
       if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
 
-      // Pick the latest session for the workspace that carries a UUID.
+      // Pick the requested session, falling back to the latest with a UUID.
       // Restricting to status=stopped here would falsely refuse to restore
       // workspaces whose row got flipped to 'unknown' or 'failed' during
       // reconciliation; what matters is that there's no LIVE session
       // already attached to this UUID.
       const sessions = store.listSessions(workspace.id);
-      const candidate = sessions.find((s) => s.runtimeSessionId && !isLive(s));
+      const candidate = requestedUuid
+        ? sessions.find((s) => s.runtimeSessionId === requestedUuid && !isLive(s))
+        : sessions.find((s) => s.runtimeSessionId && !isLive(s));
       if (!candidate || !candidate.runtimeSessionId) {
-        return res.status(409).json({ error: "no_restorable_session", workspaceId });
+        return res.status(409).json({ error: "no_restorable_session", workspaceId, requestedUuid });
       }
       const live = sessions.find((s) => s.runtimeSessionId === candidate.runtimeSessionId && isLive(s));
       if (live) return res.status(409).json({ error: "session_already_live", sessionId: live.id });
@@ -111,21 +118,32 @@ export function collectRestoreCandidates(store: SqliteStore): RestoreCandidate[]
   for (const ws of workspaces) {
     const sessions = store.listSessions(ws.id);
     if (sessions.length === 0) continue;
-    // listSessions is ordered by updated_at DESC. Find the freshest row that
-    // has a UUID and no live counterpart sharing that UUID.
-    const candidate = sessions.find((s) => s.runtimeSessionId && !isLive(s));
-    if (!candidate || !candidate.runtimeSessionId) continue;
-    const live = sessions.find((s) => s.runtimeSessionId === candidate.runtimeSessionId && isLive(s));
-    if (live) continue;
-    candidates.push({
-      workspaceId: ws.id,
-      workspaceName: ws.name,
-      workspacePath: ws.path,
-      runtimeId: candidate.runtimeId,
-      runtimeSessionId: candidate.runtimeSessionId,
-      lastActivityAt: candidate.lastOutputAt ?? candidate.updatedAt,
-      sourceSessionId: candidate.id,
-    });
+    // Surface *every* row with a UUID that's not currently live on that UUID.
+    // A workspace with multiple recoverable conversations (e.g. a pre-restart
+    // pane plus a post-restart pane) should list each so the user can pick
+    // which to bring back — restoring one shouldn't hide the others.
+    const seenUuids = new Set<string>();
+    for (const candidate of sessions) {
+      if (!candidate.runtimeSessionId) continue;
+      if (isLive(candidate)) continue;
+      // Dedupe by UUID within a workspace — if the same UUID got written onto
+      // multiple rows (shouldn't happen, but safety net), surface one.
+      if (seenUuids.has(candidate.runtimeSessionId)) continue;
+      // Skip when another row holds the same UUID and is currently live
+      // (it's already running; no need to offer "restore").
+      const live = sessions.find((s) => s.runtimeSessionId === candidate.runtimeSessionId && isLive(s));
+      if (live) continue;
+      seenUuids.add(candidate.runtimeSessionId);
+      candidates.push({
+        workspaceId: ws.id,
+        workspaceName: ws.name,
+        workspacePath: ws.path,
+        runtimeId: candidate.runtimeId,
+        runtimeSessionId: candidate.runtimeSessionId,
+        lastActivityAt: candidate.lastOutputAt ?? candidate.updatedAt,
+        sourceSessionId: candidate.id,
+      });
+    }
   }
   // Most recently active first — that matches what the user is mentally
   // tracking ("the session I had mid-flight when it died").
