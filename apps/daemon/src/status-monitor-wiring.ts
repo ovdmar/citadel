@@ -103,8 +103,7 @@ export function buildStatusMonitorDeps(
       // tmux session name (e.g., daemon restart re-spawned the session before
       // /tmp was cleared). Treat the exit signal as absent so the live agent
       // doesn't get marked stopped.
-      const liveNewerThanExit =
-        liveStat !== null && exitStat !== null && liveStat.mtimeMs > exitStat.mtimeMs;
+      const liveNewerThanExit = liveStat !== null && exitStat !== null && liveStat.mtimeMs > exitStat.mtimeMs;
       const exitCode = exitStat && !liveNewerThanExit ? readAgentExitCode(name) : null;
       return {
         live: liveStat !== null,

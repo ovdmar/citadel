@@ -1,10 +1,6 @@
 import { z } from "zod";
-
-export const IdSchema = z
-  .string()
-  .min(2)
-  .max(80)
-  .regex(/^[a-z0-9][a-z0-9_-]*$/);
+import { IdSchema } from "./primitives.js";
+export { IdSchema } from "./primitives.js";
 
 export const ProviderStatusSchema = z.enum(["healthy", "degraded", "unavailable", "unknown"]);
 export const WorkspaceLifecycleSchema = z.enum(["creating", "ready", "failed", "removing", "archived", "removed"]);
@@ -64,42 +60,13 @@ export const WorkspaceSchema = z.object({
   archivedAt: z.string().nullable().default(null),
 });
 
-export const NamespaceColorSchema = z
-  .string()
-  .regex(/^#[0-9a-fA-F]{6}$/)
-  .nullable()
-  .default(null);
-
-export const NamespaceSchema = z.object({
-  id: IdSchema,
-  name: z.string().min(1).max(80),
-  color: NamespaceColorSchema,
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  archivedAt: z.string().nullable().default(null),
-});
-
-export const CreateNamespaceInputSchema = z.object({
-  name: z.string().min(1).max(80),
-  color: z
-    .string()
-    .regex(/^#[0-9a-fA-F]{6}$/)
-    .optional(),
-});
-
-export const UpdateNamespaceInputSchema = z.object({
-  name: z.string().min(1).max(80).optional(),
-  color: z
-    .string()
-    .regex(/^#[0-9a-fA-F]{6}$/)
-    .nullable()
-    .optional(),
-});
-
-export const AssignWorkspaceToNamespaceInputSchema = z.object({
-  workspaceId: IdSchema,
-  namespaceId: IdSchema.nullable(),
-});
+export {
+  AssignWorkspaceToNamespaceInputSchema,
+  CreateNamespaceInputSchema,
+  NamespaceColorSchema,
+  NamespaceSchema,
+  UpdateNamespaceInputSchema,
+} from "./namespaces.js";
 
 export const RuntimeCapabilitySchema = z.object({
   supportsPrompt: z.boolean(),
@@ -784,10 +751,12 @@ export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
 export type CreateAgentSessionInput = z.infer<typeof CreateAgentSessionInputSchema>;
 export type LaunchAgentInput = z.infer<typeof LaunchAgentInputSchema>;
 export type TransitionIssueInput = z.infer<typeof TransitionIssueInputSchema>;
-export type Namespace = z.infer<typeof NamespaceSchema>;
-export type CreateNamespaceInput = z.infer<typeof CreateNamespaceInputSchema>;
-export type UpdateNamespaceInput = z.infer<typeof UpdateNamespaceInputSchema>;
-export type AssignWorkspaceToNamespaceInput = z.infer<typeof AssignWorkspaceToNamespaceInputSchema>;
+export type {
+  AssignWorkspaceToNamespaceInput,
+  CreateNamespaceInput,
+  Namespace,
+  UpdateNamespaceInput,
+} from "./namespaces.js";
 export type DiffFile = z.infer<typeof DiffFileSchema>;
 export type WorkspaceDiff = z.infer<typeof WorkspaceDiffSchema>;
 export type RecentCommit = z.infer<typeof RecentCommitSchema>;
