@@ -139,7 +139,13 @@ export function createDaemonApp(input: {
     const runtime = config.runtimes.find((candidate) => candidate.id === session.runtimeId);
     if (!workspace || !runtime) return null;
     const sessionName = session.tmuxSessionName ?? `citadel_${workspace.id}_${session.id.slice(-8)}`;
-    return ensureTmuxSession({ sessionName, cwd: workspace.path, command: runtime.command, args: runtime.args });
+    return ensureTmuxSession({
+      sessionName,
+      cwd: workspace.path,
+      command: runtime.command,
+      args: runtime.args,
+      runtimeId: runtime.id,
+    });
   };
   registerTerminalRoutes({ app, server, store, ttyd, dataDir: config.dataDir, emit, respawnTmux });
 

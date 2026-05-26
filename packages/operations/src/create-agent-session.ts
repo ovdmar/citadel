@@ -48,6 +48,7 @@ export async function createAgentSession(
     cwd: workspace.path,
     command: runtime.command,
     args: runtimeArgs,
+    runtimeId: input.runtimeId,
   });
   if (promptForKeys) {
     // Treat the initial prompt as load-bearing: if submitPrompt couldn't

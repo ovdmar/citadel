@@ -21,6 +21,11 @@ export type TerminalSessionRequest = {
   cwd: string;
   command: string;
   args: string[];
+  // Optional runtime hint used by the wrapper's exit hint to decide how to
+  // resolve the agent's session id. Only `"claude-code"` enables the on-disk
+  // transcript lookup; other runtimes (or unset) fall back to a session-id-less
+  // hint that still works (`claude resume` opens an interactive picker).
+  runtimeId?: string;
 };
 
 export async function ensureTmuxSession(input: TerminalSessionRequest) {
@@ -34,7 +39,9 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
     } catch {
       // best-effort: status detection degrades gracefully if tmpdir is read-only
     }
-    const command = terminalCommand(input.sessionName, input.command, input.args);
+    const command = terminalCommand(input.sessionName, input.command, input.args, {
+      ...(input.runtimeId !== undefined ? { runtimeId: input.runtimeId } : {}),
+    });
     await execFileAsync("tmux", ["new-session", "-d", "-s", input.sessionName, "-c", input.cwd, command], {
       timeout: 10000,
       maxBuffer: 128 * 1024,
@@ -151,12 +158,49 @@ export function readAgentExitCode(sessionName: string): number | null {
 // pane. Outer shell is non-login (`bash -c`) so we don't silently source
 // ~/.bash_profile per agent; the post-exit fallback IS a login shell and
 // respects $SHELL so zsh/fish users aren't forced into bash.
-function terminalCommand(sessionName: string, command: string, args: string[]) {
+// Exit hint emitted by the wrapper after the agent exits. For the Claude
+// runtime we resolve the actual Claude session UUID by listing transcripts
+// under ~/.claude/projects/<dasherized-cwd>/*.jsonl (the same mapping
+// claudeProjectsDir() implements in @citadel/runtimes) and taking the newest
+// file's basename. When resolution fails or the runtime isn't Claude, the hint
+// degrades to a session-id-less form that still works (`claude resume`
+// without an argument opens an interactive picker).
+//
+// Bash quoting note: the format strings are single-quoted so the literal
+// backticks around `claude resume` are preserved (single quotes suppress
+// command substitution). %s expansions take the (possibly empty) UUID via the
+// printf data argument, which IS double-quoted so $sid expands.
+function exitHintBlock(runtimeId: string | undefined): string {
+  const fallback =
+    "printf '\\n[citadel] Agent exited. Run any command, or restart the agent (e.g. `claude resume` to pick a session interactively).\\n'";
+  if (runtimeId !== "claude-code") return fallback;
+  const resolved =
+    "printf '\\n[citadel] Agent exited. Run any command, or restart the agent (e.g. `claude resume %s`).\\n' \"$sid\"";
+  return [
+    'sid=""',
+    'project_dir="$HOME/.claude/projects/$(printf %s "$PWD" | sed \'s/[^A-Za-z0-9]/-/g\')"',
+    'if [ -d "$project_dir" ]; then',
+    '  latest=$(ls -t "$project_dir"/*.jsonl 2>/dev/null | head -n 1)',
+    '  if [ -n "$latest" ]; then sid=$(basename "$latest" .jsonl); fi',
+    "fi",
+    'if [ -n "$sid" ]; then',
+    `  ${resolved}`,
+    "else",
+    `  ${fallback}`,
+    "fi",
+  ].join("\n");
+}
+
+export function terminalCommand(
+  sessionName: string,
+  command: string,
+  args: string[],
+  opts: { runtimeId?: string } = {},
+) {
   const argv = [command, ...args].map(shellQuote).join(" ");
   const envPrefix = "env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor FORCE_COLOR=1 CLICOLOR_FORCE=1";
   const liveSentinel = shellQuote(agentLiveSentinelPath(sessionName));
   const exitSentinel = shellQuote(agentExitSentinelPath(sessionName));
-  const exitHint = "[citadel] Agent exited. Run any command, or restart the agent (e.g. `claude resume <sessionId>`).";
   // The trap fires on bash signal-death (the bash shell receives SIGTERM/SIGINT
   // mid-`<agent>`); the explicit lines after `<agent>` cover the happy-path
   // (natural agent exit) before `exec` replaces this bash with the fallback
@@ -170,9 +214,9 @@ function terminalCommand(sessionName: string, command: string, args: string[]) {
     "rc=$?",
     `echo $rc > ${exitSentinel}`,
     `rm -f ${liveSentinel}`,
-    `printf '\\n%s\\n' ${shellQuote(exitHint)}`,
+    exitHintBlock(opts.runtimeId),
     'exec "${SHELL:-/bin/bash}" -l',
-  ].join("; ");
+  ].join("\n");
   return `bash -c ${shellQuote(script)}`;
 }
 
