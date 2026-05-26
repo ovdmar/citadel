@@ -67,8 +67,8 @@ backend routes appear to 404. Audit-friendly file:line citations:
 - **Daemon refusal to bind `:4010`** — `apps/daemon/src/index.ts:47-52`. A
   worktree daemon with no `CITADEL_PORT` exits non-zero rather than clobber
   the systemd-reserved port.
-- **ttyd slot disjointness** — `apps/daemon/src/app.ts:95-101`. Each daemon
-  computes a per-instance ttyd port slot from `(((config.port - 4010) % 11) + 11) % 11`
+- **ttyd slot disjointness** — `apps/daemon/src/ttyd-slot.ts`. Each daemon
+  computes a per-instance ttyd port slot from `(((daemonPort - 4010) % 11) + 11) % 11`
   (200 ports wide). The systemd daemon and worktree daemons land in disjoint
   slots so ttyd ports never collide.
 - **Vite proxy reads `CITADEL_DAEMON_URL`** — `apps/web/vite.config.ts:21-32`.
@@ -85,7 +85,8 @@ classification:
 | File:line | Code | Verdict |
 |---|---|---|
 | `apps/web/vite.config.ts:21,22,25,31` | `process.env.CITADEL_DAEMON_URL \|\| "http://127.0.0.1:4010"` | Intentional. Bare `pnpm dev` (no `make deploy`) is a supported UI-only workflow that targets the systemd daemon. `make deploy` always sets the env var. Keep. |
-| `apps/daemon/src/app.ts:95,101,130` | ttyd slot math + comment | Intentional. Modular origin for disjoint port slots. Keep. |
+| `apps/daemon/src/ttyd-slot.ts` | ttyd slot math + comment | Intentional. Modular origin for disjoint port slots. Keep. |
+| `apps/daemon/src/app.ts:115` | Comment about cleanupStale skip for `config.port=4010` | Intentional. Documents the production-install slot collision rationale. Keep. |
 | `apps/daemon/src/index.ts:8,49` | Comment + error message | Intentional. Refuses to bind `:4010` from a worktree daemon. Keep. |
 | `packages/config/src/index.ts:76` | `port: …default(4010)` | Intentional. Schema default for the systemd unit. Keep. |
 | `scripts/dev/smoke.ts:1`, `scripts/dev/performance-smoke.ts:8` | `process.env.CITADEL_BASE_URL \|\| "http://127.0.0.1:4010"` | Intentional. Smoke scripts target the systemd daemon by default; overridable via env var. Keep. |
