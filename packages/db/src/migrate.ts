@@ -210,7 +210,7 @@ export function runMigrations(
       (5, 'scheduled-agents', datetime('now')),
       (6, 'namespaces', datetime('now')),
       (7, 'background-sessions-and-runs', datetime('now')),
-      (8, 'plan-registrations', datetime('now'));
+      (9, 'plan-registrations', datetime('now'));
   `);
   ensureColumn("scheduled_agents", "schedule_type", "TEXT NOT NULL DEFAULT 'recurring'");
   ensureColumn("scheduled_agents", "run_at", "TEXT");
