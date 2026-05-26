@@ -45,13 +45,21 @@ describe("Toast", () => {
     expect(getToastQueueLength()).toBe(0);
   });
 
-  it("renders danger variant with role=alert (others use the implicit <output> role)", () => {
+  it("renders danger variant with role=alert and non-critical variants with explicit role=status", () => {
     mount(<Toaster />);
     act(() => {
       toast({ title: "Boom", variant: "danger" });
     });
     const alert = document.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("Boom");
+    act(() => {
+      toast({ title: "Polite", variant: "success" });
+    });
+    // Find the status node (must be explicit, not implicit on <output>) so
+    // assistive tech that doesn't translate <output> → status still
+    // announces the toast.
+    const statusNodes = Array.from(document.querySelectorAll('[role="status"]'));
+    expect(statusNodes.some((n) => n.textContent?.includes("Polite"))).toBe(true);
   });
 
   it("dismisses via the close button", () => {

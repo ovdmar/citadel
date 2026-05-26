@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { cn } from "../../lib/utils.js";
 
 // Minimal in-process toast queue + <Toaster /> renderer. Backed by a module
@@ -26,6 +26,7 @@ const listeners = new Set<() => void>();
 let queue: ToastItem[] = [];
 let maxQueue = 5;
 let counter = 0;
+const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
 function emit() {
   for (const fn of listeners) fn();
@@ -48,6 +49,11 @@ function nextId(): string {
 }
 
 function dismiss(id: string) {
+  const timer = timers.get(id);
+  if (timer !== undefined) {
+    clearTimeout(timer);
+    timers.delete(id);
+  }
   const before = queue.length;
   queue = queue.filter((t) => t.id !== id);
   if (queue.length !== before) emit();
@@ -62,17 +68,32 @@ export function toast(input: ToastInput): string {
   };
   queue = [...queue, item];
   if (queue.length > maxQueue) {
+    // Dropping older entries — clear their pending timers so the queue
+    // and timer maps stay in sync.
+    const dropped = queue.slice(0, queue.length - maxQueue);
+    for (const d of dropped) {
+      const t = timers.get(d.id);
+      if (t !== undefined) {
+        clearTimeout(t);
+        timers.delete(d.id);
+      }
+    }
     queue = queue.slice(queue.length - maxQueue);
   }
   emit();
   if (item.durationMs > 0) {
-    setTimeout(() => dismiss(item.id), item.durationMs);
+    timers.set(
+      item.id,
+      setTimeout(() => dismiss(item.id), item.durationMs),
+    );
   }
   return item.id;
 }
 
 // Testing helpers — exported but not part of the public API surface.
 export function resetToastQueue() {
+  for (const t of timers.values()) clearTimeout(t);
+  timers.clear();
   queue = [];
   counter = 0;
   emit();
@@ -95,7 +116,15 @@ const variantClasses: Record<ToastVariant, string> = {
 };
 
 export function Toaster({ maxQueue: max }: ToasterProps = {}) {
-  if (max !== undefined) maxQueue = max;
+  // Apply the cap as an effect, not during render — the module-level
+  // `maxQueue` is a singleton across every <Toaster /> on the page, and
+  // assigning during render would mutate it on StrictMode double-render or
+  // suspense retry. The cockpit mounts exactly one <Toaster /> at the
+  // root, so the singleton contract is fine; this guard just keeps the
+  // render path side-effect-free.
+  useEffect(() => {
+    if (max !== undefined) maxQueue = max;
+  }, [max]);
   const items = useSyncExternalStore(subscribe, snapshot, snapshot);
   return (
     <div
@@ -110,7 +139,11 @@ export function Toaster({ maxQueue: max }: ToasterProps = {}) {
 }
 
 function ToastItemRow({ item, onDismiss }: { item: ToastItem; onDismiss: () => void }) {
-  const role = item.variant === "danger" ? "alert" : undefined;
+  // role="status" for non-critical announcements (polite live region),
+  // role="alert" for danger (assertive live region). Setting role
+  // explicitly even on the implicit-status <output> element avoids relying
+  // on assistive tech that might not translate <output> → status.
+  const role = item.variant === "danger" ? "alert" : "status";
   return (
     <output
       role={role}
