@@ -1,9 +1,11 @@
 import type { AgentRuntime, AgentSession, Workspace } from "@citadel/contracts";
+import { deriveAgentLifecycleTone } from "@citadel/core";
 import { useMutation } from "@tanstack/react-query";
 import { ExternalLink, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { TerminalPane, getTerminalHandle, subscribeTerminalHandle } from "./terminal-pane.js";
+import { lifecycleToneClass } from "./workspace-card.js";
 
 type StageTab = {
   session: AgentSession;
@@ -150,7 +152,7 @@ export function Stage(props: {
         <div className="stage-tabs">
           {tabs.map((tab, index) => {
             const isActive = tab.session.id === activeSession?.session.id;
-            const isRunning = tab.session.status === "running";
+            const lifecycleTone = deriveAgentLifecycleTone(tab.session);
             return (
               <div key={tab.session.id} className={`stage-tab ${isActive ? "active" : ""}`}>
                 <button
@@ -171,7 +173,7 @@ export function Stage(props: {
                       </kbd>
                     ) : null}
                     <span className="stage-tab-icon" aria-hidden>
-                      <span className={`cit-pulse cit-pulse-sm ${isRunning ? "cit-pulse-run" : "cit-pulse-idle"}`} />
+                      <span className={`cit-pulse cit-pulse-sm ${lifecycleToneClass(lifecycleTone)}`} />
                     </span>
                     {editingId === tab.session.id ? (
                       <input

@@ -1,4 +1,4 @@
-import type { Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
+import type { PullRequestSummary, Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
@@ -129,6 +129,19 @@ export function Cockpit() {
     return map;
   }, [data?.repos]);
 
+  // Per-workspace PR data sourced from the cockpit summary. Today only the
+  // active workspace has its PR fetched (cockpit summary is workspace-scoped),
+  // so other workspaces map to null and skip the fold. Extending this to
+  // every workspace would require a multi-workspace PR fetch — out of scope
+  // for the lifecycle-dot work.
+  const workspacePullRequestsMap = useMemo(() => {
+    const map = new Map<string, PullRequestSummary | null>();
+    if (cockpitSummary.data) {
+      map.set(cockpitSummary.data.workspaceId, cockpitSummary.data.versionControl.pullRequest ?? null);
+    }
+    return map;
+  }, [cockpitSummary.data]);
+
   const workspaceMeta = useMemo(() => {
     const map: Record<string, { readiness?: string; prTone?: string; prNumber?: number | null; attention?: string }> =
       {};
@@ -211,6 +224,7 @@ export function Cockpit() {
               activeWorkspaceId={activeWorkspace?.id ?? ""}
               runtimes={data?.runtimes ?? []}
               namespaces={data?.namespaces ?? []}
+              workspacePullRequests={workspacePullRequestsMap}
               lastRepoId={lastRepoId || undefined}
               createWorkspaceOpen={createWorkspaceOpen}
               onOpenCreateWorkspace={() => setCreateWorkspaceOpen(true)}

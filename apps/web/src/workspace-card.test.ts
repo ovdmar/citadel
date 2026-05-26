@@ -1,118 +1,28 @@
-import type { AgentSession } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
-import { deriveWorkspaceAgentTone } from "./workspace-card.js";
+import { lifecycleToneClass } from "./workspace-card.js";
 
-function session(over: Partial<AgentSession>): AgentSession {
-  return {
-    id: "s",
-    workspaceId: "ws",
-    runtimeId: "claude-code",
-    displayName: "Test",
-    status: "running",
-    statusReason: null,
-    lastStatusAt: "2026-05-25T12:00:00.000Z",
-    lastOutputAt: null,
-    endedAt: null,
-    exitCode: null,
-    transport: "disconnected",
-    tmuxSessionName: "citadel_test",
-    tmuxSessionId: "$1",
-    createdAt: "2026-05-25T12:00:00.000Z",
-    updatedAt: "2026-05-25T12:00:00.000Z",
-    ...over,
-  } as AgentSession;
-}
-
-describe("deriveWorkspaceAgentTone", () => {
-  it("empty workspace → idle", () => {
-    expect(deriveWorkspaceAgentTone([])).toBe("idle");
+// `deriveWorkspaceLifecycleTone` and `deriveAgentLifecycleTone` are exercised
+// in packages/core/src/index.test.ts against the full status × exit-code ×
+// PR matrix. Here we only pin the CSS-class mapping, which is the
+// workspace-card layer's responsibility.
+describe("lifecycleToneClass", () => {
+  it("maps never-started to cit-pulse-idle (the only grey-static case)", () => {
+    expect(lifecycleToneClass("never-started")).toBe("cit-pulse-idle");
   });
 
-  it("any running agent → running", () => {
-    expect(deriveWorkspaceAgentTone([session({ status: "running" })])).toBe("running");
+  it("maps running to cit-pulse-run (orange ripple)", () => {
+    expect(lifecycleToneClass("running")).toBe("cit-pulse-run");
   });
 
-  it("any starting agent → running", () => {
-    expect(deriveWorkspaceAgentTone([session({ status: "starting" })])).toBe("running");
+  it("maps done to cit-pulse-done — distinct from solid-green cit-pulse-ok", () => {
+    // cit-pulse-ok is reserved for non-lifecycle indicators (auto-mode pill,
+    // deploy-health badge). Using cit-pulse-done here keeps the lifecycle
+    // ripple from spilling onto those untouched call sites.
+    expect(lifecycleToneClass("done")).toBe("cit-pulse-done");
+    expect(lifecycleToneClass("done")).not.toBe("cit-pulse-ok");
   });
 
-  it("any waiting_for_input → attention", () => {
-    expect(deriveWorkspaceAgentTone([session({ status: "waiting_for_input" })])).toBe("attention");
-  });
-
-  it("any failed → attention", () => {
-    expect(deriveWorkspaceAgentTone([session({ status: "failed" })])).toBe("attention");
-  });
-
-  it("unknown with tmux_missing reason → attention", () => {
-    expect(deriveWorkspaceAgentTone([session({ status: "unknown", statusReason: "tmux_missing" })])).toBe("attention");
-  });
-
-  it("unknown with migrated_from_orphaned → attention", () => {
-    expect(deriveWorkspaceAgentTone([session({ status: "unknown", statusReason: "migrated_from_orphaned" })])).toBe(
-      "attention",
-    );
-  });
-
-  it("unknown with sentinel_missing_tmux_alive → attention", () => {
-    expect(
-      deriveWorkspaceAgentTone([session({ status: "unknown", statusReason: "sentinel_missing_tmux_alive" })]),
-    ).toBe("attention");
-  });
-
-  it("unknown with daemon_restart_indeterminate → idle (neutral, no alarm)", () => {
-    expect(
-      deriveWorkspaceAgentTone([session({ status: "unknown", statusReason: "daemon_restart_indeterminate" })]),
-    ).toBe("idle");
-  });
-
-  it("stopped session → idle", () => {
-    expect(deriveWorkspaceAgentTone([session({ status: "stopped" })])).toBe("idle");
-  });
-
-  it("plain idle session → idle", () => {
-    expect(deriveWorkspaceAgentTone([session({ status: "idle" })])).toBe("idle");
-  });
-
-  it("shell-runtime sessions are excluded — running shell does NOT count as agent running", () => {
-    expect(deriveWorkspaceAgentTone([session({ status: "running", runtimeId: "shell" })])).toBe("idle");
-  });
-
-  describe("priority: attention > running > idle", () => {
-    it("one waiting_for_input + one running → attention", () => {
-      expect(
-        deriveWorkspaceAgentTone([
-          session({ id: "a", status: "running" }),
-          session({ id: "b", status: "waiting_for_input" }),
-        ]),
-      ).toBe("attention");
-    });
-
-    it("one failed + one running → attention", () => {
-      expect(
-        deriveWorkspaceAgentTone([session({ id: "a", status: "running" }), session({ id: "b", status: "failed" })]),
-      ).toBe("attention");
-    });
-
-    it("one running + one idle → running", () => {
-      expect(
-        deriveWorkspaceAgentTone([session({ id: "a", status: "running" }), session({ id: "b", status: "idle" })]),
-      ).toBe("running");
-    });
-
-    it("one stopped + one idle → idle", () => {
-      expect(
-        deriveWorkspaceAgentTone([session({ id: "a", status: "stopped" }), session({ id: "b", status: "idle" })]),
-      ).toBe("idle");
-    });
-
-    it("attention from one session beats running shell + idle agent", () => {
-      expect(
-        deriveWorkspaceAgentTone([
-          session({ id: "a", status: "running", runtimeId: "shell" }),
-          session({ id: "b", status: "waiting_for_input" }),
-        ]),
-      ).toBe("attention");
-    });
+  it("maps attention to cit-pulse-bad (red ripple)", () => {
+    expect(lifecycleToneClass("attention")).toBe("cit-pulse-bad");
   });
 });

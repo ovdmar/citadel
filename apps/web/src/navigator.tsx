@@ -1,4 +1,13 @@
-import type { AgentSession, Namespace, Operation, Repo, Workspace, WorkspaceCockpitSummary } from "@citadel/contracts";
+import type {
+  AgentSession,
+  Namespace,
+  Operation,
+  PullRequestSummary,
+  Repo,
+  Workspace,
+  WorkspaceCockpitSummary,
+} from "@citadel/contracts";
+import { type LifecycleTone, deriveWorkspaceLifecycleTone } from "@citadel/core";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
@@ -22,13 +31,36 @@ import {
   buildGroupTree,
   collectGroupPaths,
 } from "./navigator-groups.js";
-import { WorkspaceCard } from "./workspace-card.js";
+import { WorkspaceCard, lifecycleToneClass } from "./workspace-card.js";
 
 const GROUP_STORAGE = "citadel.navigator-group";
 const COLLAPSE_STORAGE = "citadel.navigator-group-collapsed";
 
 function runningCount(sessions: AgentSession[]): number {
   return sessions.filter((session) => session.status === "running").length;
+}
+
+// Roll up per-workspace lifecycle tones into the single navigator footer dot.
+// Same priority as the workspace card aggregator: attention > running > done
+// > never-started. Each workspace folds its own PR/CI signal via
+// deriveWorkspaceLifecycleTone so CI-red on any workspace surfaces here too.
+function aggregateNavigatorTone(
+  workspaces: Workspace[],
+  sessions: AgentSession[],
+  workspacePullRequests: Map<string, PullRequestSummary | null> | undefined,
+): LifecycleTone {
+  let result: LifecycleTone = "never-started";
+  for (const workspace of workspaces) {
+    const workspaceSessions = sessions.filter((session) => session.workspaceId === workspace.id);
+    const tone = deriveWorkspaceLifecycleTone({
+      sessions: workspaceSessions,
+      pullRequest: workspacePullRequests?.get(workspace.id) ?? null,
+    });
+    if (tone === "attention") return "attention";
+    if (tone === "running") result = "running";
+    else if (tone === "done" && result !== "running") result = "done";
+  }
+  return result;
 }
 
 export function Navigator(props: {
@@ -40,6 +72,13 @@ export function Navigator(props: {
   activeWorkspaceId: string;
   runtimes: import("@citadel/contracts").AgentRuntime[];
   namespaces: Namespace[];
+  // Per-workspace PR data so the navigator's "Running" lifecycle dot can
+  // fold PR/CI signals into the global aggregate (same rules as the
+  // workspace card dot — see specs/B.3 item 14). Optional: callers that
+  // don't yet have PR data can omit it; the aggregate then runs without
+  // the fold, which degrades to "agents only" but never produces a wrong
+  // signal.
+  workspacePullRequests?: Map<string, PullRequestSummary | null>;
   lastRepoId: string | undefined;
   createWorkspaceOpen: boolean;
   onOpenCreateWorkspace: () => void;
@@ -301,7 +340,9 @@ export function Navigator(props: {
             <div className="nav-foot-stat-label">Running</div>
             <div className="nav-foot-stat-val">
               <span
-                className={`cit-pulse cit-pulse-sm ${runningCount(props.sessions) ? "cit-pulse-run" : "cit-pulse-idle"}`}
+                className={`cit-pulse cit-pulse-sm ${lifecycleToneClass(
+                  aggregateNavigatorTone(props.workspaces, props.sessions, props.workspacePullRequests),
+                )}`}
                 aria-hidden
               />
               {runningCount(props.sessions)}
