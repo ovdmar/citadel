@@ -50,6 +50,8 @@ const makePr = (overrides: Partial<PullRequestSummary> = {}): PullRequestSummary
   parentPr: null,
   mergeable: "unknown",
   allowedMergeStrategies: [],
+  mergeStateStatus: null,
+  headSha: null,
   ...overrides,
 });
 
