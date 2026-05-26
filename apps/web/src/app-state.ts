@@ -82,6 +82,19 @@ export function useOptimisticRemove(): OptimisticRemoveContextValue {
   return useContext(OptimisticRemoveContext);
 }
 
+// Pure subtraction: returns a copy of `state` with `workspaces` filtered
+// to exclude any id in `ids`. Identity-stable when `ids` is empty or
+// state is undefined so React doesn't churn references unnecessarily.
+// Exported separately so it can be unit-tested without React's hook
+// machinery.
+export function applyOptimisticRemoveFilter(
+  state: StateResponse | undefined,
+  ids: ReadonlySet<string>,
+): StateResponse | undefined {
+  if (!state || ids.size === 0) return state;
+  return { ...state, workspaces: state.workspaces.filter((w) => !ids.has(w.id)) };
+}
+
 // Wrapper hook for consumers that render the workspace list: subtracts
 // optimistically-removed ids from `workspaces[]` at READ time. The
 // underlying `["state"]` query is the same one `useStateQuery` returns —
@@ -89,10 +102,7 @@ export function useOptimisticRemove(): OptimisticRemoveContextValue {
 export function useFilteredStateQuery(options?: { enabled?: boolean }) {
   const result = useStateQuery(options);
   const { ids } = useOptimisticRemove();
-  const filtered = useMemo(() => {
-    if (!result.data || ids.size === 0) return result.data;
-    return { ...result.data, workspaces: result.data.workspaces.filter((w) => !ids.has(w.id)) };
-  }, [result.data, ids]);
+  const filtered = useMemo(() => applyOptimisticRemoveFilter(result.data, ids), [result.data, ids]);
   return { ...result, data: filtered };
 }
 

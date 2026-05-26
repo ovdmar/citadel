@@ -476,7 +476,6 @@ export const CreateRepoInputSchema = z.object({
   worktreeParent: z.string().min(1).optional(),
 });
 
-export { WorkspaceDirtySummarySchema } from "./workspace-dirty.js";
 export const CreateWorkspaceInputSchema = z.object({
   repoId: IdSchema,
   // Empty `name` → daemon generates a funny-name (e.g. funny-cat).

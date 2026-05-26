@@ -379,9 +379,14 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
 
   const linked = useMemo(() => parseLinkedContext(linkInput), [linkInput]);
   const namePreview = defaultNameHint(linked);
-  // Branch preview uses a non-empty fallback so it shows something stable
-  // when no issue is attached and no name is typed.
-  const branchPreview = defaultBranchPreview(linked, name || defaultNameForSubmit(linked) || "workspace");
+  // Branch preview: when the user has neither typed a name nor attached
+  // an issue, the daemon will generate the name (and the branch name
+  // follows from it), so we can't honestly preview either. Show
+  // `<auto>` in that case rather than fabricating "workspace" — which
+  // the user never typed and the daemon won't use.
+  const trimmedName = name.trim();
+  const submitName = defaultNameForSubmit(linked);
+  const branchPreview = trimmedName || submitName ? defaultBranchPreview(linked, trimmedName || submitName) : "<auto>";
 
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {

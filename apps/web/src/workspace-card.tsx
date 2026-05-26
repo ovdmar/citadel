@@ -64,7 +64,7 @@ export function WorkspaceCard(
     // a reorder mime type encoding the source group path, and drops on this
     // card splice the dragged workspace into the visible-id sequence.
     reorder?: WorkspaceReorderProps;
-    // Back-compat shim — kept so dashboard.tsx (which still passes
+    // Back-compat shim — kept so namespaces-view.tsx (which still passes
     // `draggable={true}`) doesn't have to change in this PR. Internally
     // treated as `dropTarget: "namespace"` to preserve existing behavior.
     draggable?: boolean;

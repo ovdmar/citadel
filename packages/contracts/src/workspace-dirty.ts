@@ -4,7 +4,10 @@
 
 import { z } from "zod";
 
-export const WorkspaceDirtySummarySchema = z.object({
+// The schema is internal: we use `z.infer` to type the daemon return
+// shape but no runtime `.parse` happens — payload comes from our own
+// trusted daemon over /api/workspaces/:id DELETE.
+const WorkspaceDirtySummarySchema = z.object({
   files: z.array(z.object({ status: z.string(), path: z.string() })),
   unpushedCommits: z.array(z.object({ sha: z.string(), subject: z.string() })),
 });

@@ -69,10 +69,8 @@ export const FUNNY_ANIMALS = [
 ] as const;
 
 function pick<T>(arr: readonly T[], rng: () => number): T {
-  const item = arr[Math.floor(rng() * arr.length)];
-  // Defensive: rng() === 1 would index past end. Math.floor(0.999..) === N-1
-  // for any rng strictly in [0,1) so this only fires on a misbehaving rng.
-  return (item ?? arr[arr.length - 1]) as T;
+  // Contract: `rng` returns a value in [0, 1) per `Math.random()`.
+  return arr[Math.floor(rng() * arr.length)] as T;
 }
 
 export function generateFunnyName(rng: () => number = Math.random): string {

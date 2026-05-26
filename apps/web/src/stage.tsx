@@ -140,10 +140,18 @@ export function Stage(props: {
 
   const startError = startSession.error instanceof Error ? startSession.error.message : null;
   const atSessionCap = props.sessions.length >= WORKSPACE_AGENT_CAP;
-  const addDisabled = startSession.isPending || atSessionCap;
+  // Per spec B.2 §Center Stage Sessions #10: starting a session needs a
+  // ready worktree, so the "+" button is gated off while the workspace is
+  // still being provisioned. AC3 (async create) will surface this state
+  // visibly on the card; today the lifecycle is briefly "creating" only
+  // during the synchronous setup window.
+  const lifecycleCreating = props.workspace.lifecycle === "creating";
+  const addDisabled = startSession.isPending || atSessionCap || lifecycleCreating;
   const addTitle = atSessionCap
     ? `Workspace is at the ${WORKSPACE_AGENT_CAP}-session cap. Close a session to start another.`
-    : "Add session";
+    : lifecycleCreating
+      ? "Workspace is still being set up."
+      : "Add session";
   return (
     <>
       <div className="stage-tabbar">
