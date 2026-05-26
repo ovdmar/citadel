@@ -323,6 +323,13 @@ export function ensureTmuxExtendedKeys() {
       stdio: "ignore",
     });
   }
+  // Cap per-pane scrollback. The previous default (2000) was already low in
+  // line-count, but unset history-limit is what compounds: long-running tmux
+  // servers in citadel-tmux.service accumulate tmux client structs (one per
+  // ttyd browser connection / WS reconnect), and the per-client screen state
+  // grows with the per-pane scrollback ceiling. 5000 keeps headroom for
+  // operator inspection while bounding worst-case server memory.
+  execFileSync("tmux", [...tmuxPrefix(), "set-option", "-g", "history-limit", "5000"], { stdio: "ignore" });
 }
 
 export function captureTmux(sessionName: string, lines = 200) {
