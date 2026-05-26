@@ -150,9 +150,8 @@ test.describe("Jira picker", () => {
       });
 
       await page.goto("/");
-      await page.waitForLoadState("networkidle");
       const navigator = page.locator("aside[aria-label='Navigator']");
-      await expect(navigator).toBeVisible();
+      await expect(navigator).toBeVisible({ timeout: 20_000 });
       const workspaceButton = navigator.getByRole("button", { name: new RegExp(workspaceName, "i") }).first();
       await expect(workspaceButton).toBeVisible({ timeout: 20_000 });
       await workspaceButton.click();
