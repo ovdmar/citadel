@@ -6,6 +6,14 @@
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 
+// React 18+ requires consumers to opt-in to act() outside production. Vitest
+// + happy-dom doesn't set this for us, so set it once at module load.
+declare global {
+  // eslint-disable-next-line no-var
+  var IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
+}
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
 export interface RenderResult {
   container: HTMLDivElement;
   root: Root;

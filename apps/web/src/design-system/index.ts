@@ -19,4 +19,16 @@ export { Panel, PanelBody, PanelFooter, PanelHeader, PanelTitle } from "../compo
 export { Select } from "../components/ui/select.js";
 export { Skeleton } from "../components/ui/skeleton.js";
 export type { SkeletonProps } from "../components/ui/skeleton.js";
+export {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogOverlay,
+  DialogPortal,
+  DialogTitle,
+  DialogTrigger,
+} from "../components/ui/dialog.js";
 export { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.js";
