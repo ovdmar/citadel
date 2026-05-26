@@ -417,55 +417,6 @@
   transition: background 0.1s, color 0.1s;
 }
 
-.ins-pr-fix {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.ins-pr-fix .cit-btn-danger {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 4px 9px;
-  border-radius: 4px;
-  background: oklch(60% 0.16 25 / 0.16);
-  color: oklch(45% 0.16 25);
-  border: 1px solid oklch(60% 0.16 25 / 0.32);
-  cursor: pointer;
-}
-
-.ins-pr-fix .cit-btn-danger:hover:not(:disabled) {
-  background: oklch(60% 0.16 25 / 0.24);
-}
-
-.ins-pr-fix .cit-btn-danger:disabled {
-  opacity: 0.6;
-  cursor: progress;
-}
-
-[data-theme="dark"] .ins-pr-fix .cit-btn-danger {
-  color: oklch(75% 0.16 25);
-  border-color: oklch(60% 0.16 25 / 0.48);
-}
-
-.ins-pr-fix-err {
-  font-size: 10.5px;
-  color: var(--c-bad);
-}
-
-.ins-pr-fix .spin {
-  animation: ins-pr-fix-spin 1s linear infinite;
-}
-
-@keyframes ins-pr-fix-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
 
 .ins-pr-num:hover {
   background: var(--c-line-1);
@@ -581,59 +532,6 @@
 .ins-pr-parent[data-state="merged"] {
   color: oklch(45% 0.18 295);
   border-color: oklch(60% 0.18 295 / 0.4);
-}
-
-.ins-pr-merge-wrap {
-  position: relative;
-  margin-left: auto;
-}
-
-.ins-pr-merge {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  padding: 3px 9px;
-  border-radius: 6px;
-  background: var(--color-action, oklch(55% 0.18 145));
-  color: #fff;
-  border: 0;
-  cursor: pointer;
-}
-.ins-pr-merge:disabled {
-  background: var(--c-line-2);
-  color: var(--c-fg-4);
-  cursor: not-allowed;
-}
-
-.ins-pr-merge-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  background: var(--c-card);
-  border: 1px solid var(--c-line-2);
-  border-radius: 6px;
-  box-shadow: var(--sh-card);
-  padding: 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  z-index: 10;
-  min-width: 160px;
-}
-
-.ins-pr-merge-strategy {
-  text-align: left;
-  background: transparent;
-  border: 0;
-  padding: 5px 9px;
-  font-size: 11px;
-  color: var(--c-fg-2);
-  cursor: pointer;
-  border-radius: 4px;
-}
-.ins-pr-merge-strategy:hover {
-  background: var(--c-line-2);
 }
 
 .ins-pr-refresh {

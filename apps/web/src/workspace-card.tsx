@@ -17,6 +17,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { useStateQuery } from "./app-state.js";
+import { PrCardActionSlot } from "./pr-card-actions.js";
 import "./workspace-status-dot.css";
 
 export type WorkspaceCardData = {
@@ -332,6 +333,7 @@ function WorkspaceCardPrStrip(props: {
         >
           <Copy size={10} />
         </button>
+        <PrCardActionSlot workspace={workspace} pr={pullRequest} prTone={prTone} />
       </div>
     </div>
   );

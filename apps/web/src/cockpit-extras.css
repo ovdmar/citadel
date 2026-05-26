@@ -608,6 +608,120 @@
   color: var(--c-fg-5, var(--c-fg-4));
 }
 
+/* Bottom-right action slot inside the PR strip. Holds exactly one of the
+ * mutually-exclusive PR actions (Fix conflicts / Merge). margin-left:auto
+ * pins it to the trailing edge of the branch row so identity (base ← head,
+ * copy) stays left-aligned and the action stays right-aligned. */
+.pr-card-action {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.pr-card-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 8px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pr-card-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.pr-card-btn-merge {
+  background: var(--color-action, oklch(55% 0.18 145));
+  color: #fff;
+  border-color: transparent;
+}
+
+.pr-card-btn-merge:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.pr-card-btn-merge:disabled {
+  background: var(--c-line-2);
+  color: var(--c-fg-4);
+}
+
+.pr-card-btn-danger {
+  background: oklch(60% 0.16 25 / 0.18);
+  color: oklch(45% 0.16 25);
+  border-color: oklch(60% 0.16 25 / 0.36);
+}
+
+.pr-card-btn-danger:hover:not(:disabled) {
+  background: oklch(60% 0.16 25 / 0.26);
+}
+
+[data-theme="dark"] .pr-card-btn-danger {
+  color: oklch(78% 0.16 25);
+  border-color: oklch(60% 0.16 25 / 0.5);
+}
+
+.pr-card-action-err {
+  font-size: 10px;
+  color: var(--c-bad, oklch(55% 0.18 25));
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Strategy menu — anchored bottom-right of the Merge button so it doesn't
+ * push the card layout when opened. */
+.pr-card-merge-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: var(--c-card);
+  border: 1px solid var(--c-line-2);
+  border-radius: 6px;
+  box-shadow: var(--sh-card);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 10;
+  min-width: 160px;
+}
+
+.pr-card-merge-strategy {
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 5px 9px;
+  font-size: 11px;
+  color: var(--c-fg-2);
+  cursor: pointer;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.pr-card-merge-strategy:hover {
+  background: var(--c-line-2);
+}
+
+.pr-card-action .spin {
+  animation: pr-card-action-spin 1s linear infinite;
+}
+
+@keyframes pr-card-action-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .workspace-card-right {
   display: flex;
   align-items: center;

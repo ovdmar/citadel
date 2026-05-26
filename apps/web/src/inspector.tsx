@@ -11,7 +11,6 @@ import { Plus, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { DeployedAppsPanel } from "./deployed-apps.js";
-import { FixConflictsButton } from "./inspector-fix-conflicts.js";
 import { InspectorPrSection } from "./inspector-pr.js";
 
 // Re-export so existing consumers (incl. inspector.test.ts) keep working.
@@ -118,9 +117,6 @@ function StatsTab(props: {
           diffRemoved={diffRemoved}
           checkedAt={props.summary?.versionControl.checkedAt}
         />
-        {props.summary?.readiness.state === "pr-conflicts" ? (
-          <FixConflictsButton workspaceId={props.workspace.id} />
-        ) : null}
 
         {apps?.applications.length ? (
           <section className="ins-section">

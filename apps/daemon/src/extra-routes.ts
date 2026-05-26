@@ -216,17 +216,22 @@ export function registerWorkspaceExtraRoutes(input: {
       // Require a non-shell agent runtime. The fix-conflicts prompt is
       // multi-line ("git pull origin main", "make check", "git push"); if it
       // were pasted into a bash/sh/zsh/fish tmux pane those would execute
-      // line-by-line instead of being read as instructions. The real
-      // invariant is "the prompt must be delivered via a CLI flag, not by
-      // key-paste into a pane": we enforce that by requiring runtime.promptArg.
-      // (id !== "shell" is too narrow — an operator can configure any id with
-      // command:"bash" and bypass an id-only check.)
+      // line-by-line as shell commands. The invariant is "the runtime is an
+      // agent TUI, not a shell" — checked against the runtime's `command`
+      // (id !== "shell" is too narrow — any id can point at command:"bash").
+      // We do NOT require runtime.promptArg: the canonical claude-code
+      // runtime intentionally omits it (Claude's `-p` is non-interactive
+      // print mode), and createAgentSession pastes the prompt into the TUI
+      // once it's ready. Pasting multi-line text into an agent TUI is safe
+      // since the TUI treats it as user input, not as a shell command.
+      const isShellCommand = (cmd: string) => ["bash", "sh", "zsh", "fish"].includes(cmd);
       const requestedRuntimeId = typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined;
       const runtime = requestedRuntimeId
         ? config.runtimes.find((candidate) => candidate.id === requestedRuntimeId)
-        : config.runtimes.find((candidate) => candidate.id !== "shell" && Boolean(candidate.promptArg));
+        : config.runtimes.find((candidate) => candidate.id !== "shell" && !isShellCommand(candidate.command));
       if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
-      if (!runtime.promptArg) return res.status(400).json({ error: "runtime_must_be_agent" });
+      if (runtime.id === "shell" || isShellCommand(runtime.command))
+        return res.status(400).json({ error: "runtime_must_be_agent" });
       const resolved = await resolveFixConflictsPrompt({
         workspacePath: workspace.path,
         workspaceId: workspace.id,
