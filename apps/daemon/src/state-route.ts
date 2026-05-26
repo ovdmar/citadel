@@ -5,6 +5,7 @@ import { mcpStatus } from "@citadel/mcp";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import type express from "express";
 import type { asyncRoute as AsyncRoute } from "./app-helpers.js";
+import { getBootRestoreSummary } from "./boot-restore.js";
 import type { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 
 type ScheduledAgentRunner = ReturnType<typeof registerScheduledAgentRoutes>["runner"];
@@ -36,6 +37,7 @@ export function registerStateRoute(input: {
         mcp: mcpStatus(config.mcp.enabled),
         scheduledAgents: scheduledAgents.list(),
         namespaces: store.listNamespaces(),
+        bootRestore: getBootRestoreSummary(),
       });
     }),
   );

@@ -106,6 +106,8 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
       args: runtime.args,
       displayName: runtime.displayName,
       promptArg: runtime.promptArg ?? null,
+      sessionIdArg: runtime.sessionIdArg ?? null,
+      resumeArg: runtime.resumeArg ?? null,
     });
     emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
     return { session };
@@ -120,6 +122,8 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
         args: runtime.args,
         displayName: runtime.displayName,
         promptArg: runtime.promptArg ?? null,
+        sessionIdArg: runtime.sessionIdArg ?? null,
+        resumeArg: runtime.resumeArg ?? null,
       });
       emit("workspace.updated", { workspaceId: result.workspaceId, operationId: result.operationId });
       if (result.sessionId) emit("agent.updated", { workspaceId: result.workspaceId, sessionId: result.sessionId });

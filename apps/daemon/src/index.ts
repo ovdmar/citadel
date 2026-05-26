@@ -2,6 +2,7 @@ import { defaultConfigPath, loadConfig, loadDevState, resolveWorktreeRoot, saveD
 import { SqliteStore } from "@citadel/db";
 import { OperationService } from "@citadel/operations";
 import { createDaemonApp } from "./app.js";
+import { runBootRestore } from "./boot-restore.js";
 
 // Resolve the worktree root before loading config. When running inside a
 // Citadel checkout, env always wins over dev.json; dev.json wins over an
@@ -60,7 +61,8 @@ const store = new SqliteStore(config.databasePath);
 store.migrate();
 const operations = new OperationService(store, config);
 operations.reconcile();
-const { server } = await createDaemonApp({ config, configPath, store, operations });
+const daemon = await createDaemonApp({ config, configPath, store, operations });
+const { server } = daemon;
 
 // Try to bind; on EADDRINUSE, walk the next 10 ports so worktree-derived ports
 // that happen to collide (cksum-mod-100 birthday hits at ~15 worktrees) don't
@@ -91,6 +93,15 @@ server.listen(config.port, config.bindHost, () => {
       host: config.bindHost,
       worktreePath: worktreeRoot,
       ...(devState?.webPort ? { webPort: devState.webPort } : {}),
+    });
+  }
+  // Boot-time auto-restore. Fires once after listen() succeeds — the
+  // cockpit polls /api/state.bootRestore for the running summary while we
+  // walk the candidate list. Skipped when CITADEL_DISABLE_BOOT_RESTORE=1
+  // for operators who want a quiet boot.
+  if (process.env.CITADEL_DISABLE_BOOT_RESTORE !== "1") {
+    runBootRestore({ store, operations, config, emit: daemon.emit }).catch((error) => {
+      console.warn(`Boot-restore failed: ${error instanceof Error ? error.message : String(error)}`);
     });
   }
 });

@@ -1,8 +1,8 @@
 // Per-runtime status detection — pane-based, fixture-driven.
 //
 // Each adapter inspects the pane capture on every monitor tick and returns one
-// of: "running" | "idle" | "waiting_for_input" | null. The reducer
-// (@citadel/operations) applies the observation with stickiness rules.
+// of: "running" | "idle" | "waiting_for_input" | "rate_limited" | null. The
+// reducer (@citadel/operations) applies the observation with stickiness rules.
 //
 // Lifecycle signals (tmux_missing, exited_clean/failed) come from the monitor's
 // own deterministic checks (tmux session existence, bash wrapper sentinel
@@ -15,7 +15,7 @@
 import { claudeCodeStatusAdapter } from "./claude-code.js";
 import { codexStatusAdapter } from "./codex.js";
 
-export type PaneObservation = "running" | "idle" | "waiting_for_input";
+export type PaneObservation = "running" | "idle" | "waiting_for_input" | "rate_limited";
 
 export interface ObservationContext {
   // Most recent visible-pane capture (no scrollback). Adapter regexes are

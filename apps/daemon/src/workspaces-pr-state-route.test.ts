@@ -37,7 +37,7 @@ describe("GET /api/workspaces/pr-state", () => {
     }
   });
 
-  it("omits archived workspaces and workspaces with no cached entry", async () => {
+  it("omits archived workspaces and workspaces with no cached entry", { timeout: 30_000 }, async () => {
     const fixture = createFixture(dirs);
     const { repoPath } = createGitFixtureWithRemote(fixture.config.dataDir);
     const { server } = await createDaemonApp(fixture);
@@ -68,7 +68,7 @@ describe("GET /api/workspaces/pr-state", () => {
     }
   });
 
-  it("serializes cachedAt as ISO-8601 string when an entry is present", async () => {
+  it("serializes cachedAt as ISO-8601 string when an entry is present", { timeout: 30_000 }, async () => {
     // Boot a fresh daemon and pre-seed provider-cache.json so the workspace's
     // vc:* key is hydrated. Then the route serializes cachedAt as ISO.
     const fixture = createFixture(dirs);

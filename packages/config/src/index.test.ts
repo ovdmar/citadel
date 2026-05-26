@@ -244,6 +244,50 @@ describe("loadConfig", () => {
     }
   });
 
+  it("backfills missing runtime fields from built-in defaults so stale on-disk configs keep resume support", () => {
+    // Regression: a config file written before `resumeArg`/`sessionIdArg`/
+    // `supportsResume` were added to RuntimeConfigSchema would persist a
+    // claude-code entry without them. On reload, the top-level `runtimes`
+    // array fully replaced the schema's default array, so the built-in
+    // resume fields were lost — and the restore route then rejected every
+    // claude session with `runtime_does_not_support_resume`. We backfill
+    // missing fields per-id from built-ins; user overrides still win.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-config-"));
+    dirs.push(dir);
+    const configPath = path.join(dir, "citadel.config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        dataDir: dir,
+        databasePath: path.join(dir, "citadel.sqlite"),
+        runtimes: [
+          // Pre-schema-evolution shape: no resumeArg, no supportsResume, etc.
+          { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] },
+          // User override that should be preserved over the built-in.
+          { id: "shell", displayName: "Custom Shell", command: "zsh", args: [] },
+          // Unknown id — left untouched (it's a user-defined custom runtime).
+          { id: "custom", displayName: "Custom", command: "/usr/bin/custom", args: [] },
+        ],
+      }),
+    );
+
+    const config = loadConfig(configPath);
+    const claude = config.runtimes.find((r) => r.id === "claude-code");
+    expect(claude?.resumeArg).toBe("--resume");
+    expect(claude?.sessionIdArg).toBe("--session-id");
+    expect(claude?.supportsResume).toBe(true);
+    expect(claude?.supportsModelSelection).toBe(true);
+
+    const shell = config.runtimes.find((r) => r.id === "shell");
+    expect(shell?.displayName).toBe("Custom Shell");
+    expect(shell?.command).toBe("zsh");
+    expect(shell?.supportsPrompt).toBe(true); // backfilled
+
+    const custom = config.runtimes.find((r) => r.id === "custom");
+    expect(custom?.resumeArg).toBeUndefined();
+  });
+
   it("in prod mode (no CITADEL_WORKTREE), honors dataDir/databasePath persisted in the config file", () => {
     // Prod regression: the systemd-supervised daemon at the main install must
     // be able to persist a customized `databasePath` in

@@ -184,6 +184,9 @@ describe("createProviderCache.load()", () => {
     await new Promise((r) => setTimeout(r, 500));
     expect(cache.get("vc:w1:t")?.value).toBe("from-live");
     readSpy.mockRestore();
+    // Dispose to drain any pending flush BEFORE afterEach rms the dataDir.
+    // Without this the debounced write races the cleanup and can ENOTEMPTY.
+    await cache.dispose();
   });
 
   it("logs and continues on parse error", async () => {
