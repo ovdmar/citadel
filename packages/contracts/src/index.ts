@@ -160,15 +160,6 @@ export const ProviderHealthSchema = z.object({
   checkedAt: z.string(),
 });
 
-export const CheckSummarySchema = z.object({
-  name: z.string(),
-  status: z.string(),
-  conclusion: z.string().nullable(),
-  url: z.string().nullable(),
-  startedAt: z.string().nullable().default(null),
-  completedAt: z.string().nullable().default(null),
-});
-
 export const CiRunSummarySchema = z.object({
   providerId: z.string(),
   id: z.string(),
@@ -209,6 +200,7 @@ export const RuntimeUsageSummarySchema = z.object({
 });
 
 import {
+  CheckSummarySchema,
   PrMergeStateStatusSchema,
   PrMergeableSchema,
   PrReviewerSchema,
@@ -216,6 +208,7 @@ import {
   PullRequestSummarySchema,
 } from "./pull-request.js";
 export {
+  CheckSummarySchema,
   PrMergeStateStatusSchema,
   PrMergeableSchema,
   PrReviewerSchema,

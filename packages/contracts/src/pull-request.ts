@@ -1,5 +1,17 @@
 import { z } from "zod";
-import { CheckSummarySchema } from "./index.js";
+
+// Co-located with PullRequestSummary because it's the only consumer in
+// practice. Lives here (not in index.ts) so pull-request.ts has no import
+// dependency on its own parent barrel — ESM evaluates pull-request.ts during
+// index.ts's import, and a back-reference would hit the TDZ.
+export const CheckSummarySchema = z.object({
+  name: z.string(),
+  status: z.string(),
+  conclusion: z.string().nullable(),
+  url: z.string().nullable(),
+  startedAt: z.string().nullable().default(null),
+  completedAt: z.string().nullable().default(null),
+});
 
 export const PrReviewerStateSchema = z.enum(["approved", "changes_requested", "commented", "pending", "dismissed"]);
 
