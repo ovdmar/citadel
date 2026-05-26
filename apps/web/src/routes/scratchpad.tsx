@@ -1,8 +1,10 @@
 import type { ScratchpadBlockSummary, ScratchpadHistorySummary, ScratchpadSnapshot } from "@citadel/contracts";
 import { Link } from "@tanstack/react-router";
-import { ArrowLeft, Trash2, X } from "lucide-react";
+import { ArrowLeft, Clock, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api.js";
+import { VoiceCaptureButton, type VoiceCaptureButtonHandle } from "../components/voice-capture-button.js";
+import { appendTranscript } from "../lib/append-transcript.js";
 import { sideBySideDiff } from "./scratchpad-diff.js";
 import { formatBytes, pillLabel, pillSlug } from "./scratchpad-helpers.js";
 import { renderBlockMarkdown } from "./scratchpad-markdown.js";
@@ -30,6 +32,9 @@ export function ScratchpadView() {
   const [restoring, setRestoring] = useState(false);
   const [composerError, setComposerError] = useState<string | null>(null);
   const [undo, setUndo] = useState<UndoPayload | null>(null);
+  // On narrow viewports the history sidebar is hidden behind this toggle.
+  // Desktop CSS always shows the sidebar regardless of this flag.
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -270,7 +275,10 @@ export function ScratchpadView() {
     [submitComposer],
   );
 
+  const composerMicRef = useRef<VoiceCaptureButtonHandle | null>(null);
   const onComposerBlur = useCallback(() => {
+    // Spec B.2 Scratchpad #9: voice capture stops on textarea blur.
+    composerMicRef.current?.stop();
     if (composer.trim().length > 0) void submitComposer(composer);
   }, [composer, submitComposer]);
 
@@ -425,6 +433,17 @@ export function ScratchpadView() {
         <span className="command-result-meta scratchpad-status" aria-live="polite">
           {renderStatus(updatedAt)}
         </span>
+        <button
+          type="button"
+          className={`scratchpad-history-toggle${historyOpen ? " is-open" : ""}`}
+          aria-pressed={historyOpen}
+          aria-label={historyOpen ? "Hide version history" : "Show version history"}
+          title={historyOpen ? "Hide version history" : "Show version history"}
+          onClick={() => setHistoryOpen((open) => !open)}
+        >
+          <Clock size={14} />
+          <span>History</span>
+        </button>
       </header>
       <div className="scratchpad-body">
         <div className="scratchpad-blocks-pane">
@@ -460,23 +479,29 @@ export function ScratchpadView() {
                     {composerError}
                   </p>
                 ) : null}
-                <textarea
-                  ref={composerRef}
-                  className="scratchpad-composer-input"
-                  aria-label="New scratchpad block"
-                  placeholder="Add a note. ⌘/Ctrl-Enter creates a new block."
-                  value={composer}
-                  onChange={(event) => setComposer(event.target.value)}
-                  onInput={(event) => {
-                    const el = event.currentTarget;
-                    el.style.height = "auto";
-                    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-                  }}
-                  onKeyDown={onComposerKey}
-                  onBlur={onComposerBlur}
-                  disabled={!loaded}
-                  rows={2}
-                />
+                <div className="scratchpad-composer-row">
+                  <textarea
+                    ref={composerRef}
+                    className="scratchpad-composer-input"
+                    aria-label="New scratchpad block"
+                    placeholder="Add a note. ⌘/Ctrl-Enter creates a new block."
+                    value={composer}
+                    onChange={(event) => setComposer(event.target.value)}
+                    onInput={(event) => {
+                      const el = event.currentTarget;
+                      el.style.height = "auto";
+                      el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+                    }}
+                    onKeyDown={onComposerKey}
+                    onBlur={onComposerBlur}
+                    disabled={!loaded}
+                    rows={2}
+                  />
+                  <VoiceCaptureButton
+                    controlRef={composerMicRef}
+                    onTranscript={(text) => setComposer((prev) => appendTranscript(prev, text))}
+                  />
+                </div>
               </div>
               {undo ? (
                 <output className="scratchpad-undo-toast">
@@ -492,7 +517,7 @@ export function ScratchpadView() {
             </>
           )}
         </div>
-        <aside className="scratchpad-history" aria-label="Scratchpad version history">
+        <aside className={`scratchpad-history${historyOpen ? " is-open" : ""}`} aria-label="Scratchpad version history">
           <header className="scratchpad-history-header">
             <span>Versions</span>
             <span className="scratchpad-history-count">{history.length}</span>
@@ -627,6 +652,7 @@ function BlockItem(props: BlockItemProps) {
     [block.isEditing, block.text],
   );
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
+  const blockMicRef = useRef<VoiceCaptureButtonHandle | null>(null);
 
   useEffect(() => {
     if (block.isEditing) {
@@ -651,16 +677,26 @@ function BlockItem(props: BlockItemProps) {
   if (block.isEditing) {
     return (
       <div className="scratchpad-block scratchpad-block-editing">
-        <textarea
-          ref={editorRef}
-          className="scratchpad-block-textarea"
-          aria-label="Edit block"
-          value={block.draft}
-          onInput={onTextareaInput}
-          onChange={(event) => onChange(block.id, event.target.value)}
-          onBlur={(event) => onBlur(block.id, event.target.value)}
-          onKeyDown={(event) => onKey(block.id, event)}
-        />
+        <div className="scratchpad-block-edit-row">
+          <textarea
+            ref={editorRef}
+            className="scratchpad-block-textarea"
+            aria-label="Edit block"
+            value={block.draft}
+            onInput={onTextareaInput}
+            onChange={(event) => onChange(block.id, event.target.value)}
+            onBlur={(event) => {
+              // Spec B.2 Scratchpad #9: blurring stops voice capture.
+              blockMicRef.current?.stop();
+              onBlur(block.id, event.target.value);
+            }}
+            onKeyDown={(event) => onKey(block.id, event)}
+          />
+          <VoiceCaptureButton
+            controlRef={blockMicRef}
+            onTranscript={(text) => onChange(block.id, appendTranscript(block.draft, text))}
+          />
+        </div>
       </div>
     );
   }

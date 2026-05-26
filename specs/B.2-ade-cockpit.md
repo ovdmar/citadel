@@ -105,7 +105,7 @@
 
 ## Scratchpad
 
-The cockpit's scratchpad view renders the per-workspace `scratchpad.md` (see B.7 for the storage format) as a stack of discrete, focusable blocks.
+The cockpit's scratchpad view renders the global `scratchpad.md` (see B.7 for the storage format) as a stack of discrete, focusable blocks. One scratchpad per daemon installation — not per workspace.
 
 [ ] 1. Blocks render as sanitized markdown when not focused (headings, lists, bold/italic, inline + fenced code, links). Raw HTML is sanitized (scripts and inline event handlers removed); `<img>` tags are stripped in v1 since block content can originate from external MCP agents.
 [ ] 2. Clicking a block enters inline edit mode with a `<textarea>` containing the raw markdown.
@@ -115,7 +115,10 @@ The cockpit's scratchpad view renders the per-workspace `scratchpad.md` (see B.7
 [ ] 6. Each block has a hover-visible delete affordance; deletion is optimistic and reversible via an undo toast.
 [ ] 7. The version history sidebar continues to show whole-file snapshots, including the `migrate-to-blocks` entry that runs on the first read after upgrade.
 [ ] 8. No drag-drop reorder, no typed blocks (code/todo/heading), no per-block diff in v1 — out of scope.
+[ ] 9. Voice capture: the composer and per-block editor render a microphone affordance when the browser exposes the Web Speech API (`SpeechRecognition` or `webkitSpeechRecognition`, including iOS Safari ≥ 14.5). Tapping starts recognition; live results append to the composer/block draft. Tapping again, blurring, or 10s of silence stops it. When neither API is exposed the mic affordance is not rendered.
+[ ] 10. On viewports matching `(max-width: 820px)` and an otherwise-bare URL (no search, no hash), navigating to the cockpit root (`/`) routes to `/scratchpad` so the scratchpad is the first view on mobile. Deeplinks with any search or hash (including `/?modal=new-workspace`) are unaffected.
+[ ] 11. On the same narrow viewport, the scratchpad layout pins the composer to the bottom respecting `env(safe-area-inset-bottom)`, exposes interactive controls (mic, delete, save) at ≥ 36×36 logical px, and hides the version history sidebar behind a `History` toggle in the page header.
 
 ---
 
-keywords: ade, cockpit, readiness, next action, workspace detail, operator, attention state, scratchpad, blocks
+keywords: ade, cockpit, readiness, next action, workspace detail, operator, attention state, scratchpad, blocks, voice, mobile

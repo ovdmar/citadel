@@ -4,7 +4,8 @@ import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
 import { Cockpit } from "./cockpit.js";
-import { bootstrapLastRoute, clearLastRoute, saveLastRoute } from "./lib/last-route.js";
+import { applyBootstrapNavigationFromWindow } from "./lib/bootstrap-redirect.js";
+import { clearLastRoute, saveLastRoute } from "./lib/last-route.js";
 import { DashboardView } from "./routes/dashboard.js";
 import { HistoryView } from "./routes/history.js";
 import { OnboardingView } from "./routes/onboarding.js";
@@ -130,12 +131,12 @@ function NotFoundView() {
   );
 }
 
-// Restore the last visited route BEFORE the router boots so it picks the
-// correct initial location off the URL bar. The decision logic lives in
-// bootstrapLastRoute so it can be unit-tested independently.
-if (typeof window !== "undefined") {
-  bootstrapLastRoute(window.location, window.history);
-}
+// Decide the initial URL BEFORE the router boots so it picks the right
+// location off the URL bar. applyBootstrapNavigationFromWindow first checks
+// the mobile-default rule (narrow viewport + bare root → /scratchpad) and,
+// when that doesn't fire, falls through to bootstrapLastRoute to restore a
+// persisted desktop route. Each rule is unit-tested in lib/.
+applyBootstrapNavigationFromWindow();
 
 const router = createRouter({
   routeTree: rootRoute.addChildren([

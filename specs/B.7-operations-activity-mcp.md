@@ -61,7 +61,7 @@ For interactive runtimes like Claude Code, both `start_agent_session` (with a `p
 
 ### Scratchpad
 
-The per-workspace `scratchpad.md` file is a shared ideas-capture surface: the user notes thoughts and TODOs in the cockpit, orchestrator agents read/append via MCP.
+The global `scratchpad.md` file (stored at `config.dataDir/scratchpad.md`) is a shared ideas-capture surface: the user notes thoughts and TODOs in the cockpit, orchestrator agents read/append via MCP. There is one scratchpad per daemon installation — it is not split per workspace.
 
 **Storage format.** Each idea is a block fenced with symmetric HTML comments carrying a UUID:
 
@@ -95,6 +95,10 @@ The file remains a regular markdown file so external tooling (git, editors, grep
 
 All block-level tools go through the same version-history coalesce path; sources are `mcp:add_block`, `mcp:update_block`, `mcp:delete_block` (or `ui:*_block` from the cockpit). Empty blocks are never persisted.
 
+**Quick-capture page.** The daemon serves a standalone HTML page at `GET /quick-capture` — outside the `/api/*` namespace — designed to be opened in a Spotlight-style popup window by external shortcuts (see `scripts/mac-satellite/`). The page is a single autofocused `<textarea>` plus a voice mic affordance; ⌘/Ctrl-Enter posts to the existing `POST /api/scratchpad/blocks` endpoint and attempts `window.close()`. In Chrome `--app=` mode close succeeds; otherwise the page swaps the textarea for an inline `Captured. Press ⌘W to close.` confirmation. The page reuses the existing block API — there is no separate quick-capture write surface.
+
+**Security / trust model.** The daemon binds `127.0.0.1` by default (`bindHost` config; `CITADEL_BIND_HOST` env override) and enables `cors()` allow-all. It has no per-request authentication. `POST /api/scratchpad/blocks` (and every other `/api/*` endpoint) is therefore unauthenticated by design — Citadel is a single-user local-first tool. `GET /quick-capture` does not change this posture; it is a convenience surface over the same existing endpoint. Operators who choose to expose the daemon beyond `127.0.0.1` (LAN, port-forwarding, reverse proxy) own the corresponding network gate (SSH tunnel, VPN, auth-adding proxy).
+
 ---
 
-keywords: operations, activity, audit, progress, logs, mcp, automation, agents, scratchpad
+keywords: operations, activity, audit, progress, logs, mcp, automation, agents, scratchpad, quick-capture

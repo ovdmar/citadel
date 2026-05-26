@@ -273,6 +273,56 @@
   color: var(--color-danger, #f08097);
 }
 
+.scratchpad-composer-row,
+.scratchpad-block-edit-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  width: 100%;
+}
+
+.scratchpad-composer-row > .scratchpad-composer-input,
+.scratchpad-block-edit-row > .scratchpad-block-textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Voice capture mic toggle — rendered next to the composer textarea and per-block editor. */
+.scratchpad-mic {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: inherit;
+  cursor: pointer;
+}
+
+.scratchpad-mic:hover {
+  background: var(--panel-strong, var(--panel));
+}
+
+.scratchpad-mic.is-listening {
+  background: var(--color-action, #4f8cff);
+  color: var(--topbar-bg, #fff);
+  border-color: var(--color-action, #4f8cff);
+  animation: scratchpad-mic-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes scratchpad-mic-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(79, 140, 255, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(79, 140, 255, 0);
+  }
+}
+
 /* Undo toast for optimistic-delete. */
 .scratchpad-undo-toast {
   position: fixed;
@@ -663,4 +713,78 @@
 .scratchpad-restore-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* History toggle — visible in the page header. Lives next to the status pill;
+   the @media rule below promotes it to the primary affordance on mobile and
+   uses it to drive the sidebar's visibility (which the desktop CSS ignores). */
+.scratchpad-history-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  margin-left: 10px;
+}
+
+.scratchpad-history-toggle.is-open {
+  background: var(--color-action, #4f8cff);
+  color: var(--topbar-bg, #fff);
+  border-color: var(--color-action, #4f8cff);
+}
+
+/* Mobile-tightened scratchpad layout. The cockpit-wide breakpoint at 820px is
+   in styles.css; this rule scopes mobile-only adjustments to the scratchpad
+   page so they don't bleed into the rest of the cockpit. */
+@media (max-width: 820px) {
+  .scratchpad-page {
+    /* Use dvh so the iOS URL-bar collapse doesn't leave a strip of empty
+       viewport at the bottom that pushes the composer off-screen. */
+    height: 100dvh;
+  }
+
+  .scratchpad-body {
+    padding: 8px;
+    gap: 8px;
+    flex-direction: column;
+  }
+
+  .scratchpad-blocks-pane {
+    /* Composer + safe-area gap go inside this pane via padding-bottom on the
+       composer itself; the pane stays a normal flex child. */
+    flex: 1 1 auto;
+  }
+
+  .scratchpad-composer {
+    /* Respect the iOS home-indicator inset so the composer doesn't sit on top
+       of it. viewport-fit=cover in index.html is required for the inset value
+       to be non-zero on iOS. */
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+
+  /* Spec B.2 Scratchpad #11: tap targets ≥ 36×36 on narrow viewports. The
+     desktop delete affordance is 26×26 for a tighter hover feel; on touch
+     surfaces it has to grow so the user can reliably hit it. */
+  .scratchpad-block-delete {
+    width: 36px;
+    height: 36px;
+  }
+
+  /* History sidebar is hidden by default on mobile; the toggle in the header
+     promotes it to a full-pane drawer when the user wants it. */
+  .scratchpad-history {
+    display: none;
+  }
+
+  .scratchpad-history.is-open {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+  }
 }

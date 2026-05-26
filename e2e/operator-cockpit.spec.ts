@@ -13,7 +13,9 @@ const API_BASE =
   process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "4012"}`;
 
 test("cockpit renders top bar, navigator, stage, and inspector", async ({ page }, testInfo) => {
-  await page.goto("/");
+  // Use a non-bare URL so the mobile-first scratchpad redirect doesn't fire —
+  // this test is about the cockpit shell, not the mobile default landing.
+  await page.goto("/?from=cockpit-test");
   await expect(page.locator(".cit-brand")).toContainText("Citadel");
   await expect(page.getByRole("button", { name: "Search workspaces" })).toBeVisible();
   if (testInfo.project.name === "mobile") {
@@ -70,7 +72,8 @@ test("mobile cockpit toggles between navigator/stage/inspector", async ({ page, 
     workspaceId = (await createWorkspace(request, repo.id, workspaceName)).workspaceId;
     await waitForWorkspace(request, workspaceId, "ready");
 
-    await page.goto("/");
+    // Non-bare URL bypasses the mobile-first scratchpad redirect.
+    await page.goto("/?from=cockpit-test");
     const switcher = page.getByRole("navigation", { name: "Workspace layout" });
     await switcher.getByRole("button", { name: "Navigator" }).click();
     await expect(page.getByRole("button", { name: new RegExp(workspaceName, "i") })).toBeVisible();
