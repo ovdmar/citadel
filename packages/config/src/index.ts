@@ -6,6 +6,59 @@ import { z } from "zod";
 export { devStatePath, loadDevState, saveDevState, resolveWorktreeRoot, DevStateSchema } from "./dev-state.js";
 export type { DevState } from "./dev-state.js";
 
+// Built-in defaults for the runtimes Citadel ships with. Held as a constant so
+// we can both seed the schema's default (fresh install) AND backfill missing
+// fields onto user-saved configs (existing installs whose `citadel.config.json`
+// was written before newer fields like `resumeArg`/`sessionIdArg` existed —
+// without backfill those installs silently lose resume support).
+type BuiltinRuntime = {
+  id: string;
+  displayName: string;
+  command: string;
+  args: string[];
+  promptArg?: string;
+  resumeArg?: string;
+  sessionIdArg?: string;
+  supportsResume?: boolean;
+  supportsPrompt?: boolean;
+  supportsModelSelection?: boolean;
+};
+
+const BUILTIN_RUNTIMES: BuiltinRuntime[] = [
+  {
+    id: "claude-code",
+    displayName: "Claude Code",
+    command: "claude",
+    args: [],
+    // No promptArg: Claude Code's `-p` is non-interactive print mode and
+    // exits after responding, which is not what Citadel agent sessions
+    // want. Interactive prompts are injected into the tmux pane after the
+    // runtime is ready (see operations.createAgentSession).
+    resumeArg: "--resume",
+    sessionIdArg: "--session-id",
+    supportsResume: true,
+    supportsPrompt: true,
+    supportsModelSelection: true,
+  },
+  {
+    id: "codex",
+    displayName: "Codex",
+    command: "codex",
+    args: [],
+    supportsResume: true,
+    supportsPrompt: true,
+  },
+  {
+    id: "cursor-agent",
+    displayName: "Cursor Agent",
+    command: "cursor-agent",
+    args: [],
+    supportsPrompt: true,
+  },
+  { id: "pi", displayName: "Pi", command: "pi", args: [] },
+  { id: "shell", displayName: "Shell", command: "bash", args: ["-l"], supportsPrompt: true },
+];
+
 export const RuntimeConfigSchema = z.object({
   id: z.string().min(1),
   displayName: z.string().min(1),
@@ -101,40 +154,7 @@ export const CitadelConfigSchema = z
         github: { enabled: true, command: "gh" },
         jira: { enabled: true, command: "jtk" },
       }),
-    runtimes: z.array(RuntimeConfigSchema).default([
-      {
-        id: "claude-code",
-        displayName: "Claude Code",
-        command: "claude",
-        args: [],
-        // No promptArg: Claude Code's `-p` is non-interactive print mode and
-        // exits after responding, which is not what Citadel agent sessions
-        // want. Interactive prompts are injected into the tmux pane after the
-        // runtime is ready (see operations.createAgentSession).
-        resumeArg: "--resume",
-        sessionIdArg: "--session-id",
-        supportsResume: true,
-        supportsPrompt: true,
-        supportsModelSelection: true,
-      },
-      {
-        id: "codex",
-        displayName: "Codex",
-        command: "codex",
-        args: [],
-        supportsResume: true,
-        supportsPrompt: true,
-      },
-      {
-        id: "cursor-agent",
-        displayName: "Cursor Agent",
-        command: "cursor-agent",
-        args: [],
-        supportsPrompt: true,
-      },
-      { id: "pi", displayName: "Pi", command: "pi", args: [] },
-      { id: "shell", displayName: "Shell", command: "bash", args: ["-l"], supportsPrompt: true },
-    ]),
+    runtimes: z.array(RuntimeConfigSchema).default(() => BUILTIN_RUNTIMES.map((r) => ({ ...r, args: [...r.args] }))),
     usageProviders: z.array(UsageProviderConfigSchema).default([]),
     hooks: z.array(HookConfigSchema).default([]),
     repoDefaults: z
@@ -302,7 +322,7 @@ export function loadConfig(configPath = defaultConfigPath()): CitadelConfig {
       scratchpad: rawScratchpad,
       ...rawWithoutPaths
     } = raw ?? {};
-    // Strip `scratchpad.path` while preserving sibling fields so that future
+    // Strip `scratchpad.path` while preserving sibling fields so future
     // `scratchpad.*` additions are not accidentally clobbered when the worktree
     // daemon loads a leaked prod config.
     const cleanedScratchpad =
@@ -311,9 +331,34 @@ export function loadConfig(configPath = defaultConfigPath()): CitadelConfig {
         : undefined;
     const merged: Record<string, unknown> = { ...defaults, ...rawWithoutPaths };
     if (cleanedScratchpad !== undefined) merged.scratchpad = cleanedScratchpad;
-    return CitadelConfigSchema.parse(merged);
+    return backfillBuiltinRuntimes(CitadelConfigSchema.parse(merged));
   }
-  return CitadelConfigSchema.parse({ ...defaults, ...(raw ?? {}) });
+  return backfillBuiltinRuntimes(CitadelConfigSchema.parse({ ...defaults, ...(raw ?? {}) }));
+}
+
+// Heal user-saved runtime entries whose on-disk shape predates newer schema
+// fields (resumeArg, sessionIdArg, supportsResume, etc.). User overrides win;
+// only fields the user didn't set get filled in from the built-in by id.
+// Unknown ids are left untouched — those are custom runtimes the user added.
+function backfillBuiltinRuntimes(config: CitadelConfig): CitadelConfig {
+  const byId = new Map(BUILTIN_RUNTIMES.map((r) => [r.id, r] as const));
+  let mutated = false;
+  const runtimes = config.runtimes.map((runtime) => {
+    const builtin = byId.get(runtime.id);
+    if (!builtin) return runtime;
+    const merged: Record<string, unknown> = { ...builtin };
+    for (const [key, value] of Object.entries(runtime)) {
+      if (value !== undefined) merged[key] = value;
+    }
+    const next = RuntimeConfigSchema.parse(merged);
+    if (
+      Object.keys(next).some((k) => (next as Record<string, unknown>)[k] !== (runtime as Record<string, unknown>)[k])
+    ) {
+      mutated = true;
+    }
+    return next;
+  });
+  return mutated ? { ...config, runtimes } : config;
 }
 
 export function saveConfig(config: CitadelConfig, configPath = defaultConfigPath()) {
