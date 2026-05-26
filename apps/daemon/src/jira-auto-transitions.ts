@@ -113,9 +113,14 @@ export function createJiraAutoTransitions(deps: CreateJiraAutoTransitionsDeps): 
       const entries = config.providers.jira.autoTransitions.filter((entry) => entry.event === event);
       if (entries.length === 0) return;
 
-      // Re-read the workspace from the store so a post-emit unattach is
-      // visible. The `workspace` arg comes from the caller's snapshot.
-      const current = store.listWorkspaces().find((w) => w.id === workspace.id) ?? null;
+      // For events that fire on a workspace that's still active, re-read
+      // from the store so a post-emit unattach is honoured. Archive/remove
+      // events fire AFTER the workspace has been archived or deleted, so
+      // listWorkspaces() (which filters archived_at IS NULL) would return
+      // nothing and the auto-transition would silently never fire — trust
+      // the snapshot's issueKey for those two events instead.
+      const honourSnapshot = event === "workspace.archived" || event === "workspace.removed";
+      const current = honourSnapshot ? workspace : (store.listWorkspaces().find((w) => w.id === workspace.id) ?? null);
       const issueKey = current?.issueKey ?? null;
       if (!issueKey) return;
 

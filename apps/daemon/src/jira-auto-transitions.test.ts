@@ -285,6 +285,34 @@ describe("createJiraAutoTransitions", () => {
     );
   });
 
+  it("workspace.archived fires using the snapshot issueKey (store row is gone after archiveWorkspace)", async () => {
+    // Regression: listWorkspaces() filters archived_at IS NULL, so re-
+    // reading from the store post-archive returns null. The callback must
+    // trust the snapshot's issueKey for workspace.archived /
+    // workspace.removed events, otherwise these auto-transitions never
+    // fire.
+    const ctx = createDeps({ autoTransitions: [{ event: "workspace.archived", transition: "Done" }] });
+    ctx.store.archiveWorkspace(ctx.workspace.id, "archived", false);
+    await ctx.runAutoTransitions("workspace.archived", ctx.repo, ctx.workspace, {
+      repo: ctx.repo,
+      workspace: ctx.workspace,
+    });
+    expect(ctx.transitionJiraIssue).toHaveBeenCalledTimes(1);
+    expect(ctx.transitionJiraIssue).toHaveBeenCalledWith({ issueKey: "AUTH-1", transition: "31" });
+  });
+
+  it("workspace.removed fires using the snapshot issueKey (store row is gone after deleteWorkspace)", async () => {
+    const ctx = createDeps({
+      autoTransitions: [{ event: "workspace.removed", transition: "Done" }],
+    });
+    ctx.store.deleteWorkspace(ctx.workspace.id);
+    await ctx.runAutoTransitions("workspace.removed", ctx.repo, ctx.workspace, {
+      repo: ctx.repo,
+      workspace: ctx.workspace,
+    });
+    expect(ctx.transitionJiraIssue).toHaveBeenCalledTimes(1);
+  });
+
   it("never throws even when the inner provider call rejects synchronously", async () => {
     const ctx = createDeps({
       autoTransitions: [{ event: "agent.started", transition: "In Progress" }],

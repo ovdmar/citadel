@@ -75,7 +75,6 @@ import {
   type WorkspaceLifecycleDeps,
   removeWorkspace as removeWorkspaceImpl,
 } from "./workspace-lifecycle.js";
-export type { RemoveWorkspaceInput, RemoveWorkspaceResult } from "./workspace-lifecycle.js";
 
 // Daemon-constructed callback that fires lifecycle-event-driven Jira
 // transitions. Optional — when not wired (e.g., unit tests that don't

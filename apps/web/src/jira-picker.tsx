@@ -10,7 +10,6 @@
 
 import type {
   IssueSearchResponse,
-  IssueSearchResult,
   IssueTransition,
   IssueTransitionActionResult,
   WorkspaceCockpitSummary,
@@ -24,7 +23,7 @@ const SEARCH_DEBOUNCE_MS = 250;
 const SEARCH_STALE_MS = 5_000;
 const COCKPIT_SUMMARY_QUERY = (workspaceId: string) => ["workspace-cockpit", workspaceId] as const;
 
-export type IssueAttachSlotProps = {
+type IssueAttachSlotProps = {
   workspaceId: string;
   issueKey: string | null;
   issueTitle: string | null;
@@ -359,7 +358,7 @@ function ManualAttachForm(props: { workspaceId: string; onCancel: () => void }) 
 
 // ─── Hooks ────────────────────────────────────────────────────────────────────
 
-export function useJiraSearch(query: string) {
+function useJiraSearch(query: string) {
   return useQuery<IssueSearchResponse>({
     queryKey: ["jira-search", query],
     queryFn: () =>
@@ -453,7 +452,3 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
   }, [value, delayMs]);
   return debounced;
 }
-
-// Exposed for tests that want to assert on the search-result shape produced
-// by the hook layer without spinning up the full picker UI.
-export type { IssueSearchResult };

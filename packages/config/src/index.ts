@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { JiraAutoTransitionSchema } from "@citadel/contracts";
 import { z } from "zod";
 
 export { devStatePath, loadDevState, saveDevState, resolveWorktreeRoot, DevStateSchema } from "./dev-state.js";
@@ -91,21 +92,10 @@ export const CitadelConfigSchema = z
             // Lifecycle-event-driven auto-transitions. `transition` names the
             // target status (e.g., "In Progress"); the runtime resolves it
             // to an available transition by matching `toStatus`
-            // case-insensitively. Excludes `workspace.created` (no issue
-            // attached yet) and `workspace.updated` (multi-fire) by design.
-            autoTransitions: z
-              .array(
-                z.object({
-                  event: z.enum([
-                    "agent.started",
-                    "workspace.issue_attached",
-                    "workspace.archived",
-                    "workspace.removed",
-                  ]),
-                  transition: z.string().min(1),
-                }),
-              )
-              .default([]),
+            // case-insensitively. Shape canonicalized in @citadel/contracts
+            // (see JiraAutoTransitionSchema) — config defers to keep a
+            // single source of truth.
+            autoTransitions: z.array(JiraAutoTransitionSchema).default([]),
           })
           .default({ enabled: true, command: "jtk", autoTransitions: [] }),
       })

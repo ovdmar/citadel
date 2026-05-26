@@ -277,6 +277,108 @@ describe("registerJiraRoutes", () => {
     }
   });
 
+  it("PATCH /api/workspaces/:id fires workspace.issue_attached on reattach (value → different value)", async () => {
+    // The plan's PATCH guard is `attached = (prevIssueKey == null ||
+    // prevIssueKey !== nextIssueKey) && nextIssueKey != null`, so a
+    // value→different-value transition (operator swapped the attached
+    // ticket without unattaching first) must also fire — otherwise the
+    // new ticket never gets its auto-transition.
+    const fixture = createFixture();
+    fixture.config.providers.jira.autoTransitions = [{ event: "workspace.issue_attached", transition: "In Progress" }];
+    const now = new Date().toISOString();
+    fixture.store.insertRepo({
+      id: "repo_r",
+      name: "Reattach",
+      rootPath: fixture.config.dataDir,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: `${fixture.config.dataDir}/worktrees`,
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      deployHookCommand: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fixture.store.insertWorkspace({
+      id: "ws_r",
+      repoId: "repo_r",
+      name: "ws-r",
+      path: `${fixture.config.dataDir}/ws-r`,
+      branch: "ws-r",
+      baseBranch: "main",
+      source: "scratch",
+      kind: "worktree",
+      prUrl: null,
+      issueKey: "OLD-1",
+      issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
+      section: "in-progress",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      namespaceId: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    const transitionInputs: Array<{ issueKey: string; transition: string }> = [];
+    const { server } = createDaemonApp({
+      ...fixture,
+      providers: {
+        collectJiraIssueSummary: async (key) => ({
+          providerId: "jira-jtk",
+          status: "healthy",
+          reason: null,
+          key,
+          summary: null,
+          issueStatus: "To Do",
+          assignee: null,
+          updated: null,
+          url: null,
+          transitions: [{ id: "21", name: "Start Progress", toStatus: "In Progress" }],
+          checkedAt: now,
+        }),
+        transitionJiraIssue: async (input) => {
+          transitionInputs.push({ issueKey: input.issueKey, transition: input.transition });
+          return {
+            providerId: "jira-jtk",
+            status: "healthy",
+            reason: null,
+            key: input.issueKey,
+            transition: input.transition,
+            checkedAt: now,
+          };
+        },
+      },
+    });
+    const baseUrl = await listen(server);
+    try {
+      // Same value (no-op) must NOT fire.
+      const noopResp = await fetch(`${baseUrl}/api/workspaces/ws_r`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issueKey: "OLD-1", issueTitle: null, issueUrl: null }),
+      });
+      expect(noopResp.status).toBe(200);
+      expect(transitionInputs).toHaveLength(0);
+
+      // value → different value MUST fire.
+      const reattachResp = await fetch(`${baseUrl}/api/workspaces/ws_r`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issueKey: "NEW-2", issueTitle: null, issueUrl: null }),
+      });
+      expect(reattachResp.status).toBe(200);
+      expect(transitionInputs).toHaveLength(1);
+      expect(transitionInputs[0]?.issueKey).toBe("NEW-2");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("POST /api/workspaces/:id/issue-transition still works after extraction (regression)", async () => {
     const fixture = createFixture();
     const now = new Date().toISOString();

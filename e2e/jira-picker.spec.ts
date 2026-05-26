@@ -79,6 +79,101 @@ test.describe("Jira picker", () => {
     }
   });
 
+  test("transition menu calls the issue-transition route and the pill updates optimistically", async ({
+    page,
+    request,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== "desktop", "Picker interaction covered on desktop only");
+    const fixture = createGitFixture();
+    let workspaceId: string | null = null;
+    try {
+      const repo = await registerRepo(request, fixture, `Jira Transition ${Date.now().toString(36)}`);
+      const workspaceName = `jira-transition-${Date.now().toString(36)}`;
+      workspaceId = (await createWorkspace(request, repo.id, workspaceName)).workspaceId;
+      await waitForWorkspace(request, workspaceId, "ready");
+
+      // Attach an issue up front via PATCH so the chip starts in the
+      // attached state with a transitions list populated.
+      await request.patch(`${API_BASE}/api/workspaces/${workspaceId}`, {
+        data: { issueKey: "T-1", issueTitle: "Transition demo", issueUrl: null },
+      });
+
+      // The cockpit-summary refetch calls /issue-summary too — stub the
+      // transitions list there.
+      await page.route(/\/api\/workspaces\/[^/]+\/cockpit-summary/, async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            workspaceId,
+            readiness: { state: "ready", reason: null, blockers: [], nextActions: [] },
+            git: null,
+            versionControl: null,
+            ci: null,
+            issueTracker: {
+              providerId: "jira-jtk",
+              status: "healthy",
+              reason: null,
+              key: "T-1",
+              summary: "Transition demo",
+              issueStatus: "To Do",
+              assignee: null,
+              updated: null,
+              url: null,
+              transitions: [{ id: "21", name: "Start Progress", toStatus: "In Progress" }],
+              checkedAt: new Date().toISOString(),
+            },
+            apps: {
+              providerId: "hook-apps",
+              status: "unavailable",
+              reason: null,
+              apps: [],
+              checkedAt: new Date().toISOString(),
+            },
+          }),
+        });
+      });
+      await page.route(/\/api\/workspaces\/[^/]+\/issue-transition/, async (route) => {
+        await route.fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({
+            result: {
+              providerId: "jira-jtk",
+              status: "healthy",
+              reason: null,
+              key: "T-1",
+              transition: "21",
+              checkedAt: new Date().toISOString(),
+            },
+          }),
+        });
+      });
+
+      await page.goto("/");
+      await page
+        .locator("aside[aria-label='Navigator']")
+        .getByRole("button", { name: new RegExp(workspaceName, "i") })
+        .click();
+      const inspector = page.locator("aside[aria-label='Inspector']");
+      const chip = inspector.locator(".cit-jira-attached");
+      await expect(chip).toBeVisible();
+      // The status pill is a button that opens the transition menu.
+      const statusButton = chip.getByRole("button", { name: /To Do|Status/i });
+      await statusButton.click();
+      const transitionMenu = chip.getByRole("menu");
+      await expect(transitionMenu).toBeVisible();
+      await transitionMenu.getByRole("menuitem", { name: /Start Progress/i }).click();
+      // Optimistic update — pill should show "In Progress" before the
+      // (mocked) server response settles.
+      await expect(chip.getByText(/In Progress/i)).toBeVisible();
+    } finally {
+      if (workspaceId)
+        await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`).catch(() => {});
+      fs.rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
   test("manual-entry fallback still attaches an issue by key", async ({ page, request }, testInfo) => {
     test.skip(testInfo.project.name !== "desktop", "Picker interaction covered on desktop only");
     const fixture = createGitFixture();
