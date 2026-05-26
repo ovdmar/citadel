@@ -46,6 +46,7 @@ import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerDoctorRoutes } from "./doctor-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
+import { registerScaffoldHookRoutes } from "./scaffold-hook-routes.js";
 import { createDaemonServer } from "./server-factory.js";
 import { registerPrRoutes } from "./pr-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
@@ -477,6 +478,7 @@ export function createDaemonApp(input: {
 
   registerRuntimeUsageRoutes({ app, config, asyncRoute, providerCache, cachedProvider });
   registerDoctorRoutes({ app, config, store, asyncRoute, collectProviderHealth: cachedProviderHealth });
+  registerScaffoldHookRoutes({ app, config, store, operations, asyncRoute });
   registerPrRoutes({
     app,
     store,
