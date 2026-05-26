@@ -31,8 +31,13 @@ const MODE_LINE_PREFIX = "⏵⏵";
 const ESC_TO_INTERRUPT_SUBSTRING = " esc to interrupt";
 
 // Background work suffix on the mode line when the main turn ended but
-// Monitor / background-Bash / subagent (Task) are still alive.
-const BACKGROUND_WORK_REGEX = /·\s+\d+\s+(monitor|shell|local agent)\s+·\s+↓\s+to manage/;
+// Monitor / background-Bash / subagent (Task) are still alive. Operator-
+// spawned background processes count as "still running" — the user wants
+// the dot to keep pulsing while their shells/monitors finish.
+//
+// Pluralization: claude-code says "1 shell" / "2 shells" (likewise monitor,
+// local agent). The `s?` matches both.
+const BACKGROUND_WORK_REGEX = /·\s+\d+\s+(monitors?|shells?|local agents?)\s+·\s+↓\s+to manage/;
 
 // Bare idle mode line — exactly this string after trim.
 const IDLE_MODE_LINE = "⏵⏵ auto mode on (shift+tab to cycle)";
@@ -41,7 +46,7 @@ const IDLE_MODE_LINE = "⏵⏵ auto mode on (shift+tab to cycle)";
 // after Ctrl+C if tasks were on screen. The mode line then reads
 // `<IDLE_MODE_LINE> · ctrl+t to hide tasks` with NO `esc to interrupt`.
 // We treat anything that starts with IDLE_MODE_LINE and has no active-turn
-// or background-work indicator as idle (see priority-4 below).
+// or background-work indicator as idle (see priority-6 below).
 const IDLE_MODE_LINE_PREFIX = IDLE_MODE_LINE;
 
 // How many bottom lines to scan for chrome anchors. Subagent panels add a few

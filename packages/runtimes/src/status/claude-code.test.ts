@@ -220,6 +220,23 @@ describe("claudeCodeStatusAdapter", () => {
       expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("running");
     });
 
+    it("matches pluralized background work (`· 2 shells · ↓ to manage`)", () => {
+      // Claude-code pluralizes the noun once the count crosses 1. Before the
+      // s? fix, `2 shells` fell through to null and the dot only stayed
+      // running by virtue of the reducer holding the prior status.
+      const pane = "x\n  ⏵⏵ auto mode on · 2 shells · ↓ to manage";
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("running");
+    });
+
+    it("matches pluralized monitors and local agents too", () => {
+      expect(
+        claudeCodeStatusAdapter.observe(state, ctx("x\n  ⏵⏵ auto mode on · 3 monitors · ↓ to manage")),
+      ).toBe("running");
+      expect(
+        claudeCodeStatusAdapter.observe(state, ctx("x\n  ⏵⏵ auto mode on · 2 local agents · ↓ to manage")),
+      ).toBe("running");
+    });
+
     it("treats `<idle prefix> · ctrl+t to hide tasks` as idle (post-interrupt with task panel)", () => {
       const pane = "x\n  ⏵⏵ auto mode on (shift+tab to cycle) · ctrl+t to hide tasks";
       expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("idle");
