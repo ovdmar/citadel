@@ -21,7 +21,14 @@ import type {
   Workspace,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
-import { type PersistentProviderCache, resolveUsageRefreshInterval } from "./provider-cache.js";
+import {
+  type PersistentProviderCache,
+  ciCacheKey,
+  issueCacheKey,
+  resolveUsageRefreshInterval,
+  usageCacheKey,
+  vcCacheKey,
+} from "./provider-cache.js";
 
 export type ProviderRefreshDeps = {
   config: CitadelConfig;
@@ -91,8 +98,8 @@ export function startProviderRefreshJob(deps: ProviderRefreshDeps): ProviderRefr
   function collectItemsForWorkspace(workspace: Workspace): RefreshItem[] {
     const items: RefreshItem[] = [];
     const { prCiMs, jiraMs } = deps.config.providerRefresh.intervals;
-    const vcKey = `vc:${workspace.id}:${workspace.updatedAt}`;
-    const ciKey = `ci:${workspace.id}:${workspace.updatedAt}`;
+    const vcKey = vcCacheKey(workspace.id, workspace.updatedAt);
+    const ciKey = ciCacheKey(workspace.id, workspace.updatedAt);
     if (isStale(vcKey, prCiMs)) {
       items.push({ kind: "vc", workspaceId: workspace.id, cacheKey: vcKey, ttlMs: prCiMs, rootPath: workspace.path });
     }
@@ -100,9 +107,9 @@ export function startProviderRefreshJob(deps: ProviderRefreshDeps): ProviderRefr
       items.push({ kind: "ci", workspaceId: workspace.id, cacheKey: ciKey, ttlMs: prCiMs, rootPath: workspace.path });
     }
     if (workspace.issueKey) {
-      const issueKey = `issue:${workspace.issueKey}`;
-      if (isStale(issueKey, jiraMs)) {
-        items.push({ kind: "issue", issueKey: workspace.issueKey, cacheKey: issueKey, ttlMs: jiraMs });
+      const key = issueCacheKey(workspace.issueKey);
+      if (isStale(key, jiraMs)) {
+        items.push({ kind: "issue", issueKey: workspace.issueKey, cacheKey: key, ttlMs: jiraMs });
       }
     }
     return items;
@@ -114,7 +121,7 @@ export function startProviderRefreshJob(deps: ProviderRefreshDeps): ProviderRefr
     // Provider-id key mirrors runtime-usage-routes.ts so the live route and
     // the background job share cache entries.
     const provider = deps.config.usageProviders.find((p) => p.runtimeId === runtime.id);
-    const cacheKey = `usage:${runtime.id}:${provider?.id ?? "builtin"}`;
+    const cacheKey = usageCacheKey(runtime.id, provider?.id);
     const ttlMs = resolveUsageRefreshInterval(provider, deps.config);
     if (!isStale(cacheKey, ttlMs)) return [];
     return [{ kind: "usage", runtimeId: runtime.id, cacheKey, ttlMs }];

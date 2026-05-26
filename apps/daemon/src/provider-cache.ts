@@ -14,7 +14,6 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import type { Workspace } from "@citadel/contracts";
 
 const CACHE_FILE_NAME = "provider-cache.json";
 const SCHEMA_VERSION = 1;
@@ -22,7 +21,7 @@ const MAX_ENTRIES = 5000;
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const LOAD_TIMEOUT_MS = 500;
 const FLUSH_DEBOUNCE_MS = 500;
-const DEFAULT_FILE_MODE = 0o600;
+const FILE_MODE = 0o600;
 
 export type ProviderCacheEntry = {
   expiresAt: number;
@@ -36,12 +35,17 @@ type PersistedShape = {
   entries: Array<[string, ProviderCacheEntry]>;
 };
 
-export type ListWorkspacesFn = () => Workspace[];
+// Returns the id set of all entities the orphan-prune treats as "live"
+// — workspaces AND repos. Both can appear as the second segment in
+// vc:${id}:${updatedAt} / ci:${id}:${updatedAt} keys, depending on which
+// route populated them (cockpit-summary uses workspace.id, the per-repo
+// provider-summary / ci-runs endpoints use repo.id). The prune must not
+// drop an entry just because the id isn't a workspace.
+type ListLiveIdsFn = () => string[];
 
-export type CreateProviderCacheInput = {
+type CreateProviderCacheInput = {
   dataDir: string;
-  mode?: number;
-  listWorkspaces: ListWorkspacesFn;
+  listLiveIds: ListLiveIdsFn;
 };
 
 export class PersistentProviderCache extends Map<string, ProviderCacheEntry> {
@@ -52,15 +56,13 @@ export class PersistentProviderCache extends Map<string, ProviderCacheEntry> {
   private flushChain: Promise<void> = Promise.resolve();
   private readonly filePath: string;
   private readonly tmpPath: string;
-  private readonly mode: number;
-  private readonly listWorkspaces: ListWorkspacesFn;
+  private readonly listLiveIds: ListLiveIdsFn;
 
   constructor(input: CreateProviderCacheInput) {
     super();
     this.filePath = path.join(input.dataDir, CACHE_FILE_NAME);
     this.tmpPath = `${this.filePath}.${process.pid}.tmp`;
-    this.mode = input.mode ?? DEFAULT_FILE_MODE;
-    this.listWorkspaces = input.listWorkspaces;
+    this.listLiveIds = input.listLiveIds;
   }
 
   override set(key: string, value: ProviderCacheEntry): this {
@@ -155,12 +157,12 @@ export class PersistentProviderCache extends Map<string, ProviderCacheEntry> {
   }
 
   private applyEntries(entries: Array<[string, ProviderCacheEntry]>): void {
-    const workspaces = new Set(this.listWorkspaces().map((w) => w.id));
+    const liveIds = new Set(this.listLiveIds());
     const now = Date.now();
     const fresh = entries.filter(([key, entry]) => {
       if (now - entry.cachedAt > MAX_AGE_MS) return false;
-      const workspaceId = extractWorkspaceId(key);
-      if (workspaceId !== null && !workspaces.has(workspaceId)) return false;
+      const entityId = extractEntityId(key);
+      if (entityId !== null && !liveIds.has(entityId)) return false;
       return true;
     });
     // Most-recently-cached wins on truncation.
@@ -203,11 +205,11 @@ export class PersistentProviderCache extends Map<string, ProviderCacheEntry> {
     };
     const payload = JSON.stringify(snapshot);
     const next = this.flushChain.then(async () => {
-      await fs.promises.writeFile(this.tmpPath, payload, { mode: this.mode });
+      await fs.promises.writeFile(this.tmpPath, payload, { mode: FILE_MODE });
       await fs.promises.rename(this.tmpPath, this.filePath);
       // rename preserves the source's mode on most filesystems, but chmod
       // defensively in case the destination existed with broader permissions.
-      await fs.promises.chmod(this.filePath, this.mode);
+      await fs.promises.chmod(this.filePath, FILE_MODE);
     });
     this.flushChain = next.catch((error) => {
       // ENOENT during teardown (operator deleted dataDir while daemon was
@@ -228,12 +230,14 @@ export class PersistentProviderCache extends Map<string, ProviderCacheEntry> {
   }
 }
 
-// Workspace-id cache keys all encode the workspace id as the second
-// colon-separated segment: vc:<id>:<updatedAt>, ci:<id>:<updatedAt>,
-// git:<id>:<updatedAt>, apps:<id>:<updatedAt>. Other keys (issue:<jiraKey>,
-// usage:<runtimeId>:..., provider-health) return null so they bypass the
-// orphan prune.
-function extractWorkspaceId(key: string): string | null {
+// Entity-id cache keys encode the id as the second colon-separated segment:
+// vc:<id>:<updatedAt>, ci:<id>:<updatedAt>, git:<id>:<updatedAt>,
+// apps:<id>:<updatedAt>. The <id> is either a workspace id (cockpit-summary
+// route, workspace fs-watcher) or a repo id (per-repo provider-summary /
+// ci-runs routes) — the prune treats them homogeneously. Other keys
+// (issue:<jiraKey>, usage:<runtimeId>:..., provider-health) return null
+// so they bypass the orphan prune.
+function extractEntityId(key: string): string | null {
   const colon = key.indexOf(":");
   if (colon < 0) return null;
   const prefix = key.slice(0, colon);
@@ -255,4 +259,37 @@ export function resolveUsageRefreshInterval(
   config: { providerRefresh: { intervals: { usageMs: number } } },
 ): number {
   return provider?.refreshIntervalMs ?? config.providerRefresh.intervals.usageMs;
+}
+
+// Cache-key builders. Co-located with extractEntityId (which owns the key
+// grammar) so the live routes, the background refresh job, and the
+// workspaces-pr-state route can't drift on the string template — if these
+// get out of sync the refresh job populates slots the routes never read,
+// and stale UI silently follows.
+//
+// vc/ci accept either a workspace id (cockpit-summary route, fs-watcher,
+// pr-state route, refresh job) OR a repo id (per-repo provider-summary /
+// ci-runs routes). git/apps are workspace-only by convention.
+export function vcCacheKey(id: string, updatedAt: string): string {
+  return `vc:${id}:${updatedAt}`;
+}
+
+export function ciCacheKey(id: string, updatedAt: string): string {
+  return `ci:${id}:${updatedAt}`;
+}
+
+export function issueCacheKey(issueKey: string): string {
+  return `issue:${issueKey}`;
+}
+
+export function gitCacheKey(workspaceId: string, workspaceUpdatedAt: string): string {
+  return `git:${workspaceId}:${workspaceUpdatedAt}`;
+}
+
+export function appsCacheKey(workspaceId: string, workspaceUpdatedAt: string): string {
+  return `apps:${workspaceId}:${workspaceUpdatedAt}`;
+}
+
+export function usageCacheKey(runtimeId: string, providerId: string | null | undefined): string {
+  return `usage:${runtimeId}:${providerId ?? "builtin"}`;
 }

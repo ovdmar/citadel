@@ -61,7 +61,7 @@ async function waitForFlush(cache: PersistentProviderCache) {
 describe("createProviderCache.load()", () => {
   it("returns an empty cache when the file is absent", async () => {
     const dataDir = tempDataDir();
-    const cache = createProviderCache({ dataDir, listWorkspaces: () => [] });
+    const cache = createProviderCache({ dataDir, listLiveIds: () => [] });
     await cache.load();
     expect(cache.size).toBe(0);
   });
@@ -81,7 +81,7 @@ describe("createProviderCache.load()", () => {
         ],
       }),
     );
-    const cache = createProviderCache({ dataDir, listWorkspaces: () => [makeWorkspace("w1"), makeWorkspace("w2")] });
+    const cache = createProviderCache({ dataDir, listLiveIds: () => ["w1", "w2"] });
     await cache.load();
     expect(cache.has("vc:w1:t")).toBe(true);
     expect(cache.has("vc:w2:t")).toBe(false);
@@ -98,7 +98,7 @@ describe("createProviderCache.load()", () => {
         entries: [["vc:w1:t", { expiresAt: Date.now() + 1000, value: 1, cachedAt: Date.now() }]],
       }),
     );
-    const cache = createProviderCache({ dataDir, listWorkspaces: () => [makeWorkspace("w1")] });
+    const cache = createProviderCache({ dataDir, listLiveIds: () => ["w1"] });
     await cache.load();
     expect(cache.size).toBe(0);
   });
@@ -118,7 +118,7 @@ describe("createProviderCache.load()", () => {
         ],
       }),
     );
-    const cache = createProviderCache({ dataDir, listWorkspaces: () => [makeWorkspace("w1")] });
+    const cache = createProviderCache({ dataDir, listLiveIds: () => ["w1"] });
     await cache.load();
     expect(cache.has("vc:w1:t")).toBe(true);
     expect(cache.has("ci:ghost:t")).toBe(false);
@@ -136,7 +136,7 @@ describe("createProviderCache.load()", () => {
       entries.push([`vc:w1:${i}`, { expiresAt: now + 1000, value: i, cachedAt: now - (5050 - i) * 1000 }]);
     }
     fs.writeFileSync(filePath, JSON.stringify({ version: 1, savedAt: new Date().toISOString(), entries }));
-    const cache = createProviderCache({ dataDir, listWorkspaces: () => [ws] });
+    const cache = createProviderCache({ dataDir, listLiveIds: () => [ws.id] });
     await cache.load();
     expect(cache.size).toBe(5000);
     // Most-recently-cached survives — entries with higher i had a more recent cachedAt.
@@ -151,7 +151,7 @@ describe("createProviderCache.load()", () => {
       await new Promise((r) => setTimeout(r, 1_000));
       return JSON.stringify({ version: 1, savedAt: "", entries: [] });
     });
-    const cache = createProviderCache({ dataDir, listWorkspaces: () => [] });
+    const cache = createProviderCache({ dataDir, listLiveIds: () => [] });
     const start = Date.now();
     await cache.load();
     const elapsed = Date.now() - start;
@@ -176,7 +176,7 @@ describe("createProviderCache.load()", () => {
       await new Promise((r) => setTimeout(r, 800));
       return realRead.call(fs.promises, filename, options);
     });
-    const cache = createProviderCache({ dataDir, listWorkspaces: () => [makeWorkspace("w1")] });
+    const cache = createProviderCache({ dataDir, listLiveIds: () => ["w1"] });
     await cache.load();
     // Live system writes a fresh value after the 500ms timeout fired but before
     // the late read resolves at ~800ms.
@@ -190,7 +190,7 @@ describe("createProviderCache.load()", () => {
     const dataDir = tempDataDir();
     fs.writeFileSync(path.join(dataDir, "provider-cache.json"), "{not json");
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const cache = createProviderCache({ dataDir, listWorkspaces: () => [] });
+    const cache = createProviderCache({ dataDir, listLiveIds: () => [] });
     await expect(cache.load()).resolves.toBeUndefined();
     expect(cache.size).toBe(0);
     errSpy.mockRestore();
@@ -200,7 +200,7 @@ describe("createProviderCache.load()", () => {
 describe("PersistentProviderCache mutators", () => {
   it("set() invalidates the per-key in-flight token AND schedules a debounced flush", async () => {
     const dataDir = tempDataDir();
-    const cache = createProviderCache({ dataDir, listWorkspaces: () => [makeWorkspace("w1")] });
+    const cache = createProviderCache({ dataDir, listLiveIds: () => ["w1"] });
     await cache.load();
     const token = Symbol("test");
     cache.inFlightTokens.set("vc:w1:t", token);
@@ -213,7 +213,7 @@ describe("PersistentProviderCache mutators", () => {
 
   it("delete() invalidates the per-key in-flight token AND schedules a flush", async () => {
     const dataDir = tempDataDir();
-    const cache = createProviderCache({ dataDir, listWorkspaces: () => [makeWorkspace("w1")] });
+    const cache = createProviderCache({ dataDir, listLiveIds: () => ["w1"] });
     await cache.load();
     cache.set("vc:w1:t", { expiresAt: Date.now() + 1000, value: 1, cachedAt: Date.now() });
     await waitForFlush(cache);
@@ -228,7 +228,7 @@ describe("PersistentProviderCache mutators", () => {
 
   it("clear() empties all tokens AND schedules a flush", async () => {
     const dataDir = tempDataDir();
-    const cache = createProviderCache({ dataDir, listWorkspaces: () => [makeWorkspace("w1")] });
+    const cache = createProviderCache({ dataDir, listLiveIds: () => ["w1"] });
     await cache.load();
     cache.set("vc:w1:t", { expiresAt: Date.now() + 1000, value: 1, cachedAt: Date.now() });
     cache.inFlightTokens.set("vc:w1:t", Symbol());
@@ -251,7 +251,7 @@ describe("PersistentProviderCache mutators", () => {
         entries: [["vc:w1:t", { expiresAt: Date.now() + 1000, value: "from-disk", cachedAt: Date.now() }]],
       }),
     );
-    const cache = createProviderCache({ dataDir, listWorkspaces: () => [makeWorkspace("w1")] });
+    const cache = createProviderCache({ dataDir, listLiveIds: () => ["w1"] });
     // Capture current file mtime; after load() finishes the in-memory set
     // calls from hydrate must NOT have rewritten the file.
     const beforeMtime = fs.statSync(filePath).mtimeMs;
@@ -272,7 +272,7 @@ describe("PersistentProviderCache mutators", () => {
       await new Promise((r) => setTimeout(r, 1500));
       return realRead.call(fs.promises, filename, options);
     });
-    const cache = createProviderCache({ dataDir, listWorkspaces: () => [makeWorkspace("w1")] });
+    const cache = createProviderCache({ dataDir, listLiveIds: () => ["w1"] });
     await cache.load(); // returns after 500ms timeout; late read still pending
     // Live system writes — loading must be false now, so this should schedule a flush.
     cache.set("vc:w1:t", { expiresAt: Date.now() + 1000, value: "live", cachedAt: Date.now() });
@@ -287,8 +287,11 @@ describe("PersistentProviderCache.flush()", () => {
   it("writes atomically (tmp + rename) with mode 0o600", async () => {
     const dataDir = tempDataDir();
     const filePath = path.join(dataDir, "provider-cache.json");
-    const cache = createProviderCache({ dataDir, listWorkspaces: () => [makeWorkspace("w1")] });
+    const cache = createProviderCache({ dataDir, listLiveIds: () => ["w1"] });
     await cache.load();
+    // Spy on rename + writeFile so we can prove tmp-then-rename, not direct-write.
+    const writeFileSpy = vi.spyOn(fs.promises, "writeFile");
+    const renameSpy = vi.spyOn(fs.promises, "rename");
     cache.set("vc:w1:t", { expiresAt: Date.now() + 1000, value: 1, cachedAt: Date.now() });
     await waitForFlush(cache);
     expect(fs.existsSync(filePath)).toBe(true);
@@ -297,6 +300,18 @@ describe("PersistentProviderCache.flush()", () => {
     // No leftover tmp files in the dataDir.
     const tmpLeftover = fs.readdirSync(dataDir).filter((f) => f.includes(".tmp"));
     expect(tmpLeftover.length).toBe(0);
+    // Atomic-write verification: writeFile target was the .tmp path, NOT the
+    // final path. rename then promoted .tmp → final. A regression to direct-
+    // writeFile-of-final-path would be caught here.
+    expect(writeFileSpy).toHaveBeenCalled();
+    const writeTarget = writeFileSpy.mock.calls[0]?.[0];
+    expect(typeof writeTarget === "string" && writeTarget.includes(".tmp")).toBe(true);
+    expect(renameSpy).toHaveBeenCalled();
+    const renameArgs = renameSpy.mock.calls[0];
+    expect(typeof renameArgs?.[0] === "string" && renameArgs[0].includes(".tmp")).toBe(true);
+    expect(renameArgs?.[1]).toBe(filePath);
+    writeFileSpy.mockRestore();
+    renameSpy.mockRestore();
   });
 });
 
@@ -322,7 +337,7 @@ describe("PersistentProviderCache.dispose()", () => {
   it("flushes pending writes synchronously", async () => {
     const dataDir = tempDataDir();
     const filePath = path.join(dataDir, "provider-cache.json");
-    const cache = createProviderCache({ dataDir, listWorkspaces: () => [makeWorkspace("w1")] });
+    const cache = createProviderCache({ dataDir, listLiveIds: () => ["w1"] });
     await cache.load();
     cache.set("vc:w1:t", { expiresAt: Date.now() + 1000, value: 1, cachedAt: Date.now() });
     // Do not wait for the debounce — dispose() must drain it.

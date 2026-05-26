@@ -257,6 +257,86 @@ describe("createDaemonApp", () => {
     }
   });
 
+  it("rehydrates provider cache on boot and serves /provider-summary without invoking providers", async () => {
+    // Central regression guard for the persistent-cache PR's headline AC:
+    // after daemon restart, cockpit pills must render immediately from cache.
+    // The provider collector is mocked to THROW — if the route serves a body
+    // anyway, hydration is working.
+    const fixture = createFixture();
+    const now = new Date().toISOString();
+    const repoId = "repo_warm_boot";
+    fixture.store.insertRepo({
+      id: repoId,
+      name: "Warm Boot Repo",
+      rootPath: fixture.config.dataDir,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: ["github-gh"],
+      deployHookCommand: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    // Need the repo's actual updatedAt for the cache key (the store may
+    // normalize it at insert time).
+    const repos = fixture.store.listRepos();
+    const repoUpdatedAt = repos.find((r) => r.id === repoId)?.updatedAt ?? now;
+
+    // Seed provider-cache.json BEFORE the daemon boots so load() hydrates it.
+    fs.writeFileSync(
+      path.join(fixture.config.dataDir, "provider-cache.json"),
+      JSON.stringify({
+        version: 1,
+        savedAt: now,
+        entries: [
+          [
+            `vc:${repoId}:${repoUpdatedAt}`,
+            {
+              expiresAt: Date.now() + 60_000,
+              cachedAt: Date.now(),
+              value: {
+                providerId: "github-gh",
+                status: "healthy",
+                reason: null,
+                defaultBranch: "main",
+                currentBranch: "main",
+                remotes: ["origin"],
+                pullRequest: null,
+                checkedAt: now,
+              },
+            },
+          ],
+        ],
+      }),
+    );
+
+    let providerCalls = 0;
+    const { server } = await createDaemonApp({
+      ...fixture,
+      providers: {
+        collectGitHubVersionControlSummary: async () => {
+          providerCalls += 1;
+          throw new Error("provider should not be invoked when cache is warm");
+        },
+      },
+    });
+    const baseUrl = await listen(server);
+    try {
+      const body = await getJson<{ versionControl: { status: string; defaultBranch: string | null } }>(
+        `${baseUrl}/api/repos/${repoId}/provider-summary`,
+      );
+      // Cached value flowed through; provider was never called.
+      expect(providerCalls).toBe(0);
+      expect(body.versionControl.status).toBe("healthy");
+      expect(body.versionControl.defaultBranch).toBe("main");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("caches provider summaries and clears them on config updates", async () => {
     const fixture = createFixture();
     const now = new Date().toISOString();

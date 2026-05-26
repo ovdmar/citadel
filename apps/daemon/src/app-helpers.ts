@@ -62,63 +62,55 @@ export async function cachedProviderWithStaleFallback<T>(input: {
   if (cached && cached.expiresAt > now) return cached.value as T;
   if (cached) {
     // Stale hit — return cached, refresh in background.
-    if (!inFlight.has(key)) startBackgroundLoad(cache, key, load, ttlMs);
+    if (!inFlight.has(key)) {
+      const work = performLoad<T>(cache, key, load, ttlMs);
+      inFlight.set(key, work);
+      // Don't propagate background errors to the foreground caller — the
+      // stale value is the best we have. .catch() also marks the rejection
+      // as handled so Node doesn't emit unhandledRejection warnings.
+      work.catch((error) => {
+        console.error(
+          `[provider-cache] background refresh for ${key} failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    }
     return cached.value as T;
   }
-  // Cache miss — await synchronously.
-  return awaitForegroundLoad(cache, key, load, ttlMs);
-}
-
-function startBackgroundLoad<T>(
-  cache: PersistentProviderCache,
-  key: string,
-  load: () => T | Promise<T>,
-  ttlMs: number,
-): void {
-  const token = Symbol("provider-cache-token");
-  cache.inFlightTokens.set(key, token);
-  const work = (async () => {
-    try {
-      const value = await load();
-      if (cache.inFlightTokens.get(key) === token) {
-        cache.set(key, { expiresAt: Date.now() + ttlMs, value, cachedAt: Date.now() });
-      }
-    } catch (error) {
-      console.error(
-        `[provider-cache] background refresh for ${key} failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    } finally {
-      // Only clear the slot we own — if a bust deleted our token, leave the
-      // map alone (the bust has authoritative ownership now).
-      if (cache.inFlightTokens.get(key) === token) cache.inFlightTokens.delete(key);
-      inFlight.delete(key);
-    }
-  })();
+  // Cache miss. If another caller is mid-load for the same key (e.g. a
+  // background refresh fired by a previous stale hit, then the cache was
+  // busted), adopt that in-flight promise — it returns the loaded value
+  // even if the token-guarded write to cache was skipped. Without this,
+  // the foreground caller would receive `undefined` because the previous
+  // IIFE never propagated the loaded value.
+  const existing = inFlight.get(key);
+  if (existing) return (await existing) as T;
+  const work = performLoad<T>(cache, key, load, ttlMs);
   inFlight.set(key, work);
+  return work;
 }
 
-async function awaitForegroundLoad<T>(
+// Single load primitive used by both the stale-hit-background-refresh path
+// and the cache-miss-await path. Mints a per-key Symbol token, runs the
+// loader, and writes to the cache iff the token still owns the slot at
+// completion. Returns the loaded value regardless of whether the cache
+// write happened — so callers adopting an in-flight promise from a
+// previous (now-busted) refresh still see fresh data.
+async function performLoad<T>(
   cache: PersistentProviderCache,
   key: string,
   load: () => T | Promise<T>,
   ttlMs: number,
 ): Promise<T> {
-  const existing = inFlight.get(key);
-  if (existing) return (await existing) as T;
   const token = Symbol("provider-cache-token");
   cache.inFlightTokens.set(key, token);
-  const work = (async () => {
-    try {
-      const value = await load();
-      if (cache.inFlightTokens.get(key) === token) {
-        cache.set(key, { expiresAt: Date.now() + ttlMs, value, cachedAt: Date.now() });
-      }
-      return value;
-    } finally {
-      if (cache.inFlightTokens.get(key) === token) cache.inFlightTokens.delete(key);
-      inFlight.delete(key);
+  try {
+    const value = await load();
+    if (cache.inFlightTokens.get(key) === token) {
+      cache.set(key, { expiresAt: Date.now() + ttlMs, value, cachedAt: Date.now() });
     }
-  })();
-  inFlight.set(key, work);
-  return work;
+    return value;
+  } finally {
+    if (cache.inFlightTokens.get(key) === token) cache.inFlightTokens.delete(key);
+    inFlight.delete(key);
+  }
 }

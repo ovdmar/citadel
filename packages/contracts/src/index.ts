@@ -793,5 +793,6 @@ export type ApiError = {
   fieldErrors?: Record<string, string[]>;
 };
 
-export { WorkspacePrStateEntrySchema, WorkspacesPrStateResponseSchema } from "./workspaces-pr-state.js";
+// Types only (schemas stay in workspaces-pr-state.ts as the z.infer source —
+// no caller .parse()s them at runtime).
 export type { WorkspacePrStateEntry, WorkspacesPrStateResponse } from "./workspaces-pr-state.js";

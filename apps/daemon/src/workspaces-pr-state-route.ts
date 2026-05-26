@@ -7,6 +7,7 @@ import type { CiProviderSummary, VersionControlSummary, WorkspacePrStateEntry } 
 import type { SqliteStore } from "@citadel/db";
 import type express from "express";
 import type { asyncRoute as AsyncRoute, ProviderCache } from "./app-helpers.js";
+import { ciCacheKey, vcCacheKey } from "./provider-cache.js";
 
 export function registerWorkspacesPrStateRoute(input: {
   app: express.Express;
@@ -21,8 +22,8 @@ export function registerWorkspacesPrStateRoute(input: {
       const workspacePrState: Record<string, WorkspacePrStateEntry> = {};
       for (const workspace of store.listWorkspaces()) {
         if (workspace.archivedAt) continue;
-        const vc = providerCache.get(`vc:${workspace.id}:${workspace.updatedAt}`);
-        const ci = providerCache.get(`ci:${workspace.id}:${workspace.updatedAt}`);
+        const vc = providerCache.get(vcCacheKey(workspace.id, workspace.updatedAt));
+        const ci = providerCache.get(ciCacheKey(workspace.id, workspace.updatedAt));
         if (!vc && !ci) continue;
         const vcValue = vc?.value as VersionControlSummary | undefined;
         const ciValue = ci?.value as CiProviderSummary | undefined;

@@ -14,6 +14,7 @@ import type {
 } from "@citadel/providers";
 import type express from "express";
 import type { asyncRoute as AsyncRoute } from "./app-helpers.js";
+import { appsCacheKey, ciCacheKey, gitCacheKey, issueCacheKey, vcCacheKey } from "./provider-cache.js";
 import { deriveReadiness } from "./readiness.js";
 import { readWorkspaceGitStatus } from "./workspace-diff.js";
 
@@ -47,23 +48,23 @@ export function registerCockpitSummaryRoute(input: {
 
       const [git, versionControl, ci, issueTracker, apps] = await Promise.all([
         cachedProvider(
-          `git:${workspace.id}:${workspace.updatedAt}`,
+          gitCacheKey(workspace.id, workspace.updatedAt),
           () => readWorkspaceGitStatus(workspace.path),
           3000,
         ),
-        cachedProviderSwr<VersionControlSummary>(`vc:${workspace.id}:${workspace.updatedAt}`, () =>
+        cachedProviderSwr<VersionControlSummary>(vcCacheKey(workspace.id, workspace.updatedAt), () =>
           providers.collectGitHubVersionControlSummary(workspace.path),
         ),
-        cachedProviderSwr<CiProviderSummary>(`ci:${workspace.id}:${workspace.updatedAt}`, () =>
+        cachedProviderSwr<CiProviderSummary>(ciCacheKey(workspace.id, workspace.updatedAt), () =>
           providers.collectGitHubCiRuns(workspace.path),
         ),
         workspace.issueKey
-          ? cachedProviderSwr<IssueTrackerSummary>(`issue:${workspace.issueKey}`, () =>
+          ? cachedProviderSwr<IssueTrackerSummary>(issueCacheKey(workspace.issueKey), () =>
               providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
             )
           : Promise.resolve(null),
         cachedProvider(
-          `apps:${workspace.id}:${workspace.updatedAt}`,
+          appsCacheKey(workspace.id, workspace.updatedAt),
           () => operations.discoverWorkspaceApps({ repo, workspace }),
           60_000,
         ),

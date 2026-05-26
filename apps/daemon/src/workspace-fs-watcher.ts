@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Workspace } from "@citadel/contracts";
+import type { ProviderCache } from "./app-helpers.js";
 
 const IGNORED_TOP_LEVEL = new Set([
   "node_modules",
@@ -26,8 +27,6 @@ const DEBOUNCE_MS = 350;
 // the cache cold during the storm (correct), and onSettled fires once 2s
 // AFTER the last bust so the cache repopulates promptly when typing stops.
 const DEFAULT_POKE_DEBOUNCE_MS = 2_000;
-
-type ProviderCache = Map<string, { expiresAt: number; value: unknown; cachedAt: number }>;
 
 type WorkspaceFsWatcherDeps = {
   listWorkspaces: () => Workspace[];

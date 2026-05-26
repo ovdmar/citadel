@@ -87,7 +87,7 @@ function makeDeps(overrides: Partial<ProviderRefreshDeps> & { workspaces?: Works
   const store = {
     listWorkspaces: () => workspaces,
   } as unknown as SqliteStore;
-  const cache = createProviderCache({ dataDir: tempDataDir(), listWorkspaces: () => workspaces });
+  const cache = createProviderCache({ dataDir: tempDataDir(), listLiveIds: () => workspaces.map((w) => w.id) });
   const checkedAt = () => new Date().toISOString();
   const providers = {
     collectGitHubVersionControlSummary: vi.fn(async () => ({
@@ -282,28 +282,60 @@ describe("startProviderRefreshJob", () => {
     job.stop();
   });
 
-  it("re-checks workspace.archivedAt before dispatch (TOCTOU)", async () => {
+  it("re-checks workspace.archivedAt INSIDE executeItem (true TOCTOU)", async () => {
+    // The real TOCTOU race: workspace is non-archived when the tick collects
+    // items, then gets archived before executeItem dispatches the provider
+    // call. The runTick-level pre-filter cannot catch this; only the re-check
+    // inside executeItem can. A regression that removes the re-check would
+    // let the provider call fire.
+    //
+    // We simulate the race by returning "non-archived" on the FIRST
+    // listWorkspaces call (used by runTick's collect step) and "archived"
+    // on every subsequent call (used by each executeItem's re-check).
     const ws = makeWorkspace("w1");
-    let archived = false;
+    const archivedWs = { ...ws, archivedAt: new Date().toISOString() };
+    let listCalls = 0;
     const deps = makeDeps({ workspaces: [ws] });
     deps.store = {
-      listWorkspaces: () => (archived ? [{ ...ws, archivedAt: new Date().toISOString() }] : [ws]),
+      listWorkspaces: () => {
+        listCalls += 1;
+        return listCalls === 1 ? [ws] : [archivedWs];
+      },
     } as unknown as SqliteStore;
+    deps.providers.collectGitHubVersionControlSummary = vi.fn(async () => {
+      throw new Error("vc provider must not be called after mid-tick archive");
+    });
+    deps.providers.collectGitHubCiRuns = vi.fn(async () => {
+      throw new Error("ci provider must not be called after mid-tick archive");
+    });
     const job = startProviderRefreshJob({ ...deps, tickIntervalMs: 0, jitterMaxMs: 0 });
-    archived = true; // archive after the deps object was built; before runTickForTest
     await job.runTickForTest();
+    // listWorkspaces was called >1 time: once by runTick + once per
+    // executeItem re-check. That confirms the re-check actually fires.
+    expect(listCalls).toBeGreaterThan(1);
     expect(deps.providers.collectGitHubVersionControlSummary).not.toHaveBeenCalled();
+    expect(deps.providers.collectGitHubCiRuns).not.toHaveBeenCalled();
     job.stop();
   });
 
-  it("re-checks runtime.health before dispatch", async () => {
+  it("re-checks runtime.health INSIDE executeItem (true TOCTOU)", async () => {
     const runtime = makeRuntime("r1", true);
-    let healthy = true;
+    const unhealthyRuntime = { ...runtime, health: "unavailable" as const, healthReason: "flipped" };
+    let listCalls = 0;
     const deps = makeDeps({ workspaces: [makeWorkspace("w1")], runtimes: [runtime] });
-    deps.providers.listRuntimeHealth = () => [{ ...runtime, health: healthy ? "healthy" : "unavailable" }];
+    // listRuntimeHealth returns "healthy" only on the first call (tick collect),
+    // "unavailable" on every subsequent call (executeItem re-check). The
+    // re-check inside executeItem must short-circuit before the provider call.
+    deps.providers.listRuntimeHealth = () => {
+      listCalls += 1;
+      return listCalls === 1 ? [runtime] : [unhealthyRuntime];
+    };
+    deps.providers.collectRuntimeUsage = vi.fn(async () => {
+      throw new Error("usage provider must not be called after mid-tick health flip");
+    });
     const job = startProviderRefreshJob({ ...deps, tickIntervalMs: 0, jitterMaxMs: 0 });
-    healthy = false;
     await job.runTickForTest();
+    expect(listCalls).toBeGreaterThan(1);
     expect(deps.providers.collectRuntimeUsage).not.toHaveBeenCalled();
     job.stop();
   });

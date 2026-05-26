@@ -37,7 +37,7 @@ import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
-import { createProviderCache } from "./provider-cache.js";
+import { ciCacheKey, createProviderCache, issueCacheKey, vcCacheKey } from "./provider-cache.js";
 import { startProviderRefreshJob } from "./provider-refresh-job.js";
 import { workspaceAppHookSample } from "./readiness.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
@@ -95,7 +95,11 @@ export async function createDaemonApp(input: {
   const sseClients = new Set<express.Response>();
   const providerCache = createProviderCache({
     dataDir: config.dataDir,
-    listWorkspaces: () => store.listWorkspaces(),
+    // Both workspace ids AND repo ids appear as the "id" segment of vc:/ci:
+    // cache keys (workspace via cockpit-summary, repo via the per-repo
+    // provider-summary / ci-runs routes). The orphan prune treats them
+    // homogeneously: keep entries whose id matches ANY live entity.
+    listLiveIds: () => [...store.listWorkspaces().map((w) => w.id), ...store.listRepos().map((r) => r.id)],
   });
   // Hydrate the persisted cache BEFORE any route is registered so the first
   // post-restart request can hit warm cache. The load() is bounded by a 500ms
@@ -284,7 +288,7 @@ export async function createDaemonApp(input: {
       if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const versionControl = await cachedProviderSwr(`vc:${repo.id}:${repo.updatedAt}`, () =>
+      const versionControl = await cachedProviderSwr(vcCacheKey(repo.id, repo.updatedAt), () =>
         providers.collectGitHubVersionControlSummary(repo.rootPath),
       );
       res.json({ versionControl });
@@ -298,7 +302,7 @@ export async function createDaemonApp(input: {
       if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const ci = await cachedProviderSwr(`ci:${repo.id}:${repo.updatedAt}`, () =>
+      const ci = await cachedProviderSwr(ciCacheKey(repo.id, repo.updatedAt), () =>
         providers.collectGitHubCiRuns(repo.rootPath),
       );
       res.json({ ci });
@@ -372,7 +376,7 @@ export async function createDaemonApp(input: {
       const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
       if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
       if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
-      const issueTracker = await cachedProviderSwr(`issue:${workspace.issueKey}`, () =>
+      const issueTracker = await cachedProviderSwr(issueCacheKey(workspace.issueKey), () =>
         providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
       );
       res.json({ issueTracker });

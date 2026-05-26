@@ -134,7 +134,10 @@ function buildTooltip(
   selected: { label: string; section: string | null } | null,
 ): string {
   if (!summary) return `${displayName} — loading usage…`;
-  if (summary.status !== "healthy" || summary.categories.length === 0) {
+  // Mirror the reload-pill predicate so the tooltip and the button stay in
+  // lockstep — a future change to one (e.g. treating "degraded" differently)
+  // can't silently desync them.
+  if (usagePillNeedsReload(summary)) {
     return `${displayName}: ${summary.reason ?? "no usage data"}`;
   }
   const selectedKey = selected ? categoryKey(selected) : null;
