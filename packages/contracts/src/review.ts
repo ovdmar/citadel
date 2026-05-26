@@ -7,7 +7,14 @@ export const ReviewSuggestionSchema = z.object({
   kind: ReviewSuggestionKindSchema,
   label: z.string().min(1).max(200),
   detail: z.string().max(2000).nullable().default(null),
-  url: z.string().url().nullable().default(null),
+  // http(s) only — zod's .url() accepts javascript:/data: URIs which would be
+  // a clickable XSS vector when rendered as <a href> in the cockpit.
+  url: z
+    .string()
+    .url()
+    .refine((u) => /^https?:\/\//i.test(u), { message: "url must use http or https" })
+    .nullable()
+    .default(null),
   metadata: z.record(z.unknown()).default({}),
 });
 

@@ -1,5 +1,5 @@
 import type { CitadelConfig } from "@citadel/config";
-import type { HookOutput, ReviewComment, ReviewSuggestionRun, Workspace } from "@citadel/contracts";
+import type { HookOutput, ReviewSuggestionRun, Workspace } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import {
   addReviewComment as addReviewCommentImpl,
@@ -10,7 +10,7 @@ import {
 } from "@citadel/operations";
 import type express from "express";
 import { z } from "zod";
-import { readWorkspaceDiff } from "./workspace-diff.js";
+import { readWorkspaceDiffSummary } from "./workspace-diff.js";
 
 const StatusQuerySchema = z.enum(["open", "resolved", "all"]).default("all");
 
@@ -165,7 +165,13 @@ export function registerReviewRoutes(deps: ReviewRoutesDeps) {
       const parsed = DeleteCommentBodySchema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "invalid_body", detail: parsed.error.message });
       const existing = store.getReviewComment(commentId);
-      if (!existing || existing.deletedAt) return res.status(404).json({ error: "comment_not_found" });
+      if (!existing) return res.status(404).json({ error: "comment_not_found" });
+      // Soft-deleted: surface as 409 with the tombstone so the client can
+      // verify the token it tried to use is now stale.
+      if (existing.deletedAt) {
+        if (existing.updatedAt === parsed.data.ifUpdatedAtMatches) return res.status(204).end();
+        return res.status(409).json({ error: "conflict", latest: existing });
+      }
       const workspace = resolveWorkspace(existing.workspaceId);
       const result = deleteReviewCommentImpl({
         store,
@@ -199,19 +205,7 @@ export function registerReviewRoutes(deps: ReviewRoutesDeps) {
       const repos = store.listRepos();
       const repo = repos.find((r) => r.id === workspace.repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const diffSummary = (() => {
-        try {
-          const diff = readWorkspaceDiff(workspace.id, workspace.path);
-          return {
-            files: diff.files.map((f) => f.path),
-            addedLines: diff.addedLines,
-            deletedLines: diff.deletedLines,
-            truncated: diff.truncated,
-          };
-        } catch {
-          return { files: [], addedLines: 0, deletedLines: 0, truncated: false };
-        }
-      })();
+      const diffSummary = readWorkspaceDiffSummary(workspace.id, workspace.path);
       const result = await requestReviewForWorkspace({
         store,
         config: { hooks: config.hooks, commandPolicy: config.commandPolicy },
@@ -227,6 +221,3 @@ export function registerReviewRoutes(deps: ReviewRoutesDeps) {
     }),
   );
 }
-
-export type RegisteredReviewRoutes = ReturnType<typeof registerReviewRoutes>;
-export type { ReviewComment };

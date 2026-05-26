@@ -7,18 +7,24 @@ import type {
 } from "@citadel/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { api } from "./api.js";
+import { ApiError, api } from "./api.js";
 
 export type ReviewTabProps = {
   workspace: Workspace;
   diff: WorkspaceDiff | undefined;
   hasRequestReviewHook: boolean;
+  // True when the workspace has a PR open OR is on a non-default branch.
+  // AC2 limits Request-review button visibility to those contexts; comments
+  // are always available since file/line scoping doesn't depend on the PR.
+  hasReviewableContext: boolean;
 };
 
 export function ReviewTab(props: ReviewTabProps) {
   return (
     <div className="inspector-review">
-      <RequestReviewPanel workspace={props.workspace} hasHook={props.hasRequestReviewHook} />
+      {props.hasReviewableContext ? (
+        <RequestReviewPanel workspace={props.workspace} hasHook={props.hasRequestReviewHook} />
+      ) : null}
       <ReviewCommentsPanel workspace={props.workspace} diff={props.diff} />
     </div>
   );
@@ -181,6 +187,13 @@ export function ReviewCommentsPanel(props: { workspace: Workspace; diff: Workspa
 function CommentRow(props: { comment: ReviewComment; workspaceId: string; onChanged: () => void }) {
   const c = props.comment;
   const queryClient = useQueryClient();
+  const onConflict = () => {
+    // Refetch the list so the row reflects the upstream edit. The banner lives
+    // off the mutation's lingering error state, so the user sees the warning
+    // until the next action.
+    queryClient.invalidateQueries({ queryKey: ["review-comments", props.workspaceId] });
+    props.onChanged();
+  };
   const toggleResolved = useMutation({
     mutationFn: () =>
       api(`/api/review-comments/${c.id}`, {
@@ -194,6 +207,9 @@ function CommentRow(props: { comment: ReviewComment; workspaceId: string; onChan
       queryClient.invalidateQueries({ queryKey: ["review-comments", props.workspaceId] });
       props.onChanged();
     },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) onConflict();
+    },
   });
   const remove = useMutation({
     mutationFn: () =>
@@ -205,7 +221,17 @@ function CommentRow(props: { comment: ReviewComment; workspaceId: string; onChan
       queryClient.invalidateQueries({ queryKey: ["review-comments", props.workspaceId] });
       props.onChanged();
     },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) onConflict();
+    },
   });
+  const conflict =
+    (toggleResolved.error instanceof ApiError && toggleResolved.error.status === 409) ||
+    (remove.error instanceof ApiError && remove.error.status === 409);
+  const otherError =
+    !conflict && (toggleResolved.isError || remove.isError)
+      ? ((toggleResolved.error ?? remove.error) as Error)?.message
+      : null;
   return (
     <li className="inspector-review-comment" data-status={c.status}>
       <header>
@@ -226,9 +252,12 @@ function CommentRow(props: { comment: ReviewComment; workspaceId: string; onChan
         <button type="button" onClick={() => remove.mutate()}>
           Delete
         </button>
-        {toggleResolved.isError || remove.isError ? (
-          <span className="inspector-review-error">{((toggleResolved.error ?? remove.error) as Error)?.message}</span>
+        {conflict ? (
+          <output className="inspector-review-conflict">
+            This comment was edited elsewhere — refreshed to the latest version. Try again.
+          </output>
         ) : null}
+        {otherError ? <span className="inspector-review-error">{otherError}</span> : null}
       </div>
     </li>
   );

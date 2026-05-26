@@ -53,6 +53,24 @@ describe("ReviewSuggestionsOutputSchema", () => {
     expect(() => ReviewSuggestionSchema.parse({ id: "s", kind: "reviewer", label: "y", url: "not-a-url" })).toThrow();
   });
 
+  it("rejects javascript: and data: URLs even if they parse as URL()", () => {
+    expect(() =>
+      ReviewSuggestionSchema.parse({ id: "s", kind: "reviewer", label: "y", url: "javascript:alert(1)" }),
+    ).toThrow();
+    expect(() =>
+      ReviewSuggestionSchema.parse({ id: "s", kind: "reviewer", label: "y", url: "data:text/html,hi" }),
+    ).toThrow();
+  });
+
+  it("accepts http and https URLs", () => {
+    expect(
+      ReviewSuggestionSchema.parse({ id: "s", kind: "reviewer", label: "y", url: "https://x.test/path" }).url,
+    ).toBe("https://x.test/path");
+    expect(ReviewSuggestionSchema.parse({ id: "s", kind: "reviewer", label: "y", url: "http://x.test/path" }).url).toBe(
+      "http://x.test/path",
+    );
+  });
+
   it("defaults nullable fields to null instead of undefined", () => {
     const parsed = ReviewSuggestionSchema.parse({ id: "s", kind: "note", label: "x" });
     expect(parsed.detail).toBeNull();

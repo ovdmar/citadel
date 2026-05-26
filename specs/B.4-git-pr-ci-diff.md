@@ -64,7 +64,7 @@
 [~] 1. A repo can configure a `workspace.requestReview` hook (event added to `HookEventSchema` in `@citadel/config`). The hook receives `{ workspace, repo, pr, diff: { files, addedLines, deletedLines, truncated } }` on stdin and returns a validated `ReviewSuggestionsOutput` payload on stdout.
 [~] 2. The inspector exposes a "Request review" button next to (or above) the `Diff`/`Review` surface. When no `workspace.requestReview` hook is configured, the button is disabled with a tooltip pointing operators at the Settings UI hook editor.
 [~] 3. Each invocation records one `activity_events` row (`hook.workspace.requestReview` on success, `hook.workspace.requestReview.failed` on failure or timeout) plus a `review_suggestion_runs` row that preserves parsed output (success), raw stderr tail, and error message (failure).
-[ ] 4. Suggestion entries carry a `kind` (`reviewer`, `checklist`, `note`, `warning`), `label`, optional `detail`, optional `url`, and optional `metadata`.
+[~] 4. Suggestion entries carry a `kind` (`reviewer`, `checklist`, `note`, `warning`), `label`, optional `detail`, optional `url` (constrained to http/https schemes), and optional `metadata`.
 
 ### Retention
 

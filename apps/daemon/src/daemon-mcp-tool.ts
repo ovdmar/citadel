@@ -445,7 +445,14 @@ async function handleReviewTool(deps: DaemonMcpDeps, call: McpToolCall): Promise
   }
 
   if (call.name === "add_review_comment") {
-    if ("author" in args) return { error: "author_not_allowed" };
+    // Reject any attempt to spoof author identity. The schema also marks
+    // additionalProperties:false, but the in-process dispatcher does not
+    // re-validate args against the schema, so we belt-and-braces here:
+    // both `author` (the documented schema field) and `runtimeId` (an
+    // undocumented field a caller might try to inject) are refused. Until
+    // the MCP transport exposes per-client identity, the daemon stamps
+    // 'agent:unknown'.
+    if ("author" in args || "runtimeId" in args) return { error: "author_not_allowed" };
     const workspaceId = typeof args.workspaceId === "string" ? args.workspaceId : "";
     const workspace = resolveWorkspace(workspaceId);
     if (!workspace) return { error: "workspace_not_found" };
@@ -455,13 +462,12 @@ async function handleReviewTool(deps: DaemonMcpDeps, call: McpToolCall): Promise
     const lineStart = (args.lineStart as number | undefined) ?? null;
     const lineEnd = (args.lineEnd as number | undefined) ?? null;
     const side = (args.side as "LEFT" | "RIGHT" | undefined) ?? null;
-    const runtimeId = typeof args.runtimeId === "string" ? args.runtimeId : "unknown";
     const row = addReviewComment({
       store,
       activity,
       workspaceId,
       body,
-      author: `agent:${runtimeId}`,
+      author: "agent:unknown",
       repoId: workspace.repoId,
       filePath,
       lineStart,
@@ -518,13 +524,14 @@ async function handleReviewTool(deps: DaemonMcpDeps, call: McpToolCall): Promise
     const repos = store.listRepos();
     const repo = repos.find((r) => r.id === workspace.repoId);
     if (!repo) return { error: "repo_not_found" };
+    const { readWorkspaceDiffSummary } = await import("./workspace-diff.js");
     const result = await requestReviewForWorkspace({
       store,
       config: { hooks: config.hooks, commandPolicy: config.commandPolicy },
       activity,
       repo,
       workspace,
-      diff: { files: [], addedLines: 0, deletedLines: 0, truncated: false },
+      diff: readWorkspaceDiffSummary(workspace.id, workspace.path),
     });
     if (result.kind === "no-hook") return { error: "no-hook" };
     if (result.kind === "succeeded") return { run: result.run, output: result.output };

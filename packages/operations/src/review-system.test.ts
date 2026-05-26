@@ -116,6 +116,50 @@ describe("requestReviewForWorkspace", () => {
     expect(f.store.latestReviewSuggestionRun(f.workspace.id)).toBeNull();
   });
 
+  it("forwards the diff summary payload (files + lines + truncated) to the hook on stdin", async () => {
+    // The hook script echoes the parsed `diff` field back to stdout as
+    // metadata so the test can assert what the runner actually delivered.
+    const script = `
+      let raw = '';
+      process.stdin.on('data', (c) => { raw += c.toString(); });
+      process.stdin.on('end', () => {
+        try {
+          const payload = JSON.parse(raw);
+          process.stdout.write(JSON.stringify({
+            suggestions: [],
+            metadata: { observedDiff: payload.diff, observedEvent: payload.event },
+          }));
+        } catch (error) {
+          process.stderr.write(String(error));
+          process.exit(2);
+        }
+      });
+    `;
+    const f = seed({
+      hooks: [hookConfig("node", ["-e", script])],
+      requestReviewHookIds: ["rev"],
+    });
+    const result = await requestReviewForWorkspace({
+      store: f.store,
+      config: f.config,
+      activity: f.activity,
+      repo: f.repo,
+      workspace: f.workspace,
+      diff: { files: ["src/a.ts", "src/b.ts"], addedLines: 7, deletedLines: 3, truncated: false },
+    });
+    expect(result.kind).toBe("succeeded");
+    if (result.kind === "succeeded") {
+      const observed = result.output.metadata?.observedDiff as
+        | { files: string[]; addedLines: number; deletedLines: number; truncated: boolean }
+        | undefined;
+      expect(observed?.files).toEqual(["src/a.ts", "src/b.ts"]);
+      expect(observed?.addedLines).toBe(7);
+      expect(observed?.deletedLines).toBe(3);
+      expect(observed?.truncated).toBe(false);
+      expect(result.output.metadata?.observedEvent).toBe("workspace.requestReview");
+    }
+  });
+
   it("records succeeded run and exactly one activity row when the hook emits valid JSON", async () => {
     const hookOutput = JSON.stringify({
       suggestions: [{ id: "s1", kind: "reviewer", label: "@alice" }],

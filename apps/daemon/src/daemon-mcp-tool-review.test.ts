@@ -19,22 +19,33 @@ process.env.CITADEL_DISABLE_REAPER = "1";
 process.env.CITADEL_DISABLE_SCHEDULER = "1";
 
 describe("daemon MCP review tools", () => {
-  it("add_review_comment stamps agent:<runtimeId> author and rejects caller-supplied author", async () => {
+  it("add_review_comment stamps agent:unknown and refuses caller-supplied author OR runtimeId", async () => {
     const { fixture, workspaceId } = seedFixture();
     const { server } = createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
+      // Baseline: a plain call with no identity field stamps 'agent:unknown'
+      // (the schema doesn't declare runtimeId, and the daemon dispatcher does
+      // not honor caller-supplied identity until the transport surfaces it).
       const addResp = await mcpCall<{ comment: ReviewComment }>(baseUrl, {
         name: "add_review_comment",
-        arguments: { workspaceId, body: "hi from agent", runtimeId: "claude" },
+        arguments: { workspaceId, body: "hi from agent" },
       });
-      expect(addResp.result.comment.author).toBe("agent:claude");
+      expect(addResp.result.comment.author).toBe("agent:unknown");
 
-      const spoofResp = await mcpCall<{ error: string }>(baseUrl, {
+      // Spoof attempt #1: explicit `author` is refused.
+      const spoofAuthor = await mcpCall<{ error: string }>(baseUrl, {
         name: "add_review_comment",
-        arguments: { workspaceId, body: "spoof", author: "operator", runtimeId: "claude" },
+        arguments: { workspaceId, body: "spoof", author: "operator" },
       });
-      expect(spoofResp.result.error).toBe("author_not_allowed");
+      expect(spoofAuthor.result.error).toBe("author_not_allowed");
+
+      // Spoof attempt #2: undocumented `runtimeId` is also refused.
+      const spoofRuntime = await mcpCall<{ error: string }>(baseUrl, {
+        name: "add_review_comment",
+        arguments: { workspaceId, body: "spoof", runtimeId: "claude" },
+      });
+      expect(spoofRuntime.result.error).toBe("author_not_allowed");
     } finally {
       await closeServer(server);
     }
@@ -47,7 +58,7 @@ describe("daemon MCP review tools", () => {
     try {
       const add = await mcpCall<{ comment: ReviewComment }>(baseUrl, {
         name: "add_review_comment",
-        arguments: { workspaceId, body: "v1", runtimeId: "claude" },
+        arguments: { workspaceId, body: "v1" },
       });
       const stale = await mcpCall<{ error: string; latest: ReviewComment }>(baseUrl, {
         name: "update_review_comment",
@@ -82,7 +93,7 @@ describe("daemon MCP review tools", () => {
     try {
       const add = await mcpCall<{ comment: ReviewComment }>(baseUrl, {
         name: "add_review_comment",
-        arguments: { workspaceId, body: "to delete", runtimeId: "claude" },
+        arguments: { workspaceId, body: "to delete" },
       });
       const list = await mcpCall<{ comments: ReviewComment[] }>(baseUrl, {
         name: "list_review_comments",
