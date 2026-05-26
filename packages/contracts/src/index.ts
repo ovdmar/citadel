@@ -793,11 +793,6 @@ export type BackgroundAgentSession = z.infer<typeof BackgroundAgentSessionSchema
 export type CreateScheduledAgentInput = z.infer<typeof CreateScheduledAgentInputSchema>;
 export type UpdateScheduledAgentInput = z.infer<typeof UpdateScheduledAgentInputSchema>;
 
-// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-export type { ScratchpadSnapshot, ScratchpadHistorySource, ScratchpadHistoryEntry, ScratchpadHistorySummary, ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
-
-// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-export type { ShortcutId, ShortcutChord, ChordModifier } from "./shortcuts.js";
-export { SHORTCUT_CHORDS, FORWARDABLE_CHORDS, FORWARDABLE_SHORTCUT_IDS } from "./shortcuts.js";
-
+export type * from "./scratchpad.js";
+export * from "./shortcuts.js";
 export type ApiError = { error: string; detail?: string; fieldErrors?: Record<string, string[]> };
