@@ -37,6 +37,7 @@ import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
+import { registerPrRoutes } from "./pr-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
@@ -284,48 +285,6 @@ export function createDaemonApp(input: {
     }),
   );
 
-  app.get(
-    "/api/repos/:repoId/provider-summary",
-    asyncRoute(async (req, res) => {
-      const repoId = req.params.repoId;
-      if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
-      const repo = store.listRepos().find((candidate) => candidate.id === repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const versionControl = await cachedProvider(`vc:${repo.id}:${repo.updatedAt}`, () =>
-        providers.collectGitHubVersionControlSummary(repo.rootPath),
-      );
-      res.json({ versionControl });
-    }),
-  );
-
-  app.get(
-    "/api/repos/:repoId/ci-runs",
-    asyncRoute(async (req, res) => {
-      const repoId = req.params.repoId;
-      if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
-      const repo = store.listRepos().find((candidate) => candidate.id === repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const ci = await cachedProvider(`ci:${repo.id}:${repo.updatedAt}`, () =>
-        providers.collectGitHubCiRuns(repo.rootPath),
-      );
-      res.json({ ci });
-    }),
-  );
-
-  app.get(
-    "/api/repos/:repoId/ci-runs/:runId/logs",
-    asyncRoute(async (req, res) => {
-      const repoId = req.params.repoId;
-      const runId = req.params.runId;
-      if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
-      if (typeof runId !== "string") return res.status(400).json({ error: "run_id_required" });
-      const repo = store.listRepos().find((candidate) => candidate.id === repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const log = await providers.collectGitHubCiRunLog(repo.rootPath, runId);
-      res.json({ log });
-    }),
-  );
-
   app.get("/api/workspaces", (_req, res) => {
     res.json({ workspaces: store.listWorkspaces() });
   });
@@ -497,6 +456,7 @@ export function createDaemonApp(input: {
   });
 
   registerRuntimeUsageRoutes({ app, config, asyncRoute, providerCache, cachedProvider });
+  registerPrRoutes({ app, store, providers, asyncRoute, cachedProvider });
 
   app.post(
     "/api/agent-sessions",
