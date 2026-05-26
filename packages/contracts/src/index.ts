@@ -792,7 +792,7 @@ export type BackgroundAgentSession = z.infer<typeof BackgroundAgentSessionSchema
 export type CreateScheduledAgentInput = z.infer<typeof CreateScheduledAgentInputSchema>;
 export type UpdateScheduledAgentInput = z.infer<typeof UpdateScheduledAgentInputSchema>;
 
-export type { ScratchpadSnapshot, ScratchpadHistorySource } from "./scratchpad.js";
+export type { ScratchpadSnapshot, ReadScratchpadResult, ScratchpadHistorySource } from "./scratchpad.js";
 export type { ScratchpadHistoryEntry, ScratchpadHistorySummary } from "./scratchpad.js";
 export type { ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
 
