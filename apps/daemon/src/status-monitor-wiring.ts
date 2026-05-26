@@ -98,11 +98,18 @@ export function buildStatusMonitorDeps(
         fsPromises.stat(agentLiveSentinelPath(name)).catch(() => null),
         fsPromises.stat(agentExitSentinelPath(name)).catch(() => null),
       ]);
-      const exitCode = exitStat ? readAgentExitCode(name) : null;
+      // Stale-.exit guard: if both files exist and .live is newer than .exit,
+      // the .exit is leftover from a prior wrapper incarnation with the same
+      // tmux session name (e.g., daemon restart re-spawned the session before
+      // /tmp was cleared). Treat the exit signal as absent so the live agent
+      // doesn't get marked stopped.
+      const liveNewerThanExit =
+        liveStat !== null && exitStat !== null && liveStat.mtimeMs > exitStat.mtimeMs;
+      const exitCode = exitStat && !liveNewerThanExit ? readAgentExitCode(name) : null;
       return {
         live: liveStat !== null,
         exitCode,
-        exitedAt: exitStat ? exitStat.ctime.toISOString() : null,
+        exitedAt: exitStat && !liveNewerThanExit ? exitStat.ctime.toISOString() : null,
       };
     },
     getAdapter: (runtimeId): RuntimeStatusAdapter => getStatusAdapter(runtimeId),

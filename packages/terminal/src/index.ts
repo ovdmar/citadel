@@ -182,7 +182,14 @@ function terminalCommand(sessionName: string, command: string, args: string[]) {
   // shell. The explicit lines run normally; the trap also runs on signal but
   // `exec` skips the trap on the happy path. `$?` at trap time reflects the
   // killed agent's exit status (typically 130/SIGINT or 143/SIGTERM).
+  //
+  // `rm -f ${exitSentinel}` first: if a previous incarnation with the same
+  // tmux session name left a stale .exit on disk (daemon restart, /tmp not
+  // cleared), the status monitor would read it and mark this fresh session
+  // as already-stopped. Clearing before touching .live guarantees a clean
+  // slate per wrapper invocation.
   const script = [
+    `rm -f ${exitSentinel}`,
     `touch ${liveSentinel}`,
     `trap 'rc=$?; echo $rc > ${exitSentinel}; rm -f ${liveSentinel}' EXIT`,
     `${envPrefix} ${argv}`,
