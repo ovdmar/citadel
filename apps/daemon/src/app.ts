@@ -92,7 +92,7 @@ export function createDaemonApp(input: {
   // restart on file save, and each restart killed the systemd install's
   // ttyds — that's where the "Reconnecting/Reconnected" storm came from).
   //
-  // Slot = ((daemonPort - 4010) mod 11) * 20 gives 11 disjoint 20-port
+  // Slot = ((daemonPort - 4010) mod 11) * 200 gives 11 disjoint 200-port
   // slices, each deterministic per HTTP port. The base is shifted to 7721
   // (just above the legacy hardcoded ceiling of 7720) so daemons running
   // OLD pre-slot code — whose cleanupStale still targets the legacy
@@ -101,8 +101,8 @@ export function createDaemonApp(input: {
   const ttydSlot = (((config.port - 4010) % 11) + 11) % 11;
   const envTtydBase = Number.parseInt(process.env.CITADEL_TTYD_PORT_BASE ?? "", 10);
   const envTtydMax = Number.parseInt(process.env.CITADEL_TTYD_PORT_MAX ?? "", 10);
-  const ttydPortBase = Number.isFinite(envTtydBase) && envTtydBase > 0 ? envTtydBase : 7721 + 20 * ttydSlot;
-  const ttydPortMax = Number.isFinite(envTtydMax) && envTtydMax > 0 ? envTtydMax : ttydPortBase + 19;
+  const ttydPortBase = Number.isFinite(envTtydBase) && envTtydBase > 0 ? envTtydBase : 7721 + 200 * ttydSlot;
+  const ttydPortMax = Number.isFinite(envTtydMax) && envTtydMax > 0 ? envTtydMax : ttydPortBase + 199;
   const ttyd = createTtydManager({ portBase: ttydPortBase, portMax: ttydPortMax });
 
   app.use(cors());
