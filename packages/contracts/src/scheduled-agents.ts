@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IdSchema } from "./id.js";
+import { IdSchema } from "./primitives.js";
 
 export const ScheduledAgentWorkspaceStrategySchema = z.enum(["new", "existing"]);
 // Status of the denormalized cache on the agent row — includes "never" for
