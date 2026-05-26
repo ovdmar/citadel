@@ -53,6 +53,42 @@ describe("codexStatusAdapter", () => {
         ),
       ).toBe("running");
     });
+
+    it("classifies running-spinner.txt as running on the spinner alone (no recent tmux activity)", () => {
+      // Real capture from a codex session computing for minutes without
+      // visibly redrawing — the `◦ Working (2m 36s • esc to interrupt)` line
+      // is the only positive signal. Previously misclassified as idle once
+      // the activity timestamp went stale.
+      expect(
+        codexStatusAdapter.observe(
+          state,
+          ctx(load("running-spinner"), { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 5 }),
+        ),
+      ).toBe("running");
+    });
+  });
+
+  describe("active spinner detection", () => {
+    it("'• Working (1m 52s • esc to interrupt)' → running", () => {
+      const pane = "some output\n• Working (1m 52s • esc to interrupt)\n\n  gpt-5.5 default · ~/wherever";
+      expect(
+        codexStatusAdapter.observe(state, ctx(pane, { ticksSinceActivityChange: 10, hasObservedSinceBoot: true })),
+      ).toBe("running");
+    });
+
+    it("'◦ Thinking (12s • esc to interrupt)' (animated bullet variant) → running", () => {
+      const pane = "x\n◦ Thinking (12s • esc to interrupt)\n  gpt-5.5 default · ~/wherever";
+      expect(
+        codexStatusAdapter.observe(state, ctx(pane, { ticksSinceActivityChange: 10, hasObservedSinceBoot: true })),
+      ).toBe("running");
+    });
+
+    it("sandbox footer 'esc to cancel' (no closing paren) does NOT trigger running", () => {
+      const pane = "x\nPress enter to confirm or esc to cancel";
+      expect(
+        codexStatusAdapter.observe(state, ctx(pane, { ticksSinceActivityChange: 10, hasObservedSinceBoot: true })),
+      ).toBe("waiting_for_input");
+    });
   });
 
   describe("activity timestamp drives running/idle", () => {
