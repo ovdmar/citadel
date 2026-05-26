@@ -18,6 +18,7 @@ import "./chrome.css";
 import "./stage-terminal.css";
 import "./cockpit-extras.css";
 import "./inspector-stats.css";
+import "./jira-picker.css";
 import "./inspector-checks.css";
 import "./inspector-deploy.css";
 import "./inspector-meta.css";

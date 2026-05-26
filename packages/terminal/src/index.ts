@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { WebSocketServer } from "ws";
 
-export { createTtydManager, TtydUnavailableError } from "./ttyd.js";
+export { createTtydManager, discoverExistingTtyds, TtydUnavailableError } from "./ttyd.js";
 export type { TtydEntry, TtydManager, TtydManagerConfig, TtydTheme } from "./ttyd.js";
 export { submitPrompt } from "./submit-prompt.js";
 
@@ -83,52 +83,8 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
   return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
 }
 
-// Side-channel byte log of everything a pane emits. Lives under tmpdir so it
-// gets cleaned up on reboot. `pipe-pane -o` toggles: passing the command once
-// opens the pipe, calling again with no command closes it. We don't bother
-// closing on session teardown — when the tmux session goes away tmux severs
-// the pipe automatically.
-const PIPE_PANE_LOG_DIR = path.join(os.tmpdir(), "citadel-pty");
-
-export function pipePaneLogPath(sessionName: string) {
-  return path.join(PIPE_PANE_LOG_DIR, `${sessionName}.log`);
-}
-
-function attachPipePaneLog(sessionName: string) {
-  fs.mkdirSync(PIPE_PANE_LOG_DIR, { recursive: true });
-  const logPath = pipePaneLogPath(sessionName);
-  // Truncate any stale log from a previous incarnation of this session name.
-  try {
-    fs.writeFileSync(logPath, "");
-  } catch {
-    /* tmpdir is read-only — pipe-pane will recreate on first write */
-  }
-  // Default direction is "-O" (pane → command). Omitting -o means we always
-  // replace any existing pipe rather than no-op, so re-attach is idempotent.
-  const shellCmd = `cat >> ${shellQuote(logPath)}`;
-  execFileSync("tmux", [...tmuxPrefix(), "pipe-pane", "-t", sessionName, shellCmd], { stdio: "ignore" });
-}
-
-// Return the tail of the pipe-pane log (or empty string if unavailable). Used
-// by verification paths that need to inspect bytes that may have scrolled out
-// of the visible pane.
-export function readPipePaneTail(sessionName: string, maxBytes = 16 * 1024): string {
-  const logPath = pipePaneLogPath(sessionName);
-  try {
-    const stat = fs.statSync(logPath);
-    const offset = Math.max(0, stat.size - maxBytes);
-    const fd = fs.openSync(logPath, "r");
-    try {
-      const buf = Buffer.alloc(stat.size - offset);
-      fs.readSync(fd, buf, 0, buf.length, offset);
-      return buf.toString("utf8");
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return "";
-  }
-}
+import { attachPipePaneLog } from "./pipe-pane-log.js";
+export { pipePaneLogPath, readPipePaneTail, sweepPtyLogs } from "./pipe-pane-log.js";
 
 // Path of the "agent still running" sentinel file for a given tmux session.
 // The wrapper script touches this before exec'ing the agent and removes it
@@ -323,6 +279,13 @@ export function ensureTmuxExtendedKeys() {
       stdio: "ignore",
     });
   }
+  // Cap per-pane scrollback. The previous default (2000) was already low in
+  // line-count, but unset history-limit is what compounds: long-running tmux
+  // servers in citadel-tmux.service accumulate tmux client structs (one per
+  // ttyd browser connection / WS reconnect), and the per-client screen state
+  // grows with the per-pane scrollback ceiling. 5000 keeps headroom for
+  // operator inspection while bounding worst-case server memory.
+  execFileSync("tmux", [...tmuxPrefix(), "set-option", "-g", "history-limit", "5000"], { stdio: "ignore" });
 }
 
 export function captureTmux(sessionName: string, lines = 200) {

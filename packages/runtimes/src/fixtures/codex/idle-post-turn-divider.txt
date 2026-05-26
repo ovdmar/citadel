@@ -1,0 +1,32 @@
+  UI Shape
+  In the workspace inspector or stage:
+
+  - "Implementation Run" timeline.
+  - Current step, status, reason, next action.
+  - Agent session attached to each step.
+  - Checks with pass/fail logs.
+  - Commits produced per step.
+  - Blocked state with a concrete action: select plan, clean tree, approve push, fix command policy, retry check.
+
+  This fits Citadel's cockpit model: agent output plus checks plus diff plus preview in one place.
+
+  Recommended Path
+
+  1. Start with a generic WorkflowRun state model.
+  2. Add plan import for existing .agents/plans/*.md.
+  3. Add a machine-readable manifest for new plans.
+  4. Implement deterministic gates around one agent session.
+  5. Add per-unit step execution.
+  6. Add structured MCP completion from agents.
+  7. Add review/fix loop.
+  8. Only then add push/create-pr handoff.
+
+  The main principle: Citadel should orchestrate and verify; agents should implement and explain. That gives you deterministic delivery mechanics without pretending
+  the coding itself is deterministic.
+
+─ Worked for 2m 55s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+› Use /skills to list available skills
+
+  gpt-5.5 xhigh · ~/Workspace/citadel

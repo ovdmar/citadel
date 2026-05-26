@@ -7,17 +7,14 @@ import type {
   CheckSummary,
   CiProviderSummary,
   CiRunSummary,
-  IssueSearchResponse,
-  IssueSearchResult,
-  IssueTrackerSummary,
-  IssueTransition,
-  IssueTransitionActionResult,
   PrReviewerState,
   ProviderHealth,
   RuntimeUsageCategory,
   RuntimeUsageSummary,
   VersionControlSummary,
 } from "@citadel/contracts";
+import { PrMergeStateStatusSchema } from "@citadel/contracts";
+import type { ParentPr, PrCommit, PrMergeResponse, PrMergeStrategy } from "@citadel/contracts/pr-routes";
 import { runtimeUsageFetchers } from "@citadel/runtimes";
 
 const execFileAsync = promisify(execFile);
@@ -321,179 +318,17 @@ export function normalizeCiRunList(output: string) {
   return (JSON.parse(output) as Array<Record<string, unknown>>).map(normalizeCiRun);
 }
 
-export async function collectJiraIssueSummary(issueKey: string): Promise<IssueTrackerSummary> {
-  const checkedAt = new Date().toISOString();
-  const key = issueKey.trim().toUpperCase();
-  try {
-    const issue = parseJiraIssueOutput(
-      await jtk(["issues", "get", key, "--fields", "Summary,Status,Assignee,Updated", "--no-color"]),
-    );
-    const transitions = parseJiraTransitionsOutput(await jtk(["transitions", "list", key, "--no-color"]));
-    return {
-      providerId: "jira-jtk",
-      status: "healthy",
-      reason: null,
-      key,
-      summary: issue.summary,
-      issueStatus: issue.issueStatus,
-      assignee: issue.assignee,
-      updated: issue.updated,
-      url: null,
-      transitions,
-      checkedAt,
-    };
-  } catch (error) {
-    return {
-      providerId: "jira-jtk",
-      status: "degraded",
-      reason: error instanceof Error ? error.message : "Jira issue summary failed",
-      key,
-      summary: null,
-      issueStatus: null,
-      assignee: null,
-      updated: null,
-      url: null,
-      transitions: [],
-      checkedAt,
-    };
-  }
-}
-
-export function parseJiraIssueOutput(output: string) {
-  const values = new Map<string, string>();
-  for (const line of output.split("\n")) {
-    const match = line.match(/^([^:]+):\s*(.*)$/);
-    if (match?.[1]) values.set(match[1].trim().toLowerCase(), match[2]?.trim() ?? "");
-  }
-  return {
-    key: values.get("key") ?? null,
-    summary: values.get("summary") ?? null,
-    issueStatus: values.get("status") ?? null,
-    assignee: values.get("assignee") ?? null,
-    updated: values.get("updated") ?? null,
-  };
-}
-
-export function parseJiraTransitionsOutput(output: string): IssueTransition[] {
-  return output
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line && !line.startsWith("ID |"))
-    .map((line) => line.split("|").map((part) => part.trim()))
-    .filter((parts) => parts.length >= 3 && Boolean(parts[0]))
-    .map(([id, name, toStatus]) => ({
-      id: id ?? "",
-      name: name ?? "",
-      toStatus: toStatus ?? "",
-    }));
-}
-
-// Issue keys per Jira's docs: project key + dash + numeric id. Match
-// case-insensitively (we upper-case below) and require the full string so
-// "AUTH-123 OR DROP" goes to the summary search, not the key search.
-const ISSUE_KEY_RE = /^[A-Za-z][A-Za-z0-9_]+-\d+$/;
-
-// JQL operands inside `summary ~` are interpreted by Jira's Lucene parser;
-// stripping the reserved set is more robust than escaping because most are
-// not useful inside a summary search anyway.
-const LUCENE_SPECIALS_RE = /[+\-&|!(){}\[\]^"~*?:\\/]/g;
-
-export function buildJiraSearchJql(query: string | null): string {
-  const trimmed = (query ?? "").trim();
-  if (!trimmed) {
-    // Broaden beyond `assignee` so reviewer / watcher tickets surface too —
-    // operators commonly attach a ticket assigned to someone else.
-    return "(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser()) AND updated >= -14d ORDER BY updated DESC";
-  }
-  if (ISSUE_KEY_RE.test(trimmed)) {
-    return `key = "${trimmed.toUpperCase()}" ORDER BY updated DESC`;
-  }
-  // Strip Lucene-reserved characters and collapse whitespace. JQL is passed
-  // to jtk via argv so shell-injection is already moot; this is purely
-  // about keeping Lucene from mis-parsing the operand.
-  const sanitized = trimmed.replace(LUCENE_SPECIALS_RE, " ").replace(/\s+/g, " ").trim();
-  return `summary ~ "${sanitized}" ORDER BY updated DESC`;
-}
-
-export function parseJiraSearchOutput(output: string): IssueSearchResult[] {
-  const results: IssueSearchResult[] = [];
-  for (const raw of output.split("\n")) {
-    const line = raw.trim();
-    if (!line || line.startsWith("KEY |")) continue;
-    const parts = line.split("|").map((part) => part.trim());
-    const key = parts[0];
-    if (!key) continue;
-    results.push({
-      key,
-      summary: parts[1] ? parts[1] : null,
-      status: parts[2] ? parts[2] : null,
-      url: null,
-      updated: parts[3] ? parts[3] : null,
-    });
-  }
-  return results;
-}
-
-export async function searchJiraIssues(query: string | null): Promise<IssueSearchResponse> {
-  const jql = buildJiraSearchJql(query);
-  try {
-    const raw = await jtk(["issues", "search", "--jql", jql, "--max", "20", "--no-color"]);
-    return { status: "healthy", reason: null, results: parseJiraSearchOutput(raw) };
-  } catch (error) {
-    return {
-      status: "degraded",
-      reason: error instanceof Error ? error.message : "Jira search failed",
-      results: [],
-    };
-  }
-}
-
-// Picks a transition from a list whose `toStatus` matches the configured
-// target status (case-insensitive). Falls back to matching by transition
-// name so operators who configured the transition name (instead of the
-// target status) before the semantic clarification still work.
-export function resolveJiraTransitionByTargetStatus(transitions: IssueTransition[], target: string): string | null {
-  const needle = target.trim().toLowerCase();
-  if (!needle) return null;
-  for (const t of transitions) {
-    if (t.toStatus.trim().toLowerCase() === needle) return t.id;
-  }
-  for (const t of transitions) {
-    if (t.name.trim().toLowerCase() === needle) return t.id;
-  }
-  return null;
-}
-
-export async function transitionJiraIssue(input: {
-  issueKey: string;
-  transition: string;
-  fields?: Record<string, string>;
-}): Promise<IssueTransitionActionResult> {
-  const checkedAt = new Date().toISOString();
-  const key = input.issueKey.trim().toUpperCase();
-  const transition = input.transition.trim();
-  try {
-    const fieldArgs = Object.entries(input.fields ?? {}).flatMap(([field, value]) => ["--field", `${field}=${value}`]);
-    await jtk(["transitions", "do", key, transition, ...fieldArgs, "--no-color"]);
-    return {
-      providerId: "jira-jtk",
-      status: "healthy",
-      reason: null,
-      key,
-      transition,
-      checkedAt,
-    };
-  } catch (error) {
-    return {
-      providerId: "jira-jtk",
-      status: "degraded",
-      reason: error instanceof Error ? error.message : "Jira transition failed",
-      key,
-      transition,
-      checkedAt,
-    };
-  }
-}
+export {
+  buildJiraSearchJql,
+  collectJiraIssueSummary,
+  parseJiraIssueOutput,
+  parseJiraSearchOutput,
+  parseJiraTransitionsOutput,
+  resolveJiraTransitionByTargetStatus,
+  searchJiraIssues,
+  setJiraCommand,
+  transitionJiraIssue,
+} from "./jira.js";
 
 async function discoverDefaultBranch(rootPath: string) {
   const originHead = await gitOptional(rootPath, ["rev-parse", "--abbrev-ref", "origin/HEAD"]);
@@ -517,7 +352,7 @@ async function currentPullRequest(rootPath: string) {
       "pr",
       "view",
       "--json",
-      "number,title,url,state,isDraft,reviewDecision,statusCheckRollup,additions,deletions,reviews,reviewRequests",
+      "number,title,url,state,isDraft,reviewDecision,statusCheckRollup,additions,deletions,reviews,reviewRequests,commits,baseRefName,headRefName,headRepository,mergeable,mergeStateStatus,headRefOid",
     ]);
     const parsed = JSON.parse(raw) as {
       number: number;
@@ -531,7 +366,23 @@ async function currentPullRequest(rootPath: string) {
       deletions?: number | null;
       reviews?: GhReview[];
       reviewRequests?: GhReviewRequest[];
+      commits?: Array<Record<string, unknown>>;
+      baseRefName?: string;
+      headRefName?: string;
+      headRepository?: { nameWithOwner?: string } | null;
+      mergeable?: string;
+      mergeStateStatus?: string | null;
+      headRefOid?: string | null;
     };
+    // Repo merge config + parent-PR detection run in parallel — both can fail
+    // independently and degrade to safe defaults, so don't block the PR view
+    // on either.
+    const [allowedMergeStrategies, parentPr] = await Promise.all([
+      fetchAllowedMergeStrategies(rootPath),
+      parsed.baseRefName && parsed.headRepository?.nameWithOwner
+        ? fetchParentPr(rootPath, parsed.baseRefName, parsed.headRepository.nameWithOwner)
+        : Promise.resolve(null),
+    ]);
     return {
       number: parsed.number,
       title: parsed.title,
@@ -543,7 +394,73 @@ async function currentPullRequest(rootPath: string) {
       additions: typeof parsed.additions === "number" ? parsed.additions : null,
       deletions: typeof parsed.deletions === "number" ? parsed.deletions : null,
       reviewers: aggregateReviewers(parsed.reviews ?? [], parsed.reviewRequests ?? []),
+      commits: (parsed.commits ?? []).map(normalizePrCommit),
+      headRefName: parsed.headRefName ?? null,
+      parentPr,
+      mergeable: normalizeMergeable(parsed.mergeable),
+      allowedMergeStrategies,
+      // Normalize mergeStateStatus through the strict enum so unknown values
+      // from `gh` collapse to "UNKNOWN" rather than failing validation.
+      mergeStateStatus:
+        parsed.mergeStateStatus == null ? null : PrMergeStateStatusSchema.parse(parsed.mergeStateStatus),
+      headSha: parsed.headRefOid ?? null,
     };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeMergeable(raw: string | undefined): "mergeable" | "conflicting" | "unknown" {
+  if (!raw) return "unknown";
+  const upper = raw.toUpperCase();
+  if (upper === "MERGEABLE") return "mergeable";
+  if (upper === "CONFLICTING") return "conflicting";
+  return "unknown";
+}
+
+async function fetchAllowedMergeStrategies(rootPath: string): Promise<Array<"squash" | "merge" | "rebase">> {
+  try {
+    const raw = await gh(rootPath, [
+      "repo",
+      "view",
+      "--json",
+      "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed",
+    ]);
+    const parsed = JSON.parse(raw) as {
+      mergeCommitAllowed?: boolean;
+      squashMergeAllowed?: boolean;
+      rebaseMergeAllowed?: boolean;
+    };
+    const allowed: Array<"squash" | "merge" | "rebase"> = [];
+    if (parsed.squashMergeAllowed) allowed.push("squash");
+    if (parsed.mergeCommitAllowed) allowed.push("merge");
+    if (parsed.rebaseMergeAllowed) allowed.push("rebase");
+    return allowed;
+  } catch {
+    return [];
+  }
+}
+
+async function fetchParentPr(rootPath: string, baseRefName: string, headRepository: string): Promise<ParentPr | null> {
+  try {
+    const raw = await gh(rootPath, [
+      "pr",
+      "list",
+      "--state",
+      "all",
+      "--limit",
+      "50",
+      "--json",
+      "number,url,headRefName,headRepository,state",
+    ]);
+    const candidates = JSON.parse(raw) as Array<{
+      number: number;
+      url: string;
+      headRefName: string;
+      headRepository?: string | { nameWithOwner?: string } | null;
+      state: string;
+    }>;
+    return detectParentPr({ baseRefName, headRepository }, candidates);
   } catch {
     return null;
   }
@@ -637,16 +554,162 @@ async function gh(rootPath: string, args: string[]) {
   return result.stdout.trim();
 }
 
-let jiraCommandOverride = "jtk";
+// PR display helpers — used by the daemon's PR routes for the always-on
+// cross-workspace poll, force-refresh, merge button, and stacked-PR detection.
 
-export function setJiraCommand(command: string | undefined) {
-  jiraCommandOverride = command?.length ? command : "jtk";
+// Hand-rolled concurrency limiter. Kept here (not as a dependency) to avoid
+// touching pnpm-lock.yaml for ~10 lines of logic.
+export function pLimit(concurrency: number) {
+  if (concurrency < 1) throw new Error("pLimit concurrency must be >= 1");
+  const queue: Array<() => void> = [];
+  let active = 0;
+  const next = () => {
+    if (active >= concurrency) return;
+    const job = queue.shift();
+    if (job) {
+      active += 1;
+      job();
+    }
+  };
+  return <T>(task: () => Promise<T>): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      queue.push(() => {
+        task()
+          .then((value) => {
+            active -= 1;
+            resolve(value);
+            next();
+          })
+          .catch((error) => {
+            active -= 1;
+            reject(error);
+            next();
+          });
+      });
+      next();
+    });
 }
 
-async function jtk(args: string[]) {
-  const result = await execFileAsync(jiraCommandOverride, args, {
-    timeout: 12000,
-    maxBuffer: 1024 * 1024,
+type RawCommit = {
+  oid?: string;
+  sha?: string;
+  messageHeadline?: string;
+  message?: string;
+};
+
+export function normalizePrCommit(raw: RawCommit): PrCommit {
+  const sha = String(raw.oid ?? raw.sha ?? "");
+  const headline =
+    typeof raw.messageHeadline === "string" && raw.messageHeadline.length > 0
+      ? raw.messageHeadline
+      : ((raw.message ?? "").split("\n")[0]?.trim() ?? "");
+  return {
+    sha,
+    shortSha: sha.slice(0, 7),
+    message: headline,
+    checks: [],
+  };
+}
+
+// Pure: caller (daemon) provides the cache wrapper. Returns the per-commit
+// check rollup from the GitHub API; tolerates failure with an empty array so
+// one bad commit doesn't poison the PR summary.
+export async function fetchCommitChecks(rootPath: string, nameWithOwner: string, sha: string): Promise<CheckSummary[]> {
+  try {
+    const raw = await gh(rootPath, [
+      "api",
+      "-H",
+      "Accept: application/vnd.github+json",
+      `/repos/${nameWithOwner}/commits/${sha}/check-runs`,
+    ]);
+    const parsed = JSON.parse(raw) as { check_runs?: Array<Record<string, unknown>> };
+    return (parsed.check_runs ?? []).map((entry) =>
+      normalizeCheck({
+        name: entry.name,
+        status: entry.status,
+        conclusion: entry.conclusion,
+        detailsUrl: entry.details_url ?? entry.html_url,
+        startedAt: entry.started_at,
+        completedAt: entry.completed_at,
+      }),
+    );
+  } catch {
+    return [];
+  }
+}
+
+type ParentPrCandidate = {
+  number: number;
+  url: string;
+  headRefName: string;
+  state: string;
+  headRepository?: string | { nameWithOwner?: string } | null;
+};
+
+// Match by both head ref name AND head repository so same-named branches in
+// different forks don't false-positive. Open PRs win over merged when both
+// match the same repo (right-after-merge case still surfaces a merged parent
+// via its own MERGED state).
+export function detectParentPr(
+  query: { baseRefName: string; headRepository: string },
+  candidates: ParentPrCandidate[],
+): ParentPr | null {
+  const matches = candidates.filter((candidate) => {
+    if (candidate.headRefName !== query.baseRefName) return false;
+    const repo =
+      typeof candidate.headRepository === "string" ? candidate.headRepository : candidate.headRepository?.nameWithOwner;
+    return repo === query.headRepository;
   });
-  return result.stdout.trim();
+  if (matches.length === 0) return null;
+  const open = matches.find((m) => m.state.toUpperCase() === "OPEN");
+  const choice = open ?? matches[0];
+  if (!choice) return null;
+  return { number: choice.number, url: choice.url, headRefName: choice.headRefName, state: choice.state };
+}
+
+type GhRunner = (args: string[]) => Promise<string>;
+
+// Internal seam: tests inject a fake runner; production calls gh() in this
+// module. NO --delete-branch is ever passed — branch deletion is a separate
+// opt-in flow that's intentionally not part of the night's scope.
+export async function mergePr(
+  input: { rootPath: string; number: number; strategy: PrMergeStrategy },
+  runner?: GhRunner,
+): Promise<PrMergeResponse> {
+  const run: GhRunner = runner ?? ((args) => gh(input.rootPath, args));
+  const args = ["pr", "merge", String(input.number), `--${input.strategy}`];
+  try {
+    await run(args);
+    return { ok: true };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { ok: false, reason: classifyMergeFailure(detail), detail };
+  }
+}
+
+function classifyMergeFailure(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("not mergeable") || lower.includes("merge conflict")) return "not_mergeable";
+  if (lower.includes("not authorized") || lower.includes("authentication")) return "gh_auth";
+  if (lower.includes("not allowed") || lower.includes("disabled")) return "strategy_disallowed";
+  return "gh_error";
+}
+
+// isGhAvailable returns whether `gh auth status` succeeded recently for the
+// given rootPath. Caches the answer for 60s so the merge button doesn't spawn
+// gh on every render.
+const ghAvailableCache = new Map<string, { expiresAt: number; available: boolean }>();
+
+export async function isGhAvailable(rootPath: string): Promise<boolean> {
+  const cached = ghAvailableCache.get(rootPath);
+  if (cached && cached.expiresAt > Date.now()) return cached.available;
+  let available = false;
+  try {
+    await gh(rootPath, ["auth", "status"]);
+    available = true;
+  } catch {
+    available = false;
+  }
+  ghAvailableCache.set(rootPath, { expiresAt: Date.now() + 60_000, available });
+  return available;
 }

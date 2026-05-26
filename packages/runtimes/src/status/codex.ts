@@ -32,6 +32,14 @@ const SANDBOX_APPROVAL_FOOTER = "Press enter to confirm or esc to cancel";
 // Closing paren is the disambiguator vs the sandbox footer's "esc to cancel".
 const ACTIVE_SPINNER_SUBSTRING = "esc to interrupt)";
 
+// Post-turn separator: `─ Worked for Xm Ys ───────────…`. Replaces the spinner
+// the moment the turn finishes. Anchored on `Worked for` preceded by the box-
+// drawing line glyph so plain user/agent text mentioning "worked for" doesn't
+// match. Acts as a positive idle signal so the transition is immediate; without
+// it the adapter would return null until ticksSinceActivityChange ≥ 2, causing
+// a brief running → null → idle flicker in the UI.
+const POST_TURN_DIVIDER_REGEX = /^─+\s+Worked for\s/;
+
 const ACTIVE_SCAN_LINES = 30;
 
 const IDLE_STABLE_TICKS = 2;
@@ -45,6 +53,14 @@ function hasActiveSpinner(paneCapture: string): boolean {
   const lines = bottomLines(paneCapture, ACTIVE_SCAN_LINES);
   for (const line of lines) {
     if (line.includes(ACTIVE_SPINNER_SUBSTRING)) return true;
+  }
+  return false;
+}
+
+function hasPostTurnDivider(paneCapture: string): boolean {
+  const lines = bottomLines(paneCapture, ACTIVE_SCAN_LINES);
+  for (const line of lines) {
+    if (POST_TURN_DIVIDER_REGEX.test(line)) return true;
   }
   return false;
 }
@@ -78,13 +94,20 @@ export const codexStatusAdapter: RuntimeStatusAdapter = {
       return "running";
     }
 
-    // Priority 3: pane activity changed → running. Covers TUI changes that
+    // Priority 3: post-turn divider visible → idle. Positive signal for the
+    // turn-just-finished case so we don't flicker through `null` waiting for
+    // the activity counter to stabilize.
+    if (hasPostTurnDivider(ctx.paneCapture)) {
+      return "idle";
+    }
+
+    // Priority 4: pane activity changed → running. Covers TUI changes that
     // happen without the spinner (e.g. tool-result panels rerendering).
     if (ctx.tmuxActivityChangedSinceLastTick) {
       return "running";
     }
 
-    // Priority 4: stable for ≥ IDLE_STABLE_TICKS — idle.
+    // Priority 5: stable for ≥ IDLE_STABLE_TICKS — idle.
     // Boot suppression: never emit idle on the very first post-boot tick. If
     // the daemon restarted while codex was working, the in-memory state has
     // no prior activity reference and we'd misclassify.

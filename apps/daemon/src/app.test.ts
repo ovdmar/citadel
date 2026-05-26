@@ -23,6 +23,7 @@ afterEach(() => {
 
 process.env.CITADEL_DISABLE_REAPER = "1";
 process.env.CITADEL_DISABLE_SCHEDULER = "1";
+process.env.CITADEL_DISABLE_TERMINAL_REAPER = "1";
 
 describe("createDaemonApp", () => {
   it("serves config, runtime, MCP, and error endpoints without starting the production listener", async () => {
@@ -443,6 +444,13 @@ describe("createDaemonApp", () => {
               },
             ],
             reviewers: [],
+            commits: [],
+            headRefName: "feature",
+            parentPr: null,
+            mergeable: "unknown" as const,
+            allowedMergeStrategies: [],
+            mergeStateStatus: null,
+            headSha: null,
           },
           checkedAt: now,
         }),
