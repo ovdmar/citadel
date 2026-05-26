@@ -331,11 +331,30 @@ const DARK_XTERM_THEME = {
   brightWhite: "#fffaef",
 };
 
-function buildAttachCommand(tmuxSession: string) {
+// Build the shell command ttyd runs to attach to the named tmux session.
+// New options (mouse, history-limit, set-clipboard) are session-scoped
+// (`-t "${safe}"`, no `-g`) because Citadel uses the user's DEFAULT tmux
+// socket (see packages/terminal/src/index.ts where new-session is invoked
+// without `-L`). A server-global `-g` would silently mutate the operator's
+// personal tmux sessions outside Citadel — unacceptable.
+//
+// The pre-existing `extended-keys` and `terminal-features` lines remain
+// server-scoped as today; they are a documented prior decision and out of
+// scope for this PR.
+//
+// Pairing: `mouse on` routes wheel events in non-alt-screen panes into tmux
+// copy-mode (the fix for plain-shell scrollback). Selections in copy-mode
+// emit OSC 52 escapes only when `set-clipboard on` is also set, so the two
+// are enabled together — the iframe shim's OSC 52 bridge then writes the
+// decoded text to the system clipboard via navigator.clipboard.
+export function buildAttachCommand(tmuxSession: string) {
   const safe = tmuxSession.replace(/"/g, '\\"');
   return [
     "tmux set-option -s extended-keys on >/dev/null 2>&1 || true",
     "tmux show-options -s -g terminal-features 2>/dev/null | grep -q 'xterm\\*.*extkeys' || tmux set-option -as terminal-features ',xterm*:extkeys' >/dev/null 2>&1 || true",
+    `tmux set-option -t "${safe}" mouse on >/dev/null 2>&1 || true`,
+    `tmux set-option -t "${safe}" history-limit 50000 >/dev/null 2>&1 || true`,
+    `tmux set-option -t "${safe}" set-clipboard on >/dev/null 2>&1 || true`,
     `exec tmux attach -t "${safe}"`,
   ].join("; ");
 }

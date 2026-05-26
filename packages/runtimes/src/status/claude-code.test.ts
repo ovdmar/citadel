@@ -113,4 +113,36 @@ describe("claudeCodeStatusAdapter", () => {
       expect(state.ticksObserved).toBe(2);
     });
   });
+
+  describe("tmux mouse-on regression (tmux `set -g mouse on` was enabled per-attach)", () => {
+    // tmux's mouse mode emits SGR mouse-event escape sequences for clicks and
+    // wheel events when forwarded to an alt-screen app. The Claude Code TUI
+    // owns its own mouse handling and consumes those escapes — they should
+    // never reach the pane body that capture-pane returns. But as a defense
+    // in depth, verify the parser does not spuriously transition status
+    // when capture-pane somehow contains the raw sequences.
+    const SGR_WHEEL_DOWN_PRESS = "\x1b[<65;40;12M";
+    const SGR_WHEEL_UP_PRESS = "\x1b[<64;40;12M";
+    const SGR_CLICK_PRESS = "\x1b[<0;40;12M";
+    const SGR_CLICK_RELEASE = "\x1b[<0;40;12m";
+
+    it("does NOT classify a buffer that contains only SGR mouse escapes (no mode line)", () => {
+      const pane = `${SGR_WHEEL_DOWN_PRESS}${SGR_WHEEL_UP_PRESS}${SGR_CLICK_PRESS}${SGR_CLICK_RELEASE}`;
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBeNull();
+    });
+
+    it("preserves idle classification when mouse escapes precede a real mode line", () => {
+      const pane = `${SGR_WHEEL_DOWN_PRESS}\n  ⏵⏵ auto mode on (shift+tab to cycle)`;
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("idle");
+    });
+
+    it("preserves running classification when mouse escapes are interleaved", () => {
+      const pane = [
+        `${SGR_CLICK_PRESS}line 1`,
+        `line 2${SGR_WHEEL_UP_PRESS}`,
+        "  ⏵⏵ auto mode on · esc to interrupt",
+      ].join("\n");
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("running");
+    });
+  });
 });
