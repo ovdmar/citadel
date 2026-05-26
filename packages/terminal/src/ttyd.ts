@@ -38,7 +38,12 @@ const DEFAULTS = {
   portBase: Number.parseInt(process.env.CITADEL_TTYD_PORT_BASE ?? "", 10) || 7681,
   portMax: Number.parseInt(process.env.CITADEL_TTYD_PORT_MAX ?? "", 10) || 7720,
   basePathPrefix: "/terminals",
-  readyTimeoutMs: 4000,
+  // 10s readiness budget: under spawn storms (multiple ttyds respawning at
+  // once after `make deploy`) ttyd can take several seconds to bind, and a
+  // tight 4s window produced spurious "Terminal unavailable" errors. The
+  // happy path resolves in <100ms; the extra ceiling only matters when the
+  // kernel is busy scheduling the new process.
+  readyTimeoutMs: 10000,
 };
 
 export class TtydUnavailableError extends Error {
@@ -61,6 +66,14 @@ export type TtydManager = {
     theme?: TtydTheme;
     /** When true, kill any existing ttyd for this key and spawn a fresh one. */
     force?: boolean;
+    /**
+     * Enable tmux mouse mode for this session. Used for runtimes (codex,
+     * cursor-agent) whose TUIs grab DEC mouse tracking and consume wheel
+     * events for prompt-history nav — tmux intercepts the wheel first and
+     * routes it to copy-mode scrollback instead. Scoped per tmux session,
+     * so Claude Code's xterm-native wheel scrollback is unaffected.
+     */
+    enableTmuxMouse?: boolean;
   }): Promise<TtydEntry>;
   lookup(key: string): TtydEntry | null;
   release(key: string): void;
@@ -98,6 +111,7 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
      * drift to avoid reconnect storms when the user just toggles the cockpit
      * theme; respawn is opt-in via this flag. */
     force?: boolean;
+    enableTmuxMouse?: boolean;
   }): Promise<TtydEntry> {
     const desiredTheme: TtydTheme = args.theme ?? "dark";
     const existing = entries.get(args.key);
@@ -131,7 +145,7 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     }
     const port = await reserveFreePort(config.portBase, config.portMax, reservedPorts);
     const basePath = `/${config.basePathPrefix}/${encodeURIComponent(args.key)}`;
-    const attachCommand = buildAttachCommand(args.tmuxSession);
+    const attachCommand = buildAttachCommand(args.tmuxSession, { enableMouse: args.enableTmuxMouse === true });
     const themeOptions = ttydThemeArgs(desiredTheme);
     let child: ChildProcess;
     try {
@@ -332,18 +346,26 @@ const DARK_XTERM_THEME = {
   brightWhite: "#fffaef",
 };
 
-function buildAttachCommand(tmuxSession: string) {
+function buildAttachCommand(tmuxSession: string, options: { enableMouse: boolean }) {
   const safe = tmuxSession.replace(/"/g, '\\"');
   // Inline socket flag so the shell ttyd execs into talks to the same tmux
   // server citadel uses everywhere else (citadel-tmux.service). Without this,
   // `tmux attach` would hit the user's default socket and silently miss the
   // session.
   const tmux = ["tmux", ...tmuxPrefix()].map((arg) => arg.replace(/"/g, '\\"')).join(" ");
-  return [
+  const lines = [
     `${tmux} set-option -s extended-keys on >/dev/null 2>&1 || true`,
     `${tmux} show-options -s -g terminal-features 2>/dev/null | grep -q 'xterm\\*.*extkeys' || ${tmux} set-option -as terminal-features ',xterm*:extkeys' >/dev/null 2>&1 || true`,
-    `exec ${tmux} attach -t "${safe}"`,
-  ].join("; ");
+  ];
+  if (options.enableMouse) {
+    // Scope mouse to this tmux session only (`-t <session>`) — runtimes that
+    // grab DEC mouse tracking (codex, cursor-agent) need tmux to intercept
+    // wheel events for scrollback, but runtimes that don't (claude-code) get
+    // smoother native xterm.js wheel scroll without tmux in the path.
+    lines.push(`${tmux} set-option -t "${safe}" mouse on >/dev/null 2>&1 || true`);
+  }
+  lines.push(`exec ${tmux} attach -t "${safe}"`);
+  return lines.join("; ");
 }
 
 function tmuxSessionAlive(name: string) {
@@ -376,7 +398,11 @@ function portOpen(port: number) {
     };
     socket.once("connect", () => finish(true));
     socket.once("error", () => finish(false));
-    socket.setTimeout(150, () => finish(false));
+    // 500ms — closed local ports return ECONNREFUSED immediately and open
+    // ports connect in <1ms, so this timeout only fires when the kernel is
+    // overloaded (spawn storms). The earlier 150ms ceiling produced false
+    // negatives during `make deploy` that surfaced as ttyd_start_timeout.
+    socket.setTimeout(500, () => finish(false));
   });
 }
 

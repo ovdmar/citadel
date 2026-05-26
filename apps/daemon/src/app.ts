@@ -32,6 +32,7 @@ import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue, cachedProviderWithStaleFallback } from "./app-helpers.js";
+import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
 import { registerCockpitSummaryRoute } from "./cockpit-summary-route.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
@@ -49,6 +50,7 @@ import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { scratchpadPath } from "./scratchpad.js";
 import { registerStateRoute } from "./state-route.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
+import { startTerminalReaper } from "./terminal-reaper.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
 import { resolveTtydPortRange } from "./ttyd-slot.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
@@ -760,14 +762,14 @@ export async function createDaemonApp(input: {
     server.on("close", () => clearInterval(reaper));
   }
 
-  // Status monitor — 2s tick observing tmux activity + bash-wrapper sentinels
-  // and asking the runtime adapter for pane-derived status observations.
-  // Updates agent_sessions.status and emits agent.updated SSE events. Wiring
-  // lives in status-monitor-wiring.ts to keep this file under the 800-line gate.
+  // Status monitor / auto-resume / terminal reaper: see their own modules for context.
   const statusMonitor = startDaemonStatusMonitor(store, emit);
-  if (statusMonitor) {
-    server.on("close", () => statusMonitor.stop());
-  }
+  if (statusMonitor) server.on("close", () => statusMonitor.stop());
+
+  const autoResume = startDaemonAutoResumeLoop(store, operations);
+  if (autoResume) server.on("close", () => autoResume.stop());
+  const terminalReaper = startTerminalReaper();
+  server.on("close", () => terminalReaper.stop());
 
   return { app, server, emit };
 
