@@ -58,9 +58,14 @@ test.describe("notes location", () => {
     // Filesystem-level verification: writing through the cockpit's PUT must
     // land at the configured file, NOT at the old default path. This catches
     // any regression where the daemon returns the configured path in the
-    // response but actually writes elsewhere.
+    // response but actually writes elsewhere. We write content already in the
+    // fenced-block format so reading it later (e.g. via the cockpit
+    // navigation below) does NOT trigger `migrate-to-blocks` and leak a
+    // history entry into the shared <dataDir>/scratchpad-history.jsonl —
+    // other e2e specs assert exact history counts.
     const marker = `notes-location-e2e-${Date.now()}`;
-    await request.put(`${API_BASE}/api/scratchpad`, { data: { content: marker } });
+    const fencedMarker = `<!-- block:11111111-aaaa-4bbb-8ccc-aaaaaaaaaaaa -->\n${marker}\n<!-- /block:11111111-aaaa-4bbb-8ccc-aaaaaaaaaaaa -->\n`;
+    await request.put(`${API_BASE}/api/scratchpad`, { data: { content: fencedMarker } });
     expect(fs.existsSync(tmpNotes)).toBe(true);
     expect(fs.readFileSync(tmpNotes, "utf8")).toContain(marker);
 
