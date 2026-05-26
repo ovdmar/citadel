@@ -1,13 +1,11 @@
-import type { ProviderHealth, PullRequestSummary, Workspace } from "@citadel/contracts";
-import type { PrMergeStrategy } from "@citadel/contracts/pr-routes";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import type { PullRequestSummary, Workspace } from "@citadel/contracts";
+import { useMutation } from "@tanstack/react-query";
 import {
   ArrowUp,
   Check,
   ChevronDown,
   Copy,
   ExternalLink,
-  GitMerge,
   GitPullRequest,
   Hash,
   Loader2,
@@ -18,6 +16,7 @@ import { useEffect, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { ReviewerAvatars, aggregateReviewerCounts } from "./inspector-reviewers.js";
 import { formatLabel } from "./labels.js";
+import { PrCardActionSlot } from "./pr-card-actions.js";
 import { prToneFor } from "./workspace-card.js";
 
 export function InspectorPrSection(props: {
@@ -102,7 +101,6 @@ export function InspectorPrSection(props: {
                     <Copy size={10} />
                   </button>
                 </span>
-                <MergeButton workspace={workspace} pr={pr} />
               </div>
               <div className="ins-pr-title">{pr.title}</div>
               <div className="ins-pr-stats">
@@ -150,6 +148,9 @@ export function InspectorPrSection(props: {
                     <span className="ins-pr-meta-empty">No reviewers assigned</span>
                   ) : null}
                 </span>
+              </div>
+              <div className="ins-pr-actions">
+                <PrCardActionSlot workspace={workspace} pr={pr} prTone={prTone} />
               </div>
             </div>
           ) : (
@@ -522,72 +523,4 @@ function useElapsed(isoTime: string | undefined): string {
   const then = Date.parse(isoTime);
   if (!Number.isFinite(then)) return "";
   return formatDurationMs(Math.max(0, now - then));
-}
-
-function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
-  const { workspace, pr } = props;
-  const [open, setOpen] = useState(false);
-  const allowed: PrMergeStrategy[] = pr.allowedMergeStrategies.length
-    ? pr.allowedMergeStrategies
-    : (["squash", "merge", "rebase"] as const).filter(() => false);
-  // Gate on the daemon's GitHub provider health. If gh isn't healthy we
-  // disable the button and surface the reason — don't let the operator click
-  // through to a confusing gh-merge failure.
-  const providerHealth = useQuery<{ providerHealth: ProviderHealth[] }>({
-    queryKey: ["provider-health"],
-    queryFn: () => api<{ providerHealth: ProviderHealth[] }>("/api/health"),
-    refetchInterval: 60_000,
-  });
-  const ghHealthy = providerHealth.data?.providerHealth.find((entry) => entry.id === "github-gh")?.status === "healthy";
-  const canMerge = pr.mergeable === "mergeable" && allowed.length > 0 && ghHealthy === true;
-  const merge = useMutation({
-    mutationFn: (strategy: PrMergeStrategy) =>
-      api(`/api/workspaces/${workspace.id}/pr-merge`, {
-        method: "POST",
-        body: JSON.stringify({ strategy }),
-      }),
-    onSuccess: () => {
-      setOpen(false);
-      queryClient.invalidateQueries({ queryKey: ["workspace-cockpit", workspace.id] });
-      queryClient.invalidateQueries({ queryKey: ["workspaces-pr-batch"] });
-    },
-  });
-  const disabledReason =
-    ghHealthy === false
-      ? "GitHub CLI unavailable"
-      : pr.mergeable !== "mergeable"
-        ? "PR is not mergeable (conflicts or unknown state)"
-        : allowed.length === 0
-          ? "Repository allows no merge strategies via gh"
-          : null;
-  return (
-    <span className="ins-pr-merge-wrap">
-      <button
-        type="button"
-        className="ins-pr-merge"
-        onClick={() => canMerge && setOpen((v) => !v)}
-        disabled={!canMerge || merge.isPending}
-        aria-disabled={!canMerge}
-        title={disabledReason ?? `Merge PR #${pr.number}`}
-      >
-        <GitMerge size={10} /> Merge
-      </button>
-      {open && canMerge ? (
-        <div className="ins-pr-merge-menu" role="menu">
-          {allowed.map((strategy) => (
-            <button
-              key={strategy}
-              type="button"
-              className="ins-pr-merge-strategy"
-              onClick={() => merge.mutate(strategy)}
-              disabled={merge.isPending}
-              role="menuitem"
-            >
-              {strategy === "squash" ? "Squash & merge" : strategy === "rebase" ? "Rebase & merge" : "Merge commit"}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </span>
-  );
 }
