@@ -8,7 +8,7 @@ import { WebSocketServer } from "ws";
 
 export { createTtydManager, TtydUnavailableError } from "./ttyd.js";
 export type { TtydEntry, TtydManager, TtydManagerConfig, TtydTheme } from "./ttyd.js";
-export { submitPrompt } from "./submit-prompt.js";
+export { submitPrompt, pressEnter } from "./submit-prompt.js";
 
 import { tokenizeTerminalInput } from "./input-tokens.js";
 export { keyForControlCharacter, keyForEscapeSequence, tokenizeTerminalInput } from "./input-tokens.js";

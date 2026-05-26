@@ -62,6 +62,10 @@ export interface MonitorTickDeps {
   adapterStates: Map<string, SessionAdapterState>;
   // Monitor's own state map (activity tracking).
   monitorStates: Map<string, MonitorSessionState>;
+  // Optional: invoked at the end of the tick to run the rate-limit scheduler.
+  // Bound to the SqliteStore + resumer by apps/daemon. Omitted in tests that
+  // don't exercise rate-limit behavior.
+  runRateLimitScheduler?: () => Promise<void>;
 }
 
 export interface MonitorTickOptions {
@@ -263,6 +267,22 @@ export async function runStatusMonitorTick(
         }
       }
     }
+  }
+
+  // Rate-limit scheduler — invoked AT THE END of the tick so monitor writes
+  // land first, and BEFORE the hasCompletedFirstTick flip so the scheduler
+  // sees the pre-flip flag (which is what gates execution on the very first
+  // post-boot tick). Optional dep — the daemon wires it in; tests that
+  // don't exercise rate-limit behavior omit it.
+  if (deps.runRateLimitScheduler) {
+    await deps.runRateLimitScheduler();
+  }
+
+  // End-of-tick: flip hasCompletedFirstTick for every session whose
+  // MonitorSessionState still lives. The flag stays false for any session
+  // that hadn't been seen yet (no entry in the map).
+  for (const monitorState of deps.monitorStates.values()) {
+    monitorState.hasCompletedFirstTick = true;
   }
 
   return { sessionsTouched, deletedSessions };

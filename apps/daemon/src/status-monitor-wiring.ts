@@ -10,11 +10,20 @@ import {
   type MonitorTickDeps,
   type SentinelReading,
   type StatusMonitorHandle,
+  resumeRateLimitedSession,
+  runRateLimitSchedulerTick,
   startStatusMonitor,
 } from "@citadel/operations";
 import type { RuntimeStatusAdapter, SessionAdapterState } from "@citadel/runtimes";
 import { getStatusAdapter } from "@citadel/runtimes";
-import { agentExitSentinelPath, agentLiveSentinelPath, captureTmux, readAgentExitCode } from "@citadel/terminal";
+import {
+  agentExitSentinelPath,
+  agentLiveSentinelPath,
+  captureTmux,
+  captureTmuxVisibleScreen,
+  pressEnter,
+  readAgentExitCode,
+} from "@citadel/terminal";
 
 // Dedupe monitor-side failures so a persistent tmux outage doesn't flood
 // stderr at 2 Hz. Key is `kind:message` so distinct error messages are still
@@ -98,6 +107,34 @@ export function buildStatusMonitorDeps(
     getAdapter: (runtimeId): RuntimeStatusAdapter => getStatusAdapter(runtimeId),
     adapterStates,
     monitorStates,
+    runRateLimitScheduler: async () => {
+      try {
+        await runRateLimitSchedulerTick({
+          store,
+          now: () => new Date().toISOString(),
+          monitorStates,
+          resumeSession: async (sessionId) =>
+            resumeRateLimitedSession(
+              {
+                store,
+                paneCapture: (name) => {
+                  try {
+                    return captureTmuxVisibleScreen(name, 200);
+                  } catch {
+                    return "";
+                  }
+                },
+                pressEnter,
+                getAdapter: getStatusAdapter,
+              },
+              { sessionId },
+            ),
+          emit,
+        });
+      } catch (err) {
+        logMonitorFailureOnce("rateLimitScheduler", err);
+      }
+    },
   };
 }
 

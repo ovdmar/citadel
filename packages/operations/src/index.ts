@@ -37,6 +37,10 @@ export {
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
+export { runRateLimitSchedulerTick } from "./rate-limit-scheduler.js";
+export type { SchedulerDeps, SchedulerTickResult } from "./rate-limit-scheduler.js";
+export { resumeRateLimitedSession } from "./rate-limit-resumer.js";
+export type { RateLimitResumerDeps, ResumeOutcome } from "./rate-limit-resumer.js";
 import {
   type DeployOpsDeps,
   listDeployedApps as listDeployedAppsImpl,
