@@ -19,6 +19,7 @@
 [ ] 11. Agent session start/resume is an operation.
 [ ] 12. Running and failed workspace-specific operations are visible in the workspace cockpit.
 [ ] 13. Operations support retry/cancel when safe.
+[ ] 14. Rate-limited agent sessions (`status === "rate_limited"` with a parseable reset time) are automatically resumed by a daemon-internal one-shot scheduler that fires one minute after the earliest reset time across all rate-limited sessions. At execute time the resumer re-captures the pane and re-confirms (a) the runtime's rate-limit banner is still visible and (b) the bottom of the pane is not in an operator-input state; if either check fails the keystroke is suppressed. The resumption is recorded as an `agent.message` activity event with source `system` and a `[rate-limit-resumer]` message prefix. Background scheduled-agent sessions are excluded.
 
 ## Activity
 
