@@ -141,7 +141,7 @@ describe("wireGhQuota — viewer-gate helpers", () => {
       }
     } finally {
       if (prev === undefined) {
-        delete process.env.CITADEL_GH_SCHEDULER_DISABLED;
+        process.env.CITADEL_GH_SCHEDULER_DISABLED = undefined;
       } else {
         process.env.CITADEL_GH_SCHEDULER_DISABLED = prev;
       }

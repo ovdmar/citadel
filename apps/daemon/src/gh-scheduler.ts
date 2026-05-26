@@ -108,8 +108,7 @@ export function createGhScheduler(deps: GhSchedulerDeps): GhScheduler {
   function computeNextEligibleAt(entry: PrSchedulerEntry, atMs: number): number {
     if (entry.state === "merged") return Number.POSITIVE_INFINITY;
     if (entry.state === "closed") return atMs + CADENCE_CLOSED_MS;
-    const shaIsOld =
-      entry.lastHeadShaChangedAt !== null && atMs - entry.lastHeadShaChangedAt > HEAD_SHA_OLD_AFTER_MS;
+    const shaIsOld = entry.lastHeadShaChangedAt !== null && atMs - entry.lastHeadShaChangedAt > HEAD_SHA_OLD_AFTER_MS;
     if (entry.lastChecksConclusion === "green" && shaIsOld) return atMs + CADENCE_GREEN_OLD_MS;
     if (entry.lastChecksConclusion === "pending") return atMs + CADENCE_PENDING_MS;
     return atMs + CADENCE_DEFAULT_MS;
@@ -141,8 +140,7 @@ export function createGhScheduler(deps: GhSchedulerDeps): GhScheduler {
     const newSha = summary.headSha ?? null;
     const checks = classifyChecks(summary);
     const existing = entries.get(key);
-    const lastHeadShaChangedAt =
-      existing && existing.lastHeadSha === newSha ? existing.lastHeadShaChangedAt : at;
+    const lastHeadShaChangedAt = existing && existing.lastHeadSha === newSha ? existing.lastHeadShaChangedAt : at;
     const repoFullName = repoFullNameFromKey(key);
     const prNumber = prNumberFromKey(key);
     const workspaceIds = existing?.workspaceIds ?? new Set<string>();

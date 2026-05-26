@@ -1,6 +1,6 @@
 import type { PullRequestSummary } from "@citadel/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
-import { createGhScheduler, type GhScheduler, type HydrateRow, makeKey } from "./gh-scheduler.js";
+import { type GhScheduler, type HydrateRow, createGhScheduler, makeKey } from "./gh-scheduler.js";
 
 // Controllable clock + viewer + cooldown deps. Tests advance time via
 // `clock.t = ...` rather than relying on real Date.now() so we can probe
@@ -23,6 +23,14 @@ function makeHarness(opts: { hasViewers?: boolean } = {}): Harness {
     now: () => clock.t,
   });
   return { clock, viewers, cooldown, scheduler };
+}
+
+// Tiny helper — biome bans `!` non-null assertions; an explicit throw gives
+// us TypeScript narrowing without ergonomic test noise.
+function getEntry(scheduler: GhScheduler, key: ReturnType<typeof makeKey>) {
+  const entry = scheduler._entries().get(key);
+  if (!entry) throw new Error(`scheduler entry missing for ${key}`);
+  return entry;
 }
 
 function makePr(overrides: Partial<PullRequestSummary> = {}): PullRequestSummary {
@@ -98,7 +106,9 @@ describe("gh-scheduler — shouldRefetch", () => {
     h.scheduler.recordFetch(
       key,
       makePr({
-        checks: [{ name: "ci", status: "completed", conclusion: "success", url: null, startedAt: null, completedAt: null }],
+        checks: [
+          { name: "ci", status: "completed", conclusion: "success", url: null, startedAt: null, completedAt: null },
+        ],
       }),
       "ws_a",
     );
@@ -108,7 +118,9 @@ describe("gh-scheduler — shouldRefetch", () => {
     h.scheduler.recordFetch(
       key,
       makePr({
-        checks: [{ name: "ci", status: "completed", conclusion: "success", url: null, startedAt: null, completedAt: null }],
+        checks: [
+          { name: "ci", status: "completed", conclusion: "success", url: null, startedAt: null, completedAt: null },
+        ],
       }),
       "ws_a",
     );
@@ -168,13 +180,13 @@ describe("gh-scheduler — recordFetch", () => {
     const h = makeHarness();
     const key = makeKey("o/r", 1);
     h.scheduler.recordFetch(key, makePr({ headSha: "aaa" }), "ws_a");
-    const initial = h.scheduler._entries().get(key)!.lastHeadShaChangedAt;
+    const initial = h.scheduler._entries().get(key)?.lastHeadShaChangedAt;
     h.clock.t += 30_000;
     h.scheduler.recordFetch(key, makePr({ headSha: "aaa" }), "ws_a"); // same SHA
-    expect(h.scheduler._entries().get(key)!.lastHeadShaChangedAt).toBe(initial);
+    expect(h.scheduler._entries().get(key)?.lastHeadShaChangedAt).toBe(initial);
     h.clock.t += 30_000;
     h.scheduler.recordFetch(key, makePr({ headSha: "bbb" }), "ws_a"); // new SHA
-    expect(h.scheduler._entries().get(key)!.lastHeadShaChangedAt).toBe(h.clock.t);
+    expect(h.scheduler._entries().get(key)?.lastHeadShaChangedAt).toBe(h.clock.t);
   });
 
   it("resets consecutiveErrors to 0 on success", () => {
@@ -182,9 +194,9 @@ describe("gh-scheduler — recordFetch", () => {
     const key = makeKey("o/r", 1);
     h.scheduler.recordFetchError(key, new Error("x"));
     h.scheduler.recordFetchError(key, new Error("x"));
-    expect(h.scheduler._entries().get(key)!.consecutiveErrors).toBe(2);
+    expect(h.scheduler._entries().get(key)?.consecutiveErrors).toBe(2);
     h.scheduler.recordFetch(key, makePr(), "ws_a");
-    expect(h.scheduler._entries().get(key)!.consecutiveErrors).toBe(0);
+    expect(h.scheduler._entries().get(key)?.consecutiveErrors).toBe(0);
   });
 
   it("tracks all workspaceIds that touched the entry", () => {
@@ -193,7 +205,7 @@ describe("gh-scheduler — recordFetch", () => {
     h.scheduler.recordFetch(key, makePr(), "ws_a");
     h.scheduler.recordFetch(key, makePr(), "ws_b");
     h.scheduler.recordFetch(key, makePr(), "ws_a");
-    const entry = h.scheduler._entries().get(key)!;
+    const entry = getEntry(h.scheduler, key);
     expect([...entry.workspaceIds].sort()).toEqual(["ws_a", "ws_b"]);
   });
 });
@@ -206,7 +218,7 @@ describe("gh-scheduler — recordFetchError exponential backoff", () => {
     for (const delay of expectedDelays) {
       const at = h.clock.t;
       h.scheduler.recordFetchError(key, new Error("x"));
-      const entry = h.scheduler._entries().get(key)!;
+      const entry = getEntry(h.scheduler, key);
       expect(entry.nextEligibleAt - at).toBe(delay);
       // Advance just past the backoff window so the next error starts fresh
       // relative to the latest fetch time.
@@ -243,9 +255,9 @@ describe("gh-scheduler — markRepoMainMoved", () => {
     h.scheduler.recordFetch(k2, makePr({ number: 2 }), "ws_2");
     h.scheduler.recordFetch(k3, makePr({ number: 7 }), "ws_3");
     h.scheduler.markRepoMainMoved("o/r1");
-    expect(h.scheduler._entries().get(k1)!.needsMergeStateRefresh).toBe(true);
-    expect(h.scheduler._entries().get(k2)!.needsMergeStateRefresh).toBe(true);
-    expect(h.scheduler._entries().get(k3)!.needsMergeStateRefresh).toBe(false);
+    expect(h.scheduler._entries().get(k1)?.needsMergeStateRefresh).toBe(true);
+    expect(h.scheduler._entries().get(k2)?.needsMergeStateRefresh).toBe(true);
+    expect(h.scheduler._entries().get(k3)?.needsMergeStateRefresh).toBe(false);
   });
 
   it("does not flip merged PRs", () => {
@@ -253,7 +265,7 @@ describe("gh-scheduler — markRepoMainMoved", () => {
     const k = makeKey("o/r", 1);
     h.scheduler.recordFetch(k, makePr({ state: "MERGED" }), "ws_a");
     h.scheduler.markRepoMainMoved("o/r");
-    expect(h.scheduler._entries().get(k)!.needsMergeStateRefresh).toBe(false);
+    expect(h.scheduler._entries().get(k)?.needsMergeStateRefresh).toBe(false);
   });
 
   it("makes shouldRefetch return fetch:true on next call regardless of cadence", () => {
@@ -274,7 +286,7 @@ describe("gh-scheduler — evict", () => {
     h.scheduler.recordFetch(k, makePr(), "ws_a");
     h.scheduler.recordFetch(k, makePr(), "ws_b");
     h.scheduler.evict("ws_a");
-    const entry = h.scheduler._entries().get(k)!;
+    const entry = getEntry(h.scheduler, k);
     expect([...entry.workspaceIds]).toEqual(["ws_b"]);
   });
 
@@ -291,7 +303,7 @@ describe("gh-scheduler — evict", () => {
     const k = makeKey("o/r", 1);
     h.scheduler.recordFetch(k, makePr(), "ws_a");
     h.scheduler.evict("ws_unknown");
-    expect(h.scheduler._entries().get(k)!.workspaceIds.size).toBe(1);
+    expect(h.scheduler._entries().get(k)?.workspaceIds.size).toBe(1);
   });
 });
 
@@ -313,7 +325,7 @@ describe("gh-scheduler — hydrate + invalidateNotDue", () => {
   it("populates entries from rows; nullable timestamps survive as null", () => {
     const h = makeHarness();
     h.scheduler.hydrate([makeHydrateRow({ lastHeadShaChangedAt: null, lastChecksGreenAt: null })]);
-    const entry = h.scheduler._entries().get(makeKey("o/r", 1))!;
+    const entry = getEntry(h.scheduler, makeKey("o/r", 1));
     expect(entry.lastHeadShaChangedAt).toBeNull();
     expect(entry.lastChecksConclusion).toBe("unknown");
     expect(entry.state).toBe("open");
@@ -328,7 +340,7 @@ describe("gh-scheduler — hydrate + invalidateNotDue", () => {
   it("classifies green PRs as 'green' conclusion when lastChecksGreenAt is set", () => {
     const h = makeHarness();
     h.scheduler.hydrate([makeHydrateRow({ lastChecksGreenAt: "2026-05-26T19:00:00.000Z" })]);
-    expect(h.scheduler._entries().get(makeKey("o/r", 1))!.lastChecksConclusion).toBe("green");
+    expect(h.scheduler._entries().get(makeKey("o/r", 1))?.lastChecksConclusion).toBe("green");
   });
 
   it("hydrated non-merged entries are immediately eligible (nextEligibleAt = 0)", () => {

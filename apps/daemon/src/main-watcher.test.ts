@@ -346,7 +346,7 @@ describe("startMainWatcher", () => {
       setSpy.mockRestore();
     } finally {
       if (prev === undefined) {
-        delete process.env.CITADEL_MAIN_WATCHER_DISABLED;
+        process.env.CITADEL_MAIN_WATCHER_DISABLED = undefined;
       } else {
         process.env.CITADEL_MAIN_WATCHER_DISABLED = prev;
       }

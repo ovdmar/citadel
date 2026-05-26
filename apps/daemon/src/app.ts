@@ -38,16 +38,16 @@ import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
-import {
-  decorateWithCooldown,
-  type GhQuotaWiringWithDetach,
-  resolveRepoFullNameFromWorkspaces,
-  wireGhQuota,
-} from "./gh-quota-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
+import {
+  type GhQuotaWiringWithDetach,
+  decorateWithCooldown,
+  resolveRepoFullNameFromWorkspaces,
+  wireGhQuota,
+} from "./gh-quota-wiring.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { registerPrRoutes } from "./pr-routes.js";
@@ -432,7 +432,6 @@ export function createDaemonApp(input: {
       apps,
     };
   }
-
 
   app.get(
     "/api/workspaces/:workspaceId/cockpit-summary",

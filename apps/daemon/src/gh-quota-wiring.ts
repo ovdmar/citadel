@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
-import type express from "express";
 import type { VersionControlSummary } from "@citadel/contracts";
-import { getGhCooldown } from "@citadel/providers";
 import type { SqliteStore } from "@citadel/db";
-import { createGhScheduler, type GhScheduler } from "./gh-scheduler.js";
-import { startMainWatcher, type MainWatcherHandle } from "./main-watcher.js";
+import { getGhCooldown } from "@citadel/providers";
+import type express from "express";
+import { type GhScheduler, createGhScheduler } from "./gh-scheduler.js";
+import { type MainWatcherHandle, startMainWatcher } from "./main-watcher.js";
 
 /**
  * Decorate a VersionControlSummary with the current gh cooldown timestamp
