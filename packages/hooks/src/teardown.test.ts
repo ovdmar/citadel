@@ -138,4 +138,20 @@ describe("runTeardownHook (integration)", () => {
       }),
     ).rejects.toThrow(/teardown_hook_not_configured/);
   });
+
+  it("exports CITADEL_* env vars to the child process", async () => {
+    const dir = tempWorkspace();
+    const outPath = path.join(dir, "env.out");
+    writeHook(
+      dir,
+      `#!/bin/sh\nprintf '%s|%s|%s|%s\\n' "$CITADEL_WORKSPACE_ID" "$CITADEL_WORKSPACE_PATH" "$CITADEL_WORKSPACE_BRANCH" "$CITADEL_REPO_ID" > ${JSON.stringify(outPath)}\nexit 0\n`,
+      { executable: true },
+    );
+    const resolution = resolveTeardownHook({ workspacePath: dir });
+    await runTeardownHook({
+      resolution,
+      env: { workspaceId: "ws_pin", workspacePath: dir, workspaceBranch: "feature/x", repoId: "repo_pin" },
+    });
+    expect(fs.readFileSync(outPath, "utf8").trim()).toBe(`ws_pin|${dir}|feature/x|repo_pin`);
+  });
 });

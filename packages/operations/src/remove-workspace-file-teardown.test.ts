@@ -108,6 +108,33 @@ describe("removeWorkspace — file-based teardown hook", () => {
     expect(messages.some((m) => /file teardown failed/.test(m) && /force=true/.test(m))).toBe(true);
   });
 
+  it("skips file teardown when archiveOnly is true even on a dirty worktree", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "Dirty Archive", source: "scratch" });
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === created.workspaceId);
+    const sentinel = path.join(fixture.dir, "should-not-run");
+    // Write the hook WITHOUT committing — workspace stays dirty. archiveOnly
+    // is the operator's "preserve this on disk" promise; we must not run the
+    // destructive teardown even though the operator-intent allowed dirty.
+    const hookPath = path.join(workspace?.path ?? "", ".citadel", "hooks", "teardown");
+    fs.mkdirSync(path.dirname(hookPath), { recursive: true });
+    fs.writeFileSync(hookPath, `#!/bin/sh\nprintf 'ran' > ${JSON.stringify(sentinel)}\n`);
+    fs.chmodSync(hookPath, 0o755);
+
+    const archived = await service.removeWorkspace({ workspaceId: created.workspaceId, archiveOnly: true });
+    expect(archived).toMatchObject({ archived: true, dirty: true });
+    expect(fs.existsSync(sentinel)).toBe(false);
+    expect(fs.existsSync(workspace?.path ?? "")).toBe(true);
+  });
+
   it("skips both teardown paths when archiveOnly is true", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
