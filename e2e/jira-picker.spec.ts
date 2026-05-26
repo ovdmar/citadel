@@ -46,10 +46,14 @@ test.describe("Jira picker", () => {
 
       await page.goto("/");
       const navigator = page.locator("aside[aria-label='Navigator']");
-      await navigator.getByRole("button", { name: new RegExp(workspaceName, "i") }).click();
+      await expect(navigator).toBeVisible();
+      const workspaceButton = navigator.getByRole("button", { name: new RegExp(workspaceName, "i") }).first();
+      await expect(workspaceButton).toBeVisible();
+      await workspaceButton.click();
 
       const inspector = page.locator("aside[aria-label='Inspector']");
-      const attachButton = inspector.getByRole("button", { name: /Attach a Jira ticket/i });
+      await expect(inspector).toBeVisible();
+      const attachButton = inspector.getByRole("button", { name: /Attach Jira ticket/i });
       await expect(attachButton).toBeVisible();
       await attachButton.click();
 
@@ -71,7 +75,7 @@ test.describe("Jira picker", () => {
       await unattachBtn.click();
 
       // Picker returns to the "Attach Jira ticket" empty state.
-      await expect(inspector.getByRole("button", { name: /Attach a Jira ticket/i })).toBeVisible();
+      await expect(inspector.getByRole("button", { name: /Attach Jira ticket/i })).toBeVisible();
     } finally {
       if (workspaceId)
         await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`).catch(() => {});
@@ -151,11 +155,13 @@ test.describe("Jira picker", () => {
       });
 
       await page.goto("/");
-      await page
-        .locator("aside[aria-label='Navigator']")
-        .getByRole("button", { name: new RegExp(workspaceName, "i") })
-        .click();
+      const navigator = page.locator("aside[aria-label='Navigator']");
+      await expect(navigator).toBeVisible();
+      const workspaceButton = navigator.getByRole("button", { name: new RegExp(workspaceName, "i") }).first();
+      await expect(workspaceButton).toBeVisible();
+      await workspaceButton.click();
       const inspector = page.locator("aside[aria-label='Inspector']");
+      await expect(inspector).toBeVisible();
       const chip = inspector.locator(".cit-jira-attached");
       await expect(chip).toBeVisible();
       // The status pill is a button that opens the transition menu.
@@ -193,12 +199,16 @@ test.describe("Jira picker", () => {
       });
 
       await page.goto("/");
-      await page
-        .locator("aside[aria-label='Navigator']")
-        .getByRole("button", { name: new RegExp(workspaceName, "i") })
-        .click();
+      const navigator = page.locator("aside[aria-label='Navigator']");
+      await expect(navigator).toBeVisible();
+      const workspaceButton = navigator.getByRole("button", { name: new RegExp(workspaceName, "i") }).first();
+      await expect(workspaceButton).toBeVisible();
+      await workspaceButton.click();
       const inspector = page.locator("aside[aria-label='Inspector']");
-      await inspector.getByRole("button", { name: /Attach a Jira ticket/i }).click();
+      await expect(inspector).toBeVisible();
+      const attachBtn = inspector.getByRole("button", { name: /Attach Jira ticket/i });
+      await expect(attachBtn).toBeVisible();
+      await attachBtn.click();
       await inspector.getByRole("button", { name: /Enter key manually/i }).click();
       await inspector.getByLabel(/Issue key/i).fill("AUTH-77");
       await inspector.getByRole("button", { name: /^Attach$/ }).click();
