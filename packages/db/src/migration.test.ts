@@ -123,3 +123,95 @@ describe("agent-status migration", () => {
     expect(secondPass?.statusReason).toBe("migrated_from_waiting");
   });
 });
+
+describe("auto-resume migration (version 8)", () => {
+  it("adds rate_limit_resume_attempts (NOT NULL DEFAULT 0), next_resume_at, and last_resume_from_rate_limit_at columns", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    const cols = db.prepare("PRAGMA table_info(agent_sessions)").all() as Array<{
+      name: string;
+      type: string;
+      notnull: number;
+      dflt_value: string | null;
+    }>;
+    const attempts = cols.find((c) => c.name === "rate_limit_resume_attempts");
+    expect(attempts).toBeDefined();
+    expect(attempts?.type.toUpperCase()).toBe("INTEGER");
+    expect(attempts?.notnull).toBe(1);
+    expect(attempts?.dflt_value).toBe("0");
+    expect(cols.find((c) => c.name === "next_resume_at")?.type.toUpperCase()).toBe("TEXT");
+    expect(cols.find((c) => c.name === "last_resume_from_rate_limit_at")?.type.toUpperCase()).toBe("TEXT");
+  });
+
+  it("records schema_migrations version 8 row", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    const row = db.prepare("SELECT name FROM schema_migrations WHERE version = 8").get() as
+      | { name: string }
+      | undefined;
+    expect(row?.name).toBe("agent-sessions-auto-resume-backoff");
+  });
+
+  it("backfills legacy rows with rate_limit_resume_attempts=0 and NULL timestamps", () => {
+    const dbPath = makeTempPath();
+    seedLegacySession(dbPath, { id: "sess_legacy", legacyStatus: "idle" });
+    // Re-open through SqliteStore — migration runs the ALTER TABLE ADD COLUMN
+    // statements which apply DEFAULT 0 to the existing row.
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const row = store.listSessions().find((s) => s.id === "sess_legacy");
+    expect(row).toBeDefined();
+    expect(row?.rateLimitResumeAttempts).toBe(0);
+    expect(row?.nextResumeAt).toBeNull();
+    expect(row?.lastResumeFromRateLimitAt).toBeNull();
+  });
+});
+
+describe("updateSessionRateLimitResume", () => {
+  function freshStore(id: string) {
+    const dbPath = makeTempPath();
+    seedLegacySession(dbPath, { id, legacyStatus: "idle" });
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    return store;
+  }
+
+  it("writes individual fields without touching the others", () => {
+    const store = freshStore("sess_a");
+    store.updateSessionRateLimitResume("sess_a", { rateLimitResumeAttempts: 5 });
+    let row = store.listSessions().find((s) => s.id === "sess_a");
+    expect(row?.rateLimitResumeAttempts).toBe(5);
+    expect(row?.nextResumeAt).toBeNull();
+    expect(row?.lastResumeFromRateLimitAt).toBeNull();
+    store.updateSessionRateLimitResume("sess_a", { nextResumeAt: "2026-05-25T13:00:00.000Z" });
+    row = store.listSessions().find((s) => s.id === "sess_a");
+    expect(row?.rateLimitResumeAttempts).toBe(5); // unchanged
+    expect(row?.nextResumeAt).toBe("2026-05-25T13:00:00.000Z");
+  });
+
+  it("treats null as 'write NULL' (not 'skip')", () => {
+    const store = freshStore("sess_b");
+    store.updateSessionRateLimitResume("sess_b", {
+      rateLimitResumeAttempts: 3,
+      nextResumeAt: "2026-05-25T13:00:00.000Z",
+      lastResumeFromRateLimitAt: "2026-05-25T12:00:00.000Z",
+    });
+    store.updateSessionRateLimitResume("sess_b", { nextResumeAt: null });
+    const row = store.listSessions().find((s) => s.id === "sess_b");
+    expect(row?.nextResumeAt).toBeNull();
+    expect(row?.rateLimitResumeAttempts).toBe(3); // unchanged
+    expect(row?.lastResumeFromRateLimitAt).toBe("2026-05-25T12:00:00.000Z");
+  });
+
+  it("empty patch is a no-op (no UPDATE executed)", () => {
+    const store = freshStore("sess_c");
+    const before = store.listSessions().find((s) => s.id === "sess_c");
+    store.updateSessionRateLimitResume("sess_c", {});
+    const after = store.listSessions().find((s) => s.id === "sess_c");
+    expect(after?.updatedAt).toBe(before?.updatedAt); // updated_at not touched
+  });
+});

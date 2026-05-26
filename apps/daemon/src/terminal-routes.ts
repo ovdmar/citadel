@@ -18,7 +18,16 @@ type ResolvedSession = {
   sessionId: string;
   tmuxSession: string;
   worktreePath: string | null;
+  runtimeId: string;
 };
+
+// Runtimes whose TUIs enable DEC mouse tracking and consume wheel events for
+// in-app navigation (prompt history, etc.). For these we ask tmux to grab the
+// wheel first and route it to copy-mode scrollback; otherwise the user can't
+// reach terminal scrollback with the mouse. Claude Code is intentionally
+// absent — it does not request mouse tracking, so its xterm-native wheel
+// scroll works fine and stays untouched.
+const MOUSE_GRABBING_RUNTIMES = new Set(["codex", "cursor-agent"]);
 
 type Theme = "light" | "dark";
 
@@ -125,6 +134,7 @@ export function registerTerminalRoutes(input: {
       sessionId: session.id,
       tmuxSession: session.tmuxSessionName,
       worktreePath: workspace?.path ?? null,
+      runtimeId: session.runtimeId,
     };
   };
 
@@ -159,10 +169,12 @@ export function registerTerminalRoutes(input: {
   // injected respawnTmux hook to bring the underlying tmux session back, then
   // retry. Returns null if no self-heal was possible.
   const ensureWithHeal = async (session: ResolvedSession, theme?: Theme, force?: boolean): Promise<TtydEntry> => {
+    const enableTmuxMouse = MOUSE_GRABBING_RUNTIMES.has(session.runtimeId);
     const base = {
       key: session.sessionId,
       tmuxSession: session.tmuxSession,
       worktreePath: session.worktreePath,
+      enableTmuxMouse,
     };
     const ensureArgs = {
       ...base,
@@ -182,6 +194,7 @@ export function registerTerminalRoutes(input: {
         key: session.sessionId,
         tmuxSession: respawn.tmuxSessionName,
         worktreePath: session.worktreePath,
+        enableTmuxMouse,
         ...(theme ? { theme } : {}),
         ...(force ? { force: true } : {}),
       };

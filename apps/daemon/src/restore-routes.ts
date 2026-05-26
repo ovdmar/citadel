@@ -166,7 +166,8 @@ function isLive(s: AgentSession): boolean {
     s.status === "starting" ||
     s.status === "idle" ||
     s.status === "waiting_for_input" ||
-    s.status === "rate_limited"
+    s.status === "rate_limited" ||
+    s.status === "usage_limited"
   );
 }
 

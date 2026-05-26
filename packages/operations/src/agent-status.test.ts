@@ -17,7 +17,55 @@ describe("reduceStatus", () => {
   describe("idempotency / three-case return rule", () => {
     it("returns null when status field unchanged and reason same", () => {
       // running × pane_observation(running) — reducer matrix cell "—"
-      const result = reduceStatus(prev({ status: "running" }), { type: "pane_observation", observed: "running" }, now);
+      // Reason in DB must match what the observation will reduce to,
+      // otherwise the reducer correctly refines the stored reason.
+      const result = reduceStatus(
+        prev({ status: "running", statusReason: "pane:active:running" }),
+        { type: "pane_observation", observed: "running" },
+        now,
+      );
+      expect(result).toBeNull();
+    });
+
+    it("refines reason when pane_observation reports same status with different reason (load-bearing for usage_limited reset)", () => {
+      // Real-world scenario: agent has been usage_limited for hours past
+      // the displayed reset. Adapter re-parses the same banner but now
+      // computes today's past time instead of tomorrow's same time.
+      // Without reason refinement, statusReason would stay frozen and the
+      // auto-resume loop would never see the reset as due.
+      const result = reduceStatus(
+        prev({
+          status: "usage_limited",
+          statusReason: "pane:usage_limited:reset=2026-05-27T07:50:00.000Z",
+        }),
+        {
+          type: "pane_observation",
+          observed: "usage_limited",
+          reason: "pane:usage_limited:reset=2026-05-26T07:50:00.000Z",
+        },
+        now,
+      );
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe("usage_limited");
+      expect(result?.reason).toBe("pane:usage_limited:reset=2026-05-26T07:50:00.000Z");
+      // Reason-only refinement: lastStatusAt is NOT bumped (the status
+      // didn't actually change).
+      expect(result?.lastStatusAt).toBeUndefined();
+    });
+
+    it("returns null on pane_observation when status AND reason are both unchanged (no churn)", () => {
+      const result = reduceStatus(
+        prev({
+          status: "usage_limited",
+          statusReason: "pane:usage_limited:reset=2026-05-26T07:50:00.000Z",
+        }),
+        {
+          type: "pane_observation",
+          observed: "usage_limited",
+          reason: "pane:usage_limited:reset=2026-05-26T07:50:00.000Z",
+        },
+        now,
+      );
       expect(result).toBeNull();
     });
 
