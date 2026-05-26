@@ -40,7 +40,7 @@
 [ ] 5. Agents can create workspaces through MCP.
 [ ] 6. Agents can start or inspect agent sessions through MCP.
 [~] 7. Agents can read the latest terminal output of a specific session through MCP (`read_agent_output`, bounded by `lines` and `maxChars`).
-[~] 8. Agents can submit a follow-up message/prompt to a specific session through MCP (`send_agent_message`, paste + Enter into the backing tmux pane). Sessions without a tmux backing return `session_has_no_terminal`; sessions not in an active status return `session_not_accepting_input`.
+[~] 8. Agents can submit a follow-up message/prompt to a specific session through MCP (`send_agent_message`, paste + Enter into the backing tmux pane). Sessions without a tmux backing return `session_has_no_terminal`; sessions whose pane foreground is a shell binary (agent not currently running) return `session_not_accepting_input` regardless of the cached DB status — the check is performed at send-time via `pane_current_command`, not from a cached status field, because shell-first sessions can be `idle` (shell at the prompt) and would otherwise inject the message into bash rather than into the agent's TUI.
 [ ] 9. Agents can inspect operation status through MCP.
 [ ] 10. Agents can inspect readiness and next-action state through MCP.
 [ ] 11. MCP actions follow the same operation, provider, hook, and safety model as the UI.
@@ -58,7 +58,7 @@ Daemon-mediated (run through the operation service so they obey the same hook, a
   `stop_agent_session` (destructive), `archive_workspace`,
   `remove_workspace` (destructive), `reconcile` (destructive).
 
-For interactive runtimes like Claude Code, both `start_agent_session` (with a `prompt`) and `send_agent_message` deliver text into the backing tmux pane via a paste buffer followed by Enter. This guarantees the agent actually receives and processes the prompt — it is not just typed into the input box.
+For interactive runtimes like Claude Code, both `start_agent_session` (with a `prompt`) and `send_agent_message` deliver text into the backing tmux pane via a paste buffer followed by Enter. This guarantees the agent actually receives and processes the prompt — it is not just typed into the input box. `start_agent_session` is a four-step sequence in the shell-first model: spawn the shell (`bash -l`), wait for the shell prompt (`waitForTerminalIdle`), send the agent's launch argv via `tmux send-keys` and wait for the agent's TUI to become foreground (positive `runtimeReadyPredicate` matching the runtime binary name with 15-char `comm` truncation), then paste the initial prompt. Without the positive predicate, a transient subprocess (`direnv` during shell startup, `git`/`rg` mid-session) could be mistaken for the agent and cause the prompt to be pasted before the agent's TUI is ready.
 
 ### Scratchpad
 
