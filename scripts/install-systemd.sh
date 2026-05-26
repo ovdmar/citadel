@@ -11,10 +11,27 @@
 set -euo pipefail
 
 ROOT="${CITADEL_INSTALL_ROOT:-$(pwd)}"
-if [[ ! -d "$ROOT/apps/daemon" ]]; then
-  echo "✗ $ROOT does not look like a Citadel checkout (missing apps/daemon)" >&2
-  exit 2
+
+# Shared refusal guards live in scripts/install/install-guards.sh so the
+# upgrade verb can apply the exact same checks before delegating here.
+# shellcheck source=./install/install-guards.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/install/install-guards.sh"
+
+citadel_require_checkout "$ROOT"
+citadel_require_working_directory_match "$ROOT"
+
+# REF-PIN START — pin to an annotated tag when CITADEL_INSTALL_REF is set.
+# Default code path (no env var) is unchanged; this branch only fires when
+# operators explicitly opt into a pinned install.
+if [[ -n "${CITADEL_INSTALL_REF:-}" ]]; then
+  citadel_require_valid_ref_shape "$CITADEL_INSTALL_REF"
+  citadel_require_annotated_tag "$ROOT" "$CITADEL_INSTALL_REF"
+  citadel_require_clean_tree "$ROOT"
+  echo "→ Pinning to ref $CITADEL_INSTALL_REF"
+  git -C "$ROOT" fetch --tags --quiet
+  git -C "$ROOT" checkout --quiet "$CITADEL_INSTALL_REF"
 fi
+# REF-PIN END
 
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT_PATH="$UNIT_DIR/citadel.service"

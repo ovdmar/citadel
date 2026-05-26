@@ -26,7 +26,7 @@ DEV_STATE         := $(CURDIR)/.citadel/dev.json
 EFFECTIVE_PORT     := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/null 2>&1 && jq -r '.port    // empty' $(DEV_STATE) 2>/dev/null); echo $${v:-$(WORKTREE_PORT)})
 EFFECTIVE_WEB_PORT := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/null 2>&1 && jq -r '.webPort // empty' $(DEV_STATE) 2>/dev/null); echo $${v:-$(WORKTREE_WEB_PORT)})
 
-.PHONY: help setup deploy install build check typecheck lint test coverage e2e smoke performance clean stop logs
+.PHONY: help setup deploy install upgrade doctor build check typecheck lint test coverage e2e smoke performance clean stop logs
 
 help:
 	@echo "Citadel — scoped to: $(CURDIR)"
@@ -39,6 +39,11 @@ help:
 	@echo "                   vite, both watching for changes. Used by the cockpit's Redeploy chip."
 	@echo "                     cockpit → http://localhost:$(EFFECTIVE_WEB_PORT) (vite, HMR)"
 	@echo "                     daemon  → http://localhost:$(EFFECTIVE_PORT)"
+	@echo ""
+	@echo "Distribution:"
+	@echo "  make upgrade           Update the installed checkout to the latest commit of its current branch."
+	@echo "  make upgrade REF=v0.3.0  Pin the install to an annotated tag (refuses dirty trees and bad refs)."
+	@echo "  make doctor            Verify that everything is configured (binaries, daemon, config, hooks)."
 	@echo ""
 	@echo "Lifecycle:"
 	@echo "  make setup       pnpm install"
@@ -182,6 +187,16 @@ deploy:
 # different checkout entirely. Does NOT touch any worktree-local `deploy` stack.
 install:
 	@bash scripts/install-systemd.sh
+
+# Dedicated upgrade verb. Same end-state as `make install`, but with a
+# named entry point that operators recognise + REF= pinning.
+upgrade:
+	@bash scripts/install/upgrade.sh $(if $(REF),REF=$(REF))
+
+# Verify everything is configured. Outputs a human-readable table by
+# default; pass `make doctor --json` to get machine-readable JSON.
+doctor:
+	@pnpm exec tsx scripts/doctor/run.ts $(filter-out $@,$(MAKECMDGOALS))
 
 # `make stop` kills the detached `deploy` stack (daemon + vite, single pgid).
 # Doesn't touch the systemd unit (use `systemctl --user stop citadel.service`).
