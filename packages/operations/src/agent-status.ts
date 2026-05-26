@@ -17,7 +17,11 @@ export type StatusSignal =
   | { type: "exited_clean"; exitCode: number; endedAt: string }
   | { type: "exited_failed"; exitCode: number; endedAt: string }
   | { type: "active"; lastOutputAt: string }
-  | { type: "pane_observation"; observed: "running" | "idle" | "waiting_for_input"; reason?: string }
+  | {
+      type: "pane_observation";
+      observed: "running" | "idle" | "waiting_for_input" | "rate_limited" | "usage_limited";
+      reason?: string;
+    }
   | { type: "optimistic_send" };
 
 // Subset of AgentSession the reducer needs. Callers can pass the full row.
@@ -41,7 +45,11 @@ const TERMINAL_STATUSES: ReadonlySet<CanonicalStatus> = new Set(["stopped", "fai
 
 // Default canonical reason for a pane_observation when the adapter doesn't
 // pass an explicit one. Adapters can override via signal.reason.
-function defaultPaneReason(observed: "running" | "idle" | "waiting_for_input"): string {
+function defaultPaneReason(
+  observed: "running" | "idle" | "waiting_for_input" | "rate_limited" | "usage_limited",
+): string {
+  if (observed === "rate_limited") return "pane:rate_limited:server";
+  if (observed === "usage_limited") return "pane:usage_limited:reset=unknown";
   return `pane:active:${observed}`;
 }
 
@@ -123,9 +131,9 @@ export function reduceStatus(prev: ReducerPrev, signal: StatusSignal, now: () =>
     }
 
     case "active": {
-      // Active does NOT transition out of idle/waiting_for_input — those are
-      // sticky post-turn states until a positive pane_observation arrives.
-      // For unknown, treat as resurrection → running.
+      // Active does NOT transition out of idle/waiting_for_input/rate_limited/
+      // usage_limited — those are sticky post-turn states until a positive
+      // pane_observation arrives. For unknown, treat as resurrection → running.
       if (prev.status === "unknown") {
         return statusUpdate(prev, "running", "resurrected_by_activity", t, {
           lastOutputAt: signal.lastOutputAt,
@@ -153,21 +161,31 @@ export function reduceStatus(prev: ReducerPrev, signal: StatusSignal, now: () =>
       const reason = signal.reason ?? defaultPaneReason(signal.observed);
       const target: CanonicalStatus = signal.observed;
       if (prev.status === target) {
-        // Same status — null (no-op). Matrix cell "—".
-        // We don't refine the reason on every tick; reason gets set on the
-        // next genuine status change. Avoids high-frequency SSE/DB writes
-        // for sessions sitting in steady state.
-        return null;
+        // Same status. Refine the reason if the adapter is reporting a
+        // different one — critical for usage_limited where the reason
+        // encodes the parsed reset wall-clock that needs to update as the
+        // banner ages past the original reset moment. Identical reasons
+        // are no-ops (reasonRefinement returns null), so steady-state
+        // sessions don't churn the DB or SSE.
+        return reasonRefinement(prev, target, reason);
       }
       return statusUpdate(prev, target, reason, t);
     }
 
     case "optimistic_send": {
-      // Only valid when the agent is post-turn (idle or waiting_for_input).
-      // Stamps a sentinel reason so the completion-sound trigger can guard
-      // against firing if the next pane observation shows idle with no
-      // activity (i.e., the send didn't actually start a turn).
-      if (prev.status === "idle" || prev.status === "waiting_for_input") {
+      // Only valid when the agent is post-turn (idle, waiting_for_input,
+      // rate_limited, or usage_limited). Stamps a sentinel reason so the
+      // completion-sound trigger can guard against firing if the next pane
+      // observation shows idle with no activity (i.e., the send didn't
+      // actually start a turn). usage_limited is included so the auto-resume
+      // loop's wake-after-reset send transitions the dot back to running
+      // immediately rather than waiting for the next monitor tick.
+      if (
+        prev.status === "idle" ||
+        prev.status === "waiting_for_input" ||
+        prev.status === "rate_limited" ||
+        prev.status === "usage_limited"
+      ) {
         return statusUpdate(prev, "running", "optimistic_send", t);
       }
       return null;

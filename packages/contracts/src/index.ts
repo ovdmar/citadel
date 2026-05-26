@@ -1,10 +1,6 @@
 import { z } from "zod";
-
-export const IdSchema = z
-  .string()
-  .min(2)
-  .max(80)
-  .regex(/^[a-z0-9][a-z0-9_-]*$/);
+import { IdSchema } from "./primitives.js";
+export { IdSchema } from "./primitives.js";
 
 export const ProviderStatusSchema = z.enum(["healthy", "degraded", "unavailable", "unknown"]);
 export const WorkspaceLifecycleSchema = z.enum(["creating", "ready", "failed", "removing", "archived", "removed"]);
@@ -14,6 +10,8 @@ export const AgentSessionStatusSchema = z.enum([
   "starting",
   "running",
   "waiting_for_input",
+  "rate_limited",
+  "usage_limited",
   "idle",
   "stopped",
   "failed",
@@ -62,42 +60,13 @@ export const WorkspaceSchema = z.object({
   archivedAt: z.string().nullable().default(null),
 });
 
-export const NamespaceColorSchema = z
-  .string()
-  .regex(/^#[0-9a-fA-F]{6}$/)
-  .nullable()
-  .default(null);
-
-export const NamespaceSchema = z.object({
-  id: IdSchema,
-  name: z.string().min(1).max(80),
-  color: NamespaceColorSchema,
-  createdAt: z.string(),
-  updatedAt: z.string(),
-  archivedAt: z.string().nullable().default(null),
-});
-
-export const CreateNamespaceInputSchema = z.object({
-  name: z.string().min(1).max(80),
-  color: z
-    .string()
-    .regex(/^#[0-9a-fA-F]{6}$/)
-    .optional(),
-});
-
-export const UpdateNamespaceInputSchema = z.object({
-  name: z.string().min(1).max(80).optional(),
-  color: z
-    .string()
-    .regex(/^#[0-9a-fA-F]{6}$/)
-    .nullable()
-    .optional(),
-});
-
-export const AssignWorkspaceToNamespaceInputSchema = z.object({
-  workspaceId: IdSchema,
-  namespaceId: IdSchema.nullable(),
-});
+export {
+  AssignWorkspaceToNamespaceInputSchema,
+  CreateNamespaceInputSchema,
+  NamespaceColorSchema,
+  NamespaceSchema,
+  UpdateNamespaceInputSchema,
+} from "./namespaces.js";
 
 export const RuntimeCapabilitySchema = z.object({
   supportsPrompt: z.boolean(),
@@ -142,6 +111,19 @@ export const AgentSessionSchema = z.object({
   transport: TransportStatusSchema,
   tmuxSessionName: z.string().nullable(),
   tmuxSessionId: z.string().nullable(),
+  // Runtime-native session UUID (e.g. Claude Code's --session-id). Populated at
+  // spawn time so we can resume the same conversation across daemon and machine
+  // restarts, and so the Settings restore flow has a stable handle.
+  runtimeSessionId: z.string().nullable().optional(),
+  // Auto-resume bookkeeping for sessions that hit a global API rate limit.
+  // The daemon's auto-resume loop populates these so backoff state survives
+  // daemon restarts: `rateLimitResumeAttempts` is the consecutive resume-send
+  // count used for exponential backoff, `nextResumeAt` is when the loop is
+  // allowed to attempt the next resume (null = unscheduled), and
+  // `lastResumeFromRateLimitAt` records the most recent auto-resume submit.
+  rateLimitResumeAttempts: z.number().int().nonnegative().optional(),
+  nextResumeAt: z.string().nullable().optional(),
+  lastResumeFromRateLimitAt: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -497,6 +479,11 @@ export const CreateAgentSessionInputSchema = z.object({
   displayName: z.string().min(1).optional(),
   prompt: z.string().optional(),
   namespaceId: IdSchema.optional(),
+  // When set, the spawn uses `--resume <uuid>` (via the runtime's resumeArg)
+  // instead of generating a fresh UUID via `--session-id`. The runtime
+  // session's transcript on disk must exist; the caller is responsible for
+  // validating that (see the Settings restore flow / backfill).
+  resumeRuntimeSessionId: z.string().uuid().optional(),
 });
 
 // High-level one-shot launcher used by MCP orchestrators: create a workspace
@@ -764,10 +751,12 @@ export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
 export type CreateAgentSessionInput = z.infer<typeof CreateAgentSessionInputSchema>;
 export type LaunchAgentInput = z.infer<typeof LaunchAgentInputSchema>;
 export type TransitionIssueInput = z.infer<typeof TransitionIssueInputSchema>;
-export type Namespace = z.infer<typeof NamespaceSchema>;
-export type CreateNamespaceInput = z.infer<typeof CreateNamespaceInputSchema>;
-export type UpdateNamespaceInput = z.infer<typeof UpdateNamespaceInputSchema>;
-export type AssignWorkspaceToNamespaceInput = z.infer<typeof AssignWorkspaceToNamespaceInputSchema>;
+export type {
+  AssignWorkspaceToNamespaceInput,
+  CreateNamespaceInput,
+  Namespace,
+  UpdateNamespaceInput,
+} from "./namespaces.js";
 export type DiffFile = z.infer<typeof DiffFileSchema>;
 export type WorkspaceDiff = z.infer<typeof WorkspaceDiffSchema>;
 export type RecentCommit = z.infer<typeof RecentCommitSchema>;
@@ -783,14 +772,9 @@ export type BackgroundAgentSession = z.infer<typeof BackgroundAgentSessionSchema
 export type CreateScheduledAgentInput = z.infer<typeof CreateScheduledAgentInputSchema>;
 export type UpdateScheduledAgentInput = z.infer<typeof UpdateScheduledAgentInputSchema>;
 
-export type { ScratchpadSnapshot, ScratchpadHistorySource } from "./scratchpad.js";
-export type { ScratchpadHistoryEntry, ScratchpadHistorySummary } from "./scratchpad.js";
-export type { ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+export type { ScratchpadSnapshot, ScratchpadHistorySource, ScratchpadHistoryEntry, ScratchpadHistorySummary, ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
 
 export * from "./citadel-actions.js";
 
-export type ApiError = {
-  error: string;
-  detail?: string;
-  fieldErrors?: Record<string, string[]>;
-};
+export type ApiError = { error: string; detail?: string; fieldErrors?: Record<string, string[]> };

@@ -205,4 +205,20 @@ export function runMigrations(
   ensureColumn("scheduled_agents", "run_mode", "TEXT NOT NULL DEFAULT 'workspace'");
   ensureColumn("scheduled_agents", "background_cwd", "TEXT");
   ensureColumn("scheduled_agents", "overlap_policy", "TEXT NOT NULL DEFAULT 'skip'");
+  // Runtime-native session UUID captured at spawn time (claude-code's
+  // --session-id, codex's thread_id, etc.). Nullable for legacy rows and for
+  // runtimes without a session ID. Read on respawn to pass --resume so the
+  // conversation survives daemon/machine restarts.
+  ensureColumn("agent_sessions", "runtime_session_id", "TEXT");
+  // Auto-resume bookkeeping. attempts counts consecutive auto-resume sends
+  // (for exponential backoff); next_resume_at is the scheduled time of the
+  // next attempt (NULL = unscheduled); last_resume_from_rate_limit_at is the
+  // wall clock of the most recent send. See packages/operations/auto-resume.
+  ensureColumn("agent_sessions", "rate_limit_resume_attempts", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("agent_sessions", "next_resume_at", "TEXT");
+  ensureColumn("agent_sessions", "last_resume_from_rate_limit_at", "TEXT");
+  db.exec(`
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (8, 'agent-sessions-auto-resume-backoff', datetime('now'));
+  `);
 }

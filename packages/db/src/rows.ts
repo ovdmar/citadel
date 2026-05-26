@@ -86,6 +86,15 @@ export function sessionFromRow(row: Record<string, unknown>): AgentSession {
     transport: asString(row, "transport") as AgentSession["transport"],
     tmuxSessionName: row.tmux_session_name ? asString(row, "tmux_session_name") : null,
     tmuxSessionId: row.tmux_session_id ? asString(row, "tmux_session_id") : null,
+    runtimeSessionId: row.runtime_session_id ? asString(row, "runtime_session_id") : null,
+    rateLimitResumeAttempts:
+      row.rate_limit_resume_attempts === null || row.rate_limit_resume_attempts === undefined
+        ? 0
+        : Number(row.rate_limit_resume_attempts),
+    nextResumeAt: row.next_resume_at ? asString(row, "next_resume_at") : null,
+    lastResumeFromRateLimitAt: row.last_resume_from_rate_limit_at
+      ? asString(row, "last_resume_from_rate_limit_at")
+      : null,
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
   };

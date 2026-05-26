@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ChevronRight,
   FolderGit2,
+  History,
   Moon,
   Server,
   Sparkles,
@@ -14,12 +15,14 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useStateQuery } from "../app-state.js";
+import { mcpUrlFromOrigin } from "../lib/mcp-url.js";
 import { CitadelActionsPanel } from "../settings-citadel-actions.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
+import { RestorePanel } from "../settings-restore.js";
 import { AgentsPanel } from "../settings-runtimes.js";
 
-type SectionId = "overview" | "providers" | "agents" | "repositories" | "actions" | "mcp";
+type SectionId = "overview" | "providers" | "agents" | "repositories" | "restore" | "actions" | "mcp";
 
 type Section = {
   id: SectionId;
@@ -47,6 +50,12 @@ const SECTIONS: Section[] = [
     label: "Repositories",
     description: "Registered repos and tracking.",
     icon: FolderGit2,
+  },
+  {
+    id: "restore",
+    label: "Restore sessions",
+    description: "Resume conversations whose agent died.",
+    icon: History,
   },
   {
     id: "actions",
@@ -152,6 +161,16 @@ export function SettingsView() {
                 help="Removing tracking preserves the local repo and worktrees on disk — Citadel only forgets about them. Each repo has its own hook bindings inside its Repo settings."
               />
               <RepositoriesPanel state={data} />
+            </>
+          ) : null}
+          {section === "restore" ? (
+            <>
+              <PageHead
+                title="Restore lost sessions"
+                sub="Resume conversations whose agent died."
+                help="When the daemon restarts or a tmux pane gets killed, the runtime's transcript on disk survives. Citadel registers a UUID at spawn (claude-code --session-id, codex post-spawn discovery), so any workspace whose latest session row has a UUID but no live pane can be brought back via `--resume <uuid>`. Empty here means nothing to restore."
+              />
+              <RestorePanel />
             </>
           ) : null}
           {section === "actions" ? (
@@ -457,8 +476,7 @@ function buildAttention(props: {
 
 // ─── MCP section ───────────────────────────────────────────────────────────
 function McpSection(props: { mcpEnabled: boolean }) {
-  const mcpUrl =
-    typeof window !== "undefined" ? `${window.location.origin}/api/mcp/rpc` : "http://127.0.0.1:4010/api/mcp/rpc";
+  const mcpUrl = mcpUrlFromOrigin(window.location.origin);
   const example = JSON.stringify(
     {
       mcpServers: {

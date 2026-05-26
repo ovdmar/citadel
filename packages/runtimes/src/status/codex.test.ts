@@ -53,6 +53,79 @@ describe("codexStatusAdapter", () => {
         ),
       ).toBe("running");
     });
+
+    it("classifies idle-post-turn-divider.txt as idle immediately on the divider (no null window)", () => {
+      // After the spinner disappears, codex prints `─ Worked for Xm Ys ───`.
+      // Previously the adapter returned null until ticksSinceActivityChange ≥ 2,
+      // which left the UI flickering through running before settling on idle.
+      // Detector now treats the divider as a positive idle signal.
+      expect(
+        codexStatusAdapter.observe(
+          state,
+          ctx(load("idle-post-turn-divider"), { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 0 }),
+        ),
+      ).toBe("idle");
+    });
+
+    it("classifies running-spinner.txt as running on the spinner alone (no recent tmux activity)", () => {
+      // Real capture from a codex session computing for minutes without
+      // visibly redrawing — the `◦ Working (2m 36s • esc to interrupt)` line
+      // is the only positive signal. Previously misclassified as idle once
+      // the activity timestamp went stale.
+      expect(
+        codexStatusAdapter.observe(
+          state,
+          ctx(load("running-spinner"), { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 5 }),
+        ),
+      ).toBe("running");
+    });
+  });
+
+  describe("active spinner detection", () => {
+    it("'• Working (1m 52s • esc to interrupt)' → running", () => {
+      const pane = "some output\n• Working (1m 52s • esc to interrupt)\n\n  gpt-5.5 default · ~/wherever";
+      expect(
+        codexStatusAdapter.observe(state, ctx(pane, { ticksSinceActivityChange: 10, hasObservedSinceBoot: true })),
+      ).toBe("running");
+    });
+
+    it("'◦ Thinking (12s • esc to interrupt)' (animated bullet variant) → running", () => {
+      const pane = "x\n◦ Thinking (12s • esc to interrupt)\n  gpt-5.5 default · ~/wherever";
+      expect(
+        codexStatusAdapter.observe(state, ctx(pane, { ticksSinceActivityChange: 10, hasObservedSinceBoot: true })),
+      ).toBe("running");
+    });
+
+    it("post-turn divider beats stale tmux activity (running → idle is immediate)", () => {
+      const pane = "agent output\n─ Worked for 1m 12s ──────────────────────";
+      expect(
+        codexStatusAdapter.observe(
+          state,
+          ctx(pane, { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 }),
+        ),
+      ).toBe("idle");
+    });
+
+    it("body line mentioning 'worked for' (no leading divider glyph) does NOT trigger idle", () => {
+      const pane = "I worked for 3 hours on this\n";
+      expect(
+        codexStatusAdapter.observe(
+          state,
+          ctx(pane, {
+            tmuxActivityChangedSinceLastTick: false,
+            ticksSinceActivityChange: 2,
+            hasObservedSinceBoot: true,
+          }),
+        ),
+      ).toBe("idle"); // falls through to stability-based idle, not via the divider rule
+    });
+
+    it("sandbox footer 'esc to cancel' (no closing paren) does NOT trigger running", () => {
+      const pane = "x\nPress enter to confirm or esc to cancel";
+      expect(
+        codexStatusAdapter.observe(state, ctx(pane, { ticksSinceActivityChange: 10, hasObservedSinceBoot: true })),
+      ).toBe("waiting_for_input");
+    });
   });
 
   describe("activity timestamp drives running/idle", () => {
