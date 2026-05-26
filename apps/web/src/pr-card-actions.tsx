@@ -35,11 +35,14 @@ function FixConflictsButton(props: { workspaceId: string }) {
     },
   });
   return (
-    <div className="pr-card-action" onClick={(event) => event.stopPropagation()}>
+    <div className="pr-card-action">
       <button
         type="button"
         className="pr-card-btn pr-card-btn-danger"
-        onClick={() => mutation.mutate()}
+        onClick={(event) => {
+          event.stopPropagation();
+          mutation.mutate();
+        }}
         disabled={mutation.isPending}
         title="Launch a fresh agent to resolve PR conflicts against main"
       >
@@ -92,11 +95,14 @@ function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
           ? "Repository allows no merge strategies via gh"
           : null;
   return (
-    <div className="pr-card-action pr-card-action--merge" onClick={(event) => event.stopPropagation()}>
+    <div className="pr-card-action pr-card-action--merge">
       <button
         type="button"
         className="pr-card-btn pr-card-btn-merge"
-        onClick={() => canMerge && setOpen((value) => !value)}
+        onClick={(event) => {
+          event.stopPropagation();
+          if (canMerge) setOpen((value) => !value);
+        }}
         disabled={!canMerge || merge.isPending}
         aria-disabled={!canMerge}
         title={disabledReason ?? `Merge PR #${pr.number}`}
@@ -111,7 +117,10 @@ function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
               key={strategy}
               type="button"
               className="pr-card-merge-strategy"
-              onClick={() => merge.mutate(strategy)}
+              onClick={(event) => {
+                event.stopPropagation();
+                merge.mutate(strategy);
+              }}
               disabled={merge.isPending}
               role="menuitem"
             >

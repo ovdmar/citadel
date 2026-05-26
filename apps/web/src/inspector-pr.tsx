@@ -520,4 +520,3 @@ function useElapsed(isoTime: string | undefined): string {
   if (!Number.isFinite(then)) return "";
   return formatDurationMs(Math.max(0, now - then));
 }
-

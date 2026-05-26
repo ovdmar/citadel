@@ -417,7 +417,6 @@
   transition: background 0.1s, color 0.1s;
 }
 
-
 .ins-pr-num:hover {
   background: var(--c-line-1);
   color: oklch(50% 0.12 240);
