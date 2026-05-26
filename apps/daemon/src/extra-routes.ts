@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { CitadelConfig } from "@citadel/config";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
 import type express from "express";
+import { registerReviewRoutes } from "./review-routes.js";
 
 type Emit = (type: string, payload: unknown) => void;
 type AsyncHandler = (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>;
@@ -17,8 +19,10 @@ export function registerWorkspaceExtraRoutes(input: {
   emit: Emit;
   asyncRoute: AsyncRoute;
   operations: OperationService;
+  config: CitadelConfig;
 }) {
-  const { app, store, emit, asyncRoute, operations } = input;
+  const { app, store, emit, asyncRoute, operations, config } = input;
+  registerReviewRoutes({ app, store, config, asyncRoute });
 
   app.get(
     "/api/workspaces/:workspaceId/deployed-apps",
