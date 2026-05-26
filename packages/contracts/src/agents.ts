@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IdSchema } from "./id.js";
+import { IdSchema } from "./primitives.js";
 
 export const AgentDefinitionKindSchema = z.enum(["predefined", "custom"]);
 export const AgentDefinitionIdSchema = IdSchema;

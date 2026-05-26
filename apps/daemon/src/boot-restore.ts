@@ -133,7 +133,8 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
             s.status === "starting" ||
             s.status === "idle" ||
             s.status === "waiting_for_input" ||
-            s.status === "rate_limited"),
+            s.status === "rate_limited" ||
+            s.status === "usage_limited"),
       );
       if (alreadyLive) {
         entry.sessionId = alreadyLive.id;
