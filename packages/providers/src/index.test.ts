@@ -12,6 +12,7 @@ import {
   collectRuntimeUsage,
   commandHealth,
   detectParentPr,
+  isGhNoPullRequestError,
   mergePr,
   normalizeCheck,
   normalizeCiRun,
@@ -435,6 +436,17 @@ describe("PR display helpers", () => {
       number: 50,
       state: "OPEN",
     });
+  });
+
+  it("isGhNoPullRequestError recognises gh's 'no pull requests found' messages so transient gh failures stay distinct", () => {
+    expect(isGhNoPullRequestError(new Error('no pull requests found for branch "feature/x"'))).toBe(true);
+    expect(isGhNoPullRequestError(new Error("no open pull requests found in org/repo"))).toBe(true);
+    expect(isGhNoPullRequestError({ stderr: "no pull request found for branch foo" })).toBe(true);
+    // Transient failures must not match — those propagate up so the VC summary
+    // degrades and the client preserves the cached PR.
+    expect(isGhNoPullRequestError(new Error("HTTP 502 from api.github.com"))).toBe(false);
+    expect(isGhNoPullRequestError(new Error("gh auth status: not logged in"))).toBe(false);
+    expect(isGhNoPullRequestError(undefined)).toBe(false);
   });
 });
 

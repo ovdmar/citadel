@@ -629,7 +629,7 @@ export type RecentCommit = z.infer<typeof RecentCommitSchema>;
 export type WorkspaceRecentCommits = z.infer<typeof WorkspaceRecentCommitsSchema>;
 
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-export type { ScratchpadSnapshot, ScratchpadHistorySource, ScratchpadHistoryEntry, ScratchpadHistorySummary, ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
+export type { ScratchpadSnapshot, ReadScratchpadResult, ScratchpadHistorySource, ScratchpadHistoryEntry, ScratchpadHistorySummary, ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
 
 export type ApiError = { error: string; detail?: string; fieldErrors?: Record<string, string[]> };
 export * from "./scheduled-agents.js";
