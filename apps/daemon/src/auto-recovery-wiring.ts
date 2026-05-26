@@ -59,6 +59,8 @@ export function startDaemonAutoRecoveryMonitor(deps: AutoRecoveryWiringDeps): Au
             args: runtime.args,
             displayName: runtime.displayName,
             promptArg: runtime.promptArg ?? null,
+            sessionIdArg: runtime.sessionIdArg ?? null,
+            resumeArg: runtime.resumeArg ?? null,
           },
           { activitySource: "automatic-rule" },
         );

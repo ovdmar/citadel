@@ -245,6 +245,8 @@ export function registerWorkspaceExtraRoutes(input: {
           args: runtime.args,
           displayName: runtime.displayName,
           promptArg: runtime.promptArg ?? null,
+          sessionIdArg: runtime.sessionIdArg ?? null,
+          resumeArg: runtime.resumeArg ?? null,
         },
       );
       // Distinguish operator-triggered fix-conflicts launches from the generic

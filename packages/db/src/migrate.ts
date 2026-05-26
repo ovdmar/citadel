@@ -211,4 +211,9 @@ export function runMigrations(
   // row required — they ride the latest baseline version).
   ensureColumn("workspaces", "auto_recovery_last_ci_sha", "TEXT");
   ensureColumn("workspaces", "auto_recovery_last_attempt_at", "TEXT");
+  // Runtime-native session UUID captured at spawn time (claude-code's
+  // --session-id, codex's thread_id, etc.). Nullable for legacy rows and for
+  // runtimes without a session ID. Read on respawn to pass --resume so the
+  // conversation survives daemon/machine restarts.
+  ensureColumn("agent_sessions", "runtime_session_id", "TEXT");
 }

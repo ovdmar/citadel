@@ -26,7 +26,14 @@ export type LaunchAgentDeps = {
   createWorkspace: (input: CreateWorkspaceInput) => Promise<{ operationId: string; workspaceId: string }>;
   createAgentSession: (
     input: CreateAgentSessionInput,
-    runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
+    runtime: {
+      command: string;
+      args: string[];
+      displayName: string;
+      promptArg?: string | null;
+      sessionIdArg?: string | null;
+      resumeArg?: string | null;
+    },
   ) => Promise<AgentSession>;
   activity: (event: {
     type: string;
