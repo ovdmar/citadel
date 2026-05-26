@@ -787,6 +787,9 @@ export type { ScratchpadSnapshot, ScratchpadHistorySource } from "./scratchpad.j
 export type { ScratchpadHistoryEntry, ScratchpadHistorySummary } from "./scratchpad.js";
 export type { ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
 
+export type { ShortcutId, ShortcutChord, ChordModifier } from "./shortcuts.js";
+export { SHORTCUT_CHORDS, FORWARDABLE_CHORDS, FORWARDABLE_SHORTCUT_IDS } from "./shortcuts.js";
+
 export type ApiError = {
   error: string;
   detail?: string;

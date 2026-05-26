@@ -4,6 +4,7 @@ import { Check, Search, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
+import { defaultAgentRuntimeId } from "./runtime-defaults.js";
 
 export type GroupKey = "repo" | "status" | "namespace" | "none";
 
@@ -341,10 +342,7 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
     () => props.runtimes.filter((runtime) => runtime.id !== "shell" && runtime.health === "healthy"),
     [props.runtimes],
   );
-  const defaultRuntimeId = useMemo(() => {
-    if (launchableRuntimes.some((runtime) => runtime.id === "claude-code")) return "claude-code";
-    return launchableRuntimes[0]?.id ?? "";
-  }, [launchableRuntimes]);
+  const defaultRuntimeId = useMemo(() => defaultAgentRuntimeId(props.runtimes), [props.runtimes]);
   const [runtimeId, setRuntimeId] = useState(defaultRuntimeId);
   useEffect(() => {
     if (!runtimeId && defaultRuntimeId) setRuntimeId(defaultRuntimeId);
