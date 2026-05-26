@@ -99,7 +99,9 @@
 [~] 6. make check is the release-readiness gate.
 [ ] 7. make check includes architecture boundaries, file size checks, typecheck, lint, tests, coverage, dependency policy, and production build.
 [ ] 8. Performance smoke remains part of release confidence for the ADE cockpit.
-[ ] 9. `scripts/mac-satellite/` hosts macOS-only helper scripts (Spotlight-style quick-capture launcher, new-workspace launcher) that wrap daemon HTTP endpoints; the directory is intentionally outside `make check` because the scripts depend on macOS-only tooling (`open`, `osascript`, AppleScript, Chrome `--app=`) that cannot run in Linux CI.
+[ ] 9. macOS satellite is delivered in two forms, both wrapping the existing daemon HTTP surface (no new endpoints):
+   - `apps/mac-satellite/` — Electron app that registers global shortcuts (`⌘⇧S` for quick-capture, `⌘⇧N` for new-workspace deeplink) and hosts the `/quick-capture` page in a Spotlight-shaped frameless BrowserWindow. The pure helpers (`src/config.ts`) participate in `make check` via Vitest; the main process (`src/main.ts`) typechecks but is exercised manually with `pnpm --filter @citadel/mac-satellite dev` because Electron's runtime is not headless-testable in CI.
+   - `scripts/mac-satellite/` — POSIX-shell fallback helpers for users who don't want an Electron process. Outside `make check` because they depend on macOS-only tooling (`open`, `osascript`, AppleScript, Chrome `--app=`) that cannot run on Linux CI.
 
 ## Dependency Policy
 

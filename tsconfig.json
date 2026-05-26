@@ -15,6 +15,7 @@
     { "path": "packages/ui" },
     { "path": "apps/daemon" },
     { "path": "apps/web" },
-    { "path": "apps/cli" }
+    { "path": "apps/cli" },
+    { "path": "apps/mac-satellite" }
   ]
 }

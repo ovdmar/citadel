@@ -1,8 +1,11 @@
 # Citadel — Mac satellite shortcuts
 
-Two tiny shell helpers that turn the local Citadel daemon's web surfaces into
-Spotlight-style global-shortcut targets. Both target the long-term systemd
-daemon on `127.0.0.1:4010` by default.
+There are now **two** ways to bind the satellite shortcuts on macOS:
+
+1. **`apps/mac-satellite/` — the native Electron app (recommended).** Self-contained, registers the global shortcuts itself via Electron's `globalShortcut`, runs without a Dock icon, hosts the quick-capture popup in its own chromeless frameless window. See [`apps/mac-satellite/README.md`](../../apps/mac-satellite/README.md).
+2. **These shell scripts (fallback).** Tiny POSIX-shell helpers that you bind via Hammerspoon or Shortcuts.app. Useful when you don't want another menu-bar app, or when you want a worktree-specific binding via env-var overrides.
+
+Both paths target the long-term systemd daemon on `127.0.0.1:4010` by default and post via the existing daemon HTTP surface — no new endpoints. Pick whichever fits your workflow.
 
 | Script | What it does | Suggested shortcut |
 |---|---|---|

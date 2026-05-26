@@ -21,7 +21,9 @@ Phase-1 operationalised acceptance criteria (what the implementation in this PR 
 - [ ] AC4a — `scripts/mac-satellite/new-workspace.sh` opens the cockpit at `/?modal=new-workspace`. The cockpit recognises that query parameter on mount and auto-opens the existing Create Workspace modal. After the modal closes (created or cancelled) the query parameter is stripped from the URL so a page refresh doesn't re-open it.
 - [ ] AC4b — `scripts/mac-satellite/README.md` documents how to bind each script to a global shortcut via Hammerspoon (recommended) and macOS Shortcuts.app (fallback), and explains the prerequisite that the user's local Citadel daemon is reachable.
 
-**Out of scope (deferred to a follow-up plan).** Shipping an actual native `.app` shell (Tauri or Electron) that registers global shortcuts itself. The web-served `/quick-capture` page plus thin helper scripts deliver the user-facing UX in this PR without adding a Rust/Electron toolchain to CI. The follow-up will wrap the same `/quick-capture` page in a native shell and reuse the `?modal=new-workspace` deeplink, so this PR's surface area is forward-compatible.
+**Phase 2 follow-up — folded in.** Originally deferred, but added to this PR after the user said "we're not ready without the native Mac .app". Implementation: `apps/mac-satellite/` (Electron). Registers `⌘⇧S` (Spotlight-style quick-capture popup) and `⌘⇧N` (new-workspace deeplink) via `globalShortcut`; loads the existing daemon `/quick-capture` page in a frameless BrowserWindow; opens the cockpit deeplink in the default browser. No new daemon endpoints. The web-served page + shell scripts remain as a no-Electron fallback.
+
+Electron was chosen over Tauri to keep CI on its existing pnpm/TS toolchain (no Rust). Packaging to a signed `.app` is the next follow-up — `pnpm --filter @citadel/mac-satellite dev` is sufficient for personal-machine use right now.
 
 ## Context and problem statement
 
