@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CitadelConfig } from "@citadel/config";
+import { createId } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { resolveFixConflictsPrompt } from "@citadel/hooks";
 import type { OperationService } from "@citadel/operations";
@@ -212,17 +213,20 @@ export function registerWorkspaceExtraRoutes(input: {
       if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
       const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      // Skip shell runtimes (bash/sh/zsh/fish): they have no promptArg, so the
-      // multi-line fix-conflicts prompt would be pasted into the tmux pane and
-      // executed line-by-line as shell commands (`git pull`, `make check`,
-      // `git push`) instead of being read as instructions by an agent.
-      // Default to the first non-shell runtime; reject explicit shell selection.
+      // Require a non-shell agent runtime. The fix-conflicts prompt is
+      // multi-line ("git pull origin main", "make check", "git push"); if it
+      // were pasted into a bash/sh/zsh/fish tmux pane those would execute
+      // line-by-line instead of being read as instructions. The real
+      // invariant is "the prompt must be delivered via a CLI flag, not by
+      // key-paste into a pane": we enforce that by requiring runtime.promptArg.
+      // (id !== "shell" is too narrow — an operator can configure any id with
+      // command:"bash" and bypass an id-only check.)
       const requestedRuntimeId = typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined;
       const runtime = requestedRuntimeId
         ? config.runtimes.find((candidate) => candidate.id === requestedRuntimeId)
-        : config.runtimes.find((candidate) => candidate.id !== "shell");
+        : config.runtimes.find((candidate) => candidate.id !== "shell" && Boolean(candidate.promptArg));
       if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
-      if (runtime.id === "shell") return res.status(400).json({ error: "runtime_must_be_agent" });
+      if (!runtime.promptArg) return res.status(400).json({ error: "runtime_must_be_agent" });
       const resolved = await resolveFixConflictsPrompt({
         workspacePath: workspace.path,
         workspaceId: workspace.id,
@@ -245,17 +249,18 @@ export function registerWorkspaceExtraRoutes(input: {
       );
       // Distinguish operator-triggered fix-conflicts launches from the generic
       // agent.started event so the activity log can filter on intent. Per the
-      // plan: type=agent.fix-conflicts.launched, source=user.
-      const nowIso = new Date().toISOString();
+      // plan: type=agent.fix-conflicts.launched, source=user. createAgentSession
+      // also emits its own agent.started row — that's intentional. Filter by
+      // type when surfacing fix-conflicts in the UI.
       store.addActivity({
-        id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        id: createId("evt"),
         type: "agent.fix-conflicts.launched",
         source: "user",
         repoId: repo.id,
         workspaceId: workspace.id,
         operationId: null,
         message: `Launched fix-conflicts agent (prompt: ${resolved.source})`,
-        createdAt: nowIso,
+        createdAt: new Date().toISOString(),
       });
       emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
       res.status(202).json({ session, promptSource: resolved.source, diagnostic: resolved.diagnostic });
