@@ -88,8 +88,26 @@ export const CitadelConfigSchema = z
             enabled: z.boolean().default(true),
             command: z.string().min(1).default("jtk"),
             projectKey: z.string().min(1).optional(),
+            // Lifecycle-event-driven auto-transitions. `transition` names the
+            // target status (e.g., "In Progress"); the runtime resolves it
+            // to an available transition by matching `toStatus`
+            // case-insensitively. Excludes `workspace.created` (no issue
+            // attached yet) and `workspace.updated` (multi-fire) by design.
+            autoTransitions: z
+              .array(
+                z.object({
+                  event: z.enum([
+                    "agent.started",
+                    "workspace.issue_attached",
+                    "workspace.archived",
+                    "workspace.removed",
+                  ]),
+                  transition: z.string().min(1),
+                }),
+              )
+              .default([]),
           })
-          .default({ enabled: true, command: "jtk" }),
+          .default({ enabled: true, command: "jtk", autoTransitions: [] }),
       })
       .default({
         github: { enabled: true, command: "gh" },

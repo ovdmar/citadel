@@ -264,6 +264,45 @@ export const IssueTransitionActionResultSchema = z.object({
   checkedAt: z.string(),
 });
 
+// Picker-result row from a Jira search (`jtk issues search --jql ...`).
+// Only `key` is guaranteed; the rest may be missing depending on `jtk`'s
+// output (older versions occasionally omit `updated`, statuses can be
+// empty during transitions).
+export const IssueSearchResultSchema = z.object({
+  key: z.string().min(1),
+  summary: z.string().nullable(),
+  status: z.string().nullable(),
+  url: z.string().nullable(),
+  updated: z.string().nullable(),
+});
+
+export const IssueSearchResponseSchema = z.object({
+  status: ProviderStatusSchema,
+  reason: z.string().nullable(),
+  results: z.array(IssueSearchResultSchema),
+});
+
+// Events the Jira auto-transition wiring may listen to. Deliberately
+// excludes `workspace.created` (fires before any issue can be attached) and
+// `workspace.updated` (multi-fire — would burst the provider).
+export const JiraAutoTransitionEventSchema = z.enum([
+  "agent.started",
+  "workspace.issue_attached",
+  "workspace.archived",
+  "workspace.removed",
+]);
+
+// Config entry: when {event} fires for a workspace with an attached issue,
+// transition the issue toward {transition}. `transition` names the target
+// status the issue should end up in (e.g., "In Progress", "Done"); the
+// runtime picks the available transition whose `toStatus` matches
+// case-insensitively. Idempotent: if the issue is already in the target
+// status, the call is skipped.
+export const JiraAutoTransitionSchema = z.object({
+  event: JiraAutoTransitionEventSchema,
+  transition: z.string().min(1),
+});
+
 export const OperationLogEntrySchema = z.object({
   level: z.enum(["info", "warn", "error"]).default("info"),
   message: z.string(),
@@ -740,6 +779,10 @@ export type VersionControlSummary = z.infer<typeof VersionControlSummarySchema>;
 export type IssueTransition = z.infer<typeof IssueTransitionSchema>;
 export type IssueTrackerSummary = z.infer<typeof IssueTrackerSummarySchema>;
 export type IssueTransitionActionResult = z.infer<typeof IssueTransitionActionResultSchema>;
+export type IssueSearchResult = z.infer<typeof IssueSearchResultSchema>;
+export type IssueSearchResponse = z.infer<typeof IssueSearchResponseSchema>;
+export type JiraAutoTransitionEvent = z.infer<typeof JiraAutoTransitionEventSchema>;
+export type JiraAutoTransition = z.infer<typeof JiraAutoTransitionSchema>;
 export type Operation = z.infer<typeof OperationSchema>;
 export type OperationLogEntry = z.infer<typeof OperationLogEntrySchema>;
 export type GitStatusSummary = z.infer<typeof GitStatusSummarySchema>;
