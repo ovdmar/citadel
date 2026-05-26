@@ -10,7 +10,13 @@ import { expect, test } from "@playwright/test";
 const API_BASE =
   process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "4012"}`;
 
-test("POST /api/workspaces/:id/fix-conflicts is registered (404 for unknown workspace)", async ({ request }) => {
+test("POST /api/workspaces/:id/fix-conflicts is registered (404 for unknown workspace)", async ({
+  request,
+}, testInfo) => {
+  // API-only smoke — no UI surface tested. Run on desktop only; fanning the
+  // request fixture across mobile/tablet projects in parallel can ECONNRESET
+  // the single shared daemon (observed in CI on the mobile project).
+  test.skip(testInfo.project.name !== "desktop", "desktop run is sufficient for an API smoke");
   const response = await request.post(`${API_BASE}/api/workspaces/ws_does_not_exist/fix-conflicts`, {
     data: {},
   });
