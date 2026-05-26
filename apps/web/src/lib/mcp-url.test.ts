@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import settingsSource from "../routes/settings.tsx?raw";
 import { mcpUrlFromOrigin } from "./mcp-url.js";
 
 describe("mcpUrlFromOrigin", () => {
@@ -20,9 +20,10 @@ describe("settings.tsx", () => {
   // Regression guard against the dead-branch SSR fallback that previously hard-coded
   // http://127.0.0.1:4010/api/mcp/rpc. The fallback was unreachable in the SPA but
   // would silently misroute under any future SSR/prerender pass. Source-level check
-  // because a render-time assertion cannot reach dead branches.
+  // because a render-time assertion cannot reach dead branches. We use Vite's ?raw
+  // import (vitest-compatible) so the test stays inside apps/web's "no node: imports"
+  // architecture boundary.
   it("does not embed the systemd daemon URL as a literal", () => {
-    const source = readFileSync(new URL("../routes/settings.tsx", import.meta.url), "utf8");
-    expect(source).not.toMatch(/127\.0\.0\.1:4010/);
+    expect(settingsSource).not.toMatch(/127\.0\.0\.1:4010/);
   });
 });
