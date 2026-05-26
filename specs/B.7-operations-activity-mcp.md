@@ -19,6 +19,7 @@
 [ ] 11. Agent session start/resume is an operation.
 [ ] 12. Running and failed workspace-specific operations are visible in the workspace cockpit.
 [ ] 13. Operations support retry/cancel when safe.
+[ ] 14. Operation rows are deep-linkable from elsewhere in the cockpit via `?id=…` on `/operations` (the deep link highlights and scrolls the target row).
 
 ## Activity
 

@@ -87,7 +87,7 @@
 [ ] 1. Archive workspace keeps history while hiding the workspace from active cockpit views.
 [ ] 2. Remove workspace explains worktree, sessions, operations, and hook cleanup impact.
 [ ] 3. Remove workspace requires explicit confirmation when active sessions or dirty files exist.
-[ ] 4. Remove workspace can run repo teardown hooks.
+[~] 4. Remove workspace can run repo teardown hooks (resolved from `repo.teardownHookIds` and/or an executable `.citadel/hooks/teardown` in the workspace).
 [ ] 5. Remove workspace can preserve the worktree on disk when selected.
 [ ] 6. Workspace lifecycle is tracked separately from agent session, terminal, git, PR, and deployment state.
 [ ] 7. Archived/removed workspaces remain visible from the *History* navigator entry.
