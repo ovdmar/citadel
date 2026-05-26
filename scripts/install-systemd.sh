@@ -95,6 +95,12 @@ echo "→ Installing citadel.service → $ROOT"
   echo "ExecStart=$NODE_BIN $ROOT/apps/daemon/dist/index.js"
   echo "Restart=always"
   echo "RestartSec=3"
+  # Kill only the main daemon on stop/restart. ttyd children are spawned
+  # detached so they outlive a daemon restart; the next boot's
+  # discoverExistingTtyds() adopts them back into the manager. With the
+  # default control-group kill mode, systemd would SIGTERM every PID in
+  # the cgroup and we'd lose terminal sessions on every restart.
+  echo "KillMode=process"
   echo ""
   echo "[Install]"
   echo "WantedBy=default.target"

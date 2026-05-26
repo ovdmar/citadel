@@ -27,7 +27,7 @@ import {
   transitionJiraIssue,
 } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
-import { attachTerminalWebSocket, createTtydManager, ensureTmuxSession } from "@citadel/terminal";
+import { attachTerminalWebSocket, createTtydManager, discoverExistingTtyds, ensureTmuxSession } from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
@@ -113,14 +113,31 @@ export function createDaemonApp(input: {
 
   // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
   //
-  // Skip cleanupStale() when running under vitest. Every test that boots a
-  // daemon (~20 of them) derives the same slot 0 range as the production
-  // install for config.port=4010 — running cleanupStale() in tests would
-  // SIGTERM the live cockpit's ttyds on every test that calls
-  // createDaemonApp(). Production daemons still get the boot-time sweep.
+  // Boot-time discover-and-adopt: ttyds are spawned detached and the systemd
+  // unit runs with KillMode=process, so they outlive daemon restarts. Scan
+  // the ttyd port range for survivors from the previous incarnation and
+  // adopt them back into the manager — same key, same PID, no respawn.
+  // The browser's WebSocket auto-reconnect (xterm `reconnect=3`) lands on
+  // the *same* ttyd it was talking to before the restart.
+  //
+  // Skipped under vitest: tests that boot a daemon all derive the same slot
+  // 0 range as the production install for config.port=4010, so an adopt()
+  // pass would re-attach to the live cockpit's ttyds and the next test that
+  // calls release() would kill them.
   if (!process.env.VITEST) {
-    const initialTerminalCleanup = ttyd.cleanupStale();
-    if (initialTerminalCleanup.killed > 0) emit("terminal.cleanup", initialTerminalCleanup);
+    const survivors = discoverExistingTtyds({
+      portBase: ttyd.config.portBase,
+      portMax: ttyd.config.portMax,
+      basePathPrefix: ttyd.config.basePathPrefix,
+    });
+    const { adopted, reapedDuplicates } = ttyd.adopt(survivors);
+    if (adopted > 0 || reapedDuplicates > 0) {
+      emit("terminal.adopted", {
+        adopted,
+        reapedDuplicates,
+        portRange: [ttyd.config.portBase, ttyd.config.portMax],
+      });
+    }
   }
   const respawnTmux = async (session: import("@citadel/contracts").AgentSession) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
