@@ -161,11 +161,13 @@ export function reduceStatus(prev: ReducerPrev, signal: StatusSignal, now: () =>
       const reason = signal.reason ?? defaultPaneReason(signal.observed);
       const target: CanonicalStatus = signal.observed;
       if (prev.status === target) {
-        // Same status — null (no-op). Matrix cell "—".
-        // We don't refine the reason on every tick; reason gets set on the
-        // next genuine status change. Avoids high-frequency SSE/DB writes
-        // for sessions sitting in steady state.
-        return null;
+        // Same status. Refine the reason if the adapter is reporting a
+        // different one — critical for usage_limited where the reason
+        // encodes the parsed reset wall-clock that needs to update as the
+        // banner ages past the original reset moment. Identical reasons
+        // are no-ops (reasonRefinement returns null), so steady-state
+        // sessions don't churn the DB or SSE.
+        return reasonRefinement(prev, target, reason);
       }
       return statusUpdate(prev, target, reason, t);
     }
