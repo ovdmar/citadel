@@ -3,6 +3,7 @@ import { Link, Outlet, RouterProvider, createRootRoute, createRoute, createRoute
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
+import { OptimisticRemoveProvider } from "./app-state.js";
 import { Cockpit } from "./cockpit.js";
 import { bootstrapLastRoute, clearLastRoute, saveLastRoute } from "./lib/last-route.js";
 import { DashboardView } from "./routes/dashboard.js";
@@ -13,6 +14,7 @@ import { RepoSettingsView } from "./routes/repo-settings.js";
 import { ScheduledAgentsView } from "./routes/scheduled-agents.js";
 import { ScratchpadView } from "./routes/scratchpad.js";
 import { SettingsView } from "./routes/settings.js";
+import { ToastProvider } from "./toast.js";
 import "./styles.css";
 import "./chrome.css";
 import "./stage-terminal.css";
@@ -105,10 +107,18 @@ const scheduledAgentsRoute = createRoute({
 });
 
 function Shell() {
+  // Toast + optimistic-remove providers wrap every route so any view (not
+  // just the cockpit) can push toasts and filter workspaces from the
+  // shared state query during an in-flight drop. See app-state.ts /
+  // toast.tsx for the providers' contracts.
   return (
-    <div className="app-root">
-      <Outlet />
-    </div>
+    <OptimisticRemoveProvider>
+      <ToastProvider>
+        <div className="app-root">
+          <Outlet />
+        </div>
+      </ToastProvider>
+    </OptimisticRemoveProvider>
   );
 }
 

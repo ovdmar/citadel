@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-route
 import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
-import { useEventRefresh, useStateQuery } from "./app-state.js";
+import { useEventRefresh, useFilteredStateQuery } from "./app-state.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { useWorkspaceCockpitSummary } from "./cockpit-tools.js";
 import { CommandPalette } from "./command-palette.js";
@@ -24,7 +24,12 @@ const STORAGE_SESSION_BY_WORKSPACE = "citadel.session-by-workspace";
 type MobileView = "navigator" | "stage" | "inspector";
 
 export function Cockpit() {
-  const state = useStateQuery();
+  // Use the filtered variant so workspaces in the optimistic-remove
+  // blacklist (AC4) are subtracted from `data.workspaces` for every
+  // consumer of `state.data` below — including the active-workspace
+  // selector at L52, which must never pick a blacklisted workspace as
+  // the fallback active row.
+  const state = useFilteredStateQuery();
   useEventRefresh();
   const data = state.data;
   const navigate = useNavigate();

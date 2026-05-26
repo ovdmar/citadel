@@ -4,8 +4,9 @@ import { useMutation } from "@tanstack/react-query";
 import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
-import { useStateQuery } from "./app-state.js";
+import { type StateResponse, useOptimisticRemove, useStateQuery } from "./app-state.js";
 import { encodeReorderMimeType, findReorderMimeType, parseReorderMimeType } from "./navigator-order.js";
+import { useToast } from "./toast.js";
 import "./workspace-status-dot.css";
 
 export type WorkspaceCardData = {
@@ -468,9 +469,12 @@ type DropResult = {
 };
 
 function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void }) {
+  const optimistic = useOptimisticRemove();
+  const toast = useToast();
+  const workspaceId = props.workspace.id;
   const drop = useMutation({
     mutationFn: async (): Promise<DropResult> => {
-      const response = await fetch(`/api/workspaces/${props.workspace.id}`, {
+      const response = await fetch(`/api/workspaces/${workspaceId}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
       });
@@ -486,9 +490,50 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
         dirtySummary: body.dirtySummary ?? null,
       };
     },
-    onSuccess: (result) => {
+    // AC4 — optimistic remove: snapshot the previous cache, drop the row
+    // immediately, and add the workspace id to the optimistic-remove
+    // blacklist so the 5s refetch / SSE invalidation can't resurrect it
+    // mid-teardown. `useFilteredStateQuery` (consumed by the cockpit's
+    // active-workspace selector and the navigator) subtracts blacklisted
+    // ids on read, so the workspace disappears for every consumer.
+    onMutate: () => {
+      optimistic.add(workspaceId);
+      const previous = queryClient.getQueryData<StateResponse>(["state"]);
+      if (previous) {
+        queryClient.setQueryData<StateResponse>(["state"], {
+          ...previous,
+          workspaces: previous.workspaces.filter((w) => w.id !== workspaceId),
+        });
+      }
+      return { previous };
+    },
+    onSuccess: (result, _vars, context) => {
+      if (result.removed) {
+        queryClient.invalidateQueries({ queryKey: ["state"] });
+        props.onClose();
+        return;
+      }
+      // Teardown blocked (dirty / hook failed) — restore the optimistic
+      // cache write so the workspace reappears in the nav. The dialog
+      // stays open with the structured summary / error message; for users
+      // who navigated away, the toast below is the cause-and-effect cue.
+      if (context?.previous) queryClient.setQueryData(["state"], context.previous);
       queryClient.invalidateQueries({ queryKey: ["state"] });
-      if (result.removed) props.onClose();
+      const reason = result.dirty ? "uncommitted changes or unpushed commits" : (result.error ?? "teardown failed");
+      toast.push({ tone: "error", message: `Drop "${props.workspace.name}" failed: ${reason}` });
+    },
+    onError: (error, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(["state"], context.previous);
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      toast.push({
+        tone: "error",
+        message: `Drop "${props.workspace.name}" failed: ${error instanceof Error ? error.message : "network error"}`,
+      });
+    },
+    onSettled: () => {
+      // Always clear the blacklist on settle — the cache is now authoritative
+      // (either the workspace is gone or it was restored above).
+      optimistic.remove(workspaceId);
     },
   });
   const result = drop.data;
