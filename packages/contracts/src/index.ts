@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ParentPrSchema, PrCommitSchema, PrMergeStrategySchema } from "./pr-routes.js";
 
 export const IdSchema = z
   .string()
@@ -210,22 +211,6 @@ export const PrReviewerSchema = z.object({
   name: z.string().nullable().default(null),
   state: PrReviewerStateSchema,
 });
-
-export const PrCommitSchema = z.object({
-  sha: z.string().min(7),
-  shortSha: z.string().min(4),
-  message: z.string(),
-  checks: z.array(CheckSummarySchema).default([]),
-});
-
-export const ParentPrSchema = z.object({
-  number: z.number(),
-  url: z.string(),
-  headRefName: z.string(),
-  state: z.string(),
-});
-
-export const PrMergeStrategySchema = z.enum(["squash", "merge", "rebase"]);
 
 export const PullRequestSummarySchema = z.object({
   number: z.number(),
@@ -466,36 +451,6 @@ export const WorkspaceCockpitSummarySchema = z.object({
   issueTracker: IssueTrackerSummarySchema.nullable().default(null),
   apps: WorkspaceAppsSummarySchema,
 });
-
-// Batch endpoint for the always-on cross-workspace PR poll. Per-workspace
-// envelope so a single failing workspace doesn't blank PR display for the
-// others. `no-remote` / `root-workspace` reasons are returned cheaply by the
-// daemon (no gh spawn).
-export const WorkspaceCockpitSummaryBatchRequestSchema = z.object({
-  ids: z.array(z.string()).min(1).max(50),
-});
-
-export const WorkspaceCockpitSummaryBatchEntrySchema = z.discriminatedUnion("ok", [
-  z.object({ workspaceId: IdSchema, ok: z.literal(true), summary: WorkspaceCockpitSummarySchema }),
-  z.object({ workspaceId: IdSchema, ok: z.literal(false), reason: z.string() }),
-]);
-
-export const WorkspaceCockpitSummaryBatchResponseSchema = z.object({
-  summaries: z.array(WorkspaceCockpitSummaryBatchEntrySchema),
-});
-
-export const PrRefreshResponseSchema = z.object({
-  versionControl: VersionControlSummarySchema,
-});
-
-export const PrMergeRequestSchema = z.object({
-  strategy: PrMergeStrategySchema,
-});
-
-export const PrMergeResponseSchema = z.discriminatedUnion("ok", [
-  z.object({ ok: z.literal(true) }),
-  z.object({ ok: z.literal(false), reason: z.string(), detail: z.string() }),
-]);
 
 export const ActivityEventSchema = z.object({
   id: IdSchema,
@@ -784,15 +739,6 @@ export type CiProviderSummary = z.infer<typeof CiProviderSummarySchema>;
 export type RuntimeUsageCategory = z.infer<typeof RuntimeUsageCategorySchema>;
 export type RuntimeUsageSummary = z.infer<typeof RuntimeUsageSummarySchema>;
 export type PullRequestSummary = z.infer<typeof PullRequestSummarySchema>;
-export type PrCommit = z.infer<typeof PrCommitSchema>;
-export type ParentPr = z.infer<typeof ParentPrSchema>;
-export type PrMergeStrategy = z.infer<typeof PrMergeStrategySchema>;
-export type WorkspaceCockpitSummaryBatchRequest = z.infer<typeof WorkspaceCockpitSummaryBatchRequestSchema>;
-export type WorkspaceCockpitSummaryBatchEntry = z.infer<typeof WorkspaceCockpitSummaryBatchEntrySchema>;
-export type WorkspaceCockpitSummaryBatchResponse = z.infer<typeof WorkspaceCockpitSummaryBatchResponseSchema>;
-export type PrRefreshResponse = z.infer<typeof PrRefreshResponseSchema>;
-export type PrMergeRequest = z.infer<typeof PrMergeRequestSchema>;
-export type PrMergeResponse = z.infer<typeof PrMergeResponseSchema>;
 export type PrReviewer = z.infer<typeof PrReviewerSchema>;
 export type PrReviewerState = z.infer<typeof PrReviewerStateSchema>;
 export type VersionControlSummary = z.infer<typeof VersionControlSummarySchema>;

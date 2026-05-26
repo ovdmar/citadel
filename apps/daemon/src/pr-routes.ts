@@ -1,11 +1,16 @@
-import type { CiProviderSummary, VersionControlSummary } from "@citadel/contracts";
+import type { CiProviderSummary, VersionControlSummary, WorkspaceCockpitSummary } from "@citadel/contracts";
+import { PrMergeRequestSchema, WorkspaceCockpitSummaryBatchRequestSchema } from "@citadel/contracts/pr-routes";
 import type { SqliteStore } from "@citadel/db";
-import type {
-  collectGitHubCiRunLog,
-  collectGitHubCiRuns,
-  collectGitHubVersionControlSummary,
+import {
+  type collectGitHubCiRunLog,
+  type collectGitHubCiRuns,
+  type collectGitHubVersionControlSummary,
+  mergePr,
+  pLimit,
 } from "@citadel/providers";
 import type express from "express";
+import { ZodError } from "zod";
+import { bustCacheByPrefixes } from "./workspace-fs-watcher.js";
 
 type ProviderCollectors = {
   collectGitHubVersionControlSummary: typeof collectGitHubVersionControlSummary;
@@ -20,9 +25,10 @@ type AsyncRoute = (
 
 type CachedProvider = <T>(key: string, load: () => T | Promise<T>, ttlMs?: number) => Promise<T>;
 
-// Repo-level PR/CI routes. Workspace-level PR/CI surfaces (cockpit-summary,
-// pr-refresh, pr-merge, batch) live alongside this module — see the new
-// endpoints registered by registerPrRoutes for the batch + merge flow.
+type ProviderCache = Map<string, { expiresAt: number; value: unknown }>;
+
+// Repo-level PR/CI routes + workspace-level batch poll, force-refresh, and
+// merge endpoints.
 //
 // Caching boundary with #15: keys use the established `vc:` / `ci:` prefixes
 // and go through the daemon's cachedProvider helper. #15 may later replace
@@ -34,8 +40,10 @@ export function registerPrRoutes(input: {
   providers: ProviderCollectors;
   asyncRoute: AsyncRoute;
   cachedProvider: CachedProvider;
+  providerCache: ProviderCache;
+  buildWorkspaceCockpitSummary: (workspaceId: string) => Promise<WorkspaceCockpitSummary | null>;
 }) {
-  const { app, store, providers, asyncRoute, cachedProvider } = input;
+  const { app, store, providers, asyncRoute, cachedProvider, providerCache, buildWorkspaceCockpitSummary } = input;
 
   app.get(
     "/api/repos/:repoId/provider-summary",
@@ -76,6 +84,88 @@ export function registerPrRoutes(input: {
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
       const log = await providers.collectGitHubCiRunLog(repo.rootPath, runId);
       res.json({ log });
+    }),
+  );
+
+  // Batch endpoint for the always-on cross-workspace PR poll. Daemon fans out
+  // to up to 4 workspaces in parallel; root workspaces and workspaces with no
+  // remote are rejected cheaply (no gh spawn) via the per-workspace envelope.
+  // POST with JSON body avoids 414 on operators with many workspaces.
+  app.post(
+    "/api/workspaces/cockpit-summary/batch",
+    asyncRoute(async (req, res) => {
+      let parsed: { ids: string[] };
+      try {
+        parsed = WorkspaceCockpitSummaryBatchRequestSchema.parse(req.body);
+      } catch (error) {
+        if (error instanceof ZodError) return res.status(400).json({ error: "invalid_batch_request" });
+        throw error;
+      }
+      const limit = pLimit(4);
+      const summaries = await Promise.all(
+        parsed.ids.map((workspaceId) =>
+          limit(async () => {
+            const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+            if (!workspace) return { workspaceId, ok: false as const, reason: "workspace_not_found" };
+            if (workspace.kind === "root") return { workspaceId, ok: false as const, reason: "root-workspace" };
+            try {
+              const summary = await buildWorkspaceCockpitSummary(workspaceId);
+              if (!summary) return { workspaceId, ok: false as const, reason: "workspace_not_found" };
+              // Surface remote-less workspaces as a fast-fail envelope so the
+              // client doesn't render a "loading" placeholder for them forever.
+              if (summary.versionControl.remotes.length === 0)
+                return { workspaceId, ok: false as const, reason: "no-remote" };
+              return { workspaceId, ok: true as const, summary };
+            } catch (error) {
+              const reason = error instanceof Error ? error.message : "summary_failed";
+              return { workspaceId, ok: false as const, reason };
+            }
+          }),
+        ),
+      );
+      res.json({ summaries });
+    }),
+  );
+
+  app.post(
+    "/api/workspaces/:workspaceId/pr-refresh",
+    asyncRoute(async (req, res) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
+      bustCacheByPrefixes(providerCache, [`vc:${workspace.id}`, `ci:${workspace.id}`]);
+      const versionControl: VersionControlSummary = await cachedProvider(
+        `vc:${workspace.id}:${workspace.updatedAt}`,
+        () => providers.collectGitHubVersionControlSummary(workspace.path),
+      );
+      res.json({ versionControl });
+    }),
+  );
+
+  app.post(
+    "/api/workspaces/:workspaceId/pr-merge",
+    asyncRoute(async (req, res) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
+      let parsed: { strategy: "squash" | "merge" | "rebase" };
+      try {
+        parsed = PrMergeRequestSchema.parse(req.body);
+      } catch (error) {
+        if (error instanceof ZodError) return res.status(400).json({ error: "invalid_merge_request" });
+        throw error;
+      }
+      const summary = await cachedProvider(`vc:${workspace.id}:${workspace.updatedAt}`, () =>
+        providers.collectGitHubVersionControlSummary(workspace.path),
+      );
+      const number = summary.pullRequest?.number;
+      if (typeof number !== "number")
+        return res.status(409).json({ ok: false, reason: "no_pr", detail: "Workspace has no open PR" });
+      const result = await mergePr({ rootPath: workspace.path, number, strategy: parsed.strategy });
+      if (result.ok) bustCacheByPrefixes(providerCache, [`vc:${workspace.id}`, `ci:${workspace.id}`]);
+      res.status(result.ok ? 200 : 409).json(result);
     }),
   );
 }

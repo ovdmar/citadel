@@ -360,17 +360,18 @@ describe("contract schemas", () => {
 
   it("parses PR commit + parent + merge-strategy fields with sensible defaults", async () => {
     const mod = await import("./index.js");
+    const prRoutes = await import("./pr-routes.js");
+    const { PullRequestSummarySchema } = mod;
     const {
-      PullRequestSummarySchema,
-      PrCommitSchema,
       ParentPrSchema,
-      PrMergeStrategySchema,
+      PrCommitSchema,
       PrMergeRequestSchema,
       PrMergeResponseSchema,
+      PrMergeStrategySchema,
       PrRefreshResponseSchema,
       WorkspaceCockpitSummaryBatchRequestSchema,
       WorkspaceCockpitSummaryBatchResponseSchema,
-    } = mod;
+    } = prRoutes;
 
     // Existing PR payloads without the new fields still parse — additive change.
     const legacyPr = PullRequestSummarySchema.parse({

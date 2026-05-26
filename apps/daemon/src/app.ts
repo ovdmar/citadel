@@ -345,55 +345,59 @@ export function createDaemonApp(input: {
     }),
   );
 
-  app.get(
-    "/api/workspaces/:workspaceId/cockpit-summary",
-    asyncRoute(async (req, res) => {
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-
-      const [git, versionControl, ci, issueTracker, apps] = await Promise.all([
-        cachedProvider(
-          `git:${workspace.id}:${workspace.updatedAt}`,
-          () => readWorkspaceGitStatus(workspace.path),
-          3000,
-        ),
-        cachedProvider(`vc:${workspace.id}:${workspace.updatedAt}`, () =>
-          providers.collectGitHubVersionControlSummary(workspace.path),
-        ),
-        cachedProvider(`ci:${workspace.id}:${workspace.updatedAt}`, () =>
-          providers.collectGitHubCiRuns(workspace.path),
-        ),
-        workspace.issueKey
-          ? cachedProvider(`issue:${workspace.issueKey}`, () =>
-              providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
-            )
-          : Promise.resolve(null),
-        cachedProvider(
-          `apps:${workspace.id}:${workspace.updatedAt}`,
-          () => operations.discoverWorkspaceApps({ repo, workspace }),
-          60_000,
-        ),
-      ]);
-      const summary: WorkspaceCockpitSummary = {
-        workspaceId: workspace.id,
-        readiness: deriveReadiness({
-          workspace,
-          sessions: store.listSessions(workspace.id),
-          operations: store.listOperations().filter((operation) => operation.workspaceId === workspace.id),
-          providerHealth: await cachedProviderHealth(),
-          git,
-          versionControl,
-          ci,
-          apps,
-        }),
+  // Build a full workspace cockpit summary. Shared between the single-workspace
+  // endpoint and the batch endpoint registered by registerPrRoutes — the batch
+  // endpoint fan-outs with a concurrency cap so 20+ workspaces don't spawn
+  // 20+ concurrent `gh` subprocesses every 30s.
+  async function buildWorkspaceCockpitSummary(workspaceId: string): Promise<WorkspaceCockpitSummary | null> {
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+    if (!workspace) return null;
+    const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+    if (!repo) return null;
+    const [git, versionControl, ci, issueTracker, apps] = await Promise.all([
+      cachedProvider(`git:${workspace.id}:${workspace.updatedAt}`, () => readWorkspaceGitStatus(workspace.path), 3000),
+      cachedProvider(`vc:${workspace.id}:${workspace.updatedAt}`, () =>
+        providers.collectGitHubVersionControlSummary(workspace.path),
+      ),
+      cachedProvider(`ci:${workspace.id}:${workspace.updatedAt}`, () => providers.collectGitHubCiRuns(workspace.path)),
+      workspace.issueKey
+        ? cachedProvider(`issue:${workspace.issueKey}`, () =>
+            providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
+          )
+        : Promise.resolve(null),
+      cachedProvider(
+        `apps:${workspace.id}:${workspace.updatedAt}`,
+        () => operations.discoverWorkspaceApps({ repo, workspace }),
+        60_000,
+      ),
+    ]);
+    return {
+      workspaceId: workspace.id,
+      readiness: deriveReadiness({
+        workspace,
+        sessions: store.listSessions(workspace.id),
+        operations: store.listOperations().filter((operation) => operation.workspaceId === workspace.id),
+        providerHealth: await cachedProviderHealth(),
         git,
         versionControl,
         ci,
-        issueTracker,
         apps,
-      };
+      }),
+      git,
+      versionControl,
+      ci,
+      issueTracker,
+      apps,
+    };
+  }
+
+  app.get(
+    "/api/workspaces/:workspaceId/cockpit-summary",
+    asyncRoute(async (req, res) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      const summary = await buildWorkspaceCockpitSummary(workspaceId);
+      if (!summary) return res.status(404).json({ error: "workspace_not_found" });
       res.json(summary);
     }),
   );
@@ -456,7 +460,15 @@ export function createDaemonApp(input: {
   });
 
   registerRuntimeUsageRoutes({ app, config, asyncRoute, providerCache, cachedProvider });
-  registerPrRoutes({ app, store, providers, asyncRoute, cachedProvider });
+  registerPrRoutes({
+    app,
+    store,
+    providers,
+    asyncRoute,
+    cachedProvider,
+    providerCache,
+    buildWorkspaceCockpitSummary,
+  });
 
   app.post(
     "/api/agent-sessions",

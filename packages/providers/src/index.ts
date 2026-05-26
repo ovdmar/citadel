@@ -10,16 +10,13 @@ import type {
   IssueTrackerSummary,
   IssueTransition,
   IssueTransitionActionResult,
-  ParentPr,
-  PrCommit,
-  PrMergeResponse,
-  PrMergeStrategy,
   PrReviewerState,
   ProviderHealth,
   RuntimeUsageCategory,
   RuntimeUsageSummary,
   VersionControlSummary,
 } from "@citadel/contracts";
+import type { ParentPr, PrCommit, PrMergeResponse, PrMergeStrategy } from "@citadel/contracts/pr-routes";
 import { runtimeUsageFetchers } from "@citadel/runtimes";
 
 const execFileAsync = promisify(execFile);
