@@ -465,6 +465,10 @@ async function currentPullRequest(rootPath: string) {
       additions: typeof parsed.additions === "number" ? parsed.additions : null,
       deletions: typeof parsed.deletions === "number" ? parsed.deletions : null,
       reviewers: aggregateReviewers(parsed.reviews ?? [], parsed.reviewRequests ?? []),
+      commits: [],
+      parentPr: null,
+      mergeable: "unknown" as const,
+      allowedMergeStrategies: [],
     };
   } catch {
     return null;

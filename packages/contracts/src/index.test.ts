@@ -358,6 +358,86 @@ describe("contract schemas", () => {
     expect(session.status).toBe("running");
   });
 
+  it("parses PR commit + parent + merge-strategy fields with sensible defaults", async () => {
+    const mod = await import("./index.js");
+    const {
+      PullRequestSummarySchema,
+      PrCommitSchema,
+      ParentPrSchema,
+      PrMergeStrategySchema,
+      PrMergeRequestSchema,
+      PrMergeResponseSchema,
+      PrRefreshResponseSchema,
+      WorkspaceCockpitSummaryBatchRequestSchema,
+      WorkspaceCockpitSummaryBatchResponseSchema,
+    } = mod;
+
+    // Existing PR payloads without the new fields still parse — additive change.
+    const legacyPr = PullRequestSummarySchema.parse({
+      number: 1,
+      title: "Test",
+      url: "https://example.test/pr/1",
+      state: "OPEN",
+      draft: false,
+      reviewDecision: null,
+      checks: [],
+    });
+    expect(legacyPr.commits).toEqual([]);
+    expect(legacyPr.parentPr).toBeNull();
+    expect(legacyPr.mergeable).toBe("unknown");
+    expect(legacyPr.allowedMergeStrategies).toEqual([]);
+
+    // PrCommitSchema: checks default to [].
+    const commit = PrCommitSchema.parse({
+      sha: "1234567890abcdef1234567890abcdef12345678",
+      shortSha: "1234567",
+      message: "feat: add things",
+    });
+    expect(commit.checks).toEqual([]);
+
+    // ParentPrSchema requires all four fields.
+    expect(() => ParentPrSchema.parse({ number: 1, url: "u", headRefName: "h" })).toThrow();
+    expect(
+      ParentPrSchema.parse({ number: 42, url: "https://example.test/pr/42", headRefName: "foo", state: "OPEN" }),
+    ).toEqual({ number: 42, url: "https://example.test/pr/42", headRefName: "foo", state: "OPEN" });
+
+    // PrMergeStrategySchema constrains to the three gh strategies.
+    expect(PrMergeStrategySchema.parse("squash")).toBe("squash");
+    expect(() => PrMergeStrategySchema.parse("ff")).toThrow();
+
+    // Discriminated unions: response shapes carry the ok discriminator.
+    expect(PrMergeResponseSchema.parse({ ok: true })).toEqual({ ok: true });
+    expect(PrMergeResponseSchema.parse({ ok: false, reason: "not_mergeable", detail: "PR has conflicts" })).toEqual({
+      ok: false,
+      reason: "not_mergeable",
+      detail: "PR has conflicts",
+    });
+    expect(() => PrMergeResponseSchema.parse({ ok: false })).toThrow();
+
+    // PrMergeRequestSchema requires a valid strategy.
+    expect(PrMergeRequestSchema.parse({ strategy: "rebase" })).toEqual({ strategy: "rebase" });
+    expect(() => PrMergeRequestSchema.parse({ strategy: "x" })).toThrow();
+
+    // Batch request requires at least one workspace id.
+    expect(WorkspaceCockpitSummaryBatchRequestSchema.parse({ ids: ["ws_1"] })).toEqual({ ids: ["ws_1"] });
+    expect(() => WorkspaceCockpitSummaryBatchRequestSchema.parse({ ids: [] })).toThrow();
+    expect(() => WorkspaceCockpitSummaryBatchRequestSchema.parse({ ids: Array(51).fill("ws") })).toThrow();
+
+    // Batch response: each entry is either {ok:true, summary} or {ok:false, reason}; PrRefresh has a versionControl envelope.
+    expect(
+      WorkspaceCockpitSummaryBatchResponseSchema.parse({
+        summaries: [{ workspaceId: "ws_1", ok: false, reason: "no-remote" }],
+      }).summaries[0],
+    ).toEqual({ workspaceId: "ws_1", ok: false, reason: "no-remote" });
+    expect(() =>
+      WorkspaceCockpitSummaryBatchResponseSchema.parse({
+        summaries: [{ workspaceId: "ws_1", ok: false }],
+      }),
+    ).toThrow();
+
+    expect(typeof PrRefreshResponseSchema).toBe("object");
+  });
+
   it("parses PR reviewer + recent-commits schemas with their defaults and rejects malformed inputs", () => {
     // PrReviewer: name defaults to null, login is required, state is constrained.
     expect(PrReviewerSchema.parse({ login: "ovi", state: "approved" })).toEqual({
