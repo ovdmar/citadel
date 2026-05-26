@@ -14,7 +14,13 @@ import {
 } from "@citadel/operations";
 import type { RuntimeStatusAdapter, SessionAdapterState } from "@citadel/runtimes";
 import { getStatusAdapter } from "@citadel/runtimes";
-import { agentExitSentinelPath, agentLiveSentinelPath, captureTmux, readAgentExitCode } from "@citadel/terminal";
+import {
+  agentExitSentinelPath,
+  agentLiveSentinelPath,
+  captureTmux,
+  readAgentExitCode,
+  tmuxPrefix,
+} from "@citadel/terminal";
 
 // Dedupe monitor-side failures so a persistent tmux outage doesn't flood
 // stderr at 2 Hz. Key is `kind:message` so distinct error messages are still
@@ -57,10 +63,14 @@ export function buildStatusMonitorDeps(
     // logs without flooding stderr at 2 Hz.
     tmuxActivities: () => {
       try {
-        const out = execFileSync("tmux", ["list-sessions", "-F", "#{session_name} #{session_activity}"], {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-        });
+        const out = execFileSync(
+          "tmux",
+          [...tmuxPrefix(), "list-sessions", "-F", "#{session_name} #{session_activity}"],
+          {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
+          },
+        );
         const map = new Map<string, number>();
         for (const line of out.split("\n")) {
           const [name, secs] = line.trim().split(/\s+/);

@@ -16,6 +16,17 @@ export type { InputToken } from "./input-tokens.js";
 
 const execFileAsync = promisify(execFile);
 
+// Prepended to every tmux invocation. When `CITADEL_TMUX_SOCKET` is set
+// (citadel.service does this), tmux talks to its own dedicated server via
+// `tmux -L <socket>` instead of the user's default socket. The server lives
+// in citadel-tmux.service's cgroup, not citadel.service's — so daemon
+// restarts/upgrades leave the agent sessions untouched. Empty in tests and
+// on hosts where the socket isn't configured, preserving legacy behavior.
+export function tmuxPrefix(): string[] {
+  const sock = process.env.CITADEL_TMUX_SOCKET;
+  return sock ? ["-L", sock] : [];
+}
+
 export type TerminalSessionRequest = {
   sessionName: string;
   cwd: string;
@@ -35,10 +46,14 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
       // best-effort: status detection degrades gracefully if tmpdir is read-only
     }
     const command = terminalCommand(input.sessionName, input.command, input.args);
-    await execFileAsync("tmux", ["new-session", "-d", "-s", input.sessionName, "-c", input.cwd, command], {
-      timeout: 10000,
-      maxBuffer: 128 * 1024,
-    });
+    await execFileAsync(
+      "tmux",
+      [...tmuxPrefix(), "new-session", "-d", "-s", input.sessionName, "-c", input.cwd, command],
+      {
+        timeout: 10000,
+        maxBuffer: 128 * 1024,
+      },
+    );
     // Capture every byte tmux ever writes to this pane to a side log. Used by
     // submitPrompt for delivery verification (capture-pane only shows the
     // visible scrollback; the log keeps even bytes that scrolled off) and by
@@ -51,9 +66,13 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
     }
   }
   ensureTmuxExtendedKeys();
-  const id = execFileSync("tmux", ["display-message", "-p", "-t", input.sessionName, "#{session_id}"], {
-    encoding: "utf8",
-  }).trim();
+  const id = execFileSync(
+    "tmux",
+    [...tmuxPrefix(), "display-message", "-p", "-t", input.sessionName, "#{session_id}"],
+    {
+      encoding: "utf8",
+    },
+  ).trim();
   // After freshly spawning the wrapper there is a brief window where the outer
   // `bash -c` is still running the script and the inner interactive shell
   // hasn't yet taken over the PTY foreground. Keystrokes (and crucially,
@@ -87,7 +106,7 @@ function attachPipePaneLog(sessionName: string) {
   // Default direction is "-O" (pane → command). Omitting -o means we always
   // replace any existing pipe rather than no-op, so re-attach is idempotent.
   const shellCmd = `cat >> ${shellQuote(logPath)}`;
-  execFileSync("tmux", ["pipe-pane", "-t", sessionName, shellCmd], { stdio: "ignore" });
+  execFileSync("tmux", [...tmuxPrefix(), "pipe-pane", "-t", sessionName, shellCmd], { stdio: "ignore" });
 }
 
 // Return the tail of the pipe-pane log (or empty string if unavailable). Used
@@ -201,9 +220,13 @@ export const LOG_TRUNCATION_BYTES = 16 * 1024 * 1024;
  */
 export async function ensureTmuxSessionRaw(input: TerminalSessionRequest) {
   if (tmuxSessionExists(input.sessionName)) {
-    const id = execFileSync("tmux", ["display-message", "-p", "-t", input.sessionName, "#{session_id}"], {
-      encoding: "utf8",
-    }).trim();
+    const id = execFileSync(
+      "tmux",
+      [...tmuxPrefix(), "display-message", "-p", "-t", input.sessionName, "#{session_id}"],
+      {
+        encoding: "utf8",
+      },
+    ).trim();
     return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
   }
   try {
@@ -215,14 +238,22 @@ export async function ensureTmuxSessionRaw(input: TerminalSessionRequest) {
   // /bin/sh -c. Build it ourselves with shellQuote so an arg with spaces is
   // preserved correctly. Compare to ensureTmuxSession which wraps in `bash -c`.
   const shellCommand = [input.command, ...input.args].map(shellQuote).join(" ");
-  await execFileAsync("tmux", ["new-session", "-d", "-s", input.sessionName, "-c", input.cwd, shellCommand], {
-    timeout: 10000,
-    maxBuffer: 128 * 1024,
-  });
+  await execFileAsync(
+    "tmux",
+    [...tmuxPrefix(), "new-session", "-d", "-s", input.sessionName, "-c", input.cwd, shellCommand],
+    {
+      timeout: 10000,
+      maxBuffer: 128 * 1024,
+    },
+  );
   ensureTmuxExtendedKeys();
-  const id = execFileSync("tmux", ["display-message", "-p", "-t", input.sessionName, "#{session_id}"], {
-    encoding: "utf8",
-  }).trim();
+  const id = execFileSync(
+    "tmux",
+    [...tmuxPrefix(), "display-message", "-p", "-t", input.sessionName, "#{session_id}"],
+    {
+      encoding: "utf8",
+    },
+  ).trim();
   return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
 }
 
@@ -235,12 +266,12 @@ export async function ensureTmuxSessionRaw(input: TerminalSessionRequest) {
 export function pipeBackgroundSessionToLog(sessionName: string, logFilePath: string) {
   const quoted = shellQuote(logFilePath);
   const command = `head -c ${LOG_TRUNCATION_BYTES} >> ${quoted}`;
-  execFileSync("tmux", ["pipe-pane", "-O", "-t", sessionName, command]);
+  execFileSync("tmux", [...tmuxPrefix(), "pipe-pane", "-O", "-t", sessionName, command]);
 }
 
 /** Stop the pipe-pane stream on a session (no command = stop streaming). */
 export function stopBackgroundSessionPipe(sessionName: string) {
-  execFileSync("tmux", ["pipe-pane", "-t", sessionName]);
+  execFileSync("tmux", [...tmuxPrefix(), "pipe-pane", "-t", sessionName]);
 }
 
 /**
@@ -251,7 +282,7 @@ export function stopBackgroundSessionPipe(sessionName: string) {
  */
 export function tmuxPaneDead(sessionName: string): boolean {
   try {
-    const output = execFileSync("tmux", ["list-panes", "-t", sessionName, "-F", "#{pane_dead}"], {
+    const output = execFileSync("tmux", [...tmuxPrefix(), "list-panes", "-t", sessionName, "-F", "#{pane_dead}"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
@@ -267,7 +298,7 @@ export function tmuxPaneDead(sessionName: string): boolean {
 
 export function tmuxSessionExists(sessionName: string) {
   try {
-    execFileSync("tmux", ["has-session", "-t", sessionName], { stdio: "ignore" });
+    execFileSync("tmux", [...tmuxPrefix(), "has-session", "-t", sessionName], { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -275,19 +306,21 @@ export function tmuxSessionExists(sessionName: string) {
 }
 
 export function ensureTmuxExtendedKeys() {
-  execFileSync("tmux", ["set-option", "-s", "extended-keys", "on"], { stdio: "ignore" });
-  const features = execFileSync("tmux", ["show-options", "-s", "-g", "terminal-features"], {
+  execFileSync("tmux", [...tmuxPrefix(), "set-option", "-s", "extended-keys", "on"], { stdio: "ignore" });
+  const features = execFileSync("tmux", [...tmuxPrefix(), "show-options", "-s", "-g", "terminal-features"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (!/xterm\*[^\n]*\bextkeys\b/.test(features)) {
-    execFileSync("tmux", ["set-option", "-as", "terminal-features", ",xterm*:extkeys"], { stdio: "ignore" });
+    execFileSync("tmux", [...tmuxPrefix(), "set-option", "-as", "terminal-features", ",xterm*:extkeys"], {
+      stdio: "ignore",
+    });
   }
 }
 
 export function captureTmux(sessionName: string, lines = 200) {
   try {
-    return execFileSync("tmux", ["capture-pane", "-p", "-S", `-${lines}`, "-t", sessionName], {
+    return execFileSync("tmux", [...tmuxPrefix(), "capture-pane", "-p", "-S", `-${lines}`, "-t", sessionName], {
       encoding: "utf8",
       maxBuffer: 1024 * 1024,
     });
@@ -324,10 +357,14 @@ export function captureTranscript(
   }
   let raw: string;
   try {
-    raw = execFileSync("tmux", ["capture-pane", "-p", "-J", "-S", `-${requestedLines}`, "-t", sessionName], {
-      encoding: "utf8",
-      maxBuffer: 4 * 1024 * 1024,
-    });
+    raw = execFileSync(
+      "tmux",
+      [...tmuxPrefix(), "capture-pane", "-p", "-J", "-S", `-${requestedLines}`, "-t", sessionName],
+      {
+        encoding: "utf8",
+        maxBuffer: 4 * 1024 * 1024,
+      },
+    );
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "tmux_capture_failed" };
   }
@@ -344,7 +381,7 @@ export function captureTranscript(
 
 export function captureTmuxVisibleScreen(sessionName: string, lines = 200) {
   try {
-    return execFileSync("tmux", ["capture-pane", "-a", "-p", "-S", `-${lines}`, "-t", sessionName], {
+    return execFileSync("tmux", [...tmuxPrefix(), "capture-pane", "-a", "-p", "-S", `-${lines}`, "-t", sessionName], {
       encoding: "utf8",
       maxBuffer: 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
@@ -357,7 +394,7 @@ export function captureTmuxVisibleScreen(sessionName: string, lines = 200) {
 export function captureTmuxSnapshot(sessionName: string) {
   let text = "";
   try {
-    text = execFileSync("tmux", ["capture-pane", "-p", "-e", "-t", sessionName], {
+    text = execFileSync("tmux", [...tmuxPrefix(), "capture-pane", "-p", "-e", "-t", sessionName], {
       encoding: "utf8",
       maxBuffer: 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
@@ -369,9 +406,13 @@ export function captureTmuxSnapshot(sessionName: string) {
   let cursorRow = 0;
   let cursorCol = 0;
   try {
-    const raw = execFileSync("tmux", ["display-message", "-p", "-t", sessionName, "#{cursor_y},#{cursor_x}"], {
-      encoding: "utf8",
-    }).trim();
+    const raw = execFileSync(
+      "tmux",
+      [...tmuxPrefix(), "display-message", "-p", "-t", sessionName, "#{cursor_y},#{cursor_x}"],
+      {
+        encoding: "utf8",
+      },
+    ).trim();
     const [yStr, xStr] = raw.split(",");
     const y = Number.parseInt(yStr ?? "", 10);
     const x = Number.parseInt(xStr ?? "", 10);
@@ -406,10 +447,14 @@ export async function waitForPaneCommand(
   let last = "";
   while (Date.now() < deadline) {
     try {
-      last = execFileSync("tmux", ["display-message", "-p", "-t", sessionName, "#{pane_current_command}"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
+      last = execFileSync(
+        "tmux",
+        [...tmuxPrefix(), "display-message", "-p", "-t", sessionName, "#{pane_current_command}"],
+        {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        },
+      ).trim();
     } catch {
       last = "";
     }
@@ -449,13 +494,14 @@ function armSilenceHook(sessionName: string, seconds: number) {
     /* ignore */
   }
   try {
-    execFileSync("tmux", ["set-option", "-p", "-t", sessionName, "monitor-silence", String(seconds)], {
+    execFileSync("tmux", [...tmuxPrefix(), "set-option", "-p", "-t", sessionName, "monitor-silence", String(seconds)], {
       stdio: "ignore",
     });
     // -b: run the touch in the background so tmux doesn't block its event loop on it.
     execFileSync(
       "tmux",
       [
+        ...tmuxPrefix(),
         "set-hook",
         "-p",
         "-t",
@@ -472,12 +518,16 @@ function armSilenceHook(sessionName: string, seconds: number) {
 
 function disarmSilenceHook(sessionName: string) {
   try {
-    execFileSync("tmux", ["set-option", "-p", "-u", "-t", sessionName, "monitor-silence"], { stdio: "ignore" });
+    execFileSync("tmux", [...tmuxPrefix(), "set-option", "-p", "-u", "-t", sessionName, "monitor-silence"], {
+      stdio: "ignore",
+    });
   } catch {
     /* ignore */
   }
   try {
-    execFileSync("tmux", ["set-hook", "-p", "-u", "-t", sessionName, "alert-silence-pane"], { stdio: "ignore" });
+    execFileSync("tmux", [...tmuxPrefix(), "set-hook", "-p", "-u", "-t", sessionName, "alert-silence-pane"], {
+      stdio: "ignore",
+    });
   } catch {
     /* ignore */
   }
@@ -544,7 +594,7 @@ function safeStatExists(filePath: string): boolean {
 
 function safeCapture(sessionName: string): string {
   try {
-    return execFileSync("tmux", ["capture-pane", "-p", "-t", sessionName], {
+    return execFileSync("tmux", [...tmuxPrefix(), "capture-pane", "-p", "-t", sessionName], {
       encoding: "utf8",
       maxBuffer: 256 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
@@ -557,9 +607,9 @@ function safeCapture(sessionName: string): string {
 export function sendKeys(sessionName: string, data: string) {
   for (const token of tokenizeTerminalInput(data)) {
     if (token.literal) {
-      execFileSync("tmux", ["send-keys", "-l", "-t", sessionName, token.value]);
+      execFileSync("tmux", [...tmuxPrefix(), "send-keys", "-l", "-t", sessionName, token.value]);
     } else {
-      execFileSync("tmux", ["send-keys", "-t", sessionName, token.value]);
+      execFileSync("tmux", [...tmuxPrefix(), "send-keys", "-t", sessionName, token.value]);
     }
   }
 }
@@ -573,22 +623,31 @@ export function sendKeys(sessionName: string, data: string) {
 // (tests, generic shell sessions) keep working byte-for-byte.
 export function pasteText(sessionName: string, data: string, options: { bracketed?: boolean } = {}) {
   const bufferName = `citadel_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  execFileSync("tmux", ["load-buffer", "-b", bufferName, "-"], { input: data });
+  execFileSync("tmux", [...tmuxPrefix(), "load-buffer", "-b", bufferName, "-"], { input: data });
   const args = options.bracketed
     ? ["paste-buffer", "-p", "-d", "-b", bufferName, "-t", sessionName]
     : ["paste-buffer", "-d", "-b", bufferName, "-t", sessionName];
-  execFileSync("tmux", args);
+  execFileSync("tmux", [...tmuxPrefix(), ...args]);
 }
 
 export function resizePane(sessionName: string, cols: number, rows: number) {
   const safeCols = Math.min(400, Math.max(20, Math.trunc(cols)));
   const safeRows = Math.min(120, Math.max(5, Math.trunc(rows)));
-  execFileSync("tmux", ["resize-pane", "-t", sessionName, "-x", String(safeCols), "-y", String(safeRows)]);
+  execFileSync("tmux", [
+    ...tmuxPrefix(),
+    "resize-pane",
+    "-t",
+    sessionName,
+    "-x",
+    String(safeCols),
+    "-y",
+    String(safeRows),
+  ]);
 }
 
 export function killTmuxSession(sessionName: string) {
   if (tmuxSessionExists(sessionName)) {
-    execFileSync("tmux", ["kill-session", "-t", sessionName]);
+    execFileSync("tmux", [...tmuxPrefix(), "kill-session", "-t", sessionName]);
   }
   try {
     fs.rmSync(agentLiveSentinelPath(sessionName), { force: true });
@@ -663,7 +722,7 @@ export function attachTmuxControlStream(
   onOutput: (data: string) => void,
   onExit?: (reason: string) => void,
 ) {
-  const child = spawn("tmux", ["-C", "attach-session", "-t", sessionName], {
+  const child = spawn("tmux", [...tmuxPrefix(), "-C", "attach-session", "-t", sessionName], {
     stdio: ["pipe", "pipe", "ignore"],
   });
   let buffered = "";
