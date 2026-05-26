@@ -5,7 +5,7 @@
 
 import fs from "node:fs";
 import type { HookConfig } from "@citadel/config";
-import type { HookOutput, Operation, Repo, Workspace } from "@citadel/contracts";
+import type { HookOutput, JiraAutoTransitionEvent, Operation, Repo, Workspace } from "@citadel/contracts";
 import { nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
@@ -45,6 +45,14 @@ export type WorkspaceLifecycleDeps = {
     operationId: string | null,
     payload: unknown,
   ) => Promise<void>;
+  runAutoTransitions?:
+    | ((
+        event: JiraAutoTransitionEvent,
+        repo: Repo,
+        workspace: Workspace,
+        payload: { repo: Repo; workspace: Workspace },
+      ) => Promise<void>)
+    | null;
 };
 
 export type RemoveWorkspaceInput = { workspaceId: string; force?: boolean; archiveOnly?: boolean };
@@ -176,5 +184,17 @@ export async function removeWorkspace(
     operation.id,
     { repo, workspace, result: { removed: !input.archiveOnly, archived: Boolean(input.archiveOnly), dirty } },
   );
+  if (deps.runAutoTransitions) {
+    try {
+      await deps.runAutoTransitions(
+        input.archiveOnly ? "workspace.archived" : "workspace.removed",
+        repo,
+        workspace,
+        { repo, workspace },
+      );
+    } catch {
+      // Logged inside the callback.
+    }
+  }
   return { operationId: operation.id, removed: !input.archiveOnly, archived: Boolean(input.archiveOnly), dirty };
 }

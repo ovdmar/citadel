@@ -21,6 +21,7 @@ import {
   collectGitHubVersionControlSummary,
   collectJiraIssueSummary,
   collectProviderHealth,
+  resolveJiraTransitionByTargetStatus,
   searchJiraIssues,
   setGithubCommand,
   setJiraCommand,
@@ -35,6 +36,7 @@ import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
+import { createJiraAutoTransitions } from "./jira-auto-transitions.js";
 import { registerJiraRoutes } from "./jira-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
@@ -75,7 +77,6 @@ export function createDaemonApp(input: {
   const { config, configPath, store } = input;
   setGithubCommand(config.providers.github.command);
   setJiraCommand(config.providers.jira.command);
-  const operations = input.operations ?? new OperationService(store, config);
   const providers: ProviderCollectors = {
     collectGitHubVersionControlSummary,
     collectGitHubCiRuns,
@@ -89,6 +90,36 @@ export function createDaemonApp(input: {
   const server = http.createServer(app);
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
+  // Construct the Jira auto-transition callback ONCE so the same function
+  // reference reaches OperationService (for agent.started + archive/remove
+  // events) and registerWorkspaceExtraRoutes (for workspace.issue_attached).
+  // A single instance guarantees a single fire per event, no matter how
+  // many call sites invoke it.
+  const runAutoTransitions = createJiraAutoTransitions({
+    config,
+    providers: {
+      collectJiraIssueSummary: providers.collectJiraIssueSummary,
+      transitionJiraIssue: providers.transitionJiraIssue,
+      resolveJiraTransitionByTargetStatus,
+    },
+    store,
+    activity: (type, source, message, repoId, workspaceId, operationId) => {
+      store.addActivity({
+        id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        type,
+        source,
+        repoId,
+        workspaceId,
+        operationId,
+        message,
+        hookOutput: null,
+        createdAt: new Date().toISOString(),
+      });
+    },
+    emit: (type, payload) => emit(type, payload),
+    providerCache,
+  });
+  const operations = input.operations ?? new OperationService(store, config, runAutoTransitions);
   // Per-daemon ttyd port slice. Boot-time cleanupStale() blanket-SIGTERMs
   // every ttyd in this range, so any two daemons that share a range will
   // trample each other's live terminals (worktree daemons under tsx watch
@@ -695,7 +726,7 @@ export function createDaemonApp(input: {
     readMcpResource: (uri) => readMcpResource(store, config, uri),
   });
 
-  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations });
+  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, runAutoTransitions });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit });
   try {

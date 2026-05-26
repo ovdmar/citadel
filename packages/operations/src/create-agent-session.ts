@@ -1,4 +1,10 @@
-import type { AgentSession, CreateAgentSessionInput, Repo, Workspace } from "@citadel/contracts";
+import type {
+  AgentSession,
+  CreateAgentSessionInput,
+  JiraAutoTransitionEvent,
+  Repo,
+  Workspace,
+} from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { ensureTmuxSession, submitPrompt } from "@citadel/terminal";
@@ -22,6 +28,17 @@ export type CreateAgentSessionDeps = {
     operationId: string | null,
     payload: { repo: Repo; workspace: Workspace; session: AgentSession },
   ) => Promise<void>;
+  // Optional — daemon constructs this via createJiraAutoTransitions. Null
+  // when no Jira provider is wired (e.g., in unit tests that don't
+  // exercise the integration). Failures inside are swallowed; never throw.
+  runAutoTransitions?:
+    | ((
+        event: JiraAutoTransitionEvent,
+        repo: Repo,
+        workspace: Workspace,
+        payload: { repo: Repo; workspace: Workspace; session: AgentSession },
+      ) => Promise<void>)
+    | null;
 };
 
 export async function createAgentSession(
@@ -99,6 +116,18 @@ export async function createAgentSession(
   // transcript adapter, so we don't double-record it here.
   deps.activity("agent.started", "user", `Started ${session.displayName}`, workspace.repoId, workspace.id, null);
   const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-  if (repo) await deps.runNotificationHooks("agent.started", repo, workspace, null, { repo, workspace, session });
+  if (repo) {
+    await deps.runNotificationHooks("agent.started", repo, workspace, null, { repo, workspace, session });
+    // Auto-transitions never block session start — the callback wraps its
+    // own try/catch but be paranoid here too in case a bad injection
+    // throws synchronously before the callback's wrapper runs.
+    if (deps.runAutoTransitions) {
+      try {
+        await deps.runAutoTransitions("agent.started", repo, workspace, { repo, workspace, session });
+      } catch {
+        // Already logged inside the callback via activity events.
+      }
+    }
+  }
   return session;
 }

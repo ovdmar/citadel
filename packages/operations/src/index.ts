@@ -2,11 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 import type {
+  AgentSession,
   CreateAgentSessionInput,
   CreateNamespaceInput,
   CreateWorkspaceInput,
   HookAction,
   HookOutput,
+  JiraAutoTransitionEvent,
   LaunchAgentInput,
   Namespace,
   Operation,
@@ -75,6 +77,16 @@ import {
 } from "./workspace-lifecycle.js";
 export type { RemoveWorkspaceInput, RemoveWorkspaceResult } from "./workspace-lifecycle.js";
 
+// Daemon-constructed callback that fires lifecycle-event-driven Jira
+// transitions. Optional — when not wired (e.g., unit tests that don't
+// involve Jira), all auto-transition paths short-circuit.
+export type RunAutoTransitionsDep = (
+  event: JiraAutoTransitionEvent,
+  repo: Repo,
+  workspace: Workspace,
+  payload: { repo: Repo; workspace: Workspace; session?: AgentSession },
+) => Promise<void>;
+
 export class OperationService {
   constructor(
     private readonly store: SqliteStore,
@@ -88,6 +100,7 @@ export class OperationService {
       };
       commandPolicy: CitadelConfig["commandPolicy"];
     },
+    private readonly runAutoTransitionsDep: RunAutoTransitionsDep | null = null,
   ) {}
 
   registerRepo(input: { rootPath: string; name?: string | undefined; worktreeParent?: string | undefined }) {
@@ -251,6 +264,17 @@ export class OperationService {
         operation.id,
       );
       await this.runNotificationHooks("workspace.created", repo, workspace, operation.id, { repo, workspace });
+      // If the operator attached an issue at create time, fire the
+      // dedicated workspace.issue_attached event (not workspace.created,
+      // which is too noisy for auto-transitions per spec B.6). Failure
+      // never blocks workspace readiness — the callback is wrapped.
+      if (workspace.issueKey && this.runAutoTransitionsDep) {
+        try {
+          await this.runAutoTransitionsDep("workspace.issue_attached", repo, workspace, { repo, workspace });
+        } catch {
+          /* logged inside the callback */
+        }
+      }
       this.store.upsertOperation({
         ...operation,
         workspaceId: workspace.id,
@@ -295,6 +319,7 @@ export class OperationService {
         activity: (...args) => this.activity(...args),
         runNotificationHooks: (event, repo, workspace, operationId, payload) =>
           this.runNotificationHooks(event, repo, workspace, operationId, payload),
+        runAutoTransitions: this.runAutoTransitionsDep,
       },
       input,
       runtime,
@@ -404,6 +429,7 @@ export class OperationService {
     activity: (...args) => this.activity(...args),
     runWorkspaceHooks: (...args) => this.runWorkspaceHooks(...args),
     runNotificationHooks: (...args) => this.runNotificationHooks(...args),
+    runAutoTransitions: this.runAutoTransitionsDep,
   });
 
   async removeRepo(input: { repoId: string; force?: boolean; cleanupWorktrees?: boolean }) {

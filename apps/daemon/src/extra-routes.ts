@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { SqliteStore } from "@citadel/db";
-import type { OperationService } from "@citadel/operations";
+import type { OperationService, RunAutoTransitionsDep } from "@citadel/operations";
 import type express from "express";
 
 type Emit = (type: string, payload: unknown) => void;
@@ -17,8 +17,10 @@ export function registerWorkspaceExtraRoutes(input: {
   emit: Emit;
   asyncRoute: AsyncRoute;
   operations: OperationService;
+  runAutoTransitions?: RunAutoTransitionsDep | null;
 }) {
   const { app, store, emit, asyncRoute, operations } = input;
+  const runAutoTransitions = input.runAutoTransitions ?? null;
 
   app.get(
     "/api/workspaces/:workspaceId/deployed-apps",
@@ -80,9 +82,31 @@ export function registerWorkspaceExtraRoutes(input: {
       if (typeof patch.slackThreadUrl === "string" || patch.slackThreadUrl === null)
         allowed.slackThreadUrl = patch.slackThreadUrl as string | null;
       if (typeof patch.pinned === "boolean") allowed.pinned = patch.pinned;
+      const prevIssueKey = workspace.issueKey;
       store.updateWorkspace(workspace.id, allowed);
       const next = store.listWorkspaces().find((candidate) => candidate.id === workspace.id);
       emit("workspace.updated", { workspaceId: workspace.id, workspace: next });
+      // Fire workspace.issue_attached only when issueKey transitions from
+      // null|different value → new non-null value. Unattach (value → null)
+      // and no-change (null → null or value → same value) must NOT fire,
+      // otherwise the auto-transition would race against the operator's
+      // unattach intent.
+      if (
+        next &&
+        runAutoTransitions &&
+        allowed.issueKey !== undefined &&
+        next.issueKey != null &&
+        next.issueKey !== prevIssueKey
+      ) {
+        const repo = store.listRepos().find((r) => r.id === next.repoId);
+        if (repo) {
+          try {
+            await runAutoTransitions("workspace.issue_attached", repo, next, { repo, workspace: next });
+          } catch {
+            /* logged inside callback */
+          }
+        }
+      }
       res.json({ workspace: next });
     }),
   );
