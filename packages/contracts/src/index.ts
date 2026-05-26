@@ -14,6 +14,7 @@ export const AgentSessionStatusSchema = z.enum([
   "starting",
   "running",
   "waiting_for_input",
+  "rate_limited",
   "idle",
   "stopped",
   "failed",

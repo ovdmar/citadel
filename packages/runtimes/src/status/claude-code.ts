@@ -48,6 +48,24 @@ const IDLE_MODE_LINE_PREFIX = IDLE_MODE_LINE;
 // rows below the mode line; the AskUserQuestion UI has a similar footprint.
 const CHROME_SCAN_LINES = 12;
 
+// Server-side rate-limit error surfaced as a tool-result block by Claude Code,
+// distinct from the per-account usage limit. Empirical line:
+//   `⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited`
+// When this is visible AND the mode line shows no active turn, the agent is
+// stalled waiting for the server to relent. Scan a wider window than chrome
+// because the error is body content above the mode line (and the long
+// `✻ Cogitated for Xm Ys` spinner often sits between them).
+const RATE_LIMIT_SUBSTRING = "API Error: Server is temporarily limiting requests (not your usage limit)";
+const RATE_LIMIT_SCAN_LINES = 40;
+
+function hasServerRateLimitError(paneCapture: string): boolean {
+  const lines = bottomLines(paneCapture, RATE_LIMIT_SCAN_LINES);
+  for (const line of lines) {
+    if (line.includes(RATE_LIMIT_SUBSTRING)) return true;
+  }
+  return false;
+}
+
 function bottomLines(paneCapture: string, n: number): string[] {
   const lines = paneCapture.split("\n");
   return lines.slice(Math.max(0, lines.length - n));
@@ -107,7 +125,16 @@ export const claudeCodeStatusAdapter: RuntimeStatusAdapter = {
       return "running";
     }
 
-    // Priority 4: idle. The auto-mode prefix is present, and (by virtue of
+    // Priority 4: server-side rate limit visible AND no active turn. Active
+    // turn (priority 2) already wins because Claude Code's internal retries
+    // re-arm `esc to interrupt` while they're in flight; we only flag
+    // rate_limited when the agent has actually stalled (mode line back to
+    // idle/baseline but the error is still on screen).
+    if (hasServerRateLimitError(ctx.paneCapture)) {
+      return "rate_limited";
+    }
+
+    // Priority 5: idle. The auto-mode prefix is present, and (by virtue of
     // priorities 2/3 not having matched) there's no active-turn marker and no
     // background-work suffix. Covers both the bare idle line and the
     // "tasks panel still on screen after Ctrl+C" variant

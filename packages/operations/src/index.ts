@@ -539,7 +539,7 @@ export class OperationService {
       .listSessions()
       .filter((session) => workspaces.some((workspace) => workspace.id === session.workspaceId));
     const activeSessions = sessions.filter((session) =>
-      ["starting", "running", "waiting_for_input", "idle"].includes(session.status),
+      ["starting", "running", "waiting_for_input", "rate_limited", "idle"].includes(session.status),
     );
     const runningOperations = this.store
       .listOperations()

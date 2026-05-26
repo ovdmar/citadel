@@ -84,6 +84,27 @@ describe("claudeCodeStatusAdapter", () => {
       expect(claudeCodeStatusAdapter.observe(state, ctx(load("wakeup-resuming")))).toBe("running");
     });
 
+    it("classifies rate-limited-server.txt as rate_limited (server rate-limit error visible, idle mode line)", () => {
+      // The agent printed `API Error: Server is temporarily limiting requests
+      // (not your usage limit) · Rate limited` as a tool-result block, then
+      // stalled — mode line is back to the bare idle baseline with no
+      // `esc to interrupt`. Without this rule we'd report `idle` and silently
+      // hide the stall from the operator.
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("rate-limited-server")))).toBe("rate_limited");
+    });
+
+    it("active turn beats a stale rate-limit message (esc to interrupt re-armed during retry)", () => {
+      // If Claude Code's internal retry succeeded, the mode line re-arms with
+      // `esc to interrupt` while the rate-limit text still scrolls above.
+      // Active-turn priority must win over rate_limited so the dot returns
+      // to running.
+      const pane =
+        "⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited\n" +
+        "✻ Brewing… (esc to interrupt)\n" +
+        "  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt";
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("running");
+    });
+
     it("classifies idle-with-tasks-visible.txt as idle (Ctrl+C with task panel still on screen)", () => {
       // Real capture from a session where the user pressed Ctrl+C while a
       // TodoWrite task panel was visible. Mode line is
