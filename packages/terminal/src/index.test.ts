@@ -91,8 +91,10 @@ describe("tmux terminal gateway helpers", () => {
 
     const extendedKeys = execTmux(["show-options", "-s", "-g", "extended-keys"]);
     const terminalFeatures = execTmux(["show-options", "-s", "-g", "terminal-features"]);
+    const historyLimit = execTmux(["show-options", "-g", "history-limit"]);
     expect(extendedKeys).toContain("extended-keys on");
     expect(terminalFeatures).toMatch(/xterm\*.*extkeys/);
+    expect(historyLimit).toContain("history-limit 5000");
   });
 
   it("submitPrompt pastes the prompt and presses Enter so the runtime actually executes it", async () => {

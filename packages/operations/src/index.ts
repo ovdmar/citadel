@@ -21,6 +21,10 @@ export { ScheduledAgentRunner, parseCronExpression, cronMatches, nextCronRun, de
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
+export { parseUsageLimitResetFromReason, deriveAccountUsageLimit } from "./usage-limit.js";
+export type { AccountRateLimitInfo } from "./usage-limit.js";
+export { DEFAULT_AUTO_RESUME_INTERVAL_MS, startAutoResumeLoop } from "./auto-resume.js";
+export type { AutoResumeDeps, AutoResumeLoopHandle } from "./auto-resume.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import { type DeployOpsDeps, listDeployedApps as listDeployedAppsImpl, redeployApp as redeployAppImpl } from "./deploy.js";
 import {
@@ -307,7 +311,8 @@ export class OperationService {
 
   readAgentTranscript = (i: { sessionId: string; lines?: number; maxChars?: number }) =>
     agentMessages.readAgentTranscript(this.store, i);
-  sendAgentMessage = (i: { sessionId: string; message: string }) => agentMessages.sendAgentMessage(this.store, i);
+  sendAgentMessage = (i: Parameters<typeof agentMessages.sendAgentMessage>[1]) =>
+    agentMessages.sendAgentMessage(this.store, i);
   readAgentHistory = (i: { sessionId: string; limit?: number; maxChars?: number }) =>
     agentHistory.readAgentHistory(this.store, i);
   getSessionPromptSummary = (sessionId: string) => agentHistory.getSessionPromptSummary(this.store, sessionId);
@@ -517,7 +522,7 @@ export class OperationService {
       .listSessions()
       .filter((session) => workspaces.some((workspace) => workspace.id === session.workspaceId));
     const activeSessions = sessions.filter((session) =>
-      ["starting", "running", "waiting_for_input", "rate_limited", "idle"].includes(session.status),
+      ["starting", "running", "waiting_for_input", "rate_limited", "usage_limited", "idle"].includes(session.status),
     );
     const runningOperations = this.store
       .listOperations()

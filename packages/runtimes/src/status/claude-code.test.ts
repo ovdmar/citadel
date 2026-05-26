@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it } from "vitest";
-import { claudeCodeStatusAdapter } from "./claude-code.js";
+import { claudeCodeStatusAdapter, parseUsageLimitReset } from "./claude-code.js";
 import type { ObservationContext, SessionAdapterState } from "./index.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +19,7 @@ function ctx(paneCapture: string, over: Partial<ObservationContext> = {}): Obser
     ticksSinceActivityChange: 0,
     source: "tick",
     hasObservedSinceBoot: true,
+    now: () => new Date("2026-05-26T05:00:00.000Z"),
     ...over,
   };
 }
@@ -82,6 +83,30 @@ describe("claudeCodeStatusAdapter", () => {
 
     it("classifies wakeup-resuming.txt as running (esc to interrupt visible in mid-resume)", () => {
       expect(claudeCodeStatusAdapter.observe(state, ctx(load("wakeup-resuming")))).toBe("running");
+    });
+
+    it("classifies usage-limited.txt as usage_limited with parsed resetAt in reason", () => {
+      // The pane shows `You're out of extra usage · resets 7:50am (UTC)`.
+      // With now=05:00 UTC, the next 07:50 UTC is later the same day.
+      const result = claudeCodeStatusAdapter.observe(state, ctx(load("usage-limited")));
+      expect(result).not.toBeNull();
+      if (typeof result === "string" || result === null) throw new Error("expected object result");
+      expect(result.observed).toBe("usage_limited");
+      expect(result.reason).toBe("pane:usage_limited:reset=2026-05-26T07:50:00.000Z");
+    });
+
+    it("usage_limited reset that has already passed today rolls over to tomorrow", () => {
+      const pane = "⎿  You're out of extra usage · resets 3:15am (UTC)\n  ⏵⏵ auto mode on (shift+tab to cycle)";
+      const result = claudeCodeStatusAdapter.observe(state, ctx(pane));
+      if (typeof result === "string" || result === null) throw new Error("expected object result");
+      expect(result.reason).toBe("pane:usage_limited:reset=2026-05-27T03:15:00.000Z");
+    });
+
+    it("usage_limited with unknown timezone falls back to reset=unknown", () => {
+      const pane = "⎿  You're out of extra usage · resets 7:50am (PST)\n  ⏵⏵ auto mode on (shift+tab to cycle)";
+      const result = claudeCodeStatusAdapter.observe(state, ctx(pane));
+      if (typeof result === "string" || result === null) throw new Error("expected object result");
+      expect(result.reason).toBe("pane:usage_limited:reset=unknown");
     });
 
     it("classifies rate-limited-server.txt as rate_limited (server rate-limit error visible, idle mode line)", () => {
@@ -165,6 +190,32 @@ describe("claudeCodeStatusAdapter", () => {
       // already ruled out the active and background-work cases.
       const pane = "x\n  ⏵⏵ auto mode on (shift+tab to cycle) · some future hint";
       expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("idle");
+    });
+  });
+
+  describe("parseUsageLimitReset", () => {
+    const now = new Date("2026-05-26T05:00:00.000Z");
+
+    it("parses 'resets 7:50am (UTC)' to today's 07:50 UTC", () => {
+      expect(parseUsageLimitReset("You're out of extra usage · resets 7:50am (UTC)", now)).toBe(
+        "2026-05-26T07:50:00.000Z",
+      );
+    });
+
+    it("parses 'resets 11:30pm (UTC)' to 23:30 UTC", () => {
+      expect(parseUsageLimitReset("resets 11:30pm (UTC)", now)).toBe("2026-05-26T23:30:00.000Z");
+    });
+
+    it("parses '12:00am (UTC)' to midnight (hour=0) — rolls to tomorrow when now is past midnight", () => {
+      expect(parseUsageLimitReset("resets 12:00am (UTC)", now)).toBe("2026-05-27T00:00:00.000Z");
+    });
+
+    it("returns null for non-UTC timezone (we'd risk DST drift)", () => {
+      expect(parseUsageLimitReset("resets 7:50am (PST)", now)).toBeNull();
+    });
+
+    it("returns null when the line doesn't contain a reset clause", () => {
+      expect(parseUsageLimitReset("You're out of extra usage", now)).toBeNull();
     });
   });
 

@@ -355,8 +355,10 @@ export class SqliteStore {
       .prepare(
         `INSERT INTO agent_sessions (id, workspace_id, runtime_id, display_name, status, status_reason,
           last_status_at, last_output_at, ended_at, exit_code, transport,
-          tmux_session_name, tmux_session_id, runtime_session_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          tmux_session_name, tmux_session_id, runtime_session_id,
+          rate_limit_resume_attempts, next_resume_at, last_resume_from_rate_limit_at,
+          created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -376,6 +378,9 @@ export class SqliteStore {
         session.tmuxSessionName ?? null,
         session.tmuxSessionId ?? null,
         session.runtimeSessionId ?? null,
+        session.rateLimitResumeAttempts ?? 0,
+        session.nextResumeAt ?? null,
+        session.lastResumeFromRateLimitAt ?? null,
         session.createdAt,
         session.updatedAt,
       );
@@ -434,6 +439,37 @@ export class SqliteStore {
       values.push(update.exitCode);
     }
     if (sets.length === 0) return; // nothing to do
+    sets.push("updated_at = ?");
+    values.push(new Date().toISOString());
+    values.push(sessionId);
+    this.database.prepare(`UPDATE agent_sessions SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+  }
+
+  // Partial update for the rate-limit auto-resume bookkeeping. Pass `null`
+  // to clear a column; pass `undefined` (omit) to leave it untouched.
+  updateSessionRateLimitResume(
+    sessionId: string,
+    update: {
+      rateLimitResumeAttempts?: number;
+      nextResumeAt?: string | null;
+      lastResumeFromRateLimitAt?: string | null;
+    },
+  ) {
+    const sets: string[] = [];
+    const values: Array<string | number | null> = [];
+    if (update.rateLimitResumeAttempts !== undefined) {
+      sets.push("rate_limit_resume_attempts = ?");
+      values.push(update.rateLimitResumeAttempts);
+    }
+    if (update.nextResumeAt !== undefined) {
+      sets.push("next_resume_at = ?");
+      values.push(update.nextResumeAt);
+    }
+    if (update.lastResumeFromRateLimitAt !== undefined) {
+      sets.push("last_resume_from_rate_limit_at = ?");
+      values.push(update.lastResumeFromRateLimitAt);
+    }
+    if (sets.length === 0) return;
     sets.push("updated_at = ?");
     values.push(new Date().toISOString());
     values.push(sessionId);

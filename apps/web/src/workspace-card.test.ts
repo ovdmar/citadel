@@ -78,6 +78,10 @@ describe("deriveWorkspaceAgentTone", () => {
     expect(deriveWorkspaceAgentTone([session({ status: "rate_limited" })])).toBe("rate_limited");
   });
 
+  it("any usage_limited collapses into the rate_limited tone (same blue dot)", () => {
+    expect(deriveWorkspaceAgentTone([session({ status: "usage_limited" })])).toBe("rate_limited");
+  });
+
   it("shell-runtime sessions are excluded — running shell does NOT count as agent running", () => {
     expect(deriveWorkspaceAgentTone([session({ status: "running", runtimeId: "shell" })])).toBe("idle");
   });

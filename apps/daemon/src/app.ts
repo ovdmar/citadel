@@ -33,6 +33,7 @@ import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
+import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
@@ -46,6 +47,7 @@ import { backfillIfEmpty } from "./scratchpad-history.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { scratchpadPath } from "./scratchpad.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
+import { startTerminalReaper } from "./terminal-reaper.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
 import { resolveTtydPortRange } from "./ttyd-slot.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
@@ -745,11 +747,15 @@ export function createDaemonApp(input: {
     server.on("close", () => clearInterval(reaper));
   }
 
-  // Background monitors — wired in *-wiring.ts files; both attach to server.on("close").
+  // Status monitor / auto-recovery / auto-resume / terminal reaper: see their own modules for context.
   const statusMonitor = startDaemonStatusMonitor(store, emit);
   if (statusMonitor) server.on("close", () => statusMonitor.stop());
   const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({ store, config, operations, emit });
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
+  const autoResume = startDaemonAutoResumeLoop(store, operations);
+  if (autoResume) server.on("close", () => autoResume.stop());
+  const terminalReaper = startTerminalReaper();
+  server.on("close", () => terminalReaper.stop());
 
   return { app, server, emit };
 
