@@ -10,6 +10,101 @@
   let activeWs = null;
   const textEncoder = new TextEncoder();
 
+  // FORWARDABLE_CHORDS mirrors the canonical chord registry exported by
+  // `@citadel/contracts` (packages/contracts/src/shortcuts.ts). The shim is
+  // injected verbatim into ttyd's iframe HTML at daemon startup — there is
+  // no module system here — so the table is duplicated locally and parity
+  // is enforced by apps/daemon/src/shortcuts-parity.test.ts. Touching the
+  // contracts table without updating this one is a parity test failure.
+  //
+  // modifier:
+  //   "primary" = metaKey OR ctrlKey (Mac cmd / Linux+Win ctrl).
+  //   "ctrl"    = ctrlKey AND NOT metaKey (Ctrl+1..9 workspace nav so Cmd+1..9
+  //               on Mac stays available to Chrome's tab switcher).
+  //   null      = no primary modifier (plain Escape).
+  const FORWARDABLE_CHORDS = (() => {
+    const chords = [
+      { id: "command-palette", modifier: "primary", shift: false, key: "k" },
+      { id: "spawn-terminal", modifier: "primary", shift: false, key: "t" },
+      { id: "spawn-agent", modifier: "primary", shift: false, key: "e" },
+    ];
+    for (let n = 1; n <= 9; n += 1) {
+      chords.push({ id: "nav-workspace", modifier: "ctrl", shift: false, key: String(n), index: n - 1 });
+    }
+    chords.push({ id: "nav-workspace", modifier: "ctrl", shift: false, key: "0", index: 9 });
+    for (let n = 1; n <= 9; n += 1) {
+      chords.push({ id: "nav-session", modifier: "primary", shift: true, key: String(n), index: n - 1 });
+    }
+    chords.push({ id: "close-overlay", modifier: null, shift: false, key: "Escape" });
+    return chords;
+  })();
+
+  function modifierMatches(modifier, event) {
+    if (modifier === "primary") return event.metaKey || event.ctrlKey;
+    if (modifier === "ctrl") return event.ctrlKey && !event.metaKey;
+    return !event.metaKey && !event.ctrlKey;
+  }
+
+  function matchForwardable(event) {
+    if (event.altKey) return null;
+    const isEscape = event.key === "Escape";
+    const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
+    const shift = !!event.shiftKey;
+    for (const chord of FORWARDABLE_CHORDS) {
+      if (!modifierMatches(chord.modifier, event)) continue;
+      if (chord.shift !== shift) continue;
+      if (chord.key === "Escape") {
+        if (!isEscape) continue;
+      } else if (chord.key.toLowerCase() !== key) {
+        continue;
+      }
+      return chord;
+    }
+    return null;
+  }
+
+  // Expose to the parity test so apps/daemon/src/shortcuts-parity.test.ts
+  // can call matchForwardable directly and compare against the registry.
+  window.__citadelTerminalShimDebug = { matchForwardable, FORWARDABLE_CHORDS };
+
+  function readParentOverlayCount() {
+    try {
+      const value = window.parent?.__citadelOverlayOpen;
+      return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+    } catch (_err) {
+      return 0;
+    }
+  }
+
+  // Dispatch a synthetic KeyboardEvent on window.parent so the cockpit's
+  // window-level keydown listener (apps/web/src/cockpit.tsx) fires. Same-origin
+  // iframe (ttyd is served by the daemon proxy under the cockpit's host:port)
+  // so cross-frame dispatch is allowed. We log once on unexpected failure so
+  // a future origin split surfaces via devtools instead of silent breakage.
+  let parentDispatchWarned = false;
+  function dispatchToParent(event) {
+    try {
+      const ParentKeyboardEvent = window.parent?.KeyboardEvent;
+      if (!ParentKeyboardEvent) return;
+      const clone = new ParentKeyboardEvent("keydown", {
+        key: event.key,
+        code: event.code,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        bubbles: true,
+        cancelable: true,
+      });
+      window.parent.dispatchEvent(clone);
+    } catch (err) {
+      if (!parentDispatchWarned && typeof console !== "undefined" && console.error) {
+        parentDispatchWarned = true;
+        console.error("[citadel-shim] cross-frame keydown dispatch failed:", err);
+      }
+    }
+  }
+
   // Wrap WebSocket so we can capture the ttyd input channel. The constructor
   // explicitly `return ws` — per JS semantics, when a constructor returns an
   // object via `new`, that object is what `new` evaluates to, so callers get
@@ -328,6 +423,26 @@
 
   function onKeydown(event) {
     if (event.isComposing) return;
+
+    // Forwarding block: chords that should reach the cockpit even when xterm
+    // has focus. Runs BEFORE the translation block below — the two sets are
+    // mutually exclusive (primary-modifier shortcuts here vs ctrl-only and
+    // shift+enter etc. there). For Escape, forward only when at least one
+    // cockpit overlay is open; xterm always sees Escape (vim/Claude rely on it).
+    const forwardable = matchForwardable(event);
+    if (forwardable) {
+      if (forwardable.id === "close-overlay") {
+        if (readParentOverlayCount() > 0) {
+          dispatchToParent(event);
+        }
+        // Always pass Escape through to xterm — do not consume.
+        return;
+      }
+      dispatchToParent(event);
+      consume(event);
+      return;
+    }
+
     const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
     if (key === "enter" && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
       if (sendInput("\n")) consume(event);
