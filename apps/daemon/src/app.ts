@@ -27,7 +27,7 @@ import {
   transitionJiraIssue,
 } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
-import { attachTerminalWebSocket, createTtydManager, ensureTmuxSession } from "@citadel/terminal";
+import { attachTerminalWebSocket, createTtydManager } from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
@@ -38,6 +38,7 @@ import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
+import { makeRespawnTmux } from "./respawn-tmux.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { backfillIfEmpty } from "./scratchpad-history.js";
@@ -134,19 +135,7 @@ export function createDaemonApp(input: {
     const initialTerminalCleanup = ttyd.cleanupStale();
     if (initialTerminalCleanup.killed > 0) emit("terminal.cleanup", initialTerminalCleanup);
   }
-  const respawnTmux = async (session: import("@citadel/contracts").AgentSession) => {
-    const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
-    const runtime = config.runtimes.find((candidate) => candidate.id === session.runtimeId);
-    if (!workspace || !runtime) return null;
-    const sessionName = session.tmuxSessionName ?? `citadel_${workspace.id}_${session.id.slice(-8)}`;
-    return ensureTmuxSession({
-      sessionName,
-      cwd: workspace.path,
-      command: runtime.command,
-      args: runtime.args,
-      runtimeId: runtime.id,
-    });
-  };
+  const respawnTmux = makeRespawnTmux({ store, config });
   registerTerminalRoutes({ app, server, store, ttyd, dataDir: config.dataDir, emit, respawnTmux });
 
   const cachedProviderHealth = () =>
