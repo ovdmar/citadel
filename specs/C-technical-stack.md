@@ -108,6 +108,24 @@
 [ ] 4. Existing stack choices are extended before introducing parallel frameworks.
 [ ] 5. Framework swaps require explicit product/architecture approval.
 
+## Distribution
+
+[ ] 1. Citadel ships as a versioned source checkout, not a published binary or package — the systemd unit references `apps/daemon/dist/index.js` directly out of the install root.
+[ ] 2. Versions are pinned via annotated git tags shaped `v<major>.<minor>.<patch>`. Lightweight tags, branches, and SHAs are not valid pin targets.
+[ ] 3. `make install` installs from the current checkout. `CITADEL_INSTALL_REF=v<x.y.z> make install` checks out the requested tag first; refuses if the working tree is dirty.
+[ ] 4. `make upgrade [REF=<tag>]` is the dedicated upgrade verb. No REF → fast-forward the current branch and reinstall. With REF → tag-validated checkout and reinstall.
+[ ] 5. Both install and upgrade refuse to run from a checkout whose path differs from the `WorkingDirectory=` line of the installed `~/.config/systemd/user/citadel.service`.
+[ ] 6. Each tag pushed to GitHub triggers `.github/workflows/release.yml`, which runs `make check` *before* `gh release create`. A failing check blocks release publication; the operator deletes the tag (`git push --delete origin v<x.y.z>`) and re-cuts after fixing.
+[ ] 7. `CHANGELOG.md` is reverse-chronological; each release lists what changed plus a "Known gaps" section for deferred items.
+
+## HTTP And HTTPS
+
+[ ] 1. The daemon binds plain HTTP on `127.0.0.1` by default. This is the supported, encouraged configuration for local-first use.
+[ ] 2. Operators can opt into HTTPS by setting `config.tls = { certPath, keyPath }`. Both paths must be absolute, both files must exist and be non-zero bytes, and the cert must not be expired. Validation runs at daemon boot — misconfiguration causes a fail-fast exit, not a runtime crash.
+[ ] 3. Citadel is *not* a reverse-proxy replacement. HTTPS is in-process and intended for operators who explicitly bind a non-loopback host (LAN exposure, Tailscale, etc.) or want to test TLS locally via mkcert.
+[ ] 4. The doctor and the boot log warn when `bindHost` is non-loopback AND `config.tls` is absent — never the inverse (mkcert + 127.0.0.1 is a normal pattern).
+[ ] 5. WebSocket transports (terminal proxy, diagnostic gateway) function identically over `wss://` when TLS is active.
+
 ---
 
 keywords: tech stack, architecture, typescript, pnpm, node, react, vite, tanstack, express, sqlite, tmux, ttyd, reverse proxy, http-proxy, websocket, sse, zod, biome, vitest, playwright

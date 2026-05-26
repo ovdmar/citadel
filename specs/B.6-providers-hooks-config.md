@@ -65,9 +65,22 @@ Rules:
 [ ] 2. Settings can manage providers, agents, repos, health checks, MCP, and UI preferences.
 [ ] 3. Settings show missing external tools and unauthenticated providers.
 [ ] 4. Settings show unhealthy provider/hook states.
-[ ] 5. Settings can validate a repository configuration before it is used by workspace flows.
+[ ] 5. Settings can validate a repository configuration before it is used by workspace flows. *Diagnosis is delivered via `make doctor` and `GET /api/doctor` (see Verification below); gating of workspace flows on a failing doctor report is a deferred follow-up.*
 [ ] 6. Settings can export or reveal the config source for advanced users.
 [ ] 7. Future API-backed providers can manage API keys through provider-specific settings.
+
+## Verification
+
+[ ] 1. Citadel ships a programmatic "is everything configured?" check reachable from the shell (`make doctor`) and from the cockpit (Settings → Diagnostics).
+[ ] 2. The doctor report is a versioned, machine-readable JSON contract (`DoctorReport.version: 1`) defined in `@citadel/contracts`. Forward-compat clients render an explicit "report version unknown" banner on mismatch.
+[ ] 3. The doctor classifies each check as `ok` / `warn` / `fail` / `skipped` and surfaces a top-line summary `ok` / `degraded` / `failing` (precedence: any fail → failing; else any warn → degraded; else ok; skipped does not contribute).
+[ ] 4. Check kinds: `binary`, `config`, `service`, `daemon`, `database`, `repo-hooks`, `provider`.
+[ ] 5. The binary check distinguishes required (missing → fail) from recommended (missing → warn).
+[ ] 6. The provider check distinguishes **unconfigured** (binary missing, provider disabled, or auth absent → `warn` with hint "provider unconfigured — features X disabled") from **configured-but-unreachable** (`fail`) and **healthy** (`ok`).
+[ ] 7. The per-repo check warns when a registered repo has no hooks bound *and* no executable `.citadel/hooks/deploy` file, with a hint pointing at the cockpit's "Scaffold with AI" affordance on `/settings/repos/<id>`.
+[ ] 8. The daemon-reachability probe retries (5 × 1s) before declaring failure, so an async `systemctl restart` does not surface as a false positive during install/upgrade flows.
+[ ] 9. The doctor surfaces an inverse TLS warning: when `bindHost` is non-loopback (anything other than `127.0.0.1` / `::1` / `localhost`) AND `config.tls` is absent, the operator is warned. Loopback + TLS (the normal mkcert pattern) does *not* warn.
+[ ] 10. The doctor reports the daemon's protocol (`http` / `https`) and the resolved bind URL.
 
 ## Settings IA (source of truth)
 
