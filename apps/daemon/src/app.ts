@@ -10,7 +10,6 @@ import {
   CreateRepoInputSchema,
   CreateWorkspaceInputSchema,
   HookActionSchema,
-  TransitionIssueInputSchema,
   type WorkspaceCockpitSummary,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
@@ -22,6 +21,7 @@ import {
   collectGitHubVersionControlSummary,
   collectJiraIssueSummary,
   collectProviderHealth,
+  searchJiraIssues,
   setGithubCommand,
   setJiraCommand,
   transitionJiraIssue,
@@ -35,6 +35,7 @@ import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
+import { registerJiraRoutes } from "./jira-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
@@ -61,6 +62,7 @@ type ProviderCollectors = {
   collectGitHubCiRunLog: typeof collectGitHubCiRunLog;
   collectJiraIssueSummary: typeof collectJiraIssueSummary;
   transitionJiraIssue: typeof transitionJiraIssue;
+  searchJiraIssues: typeof searchJiraIssues;
 };
 
 export function createDaemonApp(input: {
@@ -80,6 +82,7 @@ export function createDaemonApp(input: {
     collectGitHubCiRunLog,
     collectJiraIssueSummary,
     transitionJiraIssue,
+    searchJiraIssues,
     ...input.providers,
   };
   const app = express();
@@ -464,23 +467,7 @@ export function createDaemonApp(input: {
     }),
   );
 
-  app.post(
-    "/api/workspaces/:workspaceId/issue-transition",
-    asyncRoute(async (req, res) => {
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
-      const input = TransitionIssueInputSchema.parse(req.body);
-      const result = await providers.transitionJiraIssue({
-        issueKey: workspace.issueKey,
-        transition: input.transition,
-        fields: input.fields,
-      });
-      providerCache.delete(`issue:${workspace.issueKey}`);
-      emit("provider.issue_transition", { workspaceId: workspace.id, issueKey: workspace.issueKey, result });
-      res.status(result.status === "healthy" ? 202 : 424).json({ result });
-    }),
-  );
+  registerJiraRoutes({ app, asyncRoute, store, providers, providerCache, emit });
 
   app.post(
     "/api/workspaces",
