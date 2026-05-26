@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import http from "node:http";
+import type https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CitadelConfig } from "@citadel/config";
@@ -45,6 +46,7 @@ import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerDoctorRoutes } from "./doctor-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
+import { createDaemonServer } from "./server-factory.js";
 import { registerPrRoutes } from "./pr-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
@@ -60,9 +62,12 @@ import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
 import { readWorkspaceGitStatus } from "./workspace-diff.js";
 import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
 
+type AnyServer = http.Server | https.Server;
+
 export type DaemonApp = {
   app: express.Express;
-  server: http.Server;
+  server: AnyServer;
+  protocol: "http" | "https";
   emit: (type: string, payload: unknown) => void;
 };
 
@@ -94,7 +99,7 @@ export function createDaemonApp(input: {
     ...input.providers,
   };
   const app = express();
-  const server = http.createServer(app);
+  const { server, protocol: serverProtocol } = createDaemonServer(app, config);
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
   const ttyd = createTtydManager(resolveTtydPortRange(config.port));
@@ -741,7 +746,7 @@ export function createDaemonApp(input: {
   const terminalReaper = startTerminalReaper();
   server.on("close", () => terminalReaper.stop());
 
-  return { app, server, emit };
+  return { app, server, protocol: serverProtocol, emit };
 
   function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderValue(providerCache, key, load, ttlMs);

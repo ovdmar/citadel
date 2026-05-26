@@ -62,7 +62,22 @@ store.migrate();
 const operations = new OperationService(store, config);
 operations.reconcile();
 const daemon = createDaemonApp({ config, configPath, store, operations });
-const { server } = daemon;
+const { server, protocol } = daemon;
+
+// Boot-time inverse warning: binding a non-loopback host without TLS is the
+// configuration combination that exposes Citadel to the LAN in cleartext.
+// The doctor surfaces this too (config.bind-host-tls); we double-print here
+// so it lands in `journalctl -u citadel.service` for operators who don't
+// look at the cockpit.
+{
+  const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
+  if (!LOOPBACK.has(config.bindHost) && !config.tls) {
+    console.warn(
+      `[citadel] WARNING: bindHost=${config.bindHost} is non-loopback but TLS is not configured. ` +
+        "Set config.tls={certPath,keyPath} or bind 127.0.0.1.",
+    );
+  }
+}
 
 // Try to bind; on EADDRINUSE, walk the next 10 ports so worktree-derived ports
 // that happen to collide (cksum-mod-100 birthday hits at ~15 worktrees) don't
@@ -84,7 +99,7 @@ server.on("error", (error: NodeJS.ErrnoException) => {
 });
 
 server.listen(config.port, config.bindHost, () => {
-  console.log(`Citadel daemon listening on http://${config.bindHost}:${config.port}`);
+  console.log(`Citadel daemon listening on ${protocol}://${config.bindHost}:${config.port}`);
   console.log(`  data dir: ${config.dataDir}`);
   if (isWorktreeDaemon && worktreeRoot) {
     console.log(`  worktree: ${worktreeRoot}`);
