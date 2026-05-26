@@ -733,7 +733,6 @@ describe("OperationService", () => {
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
 });
-
 function createGitFixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-ops-"));
   dirs.push(dir);

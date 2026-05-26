@@ -22,6 +22,7 @@ import * as agentMessages from "./agent-messages.js";
 import { createAgentSession as createAgentSessionImpl } from "./create-agent-session.js";
 import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 import * as namespaceOps from "./namespaces.js";
+import { runTeardownPhase } from "./remove-workspace-helpers.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
 export type { LaunchAgentResult } from "./launch-agent.js";
 export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
@@ -442,42 +443,48 @@ export class OperationService {
     }
 
     const ownedSessions = this.store.listSessions(workspace.id);
+    const worktreeMissing = !input.archiveOnly && !fs.existsSync(workspace.path);
+
+    // archiveOnly preserves the worktree, so we skip BOTH teardown paths.
+    // Otherwise: file teardown → configured teardown → tmux → prune. A failed
+    // hook leaves state untouched (force=true continues with a warning log).
+    if (!input.archiveOnly && !worktreeMissing) {
+      const hookTimeoutMs = this.config?.commandPolicy.hookTimeoutMs;
+      const teardownOutcome = await runTeardownPhase({
+        workspace,
+        repo,
+        operation,
+        force: input.force === true,
+        ...(hookTimeoutMs !== undefined ? { hookTimeoutMs } : {}),
+        deps: {
+          exists: fs.existsSync,
+          logOp: this.logOp.bind(this),
+          activity: this.activity.bind(this),
+          runConfiguredTeardown: () =>
+            this.runWorkspaceHooks("workspace.teardown", repo.teardownHookIds, repo, workspace, operation.id),
+        },
+      });
+      if (teardownOutcome.kind === "blocked") {
+        this.finalizeOperation(operation.id, { status: "failed", progress: 100, error: teardownOutcome.error });
+        this.activity(
+          "workspace.remove.blocked",
+          "system",
+          teardownOutcome.activityMessage,
+          workspace.repoId,
+          workspace.id,
+          operation.id,
+        );
+        return { operationId: operation.id, removed: false, archived: false, dirty };
+      }
+    }
+
+    // tmux kill moves AFTER the hooks so a hook failure leaves the session
+    // intact (the operator can re-attach and investigate before retrying).
     for (const session of ownedSessions) {
       if (session.tmuxSessionName && !input.archiveOnly) killTmuxSession(session.tmuxSessionName);
     }
     if (ownedSessions.length && !input.archiveOnly) {
       this.logOp(operation.id, "info", `Killed ${ownedSessions.length} tmux session(s) attached to workspace`);
-    }
-
-    const worktreeMissing = !input.archiveOnly && !fs.existsSync(workspace.path);
-    if (!input.archiveOnly && !worktreeMissing) {
-      try {
-        this.logOp(
-          operation.id,
-          "info",
-          `Running ${repo.teardownHookIds.length} teardown hook(s): ${repo.teardownHookIds.join(", ") || "(none)"}`,
-        );
-        await this.runWorkspaceHooks("workspace.teardown", repo.teardownHookIds, repo, workspace, operation.id);
-      } catch (error) {
-        if (!input.force) {
-          this.store.upsertOperation({
-            ...operation,
-            status: "failed",
-            progress: 100,
-            error: error instanceof Error ? error.message : "workspace_teardown_failed",
-            updatedAt: nowIso(),
-          });
-          this.activity(
-            "workspace.remove.blocked",
-            "system",
-            `Removal blocked because teardown failed for ${workspace.name}`,
-            workspace.repoId,
-            workspace.id,
-            operation.id,
-          );
-          return { operationId: operation.id, removed: false, archived: false, dirty };
-        }
-      }
     }
 
     if (!input.archiveOnly) {
@@ -492,12 +499,10 @@ export class OperationService {
       this.store.deleteWorkspace(workspace.id);
       this.logOp(operation.id, "info", `Deleted workspace ${workspace.name} (name slot freed)`);
     }
-    this.store.upsertOperation({
-      ...operation,
+    this.finalizeOperation(operation.id, {
       status: "succeeded",
       progress: 100,
       message: input.archiveOnly ? "Workspace metadata archived" : "Workspace removed",
-      updatedAt: nowIso(),
     });
     this.activity(
       input.archiveOnly ? "workspace.archived" : "workspace.removed",
@@ -739,6 +744,13 @@ export class OperationService {
 
   private logOp(operationId: string, level: "info" | "warn" | "error", message: string) {
     this.store.appendOperationLog(operationId, { level, message, at: nowIso() });
+  }
+
+  // Reads the current row before upsert so streamed log lines (appended via
+  // appendOperationLog) aren't clobbered by the INSERT-OR-REPLACE pattern.
+  private finalizeOperation(operationId: string, patch: Partial<Operation>) {
+    const current = this.store.findOperation(operationId);
+    if (current) this.store.upsertOperation({ ...current, ...patch, updatedAt: nowIso() });
   }
 
   private activity(
