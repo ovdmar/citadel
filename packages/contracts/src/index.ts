@@ -142,6 +142,10 @@ export const AgentSessionSchema = z.object({
   transport: TransportStatusSchema,
   tmuxSessionName: z.string().nullable(),
   tmuxSessionId: z.string().nullable(),
+  // Runtime-native session UUID (e.g. Claude Code's --session-id). Populated at
+  // spawn time so we can resume the same conversation across daemon and machine
+  // restarts, and so the Settings restore flow has a stable handle.
+  runtimeSessionId: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -497,6 +501,11 @@ export const CreateAgentSessionInputSchema = z.object({
   displayName: z.string().min(1).optional(),
   prompt: z.string().optional(),
   namespaceId: IdSchema.optional(),
+  // When set, the spawn uses `--resume <uuid>` (via the runtime's resumeArg)
+  // instead of generating a fresh UUID via `--session-id`. The runtime
+  // session's transcript on disk must exist; the caller is responsible for
+  // validating that (see the Settings restore flow / backfill).
+  resumeRuntimeSessionId: z.string().uuid().optional(),
 });
 
 // High-level one-shot launcher used by MCP orchestrators: create a workspace
