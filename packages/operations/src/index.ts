@@ -277,7 +277,14 @@ export class OperationService {
 
   createAgentSession = (
     input: CreateAgentSessionInput,
-    runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
+    runtime: {
+      command: string;
+      args: string[];
+      displayName: string;
+      promptArg?: string | null;
+      sessionIdArg?: string | null;
+      resumeArg?: string | null;
+    },
   ) => {
     if (input.namespaceId) {
       const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
@@ -299,7 +306,14 @@ export class OperationService {
 
   launchAgent = (
     input: LaunchAgentInput,
-    runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
+    runtime: {
+      command: string;
+      args: string[];
+      displayName: string;
+      promptArg?: string | null;
+      sessionIdArg?: string | null;
+      resumeArg?: string | null;
+    },
   ) =>
     launchAgentImpl(
       {
