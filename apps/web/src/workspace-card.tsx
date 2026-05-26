@@ -5,6 +5,7 @@ import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, Shiel
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { useStateQuery } from "./app-state.js";
+import { Chip } from "./components/ui/chip.js";
 import "./workspace-status-dot.css";
 
 export type WorkspaceCardData = {
@@ -179,14 +180,22 @@ export function WorkspaceCard(
         </span>
         <span className="workspace-card-right" aria-hidden>
           {namespace ? (
-            <span
-              className="namespace-pill"
+            <Chip
+              data-variant-source="namespace"
+              icon={<Folder size={10} />}
               title={`Namespace: ${namespace.name}`}
+              className="namespace-pill"
               style={namespace.color ? { background: namespace.color, color: "#fff" } : undefined}
             >
-              <Folder size={10} /> {namespace.name}
-            </span>
+              {namespace.name}
+            </Chip>
           ) : null}
+          {/* TODO(implement-task): migrate the approval-pill (icon-only,
+            transparent fill, tonal color) and the workspace-card-diff
+            (two-color add/del display) into design-system primitives in a
+            follow-up PR. They render correctly today via bespoke CSS but
+            don't map cleanly onto Badge/Chip's surface-fill conventions
+            and need design input before rewriting. */}
           {hasDiff ? (
             <span className="workspace-card-diff" title="Lines changed in this PR">
               <span className="diff-add">+{additions ?? 0}</span>
