@@ -1,9 +1,10 @@
 import type { AgentRuntime, Namespace, Repo } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Check, Search, X } from "lucide-react";
+import { Check, Search } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./components/ui/dialog.js";
 
 export type GroupKey = "repo" | "status" | "namespace" | "none";
 
@@ -509,33 +510,30 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   );
 }
 
+// Cockpit modal scaffolding. Radix Dialog handles Esc-close, backdrop
+// dismissal, focus trap, and ARIA wiring; our wrapper preserves the
+// existing `{title, onClose, children}` API so call sites (AddRepoModal,
+// CreateWorkspaceModal) keep working unchanged. Bespoke layout classes
+// (`.modal-header`, `.modal-body`, `.modal-form`, `.tab-strip` ...) still
+// apply to the inner content; only the surrounding overlay + frame +
+// focus-trap effects moved into the primitive.
 export function Modal(props: { title: string; onClose: () => void; children: ReactNode }) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") props.onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [props.onClose]);
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={props.onClose}>
-      <dialog open className="modal-frame" aria-label={props.title} onMouseDown={(event) => event.stopPropagation()}>
-        <div className="modal-header">
-          <Search size={14} aria-hidden />
-          <h2>{props.title}</h2>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={props.onClose}
-            aria-label="Close"
-            title="Close (Esc)"
-          >
-            <X size={14} />
-          </Button>
-        </div>
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next) props.onClose();
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="modal-title">
+            <Search size={14} aria-hidden />
+            {props.title}
+          </DialogTitle>
+        </DialogHeader>
         <div className="modal-body">{props.children}</div>
-      </dialog>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
