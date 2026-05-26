@@ -11,6 +11,7 @@ import {
   History,
   Moon,
   Server,
+  Stethoscope,
   Sun,
   Workflow,
 } from "lucide-react";
@@ -22,8 +23,17 @@ import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { RestorePanel } from "../settings-restore.js";
 import { AgentsPanel } from "../settings-runtimes.js";
+import { DiagnosticsPanel } from "../settings-diagnostics.js";
 
-type SectionId = "overview" | "providers" | "agents" | "repositories" | "restore" | "mcp" | "notes";
+type SectionId =
+  | "overview"
+  | "providers"
+  | "agents"
+  | "repositories"
+  | "restore"
+  | "mcp"
+  | "notes"
+  | "diagnostics";
 
 type Section = {
   id: SectionId;
@@ -59,6 +69,12 @@ const SECTIONS: Section[] = [
     icon: History,
   },
   { id: "mcp", label: "MCP", description: "Model Context Protocol servers Citadel exposes to agents.", icon: Workflow },
+  {
+    id: "diagnostics",
+    label: "Diagnostics",
+    description: 'Is everything configured? Runs the same checks as `make doctor`.',
+    icon: Stethoscope,
+  },
   {
     id: "notes",
     label: "Notes",
@@ -178,6 +194,15 @@ export function SettingsView() {
             <>
               <PageHead title="MCP servers" sub="Model Context Protocol servers Citadel exposes to agents." />
               <McpSection mcpEnabled={Boolean(data?.mcp.enabled)} />
+            </>
+          ) : null}
+          {section === "diagnostics" ? (
+            <>
+              <PageHead
+                title="Diagnostics"
+                sub="Is everything configured? Same checks as `make doctor`."
+              />
+              <DiagnosticsPanel />
             </>
           ) : null}
           {section === "notes" ? (

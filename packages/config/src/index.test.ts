@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  CitadelConfigSchema,
   defaultConfigPath,
   defaultNotesPath,
   detectWorktree,
@@ -10,6 +11,7 @@ import {
   loadConfig,
   mergeConfigPatch,
   saveConfig,
+  validateTlsAssets,
 } from "./index.js";
 
 const dirs: string[] = [];
@@ -541,5 +543,107 @@ describe("scratchpad.path config field", () => {
     const override = path.join(dir, "elsewhere", "notes.md");
     const configWithOverride = { dataDir: dir, scratchpad: { path: override } };
     expect(effectiveNotesPath(configWithOverride)).toBe(override);
+  });
+});
+
+// Generate a tiny self-signed cert pair via openssl. Used only by TLS tests.
+// openssl is one of the doctor's required binaries (it's part of the host's
+// toolchain for HTTPS work); CI installs it via the standard image.
+function generateSelfSignedCert(input: {
+  outDir: string;
+  daysValid: number;
+}): { certPath: string; keyPath: string } {
+  const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
+  const keyPath = path.join(input.outDir, "key.pem");
+  const certPath = path.join(input.outDir, "cert.pem");
+  execFileSync(
+    "openssl",
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-keyout",
+      keyPath,
+      "-out",
+      certPath,
+      "-days",
+      String(input.daysValid),
+      "-nodes",
+      "-subj",
+      "/CN=localhost",
+    ],
+    { stdio: "ignore" },
+  );
+  return { keyPath, certPath };
+}
+
+describe("TLS config", () => {
+  it("zod schema rejects a relative certPath", () => {
+    const result = CitadelConfigSchema.safeParse({
+      dataDir: "/tmp/x",
+      databasePath: "/tmp/x/db",
+      tls: { certPath: "relative/cert.pem", keyPath: "/abs/key.pem" },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("zod schema rejects a relative keyPath", () => {
+    const result = CitadelConfigSchema.safeParse({
+      dataDir: "/tmp/x",
+      databasePath: "/tmp/x/db",
+      tls: { certPath: "/abs/cert.pem", keyPath: "relative/key.pem" },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("validateTlsAssets returns null when tls is unset (default config)", () => {
+    expect(validateTlsAssets({ tls: undefined })).toBeNull();
+  });
+
+  it("validateTlsAssets reports missing cert file", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tls-test-"));
+    dirs.push(dir);
+    const result = validateTlsAssets({
+      tls: { certPath: path.join(dir, "nope.pem"), keyPath: path.join(dir, "nope-key.pem") },
+    });
+    expect(result?.ok).toBe(false);
+    if (result?.ok === false) expect(result.reason).toMatch(/cert not found/);
+  });
+
+  it("validateTlsAssets reports an empty (0-byte) cert file", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tls-test-"));
+    dirs.push(dir);
+    const certPath = path.join(dir, "cert.pem");
+    const keyPath = path.join(dir, "key.pem");
+    fs.writeFileSync(certPath, "");
+    fs.writeFileSync(keyPath, "key-contents\n");
+    const result = validateTlsAssets({ tls: { certPath, keyPath } });
+    expect(result?.ok).toBe(false);
+    if (result?.ok === false) expect(result.reason).toMatch(/empty/i);
+  });
+
+  it("validateTlsAssets accepts a valid, non-expired self-signed cert pair", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tls-test-"));
+    dirs.push(dir);
+    const { certPath, keyPath } = generateSelfSignedCert({ outDir: dir, daysValid: 30 });
+    const result = validateTlsAssets({ tls: { certPath, keyPath } });
+    expect(result?.ok).toBe(true);
+  });
+
+  it("validateTlsAssets reports an unparseable cert", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tls-test-"));
+    dirs.push(dir);
+    const certPath = path.join(dir, "garbage-cert.pem");
+    const keyPath = path.join(dir, "garbage-key.pem");
+    fs.writeFileSync(certPath, "this is not a PEM file");
+    fs.writeFileSync(keyPath, "this is not a key");
+    const result = validateTlsAssets({ tls: { certPath, keyPath } });
+    expect(result?.ok).toBe(false);
+  });
+
+  it("default fixture asserts tls === undefined on a fresh-config parse (regression guard)", () => {
+    const parsed = CitadelConfigSchema.parse({ dataDir: "/tmp/x", databasePath: "/tmp/x/db" });
+    expect(parsed.tls).toBeUndefined();
   });
 });

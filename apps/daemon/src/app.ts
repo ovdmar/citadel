@@ -43,6 +43,7 @@ import { getBootRestoreSummary } from "./boot-restore.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
+import { registerDoctorRoutes } from "./doctor-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { registerPrRoutes } from "./pr-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
@@ -470,6 +471,7 @@ export function createDaemonApp(input: {
   });
 
   registerRuntimeUsageRoutes({ app, config, asyncRoute, providerCache, cachedProvider });
+  registerDoctorRoutes({ app, config, store, asyncRoute, collectProviderHealth: cachedProviderHealth });
   registerPrRoutes({
     app,
     store,

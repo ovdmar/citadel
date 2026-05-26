@@ -9,6 +9,13 @@ type SqliteDatabase = {
   exec(sql: string): void;
 };
 
+// Highest schema_migrations version known to this code path. Bump alongside
+// the corresponding `INSERT OR IGNORE INTO schema_migrations` that introduces
+// the new version below. Consumed by the doctor's database-schema check so
+// `make doctor` can flag an installed daemon whose code is newer than the
+// database it's been given.
+export const CURRENT_SCHEMA_VERSION = 8;
+
 export function runMigrations(
   db: SqliteDatabase,
   ensureColumn: (table: string, column: string, definition: string) => void,

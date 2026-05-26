@@ -792,3 +792,13 @@ export class OperationService {
       payload,
     });
 }
+
+export type {
+  DeployHookStatus,
+  DoctorConfig,
+  DoctorDeps,
+  DoctorProviderProbe,
+  DoctorProviderStatus,
+  DoctorRepo,
+} from "./doctor.js";
+export { runDoctorChecks } from "./doctor.js";

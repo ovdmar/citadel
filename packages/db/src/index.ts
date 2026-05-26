@@ -13,6 +13,8 @@ import type {
   Workspace,
 } from "@citadel/contracts";
 import { runMigrations } from "./migrate.js";
+
+export { CURRENT_SCHEMA_VERSION } from "./migrate.js";
 import * as namespaces from "./namespaces.js";
 import {
   activityFromRow,
@@ -527,6 +529,20 @@ export class SqliteStore {
       Record<string, unknown>
     >;
     return rows.map(operationFromRow);
+  }
+
+  // Used by the doctor to surface the daemon's current schema_migrations
+  // version. Cheap query (single bounded scan); the doctor short-circuits to
+  // skipped when the table is missing.
+  listSchemaMigrations(): Array<{ version: number; name: string; appliedAt: string }> {
+    try {
+      const rows = this.database
+        .prepare("SELECT version, name, applied_at FROM schema_migrations ORDER BY version ASC")
+        .all() as Array<{ version: number; name: string; applied_at: string }>;
+      return rows.map((r) => ({ version: r.version, name: r.name, appliedAt: r.applied_at }));
+    } catch {
+      return [];
+    }
   }
 
   findOperation(operationId: string): Operation | null {

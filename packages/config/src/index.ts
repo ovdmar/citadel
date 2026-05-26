@@ -1,3 +1,4 @@
+import { X509Certificate } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -133,6 +134,22 @@ export const CitadelConfigSchema = z
     databasePath: z.string().min(1),
     bindHost: z.string().default("127.0.0.1"),
     port: z.number().int().min(1).max(65535).default(4010),
+    // Optional inline TLS. Both paths must be absolute; both files must exist
+    // and be non-zero bytes; the cert must not be expired. Runtime validation
+    // (file existence, expiry) lives in validateTlsAssets() — the zod refines
+    // stay pure (path-shape only) so the schema has no filesystem side effects.
+    tls: z
+      .object({
+        certPath: z
+          .string()
+          .min(1)
+          .refine((p) => path.isAbsolute(p), "TLS certPath must be absolute"),
+        keyPath: z
+          .string()
+          .min(1)
+          .refine((p) => path.isAbsolute(p), "TLS keyPath must be absolute"),
+      })
+      .optional(),
     mcp: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
     providers: z
       .object({
@@ -400,4 +417,50 @@ function validateHookReferences(
       });
     }
   });
+}
+
+// Runtime TLS-asset validator. Run by the daemon at boot AFTER zod-parsing.
+// Refuses if cert/key files don't exist, are empty, or the cert is expired.
+// Returns a "validation result" rather than throwing so callers can decide
+// whether to fail-fast (daemon boot) or surface as a doctor check.
+export type TlsAssetValidationResult =
+  | { ok: true; notBefore: Date; notAfter: Date }
+  | { ok: false; reason: string };
+
+export function validateTlsAssets(config: Pick<CitadelConfig, "tls">): TlsAssetValidationResult | null {
+  if (!config.tls) return null;
+  const { certPath, keyPath } = config.tls;
+  let certStat: fs.Stats;
+  try {
+    certStat = fs.statSync(certPath);
+  } catch {
+    return { ok: false, reason: `TLS cert not found at ${certPath}` };
+  }
+  if (!certStat.isFile() || certStat.size === 0) {
+    return { ok: false, reason: `TLS cert at ${certPath} is empty or not a regular file` };
+  }
+  try {
+    const keyStat = fs.statSync(keyPath);
+    if (!keyStat.isFile() || keyStat.size === 0) {
+      return { ok: false, reason: `TLS key at ${keyPath} is empty or not a regular file` };
+    }
+  } catch {
+    return { ok: false, reason: `TLS key not found at ${keyPath}` };
+  }
+  try {
+    const pem = fs.readFileSync(certPath);
+    const cert = new X509Certificate(pem);
+    const now = Date.now();
+    const notAfter = new Date(cert.validTo);
+    const notBefore = new Date(cert.validFrom);
+    if (Number.isNaN(notAfter.getTime())) {
+      return { ok: false, reason: `TLS cert at ${certPath}: unparseable validTo` };
+    }
+    if (notAfter.getTime() < now) {
+      return { ok: false, reason: `TLS cert at ${certPath} expired on ${notAfter.toISOString()}` };
+    }
+    return { ok: true, notBefore, notAfter };
+  } catch (err) {
+    return { ok: false, reason: `TLS cert at ${certPath} could not be parsed: ${(err as Error).message}` };
+  }
 }

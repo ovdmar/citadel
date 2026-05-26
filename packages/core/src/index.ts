@@ -88,3 +88,5 @@ export function summarizeWorkspaceState(input: {
   ].filter((reason): reason is string => Boolean(reason));
   return { suggestedSection, reasons };
 }
+
+export { groupChecksByKind, statusLabel, summarizeDoctor } from "./doctor.js";
