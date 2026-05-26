@@ -253,4 +253,28 @@ describe.runIf(hasTmux())("terminal wrapper exit hint (live tmux)", () => {
     const pane = captureTmux(name, 200);
     expect(flatten(pane)).not.toContain(flatten("claude resume shouldnt-be-used"));
   }, 15000);
+
+  it("resolves the UUID when the workspace cwd contains shell-special characters", async () => {
+    // Plan failure-modes called this out: a future change to shellQuote or
+    // the printf line could break resolution on workspaces under paths
+    // containing spaces / quotes / backticks. The wrapper uses
+    // `printf %s "$PWD" | sed` which treats $PWD as a single argument,
+    // so spaces survive. This test pins that behavior end-to-end.
+    const baseTmp = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-exit-hint-spaces-"));
+    cleanups.push(() => fs.rmSync(baseTmp, { recursive: true, force: true }));
+    const cwd = path.join(baseTmp, "My Workspace");
+    fs.mkdirSync(cwd, { recursive: true });
+    const uuid = "spaced-aaaa-bbbb-cccc-ddddeeeeffff";
+    makeFixtureTranscript(cwd, uuid);
+    const name = uniqueSessionName("hint-spaces");
+    created.push(name);
+    await ensureTmuxSession({
+      sessionName: name,
+      cwd,
+      command: "bash",
+      args: ["-c", "exit 0"],
+      runtimeId: "claude-code",
+    });
+    await waitForHint(name, `claude resume ${uuid}`);
+  }, 15000);
 });

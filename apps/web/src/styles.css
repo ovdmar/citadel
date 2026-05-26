@@ -272,10 +272,12 @@ a:hover {
 .cit-pulse-run {
   background: var(--c-warn);
   box-shadow: 0 0 0 3px var(--c-warn-bg);
+  --cit-pulse-ripple: var(--c-warn);
 }
 .cit-pulse-bad {
   background: var(--c-bad);
   box-shadow: 0 0 0 3px var(--c-bad-bg);
+  --cit-pulse-ripple: var(--c-bad);
 }
 .cit-pulse-idle {
   background: var(--c-fg-4);
@@ -287,31 +289,16 @@ a:hover {
 .cit-pulse-done {
   background: var(--c-ok);
   box-shadow: 0 0 0 3px var(--c-ok-bg);
+  --cit-pulse-ripple: var(--c-ok);
 }
-.cit-pulse-run::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  border: 1px solid var(--c-warn);
-  opacity: 0;
-  animation: cit-ripple 1.8s ease-out infinite;
-}
-.cit-pulse-done::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  border-radius: 50%;
-  border: 1px solid var(--c-ok);
-  opacity: 0;
-  animation: cit-ripple 1.8s ease-out infinite;
-}
+.cit-pulse-run::after,
+.cit-pulse-done::after,
 .cit-pulse-bad::after {
   content: "";
   position: absolute;
   inset: -3px;
   border-radius: 50%;
-  border: 1px solid var(--c-bad);
+  border: 1px solid var(--cit-pulse-ripple);
   opacity: 0;
   animation: cit-ripple 1.8s ease-out infinite;
 }

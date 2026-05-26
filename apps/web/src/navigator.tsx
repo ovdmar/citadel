@@ -44,7 +44,7 @@ function runningCount(sessions: AgentSession[]): number {
 // Same priority as the workspace card aggregator: attention > running > done
 // > never-started. Each workspace folds its own PR/CI signal via
 // deriveWorkspaceLifecycleTone so CI-red on any workspace surfaces here too.
-function aggregateNavigatorTone(
+export function aggregateNavigatorTone(
   workspaces: Workspace[],
   sessions: AgentSession[],
   workspacePullRequests: Map<string, PullRequestSummary | null> | undefined,
