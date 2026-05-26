@@ -38,6 +38,12 @@ import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
+import {
+  decorateWithCooldown,
+  type GhQuotaWiringWithDetach,
+  resolveRepoFullNameFromWorkspaces,
+  wireGhQuota,
+} from "./gh-quota-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
@@ -97,6 +103,16 @@ export function createDaemonApp(input: {
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
   const ttyd = createTtydManager(resolveTtydPortRange(config.port));
+
+  // gh-quota wiring: viewer-gate, per-PR scheduler, main-watcher. Hydrates
+  // the scheduler from persisted SQLite PR snapshots so a daemon restart
+  // doesn't re-fetch every PR on first poll.
+  const ghQuota: GhQuotaWiringWithDetach = wireGhQuota({
+    sseClients,
+    store,
+    resolveRepoFullName: (repoId) => resolveRepoFullNameFromWorkspaces(repoId, store),
+  });
+  server.on("close", () => ghQuota.stop());
 
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
@@ -364,12 +380,22 @@ export function createDaemonApp(input: {
     if (!workspace) return null;
     const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
     if (!repo) return null;
-    const [git, versionControl, ci, issueTracker, apps] = await Promise.all([
+    const [git, versionControlRaw, ci, issueTracker, apps] = await Promise.all([
       cachedProvider(`git:${workspace.id}:${workspace.updatedAt}`, () => readWorkspaceGitStatus(workspace.path), 3000),
-      cachedProvider(`vc:${workspace.id}:${workspace.updatedAt}`, () =>
-        providers.collectGitHubVersionControlSummary(workspace.path),
+      // vc: TTL bumped from 10s → 60s. workspace.updatedAt rotates only on
+      // lifecycle/branch/dirty changes (not session activity), so the longer
+      // TTL is effective in steady state. P3 (scheduler-gated decide-to-fetch
+      // in this code path) is the deeper win and lands in a follow-up commit.
+      cachedProvider(
+        `vc:${workspace.id}:${workspace.updatedAt}`,
+        () => providers.collectGitHubVersionControlSummary(workspace.path),
+        60_000,
       ),
-      cachedProvider(`ci:${workspace.id}:${workspace.updatedAt}`, () => providers.collectGitHubCiRuns(workspace.path)),
+      cachedProvider(
+        `ci:${workspace.id}:${workspace.updatedAt}`,
+        () => providers.collectGitHubCiRuns(workspace.path),
+        60_000,
+      ),
       workspace.issueKey
         ? cachedProvider(`issue:${workspace.issueKey}`, () =>
             providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
@@ -381,6 +407,12 @@ export function createDaemonApp(input: {
         60_000,
       ),
     ]);
+    // Cooldown injection (P1 surface): when the daemon's global gh cooldown
+    // is active, decorate every outgoing versionControl payload with the
+    // cooldownUntil ISO timestamp — regardless of whether it came from a
+    // fresh fetch or the cache. The FE sticky cache + banner read this on
+    // every code path.
+    const versionControl = decorateWithCooldown(versionControlRaw);
     return {
       workspaceId: workspace.id,
       readiness: deriveReadiness({
@@ -400,6 +432,7 @@ export function createDaemonApp(input: {
       apps,
     };
   }
+
 
   app.get(
     "/api/workspaces/:workspaceId/cockpit-summary",
@@ -684,8 +717,15 @@ export function createDaemonApp(input: {
       Connection: "keep-alive",
     });
     sseClients.add(res);
+    // Fire AFTER the add so hasViewers() in the wiring sees the new state.
+    // 0→1 transition triggers scheduler.invalidateNotDue() so the next FE
+    // poll fetches fresh instead of waiting for the cadence window.
+    ghQuota.onViewerAttached();
     res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
-    req.on("close", () => sseClients.delete(res));
+    req.on("close", () => {
+      sseClients.delete(res);
+      ghQuota.onViewerDetached(); // stamps lastDetachAt iff this was the last viewer
+    });
   });
 
   const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
@@ -732,7 +772,16 @@ export function createDaemonApp(input: {
   // Status monitor / auto-recovery / auto-resume / terminal reaper: see their own modules for context.
   const statusMonitor = startDaemonStatusMonitor(store, emit);
   if (statusMonitor) server.on("close", () => statusMonitor.stop());
-  const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({ store, config, operations, emit });
+  const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({
+    store,
+    config,
+    operations,
+    emit,
+    // Skip ticks when no SSE viewer is connected (2-min grace). Auto-recovery
+    // is a viewer-visible feature; consuming GitHub quota with nobody watching
+    // is the largest pre-optimization quota sink.
+    shouldRun: () => ghQuota.hasViewers() || ghQuota.msSinceLastViewer() <= 2 * 60_000,
+  });
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
   const autoResume = startDaemonAutoResumeLoop(store, operations);
   if (autoResume) server.on("close", () => autoResume.stop());

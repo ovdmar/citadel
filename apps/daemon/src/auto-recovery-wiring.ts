@@ -12,6 +12,11 @@ export type AutoRecoveryWiringDeps = {
   config: CitadelConfig;
   operations: OperationService;
   emit: (event: string, payload: unknown) => void;
+  // Optional viewer-gate predicate. When provided, the monitor consults it
+  // at the top of every tick and short-circuits when false — wired to the
+  // gh-quota viewer-gate so auto-recovery doesn't burn GitHub quota when no
+  // cockpit tab is connected.
+  shouldRun?: () => boolean;
 };
 
 // Parse env knobs once at startup. Caller may override defaults; the env-var
@@ -71,6 +76,10 @@ export function startDaemonAutoRecoveryMonitor(deps: AutoRecoveryWiringDeps): Au
       idleThresholdMs: knobs.idleThresholdMs,
       debounceMs: knobs.debounceMs,
       disabled: knobs.disabled,
+      // Conditionally spread — exactOptionalPropertyTypes disallows explicit
+      // undefined; omit the key when no predicate is provided so the monitor
+      // keeps its prior always-runs behavior.
+      ...(deps.shouldRun ? { shouldRun: deps.shouldRun } : {}),
     },
     knobs.intervalMs,
   );
