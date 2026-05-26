@@ -686,5 +686,30 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
       expect(init.shiftKey).toBe(true);
       expect(init.ctrlKey).toBeFalsy();
     });
+
+    it("forwarded clone is a fresh KeyboardEvent constructed via window.parent.KeyboardEvent — target defaults to window.parent and isTrusted is false (synthetic)", () => {
+      // The cockpit's keydown listener reads `event.target` to decide whether
+      // to gate plain `c` on inEditable. For a forwarded synthetic event the
+      // target is the cockpit Window itself (no `tagName`), so the listener's
+      // `target?.tagName` short-circuits cleanly and `inEditable` is false.
+      // Verify the shim does NOT carry the original event's target across the
+      // boundary (which would be the iframe's xterm helper textarea — wrong).
+      const harness = setup("MacIntel");
+      harness.activate();
+      // Original event has a "target" — the forwarded clone must not propagate it.
+      const original = makeEvent({ key: "k", metaKey: true });
+      (original as unknown as { target: object }).target = { tagName: "TEXTAREA" };
+      dispatch(harness, original);
+      expect(harness.parentDispatches).toHaveLength(1);
+      const clone = harness.parentDispatches[0] as FakeSyntheticEvent;
+      // FakeSyntheticEvent only stores what was passed to the KeyboardEvent
+      // constructor's init dict — `target` is read-only on real KeyboardEvent
+      // and cannot be set via init, so it's never copied. Asserting absence:
+      expect((clone.init as Record<string, unknown>).target).toBeUndefined();
+      // The shim does NOT pass `isTrusted` (it's also read-only on real
+      // KeyboardEvent and always false for `new KeyboardEvent(...)`); the
+      // cockpit listener must never gate on isTrusted.
+      expect((clone.init as Record<string, unknown>).isTrusted).toBeUndefined();
+    });
   });
 });

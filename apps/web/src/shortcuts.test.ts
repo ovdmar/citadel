@@ -84,6 +84,7 @@ describe("matchShortcut", () => {
     expect(matchShortcut(ev({ key: "Escape", metaKey: true }))).toBeNull();
     expect(matchShortcut(ev({ key: "Escape", ctrlKey: true }))).toBeNull();
     expect(matchShortcut(ev({ key: "Escape", shiftKey: true }))).toBeNull();
+    expect(matchShortcut(ev({ key: "Escape", altKey: true }))).toBeNull();
   });
 
   it("does NOT match plain letters or digits (no modifier)", () => {

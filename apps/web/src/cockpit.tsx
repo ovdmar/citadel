@@ -10,7 +10,12 @@ import { resolveShortcutAction } from "./cockpit-shortcut-actions.js";
 import { useWorkspaceCockpitSummary } from "./cockpit-tools.js";
 import { CommandPalette } from "./command-palette.js";
 import { Inspector } from "./inspector.js";
-import { expandGroupPath, readNavigatorGrouping, subscribeToCollapseChanges } from "./navigator-collapse-store.js";
+import {
+  expandGroupPath,
+  readNavigatorGrouping,
+  subscribeToCollapseChanges,
+  subscribeToGroupingChanges,
+} from "./navigator-collapse-store.js";
 import { buildGroupTree, flattenWorkspaceOrder, treeGroupingFor } from "./navigator-groups.js";
 import { Navigator } from "./navigator.js";
 import { RestoreBanner } from "./restore-banner.js";
@@ -80,17 +85,25 @@ export function Cockpit() {
   // Grouping mode read from the Navigator's localStorage key. Lives in a piece
   // of state so the cockpit re-renders (and re-derives the workspace flat
   // order) when the user changes grouping from inside the Navigator.
+  // Two synchronization sources:
+  //  - `storage` event: cross-tab changes (user switches grouping in another tab).
+  //  - NAVIGATOR_GROUPING_EVENT: same-tab changes (Navigator publishes via the
+  //    custom event whenever its grouping state changes — the native `storage`
+  //    event does NOT fire on same-tab writes).
   const [navigatorGrouping, setNavigatorGrouping] = useState(() => readNavigatorGrouping());
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const refresh = () => setNavigatorGrouping(readNavigatorGrouping());
     const onStorage = (event: StorageEvent) => {
-      if (event.key === "citadel.navigator-group") setNavigatorGrouping(readNavigatorGrouping());
+      if (event.key === "citadel.navigator-group") refresh();
     };
     window.addEventListener("storage", onStorage);
-    const unsubscribe = subscribeToCollapseChanges(() => setNavigatorGrouping(readNavigatorGrouping()));
+    const unsubscribeGrouping = subscribeToGroupingChanges(refresh);
+    const unsubscribeCollapse = subscribeToCollapseChanges(refresh);
     return () => {
       window.removeEventListener("storage", onStorage);
-      unsubscribe();
+      unsubscribeGrouping();
+      unsubscribeCollapse();
     };
   }, []);
 
@@ -192,10 +205,6 @@ export function Cockpit() {
           return;
         case "close-command-palette":
           setCommandOpen(false);
-          return;
-        case "open-new-workspace-modal":
-          event.preventDefault();
-          setCreateWorkspaceOpen(true);
           return;
         case "nav-workspace":
           event.preventDefault();

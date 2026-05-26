@@ -8,8 +8,9 @@
 export const COLLAPSE_STORAGE_KEY = "citadel.navigator-group-collapsed";
 export const GROUP_STORAGE_KEY = "citadel.navigator-group";
 export const NAVIGATOR_COLLAPSE_EVENT = "citadel:navigator-collapse-changed";
+export const NAVIGATOR_GROUPING_EVENT = "citadel:navigator-grouping-changed";
 
-export type NavigatorGrouping = "repo" | "status" | "namespace" | "none";
+type NavigatorGrouping = "repo" | "status" | "namespace" | "none";
 
 export function readNavigatorGrouping(): NavigatorGrouping {
   if (typeof window === "undefined") return "none";
@@ -20,6 +21,22 @@ export function readNavigatorGrouping(): NavigatorGrouping {
     // fall through
   }
   return "none";
+}
+
+// In-tab broadcast for grouping changes. The browser's native `storage` event
+// fires only across tabs, so a single-tab grouping switch (the common case)
+// would otherwise leave cockpit-side consumers stale. Navigator writes this
+// event whenever the user picks a new grouping mode.
+export function publishNavigatorGroupingChanged(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(NAVIGATOR_GROUPING_EVENT));
+}
+
+export function subscribeToGroupingChanges(handler: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const listener = () => handler();
+  window.addEventListener(NAVIGATOR_GROUPING_EVENT, listener);
+  return () => window.removeEventListener(NAVIGATOR_GROUPING_EVENT, listener);
 }
 
 type CollapsedMap = Record<string, boolean>;

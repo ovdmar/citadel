@@ -33,7 +33,7 @@
 
 ## Keyboard Shortcuts
 
-[ ] 1. Global cockpit shortcuts:
+[x] 1. Global cockpit shortcuts:
    - `Cmd/Ctrl+K` — opens the command palette.
    - `Ctrl+N` (mac only; Linux/Windows browsers reserve it for "new browser window") and plain `c` (when no editable target is focused) — opens the new-workspace modal.
    - `Ctrl+1`…`Ctrl+9`, `Ctrl+0` — jump to the Nth workspace in the Navigator's in-tree visible order (0 = 10th). If the workspace is inside a collapsed group, the group auto-expands. On Chrome/Edge/Firefox on Windows and Linux, `Ctrl+1..9` is browser-reserved (switches browser tabs) — these shortcuts work reliably only on macOS or inside a PWA/desktop wrapper.
@@ -41,7 +41,7 @@
    - `Cmd+T` — spawn a new bare Terminal session in the active workspace. Browser-reserved in normal tab mode on every major desktop browser; works in Safari "Add to Dock" standalone PWAs and dedicated wrappers (Electron/Tauri). Chrome PWA window mode does NOT free it on macOS in current builds.
    - `Cmd+E` — spawn a new agent session in the active workspace using the workspace's default agent runtime (currently resolved as: prefer `claude-code` if healthy, else first healthy non-`shell` runtime). Collides benignly with Chrome/Safari "Use Selection for Find" on macOS — the cockpit handler `preventDefault`s before the browser acts, since `Cmd+E` is a renderer-level editing shortcut, not a window-management shortcut.
    - `Escape` — closes the top-most open overlay (command palette, modal, dialog).
-[ ] 2. When focus is inside a terminal iframe (ttyd-rendered xterm), the iframe shim forwards the chords above to the cockpit instead of consuming them locally. `Escape` is forwarded ONLY when at least one cockpit overlay is open (the shim reads a ref-count exposed by the cockpit); otherwise xterm receives `Escape` unmodified so vim/Claude Code work normally. All other keystrokes pass through to xterm as today.
+[x] 2. When focus is inside a terminal iframe (ttyd-rendered xterm), the iframe shim forwards the chords above to the cockpit instead of consuming them locally. `Escape` is forwarded ONLY when at least one cockpit overlay is open (the shim reads a ref-count exposed by the cockpit); otherwise xterm receives `Escape` unmodified so vim/Claude Code work normally. All other keystrokes pass through to xterm as today.
 
 ## Dashboard
 
@@ -57,7 +57,7 @@
 [ ] 4. Each session tab has an editable title. Default titles are the agent runtime display name or `Terminal`.
 [ ] 5. When a workspace is created with an associated default agent, the cockpit opens that agent automatically in a new session tab.
 [ ] 6. The selected session occupies the rest of the column height.
-[ ] 7. Terminal keyboard shortcuts pass through to the active terminal by default. A small, named allow-list of cockpit shortcuts (see §Keyboard Shortcuts) is forwarded to the parent cockpit when xterm has focus; everything else is delivered to xterm unchanged.
+[x] 7. Terminal keyboard shortcuts pass through to the active terminal by default. A small, named allow-list of cockpit shortcuts (see §Keyboard Shortcuts) is forwarded to the parent cockpit when xterm has focus; everything else is delivered to xterm unchanged.
 
 ## Inspector Tabs
 

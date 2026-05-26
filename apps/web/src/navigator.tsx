@@ -18,6 +18,7 @@ import { AddRepoModal, CreateWorkspaceModal, GroupByMenu, type GroupKey } from "
 import {
   COLLAPSE_STORAGE_KEY as COLLAPSE_STORAGE,
   GROUP_STORAGE_KEY as GROUP_STORAGE,
+  publishNavigatorGroupingChanged,
   readCollapsedMap,
   subscribeToCollapseChanges,
 } from "./navigator-collapse-store.js";
@@ -73,6 +74,9 @@ export function Navigator(props: {
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(GROUP_STORAGE, grouping);
+    // Notify same-tab consumers (the cockpit's flatWorkspaceIds memo) that the
+    // grouping changed — the browser's `storage` event only fires across tabs.
+    publishNavigatorGroupingChanged();
   }, [grouping]);
 
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => readCollapsedMap());

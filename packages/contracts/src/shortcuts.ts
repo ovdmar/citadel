@@ -2,9 +2,14 @@
 // it can be consumed by both apps/web (browser runtime) and apps/daemon (the
 // shim parity test) without crossing architecture boundaries.
 
+// "new-workspace-modal" is intentionally NOT in this union. The new-workspace
+// modal is opened via the inline `Ctrl+N` and plain `c` handlers in
+// `apps/web/src/cockpit.tsx`, outside the canonical registry, so that the
+// `inEditable` guard for plain `c` can short-circuit before the matcher runs
+// and so the iframe shim does not try to forward a chord that would clash
+// with shell input.
 export type ShortcutId =
   | "command-palette"
-  | "new-workspace-modal"
   | "nav-workspace"
   | "nav-session"
   | "spawn-terminal"

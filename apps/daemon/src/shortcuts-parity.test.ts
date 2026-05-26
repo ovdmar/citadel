@@ -78,6 +78,25 @@ describe("shim ↔ contracts FORWARDABLE_CHORDS parity", () => {
     expect(shim.FORWARDABLE_CHORDS.length).toBe(FORWARDABLE_CHORDS.length);
   });
 
+  it("every shim chord is matched by the contracts matcher with the same id (inverse direction)", () => {
+    // Parity is two-way. If the shim ever ADDED a chord without updating
+    // contracts (or vice versa), the length test would still pass when both
+    // also dropped something else. Iterate the shim side and ensure the
+    // canonical contracts FORWARDABLE_CHORDS contains a matching descriptor
+    // by id/key/modifier/shift/index.
+    for (const chord of shim.FORWARDABLE_CHORDS) {
+      const match = FORWARDABLE_CHORDS.find(
+        (c) =>
+          c.id === chord.id &&
+          c.key === chord.key &&
+          c.modifier === chord.modifier &&
+          c.shift === chord.shift &&
+          (c.index ?? null) === (chord.index ?? null),
+      );
+      expect(match, `shim chord ${chord.id} (${chord.key}) has no counterpart in contracts`).toBeDefined();
+    }
+  });
+
   it("every contracts chord is matched by the shim with the same id", () => {
     for (const chord of FORWARDABLE_CHORDS) {
       const event = eventFor(chord);

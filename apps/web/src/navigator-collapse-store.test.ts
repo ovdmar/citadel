@@ -3,9 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   COLLAPSE_STORAGE_KEY,
   NAVIGATOR_COLLAPSE_EVENT,
+  NAVIGATOR_GROUPING_EVENT,
   expandGroupPath,
+  publishNavigatorGroupingChanged,
   readCollapsedMap,
   subscribeToCollapseChanges,
+  subscribeToGroupingChanges,
 } from "./navigator-collapse-store.js";
 
 // happy-dom does not expose a real Storage by default; attach a minimal
@@ -97,6 +100,22 @@ describe("navigator-collapse-store", () => {
     const unsubscribe = subscribeToCollapseChanges(handler);
     unsubscribe();
     window.dispatchEvent(new CustomEvent(NAVIGATOR_COLLAPSE_EVENT));
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("publishNavigatorGroupingChanged fires the grouping event so same-tab consumers refresh", () => {
+    const handler = vi.fn();
+    const unsubscribe = subscribeToGroupingChanges(handler);
+    publishNavigatorGroupingChanged();
+    expect(handler).toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it("subscribeToGroupingChanges returns an unsubscribe that removes the listener", () => {
+    const handler = vi.fn();
+    const unsubscribe = subscribeToGroupingChanges(handler);
+    unsubscribe();
+    window.dispatchEvent(new CustomEvent(NAVIGATOR_GROUPING_EVENT));
     expect(handler).not.toHaveBeenCalled();
   });
 });

@@ -57,6 +57,15 @@ describe("buildAttachCommand", () => {
     expect(escaped).toMatch(/set-option -t "a\\"b" mouse on/);
   });
 
+  it("always pairs `mouse on` with `set-clipboard on` (so drag-to-copy in plain panes still reaches the clipboard)", () => {
+    // mouse on alone routes wheel events into tmux copy-mode, but copy-mode
+    // selections need set-clipboard on to emit OSC 52 — without it, drag-to-copy
+    // would silently fail to reach the system clipboard. Coupling regression check.
+    if (cmd.includes("mouse on")) {
+      expect(cmd).toContain("set-clipboard on");
+    }
+  });
+
   it("all option lines are guarded with `|| true` so a missing tmux feature does not break attach", () => {
     // Every set-option line should swallow failures so attach still runs on
     // older tmux versions that may not support a particular option.

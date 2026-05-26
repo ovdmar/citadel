@@ -9,10 +9,9 @@ import type { ShortcutMatch } from "./shortcuts.js";
 // update, focus change). Keeping resolution pure means we can truth-table
 // every cmd+t / cmd+e / nav case without spinning up React.
 
-export type ShortcutAction =
+type ShortcutAction =
   | { type: "toggle-command-palette" }
   | { type: "close-command-palette" }
-  | { type: "open-new-workspace-modal" }
   | { type: "nav-workspace"; workspaceId: string; expandGroupPath: string | null }
   | { type: "nav-session"; workspaceId: string; sessionId: string }
   | { type: "spawn-terminal"; workspaceId: string }
@@ -34,8 +33,6 @@ export function resolveShortcutAction(match: ShortcutMatch, deps: ShortcutDeps):
       return { type: "toggle-command-palette" };
     case "close-overlay":
       return { type: "close-command-palette" };
-    case "new-workspace-modal":
-      return { type: "open-new-workspace-modal" };
     case "nav-workspace": {
       if (match.index === undefined) return { type: "noop" };
       const workspaceId = deps.flatWorkspaceIds[match.index];

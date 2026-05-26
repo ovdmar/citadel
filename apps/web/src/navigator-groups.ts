@@ -177,12 +177,12 @@ export function collectGroupPaths(nodes: GroupNode[]): Set<string> {
 // Depth-first flatten of the rendered tree to a list of workspace IDs in
 // in-tree visible order. Collapse state is intentionally ignored — this is
 // the index space cockpit-side nav shortcuts (Ctrl+1..9) map onto, and the
-// caller auto-expands the relevant group via expandGroupContaining so the
+// caller auto-expands the relevant group via expandGroupPath so the
 // selected workspace becomes visible.
 //
 // When the tree is empty (grouping = "none" — buildGroupTree returns []),
-// the cockpit falls back to walking `workspaces` in input order; see
-// `apps/web/src/navigator-flat-order.ts`.
+// the cockpit falls back to walking `workspaces` in input order (see
+// the inline fallback at `apps/web/src/cockpit.tsx`'s flatWorkspaceIds memo).
 export function flattenWorkspaceOrder(nodes: GroupNode[]): string[] {
   const out: string[] = [];
   const walk = (list: GroupNode[]) => {
