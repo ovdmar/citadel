@@ -73,6 +73,15 @@ describe("claudeCodeStatusAdapter", () => {
     it("classifies wakeup-resuming.txt as running (esc to interrupt visible in mid-resume)", () => {
       expect(claudeCodeStatusAdapter.observe(state, ctx(load("wakeup-resuming")))).toBe("running");
     });
+
+    it("classifies idle-with-tasks-visible.txt as idle (Ctrl+C with task panel still on screen)", () => {
+      // Real capture from a session where the user pressed Ctrl+C while a
+      // TodoWrite task panel was visible. Mode line is
+      // `⏵⏵ auto mode on (shift+tab to cycle) · ctrl+t to hide tasks` with
+      // no `esc to interrupt`. Previously fell through to `return null`,
+      // leaving the session stuck in `running` indefinitely.
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("idle-with-tasks-visible")))).toBe("idle");
+    });
   });
 
   describe("false-positive guard — chrome strings in agent body don't trigger", () => {
@@ -112,6 +121,19 @@ describe("claudeCodeStatusAdapter", () => {
     it("matches multi-digit background counts", () => {
       const pane = "x\n  ⏵⏵ auto mode on · 12 shell · ↓ to manage";
       expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("running");
+    });
+
+    it("treats `<idle prefix> · ctrl+t to hide tasks` as idle (post-interrupt with task panel)", () => {
+      const pane = "x\n  ⏵⏵ auto mode on (shift+tab to cycle) · ctrl+t to hide tasks";
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("idle");
+    });
+
+    it("treats `<idle prefix> · <unknown suffix>` (no esc to interrupt, no bg work) as idle", () => {
+      // Forward-compat: any future post-turn chrome hint that hangs off the
+      // idle prefix should still classify as idle, since priorities 2/3
+      // already ruled out the active and background-work cases.
+      const pane = "x\n  ⏵⏵ auto mode on (shift+tab to cycle) · some future hint";
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("idle");
     });
   });
 
