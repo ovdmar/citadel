@@ -174,7 +174,11 @@ export async function runStatusMonitorTick(
       );
       monitorState.hasObservedSinceBoot = true;
       if (observation !== null) {
-        signals.push({ type: "pane_observation", observed: observation });
+        if (typeof observation === "string") {
+          signals.push({ type: "pane_observation", observed: observation });
+        } else {
+          signals.push({ type: "pane_observation", observed: observation.observed, reason: observation.reason });
+        }
       }
     }
 
@@ -246,6 +250,7 @@ function buildContext(
     ticksSinceActivityChange: monitorState.ticksSinceActivityChange,
     source: opts.source,
     hasObservedSinceBoot: monitorState.hasObservedSinceBoot,
+    now: () => new Date(deps.now()),
   };
 }
 

@@ -15,6 +15,7 @@ export const AgentSessionStatusSchema = z.enum([
   "running",
   "waiting_for_input",
   "rate_limited",
+  "usage_limited",
   "idle",
   "stopped",
   "failed",
@@ -147,6 +148,15 @@ export const AgentSessionSchema = z.object({
   // spawn time so we can resume the same conversation across daemon and machine
   // restarts, and so the Settings restore flow has a stable handle.
   runtimeSessionId: z.string().nullable().optional(),
+  // Auto-resume bookkeeping for sessions that hit a global API rate limit.
+  // The daemon's auto-resume loop populates these so backoff state survives
+  // daemon restarts: `rateLimitResumeAttempts` is the consecutive resume-send
+  // count used for exponential backoff, `nextResumeAt` is when the loop is
+  // allowed to attempt the next resume (null = unscheduled), and
+  // `lastResumeFromRateLimitAt` records the most recent auto-resume submit.
+  rateLimitResumeAttempts: z.number().int().nonnegative().optional(),
+  nextResumeAt: z.string().nullable().optional(),
+  lastResumeFromRateLimitAt: z.string().nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

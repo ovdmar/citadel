@@ -1,4 +1,4 @@
-import type { ObservationContext, PaneObservation, RuntimeStatusAdapter, SessionAdapterState } from "./index.js";
+import type { ObservationContext, PaneObservationResult, RuntimeStatusAdapter, SessionAdapterState } from "./index.js";
 
 // Claude Code v2.1.x detection (verified 2026-05-25 against v2.1.133).
 //
@@ -66,6 +66,53 @@ function hasServerRateLimitError(paneCapture: string): boolean {
   return false;
 }
 
+// Account-wide usage-limit banner. Empirical line:
+//   `⎿  You're out of extra usage · resets 7:50am (UTC)`
+// followed by `/extra-usage to finish what you're working on.`. The agent
+// can't progress until the reset time elapses (or the operator buys extra
+// usage). We surface this as `usage_limited` with the parsed reset timestamp
+// in statusReason so the auto-resume loop can wait it out globally rather
+// than burning per-session backoff attempts that the API will reject anyway.
+const USAGE_LIMIT_SUBSTRING = "You're out of extra usage";
+const USAGE_LIMIT_RESET_REGEX = /resets\s+(\d{1,2}):(\d{2})(am|pm)\s+\(([A-Z]{2,5})\)/;
+
+export interface UsageLimitDetection {
+  // Parsed reset moment as ISO 8601. Always UTC; null when the banner is
+  // visible but the time string didn't parse (unknown tz, malformed digits).
+  resetAt: string | null;
+}
+
+// Exported for testing and for the auto-resume loop's `isAccountRateLimited`
+// hook to call directly off any cached pane capture if it needs to.
+export function parseUsageLimitReset(line: string, now: Date): string | null {
+  const m = USAGE_LIMIT_RESET_REGEX.exec(line);
+  if (!m) return null;
+  const [, hh, mm, ampm, tz] = m;
+  // Only UTC is handled deterministically — other zones would need a tz
+  // database to resolve correctly across DST and we'd rather null-out than
+  // silently drift by an hour. Banner is empirically always UTC.
+  if (tz !== "UTC") return null;
+  let hour = Number.parseInt(hh ?? "", 10) % 12;
+  if (ampm === "pm") hour += 12;
+  const minute = Number.parseInt(mm ?? "", 10);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  const candidate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hour, minute, 0, 0));
+  // If the named time has already passed today, the reset is tomorrow.
+  if (candidate.getTime() <= now.getTime()) {
+    candidate.setUTCDate(candidate.getUTCDate() + 1);
+  }
+  return candidate.toISOString();
+}
+
+function detectUsageLimit(paneCapture: string, now: Date): UsageLimitDetection | null {
+  const lines = bottomLines(paneCapture, RATE_LIMIT_SCAN_LINES);
+  for (const line of lines) {
+    if (!line.includes(USAGE_LIMIT_SUBSTRING)) continue;
+    return { resetAt: parseUsageLimitReset(line, now) };
+  }
+  return null;
+}
+
 function bottomLines(paneCapture: string, n: number): string[] {
   const lines = paneCapture.split("\n");
   return lines.slice(Math.max(0, lines.length - n));
@@ -99,7 +146,7 @@ export const claudeCodeStatusAdapter: RuntimeStatusAdapter = {
     return { ticksObserved: 0, lastPaneHash: null };
   },
 
-  observe(state: SessionAdapterState, ctx: ObservationContext): PaneObservation | null {
+  observe(state: SessionAdapterState, ctx: ObservationContext): PaneObservationResult | null {
     state.ticksObserved += 1;
 
     // Priority 1: prompt footer (AskUserQuestion picker or free-text confirm)
@@ -125,7 +172,20 @@ export const claudeCodeStatusAdapter: RuntimeStatusAdapter = {
       return "running";
     }
 
-    // Priority 4: server-side rate limit visible AND no active turn. Active
+    // Priority 4: account-wide usage limit. Distinct from rate_limited — the
+    // agent is out of plan credits until a known wall-clock reset moment. We
+    // encode the parsed reset in statusReason so the auto-resume loop can
+    // postpone ALL resumes (per-session and account-global) until reset.
+    const usageLimit = detectUsageLimit(ctx.paneCapture, (ctx.now ?? (() => new Date()))());
+    if (usageLimit !== null) {
+      const reason =
+        usageLimit.resetAt !== null
+          ? `pane:usage_limited:reset=${usageLimit.resetAt}`
+          : "pane:usage_limited:reset=unknown";
+      return { observed: "usage_limited", reason };
+    }
+
+    // Priority 5: server-side rate limit visible AND no active turn. Active
     // turn (priority 2) already wins because Claude Code's internal retries
     // re-arm `esc to interrupt` while they're in flight; we only flag
     // rate_limited when the agent has actually stalled (mode line back to
@@ -134,7 +194,7 @@ export const claudeCodeStatusAdapter: RuntimeStatusAdapter = {
       return "rate_limited";
     }
 
-    // Priority 5: idle. The auto-mode prefix is present, and (by virtue of
+    // Priority 6: idle. The auto-mode prefix is present, and (by virtue of
     // priorities 2/3 not having matched) there's no active-turn marker and no
     // background-work suffix. Covers both the bare idle line and the
     // "tasks panel still on screen after Ctrl+C" variant

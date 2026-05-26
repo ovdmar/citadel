@@ -21,6 +21,8 @@ export { ScheduledAgentRunner, parseCronExpression, cronMatches, nextCronRun, de
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
+export { parseUsageLimitResetFromReason, deriveAccountUsageLimit } from "./usage-limit.js";
+export type { AccountRateLimitInfo } from "./usage-limit.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import { type DeployOpsDeps, listDeployedApps as listDeployedAppsImpl, redeployApp as redeployAppImpl } from "./deploy.js";
 import {
@@ -516,7 +518,7 @@ export class OperationService {
       .listSessions()
       .filter((session) => workspaces.some((workspace) => workspace.id === session.workspaceId));
     const activeSessions = sessions.filter((session) =>
-      ["starting", "running", "waiting_for_input", "rate_limited", "idle"].includes(session.status),
+      ["starting", "running", "waiting_for_input", "rate_limited", "usage_limited", "idle"].includes(session.status),
     );
     const runningOperations = this.store
       .listOperations()
