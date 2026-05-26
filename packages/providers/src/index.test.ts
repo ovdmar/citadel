@@ -281,7 +281,25 @@ describe("commandHealth", () => {
       // not on the full JQL string.
       const operandOf = (jql: string): string => jql.match(/^summary ~ "([^"]*)"/)?.[1] ?? "";
       const specials = [
-        "+", "-", "&&", "||", "!", "(", ")", "{", "}", "[", "]", "^", '"', "~", "*", "?", ":", "\\", "/",
+        "+",
+        "-",
+        "&&",
+        "||",
+        "!",
+        "(",
+        ")",
+        "{",
+        "}",
+        "[",
+        "]",
+        "^",
+        '"',
+        "~",
+        "*",
+        "?",
+        ":",
+        "\\",
+        "/",
       ];
       for (const ch of specials) {
         const jql = buildJiraSearchJql(`auth${ch}login`);
@@ -317,11 +335,7 @@ describe("commandHealth", () => {
     });
 
     it("tolerates missing trailing fields (empty status, no updated)", () => {
-      const output = [
-        "KEY | SUMMARY | STATUS | UPDATED",
-        "MS-3 | Half-row |  | ",
-        "MS-4 | Truncated",
-      ].join("\n");
+      const output = ["KEY | SUMMARY | STATUS | UPDATED", "MS-3 | Half-row |  | ", "MS-4 | Truncated"].join("\n");
       const parsed = parseJiraSearchOutput(output);
       expect(parsed).toEqual([
         { key: "MS-3", summary: "Half-row", status: null, url: null, updated: null },

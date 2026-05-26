@@ -94,7 +94,10 @@ function makeTransitionResult(overrides: Partial<IssueTransitionActionResult> = 
 }
 
 function createDeps(options: {
-  autoTransitions?: Array<{ event: "agent.started" | "workspace.issue_attached" | "workspace.archived" | "workspace.removed"; transition: string }>;
+  autoTransitions?: Array<{
+    event: "agent.started" | "workspace.issue_attached" | "workspace.archived" | "workspace.removed";
+    transition: string;
+  }>;
   workspaceOverrides?: Partial<Workspace>;
   summary?: IssueTrackerSummary;
   transitionResult?: IssueTransitionActionResult;
@@ -155,7 +158,10 @@ function createDeps(options: {
 describe("createJiraAutoTransitions", () => {
   it("fires transitionJiraIssue when agent.started matches a configured entry and workspace has issueKey", async () => {
     const ctx = createDeps({ autoTransitions: [{ event: "agent.started", transition: "In Progress" }] });
-    await ctx.runAutoTransitions("agent.started", ctx.repo, ctx.workspace, { repo: ctx.repo, workspace: ctx.workspace });
+    await ctx.runAutoTransitions("agent.started", ctx.repo, ctx.workspace, {
+      repo: ctx.repo,
+      workspace: ctx.workspace,
+    });
     expect(ctx.transitionJiraIssue).toHaveBeenCalledTimes(1);
     expect(ctx.transitionJiraIssue).toHaveBeenCalledWith({ issueKey: "AUTH-1", transition: "21" });
     // SSE re-emit uses the DISTINCT name so future operations-layer
@@ -172,7 +178,10 @@ describe("createJiraAutoTransitions", () => {
       autoTransitions: [{ event: "agent.started", transition: "In Progress" }],
       workspaceOverrides: { issueKey: null },
     });
-    await ctx.runAutoTransitions("agent.started", ctx.repo, ctx.workspace, { repo: ctx.repo, workspace: ctx.workspace });
+    await ctx.runAutoTransitions("agent.started", ctx.repo, ctx.workspace, {
+      repo: ctx.repo,
+      workspace: ctx.workspace,
+    });
     expect(ctx.transitionJiraIssue).not.toHaveBeenCalled();
     expect(ctx.collectJiraIssueSummary).not.toHaveBeenCalled();
   });
@@ -182,7 +191,10 @@ describe("createJiraAutoTransitions", () => {
     // Simulate a race: the caller passes a snapshot with an issueKey, but
     // an operator unattached between emit and dispatch.
     ctx.store.updateWorkspace(ctx.workspace.id, { issueKey: null });
-    await ctx.runAutoTransitions("agent.started", ctx.repo, ctx.workspace, { repo: ctx.repo, workspace: ctx.workspace });
+    await ctx.runAutoTransitions("agent.started", ctx.repo, ctx.workspace, {
+      repo: ctx.repo,
+      workspace: ctx.workspace,
+    });
     expect(ctx.transitionJiraIssue).not.toHaveBeenCalled();
   });
 
@@ -191,7 +203,10 @@ describe("createJiraAutoTransitions", () => {
       autoTransitions: [{ event: "agent.started", transition: "In Progress" }],
       summary: makeSummary({ issueStatus: "In Progress" }),
     });
-    await ctx.runAutoTransitions("agent.started", ctx.repo, ctx.workspace, { repo: ctx.repo, workspace: ctx.workspace });
+    await ctx.runAutoTransitions("agent.started", ctx.repo, ctx.workspace, {
+      repo: ctx.repo,
+      workspace: ctx.workspace,
+    });
     expect(ctx.transitionJiraIssue).not.toHaveBeenCalled();
     expect(ctx.activity).toHaveBeenCalledWith(
       "provider.issue_transition.auto.skip",
@@ -205,7 +220,10 @@ describe("createJiraAutoTransitions", () => {
 
   it("returns silently when no autoTransition entry matches the event", async () => {
     const ctx = createDeps({ autoTransitions: [{ event: "workspace.archived", transition: "Done" }] });
-    await ctx.runAutoTransitions("agent.started", ctx.repo, ctx.workspace, { repo: ctx.repo, workspace: ctx.workspace });
+    await ctx.runAutoTransitions("agent.started", ctx.repo, ctx.workspace, {
+      repo: ctx.repo,
+      workspace: ctx.workspace,
+    });
     expect(ctx.transitionJiraIssue).not.toHaveBeenCalled();
     expect(ctx.collectJiraIssueSummary).not.toHaveBeenCalled();
   });
@@ -232,7 +250,10 @@ describe("createJiraAutoTransitions", () => {
     const ctx = createDeps({
       autoTransitions: [{ event: "agent.started", transition: "Nirvana" }],
     });
-    await ctx.runAutoTransitions("agent.started", ctx.repo, ctx.workspace, { repo: ctx.repo, workspace: ctx.workspace });
+    await ctx.runAutoTransitions("agent.started", ctx.repo, ctx.workspace, {
+      repo: ctx.repo,
+      workspace: ctx.workspace,
+    });
     expect(ctx.transitionJiraIssue).not.toHaveBeenCalled();
     expect(ctx.activity).toHaveBeenCalledWith(
       "provider.issue_transition.auto.unresolved",
@@ -249,7 +270,10 @@ describe("createJiraAutoTransitions", () => {
       autoTransitions: [{ event: "agent.started", transition: "In Progress" }],
       summary: makeSummary({ status: "degraded", reason: "jtk unauthed", issueStatus: null }),
     });
-    await ctx.runAutoTransitions("agent.started", ctx.repo, ctx.workspace, { repo: ctx.repo, workspace: ctx.workspace });
+    await ctx.runAutoTransitions("agent.started", ctx.repo, ctx.workspace, {
+      repo: ctx.repo,
+      workspace: ctx.workspace,
+    });
     expect(ctx.transitionJiraIssue).not.toHaveBeenCalled();
     expect(ctx.activity).toHaveBeenCalledWith(
       "provider.issue_transition.auto",

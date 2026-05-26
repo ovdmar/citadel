@@ -186,12 +186,10 @@ export async function removeWorkspace(
   );
   if (deps.runAutoTransitions) {
     try {
-      await deps.runAutoTransitions(
-        input.archiveOnly ? "workspace.archived" : "workspace.removed",
+      await deps.runAutoTransitions(input.archiveOnly ? "workspace.archived" : "workspace.removed", repo, workspace, {
         repo,
         workspace,
-        { repo, workspace },
-      );
+      });
     } catch {
       // Logged inside the callback.
     }

@@ -452,10 +452,7 @@ export async function searchJiraIssues(query: string | null): Promise<IssueSearc
 // target status (case-insensitive). Falls back to matching by transition
 // name so operators who configured the transition name (instead of the
 // target status) before the semantic clarification still work.
-export function resolveJiraTransitionByTargetStatus(
-  transitions: IssueTransition[],
-  target: string,
-): string | null {
+export function resolveJiraTransitionByTargetStatus(transitions: IssueTransition[], target: string): string | null {
   const needle = target.trim().toLowerCase();
   if (!needle) return null;
   for (const t of transitions) {

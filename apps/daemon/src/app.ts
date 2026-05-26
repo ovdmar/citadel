@@ -21,7 +21,6 @@ import {
   collectGitHubVersionControlSummary,
   collectJiraIssueSummary,
   collectProviderHealth,
-  resolveJiraTransitionByTargetStatus,
   searchJiraIssues,
   setGithubCommand,
   setJiraCommand,
@@ -36,7 +35,7 @@ import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
-import { createJiraAutoTransitions } from "./jira-auto-transitions.js";
+import { wireJiraAutoTransitions } from "./jira-auto-transitions.js";
 import { registerJiraRoutes } from "./jira-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
@@ -90,32 +89,14 @@ export function createDaemonApp(input: {
   const server = http.createServer(app);
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
-  // Construct the Jira auto-transition callback ONCE so the same function
-  // reference reaches OperationService (for agent.started + archive/remove
-  // events) and registerWorkspaceExtraRoutes (for workspace.issue_attached).
-  // A single instance guarantees a single fire per event, no matter how
-  // many call sites invoke it.
-  const runAutoTransitions = createJiraAutoTransitions({
+  // Construct the Jira auto-transition callback ONCE so the same identity
+  // reaches OperationService (for agent.started + archive/remove) and
+  // registerWorkspaceExtraRoutes (for workspace.issue_attached). The
+  // wireJiraAutoTransitions helper keeps boilerplate out of app.ts.
+  const runAutoTransitions = wireJiraAutoTransitions({
     config,
-    providers: {
-      collectJiraIssueSummary: providers.collectJiraIssueSummary,
-      transitionJiraIssue: providers.transitionJiraIssue,
-      resolveJiraTransitionByTargetStatus,
-    },
+    providers,
     store,
-    activity: (type, source, message, repoId, workspaceId, operationId) => {
-      store.addActivity({
-        id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-        type,
-        source,
-        repoId,
-        workspaceId,
-        operationId,
-        message,
-        hookOutput: null,
-        createdAt: new Date().toISOString(),
-      });
-    },
     emit: (type, payload) => emit(type, payload),
     providerCache,
   });
@@ -408,19 +389,6 @@ export function createDaemonApp(input: {
   );
 
   app.get(
-    "/api/workspaces/:workspaceId/issue-summary",
-    asyncRoute(async (req, res) => {
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
-      const issueTracker = await cachedProvider(`issue:${workspace.issueKey}`, () =>
-        providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
-      );
-      res.json({ issueTracker });
-    }),
-  );
-
-  app.get(
     "/api/workspaces/:workspaceId/cockpit-summary",
     asyncRoute(async (req, res) => {
       const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
@@ -498,7 +466,7 @@ export function createDaemonApp(input: {
     }),
   );
 
-  registerJiraRoutes({ app, asyncRoute, store, providers, providerCache, emit });
+  registerJiraRoutes({ app, asyncRoute, store, providers, providerCache, emit, cachedProvider });
 
   app.post(
     "/api/workspaces",

@@ -15,6 +15,7 @@
 import { TransitionIssueInputSchema } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import type {
+  collectJiraIssueSummary as collectJiraIssueSummaryType,
   searchJiraIssues as searchJiraIssuesType,
   transitionJiraIssue as transitionJiraIssueType,
 } from "@citadel/providers";
@@ -29,6 +30,7 @@ type AsyncRoute = (
 export type JiraRoutesProviders = {
   transitionJiraIssue: typeof transitionJiraIssueType;
   searchJiraIssues: typeof searchJiraIssuesType;
+  collectJiraIssueSummary: typeof collectJiraIssueSummaryType;
 };
 
 export function registerJiraRoutes(input: {
@@ -38,8 +40,9 @@ export function registerJiraRoutes(input: {
   providers: JiraRoutesProviders;
   providerCache: Map<string, { expiresAt: number; value: unknown }>;
   emit: Emit;
+  cachedProvider: <T>(key: string, load: () => T | Promise<T>, ttlMs?: number) => Promise<T>;
 }) {
-  const { app, asyncRoute, store, providers, providerCache, emit } = input;
+  const { app, asyncRoute, store, providers, providerCache, emit, cachedProvider } = input;
 
   app.post(
     "/api/workspaces/:workspaceId/issue-transition",
@@ -47,15 +50,28 @@ export function registerJiraRoutes(input: {
       const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
       if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
       if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
-      const input = TransitionIssueInputSchema.parse(req.body);
+      const parsed = TransitionIssueInputSchema.parse(req.body);
       const result = await providers.transitionJiraIssue({
         issueKey: workspace.issueKey,
-        transition: input.transition,
-        fields: input.fields,
+        transition: parsed.transition,
+        fields: parsed.fields,
       });
       providerCache.delete(`issue:${workspace.issueKey}`);
       emit("provider.issue_transition", { workspaceId: workspace.id, issueKey: workspace.issueKey, result });
       res.status(result.status === "healthy" ? 202 : 424).json({ result });
+    }),
+  );
+
+  app.get(
+    "/api/workspaces/:workspaceId/issue-summary",
+    asyncRoute(async (req, res) => {
+      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
+      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
+      if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
+      const issueTracker = await cachedProvider(`issue:${workspace.issueKey}`, () =>
+        providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
+      );
+      res.json({ issueTracker });
     }),
   );
 

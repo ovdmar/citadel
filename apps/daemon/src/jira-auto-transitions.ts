@@ -26,18 +26,12 @@
 //     activity_events.
 
 import type { CitadelConfig } from "@citadel/config";
-import type {
-  AgentSession,
-  HookOutput,
-  JiraAutoTransitionEvent,
-  Repo,
-  Workspace,
-} from "@citadel/contracts";
+import type { AgentSession, HookOutput, JiraAutoTransitionEvent, Repo, Workspace } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
-import type {
-  collectJiraIssueSummary as collectJiraIssueSummaryType,
-  resolveJiraTransitionByTargetStatus as resolveJiraTransitionByTargetStatusType,
-  transitionJiraIssue as transitionJiraIssueType,
+import {
+  type collectJiraIssueSummary as collectJiraIssueSummaryType,
+  resolveJiraTransitionByTargetStatus,
+  type transitionJiraIssue as transitionJiraIssueType,
 } from "@citadel/providers";
 
 export type RunAutoTransitions = (
@@ -64,13 +58,52 @@ export type CreateJiraAutoTransitionsDeps = {
   providers: {
     collectJiraIssueSummary: typeof collectJiraIssueSummaryType;
     transitionJiraIssue: typeof transitionJiraIssueType;
-    resolveJiraTransitionByTargetStatus: typeof resolveJiraTransitionByTargetStatusType;
+    resolveJiraTransitionByTargetStatus: typeof resolveJiraTransitionByTargetStatus;
   };
   store: SqliteStore;
   activity: Activity;
   emit: Emit;
   providerCache: Map<string, { expiresAt: number; value: unknown }>;
 };
+
+// Thin wrapper for the daemon's typical wiring: takes the providers
+// snapshot from createDaemonApp and supplies the boilerplate activity +
+// resolver. Lives here so app.ts stays under the 800-line file-size gate.
+export function wireJiraAutoTransitions(input: {
+  config: CitadelConfig;
+  providers: {
+    collectJiraIssueSummary: typeof collectJiraIssueSummaryType;
+    transitionJiraIssue: typeof transitionJiraIssueType;
+  };
+  store: SqliteStore;
+  emit: Emit;
+  providerCache: Map<string, { expiresAt: number; value: unknown }>;
+}): RunAutoTransitions {
+  const { config, providers, store, emit, providerCache } = input;
+  return createJiraAutoTransitions({
+    config,
+    providers: {
+      collectJiraIssueSummary: providers.collectJiraIssueSummary,
+      transitionJiraIssue: providers.transitionJiraIssue,
+      resolveJiraTransitionByTargetStatus,
+    },
+    store,
+    activity: (type, source, message, repoId, workspaceId, operationId) =>
+      store.addActivity({
+        id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        type,
+        source,
+        repoId,
+        workspaceId,
+        operationId,
+        message,
+        hookOutput: null,
+        createdAt: new Date().toISOString(),
+      }),
+    emit,
+    providerCache,
+  });
+}
 
 export function createJiraAutoTransitions(deps: CreateJiraAutoTransitionsDeps): RunAutoTransitions {
   const { config, providers, store, activity, emit, providerCache } = deps;

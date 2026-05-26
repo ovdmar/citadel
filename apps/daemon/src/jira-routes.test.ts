@@ -1,12 +1,6 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  closeServer,
-  createFixture as createFixtureBase,
-  getJson,
-  listen,
-  postJson,
-} from "./app-test-helpers.js";
+import { closeServer, createFixture as createFixtureBase, getJson, listen, postJson } from "./app-test-helpers.js";
 import { createDaemonApp } from "./app.js";
 
 const dirs: string[] = [];
@@ -110,9 +104,7 @@ describe("registerJiraRoutes", () => {
 
   it("PATCH /api/workspaces/:id fires workspace.issue_attached when issueKey transitions null → value", async () => {
     const fixture = createFixture();
-    fixture.config.providers.jira.autoTransitions = [
-      { event: "workspace.issue_attached", transition: "In Progress" },
-    ];
+    fixture.config.providers.jira.autoTransitions = [{ event: "workspace.issue_attached", transition: "In Progress" }];
     const now = new Date().toISOString();
     fixture.store.insertRepo({
       id: "repo_p",
@@ -204,9 +196,7 @@ describe("registerJiraRoutes", () => {
 
   it("PATCH /api/workspaces/:id does NOT fire workspace.issue_attached on unattach or no-op", async () => {
     const fixture = createFixture();
-    fixture.config.providers.jira.autoTransitions = [
-      { event: "workspace.issue_attached", transition: "In Progress" },
-    ];
+    fixture.config.providers.jira.autoTransitions = [{ event: "workspace.issue_attached", transition: "In Progress" }];
     const now = new Date().toISOString();
     fixture.store.insertRepo({
       id: "repo_q",

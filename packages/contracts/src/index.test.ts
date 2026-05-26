@@ -247,9 +247,9 @@ describe("contract schemas", () => {
     // Degraded responses carry an empty results array + a reason — the
     // picker UI distinguishes "search failed" from "search returned no
     // matches".
-    expect(
-      IssueSearchResponseSchema.parse({ status: "degraded", reason: "jtk not found", results: [] }).status,
-    ).toBe("degraded");
+    expect(IssueSearchResponseSchema.parse({ status: "degraded", reason: "jtk not found", results: [] }).status).toBe(
+      "degraded",
+    );
   });
 
   it("rejects auto-transition events outside the supported enum", () => {
@@ -262,9 +262,9 @@ describe("contract schemas", () => {
     // Deliberately excluded — multi-fire, would burst Jira.
     expect(JiraAutoTransitionEventSchema.safeParse("workspace.updated").success).toBe(false);
 
-    expect(
-      JiraAutoTransitionSchema.parse({ event: "agent.started", transition: "In Progress" }).transition,
-    ).toBe("In Progress");
+    expect(JiraAutoTransitionSchema.parse({ event: "agent.started", transition: "In Progress" }).transition).toBe(
+      "In Progress",
+    );
     expect(JiraAutoTransitionSchema.safeParse({ event: "agent.started", transition: "" }).success).toBe(false);
   });
 
