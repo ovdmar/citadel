@@ -71,9 +71,7 @@ export function createDaemonApp(input: {
   providers?: Partial<ProviderCollectors>;
 }): DaemonApp {
   const { config, configPath, store } = input;
-  // Identity token for this daemon process. Watchdogs (e.g. the redeploy
-  // chip's network-drop fallback) use strict inequality to detect a restart;
-  // do NOT use this for time arithmetic.
+  // Identity token for this daemon process — watchdogs use strict inequality.
   const daemonStartedAt = new Date().toISOString();
   setGithubCommand(config.providers.github.command);
   setJiraCommand(config.providers.jira.command);
@@ -171,17 +169,13 @@ export function createDaemonApp(input: {
   app.get(
     "/api/state",
     asyncRoute(async (_req, res) => {
-      const repos = store.listRepos();
-      const workspaces = store.listWorkspaces();
-      const sessions = store.listSessions();
-      const providerHealth = await cachedProviderHealth();
       res.json({
-        repos,
-        workspaces,
-        sessions,
+        repos: store.listRepos(),
+        workspaces: store.listWorkspaces(),
+        sessions: store.listSessions(),
         operations: store.listOperations(),
         activity: store.listActivity(),
-        providerHealth,
+        providerHealth: await cachedProviderHealth(),
         runtimes: listRuntimeHealth(config.runtimes),
         mcp: mcpStatus(config.mcp.enabled),
         scheduledAgents: scheduledAgents.list(),
