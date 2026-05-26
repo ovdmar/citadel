@@ -397,6 +397,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     runtimes: listRuntimeHealth(config.runtimes),
     scheduledAgents: scheduledAgents.list(),
     namespaces: store.listNamespaces(),
+    scratchpadPath: effectiveNotesPath(config),
     // Per-session summary comes from the runtime's own transcript via the
     // adapter dispatcher. mtime pre-filter inside each adapter keeps list
     // calls cheap even on big project dirs.

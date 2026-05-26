@@ -58,6 +58,33 @@ describe("mcp helpers", () => {
     expect(appendDef?.description).not.toMatch(/blank-line/);
     const addBlockDef = mcpToolDefinitions().find((tool) => tool.name === "add_block");
     expect(addBlockDef?.inputSchema).toMatchObject({ required: ["text"] });
+
+    // Configurable-notes location surface: clients learn about `path` through
+    // these descriptions, so an absent reference would silently downgrade
+    // discoverability.
+    const inspectDef = mcpToolDefinitions().find((tool) => tool.name === "inspect_status");
+    expect(inspectDef?.description).toMatch(/scratchpad\.path/);
+    const readDef = mcpToolDefinitions().find((tool) => tool.name === "read_scratchpad");
+    expect(readDef?.description).toMatch(/\bpath\b/);
+    expect(readDef?.description).toMatch(/scratchpad\.path|configurable|dataDir\/scratchpad\.md/);
+  });
+
+  it("inspect_status surfaces scratchpad.path from McpToolContext", () => {
+    const customPath = "/Users/op/Documents/citadel-notes.md";
+    const context: McpToolContext = {
+      repos: [],
+      workspaces: [],
+      sessions: [],
+      operations: [],
+      activity: [],
+      providerHealth: [],
+      runtimes: [],
+      namespaces: [],
+      scheduledAgents: [],
+      scratchpadPath: customPath,
+    };
+    const result = callMcpTool({ name: "inspect_status" }, context) as { scratchpad: { path: string } };
+    expect(result.scratchpad).toEqual({ path: customPath });
   });
 
   it("snapshot dispatcher routes block tools to the daemon", () => {
@@ -71,6 +98,7 @@ describe("mcp helpers", () => {
       runtimes: [],
       namespaces: [],
       scheduledAgents: [],
+      scratchpadPath: "/tmp/test-scratchpad.md",
     };
     for (const name of ["read_scratchpad", "list_blocks", "add_block", "update_block", "delete_block"] as const) {
       expect(callMcpTool({ name }, context)).toEqual({ error: "scratchpad_tool_requires_daemon" });
@@ -230,10 +258,16 @@ describe("mcp helpers", () => {
         },
       ],
       namespaces: [],
+      scratchpadPath: "/var/data/citadel/scratchpad.md",
     } satisfies McpToolContext;
 
     const result = callMcpTool({ name: "inspect_status" }, context);
-    expect(result).toMatchObject({ repos: 1, workspaces: 1, sessions: 1 });
+    expect(result).toMatchObject({
+      repos: 1,
+      workspaces: 1,
+      sessions: 1,
+      scratchpad: { path: "/var/data/citadel/scratchpad.md" },
+    });
     expect(callMcpTool({ name: "list_repos" }, context)).toEqual({ repos: context.repos });
     expect(callMcpTool({ name: "list_workspaces", arguments: { repoId: "repo_test" } }, context)).toEqual({
       workspaces: context.workspaces.map((workspace) => ({ ...workspace, namespaceName: null })),
