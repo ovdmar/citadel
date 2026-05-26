@@ -11,13 +11,18 @@
 // Backoff curve (per-session, current rate-limit episode):
 //
 //   schedule attempt #N  →  base_delay = min(BASE_DELAY_MS × 2^N, MAX_DELAY_MS)
-//                            + jitter ∈ [0, JITTER_MS)
+//                            + jitter ∈ [JITTER_MIN_MS, JITTER_MAX_MS)
 //
 // where N is the attempt-count after incrementing (so the first scheduled
-// resume — before any send — uses N=0 → 1min + jitter; after the first send
-// fires, N=1 → 2min, then 4, 8, 16, 32, 64, 128, 128, 128…). The cap is
-// 128min so a session that never recovers is retried at most ~11 times per
-// day — bounded token cost, no infinite hot loop.
+// resume — before any send — uses N=0 → 1min base + jitter 2-15min = 3-16min
+// before the first send; after the first send fires, N=1 → 2min base + jitter
+// = 4-17min, then 4, 8, 16, 32, 64, 128, 128, 128…). The 128-min base cap is
+// preserved (so worst-case per-session retry frequency stays ≤ ~143min) but
+// the wide jitter (2-15min) is the load-bearing piece: with many sessions
+// hitting the limit at the same time, narrow jitter would let multiple
+// sessions land in the same 60s auto-resume tick. Wider jitter spreads them
+// across many ticks, so the API sees a smooth trickle of resume nudges
+// rather than a stampede.
 //
 // Per-session backoff state is persisted on the session row so it survives
 // daemon restarts. The fields touched here are:
@@ -54,7 +59,15 @@ export const RESUME_PROMPTS: readonly string[] = Object.freeze([
 // One minute base. Each consecutive resume doubles up to a 128-minute cap.
 export const BASE_DELAY_MS = 60_000;
 export const MAX_DELAY_MS = 128 * 60_000;
-export const JITTER_MS = 60_000;
+// Jitter window — added on top of the exponential base wait. Deliberately
+// wide (2-15min) so that when many sessions hit the same rate-limit window
+// at the same time, their next-resume times spread across ~13min of
+// auto-resume ticks (which run at 60s intervals). Without this width, all
+// the same-base-attempt sessions would land in the same tick and the API
+// would see a burst rather than a trickle.
+export const JITTER_MIN_MS = 2 * 60_000;
+export const JITTER_MAX_MS = 15 * 60_000;
+const JITTER_SPAN_MS = JITTER_MAX_MS - JITTER_MIN_MS;
 // Cap the doubling exponent so 2^N can't overflow for pathological attempt
 // counts. We hit MAX_DELAY_MS at N=7 (2^7 = 128), so anything beyond is the
 // same answer either way; this is purely defense in depth.
@@ -113,13 +126,13 @@ export function pickResumePrompt(rng: () => number = Math.random): string {
 // `attempts` here is the count *after* incrementing for the resume that
 // just fired (or 0 for the very first scheduled resume on a fresh
 // rate_limited session). Returns the wait-in-ms before the next resume.
-// Guarantees: result ∈ [BASE_DELAY_MS, MAX_DELAY_MS + JITTER_MS).
+// Guarantees: result ∈ [BASE_DELAY_MS + JITTER_MIN_MS, MAX_DELAY_MS + JITTER_MAX_MS).
 export function computeNextDelayMs(attempts: number, rng: () => number = Math.random): number {
   const safeAttempts = Math.max(0, Math.floor(attempts));
   const exponent = Math.min(safeAttempts, MAX_EXPONENT);
   const base = Math.min(BASE_DELAY_MS * 2 ** exponent, MAX_DELAY_MS);
   const rawJitter = rng();
-  const jitter = (Number.isFinite(rawJitter) ? rawJitter : 0) * JITTER_MS;
+  const jitter = JITTER_MIN_MS + (Number.isFinite(rawJitter) ? rawJitter : 0) * JITTER_SPAN_MS;
   return Math.round(base + jitter);
 }
 

@@ -229,12 +229,12 @@ describe("claudeCodeStatusAdapter", () => {
     });
 
     it("matches pluralized monitors and local agents too", () => {
-      expect(
-        claudeCodeStatusAdapter.observe(state, ctx("x\n  ⏵⏵ auto mode on · 3 monitors · ↓ to manage")),
-      ).toBe("running");
-      expect(
-        claudeCodeStatusAdapter.observe(state, ctx("x\n  ⏵⏵ auto mode on · 2 local agents · ↓ to manage")),
-      ).toBe("running");
+      expect(claudeCodeStatusAdapter.observe(state, ctx("x\n  ⏵⏵ auto mode on · 3 monitors · ↓ to manage"))).toBe(
+        "running",
+      );
+      expect(claudeCodeStatusAdapter.observe(state, ctx("x\n  ⏵⏵ auto mode on · 2 local agents · ↓ to manage"))).toBe(
+        "running",
+      );
     });
 
     it("treats `<idle prefix> · ctrl+t to hide tasks` as idle (post-interrupt with task panel)", () => {
