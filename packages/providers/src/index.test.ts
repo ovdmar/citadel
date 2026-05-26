@@ -11,10 +11,14 @@ import {
   collectJiraIssueSummary,
   collectRuntimeUsage,
   commandHealth,
+  detectParentPr,
+  mergePr,
   normalizeCheck,
   normalizeCiRun,
   normalizeCiRunList,
+  normalizePrCommit,
   normalizeRuntimeUsage,
+  pLimit,
   parseJiraIssueOutput,
   parseJiraTransitionsOutput,
   transitionJiraIssue,
@@ -281,6 +285,156 @@ describe("commandHealth", () => {
       reason: "No usage provider configured for this runtime",
     });
     expect(unsupported.categories).toEqual([]);
+  });
+});
+
+describe("PR display helpers", () => {
+  it("pLimit never lets more than N tasks run concurrently", async () => {
+    const limit = pLimit(2);
+    let active = 0;
+    let peak = 0;
+    let gate: () => void = () => {};
+    const open = new Promise<void>((resolve) => {
+      gate = resolve;
+    });
+    const tasks = Array.from({ length: 6 }, () =>
+      limit(async () => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await open;
+        active -= 1;
+      }),
+    );
+    // Let microtasks settle so the limiter has a chance to schedule.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(peak).toBe(2);
+    gate();
+    await Promise.all(tasks);
+    // Even after the gate releases everyone, the peak observed during the
+    // ramp-up must have stayed at the limit.
+    expect(peak).toBe(2);
+  });
+
+  it("normalizePrCommit extracts sha, shortSha, message and defaults checks to []", () => {
+    expect(
+      normalizePrCommit({
+        oid: "1234567890abcdef1234567890abcdef12345678",
+        messageHeadline: "feat: add things",
+      }),
+    ).toEqual({
+      sha: "1234567890abcdef1234567890abcdef12345678",
+      shortSha: "1234567",
+      message: "feat: add things",
+      checks: [],
+    });
+  });
+
+  it("normalizePrCommit prefers messageHeadline but falls back to first line of message", () => {
+    expect(
+      normalizePrCommit({
+        oid: "abcdef0123456789abcdef0123456789abcdef01",
+        message: "fix: thing\n\nwith body\n",
+      }).message,
+    ).toBe("fix: thing");
+  });
+
+  it("detectParentPr matches headRefName + headRepository on open + recently-merged PRs", () => {
+    const openPrs = [
+      {
+        number: 42,
+        url: "https://x.test/pr/42",
+        headRefName: "feature/auth",
+        state: "OPEN",
+        headRepository: "org/repo",
+      },
+      {
+        number: 43,
+        url: "https://x.test/pr/43",
+        headRefName: "feature/auth",
+        state: "MERGED",
+        headRepository: "org/repo",
+      },
+      {
+        number: 99,
+        url: "https://x.test/pr/99",
+        headRefName: "feature/auth",
+        state: "OPEN",
+        headRepository: "org/fork",
+      },
+    ];
+    // Open match wins over merged match in the same repo.
+    expect(detectParentPr({ baseRefName: "feature/auth", headRepository: "org/repo" }, openPrs)).toEqual({
+      number: 42,
+      url: "https://x.test/pr/42",
+      headRefName: "feature/auth",
+      state: "OPEN",
+    });
+    // Cross-repo match is ignored.
+    expect(detectParentPr({ baseRefName: "feature/fork-only", headRepository: "org/repo" }, openPrs)).toBeNull();
+    // Merged-only parents are still surfaced (with state).
+    const mergedOnly = [
+      {
+        number: 50,
+        url: "https://x.test/pr/50",
+        headRefName: "feature/ship",
+        state: "MERGED",
+        headRepository: "org/repo",
+      },
+    ];
+    expect(detectParentPr({ baseRefName: "feature/ship", headRepository: "org/repo" }, mergedOnly)?.state).toBe(
+      "MERGED",
+    );
+  });
+
+  it("mergePr returns structured failures and never passes --delete-branch", async () => {
+    const calls: string[][] = [];
+    // Inject a fake gh runner: rejects with the "Pull request is not mergeable" message.
+    const result = await mergePr({ rootPath: "/tmp/x", number: 7, strategy: "squash" }, async (args) => {
+      calls.push(args);
+      throw new Error("Pull request is not mergeable");
+    });
+    expect(result).toEqual({ ok: false, reason: "not_mergeable", detail: "Pull request is not mergeable" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("--squash");
+    expect(calls[0]).not.toContain("--delete-branch");
+  });
+
+  it("mergePr returns ok:true on successful gh exit", async () => {
+    const result = await mergePr({ rootPath: "/tmp/x", number: 8, strategy: "merge" }, async () => "");
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("mergePr classifies gh failure messages into structured reasons", async () => {
+    const auth = await mergePr({ rootPath: "/tmp/x", number: 1, strategy: "squash" }, async () => {
+      throw new Error("gh: not authorized");
+    });
+    expect(auth).toMatchObject({ ok: false, reason: "gh_auth" });
+
+    const strategy = await mergePr({ rootPath: "/tmp/x", number: 1, strategy: "rebase" }, async () => {
+      throw new Error("rebase merge is not allowed by repository");
+    });
+    expect(strategy).toMatchObject({ ok: false, reason: "strategy_disallowed" });
+
+    const unknown = await mergePr({ rootPath: "/tmp/x", number: 1, strategy: "merge" }, async () => {
+      throw new Error("network something happened");
+    });
+    expect(unknown).toMatchObject({ ok: false, reason: "gh_error" });
+  });
+
+  it("detectParentPr accepts both string and {nameWithOwner} headRepository shapes (gh JSON returns the object)", () => {
+    const candidates = [
+      {
+        number: 50,
+        url: "https://x.test/pr/50",
+        headRefName: "feature/ship",
+        state: "OPEN",
+        headRepository: { nameWithOwner: "org/repo" },
+      },
+    ];
+    expect(detectParentPr({ baseRefName: "feature/ship", headRepository: "org/repo" }, candidates)).toMatchObject({
+      number: 50,
+      state: "OPEN",
+    });
   });
 });
 

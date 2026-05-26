@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import type { CreateAgentSessionInput, CreateNamespaceInput, CreateWorkspaceInput, HookAction, HookOutput, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
+import type { ActivityEvent, CreateAgentSessionInput, CreateNamespaceInput, CreateWorkspaceInput, HookAction, HookOutput, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
@@ -18,8 +18,8 @@ export type { AgentHistoryResult, AgentHistoryErrorResult } from "./agent-histor
 export * from "./status.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export { ScheduledAgentRunner, parseCronExpression, cronMatches, nextCronRun, describeCron } from "./scheduled-agents.js";
-export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
+export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
 export { parseUsageLimitResetFromReason, deriveAccountUsageLimit } from "./usage-limit.js";
 export type { AccountRateLimitInfo } from "./usage-limit.js";
@@ -266,12 +266,12 @@ export class OperationService {
       sessionIdArg?: string | null;
       resumeArg?: string | null;
     },
+    options: { activitySource?: ActivityEvent["source"] } = {},
   ) => {
     if (input.namespaceId) {
-      const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
-      if (workspace && input.namespaceId !== workspace.namespaceId) {
-        this.assignWorkspaceToNamespace({ workspaceId: workspace.id, namespaceId: input.namespaceId });
-      }
+      const ws = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+      if (ws && input.namespaceId !== ws.namespaceId)
+        this.assignWorkspaceToNamespace({ workspaceId: ws.id, namespaceId: input.namespaceId });
     }
     return createAgentSessionImpl(
       {
@@ -282,6 +282,7 @@ export class OperationService {
       },
       input,
       runtime,
+      options,
     );
   };
 
@@ -645,9 +646,7 @@ export class OperationService {
 
   listDeployedApps = (input: { workspaceId: string }) =>
     listDeployedAppsImpl(this.deployOpsDeps(), this.resolveRepoWorkspace(input.workspaceId));
-
-  // Per-workspace inflight guard so a double-click in the cockpit or a
-  // human+MCP overlap doesn't run two redeploys against the same port.
+  // Per-workspace inflight guard prevents concurrent redeploys (double-click, human+MCP overlap).
   private redeployInflight = new Map<string, ReturnType<typeof redeployAppImpl>>();
   redeployApp = (input: { workspaceId: string; appName?: string | undefined }) => {
     const existing = this.redeployInflight.get(input.workspaceId);
@@ -739,7 +738,7 @@ export class OperationService {
 
   private activity(
     type: string,
-    source: "user" | "system" | "hook",
+    source: ActivityEvent["source"],
     message: string,
     repoId: string | null,
     workspaceId: string | null,

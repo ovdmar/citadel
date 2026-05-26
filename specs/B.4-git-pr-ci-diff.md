@@ -27,6 +27,12 @@
 [ ] 7. Workspace cards render the PR icon with lifecycle color: grey when no PR exists, yellow when the PR exists and checks are pending, green when checks pass, red when any check fails.
 [ ] 8. The PR icon on a workspace card links directly to the provider PR URL.
 [ ] 9. Workspace cards render a separate approval icon to the right of the PR icon: grey when no reviewer is requested, yellow when reviewers are pending, red when changes are requested or comments are unresolved, green check when at least one approval exists.
+[x] 10. Workspace cards always render a PR row, even when no PR exists — an explicit thin placeholder makes the lifecycle slot visible without requiring workspace selection.
+[x] 11. The PR row exposes a copy-branch affordance for the head branch, and uses GitHub's `base ← head` direction.
+[x] 12. Stacked PRs are detected by comparing each PR's base ref to other open and recently-merged PRs in the same head repository. When a parent is detected, the workspace card and inspector show an `↑ #<parent-number>` chip linking to that PR; merged parents are rendered with a distinct tone.
+[x] 13. A merge button is available in the inspector PR section when the GitHub CLI is healthy and the PR is mergeable. The button respects the repository's allowed merge strategies (squash/merge/rebase) and never deletes the head branch by default.
+[~] 14. GitHub's `mergeable` and `mergeStateStatus` fields are surfaced through `PullRequestSummary`. `mergeable !== "CONFLICTING"` is required for the `ready-to-merge` readiness state; `mergeStateStatus` informs the workspace-card tone only.
+[~] 15. When `mergeable === "CONFLICTING"`, the workspace enters the dedicated `pr-conflicts` readiness state, distinct from the local working-tree `conflicts` state and from `checks-failing`. The workspace-card tone also flips to `conflicting` when `mergeStateStatus === "DIRTY"`, but the readiness state itself remains scoped to `mergeable === "CONFLICTING"`.
 
 ## Checks And CI
 
@@ -36,6 +42,14 @@
 [ ] 4. Pending checks show elapsed time and pending count.
 [ ] 5. Green checks contribute to ready-for-review or ready-to-merge readiness.
 [ ] 6. Stale check data is visible.
+[x] 7. The inspector renders all PR commits (not just local recent commits) with a "Show more" expander when the list exceeds 5; each commit shows a per-commit check-roll-up dot (passing/pending/failing).
+[x] 8. The inspector exposes a manual force-refresh control for PR and check state, and a live-ticking "Last fetched X ago" timestamp drawn from `versionControl.checkedAt`.
+
+## Background Refresh
+
+[x] 1. PR state for every workspace with a remote and an open PR is refreshed in the background every ~30 seconds.
+[x] 2. Background polling pauses when the cockpit tab is hidden (`document.visibilityState === 'hidden'`) and resumes on focus.
+[x] 3. Workspaces with no remote, repository-root workspaces, and workspaces with no PR are skipped to avoid useless gh invocations.
 
 ## Diff
 

@@ -551,11 +551,13 @@ function trimSlashes(value: string) {
  * Linux-only — relies on `/proc/<pid>/cmdline`. On other platforms returns
  * an empty list (caller falls back to spawning fresh ttyds).
  */
-export function discoverExistingTtyds(opts: {
-  portBase?: number;
-  portMax?: number;
-  basePathPrefix?: string;
-} = {}): TtydEntry[] {
+export function discoverExistingTtyds(
+  opts: {
+    portBase?: number;
+    portMax?: number;
+    basePathPrefix?: string;
+  } = {},
+): TtydEntry[] {
   const portBase = opts.portBase ?? DEFAULTS.portBase;
   const portMax = opts.portMax ?? DEFAULTS.portMax;
   const basePathPrefix = trimSlashes(opts.basePathPrefix ?? DEFAULTS.basePathPrefix);
