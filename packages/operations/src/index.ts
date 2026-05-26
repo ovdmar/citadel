@@ -14,14 +14,16 @@ import type {
   UpdateNamespaceInput,
   Workspace,
 } from "@citadel/contracts";
-import { createId, generateFunnyName, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
+import { createId, nowIso, repoDisplayName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
 import * as agentHistory from "./agent-history.js";
 import * as agentMessages from "./agent-messages.js";
 import { createAgentSession as createAgentSessionImpl } from "./create-agent-session.js";
+import { type WorkspaceOpsDeps, createWorkspaceImpl } from "./create-workspace.js";
 import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 import * as namespaceOps from "./namespaces.js";
+import { removeWorkspaceImpl } from "./remove-workspace.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
 export type { LaunchAgentResult } from "./launch-agent.js";
 export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
@@ -43,19 +45,11 @@ import {
   redeployApp as redeployAppImpl,
 } from "./deploy.js";
 import {
-  BranchInUseByWorktreeError,
-  RemoteRefMissingError,
-  WorkspaceNameTakenError,
-  addWorktree,
   cancelOperationInStore,
-  classifyWorktreeError,
-  cleanupWorktree,
   discoverDefaultBranch,
-  isUniqueWorkspaceNameViolation,
   listHookDiagnostics,
   reconcileStore,
   tryRunGit,
-  workspaceIsDirty,
 } from "./helpers.js";
 
 export {
@@ -145,162 +139,7 @@ export class OperationService {
     return repo;
   }
 
-  async createWorkspace(input: CreateWorkspaceInput) {
-    const repo = this.store.listRepos().find((candidate) => candidate.id === input.repoId);
-    if (!repo) throw new Error(`Unknown repo: ${input.repoId}`);
-    const namespaceId = input.namespaceId ?? null;
-    if (namespaceId) {
-      const namespace = this.store.findNamespace(namespaceId);
-      if (!namespace) throw new Error(`Unknown namespace: ${namespaceId}`);
-      if (namespace.archivedAt) throw new Error(`Namespace is archived: ${namespaceId}`);
-    }
-    const now = nowIso();
-    const operation = this.operation("workspace.create", "running", repo.id, null, 5, "Validating workspace request");
-    const newBranch = input.newBranch?.trim() || null;
-    const baseBranch = input.baseBranch?.trim() || repo.defaultBranch;
-    const existingBranch = input.existingBranch?.trim() || null;
-
-    // Resolve the workspace name with daemon-side funny-name generation
-    // when the caller leaves it blank. We retry on unique-name collisions
-    // (rare with a 30×30 dictionary) up to 5 times, then fall back to a
-    // short random suffix to keep the create attempt from failing on a
-    // freshly-typed scratch workspace.
-    const callerName = input.name.trim();
-    const wantsGenerated = callerName.length === 0;
-    let workspace: Workspace | null = null;
-    let lastTriedName = callerName;
-    let branch = "";
-    let workspacePath = "";
-    const maxAttempts = wantsGenerated ? 6 : 1;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      let candidate = callerName;
-      if (wantsGenerated) {
-        candidate = attempt < 5 ? generateFunnyName() : `${generateFunnyName()}-${createId("x").slice(-4)}`;
-      }
-      lastTriedName = candidate;
-      branch = newBranch ?? workspaceBranchName({ ...input, name: candidate });
-      workspacePath = path.join(repo.worktreeParent, branch);
-      const draft: Workspace = {
-        id: createId("ws"),
-        repoId: repo.id,
-        name: candidate,
-        path: workspacePath,
-        branch: existingBranch ?? branch,
-        baseBranch,
-        source: input.source,
-        kind: "worktree",
-        prUrl: input.prUrl ?? null,
-        issueKey: input.issueKey ?? null,
-        issueTitle: input.issueTitle ?? null,
-        issueUrl: input.issueUrl ?? null,
-        slackThreadUrl: input.slackThreadUrl ?? null,
-        section: "backlog",
-        pinned: false,
-        lifecycle: "creating",
-        dirty: false,
-        namespaceId,
-        createdAt: now,
-        updatedAt: now,
-        archivedAt: null,
-      };
-      try {
-        this.store.insertWorkspace(draft);
-        workspace = draft;
-        break;
-      } catch (error) {
-        if (isUniqueWorkspaceNameViolation(error)) {
-          if (wantsGenerated && attempt < maxAttempts - 1) continue;
-          this.store.upsertOperation({
-            ...operation,
-            status: "failed",
-            progress: 100,
-            error: `workspace_name_taken: ${candidate}`,
-            updatedAt: nowIso(),
-          });
-          throw new WorkspaceNameTakenError(repo.id, candidate);
-        }
-        throw error;
-      }
-    }
-    if (!workspace) {
-      // Defensive — the loop above either inserts or throws; this is unreachable.
-      throw new WorkspaceNameTakenError(repo.id, lastTriedName);
-    }
-    this.logOp(
-      operation.id,
-      "info",
-      `Created workspace record name=${workspace.name} branch=${workspace.branch} base=${baseBranch} source=${input.source}`,
-    );
-    this.store.upsertOperation({
-      ...operation,
-      workspaceId: workspace.id,
-      progress: 20,
-      message: "Fetching remote metadata",
-    });
-    fs.mkdirSync(repo.worktreeParent, { recursive: true });
-    try {
-      tryRunGit(repo.rootPath, ["fetch", "--prune", repo.defaultRemote]);
-      this.logOp(operation.id, "info", `Fetched ${repo.defaultRemote} (prune)`);
-      const added = addWorktree(repo.rootPath, workspacePath, repo.defaultRemote, baseBranch, branch, existingBranch);
-      this.logOp(
-        operation.id,
-        "info",
-        added.mode === "checkout"
-          ? `Added worktree at ${workspacePath} on branch ${existingBranch}`
-          : added.mode === "tracking"
-            ? `Added worktree at ${workspacePath} tracking ${added.startPoint}`
-            : `Added worktree at ${workspacePath} (new branch ${existingBranch ?? branch} from ${added.startPoint})`,
-      );
-      this.store.upsertOperation({
-        ...operation,
-        workspaceId: workspace.id,
-        progress: 75,
-        message: "Running workspace setup hooks",
-        updatedAt: nowIso(),
-      });
-      this.logOp(
-        operation.id,
-        "info",
-        `Running ${repo.setupHookIds.length} setup hook(s): ${repo.setupHookIds.join(", ") || "(none)"}`,
-      );
-      await this.runWorkspaceHooks("workspace.setup", repo.setupHookIds, repo, workspace, operation.id);
-      this.store.updateWorkspaceLifecycle(workspace.id, "ready");
-      this.activity(
-        "workspace.created",
-        "system",
-        `Created workspace ${workspace.name}`,
-        repo.id,
-        workspace.id,
-        operation.id,
-      );
-      await this.runNotificationHooks("workspace.created", repo, workspace, operation.id, { repo, workspace });
-      this.store.upsertOperation({
-        ...operation,
-        workspaceId: workspace.id,
-        status: "succeeded",
-        progress: 100,
-        message: "Workspace ready",
-        updatedAt: nowIso(),
-      });
-    } catch (error) {
-      this.store.updateWorkspaceLifecycle(workspace.id, "failed");
-      const errorMessage = error instanceof Error ? error.message : "workspace_create_failed";
-      this.logOp(operation.id, "error", `Workspace create failed: ${errorMessage}`);
-      this.store.upsertOperation({
-        ...operation,
-        workspaceId: workspace.id,
-        status: "failed",
-        progress: 100,
-        error: errorMessage,
-        updatedAt: nowIso(),
-      });
-      const classified = classifyWorktreeError(errorMessage);
-      if (classified) throw new BranchInUseByWorktreeError(classified.branch, classified.worktreePath);
-      if (/invalid reference: \S+/i.test(errorMessage) && existingBranch)
-        throw new RemoteRefMissingError(existingBranch, repo.defaultRemote);
-    }
-    return { operationId: operation.id, workspaceId: workspace.id };
-  }
+  createWorkspace = (input: CreateWorkspaceInput) => createWorkspaceImpl(this.workspaceOpsDeps(), input);
 
   createAgentSession = (
     input: CreateAgentSessionInput,
@@ -416,133 +255,8 @@ export class OperationService {
     );
   }
 
-  async removeWorkspace(input: { workspaceId: string; force?: boolean; archiveOnly?: boolean }) {
-    const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
-    if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
-    const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-    if (!repo) throw new Error(`Workspace repo is missing: ${workspace.repoId}`);
-    if (workspace.kind === "root") {
-      // The root workspace tracks the repo's main checkout; it can only be
-      // removed by removing the repository itself.
-      const operation = this.operation(
-        "workspace.remove",
-        "failed",
-        workspace.repoId,
-        workspace.id,
-        100,
-        "Cannot drop the root workspace",
-      );
-      this.store.upsertOperation({
-        ...operation,
-        error: "Root workspace is non-removable. Remove the repository to drop it.",
-        updatedAt: nowIso(),
-      });
-      return { operationId: operation.id, removed: false, archived: false, dirty: false };
-    }
-    const operation = this.operation(
-      "workspace.remove",
-      "running",
-      workspace.repoId,
-      workspace.id,
-      10,
-      "Checking workspace status",
-    );
-    const dirty = workspaceIsDirty(workspace.path);
-    if (dirty && !input.force && !input.archiveOnly) {
-      this.store.updateWorkspaceLifecycle(workspace.id, "ready", true);
-      this.store.upsertOperation({
-        ...operation,
-        status: "failed",
-        progress: 100,
-        error: "Workspace has uncommitted changes. Use metadata archive or explicit force cleanup.",
-        updatedAt: nowIso(),
-      });
-      this.activity(
-        "workspace.remove.blocked",
-        "system",
-        `Removal blocked because ${workspace.name} has dirty git status`,
-        workspace.repoId,
-        workspace.id,
-        operation.id,
-      );
-      return { operationId: operation.id, removed: false, archived: false, dirty };
-    }
-
-    const ownedSessions = this.store.listSessions(workspace.id);
-    for (const session of ownedSessions) {
-      if (session.tmuxSessionName && !input.archiveOnly) killTmuxSession(session.tmuxSessionName);
-    }
-    if (ownedSessions.length && !input.archiveOnly) {
-      this.logOp(operation.id, "info", `Killed ${ownedSessions.length} tmux session(s) attached to workspace`);
-    }
-
-    const worktreeMissing = !input.archiveOnly && !fs.existsSync(workspace.path);
-    if (!input.archiveOnly && !worktreeMissing) {
-      try {
-        this.logOp(
-          operation.id,
-          "info",
-          `Running ${repo.teardownHookIds.length} teardown hook(s): ${repo.teardownHookIds.join(", ") || "(none)"}`,
-        );
-        await this.runWorkspaceHooks("workspace.teardown", repo.teardownHookIds, repo, workspace, operation.id);
-      } catch (error) {
-        if (!input.force) {
-          this.store.upsertOperation({
-            ...operation,
-            status: "failed",
-            progress: 100,
-            error: error instanceof Error ? error.message : "workspace_teardown_failed",
-            updatedAt: nowIso(),
-          });
-          this.activity(
-            "workspace.remove.blocked",
-            "system",
-            `Removal blocked because teardown failed for ${workspace.name}`,
-            workspace.repoId,
-            workspace.id,
-            operation.id,
-          );
-          return { operationId: operation.id, removed: false, archived: false, dirty };
-        }
-      }
-    }
-
-    if (!input.archiveOnly) {
-      const cleanup = cleanupWorktree(repo.rootPath, workspace.path);
-      this.logOp(operation.id, "info", `${cleanup.action} worktree at ${workspace.path}`);
-      if (cleanup.warning) this.logOp(operation.id, "warn", `git worktree prune failed: ${cleanup.warning}`);
-    }
-    if (input.archiveOnly) {
-      this.store.archiveWorkspace(workspace.id, "archived", dirty);
-      this.logOp(operation.id, "info", `Marked workspace ${workspace.name} as archived`);
-    } else {
-      this.store.deleteWorkspace(workspace.id);
-      this.logOp(operation.id, "info", `Deleted workspace ${workspace.name} (name slot freed)`);
-    }
-    this.store.upsertOperation({
-      ...operation,
-      status: "succeeded",
-      progress: 100,
-      message: input.archiveOnly ? "Workspace metadata archived" : "Workspace removed",
-      updatedAt: nowIso(),
-    });
-    this.activity(
-      input.archiveOnly ? "workspace.archived" : "workspace.removed",
-      "user",
-      input.archiveOnly ? `Archived ${workspace.name}` : `Removed ${workspace.name}`,
-      workspace.repoId,
-      workspace.id,
-      operation.id,
-    );
-    await this.runNotificationHooks(
-      input.archiveOnly ? "workspace.archived" : "workspace.removed",
-      repo,
-      workspace,
-      operation.id,
-      { repo, workspace, result: { removed: !input.archiveOnly, archived: Boolean(input.archiveOnly), dirty } },
-    );
-    return { operationId: operation.id, removed: !input.archiveOnly, archived: Boolean(input.archiveOnly), dirty };
-  }
+  removeWorkspace = (input: { workspaceId: string; force?: boolean; archiveOnly?: boolean }) =>
+    removeWorkspaceImpl(this.workspaceOpsDeps(), input);
 
   async removeRepo(input: { repoId: string; force?: boolean; cleanupWorktrees?: boolean }) {
     const repo = this.store.listRepos().find((candidate) => candidate.id === input.repoId);
@@ -823,4 +537,19 @@ export class OperationService {
       operationId,
       payload,
     });
+
+  // Binds the class's private helpers as deps for the extracted
+  // create-workspace / remove-workspace modules. Built once per call so
+  // arrow-bound `this` stays stable across reentrant flows.
+  private workspaceOpsDeps(): WorkspaceOpsDeps {
+    return {
+      store: this.store,
+      config: this.config,
+      operation: (...args) => this.operation(...args),
+      logOp: (...args) => this.logOp(...args),
+      activity: (...args) => this.activity(...args),
+      runWorkspaceHooks: (...args) => this.runWorkspaceHooks(...args),
+      runNotificationHooks: (...args) => this.runNotificationHooks(...args),
+    };
+  }
 }

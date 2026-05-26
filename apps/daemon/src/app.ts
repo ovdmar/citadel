@@ -86,18 +86,11 @@ export function createDaemonApp(input: {
   const server = http.createServer(app);
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
-  // Per-daemon ttyd port slice. Boot-time cleanupStale() blanket-SIGTERMs
-  // every ttyd in this range, so any two daemons that share a range will
-  // trample each other's live terminals (worktree daemons under tsx watch
-  // restart on file save, and each restart killed the systemd install's
-  // ttyds — that's where the "Reconnecting/Reconnected" storm came from).
-  //
-  // Slot = ((daemonPort - 4010) mod 11) * 20 gives 11 disjoint 20-port
-  // slices, each deterministic per HTTP port. The base is shifted to 7721
-  // (just above the legacy hardcoded ceiling of 7720) so daemons running
-  // OLD pre-slot code — whose cleanupStale still targets the legacy
-  // 7681..7720 range — physically cannot reach new daemons' terminals.
-  // Env overrides still win so operators can pin the range explicitly.
+  // Per-daemon ttyd port slice — 11 disjoint 20-port ranges keyed off the
+  // daemon's HTTP port so worktree daemons can't trample each other's live
+  // terminals on boot-time cleanupStale(). Base shifted past the legacy
+  // 7681..7720 ceiling so pre-slot daemons stay physically isolated. Env
+  // vars still pin explicitly. See PR #15 / fb-terminal-shortcuts for context.
   const ttydSlot = (((config.port - 4010) % 11) + 11) % 11;
   const envTtydBase = Number.parseInt(process.env.CITADEL_TTYD_PORT_BASE ?? "", 10);
   const envTtydMax = Number.parseInt(process.env.CITADEL_TTYD_PORT_MAX ?? "", 10);

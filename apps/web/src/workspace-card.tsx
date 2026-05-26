@@ -1,4 +1,4 @@
-import type { AgentSession, Namespace, PullRequestSummary, Workspace } from "@citadel/contracts";
+import type { AgentSession, Namespace, PullRequestSummary, Workspace, WorkspaceDirtySummary } from "@citadel/contracts";
 import { sessionNeedsAttention } from "@citadel/core";
 import { useMutation } from "@tanstack/react-query";
 import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
@@ -461,6 +461,10 @@ type DropResult = {
   archived: boolean;
   dirty: boolean;
   error?: string | null;
+  // Present when removal was blocked by dirty state. Lists are bounded
+  // server-side (≤50 files, ≤20 unpushed commits) so the dialog stays
+  // readable even on heavily-modified worktrees.
+  dirtySummary?: WorkspaceDirtySummary | null;
 };
 
 function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void }) {
@@ -470,12 +474,16 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
       });
-      const body = (await response.json().catch(() => ({}))) as Partial<DropResult> & { error?: string };
+      const body = (await response.json().catch(() => ({}))) as Partial<DropResult> & {
+        error?: string;
+        dirtySummary?: WorkspaceDirtySummary;
+      };
       return {
         removed: Boolean(body.removed),
         archived: Boolean(body.archived),
         dirty: Boolean(body.dirty),
         error: body.error ?? null,
+        dirtySummary: body.dirtySummary ?? null,
       };
     },
     onSuccess: (result) => {
@@ -486,6 +494,9 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
   const result = drop.data;
   const dirtyBlocked = Boolean(result && !result.removed && result.dirty);
   const teardownBlocked = Boolean(result && !result.removed && !result.dirty);
+  const dirtySummary = result?.dirtySummary ?? null;
+  const hasStructuredSummary =
+    dirtyBlocked && dirtySummary !== null && (dirtySummary.files.length > 0 || dirtySummary.unpushedCommits.length > 0);
   return (
     <div className="drop-workspace-backdrop" onMouseDown={props.onClose}>
       <dialog
@@ -503,6 +514,36 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
           <p className="drop-workspace-error">
             Workspace has uncommitted changes or unpushed commits. Commit and push before dropping.
           </p>
+        ) : null}
+        {hasStructuredSummary && dirtySummary ? (
+          <fieldset className="drop-workspace-summary" aria-label="Blocking changes">
+            {dirtySummary.files.length > 0 ? (
+              <details open>
+                <summary>Uncommitted changes ({dirtySummary.files.length})</summary>
+                <ul className="drop-workspace-summary-list">
+                  {dirtySummary.files.map((file) => (
+                    <li key={file.path}>
+                      <code className="drop-workspace-summary-status">{file.status}</code>
+                      <span className="drop-workspace-summary-path">{file.path}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+            {dirtySummary.unpushedCommits.length > 0 ? (
+              <details open>
+                <summary>Unpushed commits ({dirtySummary.unpushedCommits.length})</summary>
+                <ul className="drop-workspace-summary-list">
+                  {dirtySummary.unpushedCommits.map((commit) => (
+                    <li key={commit.sha}>
+                      <code className="drop-workspace-summary-sha">{commit.sha.slice(0, 7)}</code>
+                      <span className="drop-workspace-summary-subject">{commit.subject}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+          </fieldset>
         ) : null}
         {teardownBlocked ? (
           <p className="drop-workspace-error">Teardown hook failed{result?.error ? `: ${result.error}` : "."}</p>

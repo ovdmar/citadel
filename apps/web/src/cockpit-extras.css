@@ -356,6 +356,60 @@
   color: var(--color-danger);
 }
 
+/* Structured summary of uncommitted changes / unpushed commits shown when
+ * the drop is blocked by dirty state. Two collapsible sections; each list
+ * is bounded server-side so we don't need a tall scrollbox here. */
+.drop-workspace-summary {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--panel-sunken, transparent);
+}
+
+.drop-workspace-summary summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 2px 0;
+}
+
+.drop-workspace-summary-list {
+  list-style: none;
+  padding: 4px 0 0;
+  margin: 0;
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.drop-workspace-summary-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.drop-workspace-summary-status,
+.drop-workspace-summary-sha {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: pre;
+}
+
+.drop-workspace-summary-path,
+.drop-workspace-summary-subject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .drop-workspace-actions {
   display: flex;
   justify-content: flex-end;
