@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
 import { Cockpit } from "./cockpit.js";
+import { Toaster } from "./components/ui/toast.js";
 import { TooltipProvider } from "./components/ui/tooltip.js";
 import { bootstrapLastRoute, clearLastRoute, saveLastRoute } from "./lib/last-route.js";
 import { DashboardView } from "./routes/dashboard.js";
@@ -174,6 +175,7 @@ createRoot(document.getElementById("root") as HTMLElement).render(
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <RouterProvider router={router} />
+      <Toaster />
     </TooltipProvider>
   </QueryClientProvider>,
 );
