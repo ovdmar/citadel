@@ -41,7 +41,7 @@ export function RequestReviewPanel(props: { workspace: Workspace; hasHook: boole
 
   const run = latest.data?.run;
   const suggestions = run?.output?.suggestions ?? [];
-  const status = mutation.isPending ? "loading" : run?.status ?? "idle";
+  const status = mutation.isPending ? "loading" : (run?.status ?? "idle");
   return (
     <section className="inspector-review-request" aria-label="Request review">
       <header>
@@ -64,9 +64,7 @@ export function RequestReviewPanel(props: { workspace: Workspace; hasHook: boole
           Hook {status === "timed_out" ? "timed out" : "failed"}: {run?.error ?? "unknown error"}
         </p>
       ) : null}
-      {mutation.isError ? (
-        <p className="inspector-review-error">{(mutation.error as Error).message}</p>
-      ) : null}
+      {mutation.isError ? <p className="inspector-review-error">{(mutation.error as Error).message}</p> : null}
       {status === "succeeded" && suggestions.length === 0 ? (
         <p className="inspector-review-empty">Hook returned no suggestions.</p>
       ) : null}
@@ -100,8 +98,7 @@ export function ReviewCommentsPanel(props: { workspace: Workspace; diff: Workspa
     queryFn: () => api(`/api/workspaces/${props.workspace.id}/review-comments`),
   });
 
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: ["review-comments", props.workspace.id] });
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["review-comments", props.workspace.id] });
 
   const addMutation = useMutation({
     mutationFn: (input: { body: string; filePath?: string; lineStart?: number }) =>
@@ -167,16 +164,12 @@ export function ReviewCommentsPanel(props: { workspace: Workspace; diff: Workspa
           </button>
         </div>
       </div>
-      {open.length === 0 && resolved.length === 0 ? (
-        <p className="inspector-review-empty">No comments yet.</p>
-      ) : null}
+      {open.length === 0 && resolved.length === 0 ? <p className="inspector-review-empty">No comments yet.</p> : null}
       <ul className="inspector-review-list">
         {open.map((c) => (
           <CommentRow key={c.id} comment={c} workspaceId={props.workspace.id} onChanged={invalidate} />
         ))}
-        {resolved.length > 0 ? (
-          <li className="inspector-review-resolved-header">{resolved.length} resolved</li>
-        ) : null}
+        {resolved.length > 0 ? <li className="inspector-review-resolved-header">{resolved.length} resolved</li> : null}
         {resolved.map((c) => (
           <CommentRow key={c.id} comment={c} workspaceId={props.workspace.id} onChanged={invalidate} />
         ))}
@@ -233,7 +226,7 @@ function CommentRow(props: { comment: ReviewComment; workspaceId: string; onChan
         <button type="button" onClick={() => remove.mutate()}>
           Delete
         </button>
-        {(toggleResolved.isError || remove.isError) ? (
+        {toggleResolved.isError || remove.isError ? (
           <span className="inspector-review-error">{((toggleResolved.error ?? remove.error) as Error)?.message}</span>
         ) : null}
       </div>

@@ -66,8 +66,7 @@ export const HookConfigSchema = z
   .transform((hook) => ({
     ...hook,
     blocking:
-      hook.blocking ??
-      ["workspace.setup", "workspace.teardown", "workspace.requestReview"].includes(hook.event),
+      hook.blocking ?? ["workspace.setup", "workspace.teardown", "workspace.requestReview"].includes(hook.event),
   }));
 
 export const CitadelConfigSchema = z
@@ -184,13 +183,10 @@ export const CitadelConfigSchema = z
       "repoDefaults",
       "actionHookIds",
     ]);
-    validateHookReferences(
-      context,
-      hooksById,
-      config.repoDefaults.requestReviewHookIds,
-      "workspace.requestReview",
-      ["repoDefaults", "requestReviewHookIds"],
-    );
+    validateHookReferences(context, hooksById, config.repoDefaults.requestReviewHookIds, "workspace.requestReview", [
+      "repoDefaults",
+      "requestReviewHookIds",
+    ]);
   });
 
 export type CitadelConfig = z.infer<typeof CitadelConfigSchema>;

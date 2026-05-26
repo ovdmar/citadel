@@ -9,8 +9,8 @@ import {
   updateReviewComment as updateReviewCommentImpl,
 } from "@citadel/operations";
 import type express from "express";
-import { readWorkspaceDiff } from "./workspace-diff.js";
 import { z } from "zod";
+import { readWorkspaceDiff } from "./workspace-diff.js";
 
 const StatusQuerySchema = z.enum(["open", "resolved", "all"]).default("all");
 
@@ -153,8 +153,7 @@ export function registerReviewRoutes(deps: ReviewRoutesDeps) {
       if (parsed.data.status !== undefined) updateInput.status = parsed.data.status;
       const result = updateReviewCommentImpl(updateInput);
       if (result.kind === "not-found") return res.status(404).json({ error: "comment_not_found" });
-      if (result.kind === "conflict")
-        return res.status(409).json({ error: "conflict", latest: result.latest });
+      if (result.kind === "conflict") return res.status(409).json({ error: "conflict", latest: result.latest });
       return res.json({ comment: result.row });
     }),
   );
@@ -176,8 +175,7 @@ export function registerReviewRoutes(deps: ReviewRoutesDeps) {
         repoId: workspace?.repoId ?? "",
       });
       if (result.kind === "not-found") return res.status(404).json({ error: "comment_not_found" });
-      if (result.kind === "conflict")
-        return res.status(409).json({ error: "conflict", latest: result.latest });
+      if (result.kind === "conflict") return res.status(409).json({ error: "conflict", latest: result.latest });
       return res.status(204).end();
     }),
   );
@@ -223,10 +221,8 @@ export function registerReviewRoutes(deps: ReviewRoutesDeps) {
         diff: diffSummary,
       });
       if (result.kind === "no-hook") return res.status(400).json({ error: "no-hook" });
-      if (result.kind === "succeeded")
-        return res.json({ run: result.run, output: result.output });
-      if (result.kind === "timed-out")
-        return res.status(504).json({ error: "timed-out", run: result.run });
+      if (result.kind === "succeeded") return res.json({ run: result.run, output: result.output });
+      if (result.kind === "timed-out") return res.status(504).json({ error: "timed-out", run: result.run });
       return res.status(502).json({ error: "hook-failed", run: result.run, message: result.error });
     }),
   );

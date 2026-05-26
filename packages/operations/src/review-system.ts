@@ -44,9 +44,7 @@ export type RequestReviewInput = {
 
 const TIMEOUT_MARKER = "Hook timed out after";
 
-export async function requestReviewForWorkspace(
-  input: RequestReviewInput,
-): Promise<RequestReviewResult> {
+export async function requestReviewForWorkspace(input: RequestReviewInput): Promise<RequestReviewResult> {
   const { store, config, activity, repo, workspace, diff } = input;
   const ids = repo.requestReviewHookIds ?? [];
   const hooks = (config?.hooks ?? []).filter(
@@ -70,10 +68,7 @@ export async function requestReviewForWorkspace(
   const timeoutMs = config?.commandPolicy.hookTimeoutMs ?? 120_000;
 
   try {
-    const result = await runCommandHookForDiagnostics(
-      commandHook(hook, workspace.path, config),
-      payload,
-    );
+    const result = await runCommandHookForDiagnostics(commandHook(hook, workspace.path, config), payload);
     const durationMs = result.durationMs;
     if (result.exitStatus !== 0) {
       const stderr = result.stderr.slice(-4000) || null;

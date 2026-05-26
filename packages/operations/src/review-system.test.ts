@@ -93,7 +93,10 @@ function seed(opts: { hooks?: HookConfig[]; requestReviewHookIds?: string[] } = 
   store.insertRepo(repo);
   store.insertWorkspace(workspace);
   const activity = vi.fn();
-  const config = { hooks: opts.hooks ?? [], commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false } };
+  const config = {
+    hooks: opts.hooks ?? [],
+    commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+  };
   return { dir, store, repo, workspace, activity, config };
 }
 

@@ -432,8 +432,7 @@ async function handleReviewTool(deps: DaemonMcpDeps, call: McpToolCall): Promise
       createdAt: new Date().toISOString(),
     });
   };
-  const resolveWorkspace = (workspaceId: string) =>
-    store.listWorkspaces().find((w) => w.id === workspaceId) ?? null;
+  const resolveWorkspace = (workspaceId: string) => store.listWorkspaces().find((w) => w.id === workspaceId) ?? null;
 
   if (call.name === "list_review_comments") {
     const workspaceId = typeof args.workspaceId === "string" ? args.workspaceId : "";

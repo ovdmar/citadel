@@ -82,9 +82,7 @@ export function Inspector(props: {
           <ReviewTab
             workspace={props.workspace}
             diff={diff.data}
-            hasRequestReviewHook={
-              (props.repo?.requestReviewHookIds?.length ?? 0) > 0
-            }
+            hasRequestReviewHook={(props.repo?.requestReviewHookIds?.length ?? 0) > 0}
           />
         )}
       </div>

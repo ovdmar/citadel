@@ -13,11 +13,7 @@ declare module "./index.js" {
       ifUpdatedAtMatches: string,
       now?: string,
     ): ReviewCommentMutationResult;
-    softDeleteReviewComment(
-      id: string,
-      ifUpdatedAtMatches: string,
-      now?: string,
-    ): ReviewCommentMutationResult;
+    softDeleteReviewComment(id: string, ifUpdatedAtMatches: string, now?: string): ReviewCommentMutationResult;
     insertReviewSuggestionRun(input: InsertReviewSuggestionRunInput): ReviewSuggestionRun;
     latestReviewSuggestionRun(workspaceId: string): ReviewSuggestionRun | null;
   }
@@ -220,9 +216,7 @@ export const reviewStoreMethods = {
 
   latestReviewSuggestionRun(this: SqliteStore, workspaceId: string): ReviewSuggestionRun | null {
     const row = this.database
-      .prepare(
-        "SELECT * FROM review_suggestion_runs WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 1",
-      )
+      .prepare("SELECT * FROM review_suggestion_runs WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 1")
       .get(workspaceId) as Record<string, unknown> | undefined;
     return row ? reviewSuggestionRunFromRow(row) : null;
   },

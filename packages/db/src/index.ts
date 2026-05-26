@@ -682,6 +682,7 @@ export class SqliteStore {
   }
 }
 
+import { reviewStoreMethods } from "./review.js";
 // Attach the scheduled_agent_runs and background_sessions methods to
 // SqliteStore.prototype. The implementations live in scheduled-run-store.ts
 // (kept separate to stay under the per-file line budget); the type
@@ -689,7 +690,6 @@ export class SqliteStore {
 // the assignment inside scheduled-run-store.ts itself because ES module
 // hoisting would run it before this class declaration completes.
 import { scheduledRunStoreMethods } from "./scheduled-run-store.js";
-import { reviewStoreMethods } from "./review.js";
 Object.assign(SqliteStore.prototype, scheduledRunStoreMethods);
 Object.assign(SqliteStore.prototype, reviewStoreMethods);
 export type {

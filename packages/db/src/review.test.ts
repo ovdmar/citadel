@@ -110,12 +110,8 @@ describe("review_comments", () => {
       body: "r",
       status: "resolved",
     });
-    expect(f.store.listReviewComments(f.workspaceId, { status: "open" }).map((c) => c.id)).toEqual([
-      "rc_open",
-    ]);
-    expect(f.store.listReviewComments(f.workspaceId, { status: "resolved" }).map((c) => c.id)).toEqual([
-      "rc_resolved",
-    ]);
+    expect(f.store.listReviewComments(f.workspaceId, { status: "open" }).map((c) => c.id)).toEqual(["rc_open"]);
+    expect(f.store.listReviewComments(f.workspaceId, { status: "resolved" }).map((c) => c.id)).toEqual(["rc_resolved"]);
     expect(f.store.listReviewComments(f.workspaceId, { status: "all" })).toHaveLength(2);
   });
 
@@ -140,11 +136,7 @@ describe("review_comments", () => {
       author: "operator",
       body: "v1",
     });
-    const result = f.store.updateReviewComment(
-      "rc_u",
-      { body: "v2" },
-      "1970-01-01T00:00:00.000Z",
-    );
+    const result = f.store.updateReviewComment("rc_u", { body: "v2" }, "1970-01-01T00:00:00.000Z");
     expect(result.kind).toBe("conflict");
     if (result.kind === "conflict") expect(result.latest.id).toBe(created.id);
     expect(f.store.getReviewComment("rc_u")?.body).toBe("v1");
@@ -211,7 +203,11 @@ describe("review_suggestion_runs", () => {
       status: "succeeded",
       durationMs: 30,
       exitStatus: 0,
-      output: { suggestions: [{ id: "s1", kind: "note", label: "ok", detail: null, url: null, metadata: {} }], generatedAt: null, metadata: {} },
+      output: {
+        suggestions: [{ id: "s1", kind: "note", label: "ok", detail: null, url: null, metadata: {} }],
+        generatedAt: null,
+        metadata: {},
+      },
       stderr: null,
       error: null,
     });

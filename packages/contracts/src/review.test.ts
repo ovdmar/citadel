@@ -42,21 +42,15 @@ describe("ReviewSuggestionsOutputSchema", () => {
   });
 
   it("rejects an unknown suggestion kind", () => {
-    expect(() =>
-      ReviewSuggestionSchema.parse({ id: "s", kind: "bogus", label: "x" }),
-    ).toThrow();
+    expect(() => ReviewSuggestionSchema.parse({ id: "s", kind: "bogus", label: "x" })).toThrow();
   });
 
   it("rejects suggestion label over 200 chars", () => {
-    expect(() =>
-      ReviewSuggestionSchema.parse({ id: "s", kind: "note", label: "x".repeat(201) }),
-    ).toThrow();
+    expect(() => ReviewSuggestionSchema.parse({ id: "s", kind: "note", label: "x".repeat(201) })).toThrow();
   });
 
   it("rejects suggestion url that is not a URL", () => {
-    expect(() =>
-      ReviewSuggestionSchema.parse({ id: "s", kind: "reviewer", label: "y", url: "not-a-url" }),
-    ).toThrow();
+    expect(() => ReviewSuggestionSchema.parse({ id: "s", kind: "reviewer", label: "y", url: "not-a-url" })).toThrow();
   });
 
   it("defaults nullable fields to null instead of undefined", () => {
@@ -101,9 +95,7 @@ describe("ReviewCommentSchema", () => {
   });
 
   it("rejects lineEnd < lineStart", () => {
-    expect(() =>
-      ReviewCommentSchema.parse({ ...base, filePath: "a.ts", lineStart: 10, lineEnd: 5 }),
-    ).toThrow();
+    expect(() => ReviewCommentSchema.parse({ ...base, filePath: "a.ts", lineStart: 10, lineEnd: 5 })).toThrow();
   });
 
   it("rejects negative line numbers", () => {

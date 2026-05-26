@@ -7,9 +7,7 @@ import { type APIRequestContext, expect, test } from "@playwright/test";
 const API_BASE =
   process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "4012"}`;
 
-test("review-comments can be created, resolved, and deleted via the API surface", async ({
-  request,
-}, testInfo) => {
+test("review-comments can be created, resolved, and deleted via the API surface", async ({ request }, testInfo) => {
   // Backend-only flow: keeps the test independent of inspector tab DOM that may
   // change. The same daemon endpoints the cockpit uses are exercised here.
   const fixture = createGitFixture();

@@ -39,10 +39,9 @@ describe("review routes — comments", () => {
 
       // Second comment via clean body — confirms author stays 'operator' even
       // on subsequent posts.
-      await postJson<{ comment: ReviewComment }>(
-        `${baseUrl}/api/workspaces/${workspaceId}/review-comments`,
-        { body: "another" },
-      );
+      await postJson<{ comment: ReviewComment }>(`${baseUrl}/api/workspaces/${workspaceId}/review-comments`, {
+        body: "another",
+      });
 
       // GET 200 with two comments
       const list = await getJson<{ comments: ReviewComment[] }>(

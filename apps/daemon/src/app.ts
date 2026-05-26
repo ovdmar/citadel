@@ -118,9 +118,8 @@ export function createDaemonApp(input: {
       payload,
     };
     for (const client of sseClients) client.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
-    if (fsWatchers && (type === "workspace.updated" || type === "state.reconciled" || type === "repo.updated")) {
+    if (fsWatchers && (type === "workspace.updated" || type === "state.reconciled" || type === "repo.updated"))
       fsWatchers.reconcile();
-    }
   };
 
   // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
@@ -562,10 +561,7 @@ export function createDaemonApp(input: {
     }),
   );
 
-  app.get("/api/operations", (_req, res) => {
-    res.json({ operations: store.listOperations() });
-  });
-
+  app.get("/api/operations", (_req, res) => res.json({ operations: store.listOperations() }));
   app.get("/api/operations/:operationId", (req, res) => {
     const operation = store.findOperation(String(req.params.operationId));
     if (!operation) return res.status(404).json({ error: "operation_not_found" });
@@ -581,12 +577,12 @@ export function createDaemonApp(input: {
       if (typeof patch.name === "string" && patch.name.length) allowed.name = patch.name;
       if (typeof patch.worktreeParent === "string" && patch.worktreeParent.length)
         allowed.worktreeParent = patch.worktreeParent;
-      if (Array.isArray(patch.setupHookIds))
-        allowed.setupHookIds = patch.setupHookIds.filter((id: unknown) => typeof id === "string");
-      if (Array.isArray(patch.teardownHookIds))
-        allowed.teardownHookIds = patch.teardownHookIds.filter((id: unknown) => typeof id === "string");
-      if (Array.isArray(patch.providerIds))
-        allowed.providerIds = patch.providerIds.filter((id: unknown) => typeof id === "string");
+      const stringArrayKeys = ["setupHookIds", "teardownHookIds", "requestReviewHookIds", "providerIds"] as const;
+      for (const key of stringArrayKeys) {
+        if (Array.isArray((patch as Record<string, unknown>)[key])) {
+          allowed[key] = ((patch as Record<string, unknown>)[key] as unknown[]).filter((id) => typeof id === "string");
+        }
+      }
       if (typeof patch.deployHookCommand === "string")
         allowed.deployHookCommand = patch.deployHookCommand.trim() || null;
       else if (patch.deployHookCommand === null) allowed.deployHookCommand = null;
@@ -690,15 +686,13 @@ export function createDaemonApp(input: {
     emit,
     asyncRoute,
   });
-  // Boot-sweep: close any 'running' run rows that were in flight when the
-  // daemon last died, sync the denormalized lastRunStatus cache on the
-  // affected agents, kill orphan background tmux sessions, and drain queued
-  // rows that were waiting on the failed in-flight predecessors. Best-effort:
-  // we don't want a sweep failure to block startup, but we DO want a signal
-  // because a silent failure leaves orphaned 'running' rows behind.
-  void scheduledAgents.recoverInFlightRuns().catch((error) => {
-    console.error("[citadel] scheduledAgents.recoverInFlightRuns failed:", error);
-  });
+  // Boot-sweep: close any in-flight run rows, sync denormalized lastRunStatus,
+  // kill orphan background tmux sessions, drain queued rows blocked on failed
+  // predecessors. Best-effort: don't block startup, but log because silent
+  // failure leaves orphan 'running' rows behind.
+  void scheduledAgents
+    .recoverInFlightRuns()
+    .catch((error) => console.error("[citadel] scheduledAgents.recoverInFlightRuns failed:", error));
 
   const mcpDeps = { config, store, operations, ttyd, scheduledAgents, scheduledAgentService, providerCache, emit };
   registerMcpRoutes(app, asyncRoute, {

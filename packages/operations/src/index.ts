@@ -27,9 +27,7 @@ export type { LaunchAgentResult } from "./launch-agent.js";
 export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
 export type { AgentHistoryResult, AgentHistoryErrorResult } from "./agent-history.js";
 export * from "./status.js";
-export { ScheduledAgentRunner, parseCronExpression, cronMatches, nextCronRun, describeCron } from "./scheduled-agents.js";
-export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
-export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
+export * from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
 import {
   type DeployOpsDeps,
@@ -59,7 +57,7 @@ export {
   WorkspaceNameTakenError,
 } from "./helpers.js";
 import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
-export { addReviewComment, deleteReviewComment, listReviewComments, requestReviewForWorkspace, updateReviewComment } from "./review-system.js";
+export * from "./review-system.js";
 import {
   type WorkspaceAppsDeps,
   discoverWorkspaceApps as discoverWorkspaceAppsImpl,
@@ -74,7 +72,9 @@ export class OperationService {
       repoDefaults: {
         setupHookIds: string[];
         teardownHookIds: string[];
-        appHookIds?: string[]; actionHookIds?: string[]; requestReviewHookIds?: string[];
+        appHookIds?: string[];
+        actionHookIds?: string[];
+        requestReviewHookIds?: string[];
       };
       commandPolicy: CitadelConfig["commandPolicy"];
     },
@@ -700,7 +700,8 @@ export class OperationService {
       workspace,
       hooks: this.config?.hooks ?? [],
       appHookIds: this.config?.repoDefaults.appHookIds ?? [],
-      actionHookIds: this.config?.repoDefaults.actionHookIds ?? [], requestReviewHookIds: this.config?.repoDefaults.requestReviewHookIds ?? [],
+      actionHookIds: this.config?.repoDefaults.actionHookIds ?? [],
+      requestReviewHookIds: this.config?.repoDefaults.requestReviewHookIds ?? [],
       hookTimeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
     });
 
