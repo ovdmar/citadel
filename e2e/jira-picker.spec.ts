@@ -108,12 +108,11 @@ test.describe("Jira picker", () => {
       const patched = (await patchResp.json()) as { workspace?: { issueKey?: string | null } };
       expect(patched.workspace?.issueKey).toBe("T-1");
 
-      // The cockpit-summary refetch normally returns degraded issueTracker
-      // when jtk is unavailable. We need an issueTracker that carries a
-      // transitions list so the transition menu has something to render.
-      // Patch only the issueTracker portion of the live response; let the
-      // real route handle git/versionControl/ci/apps so the contract stays
-      // valid and the page renders.
+      // Stateful issueStatus — flips when the transition route is hit so
+      // the cockpit-summary refetch that follows onSettled reflects the
+      // new state (otherwise the optimistic value gets clobbered by the
+      // refetch).
+      let issueStatus = "To Do";
       await page.route(/\/api\/workspaces\/[^/]+\/cockpit-summary/, async (route) => {
         const response = await route.fetch();
         const body = await response.json();
@@ -123,7 +122,7 @@ test.describe("Jira picker", () => {
           reason: null,
           key: "T-1",
           summary: "Transition demo",
-          issueStatus: "To Do",
+          issueStatus,
           assignee: null,
           updated: null,
           url: null,
@@ -133,6 +132,7 @@ test.describe("Jira picker", () => {
         await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
       });
       await page.route(/\/api\/workspaces\/[^/]+\/issue-transition/, async (route) => {
+        issueStatus = "In Progress";
         await route.fulfill({
           status: 202,
           contentType: "application/json",
