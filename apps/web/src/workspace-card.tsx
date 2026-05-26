@@ -1,7 +1,19 @@
 import type { AgentSession, Namespace, PullRequestSummary, Workspace } from "@citadel/contracts";
 import { sessionNeedsAttention } from "@citadel/core";
 import { useMutation } from "@tanstack/react-query";
-import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
+import {
+  ArrowUp,
+  Copy,
+  ExternalLink,
+  Folder,
+  GitBranch,
+  Home,
+  MessageSquare,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldQuestion,
+  X,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { useStateQuery } from "./app-state.js";
@@ -217,6 +229,9 @@ export function WorkspaceCard(
           <X size={11} />
         </button>
       )}
+      {workspace.kind === "root" ? null : (
+        <WorkspaceCardPrStrip workspace={workspace} pullRequest={pullRequest ?? null} prTone={prTone} />
+      )}
       {confirmDrop ? <DropWorkspaceDialog workspace={workspace} onClose={() => setConfirmDrop(false)} /> : null}
       {showNamespaceMenu ? (
         <NamespacePickerDialog
@@ -225,6 +240,92 @@ export function WorkspaceCard(
           onClose={() => setShowNamespaceMenu(false)}
         />
       ) : null}
+    </div>
+  );
+}
+
+// Always-visible PR strip below the card body. Shows the placeholder when no
+// PR exists so the lifecycle slot stays visible on every workspace; renders
+// the PR identity (with copy-head-branch + open-in-new-tab) when one is
+// attached. Stacked PRs surface as a parent chip above the title row.
+function WorkspaceCardPrStrip(props: {
+  workspace: Workspace;
+  pullRequest: PullRequestSummary | null;
+  prTone: PrTone;
+}) {
+  const { workspace, pullRequest, prTone } = props;
+  const stop = (event: React.MouseEvent) => event.stopPropagation();
+  if (!pullRequest) {
+    return (
+      <div className="workspace-card-pr workspace-card-pr-empty" aria-label="No PR for this workspace">
+        <span className="workspace-card-pr-dash" aria-hidden>
+          —
+        </span>
+        <span>No PR</span>
+      </div>
+    );
+  }
+  const copyHead = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    if (typeof navigator !== "undefined" && navigator.clipboard) navigator.clipboard.writeText(workspace.branch);
+  };
+  return (
+    <div className="workspace-card-pr" data-tone={prTone}>
+      {pullRequest.parentPr ? (
+        <a
+          className="workspace-card-pr-parent"
+          href={pullRequest.parentPr.url}
+          target="_blank"
+          rel="noreferrer"
+          onClick={stop}
+          data-state={pullRequest.parentPr.state.toLowerCase() === "merged" ? "merged" : "open"}
+          title={`Parent PR #${pullRequest.parentPr.number} (${pullRequest.parentPr.state})`}
+        >
+          <ArrowUp size={9} /> #{pullRequest.parentPr.number}
+        </a>
+      ) : null}
+      <div className="workspace-card-pr-row workspace-card-pr-title-row">
+        <a
+          className="workspace-card-pr-title"
+          href={pullRequest.url}
+          target="_blank"
+          rel="noreferrer"
+          onClick={stop}
+          title={pullRequest.title}
+        >
+          #{pullRequest.number}: {pullRequest.title}
+        </a>
+        <a
+          className="workspace-card-pr-open"
+          href={pullRequest.url}
+          target="_blank"
+          rel="noreferrer"
+          onClick={stop}
+          aria-label={`Open PR #${pullRequest.number} in a new tab`}
+          title="Open PR in a new tab"
+        >
+          <ExternalLink size={10} />
+        </a>
+      </div>
+      <div className="workspace-card-pr-row workspace-card-pr-branch-row">
+        <span className={`workspace-card-pr-chip tone-${prTone}`} title={`PR state: ${prTone}`}>
+          {prTone}
+        </span>
+        <span className="workspace-card-pr-base">
+          <span className="workspace-card-pr-mono">{workspace.baseBranch}</span>
+          <span className="workspace-card-pr-arrow">←</span>
+          <span className="workspace-card-pr-mono">{workspace.branch}</span>
+        </span>
+        <button
+          type="button"
+          className="workspace-card-pr-copy"
+          onClick={copyHead}
+          aria-label={`Copy head branch ${workspace.branch}`}
+          title={`Copy head branch ${workspace.branch}`}
+        >
+          <Copy size={10} />
+        </button>
+      </div>
     </div>
   );
 }

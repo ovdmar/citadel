@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
 import { useEventRefresh, useStateQuery } from "./app-state.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
-import { useWorkspaceCockpitSummary } from "./cockpit-tools.js";
+import { prMapFromBatch, useAllWorkspacesPrSummary, useWorkspaceCockpitSummary } from "./cockpit-tools.js";
 import { CommandPalette } from "./command-palette.js";
 import { Inspector } from "./inspector.js";
 import { Navigator } from "./navigator.js";
@@ -60,6 +60,8 @@ export function Cockpit() {
   }, [activeWorkspace, activeWorkspaceId, lastRepoId, setActiveWorkspaceId, setLastRepoId]);
 
   const cockpitSummary = useWorkspaceCockpitSummary(activeWorkspace);
+  const batchPrSummary = useAllWorkspacesPrSummary(data?.workspaces ?? []);
+  const prByWorkspaceId = useMemo(() => prMapFromBatch(batchPrSummary.data), [batchPrSummary.data]);
   const selectedRepo = activeWorkspace
     ? (data?.repos.find((repo) => repo.id === activeWorkspace.repoId) ?? null)
     : (data?.repos[0] ?? null);
@@ -136,10 +138,14 @@ export function Cockpit() {
       const sessions = data?.sessions.filter((session) => session.workspaceId === workspace.id) ?? [];
       const operations = data?.operations.filter((operation) => operation.workspaceId === workspace.id) ?? [];
       const attention = readinessForWorkspace(workspace, { sessions, operations });
+      // Active workspace gets the richer single-workspace summary (10s poll);
+      // every other workspace gets its PR from the 30s batch poll. Falls back
+      // to the batch map for the active workspace too while the inspector
+      // summary is still loading.
       const pr =
         workspace.id === cockpitSummary.data?.workspaceId
           ? (cockpitSummary.data.versionControl.pullRequest ?? null)
-          : null;
+          : (prByWorkspaceId.get(workspace.id) ?? null);
       const entry: { readiness?: string; prTone?: string; prNumber?: number | null; attention?: string } = {
         readiness: attention.label,
         attention: attention.tone,
@@ -149,7 +155,7 @@ export function Cockpit() {
       map[workspace.id] = entry;
     }
     return map;
-  }, [data?.workspaces, data?.sessions, data?.operations, cockpitSummary.data]);
+  }, [data?.workspaces, data?.sessions, data?.operations, cockpitSummary.data, prByWorkspaceId]);
 
   if (state.isLoading && !data)
     return (
@@ -208,6 +214,7 @@ export function Cockpit() {
               sessions={data?.sessions ?? []}
               operations={data?.operations ?? []}
               activeSummary={cockpitSummary.data}
+              prByWorkspaceId={prByWorkspaceId}
               activeWorkspaceId={activeWorkspace?.id ?? ""}
               runtimes={data?.runtimes ?? []}
               namespaces={data?.namespaces ?? []}
