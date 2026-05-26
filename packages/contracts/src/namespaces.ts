@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IdSchema } from "./index.js";
+import { IdSchema } from "./primitives.js";
 
 export const NamespaceColorSchema = z
   .string()

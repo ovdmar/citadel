@@ -1,10 +1,6 @@
 import { z } from "zod";
-
-export const IdSchema = z
-  .string()
-  .min(2)
-  .max(80)
-  .regex(/^[a-z0-9][a-z0-9_-]*$/);
+import { IdSchema } from "./primitives.js";
+export { IdSchema } from "./primitives.js";
 
 export const ProviderStatusSchema = z.enum(["healthy", "degraded", "unavailable", "unknown"]);
 export const WorkspaceLifecycleSchema = z.enum(["creating", "ready", "failed", "removing", "archived", "removed"]);
