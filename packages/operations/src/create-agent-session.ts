@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   AgentSession,
   CreateAgentSessionInput,
@@ -7,9 +8,22 @@ import type {
 } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
+import { discoverCodexSessionId } from "@citadel/runtimes";
 import { ensureTmuxSession, submitPrompt } from "@citadel/terminal";
 
-type RuntimeDescriptor = { command: string; args: string[]; displayName: string; promptArg?: string | null };
+export type RuntimeDescriptor = {
+  command: string;
+  args: string[];
+  displayName: string;
+  promptArg?: string | null;
+  // CLI flag that pins a caller-chosen session UUID (e.g. "--session-id" for
+  // claude-code). When set, createAgentSession generates a UUID, pushes the
+  // pair onto argv, and persists it on the row so respawn can `--resume`.
+  sessionIdArg?: string | null;
+  // CLI flag for resuming a previous conversation by UUID (e.g. "--resume").
+  // Used in the restore path when input.resumeRuntimeSessionId is set.
+  resumeArg?: string | null;
+};
 
 export type CreateAgentSessionDeps = {
   store: SqliteStore;
@@ -60,6 +74,24 @@ export async function createAgentSession(
     if (runtime.promptArg) runtimeArgs.push(runtime.promptArg, input.prompt);
     else promptForKeys = input.prompt;
   }
+  // Pin a UUID at spawn time when the runtime supports it (claude-code's
+  // --session-id), so we can resume this exact conversation across daemon/
+  // machine restarts. Persisted on AgentSession.runtimeSessionId below.
+  // Runtimes without `sessionIdArg` (codex, cursor-agent) need post-spawn
+  // discovery from their own session store — handled in a separate path.
+  //
+  // When the caller passes `resumeRuntimeSessionId` (Settings restore flow /
+  // backfill), prefer `--resume <uuid>` over `--session-id <new-uuid>` so we
+  // continue the existing conversation rather than fork a fresh one. The
+  // caller is responsible for verifying the on-disk transcript exists.
+  let runtimeSessionId: string | null = null;
+  if (input.resumeRuntimeSessionId && runtime.resumeArg) {
+    runtimeSessionId = input.resumeRuntimeSessionId;
+    runtimeArgs.push(runtime.resumeArg, input.resumeRuntimeSessionId);
+  } else if (runtime.sessionIdArg) {
+    runtimeSessionId = randomUUID();
+    runtimeArgs.push(runtime.sessionIdArg, runtimeSessionId);
+  }
   const tmux = await ensureTmuxSession({
     sessionName,
     cwd: workspace.path,
@@ -106,10 +138,29 @@ export async function createAgentSession(
     transport: "disconnected",
     tmuxSessionName: tmux.tmuxSessionName,
     tmuxSessionId: tmux.tmuxSessionId,
+    runtimeSessionId,
     createdAt: now,
     updatedAt: now,
   };
   store.insertSession(session);
+  // Codex (and similarly runtimes without `sessionIdArg`) auto-generates its
+  // UUID at spawn — we can't pin it via a CLI flag, so kick off a best-effort
+  // background poll of ~/.codex/sessions/ to find the rollout this spawn
+  // produced, then write its session_meta.id back onto the row. Fire-and-
+  // forget: the user's create call returns immediately; the UUID lands in
+  // the DB within a few seconds and any subsequent restore picks it up.
+  if (!runtimeSessionId && input.runtimeId === "codex") {
+    const spawnTimeMs = Date.now();
+    void (async () => {
+      try {
+        const found = await discoverCodexSessionId({ workspacePath: workspace.path, spawnTimeMs });
+        if (found) store.setSessionRuntimeSessionId(session.id, found);
+      } catch {
+        // Discovery is best-effort — codex still works, just isn't resumable
+        // until the next spawn picks up an existing rollout.
+      }
+    })();
+  }
   // The runtime records the initial prompt in its own transcript — either
   // because we passed it as a CLI flag (claude-code, codex) or because we
   // pasted it into the tmux pane. read_agent_history surfaces it via the
