@@ -197,7 +197,7 @@ Environment variables:
 
 - `TTYD_BIN` — absolute path to the ttyd binary (default `/home/linuxbrew/.linuxbrew/bin/ttyd`).
 - `CITADEL_SHELL_BIN` — shell used to wrap `tmux attach` (default `$SHELL` then `/bin/bash`).
-- `CITADEL_TTYD_PORT_BASE`, `CITADEL_TTYD_PORT_MAX` — inclusive port range used for ttyd allocation (default `7681..7720`). All ports are bound to `127.0.0.1`.
+- `CITADEL_TTYD_PORT_BASE`, `CITADEL_TTYD_PORT_MAX` — inclusive port range used for ttyd allocation. When unset, the daemon picks a per-instance 200-port slot starting at `7721 + 200 * ((daemonPort - 4010) mod 11)`, giving 11 disjoint slices in `7721..9920`. All ports are bound to `127.0.0.1`.
 
 Lifecycle:
 
