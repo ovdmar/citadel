@@ -64,7 +64,7 @@ export {
   WorkspaceInUseError,
   WorkspaceNameTakenError,
 } from "./helpers.js";
-import { dispatchAgentHook as dispatchAgentHookImpl } from "./dispatch-agent-hook.js";
+import { buildDispatchAgentHookDeps, dispatchAgentHook as dispatchAgentHookImpl } from "./dispatch-agent-hook.js";
 import { type DispatchAgentHook, runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
 import {
   type WorkspaceAppsDeps,
@@ -790,8 +790,5 @@ export class OperationService {
   ) => runNotificationHooks({ ...this.hooksDeps(), event, repo, workspace, operationId, payload });
 
   private dispatchAgentHook: DispatchAgentHook = (input) =>
-    dispatchAgentHookImpl(
-      { runtimes: this.config?.runtimes ?? [], createAgentSession: this.createAgentSession },
-      input,
-    );
+    dispatchAgentHookImpl(buildDispatchAgentHookDeps(this.config, this.createAgentSession), input);
 }

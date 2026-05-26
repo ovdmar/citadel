@@ -89,14 +89,19 @@ export type HookEvent = z.infer<typeof HookEventSchema>;
 
 // Frontmatter for a file-based `.agent` hook. Parsed from the optional
 // `---`-fenced block at the top of a `.agent` file. `.strict()` rejects
-// unknown keys (including reserved `target` and `blocking`) with a clear
-// diagnostic — forward-compat: once a key is shipped, it's part of the
+// unknown keys (including reserved `target`, `blocking`, and `model`) with a
+// clear diagnostic — forward-compat: once a key is shipped, it's part of the
 // contract; once a name is rejected, it can be added later without breaking
 // existing files.
+//
+// `model` is reserved (NOT shipped): citadel's CreateAgentSessionInput has no
+// per-launch model field today — model selection is handled via the runtime's
+// args. Accepting `model:` here without plumbing it through would silently
+// drop the value. When createAgentSession learns about model selection,
+// `.strict()` can be relaxed.
 export const AgentHookFrontmatterSchema = z
   .object({
     runtime: z.string().min(1).optional(),
-    model: z.string().min(1).optional(),
     // displayName is the agent session's user-visible label (NOT the tmux
     // session id, which is generated separately by createAgentSession).
     // Charset is restricted to keep diagnostics readable and avoid surprises

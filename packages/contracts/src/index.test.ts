@@ -446,10 +446,15 @@ describe("AgentHookFrontmatterSchema", () => {
     expect(AgentHookFrontmatterSchema.parse({})).toEqual({});
   });
 
-  it("accepts runtime, model, displayName", () => {
-    expect(
-      AgentHookFrontmatterSchema.parse({ runtime: "claude-code", model: "opus", displayName: "Hootsuite: notify" }),
-    ).toEqual({ runtime: "claude-code", model: "opus", displayName: "Hootsuite: notify" });
+  it("accepts runtime and displayName", () => {
+    expect(AgentHookFrontmatterSchema.parse({ runtime: "claude-code", displayName: "Hootsuite: notify" })).toEqual({
+      runtime: "claude-code",
+      displayName: "Hootsuite: notify",
+    });
+  });
+
+  it("rejects reserved key 'model' (CreateAgentSessionInput has no model field yet; would be silently dropped)", () => {
+    expect(() => AgentHookFrontmatterSchema.parse({ model: "opus" })).toThrow();
   });
 
   it("rejects reserved key 'target' (strict mode catches unknown keys)", () => {

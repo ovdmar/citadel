@@ -167,6 +167,34 @@ describe("discoverFileHooks", () => {
     }
   });
 
+  it("follows symlinks for .sh hooks (matches the deploy-hook X_OK pattern; plan failure-modes §1)", () => {
+    const ws = makeWorkspace();
+    // Real executable file lives outside the event dir; symlink it in.
+    const realFile = path.join(ws, "real-bootstrap.sh");
+    fs.writeFileSync(realFile, "#!/bin/sh\nexit 0\n");
+    fs.chmodSync(realFile, 0o755);
+    const eventDir = path.join(ws, ".citadel", "hooks", "workspace.setup");
+    fs.mkdirSync(eventDir, { recursive: true });
+    fs.symlinkSync(realFile, path.join(eventDir, "bootstrap.sh"));
+    const result = discoverFileHooks({ workspacePath: ws, event: "workspace.setup" });
+    expect(result.hooks).toHaveLength(1);
+    expect(result.hooks[0]?.kind).toBe("command-file");
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it("includes both foo.sh and foo.agent when they share a base name; lex order puts .agent before .sh", () => {
+    const ws = makeWorkspace();
+    writeHook(ws, "workspace.setup", "foo.sh", "#!/bin/sh\nexit 0\n");
+    writeHook(ws, "workspace.setup", "foo.agent", "body\n");
+    const result = discoverFileHooks({ workspacePath: ws, event: "workspace.setup" });
+    expect(result.hooks).toHaveLength(2);
+    // `.agent` < `.sh` alphabetically, so the agent-file fires first.
+    expect(result.hooks[0]?.id).toBe("file:workspace.setup/foo.agent");
+    expect(result.hooks[0]?.kind).toBe("agent-file");
+    expect(result.hooks[1]?.id).toBe("file:workspace.setup/foo.sh");
+    expect(result.hooks[1]?.kind).toBe("command-file");
+  });
+
   it("does not pick up .citadel/hooks/deploy at the root (deploy is a file, not an event folder)", () => {
     const ws = makeWorkspace();
     // Drop the deploy file at hooks-root, mimicking the special-case layout.

@@ -10,18 +10,17 @@
 import type { RuntimeConfig } from "@citadel/config";
 import type { AgentSession, CreateAgentSessionInput, HookEvent, Repo, Workspace } from "@citadel/contracts";
 
-export type RuntimeDescriptor = {
+type RuntimeDescriptor = {
   command: string;
   args: string[];
   displayName: string;
   promptArg?: string | null;
 };
 
-export type DispatchAgentHookInput = {
+type DispatchAgentHookInput = {
   workspace: Workspace;
   repo: Repo;
   runtimeId?: string;
-  model?: string;
   displayName?: string;
   prompt: string;
   operationId: string | null;
@@ -29,7 +28,7 @@ export type DispatchAgentHookInput = {
   event: HookEvent;
 };
 
-export type DispatchAgentHookDeps = {
+type DispatchAgentHookDeps = {
   runtimes: RuntimeConfig[];
   createAgentSession: (input: CreateAgentSessionInput, runtime: RuntimeDescriptor) => Promise<AgentSession>;
 };
@@ -62,7 +61,18 @@ export async function dispatchAgentHook(
   return { sessionId: session.id };
 }
 
+// Exported for unit tests; not part of the package public API.
 export function defaultPromptRuntimeId(runtimes: RuntimeConfig[]): string {
   const candidate = runtimes.find((runtime) => runtime.supportsPrompt);
   return candidate?.id ?? DEFAULT_FALLBACK_RUNTIME_ID;
+}
+
+// Build the dispatcher deps OperationService wires up. Exists so the
+// fallback-when-runtimes-undefined behavior (and the createAgentSession
+// binding) can be unit-tested without spinning real sqlite/tmux.
+export function buildDispatchAgentHookDeps(
+  config: { runtimes?: RuntimeConfig[] } | undefined,
+  createAgentSession: (input: CreateAgentSessionInput, runtime: RuntimeDescriptor) => Promise<AgentSession>,
+): DispatchAgentHookDeps {
+  return { runtimes: config?.runtimes ?? [], createAgentSession };
 }

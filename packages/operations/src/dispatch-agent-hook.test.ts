@@ -1,7 +1,7 @@
 import type { RuntimeConfig } from "@citadel/config";
 import type { AgentSession, Repo, Workspace } from "@citadel/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { defaultPromptRuntimeId, dispatchAgentHook } from "./dispatch-agent-hook.js";
+import { buildDispatchAgentHookDeps, defaultPromptRuntimeId, dispatchAgentHook } from "./dispatch-agent-hook.js";
 
 const fakeWorkspace = { id: "ws_test", path: "/tmp/ws", repoId: "repo_test" } as unknown as Workspace;
 const fakeRepo = { id: "repo_test", name: "repo" } as unknown as Repo;
@@ -139,6 +139,67 @@ describe("dispatchAgentHook", () => {
       },
     );
     expect(createAgentSession.mock.calls[0]?.[0]?.displayName).toBe("PR-merge: notify");
+  });
+});
+
+describe("dispatchAgentHook — failure modes", () => {
+  it("propagates initial_prompt_not_delivered as a rejection so the runner can log hook.<event>.failed", async () => {
+    // Per packages/operations/src/create-agent-session.ts:75 — when submitPrompt
+    // returns { ok: false }, createAgentSession throws initial_prompt_not_delivered.
+    // The dispatcher must surface that rejection to the runner unchanged so the
+    // failed activity event fires.
+    const createAgentSession = vi.fn().mockRejectedValue(new Error("initial_prompt_not_delivered: send_failed"));
+    await expect(
+      dispatchAgentHook(
+        { runtimes: [claudeRuntime], createAgentSession },
+        {
+          workspace: fakeWorkspace,
+          repo: fakeRepo,
+          prompt: "p",
+          operationId: "op_x",
+          hookId: "file:workspace.setup/x.agent",
+          event: "workspace.setup",
+        },
+      ),
+    ).rejects.toThrow(/initial_prompt_not_delivered/);
+    expect(createAgentSession).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("buildDispatchAgentHookDeps", () => {
+  const stubCreateAgentSession = vi.fn().mockResolvedValue(fakeSession);
+
+  it("falls back to [] when config is undefined (no crash on .runtimes.find)", () => {
+    const deps = buildDispatchAgentHookDeps(undefined, stubCreateAgentSession);
+    expect(deps.runtimes).toEqual([]);
+    expect(deps.createAgentSession).toBe(stubCreateAgentSession);
+  });
+
+  it("falls back to [] when config exists but runtimes field is omitted", () => {
+    const deps = buildDispatchAgentHookDeps({}, stubCreateAgentSession);
+    expect(deps.runtimes).toEqual([]);
+  });
+
+  it("threads the configured runtimes through unchanged", () => {
+    const deps = buildDispatchAgentHookDeps({ runtimes: [claudeRuntime, codexRuntime] }, stubCreateAgentSession);
+    expect(deps.runtimes).toEqual([claudeRuntime, codexRuntime]);
+  });
+
+  it("produces a deps object that successfully dispatches end-to-end", async () => {
+    // Closes the operations/index.ts wiring gap: this is the exact shape
+    // OperationService passes to dispatchAgentHookImpl.
+    const createAgentSession = vi.fn().mockResolvedValue(fakeSession);
+    const deps = buildDispatchAgentHookDeps({ runtimes: [claudeRuntime] }, createAgentSession);
+    const result = await dispatchAgentHook(deps, {
+      workspace: fakeWorkspace,
+      repo: fakeRepo,
+      prompt: "wired",
+      operationId: "op_w",
+      hookId: "h",
+      event: "workspace.setup",
+    });
+    expect(result.sessionId).toBe("agent_session_xyz");
+    expect(createAgentSession.mock.calls[0]?.[0]?.operationId).toBe("op_w");
   });
 });
 

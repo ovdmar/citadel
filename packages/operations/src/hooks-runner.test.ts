@@ -217,6 +217,32 @@ describe("runWorkspaceHooks — config + file hook ordering", () => {
 });
 
 describe("runNotificationHooks — file-based discovery", () => {
+  it("dispatches a .agent hook on a non-agent.started notification event with rendered payload", async () => {
+    const ws = tmpWorkspace();
+    writeFileHook(ws, "workspace.created", "notify.agent", "ws={{workspace.id}} event={{event}}\n");
+    const dispatchAgentHook = vi.fn().mockResolvedValue({ sessionId: "agent_session_n" });
+    const activity = vi.fn();
+    const workspace = baseWorkspace(ws);
+
+    await runNotificationHooks({
+      config: baseConfig(),
+      activity,
+      event: "workspace.created",
+      repo: baseRepo,
+      workspace,
+      operationId: "op_create",
+      payload: { repo: baseRepo, workspace },
+      dispatchAgentHook,
+    });
+
+    expect(dispatchAgentHook).toHaveBeenCalledTimes(1);
+    const callArg = dispatchAgentHook.mock.calls[0]?.[0];
+    expect(callArg.prompt).toBe("ws=ws_test event=workspace.created\n");
+    expect(callArg.operationId).toBe("op_create");
+    const types = activity.mock.calls.map((c) => String(c[0]));
+    expect(types).toContain("hook.workspace.created");
+  });
+
   it("rejects .agent files under agent.started/ at discovery (would loop), accepts .sh", async () => {
     const ws = tmpWorkspace();
     writeFileHook(ws, "agent.started", "loop.agent", "would loop\n");

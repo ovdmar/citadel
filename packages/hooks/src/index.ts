@@ -19,17 +19,9 @@ export type {
   RunDeployRedeployResult,
 } from "./deploy.js";
 
-export { discoverFileHooks } from "./discovery.js";
-export type {
-  DiscoverFileHooksInput,
-  DiscoverFileHooksResult,
-  FileHook,
-  FileHookAgentFile,
-  FileHookCommandFile,
-  FileHookDiagnostic,
-} from "./discovery.js";
+export { describeError, discoverFileHooks } from "./discovery.js";
+export type { FileHook, FileHookDiagnostic } from "./discovery.js";
 export { parseFrontmatter } from "./frontmatter.js";
-export type { Frontmatter } from "./frontmatter.js";
 export { renderTemplate } from "./template.js";
 
 export type CommandHook = {

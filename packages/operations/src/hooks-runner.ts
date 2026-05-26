@@ -3,6 +3,7 @@ import type { HookEvent, HookOutput, Repo, Workspace } from "@citadel/contracts"
 import {
   type FileHook,
   type FileHookDiagnostic,
+  describeError,
   discoverFileHooks,
   parseHookOutput,
   renderTemplate,
@@ -33,7 +34,6 @@ export type DispatchAgentHook = (input: {
   workspace: Workspace;
   repo: Repo;
   runtimeId?: string;
-  model?: string;
   displayName?: string;
   prompt: string;
   operationId: string | null;
@@ -280,32 +280,14 @@ async function runOne(
 
   // agent-file — fire-and-forget after launch (createAgentSession resolves
   // after the initial prompt has been delivered, so a synchronous launch
-  // failure surfaces here as a rejection).
-  const renderedPrompt = renderTemplate(hook.body, {
-    event: input.event,
-    repo: input.repo,
-    workspace: input.workspace,
-    operationId: input.operationId,
-  });
+  // failure surfaces here as a rejection). `.agent` hooks are never blocking
+  // (frontmatter `blocking` is reserved); dispatcher rejections log
+  // hook.<event>.failed and the runner continues.
   try {
-    const launched = await input.dispatchAgentHook({
-      workspace: input.workspace,
-      repo: input.repo,
-      ...(hook.meta.runtime !== undefined ? { runtimeId: hook.meta.runtime } : {}),
-      ...(hook.meta.model !== undefined ? { model: hook.meta.model } : {}),
-      ...(hook.meta.displayName !== undefined ? { displayName: hook.meta.displayName } : {}),
-      prompt: renderedPrompt,
-      operationId: input.operationId,
-      hookId: hook.id,
-      event: input.event,
-    });
-    input.activity(
-      `hook.${input.event}`,
-      "hook",
-      `Hook ${hook.id} launched agent session ${launched.sessionId}${hook.meta.runtime ? ` (runtime=${hook.meta.runtime})` : ""}`,
-      input.repo.id,
-      input.workspace.id,
-      input.operationId,
+    await dispatchAgentFileHook(
+      hook,
+      { event: input.event, repo: input.repo, workspace: input.workspace, operationId: input.operationId },
+      input,
     );
   } catch (error) {
     input.activity(
@@ -316,7 +298,6 @@ async function runOne(
       input.workspace.id,
       input.operationId,
     );
-    // .agent hooks are never blocking in PR1 (frontmatter `blocking` reserved).
   }
 }
 
@@ -369,17 +350,41 @@ async function runOneNotification(
   }
 
   // agent-file dispatch path (note: discovery rejects .agent under
-  // agent.started/, so this only fires for other notification events).
-  const renderedPrompt = renderTemplate(hook.body, {
-    event: input.event,
-    ...asObject(input.payload),
-    operationId: input.operationId,
-  });
+  // agent.started/, so this only fires for other notification events). The
+  // outer runNotificationHooks try/catch handles any dispatcher rejection.
+  await dispatchAgentFileHook(
+    hook,
+    { event: input.event, ...asObject(input.payload), operationId: input.operationId },
+    input,
+  );
+}
+
+function describeHookId(hook: DiscoveredHook): string {
+  return hook.kind === "command-config" ? hook.hook.id : hook.id;
+}
+
+// Shared agent-file dispatch path used by both runOne (workspace hooks) and
+// runOneNotification. The two paths differ only in templateContext shape and
+// in whether the caller wraps in a try/catch (workspace hooks log a failed
+// activity on dispatcher rejection; notification hooks let the outer
+// runNotificationHooks try/catch handle it).
+async function dispatchAgentFileHook(
+  hook: Extract<DiscoveredHook, { kind: "agent-file" }>,
+  templateContext: Record<string, unknown>,
+  input: {
+    activity: ActivityFn;
+    event: HookEvent;
+    repo: Repo;
+    workspace: Workspace;
+    operationId: string | null;
+    dispatchAgentHook: DispatchAgentHook;
+  },
+): Promise<void> {
+  const renderedPrompt = renderTemplate(hook.body, templateContext);
   const launched = await input.dispatchAgentHook({
     workspace: input.workspace,
     repo: input.repo,
     ...(hook.meta.runtime !== undefined ? { runtimeId: hook.meta.runtime } : {}),
-    ...(hook.meta.model !== undefined ? { model: hook.meta.model } : {}),
     ...(hook.meta.displayName !== undefined ? { displayName: hook.meta.displayName } : {}),
     prompt: renderedPrompt,
     operationId: input.operationId,
@@ -394,12 +399,4 @@ async function runOneNotification(
     input.workspace.id,
     input.operationId,
   );
-}
-
-function describeHookId(hook: DiscoveredHook): string {
-  return hook.kind === "command-config" ? hook.hook.id : hook.id;
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

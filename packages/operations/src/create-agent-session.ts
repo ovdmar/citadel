@@ -97,8 +97,23 @@ export async function createAgentSession(
   // because we passed it as a CLI flag (claude-code, codex) or because we
   // pasted it into the tmux pane. read_agent_history surfaces it via the
   // transcript adapter, so we don't double-record it here.
-  deps.activity("agent.started", "user", `Started ${session.displayName}`, workspace.repoId, workspace.id, null);
+  // When the session was launched by a hook firing, operationId is set so the
+  // session's lifecycle activity links back to the operation that triggered it.
+  const launchedFromOperation = input.operationId ?? null;
+  deps.activity(
+    "agent.started",
+    "user",
+    `Started ${session.displayName}`,
+    workspace.repoId,
+    workspace.id,
+    launchedFromOperation,
+  );
   const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-  if (repo) await deps.runNotificationHooks("agent.started", repo, workspace, null, { repo, workspace, session });
+  if (repo)
+    await deps.runNotificationHooks("agent.started", repo, workspace, launchedFromOperation, {
+      repo,
+      workspace,
+      session,
+    });
   return session;
 }
