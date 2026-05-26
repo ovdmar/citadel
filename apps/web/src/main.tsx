@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
 import { Cockpit } from "./cockpit.js";
+import { TooltipProvider } from "./components/ui/tooltip.js";
 import { bootstrapLastRoute, clearLastRoute, saveLastRoute } from "./lib/last-route.js";
 import { DashboardView } from "./routes/dashboard.js";
 import { HistoryView } from "./routes/history.js";
@@ -171,6 +172,8 @@ declare module "@tanstack/react-router" {
 
 createRoot(document.getElementById("root") as HTMLElement).render(
   <QueryClientProvider client={queryClient}>
-    <RouterProvider router={router} />
+    <TooltipProvider>
+      <RouterProvider router={router} />
+    </TooltipProvider>
   </QueryClientProvider>,
 );

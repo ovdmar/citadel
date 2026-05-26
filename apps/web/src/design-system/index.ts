@@ -32,3 +32,12 @@ export {
   DialogTrigger,
 } from "../components/ui/dialog.js";
 export { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.js";
+export {
+  COCKPIT_TOOLTIP_DELAY_MS,
+  COCKPIT_TOOLTIP_SKIP_DELAY_MS,
+  Tooltip,
+  TooltipContent,
+  TooltipPortal,
+  TooltipProvider,
+  TooltipTrigger,
+} from "../components/ui/tooltip.js";
