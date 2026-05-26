@@ -1,9 +1,10 @@
 import type { DeployedApp, DeployedAppsSummary, Repo } from "@citadel/contracts";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { RefreshCw } from "lucide-react";
-import { api, queryClient } from "./api.js";
+import { api } from "./api.js";
 import { Button } from "./components/ui/button.js";
+import { useRedeploy } from "./hooks/use-redeploy.js";
 
 export function DeployedAppsPanel(props: { workspaceId: string; repo: Repo | null }) {
   const summary = useQuery<DeployedAppsSummary>({
@@ -11,20 +12,14 @@ export function DeployedAppsPanel(props: { workspaceId: string; repo: Repo | nul
     queryFn: () => api<DeployedAppsSummary>(`/api/workspaces/${props.workspaceId}/deployed-apps`),
     refetchInterval: 10_000,
   });
-  const redeploy = useMutation({
-    mutationFn: (name?: string) =>
-      api(`/api/workspaces/${props.workspaceId}/deployed-apps/redeploy`, {
-        method: "POST",
-        body: JSON.stringify(name ? { name } : {}),
-      }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deployed-apps", props.workspaceId] }),
-  });
+  const redeploy = useRedeploy(props.workspaceId);
 
   const data = summary.data;
   const showEmpty = !data || data.resolution.source === "none";
   // Single-app panels only need the per-chip redeploy. The panel-level icon
   // (right-aligned next to the title) earns its place when there are 2+ apps.
   const showAllRedeploy = !showEmpty && (data?.apps.length ?? 0) >= 2;
+  const allInFlight = redeploy.inFlight && redeploy.targetName === undefined;
 
   return (
     <section className="inspector-block">
@@ -35,12 +30,13 @@ export function DeployedAppsPanel(props: { workspaceId: string; repo: Repo | nul
             type="button"
             variant="ghost"
             size="icon"
-            disabled={redeploy.isPending}
-            onClick={() => redeploy.mutate(undefined)}
+            disabled={redeploy.inFlight}
+            aria-busy={allInFlight}
+            onClick={() => redeploy.trigger()}
             title="Redeploy all apps"
             aria-label="Redeploy all apps"
           >
-            <RefreshCw size={14} />
+            <RefreshCw size={14} className={allInFlight ? "animate-spin" : undefined} />
           </Button>
         ) : null}
       </div>
@@ -53,18 +49,34 @@ export function DeployedAppsPanel(props: { workspaceId: string; repo: Repo | nul
             <DeployedAppChip
               key={app.name}
               app={app}
-              redeploying={redeploy.isPending && redeploy.variables === app.name}
-              onRedeploy={() => redeploy.mutate(app.name)}
+              disabled={redeploy.inFlight}
+              redeploying={redeploy.inFlight && redeploy.targetName === app.name}
+              onRedeploy={() => redeploy.trigger(app.name)}
             />
           ))}
         </div>
+      ) : null}
+      {redeploy.inFlight && redeploy.lastOperationId ? (
+        <Link
+          to="/operations"
+          search={{ id: redeploy.lastOperationId }}
+          className="settings-link"
+          title="View the in-flight deploy operation log"
+        >
+          View log
+        </Link>
       ) : null}
       {showEmpty ? <DeployedAppsEmpty repo={props.repo} /> : null}
     </section>
   );
 }
 
-function DeployedAppChip(props: { app: DeployedApp; redeploying: boolean; onRedeploy: () => void }) {
+function DeployedAppChip(props: {
+  app: DeployedApp;
+  disabled: boolean;
+  redeploying: boolean;
+  onRedeploy: () => void;
+}) {
   const { app } = props;
   return (
     <div className={`app-chip tone-${chipTone(app.status)}`} title={`${app.name} · ${app.status} · ${app.url}`}>
@@ -76,11 +88,12 @@ function DeployedAppChip(props: { app: DeployedApp; redeploying: boolean; onRede
         type="button"
         className="icon-button"
         onClick={props.onRedeploy}
-        disabled={props.redeploying}
+        disabled={props.disabled}
+        aria-busy={props.redeploying}
         title={`Redeploy ${app.name}`}
         aria-label={`Redeploy ${app.name}`}
       >
-        <RefreshCw size={12} />
+        <RefreshCw size={12} className={props.redeploying ? "animate-spin" : undefined} />
       </button>
     </div>
   );
