@@ -12,7 +12,7 @@
 // client debounce + React Query 5 s stale-time provide all the
 // back-pressure that's needed and keep picker results fresh after attach.
 
-import { TransitionIssueInputSchema } from "@citadel/contracts";
+import { IssueSearchResponseSchema, TransitionIssueInputSchema } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import type {
   collectJiraIssueSummary as collectJiraIssueSummaryType,
@@ -27,7 +27,7 @@ type AsyncRoute = (
   handler: AsyncHandler,
 ) => (req: express.Request, res: express.Response, next: express.NextFunction) => void;
 
-export type JiraRoutesProviders = {
+type JiraRoutesProviders = {
   transitionJiraIssue: typeof transitionJiraIssueType;
   searchJiraIssues: typeof searchJiraIssuesType;
   collectJiraIssueSummary: typeof collectJiraIssueSummaryType;
@@ -80,7 +80,16 @@ export function registerJiraRoutes(input: {
     asyncRoute(async (req, res) => {
       const rawQuery = typeof req.query.q === "string" ? req.query.q : null;
       const response = await providers.searchJiraIssues(rawQuery);
-      res.json(response);
+      // Defensive parse — if `jtk` changes its output format and the
+      // provider parser starts producing rows that violate the
+      // contract, the picker would render garbage. Failing the parse
+      // here surfaces it as an explicit degraded response instead.
+      const parsed = IssueSearchResponseSchema.safeParse(response);
+      if (!parsed.success) {
+        res.json({ status: "degraded", reason: "Provider response failed contract validation", results: [] });
+        return;
+      }
+      res.json(parsed.data);
     }),
   );
 }

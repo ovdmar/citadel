@@ -313,6 +313,24 @@ describe("createJiraAutoTransitions", () => {
     expect(ctx.transitionJiraIssue).toHaveBeenCalledTimes(1);
   });
 
+  it("multiple matching entries for the same event each call transitionJiraIssue (fan-out)", async () => {
+    // Operators may want different fan-out behavior (e.g. transition the
+    // ticket AND record it elsewhere via two entries). Document that the
+    // loop fires every match; a future de-dup pass should add explicit
+    // dedupe semantics rather than depending on test absence.
+    const ctx = createDeps({
+      autoTransitions: [
+        { event: "agent.started", transition: "In Progress" },
+        { event: "agent.started", transition: "Done" },
+      ],
+    });
+    await ctx.runAutoTransitions("agent.started", ctx.repo, ctx.workspace, {
+      repo: ctx.repo,
+      workspace: ctx.workspace,
+    });
+    expect(ctx.transitionJiraIssue).toHaveBeenCalledTimes(2);
+  });
+
   it("never throws even when the inner provider call rejects synchronously", async () => {
     const ctx = createDeps({
       autoTransitions: [{ event: "agent.started", transition: "In Progress" }],

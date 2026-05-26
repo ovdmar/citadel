@@ -34,7 +34,10 @@ import {
   type transitionJiraIssue as transitionJiraIssueType,
 } from "@citadel/providers";
 
-export type RunAutoTransitions = (
+// Internal — daemon callers consume this via wireJiraAutoTransitions. The
+// operations layer's public RunAutoTransitionsDep type is the cross-
+// package contract; this is the daemon-side shape.
+type RunAutoTransitions = (
   event: JiraAutoTransitionEvent,
   repo: Repo,
   workspace: Workspace,
@@ -53,7 +56,7 @@ type Activity = (
 
 type Emit = (type: string, payload: unknown) => void;
 
-export type CreateJiraAutoTransitionsDeps = {
+type CreateJiraAutoTransitionsDeps = {
   config: CitadelConfig;
   providers: {
     collectJiraIssueSummary: typeof collectJiraIssueSummaryType;
