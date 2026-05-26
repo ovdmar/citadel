@@ -46,6 +46,7 @@
 [ ] 5. When a workspace is created with an associated default agent, the cockpit opens that agent automatically in a new session tab.
 [ ] 6. The selected session occupies the rest of the column height.
 [ ] 7. Terminal keyboard shortcuts must be passed through to the active terminal correctly.
+[~] 8. Each session tab carries a per-agent lifecycle status dot following the same four-tone `LifecycleTone` taxonomy described in `specs/B.3-agent-sessions-terminal.md` item 14 (never-started / running / done / attention). Per-agent uses `deriveAgentLifecycleTone` from `@citadel/core`. The dot is a flex sibling of the tab label, not nested inside any truncating container, so ripple animations are not clipped.
 
 ## Inspector Tabs
 
