@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   aggregateReviewers,
+  buildJiraSearchJql,
   collectGitHubCiRunLog,
   collectGitHubCiRuns,
   collectGitHubVersionControlSummary,
@@ -16,7 +17,11 @@ import {
   normalizeCiRunList,
   normalizeRuntimeUsage,
   parseJiraIssueOutput,
+  parseJiraSearchOutput,
   parseJiraTransitionsOutput,
+  resolveJiraTransitionByTargetStatus,
+  searchJiraIssues,
+  setJiraCommand,
   transitionJiraIssue,
 } from "./index.js";
 
@@ -246,6 +251,139 @@ describe("commandHealth", () => {
     expect(result.status).toBe("degraded");
     expect(result.key).toBe("NOT-A-REAL-ISSUE-KEY");
     expect(result.transition).toBe("31");
+  });
+
+  describe("buildJiraSearchJql", () => {
+    it("returns the recent-default JQL (assignee OR reporter OR watcher) when query is null or empty", () => {
+      const recent = buildJiraSearchJql(null);
+      expect(recent).toContain("assignee = currentUser()");
+      expect(recent).toContain("reporter = currentUser()");
+      expect(recent).toContain("watcher = currentUser()");
+      expect(recent).toContain("updated >= -14d");
+      expect(recent).toContain("ORDER BY updated DESC");
+      expect(buildJiraSearchJql("")).toBe(recent);
+      expect(buildJiraSearchJql("   ")).toBe(recent);
+    });
+
+    it("routes issue-key-shaped input to a key = JQL and normalises case", () => {
+      // Lower-case input should be upper-cased; whitespace trimmed.
+      expect(buildJiraSearchJql("auth-123")).toBe('key = "AUTH-123" ORDER BY updated DESC');
+      expect(buildJiraSearchJql("  MS-496 ")).toBe('key = "MS-496" ORDER BY updated DESC');
+      // Multi-word project keys with digits also match.
+      expect(buildJiraSearchJql("CIT2-9")).toBe('key = "CIT2-9" ORDER BY updated DESC');
+    });
+
+    it("routes free-text input to a summary ~ JQL and strips Lucene-reserved characters", () => {
+      // Lucene reserved set per Jira's docs:
+      // + - && || ! ( ) { } [ ] ^ " ~ * ? : \ /  plus newlines.
+      // The wrapping quotes around the operand are intentional, so we
+      // assert on the operand portion (the substring between the quotes),
+      // not on the full JQL string.
+      const operandOf = (jql: string): string => jql.match(/^summary ~ "([^"]*)"/)?.[1] ?? "";
+      const specials = [
+        "+", "-", "&&", "||", "!", "(", ")", "{", "}", "[", "]", "^", '"', "~", "*", "?", ":", "\\", "/",
+      ];
+      for (const ch of specials) {
+        const jql = buildJiraSearchJql(`auth${ch}login`);
+        expect(jql).toMatch(/^summary ~ "/);
+        expect(operandOf(jql).includes(ch)).toBe(false);
+      }
+      // Newlines and carriage returns are stripped, not embedded in the JQL.
+      expect(buildJiraSearchJql("auth\nlogin\rflow")).toBe('summary ~ "auth login flow" ORDER BY updated DESC');
+      // Internal whitespace collapsed, trimmed.
+      expect(buildJiraSearchJql("  auth   login  ")).toBe('summary ~ "auth login" ORDER BY updated DESC');
+    });
+
+    it("treats almost-key-shaped strings as free text (does not match the key regex)", () => {
+      // Looks tempting but contains an OR — must NOT be routed to `key =`.
+      const jql = buildJiraSearchJql("AUTH-123 OR DROP");
+      expect(jql.startsWith("summary ~")).toBe(true);
+      // The stripped query no longer contains a stray dash that would form a bad key match.
+      expect(jql).toContain("AUTH 123 OR DROP");
+    });
+  });
+
+  describe("parseJiraSearchOutput", () => {
+    it("parses jtk search output rows into IssueSearchResult[]", () => {
+      const output = [
+        "KEY | SUMMARY | STATUS | UPDATED",
+        "MS-1 | Build picker | In Progress | 2026-05-17",
+        "MS-2 | Wire transitions | To Do | 2026-05-16",
+      ].join("\n");
+      expect(parseJiraSearchOutput(output)).toEqual([
+        { key: "MS-1", summary: "Build picker", status: "In Progress", url: null, updated: "2026-05-17" },
+        { key: "MS-2", summary: "Wire transitions", status: "To Do", url: null, updated: "2026-05-16" },
+      ]);
+    });
+
+    it("tolerates missing trailing fields (empty status, no updated)", () => {
+      const output = [
+        "KEY | SUMMARY | STATUS | UPDATED",
+        "MS-3 | Half-row |  | ",
+        "MS-4 | Truncated",
+      ].join("\n");
+      const parsed = parseJiraSearchOutput(output);
+      expect(parsed).toEqual([
+        { key: "MS-3", summary: "Half-row", status: null, url: null, updated: null },
+        { key: "MS-4", summary: "Truncated", status: null, url: null, updated: null },
+      ]);
+    });
+
+    it("skips header-only and blank-only output safely", () => {
+      expect(parseJiraSearchOutput("")).toEqual([]);
+      expect(parseJiraSearchOutput("KEY | SUMMARY | STATUS | UPDATED\n")).toEqual([]);
+      expect(parseJiraSearchOutput("\n\n   \n")).toEqual([]);
+    });
+  });
+
+  describe("searchJiraIssues", () => {
+    // Force-degrade by pointing the jtk override at a missing binary so the
+    // test isn't flaky based on whether the host happens to have `jtk`
+    // installed and authed. Mirrors the pattern in collectJiraIssueSummary's
+    // existing "not-a-real-issue-key" test — keep failure paths deterministic.
+    afterEach(() => setJiraCommand(undefined));
+
+    it("returns a degraded response with empty results when the configured jtk binary is missing", async () => {
+      setJiraCommand("citadel-test-no-such-jtk-binary");
+      const response = await searchJiraIssues("AUTH-123");
+      expect(response.status).toBe("degraded");
+      expect(response.reason).toBeTruthy();
+      expect(response.results).toEqual([]);
+    });
+
+    it("also degrades safely when called with a null/empty query (recent-by-default path)", async () => {
+      setJiraCommand("citadel-test-no-such-jtk-binary");
+      const response = await searchJiraIssues(null);
+      expect(response.status).toBe("degraded");
+      expect(response.results).toEqual([]);
+    });
+  });
+
+  describe("resolveJiraTransitionByTargetStatus", () => {
+    it("matches a transition whose toStatus equals the configured target (case-insensitive)", () => {
+      const transitions = [
+        { id: "21", name: "Start Progress", toStatus: "In Progress" },
+        { id: "31", name: "Done", toStatus: "Done" },
+      ];
+      // The transition's name ("Start Progress") differs from its toStatus
+      // ("In Progress"); the resolver matches by toStatus, not by name.
+      // This is what makes the config field "target status name" instead
+      // of "transition name".
+      expect(resolveJiraTransitionByTargetStatus(transitions, "in progress")).toBe("21");
+      expect(resolveJiraTransitionByTargetStatus(transitions, "Done")).toBe("31");
+    });
+
+    it("falls back to matching by transition.name when no toStatus matches (back-compat)", () => {
+      const transitions = [{ id: "11", name: "Triage", toStatus: "Backlog" }];
+      // Operators may have already configured `transition: "Triage"`
+      // before the semantic clarification; tolerate it.
+      expect(resolveJiraTransitionByTargetStatus(transitions, "triage")).toBe("11");
+    });
+
+    it("returns null when neither toStatus nor name matches", () => {
+      expect(resolveJiraTransitionByTargetStatus([{ id: "11", name: "X", toStatus: "Y" }], "Done")).toBeNull();
+      expect(resolveJiraTransitionByTargetStatus([], "Done")).toBeNull();
+    });
   });
 
   it("normalizes runtime usage emitted by an external provider command", () => {
