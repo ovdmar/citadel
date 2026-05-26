@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useStateQuery } from "../app-state.js";
+import { mcpUrlFromOrigin } from "../lib/mcp-url.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { RestorePanel } from "../settings-restore.js";
@@ -457,8 +458,7 @@ function buildAttention(props: {
 
 // ─── MCP section ───────────────────────────────────────────────────────────
 function McpSection(props: { mcpEnabled: boolean }) {
-  const mcpUrl =
-    typeof window !== "undefined" ? `${window.location.origin}/api/mcp/rpc` : "http://127.0.0.1:4010/api/mcp/rpc";
+  const mcpUrl = mcpUrlFromOrigin(window.location.origin);
   const example = JSON.stringify(
     {
       mcpServers: {
