@@ -235,6 +235,13 @@ export const VersionControlSummarySchema = z.object({
   remotes: z.array(z.string()),
   pullRequest: PullRequestSummarySchema.nullable(),
   checkedAt: z.string(),
+  // ISO timestamp of when the daemon's global gh rate-limit cooldown clears,
+  // present only while a cooldown is active. The pr-routes response builder
+  // decorates outgoing payloads with this regardless of whether the body came
+  // from a fresh fetch, a scheduler-skip cache fallback, or a stale snapshot,
+  // so the FE banner sees the same signal on every code path.
+  // Optional (not required) so older daemon ↔ newer FE remains compatible.
+  cooldownUntil: z.string().nullable().optional(),
 });
 
 export const IssueTransitionSchema = z.object({
