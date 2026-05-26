@@ -33,6 +33,43 @@
   color: var(--c-fg-1);
 }
 
+/* Boot-time restore banner. Sits between the top bar and the cockpit body
+ * with low-contrast chrome — it's an FYI, not a call to action. */
+.cit-restore-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--c-fg-2);
+  background: var(--c-app-2, var(--c-app));
+  border-bottom: 0.5px solid var(--c-line-2);
+}
+
+.cit-restore-banner__msg {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cit-restore-banner__dismiss {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--c-fg-2);
+  background: transparent;
+  border: 0.5px solid var(--c-line-2);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.cit-restore-banner__dismiss:hover {
+  color: var(--c-fg-1);
+  border-color: var(--c-line-1);
+}
+
 .cit-brand-text {
   display: flex;
   flex-direction: column;

@@ -1,5 +1,6 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import net from "node:net";
+import { tmuxPrefix } from "./index.js";
 
 export type TtydTheme = "light" | "dark";
 
@@ -349,19 +350,24 @@ const DARK_XTERM_THEME = {
 // decoded text to the system clipboard via navigator.clipboard.
 export function buildAttachCommand(tmuxSession: string) {
   const safe = tmuxSession.replace(/"/g, '\\"');
+  // Inline socket flag so the shell ttyd execs into talks to the same tmux
+  // server citadel uses everywhere else (citadel-tmux.service). Without this,
+  // `tmux attach` would hit the user's default socket and silently miss the
+  // session.
+  const tmux = ["tmux", ...tmuxPrefix()].map((arg) => arg.replace(/"/g, '\\"')).join(" ");
   return [
-    "tmux set-option -s extended-keys on >/dev/null 2>&1 || true",
-    "tmux show-options -s -g terminal-features 2>/dev/null | grep -q 'xterm\\*.*extkeys' || tmux set-option -as terminal-features ',xterm*:extkeys' >/dev/null 2>&1 || true",
-    `tmux set-option -t "${safe}" mouse on >/dev/null 2>&1 || true`,
-    `tmux set-option -t "${safe}" history-limit 50000 >/dev/null 2>&1 || true`,
-    `tmux set-option -t "${safe}" set-clipboard on >/dev/null 2>&1 || true`,
-    `exec tmux attach -t "${safe}"`,
+    `${tmux} set-option -s extended-keys on >/dev/null 2>&1 || true`,
+    `${tmux} show-options -s -g terminal-features 2>/dev/null | grep -q 'xterm\\*.*extkeys' || ${tmux} set-option -as terminal-features ',xterm*:extkeys' >/dev/null 2>&1 || true`,
+    `${tmux} set-option -t "${safe}" mouse on >/dev/null 2>&1 || true`,
+    `${tmux} set-option -t "${safe}" history-limit 50000 >/dev/null 2>&1 || true`,
+    `${tmux} set-option -t "${safe}" set-clipboard on >/dev/null 2>&1 || true`,
+    `exec ${tmux} attach -t "${safe}"`,
   ].join("; ");
 }
 
 function tmuxSessionAlive(name: string) {
   try {
-    execFileSync("tmux", ["has-session", "-t", name], { stdio: "ignore" });
+    execFileSync("tmux", [...tmuxPrefix(), "has-session", "-t", name], { stdio: "ignore" });
     return true;
   } catch {
     return false;

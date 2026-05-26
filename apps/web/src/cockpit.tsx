@@ -13,6 +13,7 @@ import { Inspector } from "./inspector.js";
 import { expandGroupPath, readNavigatorGrouping, subscribeToCollapseChanges } from "./navigator-collapse-store.js";
 import { buildGroupTree, flattenWorkspaceOrder, treeGroupingFor } from "./navigator-groups.js";
 import { Navigator } from "./navigator.js";
+import { RestoreBanner } from "./restore-banner.js";
 import { matchShortcut } from "./shortcuts.js";
 import { Stage } from "./stage.js";
 import { UsageIndicator } from "./usage-indicator.js";
@@ -284,6 +285,7 @@ export function Cockpit() {
         repo={selectedRepo}
         runtimes={data?.runtimes ?? []}
       />
+      <RestoreBanner bootRestore={data?.bootRestore ?? null} />
       {shortcutError ? (
         <div className="cockpit-shortcut-error" role="alert" aria-live="polite">
           {shortcutError}

@@ -12,35 +12,37 @@ describe("buildAttachCommand", () => {
   });
 
   it("enables session-scoped mouse mode", () => {
-    expect(cmd).toContain(`tmux set-option -t "${session}" mouse on`);
+    expect(cmd).toMatch(new RegExp(`set-option -t "${session}" mouse on`));
   });
 
   it("sets session-scoped history-limit to 50000", () => {
-    expect(cmd).toContain(`tmux set-option -t "${session}" history-limit 50000`);
+    expect(cmd).toMatch(new RegExp(`set-option -t "${session}" history-limit 50000`));
   });
 
   it("enables session-scoped set-clipboard so tmux copy-mode emits OSC 52", () => {
-    expect(cmd).toContain(`tmux set-option -t "${session}" set-clipboard on`);
+    expect(cmd).toMatch(new RegExp(`set-option -t "${session}" set-clipboard on`));
   });
 
   it("does NOT use the server-global `-g` flag for mouse / history-limit / set-clipboard", () => {
     // Server-global would pollute the operator's tmux sessions outside Citadel
-    // because Citadel uses the user's default tmux socket. Regression check.
+    // when Citadel runs on the default tmux socket (CITADEL_TMUX_SOCKET unset).
+    // Even with a dedicated socket, session-scoped `-t` keeps options aligned
+    // with the lifecycle of the session itself. Regression check.
     expect(cmd).not.toMatch(/set-option\s+-g\s+mouse/);
     expect(cmd).not.toMatch(/set-option\s+-g\s+history-limit/);
     expect(cmd).not.toMatch(/set-option\s+-g\s+set-clipboard/);
   });
 
-  it('ends with `exec tmux attach -t "<session>"` so attach is the final step', () => {
-    expect(cmd).toMatch(/exec tmux attach -t "[^"]+"$/);
-    expect(cmd.endsWith(`exec tmux attach -t "${session}"`)).toBe(true);
+  it('ends with `exec ... attach -t "<session>"` so attach is the final step', () => {
+    expect(cmd).toMatch(/exec .*?tmux( -L \S+)? attach -t "[^"]+"$/);
   });
 
   it("emits the options BEFORE the attach (so they take effect during attach)", () => {
     const mouseIdx = cmd.indexOf("mouse on");
     const historyIdx = cmd.indexOf("history-limit");
     const clipboardIdx = cmd.indexOf("set-clipboard");
-    const attachIdx = cmd.indexOf("exec tmux attach");
+    // attach is the LAST step regardless of socket prefix.
+    const attachIdx = cmd.search(/exec .*?tmux( -L \S+)? attach -t/);
     expect(mouseIdx).toBeGreaterThan(-1);
     expect(historyIdx).toBeGreaterThan(-1);
     expect(clipboardIdx).toBeGreaterThan(-1);
@@ -52,7 +54,7 @@ describe("buildAttachCommand", () => {
   it("escapes embedded double quotes in the session name", () => {
     const escaped = buildAttachCommand('a"b');
     expect(escaped).toContain('-t "a\\"b"');
-    expect(escaped).toContain('set-option -t "a\\"b" mouse on');
+    expect(escaped).toMatch(/set-option -t "a\\"b" mouse on/);
   });
 
   it("all option lines are guarded with `|| true` so a missing tmux feature does not break attach", () => {
@@ -60,7 +62,7 @@ describe("buildAttachCommand", () => {
     // older tmux versions that may not support a particular option.
     const lines = cmd.split(";").map((line) => line.trim());
     for (const line of lines) {
-      if (line.startsWith("tmux set-option")) {
+      if (/^tmux( -L \S+)? set-option/.test(line)) {
         expect(line, line).toContain("|| true");
       }
     }

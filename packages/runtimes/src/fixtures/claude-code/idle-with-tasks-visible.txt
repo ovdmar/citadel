@@ -1,0 +1,75 @@
+      296    // `databasePath` so an operator who has customized those settings in
+      297    // `~/.local/share/citadel/citadel.config.json` actually sees them applied.
+      298    if (process.env.CITADEL_WORKTREE === "1") {
+      299 -    const { dataDir: _ignoredDataDir, databasePath: _ignoredDbPath, ...rawWithoutPaths } = raw ?? {};
+      300 -    return CitadelConfigSchema.parse({ ...defaults, ...rawWithoutPaths });
+      299 +    const {
+      300 +      dataDir: _ignoredDataDir,
+      301 +      databasePath: _ignoredDbPath,
+      302 +      scratchpad: rawScratchpad,
+      303 +      ...rawWithoutPaths
+      304 +    } = raw ?? {};
+      305 +    // Strip `scratchpad.path` while preserving sibling fields so that future
+      306 +    // `scratchpad.*` additions are not accidentally clobbered when the worktree
+      307 +    // daemon loads a leaked prod config.
+      308 +    const cleanedScratchpad =
+      309 +      rawScratchpad && typeof rawScratchpad === "object"
+      310 +        ? (({ path: _ignoredScratchpadPath, ...rest }) => rest)(rawScratchpad as Record<string, unknown>)
+      311 +        : undefined;
+      312 +    const merged: Record<string, unknown> = { ...defaults, ...rawWithoutPaths };
+      313 +    if (cleanedScratchpad !== undefined) merged.scratchpad = cleanedScratchpad;
+      314 +    return CitadelConfigSchema.parse(merged);
+      315    }
+      316    return CitadelConfigSchema.parse({ ...defaults, ...(raw ?? {}) });
+      317  }
+
+  Ran 1 shell command
+
+● All 18 config tests pass. Now the contract type.
+
+● Update(packages/contracts/src/scratchpad.ts)
+  ⎿  Added 6 lines
+       1  export type ScratchpadSnapshot = { content: string; updatedAt: string };
+       2
+       3 +// Boundary type for surfaces where MCP clients need to discover the on-disk
+       4 +// notes file path (HTTP `GET /api/scratchpad`, MCP `read_scratchpad` daemon
+       5 +// dispatch). Kept as a separate type so internal helpers continue to return
+       6 +// the narrower `ScratchpadSnapshot` shape without fixture churn.
+       7 +export type ReadScratchpadResult = ScratchpadSnapshot & { path: string };
+       8 +
+       9  export type ScratchpadHistorySource =
+      10    | "ui"
+      11    | "mcp:write_scratchpad"
+
+  Searched for 1 pattern
+
+● Update(packages/contracts/src/index.ts)
+  ⎿  File must be read first
+
+  Read 1 file
+
+● Update(packages/contracts/src/index.ts)
+  ⎿  Added 1 line, removed 1 line
+      792  export type CreateScheduledAgentInput = z.infer<typeof CreateScheduledAgentInputSchema>;
+      793  export type UpdateScheduledAgentInput = z.infer<typeof UpdateScheduledAgentInputSchema>;
+      794
+      795 -export type { ScratchpadSnapshot, ScratchpadHistorySource } from "./scratchpad.js";
+      795 +export type { ScratchpadSnapshot, ReadScratchpadResult, ScratchpadHistorySource } from "./scratchpad.js";
+      796  export type { ScratchpadHistoryEntry, ScratchpadHistorySummary } from "./scratchpad.js";
+      797  export type { ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
+      798
+
+  Ran 2 shell commands
+
+  12 tasks (3 done, 1 in progress, 8 open)
+  ◼ Implement: config schema + contract type
+  ◻ Implement: daemon scratchpad module signature change › blocked by #4
+  ◻ Implement: daemon HTTP routes + app.ts wiring › blocked by #5
+  ◻ Implement: MCP surface (inspect_status, read_scratchpad) › blocked by #6
+  ◻ Implement: cockpit UI (structured-config + scratchpad header) › blocked by #7
+   … +4 pending, 3 completed
+                                                                                                                      Update available! Run: brew upgrade claude-code
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ctrl+t to hide tasks
