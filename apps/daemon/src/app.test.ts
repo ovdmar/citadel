@@ -449,6 +449,8 @@ describe("createDaemonApp", () => {
             parentPr: null,
             mergeable: "unknown" as const,
             allowedMergeStrategies: [],
+            mergeStateStatus: null,
+            headSha: null,
           },
           checkedAt: now,
         }),

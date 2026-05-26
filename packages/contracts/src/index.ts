@@ -194,6 +194,14 @@ export const PrReviewerSchema = z.object({
   state: PrReviewerStateSchema,
 });
 
+// GitHub's mergeStateStatus enum; affects the workspace-card "conflicting"
+// tone (DIRTY → red border) but not the readiness state itself. Lowercase
+// "mergeable" enum on PullRequestSummarySchema is the source of truth for
+// the pr-conflicts readiness gate.
+export const PrMergeStateStatusSchema = z
+  .enum(["CLEAN", "BEHIND", "BLOCKED", "DIRTY", "HAS_HOOKS", "UNKNOWN", "UNSTABLE", "DRAFT"])
+  .catch("UNKNOWN");
+
 export const PullRequestSummarySchema = z.object({
   number: z.number(),
   title: z.string(),
@@ -210,6 +218,12 @@ export const PullRequestSummarySchema = z.object({
   parentPr: ParentPrSchema.nullable().default(null),
   mergeable: z.enum(["mergeable", "conflicting", "unknown"]).default("unknown"),
   allowedMergeStrategies: z.array(PrMergeStrategySchema).default([]),
+  // gh `pr view --json mergeStateStatus` — affects card tone only.
+  mergeStateStatus: PrMergeStateStatusSchema.nullable().default(null),
+  // gh `pr view --json headRefOid` — the PR head commit SHA. Used by the
+  // CI auto-recovery tick to dedupe per-SHA so we don't re-launch agents
+  // on CI re-runs of the same commit.
+  headSha: z.string().nullable().default(null),
 });
 
 export const VersionControlSummarySchema = z.object({
@@ -397,6 +411,7 @@ export const WorkspaceReadinessSchema = z.object({
     "needs-review",
     "checks-failing",
     "conflicts",
+    "pr-conflicts",
     "dirty",
     "waiting-provider",
     "action-failed",
@@ -614,7 +629,7 @@ export type RecentCommit = z.infer<typeof RecentCommitSchema>;
 export type WorkspaceRecentCommits = z.infer<typeof WorkspaceRecentCommitsSchema>;
 
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-export type { ScratchpadSnapshot, ScratchpadHistorySource, ScratchpadHistoryEntry, ScratchpadHistorySummary, ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
+export type { ScratchpadSnapshot, ReadScratchpadResult, ScratchpadHistorySource, ScratchpadHistoryEntry, ScratchpadHistorySummary, ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
 
 export type ApiError = { error: string; detail?: string; fieldErrors?: Record<string, string[]> };
 export * from "./scheduled-agents.js";

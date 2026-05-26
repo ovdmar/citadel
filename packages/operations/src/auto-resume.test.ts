@@ -4,7 +4,8 @@ import type { SendMessageResult } from "./agent-messages.js";
 import {
   type AutoResumeDeps,
   BASE_DELAY_MS,
-  JITTER_MS,
+  JITTER_MAX_MS,
+  JITTER_MIN_MS,
   MAX_DELAY_MS,
   RESUME_PROMPTS,
   computeNextDelayMs,
@@ -114,34 +115,33 @@ describe("pickResumePrompt", () => {
 });
 
 describe("computeNextDelayMs", () => {
-  it("attempts=0 returns 1 min + jitter window", () => {
-    // floor: rng=0 → BASE only; ceil: rng→1 → BASE + JITTER_MS.
-    expect(computeNextDelayMs(0, () => 0)).toBe(BASE_DELAY_MS);
-    expect(computeNextDelayMs(0, () => 0.999999)).toBeCloseTo(BASE_DELAY_MS + JITTER_MS, -2);
+  it("attempts=0 lands in [BASE + JITTER_MIN, BASE + JITTER_MAX)", () => {
+    // floor: rng=0 → BASE + JITTER_MIN_MS; ceil: rng→1 → BASE + JITTER_MAX_MS.
+    expect(computeNextDelayMs(0, () => 0)).toBe(BASE_DELAY_MS + JITTER_MIN_MS);
+    expect(computeNextDelayMs(0, () => 0.999999)).toBeCloseTo(BASE_DELAY_MS + JITTER_MAX_MS, -2);
   });
 
-  it("doubles cleanly through attempts 1..7", () => {
-    // No jitter (rng → 0) keeps the math exact.
-    expect(computeNextDelayMs(1, () => 0)).toBe(BASE_DELAY_MS * 2);
-    expect(computeNextDelayMs(2, () => 0)).toBe(BASE_DELAY_MS * 4);
-    expect(computeNextDelayMs(3, () => 0)).toBe(BASE_DELAY_MS * 8);
-    expect(computeNextDelayMs(4, () => 0)).toBe(BASE_DELAY_MS * 16);
-    expect(computeNextDelayMs(5, () => 0)).toBe(BASE_DELAY_MS * 32);
-    expect(computeNextDelayMs(6, () => 0)).toBe(BASE_DELAY_MS * 64);
-    expect(computeNextDelayMs(7, () => 0)).toBe(BASE_DELAY_MS * 128);
-    expect(computeNextDelayMs(7, () => 0)).toBe(MAX_DELAY_MS);
+  it("doubles the base wait cleanly through attempts 1..7 (rng=0 → JITTER_MIN floor)", () => {
+    expect(computeNextDelayMs(1, () => 0)).toBe(BASE_DELAY_MS * 2 + JITTER_MIN_MS);
+    expect(computeNextDelayMs(2, () => 0)).toBe(BASE_DELAY_MS * 4 + JITTER_MIN_MS);
+    expect(computeNextDelayMs(3, () => 0)).toBe(BASE_DELAY_MS * 8 + JITTER_MIN_MS);
+    expect(computeNextDelayMs(4, () => 0)).toBe(BASE_DELAY_MS * 16 + JITTER_MIN_MS);
+    expect(computeNextDelayMs(5, () => 0)).toBe(BASE_DELAY_MS * 32 + JITTER_MIN_MS);
+    expect(computeNextDelayMs(6, () => 0)).toBe(BASE_DELAY_MS * 64 + JITTER_MIN_MS);
+    expect(computeNextDelayMs(7, () => 0)).toBe(BASE_DELAY_MS * 128 + JITTER_MIN_MS);
+    expect(computeNextDelayMs(7, () => 0)).toBe(MAX_DELAY_MS + JITTER_MIN_MS);
   });
 
-  it("caps at MAX_DELAY_MS for attempts 8+ (no further doubling)", () => {
+  it("caps the base at MAX_DELAY_MS for attempts 8+ (no further doubling)", () => {
     for (const attempts of [8, 9, 20, 100, 1_000]) {
-      expect(computeNextDelayMs(attempts, () => 0)).toBe(MAX_DELAY_MS);
-      // With max jitter it stays within MAX_DELAY_MS + JITTER_MS — never higher.
-      expect(computeNextDelayMs(attempts, () => 0.999999)).toBeLessThanOrEqual(MAX_DELAY_MS + JITTER_MS);
+      expect(computeNextDelayMs(attempts, () => 0)).toBe(MAX_DELAY_MS + JITTER_MIN_MS);
+      // With max jitter the total stays within MAX_DELAY_MS + JITTER_MAX_MS.
+      expect(computeNextDelayMs(attempts, () => 0.999999)).toBeLessThanOrEqual(MAX_DELAY_MS + JITTER_MAX_MS);
     }
   });
 
-  it("survives NaN rng (defensive)", () => {
-    expect(computeNextDelayMs(3, () => Number.NaN)).toBe(BASE_DELAY_MS * 8);
+  it("survives NaN rng (defensive — still applies JITTER_MIN floor)", () => {
+    expect(computeNextDelayMs(3, () => Number.NaN)).toBe(BASE_DELAY_MS * 8 + JITTER_MIN_MS);
   });
 });
 
@@ -154,20 +154,20 @@ describe("runAutoResumeTick", () => {
     vi.useRealTimers();
   });
 
-  it("schedules first attempt at 1 min + jitter; does not send yet", async () => {
+  it("schedules first attempt at BASE + JITTER_MIN (rng=0 → 1min + 2min = 3min); does not send yet", async () => {
     const deps = makeDeps({ sessions: [session({ nextResumeAt: null })], rng: () => 0 });
     const result = await runAutoResumeTick(deps);
     expect(result).toEqual({ resumed: 0, scheduled: 1, cleared: 0, healed: 0, postponed: false });
     expect(deps.sendCalls).toEqual([]);
-    expect(deps.updates[0]?.update.nextResumeAt).toBe(new Date(NOW_MS + BASE_DELAY_MS).toISOString());
+    expect(deps.updates[0]?.update.nextResumeAt).toBe(new Date(NOW_MS + BASE_DELAY_MS + JITTER_MIN_MS).toISOString());
   });
 
-  it("schedules into [1min, 2min] when jitter saturates", async () => {
+  it("schedules into [BASE+JITTER_MIN, BASE+JITTER_MAX] across the jitter window", async () => {
     const deps = makeDeps({ sessions: [session({ nextResumeAt: null })], rng: () => 0.999999 });
     await runAutoResumeTick(deps);
     const scheduled = Date.parse(deps.updates[0]?.update.nextResumeAt as string);
-    expect(scheduled).toBeGreaterThanOrEqual(NOW_MS + BASE_DELAY_MS);
-    expect(scheduled).toBeLessThanOrEqual(NOW_MS + BASE_DELAY_MS + JITTER_MS);
+    expect(scheduled).toBeGreaterThanOrEqual(NOW_MS + BASE_DELAY_MS + JITTER_MIN_MS);
+    expect(scheduled).toBeLessThanOrEqual(NOW_MS + BASE_DELAY_MS + JITTER_MAX_MS);
   });
 
   it("skips sessions whose nextResumeAt is in the future", async () => {
@@ -194,8 +194,8 @@ describe("runAutoResumeTick", () => {
     const update = deps.updates.at(-1)?.update;
     expect(update?.rateLimitResumeAttempts).toBe(1);
     expect(update?.lastResumeFromRateLimitAt).toBe(new Date(NOW_MS).toISOString());
-    // attempts=1, rng=0 → 2min exactly
-    expect(update?.nextResumeAt).toBe(new Date(NOW_MS + BASE_DELAY_MS * 2).toISOString());
+    // attempts=1, rng=0 → 2min base + 2min jitter floor = 4min total
+    expect(update?.nextResumeAt).toBe(new Date(NOW_MS + BASE_DELAY_MS * 2 + JITTER_MIN_MS).toISOString());
   });
 
   it("backoff doubles 1 → 2 → 4 → 8 … and caps at 128 min over many ticks (TA11)", async () => {
@@ -212,7 +212,8 @@ describe("runAutoResumeTick", () => {
       await runAutoResumeTick(deps);
       const scheduledIso = sess.nextResumeAt as string;
       const scheduledMs = Date.parse(scheduledIso);
-      expect(scheduledMs - currentMs).toBe(expected * 60_000); // exact, since rng=0
+      // rng=0 → jitter is at JITTER_MIN_MS floor (2min); total = base + 2min.
+      expect(scheduledMs - currentMs).toBe(expected * 60_000 + JITTER_MIN_MS);
       expect(sess.rateLimitResumeAttempts).toBe(before + 1);
       // Advance just past the scheduled time so the next tick fires.
       currentMs = scheduledMs + 1;
@@ -232,7 +233,7 @@ describe("runAutoResumeTick", () => {
     expect(result.resumed).toBe(0);
     const update = deps.updates.at(-1)?.update;
     expect(update?.rateLimitResumeAttempts).toBe(2);
-    expect(update?.nextResumeAt).toBe(new Date(NOW_MS + BASE_DELAY_MS * 4).toISOString());
+    expect(update?.nextResumeAt).toBe(new Date(NOW_MS + BASE_DELAY_MS * 4 + JITTER_MIN_MS).toISOString());
     expect(update).not.toHaveProperty("lastResumeFromRateLimitAt");
     expect(deps.warnings.some((w) => w.msg.includes("send failed"))).toBe(true);
   });
@@ -249,7 +250,7 @@ describe("runAutoResumeTick", () => {
     expect(deps.sendCalls).toHaveLength(1); // exactly one attempt (no double-send)
     const update = deps.updates.at(-1)?.update;
     expect(update?.rateLimitResumeAttempts).toBe(2);
-    expect(update?.nextResumeAt).toBe(new Date(NOW_MS + BASE_DELAY_MS * 4).toISOString());
+    expect(update?.nextResumeAt).toBe(new Date(NOW_MS + BASE_DELAY_MS * 4 + JITTER_MIN_MS).toISOString());
     expect(update).not.toHaveProperty("lastResumeFromRateLimitAt");
     expect(deps.warnings.some((w) => w.msg.includes("send threw"))).toBe(true);
   });
@@ -288,6 +289,33 @@ describe("runAutoResumeTick", () => {
     expect(update?.rateLimitResumeAttempts).toBe(0);
     expect(update?.nextResumeAt).toBeNull();
     expect(update).not.toHaveProperty("lastResumeFromRateLimitAt");
+  });
+
+  it("preserves rate_limited backoff state when session flips to usage_limited (oscillation guard)", async () => {
+    // Real scenario: a session oscillates rate_limited → usage_limited →
+    // rate_limited as nudges hit different banners. If we cleared the
+    // rateLimitResumeAttempts/nextResumeAt every time it flipped to
+    // usage_limited, the next rate_limited episode would restart at the
+    // 1-min initial backoff and we'd send ~one nudge per minute against a
+    // sustained limit. The else-branch must skip clear for usage_limited.
+    const future = new Date(NOW_MS + 30 * 60_000).toISOString();
+    const sessions = [
+      session({
+        status: "usage_limited",
+        statusReason: `pane:usage_limited:reset=${future}`,
+        rateLimitResumeAttempts: 4,
+        nextResumeAt: new Date(NOW_MS + 8 * 60_000).toISOString(),
+        lastResumeFromRateLimitAt: "2026-05-25T11:30:00.000Z",
+      }),
+    ];
+    const deps = makeDeps({ sessions });
+    const result = await runAutoResumeTick(deps);
+    expect(result.cleared).toBe(0);
+    // No update should have been written that resets rate_limited fields.
+    const wipeUpdates = deps.updates.filter(
+      (u) => u.update.rateLimitResumeAttempts === 0 || u.update.nextResumeAt === null,
+    );
+    expect(wipeUpdates).toHaveLength(0);
   });
 
   it("does not churn DB writes for non-rate-limited sessions with no stale state", async () => {
@@ -349,7 +377,7 @@ describe("runAutoResumeTick", () => {
     expect(sess.rateLimitResumeAttempts).toBe(1);
     expect(sess.lastResumeFromRateLimitAt).toBe(new Date(NOW_MS).toISOString());
     const after1 = Date.parse(sess.nextResumeAt as string);
-    expect(after1 - NOW_MS).toBe(BASE_DELAY_MS * 2);
+    expect(after1 - NOW_MS).toBe(BASE_DELAY_MS * 2 + JITTER_MIN_MS);
 
     // Pane still shows banner; status_monitor would leave status=rate_limited.
     // Because we passed optimistic:false, the cockpit never flipped to
@@ -361,7 +389,7 @@ describe("runAutoResumeTick", () => {
     deps.now = () => new Date(t2);
     await runAutoResumeTick(deps);
     expect(sess.rateLimitResumeAttempts).toBe(2);
-    expect(Date.parse(sess.nextResumeAt as string) - t2).toBe(BASE_DELAY_MS * 4);
+    expect(Date.parse(sess.nextResumeAt as string) - t2).toBe(BASE_DELAY_MS * 4 + JITTER_MIN_MS);
   });
 
   it("integration: pane clears (status flips to running externally) → next tick clears state", async () => {
@@ -557,7 +585,7 @@ describe("runAutoResumeTick — usage_limited branch", () => {
     expect(result.resumed).toBe(0);
   });
 
-  it("nudges once after the reset wall-clock has passed", async () => {
+  it("nudges once after the reset wall-clock has passed; stamps lastResumeFromRateLimitAt", async () => {
     const past = new Date(NOW_MS - 1).toISOString();
     const sessions = [session({ status: "usage_limited", statusReason: `pane:usage_limited:reset=${past}` })];
     const deps = makeDeps({ sessions });
@@ -566,6 +594,45 @@ describe("runAutoResumeTick — usage_limited branch", () => {
     expect(deps.sendCalls[0]?.source).toBe("system");
     expect(deps.sendCalls[0]?.optimistic).toBe(false);
     expect(result.resumed).toBe(1);
+    // The successful send must stamp lastResumeFromRateLimitAt so the next
+    // tick's idempotency gate knows we already nudged this reset cycle.
+    const update = deps.updates.at(-1)?.update;
+    expect(update?.lastResumeFromRateLimitAt).toBe(new Date(NOW_MS).toISOString());
+  });
+
+  it("does NOT re-nudge the same reset cycle even if banner stays stuck (idempotency gate)", async () => {
+    const past = new Date(NOW_MS - 1).toISOString();
+    // Simulate: we already nudged 30s after the reset, banner is still
+    // showing the SAME reset (Claude didn't refresh).
+    const sessions = [
+      session({
+        status: "usage_limited",
+        statusReason: `pane:usage_limited:reset=${past}`,
+        lastResumeFromRateLimitAt: new Date(Date.parse(past) + 30_000).toISOString(),
+      }),
+    ];
+    const deps = makeDeps({ sessions });
+    await runAutoResumeTick(deps);
+    expect(deps.sendCalls).toHaveLength(0);
+  });
+
+  it("re-nudges when banner refreshes with a NEWER reset that has since also passed", async () => {
+    // First reset was at NOW-2h, we nudged at NOW-90min. Banner refreshed
+    // and now shows a NEWER reset (NOW-30min) — which is also in the past.
+    // The gate compares lastResumeFromRateLimitAt against the new reset
+    // (NOW-30min) and lets us nudge again because lastResume < newReset.
+    const newerReset = new Date(NOW_MS - 30 * 60_000).toISOString();
+    const previousNudge = new Date(NOW_MS - 90 * 60_000).toISOString();
+    const sessions = [
+      session({
+        status: "usage_limited",
+        statusReason: `pane:usage_limited:reset=${newerReset}`,
+        lastResumeFromRateLimitAt: previousNudge,
+      }),
+    ];
+    const deps = makeDeps({ sessions });
+    await runAutoResumeTick(deps);
+    expect(deps.sendCalls).toHaveLength(1);
   });
 
   it("skips when statusReason is reset=unknown (no horizon to wait against)", async () => {

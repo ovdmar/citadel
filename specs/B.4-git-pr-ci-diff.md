@@ -31,6 +31,8 @@
 [x] 11. The PR row exposes a copy-branch affordance for the head branch, and uses GitHub's `base ← head` direction.
 [x] 12. Stacked PRs are detected by comparing each PR's base ref to other open and recently-merged PRs in the same head repository. When a parent is detected, the workspace card and inspector show an `↑ #<parent-number>` chip linking to that PR; merged parents are rendered with a distinct tone.
 [x] 13. A merge button is available in the inspector PR section when the GitHub CLI is healthy and the PR is mergeable. The button respects the repository's allowed merge strategies (squash/merge/rebase) and never deletes the head branch by default.
+[~] 14. GitHub's `mergeable` and `mergeStateStatus` fields are surfaced through `PullRequestSummary`. `mergeable !== "CONFLICTING"` is required for the `ready-to-merge` readiness state; `mergeStateStatus` informs the workspace-card tone only.
+[~] 15. When `mergeable === "CONFLICTING"`, the workspace enters the dedicated `pr-conflicts` readiness state, distinct from the local working-tree `conflicts` state and from `checks-failing`. The workspace-card tone also flips to `conflicting` when `mergeStateStatus === "DIRTY"`, but the readiness state itself remains scoped to `mergeable === "CONFLICTING"`.
 
 ## Checks And CI
 

@@ -6,7 +6,6 @@ import type { CitadelConfig } from "@citadel/config";
 import { mergeConfigPatch, saveConfig } from "@citadel/config";
 import {
   type AppEvent,
-  CreateAgentSessionInputSchema,
   CreateRepoInputSchema,
   CreateWorkspaceInputSchema,
   HookActionSchema,
@@ -27,12 +26,18 @@ import {
   transitionJiraIssue,
 } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
-import { attachTerminalWebSocket, createTtydManager, ensureTmuxSession } from "@citadel/terminal";
+import {
+  attachTerminalWebSocket,
+  createTtydManager,
+  discoverExistingTtyds,
+  ensureTmuxSession,
+} from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
+import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
@@ -44,9 +49,8 @@ import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
-import { backfillIfEmpty } from "./scratchpad-history.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
-import { scratchpadPath } from "./scratchpad.js";
+import { backfillScratchpadOnStartup } from "./scratchpad.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
@@ -114,14 +118,31 @@ export function createDaemonApp(input: {
 
   // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
   //
-  // Skip cleanupStale() when running under vitest. Every test that boots a
-  // daemon (~20 of them) derives the same slot 0 range as the production
-  // install for config.port=4010 — running cleanupStale() in tests would
-  // SIGTERM the live cockpit's ttyds on every test that calls
-  // createDaemonApp(). Production daemons still get the boot-time sweep.
+  // Boot-time discover-and-adopt: ttyds are spawned detached and the systemd
+  // unit runs with KillMode=process, so they outlive daemon restarts. Scan
+  // the ttyd port range for survivors from the previous incarnation and
+  // adopt them back into the manager — same key, same PID, no respawn.
+  // The browser's WebSocket auto-reconnect (xterm `reconnect=3`) lands on
+  // the *same* ttyd it was talking to before the restart.
+  //
+  // Skipped under vitest: tests that boot a daemon all derive the same slot
+  // 0 range as the production install for config.port=4010, so an adopt()
+  // pass would re-attach to the live cockpit's ttyds and the next test that
+  // calls release() would kill them.
   if (!process.env.VITEST) {
-    const initialTerminalCleanup = ttyd.cleanupStale();
-    if (initialTerminalCleanup.killed > 0) emit("terminal.cleanup", initialTerminalCleanup);
+    const survivors = discoverExistingTtyds({
+      portBase: ttyd.config.portBase,
+      portMax: ttyd.config.portMax,
+      basePathPrefix: ttyd.config.basePathPrefix,
+    });
+    const { adopted, reapedDuplicates } = ttyd.adopt(survivors);
+    if (adopted > 0 || reapedDuplicates > 0) {
+      emit("terminal.adopted", {
+        adopted,
+        reapedDuplicates,
+        portRange: [ttyd.config.portBase, ttyd.config.portMax],
+      });
+    }
   }
   const respawnTmux = async (session: import("@citadel/contracts").AgentSession) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
@@ -459,39 +480,7 @@ export function createDaemonApp(input: {
     buildWorkspaceCockpitSummary,
   });
 
-  app.post(
-    "/api/agent-sessions",
-    asyncRoute(async (req, res) => {
-      const input = CreateAgentSessionInputSchema.parse(req.body);
-      const runtime = config.runtimes.find((candidate) => candidate.id === input.runtimeId);
-      if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
-      const session = await operations.createAgentSession(input, {
-        command: runtime.command,
-        args: runtime.args,
-        displayName: runtime.displayName,
-        promptArg: runtime.promptArg ?? null,
-        sessionIdArg: runtime.sessionIdArg ?? null,
-        resumeArg: runtime.resumeArg ?? null,
-      });
-      emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
-      res.status(202).json({ session });
-    }),
-  );
-
-  app.delete(
-    "/api/agent-sessions/:sessionId",
-    asyncRoute(async (req, res) => {
-      const sessionId = req.params.sessionId;
-      if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
-      const result = operations.stopAgentSession({ sessionId });
-      if (!result.stopped) return res.status(404).json(result);
-      ttyd.release(sessionId);
-      emit("agent.updated", { sessionId });
-      res.status(202).json(result);
-    }),
-  );
-
-  registerAgentSessionRoutes(app, { operations, emit, asyncRoute });
+  registerAgentSessionRoutes(app, { operations, emit, asyncRoute, config, ttyd });
   registerRestoreRoutes(app, { store, operations, config, emit, asyncRoute });
 
   app.post(
@@ -672,21 +661,10 @@ export function createDaemonApp(input: {
     readMcpResource: (uri) => readMcpResource(store, config, uri),
   });
 
-  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations });
+  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, config });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit });
-  try {
-    const spPath = scratchpadPath(config.dataDir);
-    if (fs.existsSync(spPath)) {
-      const content = fs.readFileSync(spPath, "utf8");
-      if (content.length > 0) {
-        const stat = fs.statSync(spPath);
-        backfillIfEmpty(config.dataDir, { content, updatedAt: stat.mtime.toISOString() });
-      }
-    }
-  } catch (error) {
-    console.error(`[scratchpad-history] backfill skipped: ${error instanceof Error ? error.message : error}`);
-  }
+  backfillScratchpadOnStartup(config);
 
   fsWatchers = createWorkspaceFsWatchers({
     listWorkspaces: () => store.listWorkspaces(),
@@ -751,10 +729,11 @@ export function createDaemonApp(input: {
     server.on("close", () => clearInterval(reaper));
   }
 
-  // Status monitor / auto-resume / terminal reaper: see their own modules for context.
+  // Status monitor / auto-recovery / auto-resume / terminal reaper: see their own modules for context.
   const statusMonitor = startDaemonStatusMonitor(store, emit);
   if (statusMonitor) server.on("close", () => statusMonitor.stop());
-
+  const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({ store, config, operations, emit });
+  if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
   const autoResume = startDaemonAutoResumeLoop(store, operations);
   if (autoResume) server.on("close", () => autoResume.stop());
   const terminalReaper = startTerminalReaper();
