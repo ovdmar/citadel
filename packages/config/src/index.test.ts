@@ -475,6 +475,59 @@ describe("scratchpad.path config field", () => {
     }
   });
 
+  it("preserves other scratchpad.* fields under worktree strip (only `path` is dropped)", () => {
+    // Forward-compat guard: when the schema grows (e.g. scratchpad.history.*),
+    // the strip-on-load defense MUST drop only `path` — accidentally flat-stripping
+    // the whole `scratchpad` key would silently lose future settings.
+    const prevData = process.env.CITADEL_DATA_DIR;
+    const prevWorktree = process.env.CITADEL_WORKTREE;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-wt-siblings-"));
+    dirs.push(root);
+    process.env.CITADEL_DATA_DIR = path.join(root, "wt-data");
+    process.env.CITADEL_WORKTREE = "1";
+    const configPath = path.join(root, "leaked-with-siblings.config.json");
+    // Write a raw object that includes both `path` and an unknown sibling. Zod
+    // strips unknown keys today, so the loaded `scratchpad` will be `{}` either
+    // way — but the load-time strip must not throw and must not surface `path`.
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        scratchpad: { path: "/should/be/stripped.md", futureFlag: true },
+      }),
+    );
+    try {
+      const loaded = loadConfig(configPath);
+      expect(loaded.scratchpad.path).toBeUndefined();
+      // On-disk leaked value untouched (strip is in-memory only).
+      const onDisk = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      expect(onDisk.scratchpad).toEqual({ path: "/should/be/stripped.md", futureFlag: true });
+    } finally {
+      // biome-ignore lint/performance/noDelete: must actually unset.
+      if (prevData === undefined) delete process.env.CITADEL_DATA_DIR;
+      else process.env.CITADEL_DATA_DIR = prevData;
+      // biome-ignore lint/performance/noDelete: must actually unset.
+      if (prevWorktree === undefined) delete process.env.CITADEL_WORKTREE;
+      else process.env.CITADEL_WORKTREE = prevWorktree;
+    }
+  });
+
+  it("rejects bare `~` (no slash) as relative — only `~/X` is tilde-expanded", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-bare-tilde-"));
+    dirs.push(dir);
+    const configPath = path.join(dir, "citadel.config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        dataDir: dir,
+        databasePath: path.join(dir, "citadel.sqlite"),
+        scratchpad: { path: "~" },
+      }),
+    );
+    expect(() => loadConfig(configPath)).toThrow(/absolute/i);
+  });
+
   it("effectiveNotesPath returns the override when set, else <dataDir>/scratchpad.md", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-effpath-"));
     dirs.push(dir);

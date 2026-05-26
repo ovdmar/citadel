@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { type CitadelConfig, SCRATCHPAD_DEFAULT_FILENAME, defaultNotesPath, effectiveNotesPath } from "@citadel/config";
+import { type CitadelConfig, defaultNotesPath, effectiveNotesPath } from "@citadel/config";
 import type {
   ScratchpadBlock,
   ScratchpadBlockPosition,
@@ -22,9 +22,6 @@ import {
   recordHistoryWrite,
 } from "./scratchpad-history.js";
 
-// Re-export for legacy daemon code paths that still touch the default basename.
-export { SCRATCHPAD_DEFAULT_FILENAME };
-export const SCRATCHPAD_FILENAME = SCRATCHPAD_DEFAULT_FILENAME;
 export const SCRATCHPAD_MAX_BYTES = 1_000_000;
 export const DEFAULT_STUB = "# Scratchpad\n\n";
 
@@ -35,13 +32,6 @@ export class ScratchpadTooLargeError extends Error {
     super("scratchpad_too_large");
     this.name = "ScratchpadTooLargeError";
   }
-}
-
-// Where the notes file lives on disk. Returns notesPath unchanged — kept as a
-// thin function so tests and call sites have a single named entry point even
-// though the field is now resolved from `effectiveNotesPath(config)` upstream.
-export function scratchpadPath(notesPath: string) {
-  return notesPath;
 }
 
 // Bundle of the two filesystem locations every scratchpad operation needs.

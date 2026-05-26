@@ -25,7 +25,7 @@ test.describe("notes location", () => {
     }
   });
 
-  test("Settings round-trips a custom notes path and the daemon honors it", async ({ page, request }) => {
+  test("Settings round-trips a custom notes path and the daemon writes to disk at it", async ({ page, request }) => {
     const tmpNotes = path.join(os.tmpdir(), `citadel-e2e-notes-${Date.now()}.md`);
     tmpFiles.push(tmpNotes);
 
@@ -50,6 +50,15 @@ test.describe("notes location", () => {
       path: string;
     };
     expect(snapshot.path).toBe(tmpNotes);
+
+    // Filesystem-level verification: writing through the cockpit's PUT must
+    // land at the configured file, NOT at the old default path. This catches
+    // any regression where the daemon returns the configured path in the
+    // response but actually writes elsewhere.
+    const marker = `notes-location-e2e-${Date.now()}`;
+    await request.put(`${API_BASE}/api/scratchpad`, { data: { content: marker } });
+    expect(fs.existsSync(tmpNotes)).toBe(true);
+    expect(fs.readFileSync(tmpNotes, "utf8")).toContain(marker);
 
     // Cockpit displays the resolved path in the scratchpad header subtitle.
     await page.goto("/scratchpad");

@@ -19,7 +19,6 @@ import {
   deleteBlock,
   listBlocks,
   readScratchpad,
-  scratchpadPath,
   updateBlock,
   writeScratchpad,
 } from "./scratchpad.js";
@@ -478,5 +477,17 @@ describe("configurable notes location", () => {
     fs.writeFileSync(customNotes, "");
     backfillScratchpadOnStartup({ dataDir: dir, scratchpad: { path: customNotes } });
     expect(fs.existsSync(historyPath(dir))).toBe(false);
+  });
+
+  it("surfaces a clear error (not a silent swallow) when notesPath points at a non-writable location", () => {
+    // Failure-mode coverage from the plan: pointing the path at a directory or
+    // a path the daemon can't write produces an explicit throw, not a silent
+    // empty-content return. Use a directory as the notes path — fs.writeFileSync
+    // on a directory always fails with EISDIR regardless of permissions.
+    const dir = tmpDir();
+    const customDir = tmpDir();
+    const notesAsDir = path.join(customDir, "this-is-a-dir");
+    fs.mkdirSync(notesAsDir, { recursive: true });
+    expect(() => writeScratchpad({ notesPath: notesAsDir, dataDir: dir }, "content", "ui")).toThrow();
   });
 });

@@ -85,7 +85,7 @@ The file remains a regular markdown file so external tooling (git, editors, grep
 
 **MCP tool surface:**
 
-- `read_scratchpad()` → `{ content, updatedAt }`. Auto-migrates the file on first read after upgrade.
+- `read_scratchpad()` → `{ content, updatedAt, path }`. Auto-migrates the file on first read after upgrade. `path` is the absolute filesystem path the daemon read from — see "Configurable location" below.
 - `write_scratchpad(content)` → `{ content, updatedAt }`. Byte-faithful overwrite; the next read normalizes if needed.
 - `append_scratchpad(text)` → **creates a new block** (fresh UUID, end of file). Each call produces exactly one block. **Behavior change** from prior versions, which inserted a blank-line separator; downstream agents that built multi-line content by repeated `append_scratchpad` calls now get one block per call instead of concatenated text.
 - `list_blocks()` → `[{ id, text, createdAt, updatedAt }]`. Timestamps are best-effort, derived from version history; due to same-source 60s coalesce, they bracket the real edit time but may be aliased within a coalesce window. Blocks predating history fall back to the file's `mtime`.

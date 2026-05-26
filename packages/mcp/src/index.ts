@@ -83,10 +83,10 @@ export type McpToolContext = {
   sessionPromptSummary?: (sessionId: string) => { initialPrompt: string | null; messageCount: number };
   // Absolute path of the daemon's notes file. Surfaced through `inspect_status`
   // so MCP-using agents can discover the scratchpad location without a separate
-  // `/api/config` round-trip. Required — every construction site must supply it
-  // (snapshot fallbacks compute `effectiveNotesPath(config)`); leaving it
-  // optional would make the `inspect_status.scratchpad` field sometimes-present
-  // and weaken the discovery guarantee.
+  // `/api/config` round-trip. Required (non-optional) — leaving it optional
+  // would make the `inspect_status.scratchpad` field sometimes-present and
+  // weaken the discovery guarantee for MCP clients. The daemon-side constructor
+  // populates it from `effectiveNotesPath(config)` in apps/daemon/src/daemon-mcp-tool.ts.
   scratchpadPath: string;
 };
 
