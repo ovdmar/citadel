@@ -9,7 +9,7 @@
 [~] 1. Citadel uses a workspace-first cockpit layout.
 [~] 2. Settings is secondary to the cockpit.
 [ ] 3. The UI is calm, dense, premium, and operational.
-[ ] 4. shadcn-style components are used where they improve consistency and speed.
+[~] 4. shadcn-style components are used where they improve consistency and speed. First wave of primitives shipped under `apps/web/src/components/ui/` (Button, Badge, Card, Panel, Input/Textarea/Select/Label/FormField/HelpText, Tabs, Dialog, Tooltip, Chip, IconButton, EmptyState, Skeleton, Toast); see `apps/web/src/design-system/README.md`. Remaining surface migrations deferred to follow-up PRs.
 [ ] 5. The UI has theme support.
 [ ] 6. Workspace rows are compact and scannable.
 [ ] 7. Status language is concrete and operator-facing.
