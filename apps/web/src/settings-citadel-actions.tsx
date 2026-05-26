@@ -1,6 +1,6 @@
 import type { CitadelAction } from "@citadel/contracts";
 import { Plus, RotateCcw, Sparkles, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 
 export function CitadelActionsPanel() {
@@ -9,6 +9,7 @@ export function CitadelActionsPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<CitadelAction | null>(null);
+  const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
 
@@ -31,15 +32,34 @@ export function CitadelActionsPanel() {
     void load();
   }, [load]);
 
-  // Refresh draft when selection changes.
+  // Reseed the draft from `actions` when:
+  //   (a) the selection changes (always reseed — switching rows must reset).
+  //   (b) the selection is unchanged but the draft is clean (dirty=false).
+  // If the user is mid-edit (dirty=true) and `actions` re-renders for an
+  // unrelated reason (sibling save / SSE refresh), unsaved input must NOT be
+  // clobbered. Save / Reset / Delete handlers explicitly clear `dirty` after
+  // they touch the row so the next refresh re-syncs as expected.
+  const lastSelectedRef = useRef<string | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `dirty` is consulted but is not a trigger — only selectedId/actions identity changes should re-evaluate.
   useEffect(() => {
+    const selectionChanged = lastSelectedRef.current !== selectedId;
+    lastSelectedRef.current = selectedId;
     if (!selectedId) {
       setDraft(null);
+      setDirty(false);
       return;
     }
+    if (!selectionChanged && dirty) return;
     const selected = actions.find((a) => a.id === selectedId);
     setDraft(selected ? { ...selected } : null);
+    if (selectionChanged) setDirty(false);
   }, [selectedId, actions]);
+
+  // Helper: wrap setDraft so any user-driven edit flips dirty=true.
+  const editDraft = useCallback((patch: (current: CitadelAction) => CitadelAction) => {
+    setDraft((current) => (current ? patch(current) : current));
+    setDirty(true);
+  }, []);
 
   const handleSave = useCallback(async () => {
     if (!draft) return;
@@ -58,6 +78,7 @@ export function CitadelActionsPanel() {
       });
       setActions((current) => current.map((a) => (a.id === result.action.id ? result.action : a)));
       setDraft(result.action);
+      setDirty(false);
       setSavedAt(new Date().toISOString());
     } catch (err) {
       setError(err instanceof Error ? err.message : "save_failed");
@@ -77,6 +98,7 @@ export function CitadelActionsPanel() {
       );
       setActions((current) => current.map((a) => (a.id === result.action.id ? result.action : a)));
       setDraft(result.action);
+      setDirty(false);
       setSavedAt(new Date().toISOString());
     } catch (err) {
       setError(err instanceof Error ? err.message : "reset_failed");
@@ -175,7 +197,7 @@ export function CitadelActionsPanel() {
                 id="citadel-action-name"
                 type="text"
                 value={draft.name}
-                onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+                onChange={(event) => editDraft((d) => ({ ...d, name: event.target.value }))}
               />
             </div>
             <div className="citadel-actions-editor-row">
@@ -184,7 +206,7 @@ export function CitadelActionsPanel() {
                 id="citadel-action-description"
                 type="text"
                 value={draft.description}
-                onChange={(event) => setDraft({ ...draft, description: event.target.value })}
+                onChange={(event) => editDraft((d) => ({ ...d, description: event.target.value }))}
               />
             </div>
             <div className="citadel-actions-editor-row">
@@ -193,7 +215,7 @@ export function CitadelActionsPanel() {
                 id="citadel-action-icon"
                 type="text"
                 value={draft.icon}
-                onChange={(event) => setDraft({ ...draft, icon: event.target.value })}
+                onChange={(event) => editDraft((d) => ({ ...d, icon: event.target.value }))}
                 placeholder="e.g. Wand2"
               />
             </div>
@@ -202,7 +224,7 @@ export function CitadelActionsPanel() {
               <textarea
                 id="citadel-action-prompt"
                 value={draft.promptTemplate}
-                onChange={(event) => setDraft({ ...draft, promptTemplate: event.target.value })}
+                onChange={(event) => editDraft((d) => ({ ...d, promptTemplate: event.target.value }))}
                 rows={12}
               />
             </div>
