@@ -15,10 +15,36 @@ export const AgentSessionStatusSchema = z.enum([
   "running",
   "waiting_for_input",
   "idle",
+  "rate_limited",
   "stopped",
   "failed",
   "unknown",
 ]);
+
+// Typed helpers for the AgentSessionStatus enum. Use these instead of
+// hardcoded string lists at call sites — when the enum grows again, the
+// helpers update in one place rather than across the repo.
+//
+// isInteractiveStatus  — agent is actively driving toward completion
+// isAliveStatus        — process exists (everything but stopped/failed)
+// isAcceptingInputStatus — operator messages should be accepted
+//
+// rate_limited is INTENTIONALLY excluded from isAcceptingInputStatus —
+// the runtime cannot process input until reset; the resumer uses the
+// lower-level pressEnter() path that bypasses this gate.
+export type AgentSessionStatus = z.infer<typeof AgentSessionStatusSchema>;
+
+export function isInteractiveStatus(status: AgentSessionStatus): boolean {
+  return status === "starting" || status === "running" || status === "waiting_for_input";
+}
+
+export function isAliveStatus(status: AgentSessionStatus): boolean {
+  return status !== "stopped" && status !== "failed";
+}
+
+export function isAcceptingInputStatus(status: AgentSessionStatus): boolean {
+  return status === "starting" || status === "running" || status === "waiting_for_input" || status === "idle";
+}
 export const TransportStatusSchema = z.enum(["disconnected", "connecting", "connected", "degraded"]);
 export const OperationStatusSchema = z.enum(["queued", "running", "succeeded", "failed", "cancelled"]);
 
@@ -592,6 +618,21 @@ export const ScheduledAgentRunSchema = z.object({
   logFilePath: z.string().nullable().default(null),
 });
 
+// One-shot rate-limit resumption row. At most one row exists in 'pending' status
+// at any time (enforced by a partial unique index in the DB). The scheduler
+// writes a row when any session is rate_limited with a parseable reset time,
+// and marks it 'executed' after the resumer has fanned out across all currently
+// rate-limited sessions whose reset has actually passed.
+export const RateLimitResumptionStatusSchema = z.enum(["pending", "executed"]);
+
+export const RateLimitResumptionSchema = z.object({
+  id: IdSchema,
+  scheduledAt: z.string(),
+  status: RateLimitResumptionStatusSchema.default("pending"),
+  createdAt: z.string(),
+  executedAt: z.string().nullable().default(null),
+});
+
 // Tmux-backed agent session that is NOT tied to a workspace. Only fields with
 // a documented reader in v1 are surfaced — see plan step 1 for the reader map.
 export const BackgroundAgentSessionStatusSchema = z.enum(["running", "stopped", "failed"]);
@@ -780,6 +821,8 @@ export type ScheduledAgentRunMode = z.infer<typeof ScheduledAgentRunModeSchema>;
 export type ScheduledAgentOverlapPolicy = z.infer<typeof ScheduledAgentOverlapPolicySchema>;
 export type ScheduledAgentRun = z.infer<typeof ScheduledAgentRunSchema>;
 export type BackgroundAgentSession = z.infer<typeof BackgroundAgentSessionSchema>;
+export type RateLimitResumption = z.infer<typeof RateLimitResumptionSchema>;
+export type RateLimitResumptionStatus = z.infer<typeof RateLimitResumptionStatusSchema>;
 export type CreateScheduledAgentInput = z.infer<typeof CreateScheduledAgentInputSchema>;
 export type UpdateScheduledAgentInput = z.infer<typeof UpdateScheduledAgentInputSchema>;
 

@@ -5,6 +5,7 @@ import type {
   HookOutput,
   Operation,
   OperationLogEntry,
+  RateLimitResumption,
   Repo,
   ScheduledAgent,
   ScheduledAgentRun,
@@ -172,6 +173,16 @@ export function backgroundSessionFromRow(row: Record<string, unknown>): Backgrou
     status: asString(row, "status") as BackgroundAgentSession["status"],
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
+  };
+}
+
+export function rateLimitResumptionFromRow(row: Record<string, unknown>): RateLimitResumption {
+  return {
+    id: asString(row, "id"),
+    scheduledAt: asString(row, "scheduled_at"),
+    status: asString(row, "status") as RateLimitResumption["status"],
+    createdAt: asString(row, "created_at"),
+    executedAt: row.executed_at ? asString(row, "executed_at") : null,
   };
 }
 

@@ -677,4 +677,6 @@ export class SqliteStore {
 // the assignment inside scheduled-run-store.ts itself because ES module
 // hoisting would run it before this class declaration completes.
 import { scheduledRunStoreMethods } from "./scheduled-run-store.js";
+import { rateLimitResumptionStoreMethods } from "./rate-limit-resumption-store.js";
 Object.assign(SqliteStore.prototype, scheduledRunStoreMethods);
+Object.assign(SqliteStore.prototype, rateLimitResumptionStoreMethods);

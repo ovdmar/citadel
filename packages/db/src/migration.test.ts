@@ -102,6 +102,75 @@ describe("agent-status migration", () => {
     expect(row?.lastStatusAt).toBe("2026-05-20T14:30:00.000Z");
   });
 
+  it("creates rate_limit_resumptions table and lands schema_migrations version 8", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    const tableRow = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='rate_limit_resumptions'")
+      .get();
+    expect(tableRow).toBeTruthy();
+    const versionRow = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as { v: number };
+    expect(versionRow.v).toBe(8);
+    // Migration is idempotent: re-running picks up no new state.
+    const store2 = new SqliteStore(dbPath);
+    store2.migrate();
+    const versionRow2 = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as { v: number };
+    expect(versionRow2.v).toBe(8);
+  });
+
+  it("rate_limit_resumptions partial unique index allows only one pending row", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const now = "2026-05-26T10:00:00.000Z";
+    store.insertRateLimitResumption({
+      id: "rlr_1",
+      scheduledAt: "2026-05-26T11:00:00.000Z",
+      status: "pending",
+      createdAt: now,
+      executedAt: null,
+    });
+    // Second insert with a different id still in 'pending' returns the existing row.
+    const idempotent = store.insertRateLimitResumption({
+      id: "rlr_2",
+      scheduledAt: "2026-05-26T12:00:00.000Z",
+      status: "pending",
+      createdAt: now,
+      executedAt: null,
+    });
+    expect(idempotent.id).toBe("rlr_1");
+    expect(store.findPendingRateLimitResumption()?.id).toBe("rlr_1");
+    // Marking executed releases the singleton slot — a new pending row can land.
+    store.markRateLimitResumptionExecuted("rlr_1", "2026-05-26T11:01:00.000Z");
+    const fresh = store.insertRateLimitResumption({
+      id: "rlr_3",
+      scheduledAt: "2026-05-26T13:00:00.000Z",
+      status: "pending",
+      createdAt: "2026-05-26T12:00:00.000Z",
+      executedAt: null,
+    });
+    expect(fresh.id).toBe("rlr_3");
+    expect(store.findPendingRateLimitResumption()?.id).toBe("rlr_3");
+  });
+
+  it("listDueRateLimitResumptions returns rows whose scheduled_at <= now", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    store.insertRateLimitResumption({
+      id: "rlr_due",
+      scheduledAt: "2026-05-26T11:00:00.000Z",
+      status: "pending",
+      createdAt: "2026-05-26T10:00:00.000Z",
+      executedAt: null,
+    });
+    expect(store.listDueRateLimitResumptions("2026-05-26T10:59:59.000Z")).toHaveLength(0);
+    expect(store.listDueRateLimitResumptions("2026-05-26T11:00:00.000Z")).toHaveLength(1);
+    expect(store.listDueRateLimitResumptions("2026-05-26T12:00:00.000Z")).toHaveLength(1);
+  });
+
   it("is idempotent — repeated boots don't re-stamp already-migrated rows", () => {
     const dbPath = makeTempPath();
     seedLegacySession(dbPath, { id: "sess_w2", legacyStatus: "waiting" });

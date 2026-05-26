@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AgentRuntimeSchema,
   AgentSessionSchema,
+  AgentSessionStatusSchema,
   AppEventSchema,
   BackgroundAgentSessionSchema,
   CiProviderSummarySchema,
@@ -16,6 +17,7 @@ import {
   PrReviewerSchema,
   ProviderHealthSchema,
   PullRequestSummarySchema,
+  RateLimitResumptionSchema,
   RecentCommitSchema,
   RepoSchema,
   RuntimeUsageSummarySchema,
@@ -26,6 +28,9 @@ import {
   WorkspaceDiffSchema,
   WorkspaceRecentCommitsSchema,
   WorkspaceSchema,
+  isAcceptingInputStatus,
+  isAliveStatus,
+  isInteractiveStatus,
 } from "./index.js";
 
 const timestamp = "2026-05-17T00:00:00.000Z";
@@ -340,6 +345,87 @@ describe("contract schemas", () => {
         enqueuedAt: timestamp,
       }).success,
     ).toBe(false);
+  });
+
+  it("validates the canonical AgentSessionStatus enum and round-trips rate_limited", () => {
+    const allValues = ["starting", "running", "waiting_for_input", "idle", "rate_limited", "stopped", "failed", "unknown"];
+    for (const value of allValues) {
+      expect(AgentSessionStatusSchema.parse(value)).toBe(value);
+    }
+    expect(() => AgentSessionStatusSchema.parse("waiting")).toThrow();
+    expect(() => AgentSessionStatusSchema.parse("orphaned")).toThrow();
+    const rl = AgentSessionSchema.parse({
+      id: "sess_rl",
+      workspaceId: "ws_test",
+      runtimeId: "claude-code",
+      displayName: "Claude",
+      status: "rate_limited",
+      statusReason: "rate_limited:2026-05-26T10:00:00.000Z",
+      transport: "connected",
+      tmuxSessionName: "citadel_rl",
+      tmuxSessionId: "$2",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    expect(rl.status).toBe("rate_limited");
+    expect(rl.statusReason).toBe("rate_limited:2026-05-26T10:00:00.000Z");
+  });
+
+  it("validates RateLimitResumption rows and rejects bad shapes", () => {
+    const pending = RateLimitResumptionSchema.parse({
+      id: "rlr_test",
+      scheduledAt: timestamp,
+      createdAt: timestamp,
+    });
+    expect(pending.status).toBe("pending");
+    expect(pending.executedAt).toBeNull();
+    const done = RateLimitResumptionSchema.parse({
+      id: "rlr_done",
+      scheduledAt: timestamp,
+      status: "executed",
+      createdAt: timestamp,
+      executedAt: "2026-05-26T10:01:00.000Z",
+    });
+    expect(done.status).toBe("executed");
+    expect(done.executedAt).toBe("2026-05-26T10:01:00.000Z");
+    expect(() =>
+      RateLimitResumptionSchema.parse({
+        id: "rlr_bad",
+        scheduledAt: timestamp,
+        status: "queued",
+        createdAt: timestamp,
+      }),
+    ).toThrow();
+  });
+
+  it("typed status helpers partition the canonical enum correctly", () => {
+    // isInteractiveStatus
+    expect(isInteractiveStatus("starting")).toBe(true);
+    expect(isInteractiveStatus("running")).toBe(true);
+    expect(isInteractiveStatus("waiting_for_input")).toBe(true);
+    expect(isInteractiveStatus("idle")).toBe(false);
+    expect(isInteractiveStatus("rate_limited")).toBe(false);
+    expect(isInteractiveStatus("stopped")).toBe(false);
+    expect(isInteractiveStatus("failed")).toBe(false);
+    expect(isInteractiveStatus("unknown")).toBe(false);
+    // isAliveStatus
+    expect(isAliveStatus("starting")).toBe(true);
+    expect(isAliveStatus("running")).toBe(true);
+    expect(isAliveStatus("waiting_for_input")).toBe(true);
+    expect(isAliveStatus("idle")).toBe(true);
+    expect(isAliveStatus("rate_limited")).toBe(true);
+    expect(isAliveStatus("unknown")).toBe(true);
+    expect(isAliveStatus("stopped")).toBe(false);
+    expect(isAliveStatus("failed")).toBe(false);
+    // isAcceptingInputStatus (rate_limited intentionally excluded)
+    expect(isAcceptingInputStatus("starting")).toBe(true);
+    expect(isAcceptingInputStatus("running")).toBe(true);
+    expect(isAcceptingInputStatus("waiting_for_input")).toBe(true);
+    expect(isAcceptingInputStatus("idle")).toBe(true);
+    expect(isAcceptingInputStatus("rate_limited")).toBe(false);
+    expect(isAcceptingInputStatus("stopped")).toBe(false);
+    expect(isAcceptingInputStatus("failed")).toBe(false);
+    expect(isAcceptingInputStatus("unknown")).toBe(false);
   });
 
   it("models BackgroundAgentSession rows with the minimum reader-driven fields", () => {

@@ -205,4 +205,22 @@ export function runMigrations(
   ensureColumn("scheduled_agents", "run_mode", "TEXT NOT NULL DEFAULT 'workspace'");
   ensureColumn("scheduled_agents", "background_cwd", "TEXT");
   ensureColumn("scheduled_agents", "overlap_policy", "TEXT NOT NULL DEFAULT 'skip'");
+  // Rate-limit resumption rows. At most one row in 'pending' status at a time
+  // (enforced by the partial unique index). Daemon-internal — not a
+  // user-visible ScheduledAgent.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS rate_limit_resumptions (
+      id TEXT PRIMARY KEY,
+      scheduled_at TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      executed_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_rl_resumptions_pending_singleton
+      ON rate_limit_resumptions(status) WHERE status = 'pending';
+    CREATE INDEX IF NOT EXISTS idx_rl_resumptions_status_scheduled
+      ON rate_limit_resumptions(status, scheduled_at);
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at)
+      VALUES (8, 'rate-limit-resumptions', datetime('now'));
+  `);
 }
