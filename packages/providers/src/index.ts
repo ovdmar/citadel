@@ -13,6 +13,7 @@ import type {
   RuntimeUsageSummary,
   VersionControlSummary,
 } from "@citadel/contracts";
+import { PrMergeStateStatusSchema } from "@citadel/contracts";
 import type { ParentPr, PrCommit, PrMergeResponse, PrMergeStrategy } from "@citadel/contracts/pr-routes";
 import { runtimeUsageFetchers } from "@citadel/runtimes";
 
@@ -347,7 +348,7 @@ async function currentPullRequest(rootPath: string) {
       "pr",
       "view",
       "--json",
-      "number,title,url,state,isDraft,reviewDecision,statusCheckRollup,additions,deletions,reviews,reviewRequests,commits,baseRefName,headRefName,headRepository,mergeable",
+      "number,title,url,state,isDraft,reviewDecision,statusCheckRollup,additions,deletions,reviews,reviewRequests,commits,baseRefName,headRefName,headRepository,mergeable,mergeStateStatus,headRefOid",
     ]);
     const parsed = JSON.parse(raw) as {
       number: number;
@@ -366,6 +367,8 @@ async function currentPullRequest(rootPath: string) {
       headRefName?: string;
       headRepository?: { nameWithOwner?: string } | null;
       mergeable?: string;
+      mergeStateStatus?: string | null;
+      headRefOid?: string | null;
     };
     // Repo merge config + parent-PR detection run in parallel — both can fail
     // independently and degrade to safe defaults, so don't block the PR view
@@ -392,6 +395,11 @@ async function currentPullRequest(rootPath: string) {
       parentPr,
       mergeable: normalizeMergeable(parsed.mergeable),
       allowedMergeStrategies,
+      // Normalize mergeStateStatus through the strict enum so unknown values
+      // from `gh` collapse to "UNKNOWN" rather than failing validation.
+      mergeStateStatus:
+        parsed.mergeStateStatus == null ? null : PrMergeStateStatusSchema.parse(parsed.mergeStateStatus),
+      headSha: parsed.headRefOid ?? null,
     };
   } catch {
     return null;

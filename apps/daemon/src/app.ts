@@ -6,7 +6,6 @@ import type { CitadelConfig } from "@citadel/config";
 import { mergeConfigPatch, saveConfig } from "@citadel/config";
 import {
   type AppEvent,
-  CreateAgentSessionInputSchema,
   CreateRepoInputSchema,
   CreateWorkspaceInputSchema,
   HookActionSchema,
@@ -27,12 +26,18 @@ import {
   transitionJiraIssue,
 } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
-import { attachTerminalWebSocket, createTtydManager, discoverExistingTtyds, ensureTmuxSession } from "@citadel/terminal";
+import {
+  attachTerminalWebSocket,
+  createTtydManager,
+  discoverExistingTtyds,
+  ensureTmuxSession,
+} from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
+import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
@@ -476,39 +481,7 @@ export function createDaemonApp(input: {
     buildWorkspaceCockpitSummary,
   });
 
-  app.post(
-    "/api/agent-sessions",
-    asyncRoute(async (req, res) => {
-      const input = CreateAgentSessionInputSchema.parse(req.body);
-      const runtime = config.runtimes.find((candidate) => candidate.id === input.runtimeId);
-      if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
-      const session = await operations.createAgentSession(input, {
-        command: runtime.command,
-        args: runtime.args,
-        displayName: runtime.displayName,
-        promptArg: runtime.promptArg ?? null,
-        sessionIdArg: runtime.sessionIdArg ?? null,
-        resumeArg: runtime.resumeArg ?? null,
-      });
-      emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
-      res.status(202).json({ session });
-    }),
-  );
-
-  app.delete(
-    "/api/agent-sessions/:sessionId",
-    asyncRoute(async (req, res) => {
-      const sessionId = req.params.sessionId;
-      if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
-      const result = operations.stopAgentSession({ sessionId });
-      if (!result.stopped) return res.status(404).json(result);
-      ttyd.release(sessionId);
-      emit("agent.updated", { sessionId });
-      res.status(202).json(result);
-    }),
-  );
-
-  registerAgentSessionRoutes(app, { operations, emit, asyncRoute });
+  registerAgentSessionRoutes(app, { operations, emit, asyncRoute, config, ttyd });
   registerRestoreRoutes(app, { store, operations, config, emit, asyncRoute });
 
   app.post(
@@ -689,7 +662,7 @@ export function createDaemonApp(input: {
     readMcpResource: (uri) => readMcpResource(store, config, uri),
   });
 
-  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations });
+  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, config });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit });
   try {
@@ -768,10 +741,11 @@ export function createDaemonApp(input: {
     server.on("close", () => clearInterval(reaper));
   }
 
-  // Status monitor / auto-resume / terminal reaper: see their own modules for context.
+  // Status monitor / auto-recovery / auto-resume / terminal reaper: see their own modules for context.
   const statusMonitor = startDaemonStatusMonitor(store, emit);
   if (statusMonitor) server.on("close", () => statusMonitor.stop());
-
+  const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({ store, config, operations, emit });
+  if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
   const autoResume = startDaemonAutoResumeLoop(store, operations);
   if (autoResume) server.on("close", () => autoResume.stop());
   const terminalReaper = startTerminalReaper();

@@ -13,6 +13,7 @@ import {
   IssueTrackerSummarySchema,
   IssueTransitionActionResultSchema,
   OperationSchema,
+  PrMergeStateStatusSchema,
   PrReviewerSchema,
   ProviderHealthSchema,
   PullRequestSummarySchema,
@@ -24,6 +25,7 @@ import {
   UpdateScheduledAgentInputSchema,
   VersionControlSummarySchema,
   WorkspaceDiffSchema,
+  WorkspaceReadinessSchema,
   WorkspaceRecentCommitsSchema,
   WorkspaceSchema,
 } from "./index.js";
@@ -488,5 +490,55 @@ describe("contract schemas", () => {
       workspaceId: "ws_test",
       commits: [],
     });
+  });
+
+  it("surfaces mergeStateStatus/headSha and gates pr-conflicts readiness", () => {
+    // PrMergeStateStatusSchema accepts all documented states; .catch("UNKNOWN") maps the rest.
+    for (const value of ["CLEAN", "BEHIND", "BLOCKED", "DIRTY", "HAS_HOOKS", "UNKNOWN", "UNSTABLE", "DRAFT"]) {
+      expect(PrMergeStateStatusSchema.parse(value)).toBe(value);
+    }
+    expect(PrMergeStateStatusSchema.parse("FROM_THE_FUTURE")).toBe("UNKNOWN");
+
+    // PullRequestSummary defaults: mergeable=unknown, additive fields null.
+    const prMinimal = PullRequestSummarySchema.parse({
+      number: 7,
+      title: "Test",
+      url: "https://example.test/pr/7",
+      state: "OPEN",
+      draft: false,
+      reviewDecision: null,
+      checks: [],
+    });
+    expect(prMinimal.mergeable).toBe("unknown");
+    expect(prMinimal.mergeStateStatus).toBeNull();
+    expect(prMinimal.headSha).toBeNull();
+
+    // PullRequestSummary carries the conflict-detection fields when supplied.
+    const prFull = PullRequestSummarySchema.parse({
+      number: 8,
+      title: "Conflicting",
+      url: "https://example.test/pr/8",
+      state: "OPEN",
+      draft: false,
+      reviewDecision: null,
+      checks: [],
+      mergeable: "conflicting",
+      mergeStateStatus: "DIRTY",
+      headSha: "deadbeef",
+    });
+    expect(prFull.mergeable).toBe("conflicting");
+    expect(prFull.mergeStateStatus).toBe("DIRTY");
+    expect(prFull.headSha).toBe("deadbeef");
+
+    // WorkspaceReadinessSchema accepts the new pr-conflicts state.
+    expect(
+      WorkspaceReadinessSchema.parse({
+        state: "pr-conflicts",
+        tone: "danger",
+        nextAction: "Resolve PR conflicts against main before merging",
+        reasons: ["PR branch has merge conflicts with the base branch"],
+        freshness: { checkedAt: timestamp, stale: false, degraded: false },
+      }).state,
+    ).toBe("pr-conflicts");
   });
 });

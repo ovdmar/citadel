@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { CitadelConfig } from "@citadel/config";
+import { createId } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
+import { resolveFixConflictsPrompt } from "@citadel/hooks";
 import type { OperationService } from "@citadel/operations";
 import type express from "express";
 
@@ -17,8 +20,9 @@ export function registerWorkspaceExtraRoutes(input: {
   emit: Emit;
   asyncRoute: AsyncRoute;
   operations: OperationService;
+  config: CitadelConfig;
 }) {
-  const { app, store, emit, asyncRoute, operations } = input;
+  const { app, store, emit, asyncRoute, operations, config } = input;
 
   app.get(
     "/api/workspaces/:workspaceId/deployed-apps",
@@ -192,6 +196,76 @@ export function registerWorkspaceExtraRoutes(input: {
       // we cannot identify the project, so we return an empty payload with an
       // explanatory error string the UI surfaces verbatim.
       res.status(200).json({ issues: [], error: "Configure a default issue provider to populate suggestions." });
+    }),
+  );
+
+  // Launch a fresh agent to resolve a PR's merge conflicts. Always spawns a new
+  // session (no de-duplication) per the design — operators can click multiple
+  // times if they want multiple agents trying. The prompt is taken from a repo
+  // `.citadel/hooks/fixconflicts` hook when present, else a hardcoded default
+  // that references Citadel's non-fast-forward policy.
+  app.post(
+    "/api/workspaces/:workspaceId/fix-conflicts",
+    asyncRoute(async (req: express.Request, res: express.Response) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
+      const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+      if (!repo) return res.status(404).json({ error: "repo_not_found" });
+      // Require a non-shell agent runtime. The fix-conflicts prompt is
+      // multi-line ("git pull origin main", "make check", "git push"); if it
+      // were pasted into a bash/sh/zsh/fish tmux pane those would execute
+      // line-by-line instead of being read as instructions. The real
+      // invariant is "the prompt must be delivered via a CLI flag, not by
+      // key-paste into a pane": we enforce that by requiring runtime.promptArg.
+      // (id !== "shell" is too narrow — an operator can configure any id with
+      // command:"bash" and bypass an id-only check.)
+      const requestedRuntimeId = typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined;
+      const runtime = requestedRuntimeId
+        ? config.runtimes.find((candidate) => candidate.id === requestedRuntimeId)
+        : config.runtimes.find((candidate) => candidate.id !== "shell" && Boolean(candidate.promptArg));
+      if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
+      if (!runtime.promptArg) return res.status(400).json({ error: "runtime_must_be_agent" });
+      const resolved = await resolveFixConflictsPrompt({
+        workspacePath: workspace.path,
+        workspaceId: workspace.id,
+        workspaceBranch: workspace.branch,
+        repoId: repo.id,
+      });
+      const session = await operations.createAgentSession(
+        {
+          workspaceId: workspace.id,
+          runtimeId: runtime.id,
+          displayName: "Fix conflicts",
+          prompt: resolved.prompt,
+        },
+        {
+          command: runtime.command,
+          args: runtime.args,
+          displayName: runtime.displayName,
+          promptArg: runtime.promptArg ?? null,
+          sessionIdArg: runtime.sessionIdArg ?? null,
+          resumeArg: runtime.resumeArg ?? null,
+        },
+      );
+      // Distinguish operator-triggered fix-conflicts launches from the generic
+      // agent.started event so the activity log can filter on intent. Per the
+      // plan: type=agent.fix-conflicts.launched, source=user. createAgentSession
+      // also emits its own agent.started row — that's intentional. Filter by
+      // type when surfacing fix-conflicts in the UI.
+      store.addActivity({
+        id: createId("evt"),
+        type: "agent.fix-conflicts.launched",
+        source: "user",
+        repoId: repo.id,
+        workspaceId: workspace.id,
+        operationId: null,
+        message: `Launched fix-conflicts agent (prompt: ${resolved.source})`,
+        createdAt: new Date().toISOString(),
+      });
+      emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
+      res.status(202).json({ session, promptSource: resolved.source, diagnostic: resolved.diagnostic });
     }),
   );
 }

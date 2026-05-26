@@ -407,7 +407,8 @@
   color: var(--c-ok);
 }
 
-.workspace-card-agent.tone-failing {
+.workspace-card-agent.tone-failing,
+.workspace-card-agent.tone-conflicting {
   color: var(--c-bad);
 }
 
@@ -427,7 +428,8 @@
   color: var(--c-ok);
 }
 
-.workspace-card.active .workspace-card-agent.tone-failing {
+.workspace-card.active .workspace-card-agent.tone-failing,
+.workspace-card.active .workspace-card-agent.tone-conflicting {
   color: var(--c-bad);
 }
 
@@ -676,6 +678,7 @@
 }
 
 .pr-pill.tone-failing,
+.pr-pill.tone-conflicting,
 .approval-pill.tone-changes {
   background: transparent;
   color: var(--c-bad);

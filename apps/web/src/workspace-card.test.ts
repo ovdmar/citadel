@@ -18,6 +18,8 @@ const basePr = (over: Partial<PullRequestSummary> = {}): PullRequestSummary => (
   parentPr: null,
   mergeable: "unknown",
   allowedMergeStrategies: [],
+  mergeStateStatus: null,
+  headSha: null,
   ...over,
 });
 
@@ -225,5 +227,48 @@ describe("deriveWorkspaceAgentTone", () => {
         ]),
       ).toBe("attention");
     });
+  });
+});
+
+describe("prToneFor — conflicting precedence", () => {
+  it("merged PR wins over conflicting", () => {
+    expect(prToneFor(basePr({ state: "MERGED", mergeable: "conflicting" }))).toBe("merged");
+  });
+
+  it("mergeable=conflicting → conflicting", () => {
+    expect(prToneFor(basePr({ mergeable: "conflicting" }))).toBe("conflicting");
+  });
+
+  it("mergeStateStatus=DIRTY → conflicting (even if mergeable=unknown)", () => {
+    expect(prToneFor(basePr({ mergeable: "unknown", mergeStateStatus: "DIRTY" }))).toBe("conflicting");
+  });
+
+  it("mergeable=unknown → not conflicting (transient post-push state)", () => {
+    expect(prToneFor(basePr({ mergeable: "unknown" }))).not.toBe("conflicting");
+  });
+
+  it("conflicting wins over failing checks", () => {
+    expect(
+      prToneFor(
+        basePr({
+          mergeable: "conflicting",
+          checks: [
+            { name: "ci", status: "completed", conclusion: "failure", url: null, startedAt: null, completedAt: null },
+          ],
+        }),
+      ),
+    ).toBe("conflicting");
+  });
+
+  it("failing checks without conflict → failing", () => {
+    expect(
+      prToneFor(
+        basePr({
+          checks: [
+            { name: "ci", status: "completed", conclusion: "failure", url: null, startedAt: null, completedAt: null },
+          ],
+        }),
+      ),
+    ).toBe("failing");
   });
 });
