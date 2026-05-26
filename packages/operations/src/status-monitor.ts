@@ -1,6 +1,7 @@
 import type { AgentSession } from "@citadel/contracts";
 import type { ObservationContext, RuntimeStatusAdapter, SessionAdapterState } from "@citadel/runtimes";
 import { type ReducerPrev, type StatusSignal, type StatusUpdate, reduceStatus } from "./agent-status.js";
+import { startGuardedInterval } from "./guarded-interval.js";
 
 // Per-session bookkeeping that the monitor maintains across ticks. The
 // adapter has its own SessionAdapterState (for runtime-specific internals);
@@ -258,27 +259,15 @@ export interface StatusMonitorHandle {
   stop: () => void;
 }
 
-// Periodic driver. Hidden behind a thin wrapper so apps/daemon can `.unref()`
-// and clear on server close.
+// Periodic driver. Thin wrapper around the shared startGuardedInterval so
+// the overlap guard, unref, and clearInterval semantics live in one place
+// (also used by startAutoResumeLoop). Behaviour is identical to the prior
+// inline setInterval.
 export function startStatusMonitor(deps: MonitorTickDeps, intervalMs = 2000): StatusMonitorHandle {
-  let running = false;
-  const handle = setInterval(() => {
-    if (running) return; // skip if previous tick still in flight
-    running = true;
-    runStatusMonitorTick(deps, { source: "tick" })
-      .catch((err) => {
-        // Best-effort log; don't crash the daemon on a single bad tick.
-        // eslint-disable-next-line no-console
-        console.error("[status-monitor] tick failed:", err);
-      })
-      .finally(() => {
-        running = false;
-      });
-  }, intervalMs);
-  if (typeof (handle as { unref?: () => void }).unref === "function") {
-    (handle as { unref: () => void }).unref();
-  }
-  return {
-    stop: () => clearInterval(handle),
-  };
+  return startGuardedInterval(() => runStatusMonitorTick(deps, { source: "tick" }), intervalMs, {
+    error: (_msg, err) => {
+      // eslint-disable-next-line no-console
+      console.error("[status-monitor] tick failed:", err);
+    },
+  });
 }

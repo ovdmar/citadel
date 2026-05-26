@@ -33,6 +33,7 @@ import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
+import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
@@ -785,6 +786,12 @@ export function createDaemonApp(input: {
   if (statusMonitor) {
     server.on("close", () => statusMonitor.stop());
   }
+
+  // Auto-resume loop — every minute, scan rate_limited sessions and submit a
+  // generic resume nudge with per-session exponential backoff + jitter so a
+  // global rate-limit storm doesn't stampede.
+  const autoResume = startDaemonAutoResumeLoop(store, operations);
+  if (autoResume) server.on("close", () => autoResume.stop());
 
   return { app, server, emit };
 
