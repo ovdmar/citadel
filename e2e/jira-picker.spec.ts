@@ -108,40 +108,29 @@ test.describe("Jira picker", () => {
       const patched = (await patchResp.json()) as { workspace?: { issueKey?: string | null } };
       expect(patched.workspace?.issueKey).toBe("T-1");
 
-      // The cockpit-summary refetch calls /issue-summary too — stub the
-      // transitions list there.
+      // The cockpit-summary refetch normally returns degraded issueTracker
+      // when jtk is unavailable. We need an issueTracker that carries a
+      // transitions list so the transition menu has something to render.
+      // Patch only the issueTracker portion of the live response; let the
+      // real route handle git/versionControl/ci/apps so the contract stays
+      // valid and the page renders.
       await page.route(/\/api\/workspaces\/[^/]+\/cockpit-summary/, async (route) => {
-        await route.fulfill({
-          status: 200,
-          contentType: "application/json",
-          body: JSON.stringify({
-            workspaceId,
-            readiness: { state: "ready", reason: null, blockers: [], nextActions: [] },
-            git: null,
-            versionControl: null,
-            ci: null,
-            issueTracker: {
-              providerId: "jira-jtk",
-              status: "healthy",
-              reason: null,
-              key: "T-1",
-              summary: "Transition demo",
-              issueStatus: "To Do",
-              assignee: null,
-              updated: null,
-              url: null,
-              transitions: [{ id: "21", name: "Start Progress", toStatus: "In Progress" }],
-              checkedAt: new Date().toISOString(),
-            },
-            apps: {
-              providerId: "hook-apps",
-              status: "unavailable",
-              reason: null,
-              apps: [],
-              checkedAt: new Date().toISOString(),
-            },
-          }),
-        });
+        const response = await route.fetch();
+        const body = await response.json();
+        body.issueTracker = {
+          providerId: "jira-jtk",
+          status: "healthy",
+          reason: null,
+          key: "T-1",
+          summary: "Transition demo",
+          issueStatus: "To Do",
+          assignee: null,
+          updated: null,
+          url: null,
+          transitions: [{ id: "21", name: "Start Progress", toStatus: "In Progress" }],
+          checkedAt: new Date().toISOString(),
+        };
+        await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
       });
       await page.route(/\/api\/workspaces\/[^/]+\/issue-transition/, async (route) => {
         await route.fulfill({
