@@ -53,6 +53,15 @@ describe("resolveTeardownHook", () => {
     expect(resolution.note).toMatch(/exists but is not executable/);
     expect(resolution.note).toMatch(/chmod \+x/);
   });
+
+  it("returns none when the hook path is a directory (would otherwise EISDIR on spawn)", () => {
+    const dir = tempWorkspace();
+    const hookPath = path.join(dir, TEARDOWN_HOOK_RELATIVE_PATH);
+    fs.mkdirSync(hookPath, { recursive: true });
+    const resolution = resolveTeardownHook({ workspacePath: dir });
+    expect(resolution.source).toBe("none");
+    expect(resolution.note).toBeNull();
+  });
 });
 
 describe("runTeardownHook (integration)", () => {

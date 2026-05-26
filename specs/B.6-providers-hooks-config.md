@@ -50,7 +50,7 @@ Rules:
 
 [~] 1. Hooks are the extension path for repo-specific behavior.
 [ ] 2. Setup hooks are configured per repo.
-[~] 3. Teardown hooks are configured per repo (via `repo.teardownHookIds`) and/or discovered as an executable at `.citadel/hooks/teardown` in the workspace, mirroring the deploy hook's dual discovery.
+[~] 3. Teardown hooks can be configured per repo (`repo.teardownHookIds`) and/or shipped as an executable `.citadel/hooks/teardown`; when both are present, the file hook runs first, then the configured hooks (this is dual execution, not dual-discovery-with-fallback as deploy uses).
 [ ] 4. App/link discovery hooks are configured per repo.
 [ ] 5. Action hooks are configured per repo.
 [ ] 6. Hooks receive structured workspace/repo/provider context.

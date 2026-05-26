@@ -13,7 +13,7 @@ import {
 type RedeployResponse = { operationId?: string };
 type StatePayload = { daemonStartedAt?: string };
 
-export type UseRedeployResult = {
+type UseRedeployResult = {
   inFlight: boolean;
   targetName: string | undefined;
   lastOperationId: string | null;

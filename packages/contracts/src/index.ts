@@ -773,7 +773,6 @@ export type DeployHookListOutput = z.infer<typeof DeployHookListOutputSchema>;
 export type DeployHookResolution = z.infer<typeof DeployHookResolutionSchema>;
 export type DeployHookSource = z.infer<typeof DeployHookSourceSchema>;
 export type TeardownHookResolution = z.infer<typeof TeardownHookResolutionSchema>;
-export type TeardownHookSource = z.infer<typeof TeardownHookSourceSchema>;
 export type DeployedAppsSummary = z.infer<typeof DeployedAppsSummarySchema>;
 export type ActivityEvent = z.infer<typeof ActivityEventSchema>;
 export type AppEvent = z.infer<typeof AppEventSchema>;

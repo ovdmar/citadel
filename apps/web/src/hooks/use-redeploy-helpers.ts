@@ -12,7 +12,7 @@ export const WATCHDOG_INTERVAL_MS = 1_000;
 // click-to-spinner latency bounded even when the daemon is mid-restart.
 export const PREFETCH_TIMEOUT_MS = 1_500;
 
-export type RedeployErrorKind = "network" | "other";
+type RedeployErrorKind = "network" | "other";
 
 // Network errors look like a Promise rejection from fetch with no Response
 // attached: AbortError, TypeError("Failed to fetch"), DNS failures, etc.

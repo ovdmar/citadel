@@ -201,6 +201,10 @@ describe("OperationService", () => {
     expect(blocked).toMatchObject({ removed: false, archived: false, dirty: false });
     expect(fs.existsSync(workspace?.path ?? "")).toBe(true);
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(1);
+    // Regression pin: configured-teardown failure must label its error so
+    // operators / UI can disambiguate from file-teardown failures.
+    const blockedOp = store.listOperations().find((o) => o.id === blocked.operationId);
+    expect(blockedOp?.error).toMatch(/^configured teardown failed:/);
 
     const forced = await service.removeWorkspace({ workspaceId: created.workspaceId, force: true });
     expect(forced).toMatchObject({ removed: true, archived: false, dirty: false });

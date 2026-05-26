@@ -102,6 +102,12 @@ describe("createDaemonApp", () => {
       }>(`${baseUrl}/api/state`);
       expect(state).toMatchObject({ repos: [], workspaces: [], sessions: [] });
       expect(state.daemonStartedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      // Watchdog correctness depends on this token being stable across
+      // calls within the same daemon process — a regression that returned
+      // a fresh ISO per request would silently break the redeploy chip's
+      // newer-token check.
+      const second = await getJson<{ daemonStartedAt: string }>(`${baseUrl}/api/state`);
+      expect(second.daemonStartedAt).toBe(state.daemonStartedAt);
       expect(await getJson<{ repos: unknown[] }>(`${baseUrl}/api/repos`)).toEqual({ repos: [] });
       expect(await getJson<{ workspaces: unknown[] }>(`${baseUrl}/api/workspaces`)).toEqual({ workspaces: [] });
       expect(await getJson<{ repos: unknown[] }>(`${baseUrl}/api/mcp/resources/repos`)).toEqual({ repos: [] });

@@ -1,7 +1,7 @@
 import type { Operation, Repo, Workspace } from "@citadel/contracts";
 import { resolveTeardownHook, runTeardownHook } from "@citadel/hooks";
 
-export type TeardownPhaseOutcome = { kind: "ok" } | { kind: "blocked"; error: string; activityMessage: string };
+type TeardownPhaseOutcome = { kind: "ok" } | { kind: "blocked"; error: string; activityMessage: string };
 
 // Runs the full teardown phase for removeWorkspace: file-based hook first,
 // then configured hooks. Returns "blocked" when force=false AND a hook
@@ -63,13 +63,13 @@ export async function runTeardownPhase(input: {
   return { kind: "ok" };
 }
 
-export type FileTeardownOutcome =
+type FileTeardownOutcome =
   | { kind: "skipped" }
   | { kind: "succeeded" }
   | { kind: "failed-continue"; logMessage: string }
   | { kind: "failed-blocked"; error: string };
 
-export type FileTeardownDeps = {
+type FileTeardownDeps = {
   exists: (path: string) => boolean;
   logOp: (operationId: string, level: "info" | "warn" | "error", message: string) => void;
   activity: (
@@ -89,7 +89,7 @@ export type FileTeardownDeps = {
 //
 // Kept in its own module so the OperationService entry point stays under the
 // 800-line architectural cap.
-export async function runFileTeardown(input: {
+async function runFileTeardown(input: {
   workspace: Workspace;
   repo: Repo;
   operation: Operation;

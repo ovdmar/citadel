@@ -1,6 +1,6 @@
 import type { Operation } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
-import { findHighlightedOperation, operationHighlightStatus } from "./operations-helpers.js";
+import { operationHighlightStatus } from "./operations-helpers.js";
 
 const op = (id: string): Operation => ({
   id,
@@ -16,21 +16,6 @@ const op = (id: string): Operation => ({
   retryInput: null,
   createdAt: "2026-05-26T00:00:00.000Z",
   updatedAt: "2026-05-26T00:00:00.000Z",
-});
-
-describe("findHighlightedOperation", () => {
-  it("returns null when id is undefined", () => {
-    expect(findHighlightedOperation([op("a")], undefined)).toBeNull();
-  });
-
-  it("returns the matching operation when id is found", () => {
-    const target = op("b");
-    expect(findHighlightedOperation([op("a"), target, op("c")], "b")).toBe(target);
-  });
-
-  it("returns null when the id is missing from the list", () => {
-    expect(findHighlightedOperation([op("a"), op("b")], "missing")).toBeNull();
-  });
 });
 
 describe("operationHighlightStatus", () => {

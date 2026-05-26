@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
 import type { TeardownHookResolution } from "@citadel/contracts";
+import { buildHookEnv, inspectHookFile, notExecutableNote } from "./file-hook-shared.js";
 
 // The teardown hook contract:
 //
@@ -33,26 +33,8 @@ export function resolveTeardownHook(input: ResolveTeardownHookInput): TeardownHo
   }
   // Mirror deploy's diagnostic so operators discover a missing chmod +x
   // instead of silently treating an existing-but-not-executable file as absent.
-  const note =
-    status === "exists-not-executable" ? `${filePath} exists but is not executable (run: chmod +x ${filePath})` : null;
+  const note = status === "exists-not-executable" ? notExecutableNote(filePath) : null;
   return { source: "none", filePath: null, note };
-}
-
-type HookFileStatus = "executable" | "exists-not-executable" | "missing";
-
-function inspectHookFile(filePath: string): HookFileStatus {
-  try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile()) return "missing";
-    try {
-      fs.accessSync(filePath, fs.constants.X_OK);
-      return "executable";
-    } catch {
-      return "exists-not-executable";
-    }
-  } catch {
-    return "missing";
-  }
 }
 
 export type TeardownStreamHandler = (input: { stream: "stdout" | "stderr"; chunk: string }) => void;
@@ -61,16 +43,6 @@ export type RunTeardownHookResult = {
   exitStatus: number | null;
   stderrTail: string;
 };
-
-function teardownHookEnv(input: TeardownHookEnv): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    CITADEL_WORKSPACE_ID: input.workspaceId,
-    CITADEL_WORKSPACE_PATH: input.workspacePath,
-    CITADEL_WORKSPACE_BRANCH: input.workspaceBranch,
-    CITADEL_REPO_ID: input.repoId,
-  };
-}
 
 // Default timeout for teardown hooks. Matches the order of magnitude of
 // commandPolicy.hookTimeoutMs (120000) but is a per-call override so the
@@ -89,7 +61,7 @@ export function runTeardownHook(input: {
   const timeoutMs = input.timeoutMs ?? DEFAULT_TEARDOWN_TIMEOUT_MS;
   const child = spawn(input.resolution.filePath, [], {
     cwd: input.env.workspacePath,
-    env: teardownHookEnv(input.env),
+    env: buildHookEnv(input.env),
     // ignore stdin and pipe stdout/stderr only. detached:true puts the hook in
     // its own process group so a timeout SIGKILL can reach grandchildren (a
     // bash hook + `sleep 5` would otherwise survive a kill targeted at the
