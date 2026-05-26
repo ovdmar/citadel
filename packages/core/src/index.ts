@@ -23,9 +23,13 @@ export function nowIso() {
 //  - done:          agent has finished cleanly (or via operator-initiated
 //                   Ctrl-C / SIGTERM) and the workspace's PR (if any) has no
 //                   failure-class checks.
+//  - rate-limited:  agent is blocked by a server-side rate limit; it's not
+//                   broken but also can't make progress until the limit
+//                   resets. Rendered blue to distinguish from outright
+//                   failures (red).
 //  - attention:     agent failed, is blocked on input, exited badly, or the
 //                   workspace's PR has at least one failing check.
-export type LifecycleTone = "never-started" | "running" | "done" | "attention";
+export type LifecycleTone = "never-started" | "running" | "done" | "rate-limited" | "attention";
 
 // Exit codes that signal a clean stop in operator terms. 0 is the obvious
 // happy path. null appears when the wrapper never wrote a .exit sentinel
@@ -54,6 +58,8 @@ export function deriveAgentLifecycleTone(
     case "running":
     case "idle":
       return "running";
+    case "rate_limited":
+      return "rate-limited";
     case "waiting_for_input":
       return "attention";
     case "stopped": {
@@ -80,7 +86,8 @@ function hasFailingCheck(checks: readonly CheckSummary[]): boolean {
 // Aggregate workspace tone. Order:
 //   1. Filter out shell (plain-terminal) sessions.
 //   2. No agents remaining → never-started.
-//   3. Take the priority max of per-agent tones under attention > running > done.
+//   3. Take the priority max of per-agent tones under
+//      attention > rate-limited > running > done.
 //   4. Fold PR/CI: any failing check escalates to attention, even when the
 //      agent aggregate is `running`. Rationale: a failing CI is the more
 //      actionable operator signal even if a fix is being authored right now.
@@ -99,7 +106,8 @@ export function deriveWorkspaceLifecycleTone(input: {
       aggregate = "attention";
       break;
     }
-    if (tone === "running") aggregate = "running";
+    if (tone === "rate-limited") aggregate = "rate-limited";
+    else if (tone === "running" && aggregate !== "rate-limited") aggregate = "running";
   }
   if (input.pullRequest && hasFailingCheck(input.pullRequest.checks)) return "attention";
   return aggregate;

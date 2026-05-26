@@ -22,6 +22,10 @@ describe("lifecycleToneClass", () => {
     expect(lifecycleToneClass("done")).not.toBe("cit-pulse-ok");
   });
 
+  it("maps rate-limited to cit-pulse-info (blue ripple)", () => {
+    expect(lifecycleToneClass("rate-limited")).toBe("cit-pulse-info");
+  });
+
   it("maps attention to cit-pulse-bad (red ripple)", () => {
     expect(lifecycleToneClass("attention")).toBe("cit-pulse-bad");
   });

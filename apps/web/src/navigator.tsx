@@ -57,8 +57,9 @@ export function aggregateNavigatorTone(
       pullRequest: workspacePullRequests?.get(workspace.id) ?? null,
     });
     if (tone === "attention") return "attention";
-    if (tone === "running") result = "running";
-    else if (tone === "done" && result !== "running") result = "done";
+    if (tone === "rate-limited" && result !== "rate-limited") result = "rate-limited";
+    else if (tone === "running" && result !== "rate-limited" && result !== "running") result = "running";
+    else if (tone === "done" && result === "never-started") result = "done";
   }
   return result;
 }

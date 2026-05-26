@@ -22,10 +22,11 @@ export type WorkspaceCardData = {
 export type PrTone = "missing" | "pending" | "passing" | "failing" | "merged";
 export type ApprovalTone = "none" | "pending" | "changes" | "approved";
 
-// Maps the four-tone LifecycleTone enum (defined in @citadel/core) to the
-// shared cit-pulse-* CSS classes. cit-pulse-idle stays "grey static" for
-// the never-started case; cit-pulse-done is the new green-with-ripple class
-// added in styles.css for the "agent finished, awaiting review" case.
+// Maps the LifecycleTone enum (defined in @citadel/core) to the shared
+// cit-pulse-* CSS classes. cit-pulse-idle stays "grey static" for the
+// never-started case; cit-pulse-done is the green-with-ripple class for
+// "agent finished, awaiting review"; cit-pulse-info is the blue-with-ripple
+// class for rate-limit stalls (introduced alongside the lifecycle taxonomy).
 // cit-pulse-ok (solid green) is reserved for non-lifecycle uses elsewhere.
 export function lifecycleToneClass(tone: LifecycleTone): string {
   switch (tone) {
@@ -35,6 +36,8 @@ export function lifecycleToneClass(tone: LifecycleTone): string {
       return "cit-pulse-run";
     case "done":
       return "cit-pulse-done";
+    case "rate-limited":
+      return "cit-pulse-info";
     case "attention":
       return "cit-pulse-bad";
   }
@@ -44,6 +47,8 @@ function lifecycleToneAriaSuffix(tone: LifecycleTone): string {
   switch (tone) {
     case "attention":
       return ", agent needs attention";
+    case "rate-limited":
+      return ", agent rate-limited";
     case "running":
       return ", agent running";
     case "done":

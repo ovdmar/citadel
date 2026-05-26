@@ -208,6 +208,10 @@ describe("deriveAgentLifecycleTone", () => {
     expect(deriveAgentLifecycleTone(makeAgent({ status: "waiting_for_input" }))).toBe("attention");
   });
 
+  it("maps rate_limited to rate-limited (blue, not red)", () => {
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "rate_limited" }))).toBe("rate-limited");
+  });
+
   it("treats clean and operator-initiated stops as done", () => {
     expect(deriveAgentLifecycleTone(makeAgent({ status: "stopped", exitCode: 0 }))).toBe("done");
     expect(deriveAgentLifecycleTone(makeAgent({ status: "stopped", exitCode: null }))).toBe("done");
@@ -274,6 +278,19 @@ describe("deriveWorkspaceLifecycleTone", () => {
         sessions: [makeAgent({ status: "running" })],
       }),
     ).toBe("running");
+  });
+
+  it("rate-limited beats running but loses to attention", () => {
+    expect(
+      deriveWorkspaceLifecycleTone({
+        sessions: [makeAgent({ id: "a", status: "running" }), makeAgent({ id: "b", status: "rate_limited" })],
+      }),
+    ).toBe("rate-limited");
+    expect(
+      deriveWorkspaceLifecycleTone({
+        sessions: [makeAgent({ id: "a", status: "rate_limited" }), makeAgent({ id: "b", status: "waiting_for_input" })],
+      }),
+    ).toBe("attention");
   });
 
   it("attention wins over running across agents", () => {

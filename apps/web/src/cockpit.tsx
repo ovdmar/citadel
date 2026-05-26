@@ -10,6 +10,7 @@ import { useWorkspaceCockpitSummary } from "./cockpit-tools.js";
 import { CommandPalette } from "./command-palette.js";
 import { Inspector } from "./inspector.js";
 import { Navigator } from "./navigator.js";
+import { RestoreBanner } from "./restore-banner.js";
 import { Stage } from "./stage.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
@@ -179,6 +180,7 @@ export function Cockpit() {
         repo={selectedRepo}
         runtimes={data?.runtimes ?? []}
       />
+      <RestoreBanner bootRestore={data?.bootRestore ?? null} />
       <div
         className={`cockpit-body ${layout.state.leftCollapsed ? "left-collapsed" : ""} ${
           layout.state.rightCollapsed ? "right-collapsed" : ""

@@ -36,7 +36,7 @@ export type SendMessageResult = {
   error?: string;
 };
 
-const acceptingStates = new Set(["starting", "running", "waiting_for_input", "idle"]);
+const acceptingStates = new Set(["starting", "running", "waiting_for_input", "rate_limited", "idle"]);
 
 export function readAgentTranscript(
   store: SqliteStore,
@@ -89,12 +89,13 @@ export async function sendAgentMessage(
       createdAt: nowIso(),
     };
     store.addActivity(event);
-    // Optimistic state transition: if the agent was idle or waiting_for_input,
-    // immediately flip to running with the sentinel reason "optimistic_send".
-    // The next monitor tick reconciles (real pane observation overwrites the
-    // reason to pane:claude-code:active). This eliminates the ~2s lag between
-    // a user clicking submit and the pulsing-green workspace dot appearing.
-    if (session.status === "idle" || session.status === "waiting_for_input") {
+    // Optimistic state transition: if the agent was idle, waiting_for_input,
+    // or rate_limited, immediately flip to running with the sentinel reason
+    // "optimistic_send". The next monitor tick reconciles (real pane
+    // observation overwrites the reason to pane:claude-code:active). This
+    // eliminates the ~2s lag between a user clicking submit and the pulsing-
+    // green workspace dot appearing.
+    if (session.status === "idle" || session.status === "waiting_for_input" || session.status === "rate_limited") {
       const update = reduceStatus(
         { status: session.status, lastOutputAt: session.lastOutputAt, statusReason: session.statusReason },
         { type: "optimistic_send" },
