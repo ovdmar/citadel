@@ -1,10 +1,7 @@
 import { z } from "zod";
+export { IdSchema } from "./id.js";
+import { IdSchema } from "./id.js";
 import { ParentPrSchema, PrCommitSchema, PrMergeStrategySchema } from "./pr-routes.js";
-export const IdSchema = z
-  .string()
-  .min(2)
-  .max(80)
-  .regex(/^[a-z0-9][a-z0-9_-]*$/);
 
 export const ProviderStatusSchema = z.enum(["healthy", "degraded", "unavailable", "unknown"]);
 export const WorkspaceLifecycleSchema = z.enum(["creating", "ready", "failed", "removing", "archived", "removed"]);
