@@ -5,7 +5,7 @@ function base(overrides: Partial<AutoRecoveryDecisionInput> = {}): AutoRecoveryD
   return {
     workspace: { id: "ws_test", autoRecoveryLastCiSha: null, autoRecoveryLastAttemptAt: null },
     sessions: [],
-    pr: { headSha: "abc1234", mergeable: "MERGEABLE", checks: [{ status: "completed", conclusion: "failure" }] },
+    pr: { headSha: "abc1234", mergeable: "mergeable", checks: [{ status: "completed", conclusion: "failure" }] },
     runtimeId: "claude-code",
     now: new Date("2026-05-25T12:00:00.000Z"),
     idleThresholdMs: 300_000,
@@ -112,7 +112,7 @@ describe("decideAutoRecoveryAction", () => {
 
   it("skips when PR has no head SHA", () => {
     const decision = decideAutoRecoveryAction(
-      base({ pr: { headSha: null, mergeable: "MERGEABLE", checks: [{ status: "completed", conclusion: "failure" }] } }),
+      base({ pr: { headSha: null, mergeable: "mergeable", checks: [{ status: "completed", conclusion: "failure" }] } }),
     );
     expect(decision.fire).toBe(false);
     expect(decision.reason).toBe("no_pr_or_head_sha");
@@ -121,7 +121,7 @@ describe("decideAutoRecoveryAction", () => {
   it("skips when CI has no failing checks", () => {
     const decision = decideAutoRecoveryAction(
       base({
-        pr: { headSha: "abc1234", mergeable: "MERGEABLE", checks: [{ status: "completed", conclusion: "success" }] },
+        pr: { headSha: "abc1234", mergeable: "mergeable", checks: [{ status: "completed", conclusion: "success" }] },
       }),
     );
     expect(decision.fire).toBe(false);
@@ -131,7 +131,7 @@ describe("decideAutoRecoveryAction", () => {
   it("returns the headSha to persist on fire", () => {
     const decision = decideAutoRecoveryAction(
       base({
-        pr: { headSha: "deadbeef", mergeable: "MERGEABLE", checks: [{ status: "completed", conclusion: "failure" }] },
+        pr: { headSha: "deadbeef", mergeable: "mergeable", checks: [{ status: "completed", conclusion: "failure" }] },
       }),
     );
     expect(decision.fire).toBe(true);

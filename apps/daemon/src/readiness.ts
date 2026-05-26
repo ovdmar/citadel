@@ -46,7 +46,7 @@ export function deriveReadiness(input: {
   const failedSession = input.sessions.some((session) =>
     sessionNeedsAttention({ status: session.status as never, statusReason: session.statusReason ?? null }),
   );
-  const prConflicting = input.versionControl.pullRequest?.mergeable === "CONFLICTING";
+  const prConflicting = input.versionControl.pullRequest?.mergeable === "conflicting";
   const reasons = [
     input.workspace.lifecycle === "failed" ? "Workspace lifecycle failed" : null,
     failedSession ? "A terminal or agent session needs attention" : null,
@@ -113,7 +113,7 @@ export function deriveReadiness(input: {
   if (
     input.versionControl.pullRequest?.reviewDecision === "APPROVED" &&
     !pendingCheck &&
-    input.versionControl.pullRequest.mergeable !== "CONFLICTING"
+    input.versionControl.pullRequest.mergeable !== "conflicting"
   ) {
     return readiness(
       "ready-to-merge",

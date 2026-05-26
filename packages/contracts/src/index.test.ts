@@ -14,7 +14,6 @@ import {
   IssueTransitionActionResultSchema,
   OperationSchema,
   PrMergeStateStatusSchema,
-  PrMergeableSchema,
   PrReviewerSchema,
   ProviderHealthSchema,
   PullRequestSummarySchema,
@@ -361,6 +360,87 @@ describe("contract schemas", () => {
     expect(session.status).toBe("running");
   });
 
+  it("parses PR commit + parent + merge-strategy fields with sensible defaults", async () => {
+    const mod = await import("./index.js");
+    const prRoutes = await import("./pr-routes.js");
+    const { PullRequestSummarySchema } = mod;
+    const {
+      ParentPrSchema,
+      PrCommitSchema,
+      PrMergeRequestSchema,
+      PrMergeResponseSchema,
+      PrMergeStrategySchema,
+      PrRefreshResponseSchema,
+      WorkspaceCockpitSummaryBatchRequestSchema,
+      WorkspaceCockpitSummaryBatchResponseSchema,
+    } = prRoutes;
+
+    // Existing PR payloads without the new fields still parse — additive change.
+    const legacyPr = PullRequestSummarySchema.parse({
+      number: 1,
+      title: "Test",
+      url: "https://example.test/pr/1",
+      state: "OPEN",
+      draft: false,
+      reviewDecision: null,
+      checks: [],
+    });
+    expect(legacyPr.commits).toEqual([]);
+    expect(legacyPr.parentPr).toBeNull();
+    expect(legacyPr.mergeable).toBe("unknown");
+    expect(legacyPr.allowedMergeStrategies).toEqual([]);
+
+    // PrCommitSchema: checks default to [].
+    const commit = PrCommitSchema.parse({
+      sha: "1234567890abcdef1234567890abcdef12345678",
+      shortSha: "1234567",
+      message: "feat: add things",
+    });
+    expect(commit.checks).toEqual([]);
+
+    // ParentPrSchema requires all four fields.
+    expect(() => ParentPrSchema.parse({ number: 1, url: "u", headRefName: "h" })).toThrow();
+    expect(
+      ParentPrSchema.parse({ number: 42, url: "https://example.test/pr/42", headRefName: "foo", state: "OPEN" }),
+    ).toEqual({ number: 42, url: "https://example.test/pr/42", headRefName: "foo", state: "OPEN" });
+
+    // PrMergeStrategySchema constrains to the three gh strategies.
+    expect(PrMergeStrategySchema.parse("squash")).toBe("squash");
+    expect(() => PrMergeStrategySchema.parse("ff")).toThrow();
+
+    // Discriminated unions: response shapes carry the ok discriminator.
+    expect(PrMergeResponseSchema.parse({ ok: true })).toEqual({ ok: true });
+    expect(PrMergeResponseSchema.parse({ ok: false, reason: "not_mergeable", detail: "PR has conflicts" })).toEqual({
+      ok: false,
+      reason: "not_mergeable",
+      detail: "PR has conflicts",
+    });
+    expect(() => PrMergeResponseSchema.parse({ ok: false })).toThrow();
+
+    // PrMergeRequestSchema requires a valid strategy.
+    expect(PrMergeRequestSchema.parse({ strategy: "rebase" })).toEqual({ strategy: "rebase" });
+    expect(() => PrMergeRequestSchema.parse({ strategy: "x" })).toThrow();
+
+    // Batch request requires at least one workspace id.
+    expect(WorkspaceCockpitSummaryBatchRequestSchema.parse({ ids: ["ws_1"] })).toEqual({ ids: ["ws_1"] });
+    expect(() => WorkspaceCockpitSummaryBatchRequestSchema.parse({ ids: [] })).toThrow();
+    expect(() => WorkspaceCockpitSummaryBatchRequestSchema.parse({ ids: Array(51).fill("ws") })).toThrow();
+
+    // Batch response: each entry is either {ok:true, summary} or {ok:false, reason}; PrRefresh has a versionControl envelope.
+    expect(
+      WorkspaceCockpitSummaryBatchResponseSchema.parse({
+        summaries: [{ workspaceId: "ws_1", ok: false, reason: "no-remote" }],
+      }).summaries[0],
+    ).toEqual({ workspaceId: "ws_1", ok: false, reason: "no-remote" });
+    expect(() =>
+      WorkspaceCockpitSummaryBatchResponseSchema.parse({
+        summaries: [{ workspaceId: "ws_1", ok: false }],
+      }),
+    ).toThrow();
+
+    expect(typeof PrRefreshResponseSchema).toBe("object");
+  });
+
   it("parses PR reviewer + recent-commits schemas with their defaults and rejects malformed inputs", () => {
     // PrReviewer: name defaults to null, login is required, state is constrained.
     expect(PrReviewerSchema.parse({ login: "ovi", state: "approved" })).toEqual({
@@ -412,22 +492,14 @@ describe("contract schemas", () => {
     });
   });
 
-  it("normalizes mergeable/mergeStateStatus and gates pr-conflicts readiness", () => {
-    // PrMergeableSchema accepts the documented values verbatim.
-    expect(PrMergeableSchema.parse("MERGEABLE")).toBe("MERGEABLE");
-    expect(PrMergeableSchema.parse("CONFLICTING")).toBe("CONFLICTING");
-    expect(PrMergeableSchema.parse("UNKNOWN")).toBe("UNKNOWN");
-    // .catch("UNKNOWN") maps anything else to UNKNOWN — drift is visible-but-non-fatal.
-    expect(PrMergeableSchema.parse("WEIRD_NEW_GH_VALUE")).toBe("UNKNOWN");
-    expect(PrMergeableSchema.parse(42)).toBe("UNKNOWN");
-
-    // PrMergeStateStatusSchema accepts all documented states.
+  it("surfaces mergeStateStatus/headSha and gates pr-conflicts readiness", () => {
+    // PrMergeStateStatusSchema accepts all documented states; .catch("UNKNOWN") maps the rest.
     for (const value of ["CLEAN", "BEHIND", "BLOCKED", "DIRTY", "HAS_HOOKS", "UNKNOWN", "UNSTABLE", "DRAFT"]) {
       expect(PrMergeStateStatusSchema.parse(value)).toBe(value);
     }
     expect(PrMergeStateStatusSchema.parse("FROM_THE_FUTURE")).toBe("UNKNOWN");
 
-    // PullRequestSummary defaults mergeable/mergeStateStatus to null when omitted.
+    // PullRequestSummary defaults: mergeable=unknown, additive fields null.
     const prMinimal = PullRequestSummarySchema.parse({
       number: 7,
       title: "Test",
@@ -437,10 +509,11 @@ describe("contract schemas", () => {
       reviewDecision: null,
       checks: [],
     });
-    expect(prMinimal.mergeable).toBeNull();
+    expect(prMinimal.mergeable).toBe("unknown");
     expect(prMinimal.mergeStateStatus).toBeNull();
+    expect(prMinimal.headSha).toBeNull();
 
-    // PullRequestSummary carries the fields when supplied.
+    // PullRequestSummary carries the conflict-detection fields when supplied.
     const prFull = PullRequestSummarySchema.parse({
       number: 8,
       title: "Conflicting",
@@ -449,26 +522,13 @@ describe("contract schemas", () => {
       draft: false,
       reviewDecision: null,
       checks: [],
-      mergeable: "CONFLICTING",
+      mergeable: "conflicting",
       mergeStateStatus: "DIRTY",
+      headSha: "deadbeef",
     });
-    expect(prFull.mergeable).toBe("CONFLICTING");
+    expect(prFull.mergeable).toBe("conflicting");
     expect(prFull.mergeStateStatus).toBe("DIRTY");
-
-    // PullRequestSummary normalizes unknown values through .catch().
-    const prDrift = PullRequestSummarySchema.parse({
-      number: 9,
-      title: "Drift",
-      url: "https://example.test/pr/9",
-      state: "OPEN",
-      draft: false,
-      reviewDecision: null,
-      checks: [],
-      mergeable: "QUANTUM_SUPERPOSITION",
-      mergeStateStatus: "REGRET",
-    });
-    expect(prDrift.mergeable).toBe("UNKNOWN");
-    expect(prDrift.mergeStateStatus).toBe("UNKNOWN");
+    expect(prFull.headSha).toBe("deadbeef");
 
     // WorkspaceReadinessSchema accepts the new pr-conflicts state.
     expect(

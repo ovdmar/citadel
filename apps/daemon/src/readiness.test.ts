@@ -26,7 +26,7 @@ const cleanPr = {
   draft: false,
   reviewDecision: "APPROVED" as string | null,
   checks: [{ status: "completed", conclusion: "success" }],
-  mergeable: "MERGEABLE" as string | null,
+  mergeable: "mergeable" as string | null,
   mergeStateStatus: "CLEAN" as string | null,
 };
 
@@ -37,7 +37,7 @@ describe("deriveReadiness — PR conflicts", () => {
         versionControl: {
           status: "healthy",
           reason: null,
-          pullRequest: { ...cleanPr, mergeable: "CONFLICTING" },
+          pullRequest: { ...cleanPr, mergeable: "conflicting" },
           checkedAt: "2026-05-25T00:00:00.000Z",
         },
       }),
@@ -54,7 +54,7 @@ describe("deriveReadiness — PR conflicts", () => {
         versionControl: {
           status: "healthy",
           reason: null,
-          pullRequest: { ...cleanPr, mergeable: "CONFLICTING" },
+          pullRequest: { ...cleanPr, mergeable: "conflicting" },
           checkedAt: "x",
         },
       }),
@@ -69,7 +69,7 @@ describe("deriveReadiness — PR conflicts", () => {
         versionControl: {
           status: "healthy",
           reason: null,
-          pullRequest: { ...cleanPr, mergeable: "CONFLICTING" },
+          pullRequest: { ...cleanPr, mergeable: "conflicting" },
           checkedAt: "x",
         },
       }),
@@ -85,7 +85,7 @@ describe("deriveReadiness — PR conflicts", () => {
           reason: null,
           pullRequest: {
             ...cleanPr,
-            mergeable: "CONFLICTING",
+            mergeable: "conflicting",
             checks: [{ status: "completed", conclusion: "failure" }],
           },
           checkedAt: "x",
@@ -111,13 +111,13 @@ describe("deriveReadiness — PR conflicts", () => {
     expect(r.state).toBe("ready-to-merge");
   });
 
-  it("ready-to-merge still fires when mergeable=UNKNOWN (transient — does NOT block)", () => {
+  it("ready-to-merge still fires when mergeable=unknown (transient — does NOT block)", () => {
     const r = deriveReadiness(
       baseInput({
         versionControl: {
           status: "healthy",
           reason: null,
-          pullRequest: { ...cleanPr, mergeable: "UNKNOWN" },
+          pullRequest: { ...cleanPr, mergeable: "unknown" },
           checkedAt: "x",
         },
       }),
@@ -125,13 +125,13 @@ describe("deriveReadiness — PR conflicts", () => {
     expect(r.state).toBe("ready-to-merge");
   });
 
-  it("pr-conflicts does NOT fire when mergeable=UNKNOWN", () => {
+  it("pr-conflicts does NOT fire when mergeable=unknown", () => {
     const r = deriveReadiness(
       baseInput({
         versionControl: {
           status: "healthy",
           reason: null,
-          pullRequest: { ...cleanPr, mergeable: "UNKNOWN", reviewDecision: null },
+          pullRequest: { ...cleanPr, mergeable: "unknown", reviewDecision: null },
           checkedAt: "x",
         },
       }),

@@ -321,6 +321,10 @@ export function registerTerminalRoutes(input: {
 
   server.on("close", () => {
     server.off("upgrade", upgradeHandler);
+    // Intentionally do NOT signal ttyd children — they were spawned detached
+    // so they outlive this daemon process and get re-adopted at next boot
+    // (see discoverExistingTtyds() in apps/daemon/src/app.ts). shutdown()
+    // just clears the in-memory map.
     ttyd.shutdown();
     proxy.close();
   });

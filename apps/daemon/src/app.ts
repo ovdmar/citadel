@@ -26,7 +26,12 @@ import {
   transitionJiraIssue,
 } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
-import { attachTerminalWebSocket, createTtydManager, ensureTmuxSession } from "@citadel/terminal";
+import {
+  attachTerminalWebSocket,
+  createTtydManager,
+  discoverExistingTtyds,
+  ensureTmuxSession,
+} from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
@@ -39,6 +44,7 @@ import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
+import { registerPrRoutes } from "./pr-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
@@ -113,14 +119,31 @@ export function createDaemonApp(input: {
 
   // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
   //
-  // Skip cleanupStale() when running under vitest. Every test that boots a
-  // daemon (~20 of them) derives the same slot 0 range as the production
-  // install for config.port=4010 — running cleanupStale() in tests would
-  // SIGTERM the live cockpit's ttyds on every test that calls
-  // createDaemonApp(). Production daemons still get the boot-time sweep.
+  // Boot-time discover-and-adopt: ttyds are spawned detached and the systemd
+  // unit runs with KillMode=process, so they outlive daemon restarts. Scan
+  // the ttyd port range for survivors from the previous incarnation and
+  // adopt them back into the manager — same key, same PID, no respawn.
+  // The browser's WebSocket auto-reconnect (xterm `reconnect=3`) lands on
+  // the *same* ttyd it was talking to before the restart.
+  //
+  // Skipped under vitest: tests that boot a daemon all derive the same slot
+  // 0 range as the production install for config.port=4010, so an adopt()
+  // pass would re-attach to the live cockpit's ttyds and the next test that
+  // calls release() would kill them.
   if (!process.env.VITEST) {
-    const initialTerminalCleanup = ttyd.cleanupStale();
-    if (initialTerminalCleanup.killed > 0) emit("terminal.cleanup", initialTerminalCleanup);
+    const survivors = discoverExistingTtyds({
+      portBase: ttyd.config.portBase,
+      portMax: ttyd.config.portMax,
+      basePathPrefix: ttyd.config.basePathPrefix,
+    });
+    const { adopted, reapedDuplicates } = ttyd.adopt(survivors);
+    if (adopted > 0 || reapedDuplicates > 0) {
+      emit("terminal.adopted", {
+        adopted,
+        reapedDuplicates,
+        portRange: [ttyd.config.portBase, ttyd.config.portMax],
+      });
+    }
   }
   const respawnTmux = async (session: import("@citadel/contracts").AgentSession) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
@@ -273,48 +296,6 @@ export function createDaemonApp(input: {
     }),
   );
 
-  app.get(
-    "/api/repos/:repoId/provider-summary",
-    asyncRoute(async (req, res) => {
-      const repoId = req.params.repoId;
-      if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
-      const repo = store.listRepos().find((candidate) => candidate.id === repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const versionControl = await cachedProvider(`vc:${repo.id}:${repo.updatedAt}`, () =>
-        providers.collectGitHubVersionControlSummary(repo.rootPath),
-      );
-      res.json({ versionControl });
-    }),
-  );
-
-  app.get(
-    "/api/repos/:repoId/ci-runs",
-    asyncRoute(async (req, res) => {
-      const repoId = req.params.repoId;
-      if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
-      const repo = store.listRepos().find((candidate) => candidate.id === repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const ci = await cachedProvider(`ci:${repo.id}:${repo.updatedAt}`, () =>
-        providers.collectGitHubCiRuns(repo.rootPath),
-      );
-      res.json({ ci });
-    }),
-  );
-
-  app.get(
-    "/api/repos/:repoId/ci-runs/:runId/logs",
-    asyncRoute(async (req, res) => {
-      const repoId = req.params.repoId;
-      const runId = req.params.runId;
-      if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
-      if (typeof runId !== "string") return res.status(400).json({ error: "run_id_required" });
-      const repo = store.listRepos().find((candidate) => candidate.id === repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const log = await providers.collectGitHubCiRunLog(repo.rootPath, runId);
-      res.json({ log });
-    }),
-  );
-
   app.get("/api/workspaces", (_req, res) => {
     res.json({ workspaces: store.listWorkspaces() });
   });
@@ -375,55 +356,59 @@ export function createDaemonApp(input: {
     }),
   );
 
-  app.get(
-    "/api/workspaces/:workspaceId/cockpit-summary",
-    asyncRoute(async (req, res) => {
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-
-      const [git, versionControl, ci, issueTracker, apps] = await Promise.all([
-        cachedProvider(
-          `git:${workspace.id}:${workspace.updatedAt}`,
-          () => readWorkspaceGitStatus(workspace.path),
-          3000,
-        ),
-        cachedProvider(`vc:${workspace.id}:${workspace.updatedAt}`, () =>
-          providers.collectGitHubVersionControlSummary(workspace.path),
-        ),
-        cachedProvider(`ci:${workspace.id}:${workspace.updatedAt}`, () =>
-          providers.collectGitHubCiRuns(workspace.path),
-        ),
-        workspace.issueKey
-          ? cachedProvider(`issue:${workspace.issueKey}`, () =>
-              providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
-            )
-          : Promise.resolve(null),
-        cachedProvider(
-          `apps:${workspace.id}:${workspace.updatedAt}`,
-          () => operations.discoverWorkspaceApps({ repo, workspace }),
-          60_000,
-        ),
-      ]);
-      const summary: WorkspaceCockpitSummary = {
-        workspaceId: workspace.id,
-        readiness: deriveReadiness({
-          workspace,
-          sessions: store.listSessions(workspace.id),
-          operations: store.listOperations().filter((operation) => operation.workspaceId === workspace.id),
-          providerHealth: await cachedProviderHealth(),
-          git,
-          versionControl,
-          ci,
-          apps,
-        }),
+  // Build a full workspace cockpit summary. Shared between the single-workspace
+  // endpoint and the batch endpoint registered by registerPrRoutes — the batch
+  // endpoint fan-outs with a concurrency cap so 20+ workspaces don't spawn
+  // 20+ concurrent `gh` subprocesses every 30s.
+  async function buildWorkspaceCockpitSummary(workspaceId: string): Promise<WorkspaceCockpitSummary | null> {
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+    if (!workspace) return null;
+    const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+    if (!repo) return null;
+    const [git, versionControl, ci, issueTracker, apps] = await Promise.all([
+      cachedProvider(`git:${workspace.id}:${workspace.updatedAt}`, () => readWorkspaceGitStatus(workspace.path), 3000),
+      cachedProvider(`vc:${workspace.id}:${workspace.updatedAt}`, () =>
+        providers.collectGitHubVersionControlSummary(workspace.path),
+      ),
+      cachedProvider(`ci:${workspace.id}:${workspace.updatedAt}`, () => providers.collectGitHubCiRuns(workspace.path)),
+      workspace.issueKey
+        ? cachedProvider(`issue:${workspace.issueKey}`, () =>
+            providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
+          )
+        : Promise.resolve(null),
+      cachedProvider(
+        `apps:${workspace.id}:${workspace.updatedAt}`,
+        () => operations.discoverWorkspaceApps({ repo, workspace }),
+        60_000,
+      ),
+    ]);
+    return {
+      workspaceId: workspace.id,
+      readiness: deriveReadiness({
+        workspace,
+        sessions: store.listSessions(workspace.id),
+        operations: store.listOperations().filter((operation) => operation.workspaceId === workspace.id),
+        providerHealth: await cachedProviderHealth(),
         git,
         versionControl,
         ci,
-        issueTracker,
         apps,
-      };
+      }),
+      git,
+      versionControl,
+      ci,
+      issueTracker,
+      apps,
+    };
+  }
+
+  app.get(
+    "/api/workspaces/:workspaceId/cockpit-summary",
+    asyncRoute(async (req, res) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      const summary = await buildWorkspaceCockpitSummary(workspaceId);
+      if (!summary) return res.status(404).json({ error: "workspace_not_found" });
       res.json(summary);
     }),
   );
@@ -486,6 +471,15 @@ export function createDaemonApp(input: {
   });
 
   registerRuntimeUsageRoutes({ app, config, asyncRoute, providerCache, cachedProvider });
+  registerPrRoutes({
+    app,
+    store,
+    providers,
+    asyncRoute,
+    cachedProvider,
+    providerCache,
+    buildWorkspaceCockpitSummary,
+  });
 
   registerAgentSessionRoutes(app, { operations, emit, asyncRoute, config, ttyd });
   registerRestoreRoutes(app, { store, operations, config, emit, asyncRoute });
