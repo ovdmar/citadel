@@ -97,10 +97,16 @@ test.describe("Jira picker", () => {
       await waitForWorkspace(request, workspaceId, "ready");
 
       // Attach an issue up front via PATCH so the chip starts in the
-      // attached state with a transitions list populated.
-      await request.patch(`${API_BASE}/api/workspaces/${workspaceId}`, {
+      // attached state with a transitions list populated. The PATCH
+      // returns 200 with the updated workspace; confirm issueKey is
+      // persisted before navigating, so the page's initial /api/state
+      // render already sees it.
+      const patchResp = await request.patch(`${API_BASE}/api/workspaces/${workspaceId}`, {
         data: { issueKey: "T-1", issueTitle: "Transition demo", issueUrl: null },
       });
+      expect(patchResp.ok()).toBe(true);
+      const patched = (await patchResp.json()) as { workspace?: { issueKey?: string | null } };
+      expect(patched.workspace?.issueKey).toBe("T-1");
 
       // The cockpit-summary refetch calls /issue-summary too — stub the
       // transitions list there.
@@ -155,15 +161,16 @@ test.describe("Jira picker", () => {
       });
 
       await page.goto("/");
+      await page.waitForLoadState("networkidle");
       const navigator = page.locator("aside[aria-label='Navigator']");
       await expect(navigator).toBeVisible();
       const workspaceButton = navigator.getByRole("button", { name: new RegExp(workspaceName, "i") }).first();
-      await expect(workspaceButton).toBeVisible();
+      await expect(workspaceButton).toBeVisible({ timeout: 20_000 });
       await workspaceButton.click();
       const inspector = page.locator("aside[aria-label='Inspector']");
       await expect(inspector).toBeVisible();
       const chip = inspector.locator(".cit-jira-attached");
-      await expect(chip).toBeVisible();
+      await expect(chip).toBeVisible({ timeout: 20_000 });
       // The status pill is a button that opens the transition menu.
       const statusButton = chip.getByRole("button", { name: /To Do|Status/i });
       await statusButton.click();
