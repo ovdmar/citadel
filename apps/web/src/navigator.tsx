@@ -25,7 +25,11 @@ import {
 import { WorkspaceCard } from "./workspace-card.js";
 
 const GROUP_STORAGE = "citadel.navigator-group";
-const COLLAPSE_STORAGE = "citadel.navigator-group-collapsed";
+import {
+  COLLAPSE_STORAGE_KEY as COLLAPSE_STORAGE,
+  readCollapsedMap,
+  subscribeToCollapseChanges,
+} from "./navigator-collapse-store.js";
 
 function runningCount(sessions: AgentSession[]): number {
   return sessions.filter((session) => session.status === "running").length;
@@ -71,21 +75,15 @@ export function Navigator(props: {
     window.localStorage.setItem(GROUP_STORAGE, grouping);
   }, [grouping]);
 
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
-    if (typeof window === "undefined") return {};
-    try {
-      const raw = window.localStorage.getItem(COLLAPSE_STORAGE);
-      if (!raw) return {};
-      const parsed = JSON.parse(raw) as Record<string, boolean>;
-      return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-      return {};
-    }
-  });
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => readCollapsedMap());
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(COLLAPSE_STORAGE, JSON.stringify(collapsed));
   }, [collapsed]);
+  // External writers (e.g. cockpit nav shortcuts that auto-expand a group)
+  // mutate the same localStorage key and broadcast a custom event. Re-read
+  // and replace local state so the navigator visibly reflects the change.
+  useEffect(() => subscribeToCollapseChanges(() => setCollapsed(readCollapsedMap())), []);
   const toggleCollapsed = useCallback((nodePath: string) => {
     setCollapsed((prev) => {
       const next = { ...prev };
