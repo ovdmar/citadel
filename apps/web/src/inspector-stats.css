@@ -537,6 +537,17 @@
   margin-left: auto;
 }
 
+/* Right-aligned action row at the bottom of the inspector PR card. Holds
+ * exactly one of the mutually-exclusive PR actions (Fix conflicts when
+ * the PR is in conflict, Merge otherwise). The wrapper is a flex row so
+ * the .pr-card-action `margin-left: auto` resolves against it. */
+.ins-pr-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 2px;
+}
+
 .ins-pr-elapsed {
   font-size: 10px;
   color: var(--c-fg-4);

@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { ReviewerAvatars, aggregateReviewerCounts } from "./inspector-reviewers.js";
 import { formatLabel } from "./labels.js";
+import { PrCardActionSlot } from "./pr-card-actions.js";
 import { prToneFor } from "./workspace-card.js";
 
 export function InspectorPrSection(props: {
@@ -147,6 +148,9 @@ export function InspectorPrSection(props: {
                     <span className="ins-pr-meta-empty">No reviewers assigned</span>
                   ) : null}
                 </span>
+              </div>
+              <div className="ins-pr-actions">
+                <PrCardActionSlot workspace={workspace} pr={pr} prTone={prTone} />
               </div>
             </div>
           ) : (

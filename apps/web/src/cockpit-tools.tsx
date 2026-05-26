@@ -1,17 +1,29 @@
 import type { PullRequestSummary, Workspace, WorkspaceCockpitSummary } from "@citadel/contracts";
 import type { WorkspaceCockpitSummaryBatchResponse } from "@citadel/contracts/pr-routes";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useMemo, useRef } from "react";
 import { api } from "./api.js";
 
 export { RuntimeLauncher, WorkspaceForm } from "./workspace-forms.js";
 export { TerminalPane } from "./terminal-pane.js";
 
-export function useWorkspaceCockpitSummary(workspace: Workspace | null) {
+// Single-workspace summary poll. When a placeholder summary is passed (built
+// from the sticky cross-workspace cache below), React Query serves it
+// immediately on workspace switch so the inspector renders PR state from the
+// last-known batch result instead of flashing empty for ~3-5s while the
+// fresh `gh pr view` is in flight.
+export function useWorkspaceCockpitSummary(
+  workspace: Workspace | null,
+  placeholderSummary?: WorkspaceCockpitSummary | undefined,
+) {
   return useQuery({
     queryKey: ["workspace-cockpit", workspace?.id],
     enabled: Boolean(workspace),
     refetchInterval: 10_000,
     queryFn: () => api<WorkspaceCockpitSummary>(`/api/workspaces/${workspace?.id}/cockpit-summary`),
+    // Conditional spread — exactOptionalPropertyTypes disallows passing
+    // `undefined` explicitly, but omitting the key is fine.
+    ...(placeholderSummary ? { placeholderData: placeholderSummary } : {}),
   });
 }
 
@@ -51,19 +63,87 @@ export function useAllWorkspacesPrSummary(workspaces: Workspace[]) {
   });
 }
 
-// Build a Map<workspaceId, PullRequestSummary | null> from the batch response.
-// Per-workspace failures (no-remote, root-workspace) collapse to `null` so
-// the workspace card can render its placeholder slot without further work.
-export function prMapFromBatch(batch: WorkspaceCockpitSummaryBatchResponse | undefined) {
-  const map = new Map<string, PullRequestSummary | null>();
-  if (!batch) return map;
-  for (const entry of batch.summaries) {
-    if (entry.ok) {
-      const summary = entry.summary as WorkspaceCockpitSummary;
-      map.set(entry.workspaceId, summary.versionControl.pullRequest ?? null);
-    } else {
-      map.set(entry.workspaceId, null);
+// Authoritative ok:false reasons mean "this workspace truly has no PR data
+// to cache" — clear the sticky entry. Any other reason (transient batch
+// failure, gh hiccup, network blip) is non-authoritative: leave the cached
+// entry untouched so the navbar keeps showing the last-known PR icon.
+const AUTHORITATIVE_EMPTY_REASONS = new Set(["no-remote", "root-workspace", "workspace_not_found"]);
+
+// Apply a batch onto a sticky cache. Pulled out so the merge rules can be
+// unit-tested without React.
+//
+// Update rules:
+//  - ok:true with versionControl.status === "healthy" — definitive update,
+//    overwrites the cached entry (a null pullRequest in a healthy response
+//    means "the PR was closed/merged or the branch genuinely has none").
+//  - ok:true with versionControl.status === "degraded" — non-authoritative
+//    (the provider couldn't talk to gh cleanly), so we KEEP the previous
+//    entry to avoid the navbar's "PR state disappeared" flicker.
+//  - ok:false with an authoritative reason — clear the entry.
+//  - ok:false otherwise — keep the previous entry.
+// Workspaces that are no longer in `knownIds` are pruned so the cache
+// doesn't grow without bound across the cockpit's lifetime.
+export function applyStickyUpdates(
+  cache: Map<string, WorkspaceCockpitSummary>,
+  knownIds: Set<string>,
+  batch: WorkspaceCockpitSummaryBatchResponse | undefined,
+): Map<string, WorkspaceCockpitSummary> {
+  if (batch) {
+    for (const entry of batch.summaries) {
+      if (entry.ok) {
+        // The contract types `summary` as unknown to avoid a cross-file zod
+        // cycle (see packages/contracts/src/pr-routes.ts). The daemon writes
+        // a real WorkspaceCockpitSummary — cast it back here.
+        const summary = entry.summary as WorkspaceCockpitSummary;
+        if (summary.versionControl.status === "healthy") {
+          cache.set(entry.workspaceId, summary);
+        }
+      } else if (AUTHORITATIVE_EMPTY_REASONS.has(entry.reason)) {
+        cache.delete(entry.workspaceId);
+      }
     }
+  }
+  for (const id of Array.from(cache.keys())) {
+    if (!knownIds.has(id)) cache.delete(id);
+  }
+  return cache;
+}
+
+// Sticky per-workspace summary cache that survives transient batch failures.
+// The returned Map identity is stable across renders (we mutate the same ref);
+// callers must derive memoized views from it rather than relying on reference
+// equality.
+export function useStickyWorkspaceSummaries(
+  workspaces: Workspace[],
+  batch: WorkspaceCockpitSummaryBatchResponse | undefined,
+): Map<string, WorkspaceCockpitSummary> {
+  const cacheRef = useRef(new Map<string, WorkspaceCockpitSummary>());
+  // Stable id key — derived from sorted ids so the downstream memo only re-runs
+  // when the workspace set actually changes (the `workspaces` array gets a
+  // fresh identity on every parent re-render).
+  const idsKey = useMemo(
+    () =>
+      workspaces
+        .map((w) => w.id)
+        .sort()
+        .join("\n"),
+    [workspaces],
+  );
+  return useMemo(() => {
+    const knownIds = new Set(idsKey ? idsKey.split("\n") : []);
+    applyStickyUpdates(cacheRef.current, knownIds, batch);
+    return cacheRef.current;
+  }, [batch, idsKey]);
+}
+
+// Derive a PR map from the sticky summary cache. Used by the navbar /
+// command palette so they don't need to know about the summary shape.
+export function prMapFromSummaries(
+  summaries: Map<string, WorkspaceCockpitSummary>,
+): Map<string, PullRequestSummary | null> {
+  const map = new Map<string, PullRequestSummary | null>();
+  for (const [id, summary] of summaries) {
+    map.set(id, summary.versionControl.pullRequest ?? null);
   }
   return map;
 }
