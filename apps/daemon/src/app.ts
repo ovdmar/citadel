@@ -49,9 +49,8 @@ import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
-import { backfillIfEmpty } from "./scratchpad-history.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
-import { scratchpadPath } from "./scratchpad.js";
+import { backfillScratchpadOnStartup } from "./scratchpad.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
@@ -665,18 +664,7 @@ export function createDaemonApp(input: {
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, config });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit });
-  try {
-    const spPath = scratchpadPath(config.dataDir);
-    if (fs.existsSync(spPath)) {
-      const content = fs.readFileSync(spPath, "utf8");
-      if (content.length > 0) {
-        const stat = fs.statSync(spPath);
-        backfillIfEmpty(config.dataDir, { content, updatedAt: stat.mtime.toISOString() });
-      }
-    }
-  } catch (error) {
-    console.error(`[scratchpad-history] backfill skipped: ${error instanceof Error ? error.message : error}`);
-  }
+  backfillScratchpadOnStartup(config);
 
   fsWatchers = createWorkspaceFsWatchers({
     listWorkspaces: () => store.listWorkspaces(),
