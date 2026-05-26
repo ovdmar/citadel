@@ -290,6 +290,33 @@ describe("runAutoResumeTick", () => {
     expect(update).not.toHaveProperty("lastResumeFromRateLimitAt");
   });
 
+  it("preserves rate_limited backoff state when session flips to usage_limited (oscillation guard)", async () => {
+    // Real scenario: a session oscillates rate_limited → usage_limited →
+    // rate_limited as nudges hit different banners. If we cleared the
+    // rateLimitResumeAttempts/nextResumeAt every time it flipped to
+    // usage_limited, the next rate_limited episode would restart at the
+    // 1-min initial backoff and we'd send ~one nudge per minute against a
+    // sustained limit. The else-branch must skip clear for usage_limited.
+    const future = new Date(NOW_MS + 30 * 60_000).toISOString();
+    const sessions = [
+      session({
+        status: "usage_limited",
+        statusReason: `pane:usage_limited:reset=${future}`,
+        rateLimitResumeAttempts: 4,
+        nextResumeAt: new Date(NOW_MS + 8 * 60_000).toISOString(),
+        lastResumeFromRateLimitAt: "2026-05-25T11:30:00.000Z",
+      }),
+    ];
+    const deps = makeDeps({ sessions });
+    const result = await runAutoResumeTick(deps);
+    expect(result.cleared).toBe(0);
+    // No update should have been written that resets rate_limited fields.
+    const wipeUpdates = deps.updates.filter(
+      (u) => u.update.rateLimitResumeAttempts === 0 || u.update.nextResumeAt === null,
+    );
+    expect(wipeUpdates).toHaveLength(0);
+  });
+
   it("does not churn DB writes for non-rate-limited sessions with no stale state", async () => {
     const deps = makeDeps({
       sessions: [

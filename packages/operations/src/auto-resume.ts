@@ -247,10 +247,18 @@ export async function runAutoResumeTick(deps: AutoResumeDeps): Promise<AutoResum
       deps.updateRateLimitResume(session.id, update);
       if (sendOk) result.resumed += 1;
     } else {
-      // Session is no longer rate-limited; clear stale resume bookkeeping
-      // so a future rate-limit episode starts a fresh backoff curve. We
-      // deliberately keep `lastResumeFromRateLimitAt` as a historical
-      // breadcrumb.
+      // Session is no longer in *any* limited state; clear stale resume
+      // bookkeeping so a future rate-limit episode starts a fresh backoff
+      // curve. We deliberately keep `lastResumeFromRateLimitAt` as a
+      // historical breadcrumb.
+      //
+      // Important: usage_limited never reaches this branch because the
+      // usage_limited block at the top of the loop `continue`s out. That
+      // protects rate_limited backoff across rate_limited ↔ usage_limited
+      // oscillation — without that early-continue, each flip to
+      // usage_limited would wipe attempts and the next rate_limited
+      // episode would restart at the 1-min initial backoff, sending ~one
+      // nudge per minute against a sustained limit.
       const hasAttempts = (session.rateLimitResumeAttempts ?? 0) > 0;
       const hasNext = session.nextResumeAt != null;
       if (hasAttempts || hasNext) {

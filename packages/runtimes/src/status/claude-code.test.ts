@@ -124,6 +124,41 @@ describe("claudeCodeStatusAdapter", () => {
       expect(claudeCodeStatusAdapter.observe(state, ctx(load("rate-limited-server")))).toBe("rate_limited");
     });
 
+    it("when both limit banners are visible, the more recent (lower-in-pane) wins — rate_limited", () => {
+      // A session that bounced: earlier nudge got the account-cap banner,
+      // most recent nudge got the server rate-limit banner. The agent's
+      // CURRENT state is the server rate-limit, so we want backoff retries
+      // (rate_limited) not the postpone-until-reset path (usage_limited).
+      const pane = [
+        "⎿  You're out of extra usage · resets 7:50am (UTC)",
+        "   /extra-usage to finish what you're working on.",
+        "✻ Cogitated for 0s",
+        "❯ continue, please",
+        "  Ran 2 shell commands",
+        "  ⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+        "✻ Worked for 23s",
+        "  ⏵⏵ auto mode on (shift+tab to cycle)",
+      ].join("\n");
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("rate_limited");
+    });
+
+    it("when both limit banners are visible, the more recent (lower-in-pane) wins — usage_limited", () => {
+      // Reversed order: server rate-limit was the earlier failure; account
+      // cap is the most recent. Current state is usage_limited, gate engages.
+      const pane = [
+        "⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+        "✻ Crunched for 24s",
+        "❯ continue, please",
+        "  ⎿  You're out of extra usage · resets 7:50am (UTC)",
+        "     /extra-usage to finish what you're working on.",
+        "  ⏵⏵ auto mode on (shift+tab to cycle)",
+      ].join("\n");
+      const result = claudeCodeStatusAdapter.observe(state, ctx(pane));
+      if (typeof result === "string" || result === null) throw new Error("expected object result");
+      expect(result.observed).toBe("usage_limited");
+      expect(result.reason).toBe("pane:usage_limited:reset=2026-05-26T07:50:00.000Z");
+    });
+
     it("active turn beats a stale rate-limit message (esc to interrupt re-armed during retry)", () => {
       // If Claude Code's internal retry succeeded, the mode line re-arms with
       // `esc to interrupt` while the rate-limit text still scrolls above.
