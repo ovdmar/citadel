@@ -15,13 +15,13 @@ const ATTENTION_UNKNOWN_REASONS: ReadonlySet<string> = new Set([
   "migrated_from_orphaned",
 ]);
 
-// True iff the session needs the operator's attention — failed, rate_limited,
-// or unknown with positive evidence the agent went away (tmux gone, sentinel
-// mismatched). Used by readiness derivations and the workspace-card status
-// dot. Single source of truth for the predicate.
+// True iff the session needs the operator's attention — failed, or unknown
+// with positive evidence the agent went away (tmux gone, sentinel mismatched).
+// rate_limited is INTENTIONALLY excluded — it has its own pulse tone
+// (cit-pulse-info, blue) in the workspace card, separate from the red
+// attention tone reserved for hard failures.
 export function sessionNeedsAttention(session: Pick<AgentSession, "status" | "statusReason">): boolean {
   if (session.status === "failed") return true;
-  if (session.status === "rate_limited") return true;
   if (session.status !== "unknown") return false;
   const reason = session.statusReason;
   return reason !== null && reason !== undefined && ATTENTION_UNKNOWN_REASONS.has(reason);

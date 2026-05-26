@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { pasteText, tmuxSessionExists, waitForPaneCommand, waitForTerminalIdle } from "./index.js";
+import { pasteText, tmuxPrefix, tmuxSessionExists, waitForPaneCommand, waitForTerminalIdle } from "./index.js";
 
 // Submit a prompt or follow-up message into a tmux-backed runtime.
 //
@@ -88,7 +88,7 @@ export async function submitPrompt(
     // didn't submit" from "Enter submitted and the runtime is echoing the
     // history." The pre-paste idle wait + paste-visible verification above
     // are the load-bearing checks; this Enter is the easy part.
-    execFileSync("tmux", ["send-keys", "-t", sessionName, submitKey]);
+    execFileSync("tmux", [...tmuxPrefix(), "send-keys", "-t", sessionName, submitKey]);
     return { ok: true };
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : "submit_prompt_failed" };
@@ -150,7 +150,7 @@ function collapseWhitespace(text: string): string {
 function pasteVisible(sessionName: string, snippet: string): boolean {
   let captured: string;
   try {
-    captured = execFileSync("tmux", ["capture-pane", "-p", "-J", "-S", "-12", "-t", sessionName], {
+    captured = execFileSync("tmux", [...tmuxPrefix(), "capture-pane", "-p", "-J", "-S", "-12", "-t", sessionName], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       maxBuffer: 256 * 1024,

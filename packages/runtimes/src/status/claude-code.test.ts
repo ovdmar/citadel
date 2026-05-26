@@ -74,8 +74,51 @@ describe("claudeCodeStatusAdapter", () => {
       });
     });
 
+    it("classifies waiting-for-input-ask-question-confirm.txt as waiting_for_input (free-text confirm footer)", () => {
+      // When the user picks "Type something" / Other in AskUserQuestion, the
+      // footer collapses to `Enter to confirm · Esc to cancel` (different verb,
+      // no middle nav hint). Detector anchors on `Enter to <verb>` start and
+      // `Esc to cancel` end with optional middle segments.
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("waiting-for-input-ask-question-confirm")))).toEqual({
+        kind: "waiting_for_input",
+      });
+    });
+
     it("classifies wakeup-resuming.txt as running (esc to interrupt visible in mid-resume)", () => {
       expect(claudeCodeStatusAdapter.observe(state, ctx(load("wakeup-resuming")))).toEqual({ kind: "running" });
+    });
+
+    it("classifies rate-limited-server.txt as rate_limited (server rate-limit error visible, idle mode line)", () => {
+      // The agent printed `API Error: Server is temporarily limiting requests
+      // (not your usage limit) · Rate limited` as a tool-result block, then
+      // stalled — mode line is back to the bare idle baseline with no
+      // `esc to interrupt`. Without this rule we'd report `idle` and silently
+      // hide the stall from the operator.
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("rate-limited-server")))).toEqual({
+        kind: "rate_limited",
+        resetAt: null,
+      });
+    });
+
+    it("active turn beats a stale rate-limit message (esc to interrupt re-armed during retry)", () => {
+      // If Claude Code's internal retry succeeded, the mode line re-arms with
+      // `esc to interrupt` while the rate-limit text still scrolls above.
+      // Active-turn priority must win over rate_limited so the dot returns
+      // to running.
+      const pane =
+        "⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited\n" +
+        "✻ Brewing… (esc to interrupt)\n" +
+        "  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt";
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toEqual({ kind: "running" });
+    });
+
+    it("classifies idle-with-tasks-visible.txt as idle (Ctrl+C with task panel still on screen)", () => {
+      // Real capture from a session where the user pressed Ctrl+C while a
+      // TodoWrite task panel was visible. Mode line is
+      // `⏵⏵ auto mode on (shift+tab to cycle) · ctrl+t to hide tasks` with
+      // no `esc to interrupt`. Previously fell through to `return null`,
+      // leaving the session stuck in `running` indefinitely.
+      expect(claudeCodeStatusAdapter.observe(state, ctx(load("idle-with-tasks-visible")))).toEqual({ kind: "idle" });
     });
   });
 
@@ -116,6 +159,19 @@ describe("claudeCodeStatusAdapter", () => {
     it("matches multi-digit background counts", () => {
       const pane = "x\n  ⏵⏵ auto mode on · 12 shell · ↓ to manage";
       expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toEqual({ kind: "running" });
+    });
+
+    it("treats `<idle prefix> · ctrl+t to hide tasks` as idle (post-interrupt with task panel)", () => {
+      const pane = "x\n  ⏵⏵ auto mode on (shift+tab to cycle) · ctrl+t to hide tasks";
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toEqual({ kind: "idle" });
+    });
+
+    it("treats `<idle prefix> · <unknown suffix>` (no esc to interrupt, no bg work) as idle", () => {
+      // Forward-compat: any future post-turn chrome hint that hangs off the
+      // idle prefix should still classify as idle, since priorities 2/3
+      // already ruled out the active and background-work cases.
+      const pane = "x\n  ⏵⏵ auto mode on (shift+tab to cycle) · some future hint";
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toEqual({ kind: "idle" });
     });
   });
 

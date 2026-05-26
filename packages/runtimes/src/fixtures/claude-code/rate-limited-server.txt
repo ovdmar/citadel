@@ -1,0 +1,22 @@
+● Update(apps/daemon/src/app.ts)
+  ⎿  Added 1 line, removed 1 line
+      32  import express from "express";
+      33  import { ZodError } from "zod";
+      34  import { registerAgentSessionRoutes } from "./agent-session-routes.js";
+      35 -import { getBootRestoreSummary, runBootRestore } from "./boot-restore.js";
+      35 +import { getBootRestoreSummary } from "./boot-restore.js";
+      36  import { registerRestoreRoutes } from "./restore-routes.js";
+      37  import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
+      38  import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
+
+
+
+
+  ⎿  API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited
+
+
+✻ Cogitated for 17m 16s                                copied 1186 chars to tmux buffer · paste with prefix + ]
+────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle)

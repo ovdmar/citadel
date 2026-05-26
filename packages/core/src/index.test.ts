@@ -179,11 +179,13 @@ describe("rate-limit status helpers", () => {
     expect(parseRateLimitReason("rate_limited:")).toBeNull();
   });
 
-  it("sessionNeedsAttention is true for rate_limited, failed, and tmux-gone unknown", () => {
+  it("sessionNeedsAttention is true for failed and tmux-gone unknown, false for rate_limited (own tone)", () => {
     const base = {
       statusReason: null,
     };
-    expect(sessionNeedsAttention({ ...base, status: "rate_limited" })).toBe(true);
+    // rate_limited has its own cit-pulse-info tone in the workspace card,
+    // separate from the red attention tone reserved for hard failures.
+    expect(sessionNeedsAttention({ ...base, status: "rate_limited" })).toBe(false);
     expect(sessionNeedsAttention({ ...base, status: "failed" })).toBe(true);
     expect(sessionNeedsAttention({ status: "unknown", statusReason: "tmux_missing" })).toBe(true);
     expect(sessionNeedsAttention({ status: "unknown", statusReason: "daemon_restart_indeterminate" })).toBe(false);

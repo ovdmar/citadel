@@ -426,12 +426,13 @@ describe("contract schemas", () => {
     expect(isAliveStatus("unknown")).toBe(true);
     expect(isAliveStatus("stopped")).toBe(false);
     expect(isAliveStatus("failed")).toBe(false);
-    // isAcceptingInputStatus (rate_limited intentionally excluded)
+    // isAcceptingInputStatus (rate_limited included — operator follow-ups can
+    // wake server-stalled sessions; usage-quota waits queue the input)
     expect(isAcceptingInputStatus("starting")).toBe(true);
     expect(isAcceptingInputStatus("running")).toBe(true);
     expect(isAcceptingInputStatus("waiting_for_input")).toBe(true);
     expect(isAcceptingInputStatus("idle")).toBe(true);
-    expect(isAcceptingInputStatus("rate_limited")).toBe(false);
+    expect(isAcceptingInputStatus("rate_limited")).toBe(true);
     expect(isAcceptingInputStatus("stopped")).toBe(false);
     expect(isAcceptingInputStatus("failed")).toBe(false);
     expect(isAcceptingInputStatus("unknown")).toBe(false);

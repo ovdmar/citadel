@@ -74,18 +74,16 @@ describe("deriveWorkspaceAgentTone", () => {
     expect(deriveWorkspaceAgentTone([session({ status: "idle" })])).toBe("idle");
   });
 
-  it("rate_limited session → attention", () => {
+  it("any rate_limited → rate_limited", () => {
+    expect(deriveWorkspaceAgentTone([session({ status: "rate_limited" })])).toBe("rate_limited");
+  });
+
+  it("rate_limited with parsed reset reason → rate_limited tone", () => {
     expect(
       deriveWorkspaceAgentTone([
         session({ status: "rate_limited", statusReason: "rate_limited:2026-05-26T10:00:00.000Z" }),
       ]),
-    ).toBe("attention");
-  });
-
-  it("attention beats running when both are present", () => {
-    expect(
-      deriveWorkspaceAgentTone([session({ id: "a", status: "running" }), session({ id: "b", status: "rate_limited" })]),
-    ).toBe("attention");
+    ).toBe("rate_limited");
   });
 
   it("shell-runtime sessions are excluded — running shell does NOT count as agent running", () => {
@@ -112,6 +110,24 @@ describe("deriveWorkspaceAgentTone", () => {
       expect(
         deriveWorkspaceAgentTone([session({ id: "a", status: "running" }), session({ id: "b", status: "idle" })]),
       ).toBe("running");
+    });
+
+    it("rate_limited beats running", () => {
+      expect(
+        deriveWorkspaceAgentTone([
+          session({ id: "a", status: "running" }),
+          session({ id: "b", status: "rate_limited" }),
+        ]),
+      ).toBe("rate_limited");
+    });
+
+    it("attention beats rate_limited", () => {
+      expect(
+        deriveWorkspaceAgentTone([
+          session({ id: "a", status: "rate_limited" }),
+          session({ id: "b", status: "waiting_for_input" }),
+        ]),
+      ).toBe("attention");
     });
 
     it("one stopped + one idle → idle", () => {

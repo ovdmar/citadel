@@ -205,6 +205,11 @@ export function runMigrations(
   ensureColumn("scheduled_agents", "run_mode", "TEXT NOT NULL DEFAULT 'workspace'");
   ensureColumn("scheduled_agents", "background_cwd", "TEXT");
   ensureColumn("scheduled_agents", "overlap_policy", "TEXT NOT NULL DEFAULT 'skip'");
+  // Runtime-native session UUID captured at spawn time (claude-code's
+  // --session-id, codex's thread_id, etc.). Nullable for legacy rows and for
+  // runtimes without a session ID. Read on respawn to pass --resume so the
+  // conversation survives daemon/machine restarts.
+  ensureColumn("agent_sessions", "runtime_session_id", "TEXT");
   // Rate-limit resumption rows. At most one row in 'pending' status at a time
   // (enforced by the partial unique index). Daemon-internal — not a
   // user-visible ScheduledAgent.

@@ -1,19 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
-import type {
-  CreateAgentSessionInput,
-  CreateNamespaceInput,
-  CreateWorkspaceInput,
-  HookAction,
-  HookOutput,
-  LaunchAgentInput,
-  Namespace,
-  Operation,
-  Repo,
-  UpdateNamespaceInput,
-  Workspace,
-} from "@citadel/contracts";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+import type { CreateAgentSessionInput, CreateNamespaceInput, CreateWorkspaceInput, HookAction, HookOutput, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
 import { isAcceptingInputStatus } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
@@ -28,13 +17,8 @@ export type { LaunchAgentResult } from "./launch-agent.js";
 export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
 export type { AgentHistoryResult, AgentHistoryErrorResult } from "./agent-history.js";
 export * from "./status.js";
-export {
-  ScheduledAgentRunner,
-  parseCronExpression,
-  cronMatches,
-  nextCronRun,
-  describeCron,
-} from "./scheduled-agents.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+export { ScheduledAgentRunner, parseCronExpression, cronMatches, nextCronRun, describeCron } from "./scheduled-agents.js";
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
@@ -42,11 +26,8 @@ export { runRateLimitSchedulerTick } from "./rate-limit-scheduler.js";
 export type { SchedulerDeps, SchedulerTickResult } from "./rate-limit-scheduler.js";
 export { resumeRateLimitedSession } from "./rate-limit-resumer.js";
 export type { RateLimitResumerDeps, ResumeOutcome } from "./rate-limit-resumer.js";
-import {
-  type DeployOpsDeps,
-  listDeployedApps as listDeployedAppsImpl,
-  redeployApp as redeployAppImpl,
-} from "./deploy.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+import { type DeployOpsDeps, listDeployedApps as listDeployedAppsImpl, redeployApp as redeployAppImpl } from "./deploy.js";
 import {
   BranchInUseByWorktreeError,
   RemoteRefMissingError,
@@ -63,12 +44,8 @@ import {
   workspaceIsDirty,
 } from "./helpers.js";
 
-export {
-  BranchInUseByWorktreeError,
-  RemoteRefMissingError,
-  WorkspaceInUseError,
-  WorkspaceNameTakenError,
-} from "./helpers.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+export { BranchInUseByWorktreeError, RemoteRefMissingError, WorkspaceInUseError, WorkspaceNameTakenError } from "./helpers.js";
 import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
 import {
   type WorkspaceAppsDeps,
@@ -282,7 +259,14 @@ export class OperationService {
 
   createAgentSession = (
     input: CreateAgentSessionInput,
-    runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
+    runtime: {
+      command: string;
+      args: string[];
+      displayName: string;
+      promptArg?: string | null;
+      sessionIdArg?: string | null;
+      resumeArg?: string | null;
+    },
   ) => {
     if (input.namespaceId) {
       const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
@@ -304,7 +288,14 @@ export class OperationService {
 
   launchAgent = (
     input: LaunchAgentInput,
-    runtime: { command: string; args: string[]; displayName: string; promptArg?: string | null },
+    runtime: {
+      command: string;
+      args: string[];
+      displayName: string;
+      promptArg?: string | null;
+      sessionIdArg?: string | null;
+      resumeArg?: string | null;
+    },
   ) =>
     launchAgentImpl(
       {

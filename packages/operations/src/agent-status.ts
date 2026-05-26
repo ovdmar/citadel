@@ -124,9 +124,9 @@ export function reduceStatus(prev: ReducerPrev, signal: StatusSignal, now: () =>
     }
 
     case "active": {
-      // Active does NOT transition out of idle/waiting_for_input — those are
-      // sticky post-turn states until a positive pane_observation arrives.
-      // For unknown, treat as resurrection → running.
+      // Active does NOT transition out of idle/waiting_for_input/rate_limited
+      // — those are sticky post-turn states until a positive pane_observation
+      // arrives. For unknown, treat as resurrection → running.
       if (prev.status === "unknown") {
         return statusUpdate(prev, "running", "resurrected_by_activity", t, {
           lastOutputAt: signal.lastOutputAt,
@@ -186,11 +186,11 @@ export function reduceStatus(prev: ReducerPrev, signal: StatusSignal, now: () =>
     }
 
     case "optimistic_send": {
-      // Only valid when the agent is post-turn (idle or waiting_for_input).
-      // Stamps a sentinel reason so the completion-sound trigger can guard
-      // against firing if the next pane observation shows idle with no
-      // activity (i.e., the send didn't actually start a turn).
-      if (prev.status === "idle" || prev.status === "waiting_for_input") {
+      // Only valid when the agent is post-turn (idle, waiting_for_input, or
+      // rate_limited). Stamps a sentinel reason so the completion-sound
+      // trigger can guard against firing if the next pane observation shows
+      // idle with no activity (i.e., the send didn't actually start a turn).
+      if (prev.status === "idle" || prev.status === "waiting_for_input" || prev.status === "rate_limited") {
         return statusUpdate(prev, "running", "optimistic_send", t);
       }
       return null;

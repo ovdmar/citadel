@@ -17,7 +17,9 @@ import { claudeCodeStatusAdapter } from "./claude-code.js";
 import { codexStatusAdapter } from "./codex.js";
 
 // Discriminated union so rate_limited can carry the parsed reset time
-// alongside its kind. The simple kinds carry no extra data.
+// alongside its kind. The simple kinds carry no extra data. Server-side
+// transient rate-limits return resetAt=null (no known reset window); the
+// auto-resume scheduler only fires for sessions with a known reset.
 export type PaneObservation =
   | { kind: "running" }
   | { kind: "idle" }
