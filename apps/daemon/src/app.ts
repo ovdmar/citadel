@@ -61,6 +61,7 @@ import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
 import { resolveTtydPortRange } from "./ttyd-slot.js";
+import { fetchVersionControlGated } from "./vc-fetch-gated.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
 import { readWorkspaceGitStatus } from "./workspace-diff.js";
 import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
@@ -104,15 +105,18 @@ export function createDaemonApp(input: {
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
   const ttyd = createTtydManager(resolveTtydPortRange(config.port));
 
-  // gh-quota wiring: viewer-gate, per-PR scheduler, main-watcher. Hydrates
-  // the scheduler from persisted SQLite PR snapshots so a daemon restart
-  // doesn't re-fetch every PR on first poll.
-  const ghQuota: GhQuotaWiringWithDetach = wireGhQuota({
-    sseClients,
-    store,
-    resolveRepoFullName: (repoId) => resolveRepoFullNameFromWorkspaces(repoId, store),
-  });
+  // gh-quota wiring: viewer-gate, per-PR scheduler, main-watcher. Hydrates from SQLite PR snapshots so restart doesn't re-fetch every PR.
+  const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
+  const ghQuota: GhQuotaWiringWithDetach = wireGhQuota({ sseClients, store, resolveRepoFullName });
   server.on("close", () => ghQuota.stop());
+  const gatedVcDeps = {
+    store,
+    scheduler: ghQuota.scheduler,
+    providerCache,
+    collectVc: (path: string) => providers.collectGitHubVersionControlSummary(path),
+    resolveRepoFullName,
+    cachedProvider: <T>(k: string, l: () => T | Promise<T>, t?: number) => cachedProvider(k, l, t),
+  };
 
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
@@ -382,15 +386,7 @@ export function createDaemonApp(input: {
     if (!repo) return null;
     const [git, versionControlRaw, ci, issueTracker, apps] = await Promise.all([
       cachedProvider(`git:${workspace.id}:${workspace.updatedAt}`, () => readWorkspaceGitStatus(workspace.path), 3000),
-      // vc: TTL bumped from 10s → 60s. workspace.updatedAt rotates only on
-      // lifecycle/branch/dirty changes (not session activity), so the longer
-      // TTL is effective in steady state. P3 (scheduler-gated decide-to-fetch
-      // in this code path) is the deeper win and lands in a follow-up commit.
-      cachedProvider(
-        `vc:${workspace.id}:${workspace.updatedAt}`,
-        () => providers.collectGitHubVersionControlSummary(workspace.path),
-        60_000,
-      ),
+      fetchVersionControlGated(gatedVcDeps, workspace, repo, `vc:${workspace.id}:${workspace.updatedAt}`),
       cachedProvider(
         `ci:${workspace.id}:${workspace.updatedAt}`,
         () => providers.collectGitHubCiRuns(workspace.path),
@@ -661,6 +657,14 @@ export function createDaemonApp(input: {
         force: req.query.force === "true",
         archiveOnly: req.query.archiveOnly === "true",
       });
+      // Evict from the scheduler regardless of removed-vs-archived outcome.
+      // An archived workspace has no UI presence either, so its cadence slot
+      // is dead weight and (if it shared a PR with another workspace) the
+      // workspaceIds refcount should drop. evict is a no-op if the id wasn't
+      // tracked.
+      if (result.removed || result.archived) {
+        ghQuota.scheduler.evict(workspaceId);
+      }
       emit("workspace.updated", result);
       res.status(result.removed || result.archived ? 202 : 409).json(result);
     }),

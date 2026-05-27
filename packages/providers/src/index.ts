@@ -26,8 +26,17 @@ import {
 } from "./gh-cooldown.js";
 
 // Re-export the cooldown surface so existing consumers (apps/daemon,
-// gh-quota-wiring, tests) keep their import paths.
-export { clearGhCooldown, GhRateLimitedError, getGhCooldown, isRateLimitError } from "./gh-cooldown.js";
+// gh-quota-wiring, tests) keep their import paths. setGhCooldown is
+// exported for tests / the future "retry now" button; production code
+// only sets cooldown through gh() catching a rate-limit error.
+export {
+  clearGhCooldown,
+  DEFAULT_GH_COOLDOWN_MS,
+  GhRateLimitedError,
+  getGhCooldown,
+  isRateLimitError,
+  setGhCooldown,
+} from "./gh-cooldown.js";
 
 const execFileAsync = promisify(execFile);
 

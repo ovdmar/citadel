@@ -123,6 +123,33 @@ describe("wireGhQuota — viewer-gate helpers", () => {
     }
   });
 
+  // Review #10: the daemon wires the auto-recovery shouldRun predicate as
+  // `() => ghQuota.hasViewers() || ghQuota.msSinceLastViewer() <= 2 * 60_000`.
+  // Verify the composition end-to-end against the wiring's exposed state so
+  // a future refactor can't silently break the viewer-gate auto-recovery
+  // skip (which is the largest pre-optimization quota sink).
+  it("composed shouldRun predicate skips when no viewers + grace expired and runs otherwise", () => {
+    const sseClients = new Set<express.Response>();
+    const wiring = wireGhQuota({ sseClients, store: makeStubStore(), resolveRepoFullName: () => null });
+    try {
+      const shouldRun = () => wiring.hasViewers() || wiring.msSinceLastViewer() <= 2 * 60_000;
+      // No viewer ever attached → msSinceLastViewer = Infinity → predicate = false.
+      expect(shouldRun()).toBe(false);
+      // Viewer attaches → hasViewers true → predicate true.
+      const a = {} as express.Response;
+      sseClients.add(a);
+      wiring.onViewerAttached();
+      expect(shouldRun()).toBe(true);
+      // Viewer detaches → hasViewers false, msSinceLastViewer just-now (≪ grace)
+      // → still true (within the 2-min grace window).
+      sseClients.delete(a);
+      wiring.onViewerDetached();
+      expect(shouldRun()).toBe(true);
+    } finally {
+      wiring.stop();
+    }
+  });
+
   it("CITADEL_GH_SCHEDULER_DISABLED=1 returns a passthrough scheduler (shouldRefetch always true)", () => {
     const prev = process.env.CITADEL_GH_SCHEDULER_DISABLED;
     process.env.CITADEL_GH_SCHEDULER_DISABLED = "1";

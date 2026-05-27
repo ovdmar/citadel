@@ -13,6 +13,7 @@ import {
   useWorkspaceCockpitSummary,
 } from "./cockpit-tools.js";
 import { CommandPalette } from "./command-palette.js";
+import { GhCooldownBanner } from "./gh-cooldown-banner.js";
 import { Inspector } from "./inspector.js";
 import { Navigator } from "./navigator.js";
 import { RestoreBanner } from "./restore-banner.js";
@@ -194,6 +195,7 @@ export function Cockpit() {
         repo={selectedRepo}
         runtimes={data?.runtimes ?? []}
       />
+      <GhCooldownBanner summaries={stickySummaries} />
       <RestoreBanner bootRestore={data?.bootRestore ?? null} />
       <div
         className={`cockpit-body ${layout.state.leftCollapsed ? "left-collapsed" : ""} ${

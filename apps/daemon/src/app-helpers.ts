@@ -37,3 +37,13 @@ export function parsePositiveInt(raw: string | undefined, fallback: number): num
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
+
+/** Read a value from the provider cache without calling the loader. Returns
+ * the cached value if present and not expired, else undefined. The gh-quota
+ * scheduler uses this to serve cache when shouldRefetch says "don't fetch
+ * yet" without bypassing the normal cache freshness rules. */
+export function peekProviderValue<T>(cache: ProviderCache, key: string): T | undefined {
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value as T;
+  return undefined;
+}

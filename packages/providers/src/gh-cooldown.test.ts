@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  clearGhCooldown,
   DEFAULT_GH_COOLDOWN_MS,
+  clearGhCooldown,
   getGhCooldown,
   getGhCooldownReason,
   getGhCooldownUntil,
