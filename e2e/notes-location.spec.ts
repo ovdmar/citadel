@@ -2,15 +2,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
+import { assertDaemonIsSandbox } from "./helpers/sandbox-guard.js";
 
 const API_BASE =
-  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "4012"}`;
+  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012"}`;
 
 // End-to-end coverage for the configurable notes location. Exercises the round
 // trip Settings → daemon config → /api/scratchpad → cockpit, plus the fallback
 // when the user clears the override.
 test.describe("notes location", () => {
   const tmpFiles: string[] = [];
+
+  test.beforeAll(async ({ request }) => {
+    await assertDaemonIsSandbox(request, API_BASE);
+  });
 
   test.afterEach(async ({ request }) => {
     // Reset to the default notes location so subsequent tests aren't pinned
