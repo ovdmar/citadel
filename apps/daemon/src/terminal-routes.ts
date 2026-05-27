@@ -110,8 +110,13 @@ export function registerTerminalRoutes(input: {
   // reconnect after restart.
   const themePreferences = new ThemePrefStore(input.dataDir);
 
-  proxy.on("error", (error, _req, target) => {
+  proxy.on("error", (error, req, target) => {
     const message = error instanceof Error ? error.message : "terminal_proxy_failed";
+    if (process.env.CITADEL_DEBUG_TERMINAL_WS === "1") {
+      const stamp = new Date().toISOString();
+      // biome-ignore lint/suspicious/noConsole: deliberate diagnostic channel
+      console.log(`[ws] ${stamp} proxy-error`, { url: req?.url, message });
+    }
     if (target && "headersSent" in target && typeof (target as express.Response).status === "function") {
       const response = target as express.Response;
       if (!response.headersSent) response.status(502).type("text/plain").send(message);
@@ -125,6 +130,26 @@ export function registerTerminalRoutes(input: {
       }
     }
   });
+
+  if (process.env.CITADEL_DEBUG_TERMINAL_WS === "1") {
+    const stamp = () => new Date().toISOString();
+    proxy.on("open", (proxySocket: Duplex) => {
+      // biome-ignore lint/suspicious/noConsole: deliberate diagnostic channel
+      console.log(`[ws] ${stamp()} upstream-open`);
+      proxySocket.once("close", (hadError: boolean) => {
+        // biome-ignore lint/suspicious/noConsole: deliberate diagnostic channel
+        console.log(`[ws] ${stamp()} upstream-close`, { hadError });
+      });
+      proxySocket.once("end", () => {
+        // biome-ignore lint/suspicious/noConsole: deliberate diagnostic channel
+        console.log(`[ws] ${stamp()} upstream-end`);
+      });
+    });
+    proxy.on("close", (_req, _socket, _head) => {
+      // biome-ignore lint/suspicious/noConsole: deliberate diagnostic channel
+      console.log(`[ws] ${stamp()} proxy-ws-close`);
+    });
+  }
 
   const resolveSession = (sessionId: string): ResolvedSession | null => {
     const session = store.listSessions().find((candidate) => candidate.id === sessionId);
@@ -290,9 +315,32 @@ export function registerTerminalRoutes(input: {
   // lands here. Mirror the HTTP path's self-heal so a stale iframe that opens
   // a ws after the daemon restarted / ttyd was reaped picks up a freshly
   // spawned instance instead of hard-failing with terminal_not_found.
+  // Lifecycle logging for terminal WS upgrades. Active only when
+  // CITADEL_DEBUG_TERMINAL_WS=1 — captures which side closed (client vs
+  // upstream ttyd), with reason, so "random terminal reload" reports can
+  // be traced to a real cause (proxy timeout, ttyd ping miss, browser
+  // navigation, etc).
+  const debugWs = process.env.CITADEL_DEBUG_TERMINAL_WS === "1";
+  const logWs = (...args: unknown[]) => {
+    if (!debugWs) return;
+    const stamp = new Date().toISOString();
+    // biome-ignore lint/suspicious/noConsole: deliberate diagnostic channel
+    console.log(`[ws] ${stamp}`, ...args);
+  };
+  const instrumentSocket = (label: string, sessionId: string, socket: Duplex) => {
+    if (!debugWs) return;
+    socket.once("close", (hadError: boolean) => logWs(label, sessionId, "close", { hadError }));
+    socket.once("end", () => logWs(label, sessionId, "end"));
+    socket.once("error", (err: Error) => logWs(label, sessionId, "error", err.message));
+  };
+
   const upgradeHandler = (request: http.IncomingMessage, socket: Duplex, head: Buffer) => {
     const urlPath = request.url || "";
     if (!urlPath.startsWith(TERMINAL_PROXY_PREFIX)) return;
+    const sessionMatch = /^\/terminals\/([^/]+)/.exec(urlPath);
+    const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1] ?? "") : "?";
+    logWs("upgrade", sessionId, { path: urlPath });
+    instrumentSocket("client", sessionId, socket);
     const resolved = resolveProxyTarget(urlPath);
     if (!resolved) {
       // Hold the socket open while we try to revive ttyd. Browsers retry on
@@ -300,13 +348,16 @@ export function registerTerminalRoutes(input: {
       reviveProxyTarget(urlPath)
         .then((revived) => {
           if (!revived) {
+            logWs("revive-failed", sessionId);
             socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
             socket.destroy();
             return;
           }
+          logWs("revived", sessionId, { target: revived.target });
           proxy.ws(request, socket, head, { target: revived.target });
         })
-        .catch(() => {
+        .catch((err: Error) => {
+          logWs("revive-error", sessionId, err.message);
           try {
             socket.destroy();
           } catch {
