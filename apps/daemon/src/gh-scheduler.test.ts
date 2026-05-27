@@ -101,7 +101,7 @@ describe("gh-scheduler — shouldRefetch", () => {
     expect(h.scheduler.shouldRefetch(key)).toEqual({ fetch: true });
   });
 
-  it("green-checks-and-old cadence is 3 min", () => {
+  it("green checks use 10 min metadata refresh cadence", () => {
     const key = makeKey("o/r", 1);
     h.scheduler.recordFetch(
       key,
@@ -112,23 +112,24 @@ describe("gh-scheduler — shouldRefetch", () => {
       }),
       "ws_a",
     );
-    // Age the headSha past 10min.
-    h.clock.t += 11 * 60_000;
-    // Refetch with same SHA to re-evaluate cadence based on aged shaChangedAt.
-    h.scheduler.recordFetch(
-      key,
-      makePr({
-        checks: [
-          { name: "ci", status: "completed", conclusion: "success", url: null, startedAt: null, completedAt: null },
-        ],
-      }),
-      "ws_a",
-    );
-    // Now 3-min cadence applies.
-    h.clock.t += 2 * 60_000 + 30_000; // 2m30s after the latest fetch
+    h.clock.t += 9 * 60_000 + 30_000;
     expect(h.scheduler.shouldRefetch(key)).toEqual({ fetch: false, reason: "not-due" });
-    h.clock.t += 31_000; // total 3m01s
+    h.clock.t += 31_000;
     expect(h.scheduler.shouldRefetch(key)).toEqual({ fetch: true });
+  });
+
+  it("closed PRs are terminal and do not auto-refetch", () => {
+    const key = makeKey("o/r", 1);
+    h.scheduler.recordFetch(key, makePr({ state: "CLOSED" }), "ws_a");
+    h.clock.t += 24 * 60 * 60_000;
+    expect(h.scheduler.shouldRefetch(key)).toEqual({ fetch: false, reason: "closed" });
+  });
+
+  it("conflicting PRs do not auto-refetch until a new commit bypasses the scheduler", () => {
+    const key = makeKey("o/r", 1);
+    h.scheduler.recordFetch(key, makePr({ mergeable: "conflicting", mergeStateStatus: "DIRTY" }), "ws_a");
+    h.clock.t += 24 * 60 * 60_000;
+    expect(h.scheduler.shouldRefetch(key)).toEqual({ fetch: false, reason: "conflicting" });
   });
 
   it("skips with 'cooldown' regardless of cadence", () => {
@@ -260,12 +261,18 @@ describe("gh-scheduler — markRepoMainMoved", () => {
     expect(h.scheduler._entries().get(k3)?.needsMergeStateRefresh).toBe(false);
   });
 
-  it("does not flip merged PRs", () => {
+  it("does not flip terminal or conflicting PRs", () => {
     const h = makeHarness();
-    const k = makeKey("o/r", 1);
-    h.scheduler.recordFetch(k, makePr({ state: "MERGED" }), "ws_a");
+    const merged = makeKey("o/r", 1);
+    const closed = makeKey("o/r", 2);
+    const dirty = makeKey("o/r", 3);
+    h.scheduler.recordFetch(merged, makePr({ state: "MERGED" }), "ws_a");
+    h.scheduler.recordFetch(closed, makePr({ number: 2, state: "CLOSED" }), "ws_b");
+    h.scheduler.recordFetch(dirty, makePr({ number: 3, mergeStateStatus: "DIRTY" }), "ws_c");
     h.scheduler.markRepoMainMoved("o/r");
-    expect(h.scheduler._entries().get(k)?.needsMergeStateRefresh).toBe(false);
+    expect(h.scheduler._entries().get(merged)?.needsMergeStateRefresh).toBe(false);
+    expect(h.scheduler._entries().get(closed)?.needsMergeStateRefresh).toBe(false);
+    expect(h.scheduler._entries().get(dirty)?.needsMergeStateRefresh).toBe(false);
   });
 
   it("makes shouldRefetch return fetch:true on next call regardless of cadence", () => {

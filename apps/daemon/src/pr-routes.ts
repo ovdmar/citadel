@@ -159,7 +159,13 @@ export function registerPrRoutes(input: {
       // cache decorated with cooldownUntil so the FE banner can render. No 503;
       // the response shape stays uniform across cooldown / normal.
       if (!getGhCooldown()) {
-        bustCacheByPrefixes(providerCache, [`vc:${workspace.id}`, `ci:${repo.id}`]);
+        const nameWithOwner = resolveRepoFullName(repo.id);
+        bustCacheByPrefixes(
+          providerCache,
+          [`vc:${workspace.id}`, `ci:${repo.id}`, nameWithOwner ? `ci:${nameWithOwner}` : null].filter(
+            Boolean,
+          ) as string[],
+        );
         const key = globalPrCacheKeyForWorkspace(workspace, {
           resolveRepoFullName,
           getSnapshot: (id) => store.getWorkspacePrSnapshot(id),
@@ -202,7 +208,12 @@ export function registerPrRoutes(input: {
       const result = await mergePr({ rootPath: workspace.path, number, strategy: parsed.strategy });
       const nameWithOwner = resolveRepoFullName(repo.id);
       if (result.ok) {
-        bustCacheByPrefixes(providerCache, [`vc:${workspace.id}`, `ci:${repo.id}`]);
+        bustCacheByPrefixes(
+          providerCache,
+          [`vc:${workspace.id}`, `ci:${repo.id}`, nameWithOwner ? `ci:${nameWithOwner}` : null].filter(
+            Boolean,
+          ) as string[],
+        );
         if (nameWithOwner) bustGlobalPrEntry(providerCache, nameWithOwner, number);
       } else if (nameWithOwner && isMergeStrategyCacheFailure(result.reason, result.detail)) {
         providerCache.delete(`gh-repo-merge-strategies:${nameWithOwner}`);

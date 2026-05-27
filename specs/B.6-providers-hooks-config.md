@@ -65,6 +65,7 @@ Rules:
 [ ] 2. Settings can manage providers, agents, repos, health checks, MCP, and UI preferences.
 [ ] 3. Settings show missing external tools and unauthenticated providers.
 [ ] 4. Settings show unhealthy provider/hook states.
+[ ] 4a. GitHub provider settings show gh quota/cooldown state when available, including reset time and percent used; worktree deploys explain when automated GitHub polling is disabled.
 [ ] 5. Settings can validate a repository configuration before it is used by workspace flows.
 [ ] 6. Settings can export or reveal the config source for advanced users.
 [ ] 7. Future API-backed providers can manage API keys through provider-specific settings.

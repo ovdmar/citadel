@@ -23,13 +23,22 @@ export type PrSchedulerEntry = {
   lastHeadSha: string | null;
   lastHeadShaChangedAt: number | null;
   lastChecksConclusion: "green" | "pending" | "failing" | "unknown";
+  lastMergeable: "mergeable" | "conflicting" | "unknown";
+  lastMergeStateStatus: string | null;
   lastFetchAt: number;
   nextEligibleAt: number;
   needsMergeStateRefresh: boolean;
   consecutiveErrors: number;
 };
 
-export type ShouldRefetchReason = "merged" | "cooldown" | "no-viewers" | "not-due" | "backoff";
+export type ShouldRefetchReason =
+  | "merged"
+  | "closed"
+  | "conflicting"
+  | "cooldown"
+  | "no-viewers"
+  | "not-due"
+  | "backoff";
 
 export type ShouldRefetchResult = { fetch: true } | { fetch: false; reason: ShouldRefetchReason };
 
@@ -66,9 +75,7 @@ export type GhScheduler = {
 // Cadence constants — tuned per the AC and re-derived in the plan.
 const CADENCE_DEFAULT_MS = 60_000;
 const CADENCE_PENDING_MS = 60_000;
-const CADENCE_GREEN_OLD_MS = 3 * 60_000;
-const CADENCE_CLOSED_MS = 5 * 60_000;
-const HEAD_SHA_OLD_AFTER_MS = 10 * 60_000;
+const CADENCE_STABLE_REVIEW_MS = 10 * 60_000;
 // Viewer grace: 2 minutes between last viewer detach and the daemon entering
 // no-viewers skip mode. Brief tab reloads don't trip it.
 const VIEWER_GRACE_MS = 2 * 60_000;
@@ -107,9 +114,10 @@ export function createGhScheduler(deps: GhSchedulerDeps): GhScheduler {
 
   function computeNextEligibleAt(entry: PrSchedulerEntry, atMs: number): number {
     if (entry.state === "merged") return Number.POSITIVE_INFINITY;
-    if (entry.state === "closed") return atMs + CADENCE_CLOSED_MS;
-    const shaIsOld = entry.lastHeadShaChangedAt !== null && atMs - entry.lastHeadShaChangedAt > HEAD_SHA_OLD_AFTER_MS;
-    if (entry.lastChecksConclusion === "green" && shaIsOld) return atMs + CADENCE_GREEN_OLD_MS;
+    if (entry.state === "closed") return Number.POSITIVE_INFINITY;
+    if (entry.lastMergeable === "conflicting" || entry.lastMergeStateStatus === "DIRTY")
+      return Number.POSITIVE_INFINITY;
+    if (entry.lastChecksConclusion === "green") return atMs + CADENCE_STABLE_REVIEW_MS;
     if (entry.lastChecksConclusion === "pending") return atMs + CADENCE_PENDING_MS;
     return atMs + CADENCE_DEFAULT_MS;
   }
@@ -125,6 +133,9 @@ export function createGhScheduler(deps: GhSchedulerDeps): GhScheduler {
     const entry = entries.get(key);
     if (!entry) return { fetch: true };
     if (entry.state === "merged") return { fetch: false, reason: "merged" };
+    if (entry.state === "closed") return { fetch: false, reason: "closed" };
+    if (entry.lastMergeable === "conflicting" || entry.lastMergeStateStatus === "DIRTY")
+      return { fetch: false, reason: "conflicting" };
     if (entry.needsMergeStateRefresh) return { fetch: true };
     if (opts.force) return { fetch: true };
     if (entry.consecutiveErrors > 0 && now() < entry.nextEligibleAt) {
@@ -153,6 +164,8 @@ export function createGhScheduler(deps: GhSchedulerDeps): GhScheduler {
       lastHeadSha: newSha,
       lastHeadShaChangedAt,
       lastChecksConclusion: checks,
+      lastMergeable: summary.mergeable ?? "unknown",
+      lastMergeStateStatus: summary.mergeStateStatus ?? null,
       lastFetchAt: at,
       nextEligibleAt: 0,
       needsMergeStateRefresh: false,
@@ -178,6 +191,8 @@ export function createGhScheduler(deps: GhSchedulerDeps): GhScheduler {
         lastHeadSha: null,
         lastHeadShaChangedAt: null,
         lastChecksConclusion: "unknown",
+        lastMergeable: "unknown",
+        lastMergeStateStatus: null,
         lastFetchAt: at,
         nextEligibleAt: at + BACKOFF_BASE_MS,
         needsMergeStateRefresh: false,
@@ -198,7 +213,9 @@ export function createGhScheduler(deps: GhSchedulerDeps): GhScheduler {
 
   function markRepoMainMoved(repoFullName: string): void {
     for (const entry of entries.values()) {
-      if (entry.repoFullName === repoFullName && entry.state !== "merged") {
+      const terminal = entry.state === "merged" || entry.state === "closed";
+      const conflicting = entry.lastMergeable === "conflicting" || entry.lastMergeStateStatus === "DIRTY";
+      if (entry.repoFullName === repoFullName && !terminal && !conflicting) {
         entry.needsMergeStateRefresh = true;
       }
     }
@@ -244,6 +261,8 @@ export function createGhScheduler(deps: GhSchedulerDeps): GhScheduler {
         lastHeadSha: row.lastHeadSha,
         lastHeadShaChangedAt,
         lastChecksConclusion,
+        lastMergeable: "unknown",
+        lastMergeStateStatus: row.lastMergeStateStatus,
         lastFetchAt: 0,
         // On boot: eligible immediately for non-terminal PRs (operator
         // doesn't wait a full cycle); merged PRs are pinned by their state

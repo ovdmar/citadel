@@ -195,6 +195,52 @@ describe("fetchVersionControlGated global PR cache", () => {
     expect(vc.pullRequest?.title).toBe("Fresh");
   });
 
+  it("bypasses the per-workspace VC cache when the local PR head changed", async () => {
+    const git = makeGitRepo();
+    const cache = new Map<string, { expiresAt: number; value: unknown }>();
+    const key = "vc:ws_a:1";
+    cache.set(key, { expiresAt: Date.now() + 60_000, value: makeVc(makePr({ title: "Stale", headSha: "old" })) });
+    let collectCalls = 0;
+    const fresh = makePr({ headSha: git.headSha, title: "Fresh" });
+    const workspace = makeWorkspace({ path: git.repoPath });
+    const deps = makeDeps({
+      cache,
+      snapshots: new Map([[workspace.id, { prNumber: 42, prState: "open", lastHeadSha: "old" }]]),
+      collectVc: async () => {
+        collectCalls += 1;
+        return makeVc(fresh);
+      },
+    });
+
+    const vc = await fetchVersionControlGated(deps, workspace, makeRepo(git.repoPath), key);
+
+    expect(collectCalls).toBe(1);
+    expect(vc.pullRequest?.title).toBe("Fresh");
+  });
+
+  it("serves stale per-workspace VC cache when the scheduler says not to poll", async () => {
+    const git = makeGitRepo();
+    const cache = new Map<string, { expiresAt: number; value: unknown }>();
+    const key = "vc:ws_a:1";
+    cache.set(key, { expiresAt: Date.now() - 1, value: makeVc(makePr({ title: "Stable", headSha: git.headSha })) });
+    let collectCalls = 0;
+    const workspace = makeWorkspace({ path: git.repoPath });
+    const deps = makeDeps({
+      cache,
+      snapshots: new Map([[workspace.id, { prNumber: 42, prState: "open", lastHeadSha: git.headSha }]]),
+      collectVc: async () => {
+        collectCalls += 1;
+        return makeVc(makePr({ title: "Fresh", headSha: git.headSha }));
+      },
+    });
+    deps.scheduler.shouldRefetch = () => ({ fetch: false, reason: "not-due" });
+
+    const vc = await fetchVersionControlGated(deps, workspace, makeRepo(git.repoPath), key);
+
+    expect(collectCalls).toBe(0);
+    expect(vc.pullRequest?.title).toBe("Stable");
+  });
+
   it("writes successful fetches into the global PR cache", async () => {
     const git = makeGitRepo();
     const cache = new Map<string, { expiresAt: number; value: unknown }>();

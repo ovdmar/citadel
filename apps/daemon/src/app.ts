@@ -47,6 +47,7 @@ import {
   automatedGhEnabled,
   cachedCiOrDisabled,
   disabledVersionControlSummary,
+  githubCiCacheKey,
   shouldFetchGithubCi,
 } from "./gh-automation.js";
 import {
@@ -57,6 +58,7 @@ import {
 } from "./gh-quota-wiring.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
+import { registerPrDiffRoute } from "./pr-diff-route.js";
 import { registerPrRoutes } from "./pr-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
@@ -117,7 +119,6 @@ export function createDaemonApp(input: {
     operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId) });
   }
 
-  // gh-quota wiring: viewer-gate, per-PR scheduler, main-watcher. Hydrates from SQLite PR snapshots so restart doesn't re-fetch every PR.
   const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
   const ghQuota: GhQuotaWiringWithDetach = wireGhQuota({ sseClients, store, resolveRepoFullName });
   const ghAutomationEnabled = automatedGhEnabled();
@@ -183,9 +184,10 @@ export function createDaemonApp(input: {
     cachedProvider(
       "provider-health",
       () =>
-        collectProviderHealth(config.providers, {
-          ...(ghAutomationEnabled ? {} : { skipGithubReason: AUTOMATED_GH_DISABLED_REASON }),
-        }),
+        collectProviderHealth(
+          config.providers,
+          ghAutomationEnabled ? {} : { skipGithubReason: AUTOMATED_GH_DISABLED_REASON },
+        ),
       60_000,
     );
 
@@ -388,16 +390,18 @@ export function createDaemonApp(input: {
     }),
   );
 
-  // Build a full workspace cockpit summary. Shared between the single-workspace
-  // endpoint and the batch endpoint registered by registerPrRoutes — the batch
-  // endpoint fan-outs with a concurrency cap so 20+ workspaces don't spawn
-  // 20+ concurrent `gh` subprocesses every 30s.
+  // Shared by the active-workspace and batch cockpit summary endpoints.
   async function buildWorkspaceCockpitSummary(workspaceId: string): Promise<WorkspaceCockpitSummary | null> {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
     if (!workspace) return null;
     const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
     if (!repo) return null;
-    const ciKey = `ci:${workspace.id}:${workspace.updatedAt}`;
+    const ciKey = githubCiCacheKey(
+      workspace,
+      repo,
+      resolveRepoFullName(repo.id),
+      store.getWorkspacePrSnapshot(workspace.id),
+    );
     const shouldFetchCi = ghAutomationEnabled && shouldFetchGithubCi(store, workspace);
     const [git, versionControlRaw, ci, issueTracker, apps] = await Promise.all([
       cachedProvider(`git:${workspace.id}:${workspace.updatedAt}`, () => readWorkspaceGitStatus(workspace.path), 3000),
@@ -410,7 +414,9 @@ export function createDaemonApp(input: {
             cachedCiOrDisabled(
               providerCache,
               ciKey,
-              ghAutomationEnabled ? "GitHub CI is cached until the PR receives a new local commit" : AUTOMATED_GH_DISABLED_REASON,
+              ghAutomationEnabled
+                ? "GitHub CI is cached until the PR receives a new local commit"
+                : AUTOMATED_GH_DISABLED_REASON,
             ),
           ),
       workspace.issueKey
@@ -424,11 +430,6 @@ export function createDaemonApp(input: {
         60_000,
       ),
     ]);
-    // Cooldown injection (P1 surface): when the daemon's global gh cooldown
-    // is active, decorate every outgoing versionControl payload with the
-    // cooldownUntil ISO timestamp — regardless of whether it came from a
-    // fresh fetch or the cache. The FE sticky cache + banner read this on
-    // every code path.
     const versionControl = decorateWithCooldown(versionControlRaw);
     return {
       workspaceId: workspace.id,
@@ -600,38 +601,7 @@ export function createDaemonApp(input: {
     }),
   );
 
-  app.get(
-    "/api/workspaces/:workspaceId/pr-diff",
-    asyncRoute(async (req, res) => {
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      try {
-        const { execFile: execFileCb } = await import("node:child_process");
-        const { promisify } = await import("node:util");
-        const exec = promisify(execFileCb);
-        const { stdout } = await exec(config.providers.github.command ?? "gh", ["pr", "diff"], {
-          cwd: workspace.path,
-          timeout: 12_000,
-          maxBuffer: 4 * 1024 * 1024,
-        });
-        const truncated = stdout.length > 256 * 1024;
-        res.json({
-          provider: "github-gh",
-          truncated,
-          diff: stdout.slice(0, 256 * 1024),
-          checkedAt: new Date().toISOString(),
-        });
-      } catch (error) {
-        res.status(424).json({
-          provider: "github-gh",
-          diff: "",
-          truncated: false,
-          error: error instanceof Error ? error.message : "gh_pr_diff_failed",
-          checkedAt: new Date().toISOString(),
-        });
-      }
-    }),
-  );
+  registerPrDiffRoute({ app, store, config, providerCache, asyncRoute });
 
   app.post(
     "/api/workspaces/:workspaceId/refresh",

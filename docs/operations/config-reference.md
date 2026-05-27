@@ -23,7 +23,7 @@ Bundled provider toggles:
 }
 ```
 
-GitHub provider features use the local `gh` CLI when enabled. Jira provider features use the local `jtk` CLI when enabled. If a provider CLI is missing or unhealthy, Citadel reports the provider as degraded or unavailable and disables provider-backed actions in the cockpit.
+GitHub provider features use the local `gh` CLI when enabled. Jira provider features use the local `jtk` CLI when enabled. If a provider CLI is missing or unhealthy, Citadel reports the provider as degraded or unavailable and disables provider-backed actions in the cockpit. Worktree deploys started by `make deploy` disable automated GitHub polling by default (`CITADEL_AUTOMATED_GH=0`); set `CITADEL_ENABLE_WORKTREE_GH_AUTOMATION=1` before `make deploy` to opt one worktree back in. The long-term systemd install sets `CITADEL_AUTOMATED_GH=1`.
 
 ## Runtimes
 

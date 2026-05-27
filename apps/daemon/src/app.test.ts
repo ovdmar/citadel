@@ -258,6 +258,37 @@ describe("createDaemonApp", () => {
     }
   });
 
+  it("reports GitHub quota automation disabled for worktree daemons without shelling out", async () => {
+    const prevWorktree = process.env.CITADEL_WORKTREE;
+    const prevAutomated = process.env.CITADEL_AUTOMATED_GH;
+    const prevWorktreeGh = process.env.CITADEL_ENABLE_WORKTREE_GH_AUTOMATION;
+    process.env.CITADEL_WORKTREE = "1";
+    Reflect.deleteProperty(process.env, "CITADEL_AUTOMATED_GH");
+    Reflect.deleteProperty(process.env, "CITADEL_ENABLE_WORKTREE_GH_AUTOMATION");
+    const fixture = createFixture();
+    fixture.config.providers.github.command = "definitely-missing-gh";
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const body = await getJson<{ quota: { status: string; automationEnabled: boolean; reason: string } }>(
+        `${baseUrl}/api/integrations/github/quota`,
+      );
+      expect(body.quota).toMatchObject({
+        status: "unavailable",
+        automationEnabled: false,
+      });
+      expect(body.quota.reason).toContain("Automated GitHub polling is disabled");
+    } finally {
+      await closeServer(server);
+      if (prevWorktree === undefined) Reflect.deleteProperty(process.env, "CITADEL_WORKTREE");
+      else process.env.CITADEL_WORKTREE = prevWorktree;
+      if (prevAutomated === undefined) Reflect.deleteProperty(process.env, "CITADEL_AUTOMATED_GH");
+      else process.env.CITADEL_AUTOMATED_GH = prevAutomated;
+      if (prevWorktreeGh === undefined) Reflect.deleteProperty(process.env, "CITADEL_ENABLE_WORKTREE_GH_AUTOMATION");
+      else process.env.CITADEL_ENABLE_WORKTREE_GH_AUTOMATION = prevWorktreeGh;
+    }
+  });
+
   it("injects versionControl.cooldownUntil into provider-summary while gh is in cooldown (review #6)", async () => {
     const { clearGhCooldown, setGhCooldown } = await import("@citadel/providers");
     const fixture = createFixture();

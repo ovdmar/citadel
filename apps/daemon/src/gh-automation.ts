@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import type { CiProviderSummary, Repo, VersionControlSummary, Workspace } from "@citadel/contracts";
-import type { SqliteStore } from "@citadel/db";
+import type { SqliteStore, WorkspacePrSnapshot } from "@citadel/db";
 import type { ProviderCache } from "./app-helpers.js";
 
 export const WORKTREE_GH_AUTOMATION_ENV = "CITADEL_ENABLE_WORKTREE_GH_AUTOMATION";
@@ -39,8 +39,19 @@ export function disabledCiSummary(reason = AUTOMATED_GH_DISABLED_REASON): CiProv
 
 export function cachedCiOrDisabled(cache: ProviderCache, key: string, reason: string): CiProviderSummary {
   const cached = cache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached.value as CiProviderSummary;
+  if (cached) return cached.value as CiProviderSummary;
   return disabledCiSummary(reason);
+}
+
+export function githubCiCacheKey(
+  workspace: Workspace,
+  repo: Repo,
+  repoFullName: string | null,
+  snapshot: WorkspacePrSnapshot | null,
+): string {
+  const repoScope = (repoFullName ?? repo.id).replace(/[^a-zA-Z0-9_.#/-]/g, "_");
+  const headScope = snapshot?.lastHeadSha ?? workspace.branch;
+  return `ci:${repoScope}:${headScope}`;
 }
 
 export function shouldFetchGithubCi(store: Pick<SqliteStore, "getWorkspacePrSnapshot">, workspace: Workspace): boolean {

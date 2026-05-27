@@ -81,12 +81,15 @@ describe("global PR cache", () => {
           ],
         }),
       ),
-    ).toBe(180_000);
-    expect(classifyTtlMs(makePr({ state: "CLOSED" }))).toBe(300_000);
+    ).toBe(10 * 60_000);
+    expect(classifyTtlMs(makePr({ state: "CLOSED" }))).toBe(Number.POSITIVE_INFINITY);
     expect(classifyTtlMs(makePr({ state: "MERGED" }))).toBe(Number.POSITIVE_INFINITY);
+    expect(classifyTtlMs(makePr({ mergeable: "conflicting", mergeStateStatus: "DIRTY" }))).toBe(
+      Number.POSITIVE_INFINITY,
+    );
   });
 
-  it("writes fresh entries and clears merged PRs", () => {
+  it("writes fresh entries and pins terminal PRs", () => {
     const cache = new Map<string, { expiresAt: number; value: unknown }>();
     const key = globalPrCacheKey("owner/repo", 42);
 
@@ -95,9 +98,10 @@ describe("global PR cache", () => {
     expect(readGlobalPrSummary(cache, key)?.number).toBe(42);
 
     writeGlobalPrSummary(cache, globalPrCacheKey("owner/repo", 43), makePr({ number: 43, state: "MERGED" }));
-    expect(cache.has(globalPrCacheKey("owner/repo", 43))).toBe(false);
+    expect(cache.get(globalPrCacheKey("owner/repo", 43))?.expiresAt).toBe(Number.POSITIVE_INFINITY);
     writeGlobalPrSummary(cache, key, makePr({ state: "MERGED" }));
-    expect(cache.has(key)).toBe(false);
+    expect(cache.get(key)?.expiresAt).toBe(Number.POSITIVE_INFINITY);
+    expect(readGlobalPrSummary(cache, key)?.number).toBe(42);
   });
 
   it("returns null after TTL expiry", () => {

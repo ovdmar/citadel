@@ -1,18 +1,26 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import type { CitadelConfig } from "@citadel/config";
+import type { GitHubQuotaResource, GitHubQuotaSummary } from "@citadel/contracts";
 import { createId } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { resolveFixConflictsPrompt } from "@citadel/hooks";
 import type { OperationService } from "@citadel/operations";
+import { getGhCooldown, isRateLimitError, setGhCooldown } from "@citadel/providers";
 import type express from "express";
+import { AUTOMATED_GH_DISABLED_REASON, automatedGhEnabled } from "./gh-automation.js";
 
 type Emit = (type: string, payload: unknown) => void;
 type AsyncHandler = (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>;
 type AsyncRoute = (
   handler: AsyncHandler,
 ) => (req: express.Request, res: express.Response, next: express.NextFunction) => void;
+
+const execFileAsync = promisify(execFile);
+const GITHUB_QUOTA_CACHE_TTL_MS = 60_000;
 
 export function registerWorkspaceExtraRoutes(input: {
   app: express.Express;
@@ -23,6 +31,7 @@ export function registerWorkspaceExtraRoutes(input: {
   config: CitadelConfig;
 }) {
   const { app, store, emit, asyncRoute, operations, config } = input;
+  let githubQuotaCache: { expiresAt: number; value: GitHubQuotaSummary } | null = null;
 
   app.get(
     "/api/workspaces/:workspaceId/deployed-apps",
@@ -125,6 +134,21 @@ export function registerWorkspaceExtraRoutes(input: {
   // GitHub search/clone helpers used by the AddRepo modal. Both require gh to be
   // available and authenticated; failures surface as structured errors so the UI
   // can render an explicit empty state.
+  app.get(
+    "/api/integrations/github/quota",
+    asyncRoute(async (_req: express.Request, res: express.Response) => {
+      if (!getGhCooldown() && githubQuotaCache && githubQuotaCache.expiresAt > Date.now())
+        return res.json({ quota: githubQuotaCache.value });
+      const quota = await readGitHubQuota(config, githubQuotaCache?.value ?? null);
+      if (quota.status !== "unavailable") {
+        githubQuotaCache = { expiresAt: Date.now() + GITHUB_QUOTA_CACHE_TTL_MS, value: quota };
+      } else if (!githubQuotaCache || githubQuotaCache.expiresAt <= Date.now()) {
+        githubQuotaCache = { expiresAt: Date.now() + GITHUB_QUOTA_CACHE_TTL_MS, value: quota };
+      }
+      res.json({ quota });
+    }),
+  );
+
   app.get(
     "/api/integrations/github/search",
     asyncRoute(async (req: express.Request, res: express.Response) => {
@@ -273,4 +297,114 @@ export function registerWorkspaceExtraRoutes(input: {
       res.status(202).json({ session, promptSource: resolved.source, diagnostic: resolved.diagnostic });
     }),
   );
+}
+
+async function readGitHubQuota(
+  config: CitadelConfig,
+  previous: GitHubQuotaSummary | null,
+): Promise<GitHubQuotaSummary> {
+  const checkedAt = new Date().toISOString();
+  const automationEnabled = automatedGhEnabled();
+  const cooldown = getGhCooldown();
+  if (cooldown) {
+    return {
+      providerId: "github-gh",
+      status: "degraded",
+      reason: cooldown.reason,
+      checkedAt,
+      cooldownUntil: new Date(cooldown.until).toISOString(),
+      automationEnabled,
+      resources: previous?.resources ?? [],
+    };
+  }
+  if (!automationEnabled) {
+    return {
+      providerId: "github-gh",
+      status: "unavailable",
+      reason: AUTOMATED_GH_DISABLED_REASON,
+      checkedAt,
+      cooldownUntil: null,
+      automationEnabled,
+      resources: previous?.resources ?? [],
+    };
+  }
+  if (!config.providers.github.enabled) {
+    return {
+      providerId: "github-gh",
+      status: "unavailable",
+      reason: "GitHub provider is disabled in config",
+      checkedAt,
+      cooldownUntil: null,
+      automationEnabled,
+      resources: previous?.resources ?? [],
+    };
+  }
+  try {
+    const { stdout } = await execFileAsync(config.providers.github.command ?? "gh", ["api", "rate_limit"], {
+      timeout: 8000,
+      maxBuffer: 256 * 1024,
+    });
+    return normalizeGitHubQuota(stdout, checkedAt, automationEnabled);
+  } catch (error) {
+    const reason = isRateLimitError(error);
+    if (reason) {
+      const until = setGhCooldown(reason);
+      return {
+        providerId: "github-gh",
+        status: "degraded",
+        reason,
+        checkedAt,
+        cooldownUntil: new Date(until).toISOString(),
+        automationEnabled,
+        resources: previous?.resources ?? [],
+      };
+    }
+    return {
+      providerId: "github-gh",
+      status: "degraded",
+      reason: error instanceof Error ? error.message : "GitHub quota lookup failed",
+      checkedAt,
+      cooldownUntil: null,
+      automationEnabled,
+      resources: previous?.resources ?? [],
+    };
+  }
+}
+
+function normalizeGitHubQuota(raw: string, checkedAt: string, automationEnabled: boolean): GitHubQuotaSummary {
+  const parsed = JSON.parse(raw) as { resources?: Record<string, Record<string, unknown>> };
+  const resources: GitHubQuotaResource[] = [];
+  for (const name of ["core", "graphql", "search"] as const) {
+    const entry = parsed.resources?.[name];
+    if (!entry) continue;
+    const limit = readNonNegativeInt(entry.limit);
+    const remaining = readNonNegativeInt(entry.remaining);
+    const reset = readNonNegativeInt(entry.reset);
+    if (limit === null || remaining === null) continue;
+    const usedFromPayload = readNonNegativeInt(entry.used);
+    const used = usedFromPayload ?? Math.max(0, limit - remaining);
+    const percentUsed = limit > 0 ? Math.min(100, Math.max(0, Math.round((used / limit) * 100))) : 0;
+    resources.push({
+      name,
+      limit,
+      used,
+      remaining,
+      percentUsed,
+      resetAt: reset === null ? null : new Date(reset * 1000).toISOString(),
+    });
+  }
+  return {
+    providerId: "github-gh",
+    status: resources.length > 0 ? "healthy" : "degraded",
+    reason: resources.length > 0 ? null : "GitHub quota response had no rate resources",
+    checkedAt,
+    cooldownUntil: null,
+    automationEnabled,
+    resources,
+  };
+}
+
+function readNonNegativeInt(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+  return Math.floor(value);
 }

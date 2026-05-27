@@ -9,6 +9,7 @@ import {
   collectGitHubCiRuns,
   collectGitHubVersionControlSummary,
   collectJiraIssueSummary,
+  collectProviderHealth,
   collectRuntimeUsage,
   commandHealth,
   detectParentPr,
@@ -73,6 +74,22 @@ describe("commandHealth", () => {
 
     expect(health.status).toBe("degraded");
     expect(health.reason).toContain("Command failed");
+  });
+
+  it("can skip GitHub health without spawning gh", async () => {
+    const [github] = await collectProviderHealth(
+      {
+        github: { enabled: true, command: "missing-gh-command" },
+        jira: { enabled: false, command: "missing-jira-command" },
+      },
+      { skipGithubReason: "automation disabled" },
+    );
+
+    expect(github).toMatchObject({
+      id: "github-gh",
+      status: "unavailable",
+      reason: "automation disabled",
+    });
   });
 
   it("returns degraded normalized summaries for invalid repos", async () => {

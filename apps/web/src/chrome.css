@@ -326,6 +326,14 @@
   text-decoration: none;
 }
 
+.cit-usage-pill.is-warn {
+  color: oklch(48% 0.15 55);
+}
+
+:root[data-theme="dark"] .cit-usage-pill.is-warn {
+  color: oklch(78% 0.13 65);
+}
+
 .cit-usage-pill-mark {
   display: inline-flex;
   align-items: center;

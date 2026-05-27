@@ -5,8 +5,7 @@ import type { ProviderCache } from "./app-helpers.js";
 export type GlobalPrCacheKey = `pr:${string}#${number}`;
 
 const PENDING_TTL_MS = 60_000;
-const GREEN_TTL_MS = 180_000;
-const CLOSED_TTL_MS = 300_000;
+const GREEN_TTL_MS = 10 * 60_000;
 const inflight = new Map<GlobalPrCacheKey, Promise<PullRequestSummary>>();
 
 export function globalPrCacheKey(nameWithOwner: string, prNumber: number): GlobalPrCacheKey {
@@ -30,7 +29,8 @@ export function globalPrCacheKeyForWorkspace(
 export function classifyTtlMs(summary: PullRequestSummary): number {
   const state = summary.state.toLowerCase();
   if (state === "merged") return Number.POSITIVE_INFINITY;
-  if (state === "closed") return CLOSED_TTL_MS;
+  if (state === "closed") return Number.POSITIVE_INFINITY;
+  if (summary.mergeable === "conflicting" || summary.mergeStateStatus === "DIRTY") return Number.POSITIVE_INFINITY;
   if (summary.checks.length > 0 && summary.checks.every(isGreenCheck)) return GREEN_TTL_MS;
   return PENDING_TTL_MS;
 }
@@ -43,10 +43,6 @@ export function readGlobalPrSummary(cache: ProviderCache, key: GlobalPrCacheKey)
 
 export function writeGlobalPrSummary(cache: ProviderCache, key: GlobalPrCacheKey, summary: PullRequestSummary): void {
   const ttlMs = classifyTtlMs(summary);
-  if (ttlMs === Number.POSITIVE_INFINITY) {
-    cache.delete(key);
-    return;
-  }
   cache.set(key, { expiresAt: Date.now() + ttlMs, value: summary });
 }
 
