@@ -114,6 +114,19 @@ function makeVc(pr: PullRequestSummary): VersionControlSummary {
   };
 }
 
+function makeNoPrVc(): VersionControlSummary {
+  return {
+    providerId: "github-gh",
+    status: "healthy",
+    reason: null,
+    defaultBranch: "main",
+    currentBranch: "feature",
+    remotes: ["origin"],
+    pullRequest: null,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
 function makeDeps(input: {
   cache: ProviderCache;
   snapshots: Map<string, Partial<WorkspacePrSnapshot>>;
@@ -239,6 +252,93 @@ describe("fetchVersionControlGated global PR cache", () => {
 
     expect(collectCalls).toBe(0);
     expect(vc.pullRequest?.title).toBe("Stable");
+  });
+
+  it("serves a persisted no-PR snapshot without collecting from gh", async () => {
+    const git = makeGitRepo();
+    const cache = new Map<string, { expiresAt: number; value: unknown }>();
+    let collectCalls = 0;
+    const workspace = makeWorkspace({ path: git.repoPath });
+    const deps = makeDeps({
+      cache,
+      snapshots: new Map([
+        [
+          workspace.id,
+          {
+            prNumber: null,
+            prState: null,
+            lastFetchAt: "2026-05-27T19:00:00.000Z",
+            lastHeadSha: git.headSha,
+          },
+        ],
+      ]),
+      collectVc: async () => {
+        collectCalls += 1;
+        return makeNoPrVc();
+      },
+    });
+
+    const vc = await fetchVersionControlGated(deps, workspace, makeRepo(git.repoPath), `vc:${workspace.id}:1`);
+
+    expect(collectCalls).toBe(0);
+    expect(vc.status).toBe("healthy");
+    expect(vc.pullRequest).toBeNull();
+    expect(vc.checkedAt).toBe("2026-05-27T19:00:00.000Z");
+  });
+
+  it("persists a no-PR snapshot after a healthy no-PR fetch", async () => {
+    const git = makeGitRepo();
+    const cache = new Map<string, { expiresAt: number; value: unknown }>();
+    const workspace = makeWorkspace({ path: git.repoPath });
+    const snapshots = new Map<string, Partial<WorkspacePrSnapshot>>();
+    const deps = makeDeps({
+      cache,
+      snapshots,
+      collectVc: async () => makeNoPrVc(),
+    });
+
+    await fetchVersionControlGated(deps, workspace, makeRepo(git.repoPath), `vc:${workspace.id}:1`);
+
+    expect(snapshots.get(workspace.id)).toMatchObject({
+      prNumber: null,
+      prState: null,
+      lastHeadSha: git.headSha,
+      lastChecksGreenAt: null,
+      lastMergeStateStatus: null,
+    });
+    expect(snapshots.get(workspace.id)?.lastFetchAt).toBeTruthy();
+  });
+
+  it("refetches a no-PR snapshot after the local head changes", async () => {
+    const git = makeGitRepo();
+    fs.writeFileSync(path.join(git.repoPath, "next.txt"), "next\n");
+    execFileSync("git", ["add", "next.txt"], { cwd: git.repoPath, stdio: "pipe" });
+    execFileSync("git", ["commit", "-m", "next"], { cwd: git.repoPath, stdio: "pipe" });
+    const cache = new Map<string, { expiresAt: number; value: unknown }>();
+    let collectCalls = 0;
+    const workspace = makeWorkspace({ path: git.repoPath });
+    const deps = makeDeps({
+      cache,
+      snapshots: new Map([
+        [
+          workspace.id,
+          {
+            prNumber: null,
+            prState: null,
+            lastFetchAt: "2026-05-27T19:00:00.000Z",
+            lastHeadSha: git.headSha,
+          },
+        ],
+      ]),
+      collectVc: async () => {
+        collectCalls += 1;
+        return makeNoPrVc();
+      },
+    });
+
+    await fetchVersionControlGated(deps, workspace, makeRepo(git.repoPath), `vc:${workspace.id}:1`);
+
+    expect(collectCalls).toBe(1);
   });
 
   it("writes successful fetches into the global PR cache", async () => {

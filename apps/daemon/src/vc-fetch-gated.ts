@@ -51,6 +51,17 @@ export async function fetchVersionControlGated(
   const snapshotHeadSha = snapshot?.lastHeadSha ?? null;
   const repoFullName = snapshot?.prNumber != null ? deps.resolveRepoFullName(repo.id) : null;
   const key: SchedulerKey | null = snapshot?.prNumber && repoFullName ? makeKey(repoFullName, snapshot.prNumber) : null;
+  if (
+    snapshot &&
+    snapshot.prNumber == null &&
+    snapshot.lastFetchAt &&
+    snapshot.lastHeadSha &&
+    headMatches(workspace.path, snapshot.lastHeadSha)
+  ) {
+    const cached = readAnyProviderValue<VersionControlSummary>(deps.providerCache, cacheKey);
+    if (cached) return cached;
+    return synthesizeNoPrVcFromSnapshot(workspace, repo, snapshot);
+  }
   const localHeadChanged =
     Boolean(snapshotHeadSha) &&
     snapshot?.prState !== "merged" &&
@@ -138,10 +149,21 @@ function recordVcOutcome(
   // Non-healthy responses → error path for the scheduler (auth wobble,
   // network blip; rate-limit already short-circuited inside gh()). Without
   // a PR we can't key the scheduler, so just skip persisting.
-  if (vc.status !== "healthy" || !vc.pullRequest) {
-    if (priorKey && vc.status !== "healthy") {
-      deps.scheduler.recordFetchError(priorKey, new Error(vc.reason ?? "vc fetch degraded"));
-    }
+  if (vc.status !== "healthy") {
+    if (priorKey) deps.scheduler.recordFetchError(priorKey, new Error(vc.reason ?? "vc fetch degraded"));
+    return;
+  }
+  if (!vc.pullRequest) {
+    const localHead = gitOptional(workspace.path, ["rev-parse", "HEAD"]) || null;
+    deps.store.updateWorkspacePrSnapshot(workspace.id, {
+      prNumber: null,
+      prState: null,
+      lastFetchAt: new Date().toISOString(),
+      lastChecksGreenAt: null,
+      lastHeadSha: localHead,
+      lastHeadShaChangedAt: localHead ? new Date().toISOString() : null,
+      lastMergeStateStatus: null,
+    });
     return;
   }
   // First-fetch case: snapshot had no PR yet; resolve the repo full name
@@ -210,6 +232,23 @@ export function synthesizeVcFromGlobalCache(workspacePath: string, pr: PullReque
     remotes: remotes ? remotes.split("\n").filter(Boolean) : [],
     pullRequest: pr,
     checkedAt,
+  };
+}
+
+function synthesizeNoPrVcFromSnapshot(
+  workspace: Workspace,
+  repo: Repo,
+  snapshot: WorkspacePrSnapshot,
+): VersionControlSummary {
+  return {
+    providerId: "github-gh",
+    status: "healthy",
+    reason: null,
+    defaultBranch: repo.defaultBranch || null,
+    currentBranch: workspace.branch || null,
+    remotes: [repo.defaultRemote || "origin"],
+    pullRequest: null,
+    checkedAt: snapshot.lastFetchAt ?? new Date().toISOString(),
   };
 }
 
