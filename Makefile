@@ -26,16 +26,16 @@ DEV_STATE         := $(CURDIR)/.citadel/dev.json
 EFFECTIVE_PORT     := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/null 2>&1 && jq -r '.port    // empty' $(DEV_STATE) 2>/dev/null); echo $${v:-$(WORKTREE_PORT)})
 EFFECTIVE_WEB_PORT := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/null 2>&1 && jq -r '.webPort // empty' $(DEV_STATE) 2>/dev/null); echo $${v:-$(WORKTREE_WEB_PORT)})
 
-# Seeding worktree data dirs. `make seed-snapshot` captures the long-term
-# daemon's data dir into $(SEED_DIR); `make deploy` lazily copies that into a
-# fresh worktree so the cockpit isn't empty; `make seed-reset` wipes the
-# worktree data dir and re-copies. Seed location is per-machine ($HOME), not
-# per-checkout — same baseline serves every worktree.
-PROD_DATA_DIR := $(HOME)/.local/share/citadel
-SEED_DIR      := $(HOME)/.citadel-seed
-SEED_SQLITE   := $(SEED_DIR)/citadel.sqlite
+# Seeding worktree data dirs. The seed is checked-in fixture data — a tiny
+# mock git repo materialized under $(WORKTREE_MOCK_REPO) plus synthetic rows
+# inserted into the worktree SQLite. It is intentionally isolated from the
+# systemd long-term daemon's prod data: seeding from prod would copy live
+# agent_sessions and the worktree daemon would race the live daemon for the
+# same tmux sessions.
+WORKTREE_MOCK_REPO       := $(CURDIR)/.citadel/mock-repo
+WORKTREE_MOCK_WORKTREES  := $(CURDIR)/.citadel/mock-worktrees
 
-.PHONY: help setup deploy install tmux-service build check typecheck lint test coverage e2e smoke performance clean stop logs seed-snapshot seed-reset
+.PHONY: help setup deploy install tmux-service build check typecheck lint test coverage e2e smoke performance clean stop logs seed seed-reset
 
 help:
 	@echo "Citadel — scoped to: $(CURDIR)"
@@ -58,10 +58,11 @@ help:
 	@echo "                    tmux-unit changes or recover from an orphan tmux server."
 	@echo ""
 	@echo "Seeding (so a fresh worktree cockpit isn't empty):"
-	@echo "  make seed-snapshot Snapshot the long-term daemon's data dir into $(SEED_DIR)."
-	@echo "                    Re-run whenever you want a fresher baseline."
-	@echo "  make seed-reset   Stop this worktree's stack, wipe its data dir, re-copy from seed."
-	@echo "                    'make deploy' on a fresh worktree auto-seeds from the same place."
+	@echo "  make seed         Materialize the checked-in mock repo + insert fixture rows into"
+	@echo "                    this worktree's SQLite. Idempotent. 'make deploy' auto-runs this"
+	@echo "                    on first launch of a fresh worktree."
+	@echo "  make seed-reset   Stop this worktree's stack, wipe data + mock-repo + mock-worktrees,"
+	@echo "                    re-seed from scratch. Use for a clean QA baseline."
 	@echo ""
 	@echo "Quality:"
 	@echo "  make check       typecheck + lint + test + build"
@@ -120,13 +121,11 @@ deploy:
 	fi
 	@mkdir -p $(WORKTREE_LOGS_DIR) $(WORKTREE_DATA_DIR)
 	@command -v setsid >/dev/null 2>&1 || { echo "setsid required — install util-linux"; exit 127; }
-	@# Lazy seed: if this worktree's DB doesn't exist yet and a seed snapshot is
-	@# available, copy the whole seed (config, sqlite, scratchpad, tls, scheduled
-	@# runs) so the cockpit has data to QA against. Never overwrites existing
-	@# worktree state. Run `make seed-reset` to force a re-seed.
-	@if [ ! -f "$(WORKTREE_DATA_DIR)/citadel.sqlite" ] && [ -d "$(SEED_DIR)" ] && [ -f "$(SEED_SQLITE)" ]; then \
-		echo "→ Seeding worktree data from $(SEED_DIR)"; \
-		rsync -a "$(SEED_DIR)/" "$(WORKTREE_DATA_DIR)/"; \
+	@# Auto-seed on a fresh worktree: if there's no mock repo AND no DB yet,
+	@# run `make seed` once. Never re-seeds an existing worktree — that's what
+	@# `make seed-reset` is for.
+	@if [ ! -d "$(WORKTREE_MOCK_REPO)/.git" ] && [ ! -f "$(WORKTREE_DATA_DIR)/citadel.sqlite" ]; then \
+		$(MAKE) -s seed; \
 	fi
 	@# Seed dev.json with the webPort so the deploy hook can advertise the vite
 	# (HMR) URL — the daemon writes its own port on boot but doesn't know about
@@ -242,54 +241,38 @@ logs:
 	@touch $(WORKTREE_LOG)
 	@tail -n 80 -f $(WORKTREE_LOG)
 
-# `make seed-snapshot` captures the long-term daemon's data dir at
-# $(PROD_DATA_DIR) into the shared seed at $(SEED_DIR). The seed is what
-# `make deploy` lazily copies into a fresh worktree so the cockpit isn't
-# empty — same baseline for every worktree on this machine.
+# `make seed` materializes the checked-in fixture: a mock git repo at
+# $(WORKTREE_MOCK_REPO) (+ two mock worktrees under $(WORKTREE_MOCK_WORKTREES))
+# and a small set of synthetic rows in this worktree's SQLite. Idempotent — if
+# either piece is already in place, that piece is skipped. `make deploy`
+# auto-runs this on a fresh worktree so the cockpit isn't empty.
 #
-# Why two-step (not "cp live data into the worktree on deploy"): the live DB
-# has open WAL/SHM handles and the worktree daemon would inherit incoherent
-# state. We use `sqlite3 .backup` to get a checkpointed standalone copy and
-# rsync everything else (config, scratchpad, scheduled-runs, tls). Re-run
-# this any time you want a fresher baseline; existing worktrees keep their
-# own data dir (use `make seed-reset` per-worktree to pick up the new seed).
-seed-snapshot:
-	@if [ ! -d "$(PROD_DATA_DIR)" ]; then \
-		echo "✗ No prod data dir at $(PROD_DATA_DIR). Is the long-term daemon installed?"; \
+# Why not snapshot from prod: prod data carries live agent_sessions rows that
+# reference tmux sessions owned by the systemd long-term daemon. A worktree
+# daemon booted on that data races/steals those sessions, breaking the live
+# cockpit. The seed here is fully synthetic and references only paths inside
+# this checkout.
+seed:
+	@if [ ! -d node_modules ]; then \
+		echo "✗ node_modules missing — run 'make setup' first"; \
 		exit 1; \
 	fi
-	@if [ ! -f "$(PROD_DATA_DIR)/citadel.sqlite" ]; then \
-		echo "✗ No SQLite at $(PROD_DATA_DIR)/citadel.sqlite — nothing to snapshot."; \
-		exit 1; \
-	fi
-	@command -v sqlite3 >/dev/null 2>&1 || { echo "✗ sqlite3 binary required for hot-safe DB snapshot"; exit 127; }
-	@command -v rsync   >/dev/null 2>&1 || { echo "✗ rsync required";   exit 127; }
-	@mkdir -p $(SEED_DIR)
-	@echo "→ Snapshotting $(PROD_DATA_DIR) → $(SEED_DIR)"
-	@# Mirror everything except the live SQLite (its WAL/SHM are inconsistent
-	@# if copied raw); .backup writes a checkpointed standalone DB.
-	@rsync -a --delete \
-		--exclude 'citadel.sqlite' \
-		--exclude 'citadel.sqlite-wal' \
-		--exclude 'citadel.sqlite-shm' \
-		"$(PROD_DATA_DIR)/" "$(SEED_DIR)/"
-	@sqlite3 "$(PROD_DATA_DIR)/citadel.sqlite" ".backup '$(SEED_SQLITE)'"
-	@echo "✓ Seed ready at $(SEED_DIR)"
-	@echo "  Next: 'make deploy' on a fresh worktree auto-copies this in; 'make seed-reset' refreshes an existing worktree."
+	@bash seeds/setup.sh "$(CURDIR)"
+	@CITADEL_DATA_DIR="$(WORKTREE_DATA_DIR)" pnpm --silent seed
 
-# `make seed-reset` is for an existing worktree: stop the stack (the daemon
-# has the DB open), wipe the worktree data dir, copy the seed in. Safe to
-# run whenever you want a clean QA baseline. Requires a prior `seed-snapshot`.
+# `make seed-reset` is the destructive sibling: stops this worktree's stack,
+# removes the SQLite, mock repo, and mock worktrees, then re-seeds. Use when
+# you want a clean QA baseline.
 seed-reset:
-	@if [ ! -d "$(SEED_DIR)" ] || [ ! -f "$(SEED_SQLITE)" ]; then \
-		echo "✗ No seed at $(SEED_DIR). Run 'make seed-snapshot' first."; \
-		exit 1; \
-	fi
-	@command -v rsync >/dev/null 2>&1 || { echo "✗ rsync required"; exit 127; }
 	@$(MAKE) -s stop
-	@echo "→ Wiping $(WORKTREE_DATA_DIR)"
-	@rm -rf "$(WORKTREE_DATA_DIR)"
+	@echo "→ Removing mock repo worktrees registered with $(WORKTREE_MOCK_REPO)"
+	@if [ -d "$(WORKTREE_MOCK_REPO)/.git" ]; then \
+		git -C "$(WORKTREE_MOCK_REPO)" worktree list --porcelain 2>/dev/null \
+			| awk '/^worktree / && $$2 != "$(WORKTREE_MOCK_REPO)" { print $$2 }' \
+			| while read -r wt; do git -C "$(WORKTREE_MOCK_REPO)" worktree remove --force "$$wt" 2>/dev/null || true; done; \
+	fi
+	@echo "→ Wiping seeded paths"
+	@rm -rf "$(WORKTREE_DATA_DIR)" "$(WORKTREE_MOCK_REPO)" "$(WORKTREE_MOCK_WORKTREES)"
 	@mkdir -p "$(WORKTREE_DATA_DIR)"
-	@echo "→ Re-seeding from $(SEED_DIR)"
-	@rsync -a "$(SEED_DIR)/" "$(WORKTREE_DATA_DIR)/"
-	@echo "✓ Worktree data reset. Run 'make deploy' to start a fresh stack on the seeded data."
+	@$(MAKE) -s seed
+	@echo "✓ Worktree reset. Run 'make deploy' to start fresh."

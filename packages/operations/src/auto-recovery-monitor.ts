@@ -93,16 +93,24 @@ export async function runAutoRecoveryTick(deps: AutoRecoveryMonitorDeps, now: Da
   for (const workspace of workspaces) {
     if (workspace.lifecycle !== "ready") continue;
     let vc: VersionControlSummary;
-    let ci: CiProviderSummary;
     try {
-      [vc, ci] = await Promise.all([deps.fetchVersionControl(workspace.path), deps.fetchCi(workspace.path)]);
+      vc = await deps.fetchVersionControl(workspace.path);
     } catch {
       // Provider unavailable — skip this workspace this tick. The next tick
       // will pick it up if the provider recovers.
       continue;
     }
-    if (vc.status !== "healthy" || ci.status !== "healthy") {
+    if (vc.status !== "healthy" || !vc.pullRequest) {
       // Provider-degradation policy: never auto-spawn on stale data.
+      continue;
+    }
+    let ci: CiProviderSummary;
+    try {
+      ci = await deps.fetchCi(workspace.path);
+    } catch {
+      continue;
+    }
+    if (ci.status !== "healthy") {
       continue;
     }
     const state = deps.store.getWorkspaceAutoRecoveryState(workspace.id);
@@ -122,13 +130,11 @@ export async function runAutoRecoveryTick(deps: AutoRecoveryMonitorDeps, now: Da
         // genuine activity.
         lastActivityAt: mostRecent(session.lastOutputAt, session.lastStatusAt),
       })),
-      pr: vc.pullRequest
-        ? {
-            headSha: vc.pullRequest.headSha ?? null,
-            mergeable: vc.pullRequest.mergeable ?? null,
-            checks: vc.pullRequest.checks ?? [],
-          }
-        : null,
+      pr: {
+        headSha: vc.pullRequest.headSha ?? null,
+        mergeable: vc.pullRequest.mergeable ?? null,
+        checks: vc.pullRequest.checks ?? [],
+      },
       runtimeId,
       now,
       idleThresholdMs: deps.idleThresholdMs,
