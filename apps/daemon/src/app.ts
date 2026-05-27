@@ -59,8 +59,7 @@ import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { backfillScratchpadOnStartup } from "./scratchpad.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
-import { buildRespawnTmux, buildRestartAgent } from "./terminal-routes-helpers.js";
-import { registerTerminalRoutes } from "./terminal-routes.js";
+import { wireTerminalRoutes } from "./terminal-routes-helpers.js";
 import { resolveTtydPortRange } from "./ttyd-slot.js";
 import { fetchVersionControlGated } from "./vc-fetch-gated.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
@@ -165,26 +164,7 @@ export function createDaemonApp(input: {
       });
     }
   }
-  // In-memory map shared between the user-action recorder (Restart endpoint
-  // and the user-action POST hit by the terminal-key-shim Ctrl+C
-  // interceptor) and the status-monitor tick body. Lifecycle is process-
-  // scoped — cleared on daemon restart, which is fine because boot-restore
-  // re-establishes `running` independently.
-  const recentUserAction = new Map<string, number>();
-
-  const respawnTmux = buildRespawnTmux(store, config);
-  const restartAgent = buildRestartAgent(store, config);
-  registerTerminalRoutes({
-    app,
-    server,
-    store,
-    ttyd,
-    dataDir: config.dataDir,
-    emit,
-    respawnTmux,
-    restartAgent,
-    recentUserAction,
-  });
+  const { recentUserAction } = wireTerminalRoutes({ app, server, store, ttyd, dataDir: config.dataDir, emit, config });
 
   const cachedProviderHealth = () =>
     cachedProvider("provider-health", () => collectProviderHealth(config.providers), 15_000);

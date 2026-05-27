@@ -1,10 +1,13 @@
 // Helpers used by terminal-routes wiring in apps/daemon/src/app.ts.
 // Extracted so app.ts stays under the 800-line file-size cap.
 
+import type http from "node:http";
 import type { CitadelConfig } from "@citadel/config";
 import type { AgentSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
-import { ensureTmuxSession, launchAgentInSession, panePidProcess } from "@citadel/terminal";
+import { type TtydManager, ensureTmuxSession, launchAgentInSession, panePidProcess } from "@citadel/terminal";
+import type express from "express";
+import { registerTerminalRoutes } from "./terminal-routes.js";
 
 const SHELL_COMMANDS = ["bash", "sh", "zsh", "fish"] as const;
 function isShellCommand(command: string): boolean {
@@ -29,6 +32,34 @@ function resolveSessionContext(
 // Recreate the tmux session a terminal needs (operator reconnect after
 // tmux gone). Shell-first three-step: spawn `bash -l`, then send-keys the
 // runtime argv (skipped for the `shell` runtime — bash IS the runtime).
+// Wire the terminal-routes + supporting helpers in one call. Returns the
+// shared recentUserAction map so the status-monitor wiring (separate file)
+// can read it by reference. Keeping the wiring in this helper module
+// rather than inline in app.ts saves the 800-line file-size cap.
+export function wireTerminalRoutes(input: {
+  app: express.Express;
+  server: http.Server;
+  store: SqliteStore;
+  ttyd: TtydManager;
+  dataDir: string;
+  emit: (type: string, payload: unknown) => void;
+  config: CitadelConfig;
+}): { recentUserAction: Map<string, number> } {
+  const recentUserAction = new Map<string, number>();
+  registerTerminalRoutes({
+    app: input.app,
+    server: input.server,
+    store: input.store,
+    ttyd: input.ttyd,
+    dataDir: input.dataDir,
+    emit: input.emit,
+    recentUserAction,
+    respawnTmux: buildRespawnTmux(input.store, input.config),
+    restartAgent: buildRestartAgent(input.store, input.config),
+  });
+  return { recentUserAction };
+}
+
 export function buildRespawnTmux(
   store: SqliteStore,
   config: CitadelConfig,
