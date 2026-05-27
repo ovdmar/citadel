@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@citadel/db':
+        specifier: workspace:*
+        version: link:packages/db
       '@tanstack/react-query':
         specifier: ^5.90.10
         version: 5.100.10(react@19.2.6)
