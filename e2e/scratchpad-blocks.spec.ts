@@ -88,8 +88,10 @@ test.describe("scratchpad blocks", () => {
     const composer = page.locator(".scratchpad-composer-input");
     await composer.focus();
     await composer.fill("blur should save this");
-    // Defocus by clicking elsewhere — onBlur should fire and submit.
-    await page.locator(".dashboard-title").click();
+    // Defocus by clicking elsewhere — onBlur should fire and submit. The
+    // drawer title is a static span inside the panel, so clicking it removes
+    // focus from the composer without closing the drawer or navigating.
+    await page.locator(".scratchpad-drawer-title").click();
     await expect(page.locator(".scratchpad-block-list").getByText("blur should save this")).toBeVisible();
     const list = await request.get(`${API_BASE}/api/scratchpad/blocks`);
     const body = (await list.json()) as { blocks: Array<{ text: string }> };

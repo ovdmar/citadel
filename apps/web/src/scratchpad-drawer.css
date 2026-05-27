@@ -59,9 +59,25 @@
   font-size: 13px;
 }
 
+.scratchpad-drawer-titlegroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .scratchpad-drawer-title {
   font-weight: 600;
   letter-spacing: 0.02em;
+}
+
+.scratchpad-drawer-path {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .scratchpad-drawer-status {

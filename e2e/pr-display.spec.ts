@@ -13,7 +13,7 @@ import { type APIRequestContext, expect, test } from "@playwright/test";
 // CLAUDE.md; we just guard that the inspector PR section renders.
 
 const API_BASE =
-  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "4012"}`;
+  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012"}`;
 
 test("inspector PR section renders even when the workspace has no PR", async ({ page, request }, testInfo) => {
   // Mobile collapses to one column; the inspector isn't directly visible without

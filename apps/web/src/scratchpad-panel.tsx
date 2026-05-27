@@ -5,14 +5,13 @@
 // HTML attribute so React keeps state mounted (scrollTop, edit state, etc.)
 // across close/reopen and across route changes.
 //
-// History sidebar is hidden by default; the user reveals it via the "History"
-// toggle in the header. Class names retain the `scratchpad-drawer-*` prefix
-// for continuity (the drawer-store and CSS file are still named that way).
-//
-// The SSE listener is panel-lifetime-scoped (NOT gated on open) so block /
-// history updates from other tabs or MCP writers keep converging into local
-// state even while the panel is closed.
+// History sidebar is hidden by default; revealed via the "History" header
+// toggle. Class names retain the `scratchpad-drawer-*` prefix for continuity
+// (drawer-store and CSS file are still named that way). The SSE listener is
+// panel-lifetime-scoped (NOT gated on open) so block / history updates from
+// other tabs or MCP writers keep converging into local state while closed.
 import type {
+  ReadScratchpadResult,
   ScratchpadBlockSummary,
   ScratchpadHistorySummary,
   ScratchpadSnapshot,
@@ -59,6 +58,7 @@ export function ScratchpadPanel() {
   const navigate = useNavigate();
   const [blocks, setBlocks] = useState<UiBlock[]>([]);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [notesPath, setNotesPath] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [composer, setComposer] = useState("");
@@ -132,9 +132,10 @@ export function ScratchpadPanel() {
 
   const loadCurrentMeta = useCallback(async () => {
     try {
-      const snapshot = await api<ScratchpadSnapshot>("/api/scratchpad");
+      const snapshot = await api<ReadScratchpadResult>("/api/scratchpad");
       if (!mountedRef.current) return;
       setUpdatedAt(snapshot.updatedAt);
+      setNotesPath(snapshot.path);
     } catch {
       /* meta is best-effort */
     }
@@ -587,7 +588,14 @@ export function ScratchpadPanel() {
       {/* biome-ignore lint/a11y/useSemanticElements: the native <dialog> open/close lifecycle clashes with our hidden-attribute toggle (panel is mounted persistently to preserve scroll/edit state), so we keep a plain element with explicit ARIA. */}
       <div className="scratchpad-modal" role="dialog" aria-modal="true" aria-label="Scratchpad">
         <header className="scratchpad-drawer-header" data-saving={savePulse ?? undefined}>
-          <span className="scratchpad-drawer-title">Scratchpad</span>
+          <div className="scratchpad-drawer-titlegroup">
+            <span className="scratchpad-drawer-title">Scratchpad</span>
+            {notesPath ? (
+              <span className="scratchpad-drawer-path" data-testid="scratchpad-path" title={notesPath}>
+                {notesPath}
+              </span>
+            ) : null}
+          </div>
           <span className="scratchpad-drawer-status command-result-meta" aria-live="polite">
             {renderStatus(updatedAt, savePulse)}
           </span>

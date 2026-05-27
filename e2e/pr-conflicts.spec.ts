@@ -8,7 +8,7 @@ import { expect, test } from "@playwright/test";
 // This spec verifies the new HTTP surface ships in the deployed daemon.
 
 const API_BASE =
-  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "4012"}`;
+  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012"}`;
 
 test("POST /api/workspaces/:id/fix-conflicts is registered (404 for unknown workspace)", async ({
   request,
