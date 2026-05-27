@@ -46,19 +46,19 @@ export function GhCooldownBanner(props: { summaries: Map<string, WorkspaceCockpi
   }, [dismissedUntil, now]);
 
   if (!active) return null;
-  if (dismissedUntil === active.until) return null;
+  if (dismissedUntil === active.iso) return null;
 
-  const retryAt = new Date(active.until);
+  const retryAt = new Date(active.iso);
   const hh = String(retryAt.getHours()).padStart(2, "0");
   const mm = String(retryAt.getMinutes()).padStart(2, "0");
 
   const dismiss = () => {
     try {
-      window.localStorage.setItem(DISMISS_STORAGE_KEY, active.until);
+      window.localStorage.setItem(DISMISS_STORAGE_KEY, active.iso);
     } catch {
       // ignore
     }
-    setDismissedUntil(active.until);
+    setDismissedUntil(active.iso);
   };
 
   return (
