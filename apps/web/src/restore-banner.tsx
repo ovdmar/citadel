@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from "react";
 import type { BootRestoreSummary } from "./app-state.js";
+import { RestoreModal } from "./settings-restore.js";
 
 const DISMISS_STORAGE_KEY = "citadel.restore-banner.dismissedBootedAt";
 
@@ -17,6 +18,7 @@ export function RestoreBanner(props: { bootRestore: BootRestoreSummary | null })
       return null;
     }
   });
+  const [modalOpen, setModalOpen] = useState(false);
 
   // Refresh dismissed state if the boot summary changes underneath us — e.g.
   // the daemon was restarted while the cockpit was open. New bootedAt means
@@ -55,20 +57,28 @@ export function RestoreBanner(props: { bootRestore: BootRestoreSummary | null })
         ? `Restored ${succeeded} of ${total} sessions from previous run — ${failed} failed`
         : `Restored ${total} session${total === 1 ? "" : "s"} from previous run`;
 
-  const skippedHint =
-    bootRestore.skippedOlder > 0
-      ? ` (${bootRestore.skippedOlder} older session${bootRestore.skippedOlder === 1 ? "" : "s"} not restored — see Settings → Restore)`
-      : "";
+  const hasSkipped = bootRestore.skippedOlder > 0;
+  const skippedHint = hasSkipped
+    ? ` (${bootRestore.skippedOlder} older session${bootRestore.skippedOlder === 1 ? "" : "s"} not restored)`
+    : "";
 
   return (
-    <output className="cit-restore-banner">
-      <span className="cit-restore-banner__msg">
-        {message}
-        {skippedHint}
-      </span>
-      <button type="button" className="cit-restore-banner__dismiss" onClick={dismiss}>
-        Dismiss
-      </button>
-    </output>
+    <>
+      <output className="cit-restore-banner">
+        <span className="cit-restore-banner__msg">
+          {message}
+          {skippedHint}
+        </span>
+        {hasSkipped || failed > 0 ? (
+          <button type="button" className="cit-restore-banner__open" onClick={() => setModalOpen(true)}>
+            Open restore
+          </button>
+        ) : null}
+        <button type="button" className="cit-restore-banner__dismiss" onClick={dismiss}>
+          Dismiss
+        </button>
+      </output>
+      {modalOpen ? <RestoreModal onClose={() => setModalOpen(false)} /> : null}
+    </>
   );
 }

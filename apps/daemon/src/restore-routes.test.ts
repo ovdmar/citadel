@@ -183,9 +183,12 @@ describe("restore routes — absorb empty Claude pane", () => {
       });
       expect(result.restoredFrom).toBe("sess_dead");
       expect(result.absorbed).toEqual(["sess_empty"]);
-      // sess_empty deleted; sess_dead still around (the restored session is new).
+      // Both rows gone: sess_empty via the absorb pass (no-user-prompt sibling),
+      // sess_dead because /api/restore/run now stops the source row to prevent
+      // duplicate-tab surfacing. Only the newly-created session remains.
       const remaining = fixture.store.listSessions("ws_1").map((s) => s.id);
       expect(remaining).not.toContain("sess_empty");
+      expect(remaining).not.toContain("sess_dead");
     } finally {
       await closeServer(server);
       fs.rmSync(transcriptFile, { force: true });
@@ -259,6 +262,44 @@ describe("restore routes — absorb empty Claude pane", () => {
 // sessions rollouts that were never registered in the DB). collectRestoreCandidates
 // lazy-backfills the UUID by re-scanning the rollout tree, so the row eventually
 // becomes restore-eligible instead of staying silently invisible.
+describe("restore routes — source row cleanup", () => {
+  it("deletes the source row after a successful /api/restore/run", async () => {
+    const fixture = makeFixture();
+    const ts = new Date().toISOString();
+    fixture.store.insertSession({
+      id: "sess_source",
+      workspaceId: "ws_1",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
+      status: "unknown",
+      statusReason: "tmux_missing",
+      lastStatusAt: ts,
+      lastOutputAt: ts,
+      endedAt: ts,
+      exitCode: 0,
+      transport: "disconnected",
+      tmuxSessionName: "citadel_ws_1_source",
+      tmuxSessionId: null,
+      runtimeSessionId: "uuid-cleanup",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    const { server } = createDaemonApp({ ...fixture, operations: fakeOps(fixture) });
+    const baseUrl = await listen(server);
+    try {
+      const result = await postJson<{ restoredFrom: string }>(`${baseUrl}/api/restore/run`, {
+        workspaceId: "ws_1",
+        runtimeSessionId: "uuid-cleanup",
+      });
+      expect(result.restoredFrom).toBe("sess_source");
+      const remaining = fixture.store.listSessions("ws_1").map((s) => s.id);
+      expect(remaining).not.toContain("sess_source");
+    } finally {
+      await closeServer(server);
+    }
+  });
+});
+
 describe("collectRestoreCandidates — codex UUID backfill", () => {
   it("recovers a codex session whose runtime_session_id was never persisted", () => {
     const fixture = makeFixture();

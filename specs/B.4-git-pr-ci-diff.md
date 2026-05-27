@@ -47,9 +47,10 @@
 
 ## Background Refresh
 
-[x] 1. PR state for every workspace with a remote and an open PR is refreshed in the background on a per-PR adaptive cadence decided by the daemon: 60s default, 3min once checks are green and the head SHA has been stable for >10min, never once the PR is merged. The cockpit asks at a fast rhythm (60s batch, 30s active workspace); the daemon serves cache or fetches based on the per-PR schedule.
+[x] 1. PR state for every workspace with a remote and an open PR is refreshed in the background on a per-PR adaptive cadence decided by the daemon: 60s default, 3min once checks are green and the head SHA has been stable for >10min, never once the PR is merged. The cockpit asks at a 60s batch rhythm and refetches the active workspace on focus / SSE invalidation; the daemon serves cache or fetches based on the per-PR schedule and a shared global PR cache.
 [x] 2. Background polling pauses when the cockpit tab is hidden (`document.visibilityState === 'hidden'`) and resumes on focus. It also pauses entirely when no cockpit tab is connected at all (no SSE viewers) after a 2-minute grace window so brief tab-reloads don't trip it.
 [x] 3. Workspaces with no remote, repository-root workspaces, workspaces with no PR, and PRs in the merged state are skipped to avoid useless gh invocations. Workspaces in active gh-cooldown are not skipped — they are queued and served from snapshot/cache.
+[x] 4. PRs tracked by multiple workspaces share a single cached `PullRequestSummary` keyed by `owner/repo#number`; both the active-workspace fetch and stacked-PR detection consult daemon-owned caches before spawning GitHub CLI work.
 
 ## GitHub Rate Limiting
 

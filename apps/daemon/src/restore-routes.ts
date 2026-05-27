@@ -119,6 +119,19 @@ export function registerRestoreRoutes(app: express.Express, deps: Deps) {
         },
       );
       emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
+      // Drop the source row whose conversation we just resumed. Leaving it
+      // around makes the cockpit render a duplicate tab (same tabId, slightly
+      // older createdAt) and — worse — opening it triggers the terminal's
+      // attach handler which ensureTmuxSession-creates a fresh empty pane
+      // under the old name. The result is two tabs per conversation, one
+      // resumed and one bare-shell. stopAgentSession cleans up tmux + DB +
+      // ttyd in one call; best-effort, never blocks the response.
+      try {
+        operations.stopAgentSession({ sessionId: candidate.id });
+        emit("agent.updated", { workspaceId: workspace.id, sessionId: candidate.id });
+      } catch {
+        /* best-effort */
+      }
       // Consolidate: if the user (or muscle memory) already opened an empty
       // Claude pane in this workspace, stop it so they don't end up with two
       // panes for the same conversation. "Empty" = a claude-code session

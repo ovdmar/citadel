@@ -271,4 +271,36 @@ export function runMigrations(
       (11, 'agent-sessions-tab-id', datetime('now'));
     COMMIT;
   `);
+
+  // One-shot dedup for accumulated restore artifacts: prior to the source-
+  // row cleanup landing in restore-routes / boot-restore, every successful
+  // restore left the original row in the DB. Repeated restarts produced
+  // 7-8 rows per (workspace, runtime_session_id), and the cockpit's tab
+  // strip rendered one tab per row. Keep only the most recently created
+  // row in each group; the older ones are dead pointers (their tmux died
+  // when the previous tmux server was killed, the only reason they look
+  // "running" is the cockpit's terminal-attach respawned an empty pane
+  // under the same name). The orphan-reaper will pick up those zombie
+  // tmux sessions on its next sweep. Idempotent and safe to run on an
+  // already-deduped DB.
+  // Self-join: delete any row that has a strictly newer sibling with the
+  // same (workspace_id, runtime_session_id). Single-row groups produce no
+  // join matches → untouched. Multi-row groups collapse to the latest by
+  // created_at. Works on every SQLite version (no window-function dep).
+  db.exec(`
+    BEGIN;
+    DELETE FROM agent_sessions
+    WHERE rowid IN (
+      SELECT a.rowid
+      FROM agent_sessions a
+      JOIN agent_sessions b
+        ON a.workspace_id = b.workspace_id
+       AND a.runtime_session_id = b.runtime_session_id
+       AND b.created_at > a.created_at
+      WHERE a.runtime_session_id IS NOT NULL
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (12, 'agent-sessions-dedup-restore-cruft', datetime('now'));
+    COMMIT;
+  `);
 }

@@ -202,6 +202,25 @@ export const RuntimeUsageSummarySchema = z.object({
   checkedAt: z.string(),
 });
 
+export const GitHubQuotaResourceSchema = z.object({
+  name: z.enum(["core", "graphql", "search"]),
+  limit: z.number().int().nonnegative(),
+  used: z.number().int().nonnegative(),
+  remaining: z.number().int().nonnegative(),
+  percentUsed: z.number().min(0).max(100),
+  resetAt: z.string().nullable(),
+});
+
+export const GitHubQuotaSummarySchema = z.object({
+  providerId: z.literal("github-gh"),
+  status: ProviderStatusSchema,
+  reason: z.string().nullable(),
+  checkedAt: z.string(),
+  cooldownUntil: z.string().nullable().default(null),
+  automationEnabled: z.boolean().default(true),
+  resources: z.array(GitHubQuotaResourceSchema).default([]),
+});
+
 export const PrReviewerStateSchema = z.enum(["approved", "changes_requested", "commented", "pending", "dismissed"]);
 
 export const PrReviewerSchema = z.object({
@@ -614,6 +633,8 @@ export type CiRunSummary = z.infer<typeof CiRunSummarySchema>;
 export type CiProviderSummary = z.infer<typeof CiProviderSummarySchema>;
 export type RuntimeUsageCategory = z.infer<typeof RuntimeUsageCategorySchema>;
 export type RuntimeUsageSummary = z.infer<typeof RuntimeUsageSummarySchema>;
+export type GitHubQuotaResource = z.infer<typeof GitHubQuotaResourceSchema>;
+export type GitHubQuotaSummary = z.infer<typeof GitHubQuotaSummarySchema>;
 export type PullRequestSummary = z.infer<typeof PullRequestSummarySchema>;
 export type PrReviewer = z.infer<typeof PrReviewerSchema>;
 export type PrReviewerState = z.infer<typeof PrReviewerStateSchema>;

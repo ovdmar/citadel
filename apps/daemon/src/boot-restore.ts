@@ -256,6 +256,18 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
       );
       entry.sessionId = session.id;
       deps.emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
+      // Drop the source row whose conversation we just resumed. It points at
+      // a dead pane; leaving it in the DB surfaces as a duplicate tab in the
+      // cockpit (same tabId, older createdAt) and — worse — the cockpit's
+      // terminal-attach handler ensureTmuxSession-creates an empty pane under
+      // the dead name, giving the user two tabs per conversation: one with
+      // the resumed agent and one with a bare bash shell.
+      try {
+        deps.operations.stopAgentSession({ sessionId: candidate.sourceSessionId });
+        deps.emit("agent.updated", { workspaceId: candidate.workspaceId, sessionId: candidate.sourceSessionId });
+      } catch {
+        /* best-effort */
+      }
     } catch (error) {
       entry.error = error instanceof Error ? error.message : String(error);
     }

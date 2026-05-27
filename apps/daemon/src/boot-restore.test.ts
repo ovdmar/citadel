@@ -96,6 +96,8 @@ function insertStoppedSession(
 
 function fakeOps(
   spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }>,
+  stopped: string[] = [],
+  store?: SqliteStore,
 ) {
   return {
     createAgentSession: async (input: {
@@ -113,6 +115,11 @@ function fakeOps(
         workspaceId: input.workspaceId,
         runtimeId: "claude-code",
       };
+    },
+    stopAgentSession: (input: { sessionId: string }) => {
+      stopped.push(input.sessionId);
+      if (store) store.deleteSession(input.sessionId);
+      return { stopped: true, removed: true, reason: "ok" as const };
     },
   } as unknown as OperationService;
 }
@@ -183,6 +190,28 @@ describe("runBootRestore", () => {
     expect(summary.entries).toHaveLength(2);
     expect(summary.entries.every((e) => e.sessionId === null && e.error?.startsWith("runtime_not_found:"))).toBe(true);
     expect(spawned).toHaveLength(0);
+  });
+
+  it("stops the source row after a successful restore so it doesn't surface as a duplicate tab", async () => {
+    const { config, store } = fixture();
+    insertStoppedSession(store, { id: "sess_to_restore", uuid: "uuid-cleanup", ageMs: 5 * 60_000 });
+    const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }> = [];
+    const stopped: string[] = [];
+    await runBootRestore({
+      store,
+      operations: fakeOps(spawned, stopped, store),
+      config,
+      emit: () => {},
+      listTmuxSessions: () => null,
+      tmuxReadinessTimeoutMs: 0,
+    });
+    expect(spawned).toHaveLength(1);
+    expect(stopped).toEqual(["sess_to_restore"]);
+    // DB no longer holds the source row — only the fakeOps-created "live"
+    // one would remain in a real flow, but fakeOps doesn't insert one, so
+    // the workspace ends up empty. Either way, no duplicate row.
+    const remaining = store.listSessions("ws_1").map((s) => s.id);
+    expect(remaining).not.toContain("sess_to_restore");
   });
 
   it("propagates the source row's tabId so the restored session reuses its tab slot", async () => {

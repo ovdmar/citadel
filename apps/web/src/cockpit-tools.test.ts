@@ -4,9 +4,11 @@ import { describe, expect, it } from "vitest";
 import {
   applyStickyUpdates,
   filterPollableWorkspaceIds,
+  invalidateActiveWorkspaceFromBatch,
   nextPollInterval,
   prMapFromSummaries,
   selectActiveGhCooldown,
+  workspaceCockpitSummaryQueryOptions,
 } from "./cockpit-tools.js";
 
 const workspace = (overrides: Partial<Workspace>): Workspace =>
@@ -111,6 +113,45 @@ describe("nextPollInterval", () => {
 
   it("falls back to polling when visibilityState is undefined (non-browser host)", () => {
     expect(nextPollInterval(undefined)).toBe(60_000);
+  });
+});
+
+describe("workspaceCockpitSummaryQueryOptions", () => {
+  it("does not install an active-workspace polling interval", () => {
+    const options = workspaceCockpitSummaryQueryOptions(workspace({ id: "ws_a" }));
+
+    expect("refetchInterval" in options).toBe(false);
+    expect(options.refetchOnWindowFocus).toBe(true);
+  });
+
+  it("keeps placeholder data available on mount", () => {
+    const placeholder = makeSummary("ws_a", "healthy", makePr({ number: 7 }));
+    const options = workspaceCockpitSummaryQueryOptions(workspace({ id: "ws_a" }), placeholder);
+
+    expect(options.placeholderData).toBe(placeholder);
+  });
+});
+
+describe("invalidateActiveWorkspaceFromBatch", () => {
+  it("invalidates the active workspace when a batch result lands", () => {
+    const calls: unknown[] = [];
+    invalidateActiveWorkspaceFromBatch(
+      { invalidateQueries: (input: unknown) => calls.push(input) } as never,
+      "ws_a",
+      123,
+    );
+
+    expect(calls).toEqual([{ queryKey: ["workspace-cockpit", "ws_a"] }]);
+  });
+
+  it("skips the initial zero timestamp and missing active workspace", () => {
+    const calls: unknown[] = [];
+    const queryClient = { invalidateQueries: (input: unknown) => calls.push(input) } as never;
+
+    invalidateActiveWorkspaceFromBatch(queryClient, "ws_a", 0);
+    invalidateActiveWorkspaceFromBatch(queryClient, null, 123);
+
+    expect(calls).toEqual([]);
   });
 });
 

@@ -1,9 +1,11 @@
 import { execFileSync } from "node:child_process";
 import type { VersionControlSummary } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
-import { getGhCooldown } from "@citadel/providers";
+import { type CollectGitHubVersionControlSummaryDeps, type RepoCacheLookup, getGhCooldown } from "@citadel/providers";
 import type express from "express";
+import type { ProviderCache } from "./app-helpers.js";
 import { type GhScheduler, createGhScheduler } from "./gh-scheduler.js";
+import { globalPrCacheKey, lookupGlobalPrByBranch, readGlobalPrSummary } from "./global-pr-cache.js";
 import { type MainWatcherHandle, startMainWatcher } from "./main-watcher.js";
 
 /**
@@ -17,6 +19,31 @@ export function decorateWithCooldown(vc: VersionControlSummary): VersionControlS
   const cooldown = getGhCooldown();
   if (!cooldown) return vc;
   return { ...vc, cooldownUntil: new Date(cooldown.until).toISOString() };
+}
+
+export function buildRepoCacheLookup(providerCache: ProviderCache): RepoCacheLookup {
+  return async (key, load, ttlMs) => {
+    const cached = providerCache.get(key);
+    const now = Date.now();
+    if (cached && cached.expiresAt > now) return cached.value as string;
+    const value = await load();
+    providerCache.set(key, { expiresAt: now + ttlMs, value });
+    return value;
+  };
+}
+
+export function buildVersionControlProviderDeps(
+  providerCache: ProviderCache,
+  resolveNameWithOwner: () => string | null,
+): CollectGitHubVersionControlSummaryDeps {
+  return {
+    repoCacheLookup: buildRepoCacheLookup(providerCache),
+    resolveNameWithOwner,
+    lookupCachedPr: (nameWithOwner, prNumber) =>
+      readGlobalPrSummary(providerCache, globalPrCacheKey(nameWithOwner, prNumber)),
+    lookupCachedPrByBranch: (nameWithOwner, headRefName) =>
+      lookupGlobalPrByBranch(providerCache, nameWithOwner, headRefName),
+  };
 }
 
 /**

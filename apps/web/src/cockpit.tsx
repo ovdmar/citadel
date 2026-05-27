@@ -1,5 +1,5 @@
 import type { Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -7,6 +7,7 @@ import { api } from "./api.js";
 import { useEventRefresh, useStateQuery } from "./app-state.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import {
+  invalidateActiveWorkspaceFromBatch,
   prMapFromSummaries,
   useAllWorkspacesPrSummary,
   useStickyWorkspaceSummaries,
@@ -33,6 +34,7 @@ export function Cockpit() {
   const state = useStateQuery();
   useEventRefresh();
   const data = state.data;
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const search = (useSearch({ strict: false }) ?? {}) as { workspace?: string };
   const location = useLocation();
@@ -75,9 +77,12 @@ export function Cockpit() {
   const stickySummaries = useStickyWorkspaceSummaries(data?.workspaces ?? [], batchPrSummary.data);
   const placeholderSummary = activeWorkspace ? stickySummaries.get(activeWorkspace.id) : undefined;
   const cockpitSummary = useWorkspaceCockpitSummary(activeWorkspace, placeholderSummary);
-  // Feed the active workspace's fresher 10s result back into the sticky cache
-  // by recomputing the PR map from both sources. The 10s data is preferred
-  // for the active workspace; the batch covers everyone else.
+  useEffect(() => {
+    invalidateActiveWorkspaceFromBatch(queryClient, activeWorkspace?.id, batchPrSummary.dataUpdatedAt);
+  }, [activeWorkspace?.id, batchPrSummary.dataUpdatedAt, queryClient]);
+  // Feed the active workspace result back into the sticky cache by recomputing
+  // the PR map from both sources. The active query is preferred for the
+  // selected workspace; the batch covers everyone else.
   const prByWorkspaceId = useMemo(() => {
     const map = prMapFromSummaries(stickySummaries);
     if (cockpitSummary.data) {

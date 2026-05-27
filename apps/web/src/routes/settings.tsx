@@ -20,7 +20,7 @@ import { useStateQuery } from "../app-state.js";
 import { mcpUrlFromOrigin } from "../lib/mcp-url.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
-import { RestorePanel } from "../settings-restore.js";
+import { RestoreModal, RestorePanelBody } from "../settings-restore.js";
 import { AgentsPanel } from "../settings-runtimes.js";
 
 type SectionId = "overview" | "providers" | "agents" | "repositories" | "restore" | "mcp" | "notes";
@@ -70,6 +70,7 @@ const SECTIONS: Section[] = [
 export function SettingsView() {
   const state = useStateQuery();
   const [section, setSection] = useState<SectionId>("overview");
+  const [restoreModalOpen, setRestoreModalOpen] = useState(false);
 
   const data = state.data;
   const current = SECTIONS.find((entry) => entry.id === section) ?? SECTIONS[0];
@@ -117,7 +118,14 @@ export function SettingsView() {
                   key={entry.id}
                   type="button"
                   className={`set-nav-item ${section === entry.id ? "is-active" : ""}`}
-                  onClick={() => setSection(entry.id)}
+                  onClick={() => {
+                    // Restore opens as a modal — there's no "settings page" UX
+                    // for it because restoring is a transient action, not a
+                    // persistent setting. Click flicks the modal open and
+                    // leaves the previous section selection intact.
+                    if (entry.id === "restore") setRestoreModalOpen(true);
+                    else setSection(entry.id);
+                  }}
                   aria-current={section === entry.id ? "page" : undefined}
                 >
                   <Icon size={15} />
@@ -135,7 +143,10 @@ export function SettingsView() {
               runtimes={data?.runtimes ?? []}
               repos={data?.repos ?? []}
               mcpEnabled={Boolean(data?.mcp.enabled)}
-              onNavigate={setSection}
+              onNavigate={(id) => {
+                if (id === "restore") setRestoreModalOpen(true);
+                else setSection(id);
+              }}
             />
           ) : null}
           {section === "providers" ? (
@@ -171,9 +182,10 @@ export function SettingsView() {
                 sub="Resume conversations whose agent died."
                 help="When the daemon restarts or a tmux pane gets killed, the runtime's transcript on disk survives. Citadel registers a UUID at spawn (claude-code --session-id, codex post-spawn discovery), so any workspace whose latest session row has a UUID but no live pane can be brought back via `--resume <uuid>`. Empty here means nothing to restore."
               />
-              <RestorePanel />
+              <RestorePanelBody />
             </>
           ) : null}
+          {restoreModalOpen ? <RestoreModal onClose={() => setRestoreModalOpen(false)} /> : null}
           {section === "mcp" ? (
             <>
               <PageHead title="MCP servers" sub="Model Context Protocol servers Citadel exposes to agents." />

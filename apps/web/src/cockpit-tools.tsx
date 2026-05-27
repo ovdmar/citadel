@@ -1,5 +1,6 @@
 import type { PullRequestSummary, Workspace, WorkspaceCockpitSummary } from "@citadel/contracts";
 import type { WorkspaceCockpitSummaryBatchResponse } from "@citadel/contracts/pr-routes";
+import type { QueryClient } from "@tanstack/react-query";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useMemo, useRef } from "react";
 import { api } from "./api.js";
@@ -7,27 +8,37 @@ import { api } from "./api.js";
 export { RuntimeLauncher, WorkspaceForm } from "./workspace-forms.js";
 export { TerminalPane } from "./terminal-pane.js";
 
-// Single-workspace summary poll. When a placeholder summary is passed (built
-// from the sticky cross-workspace cache below), React Query serves it
-// immediately on workspace switch so the inspector renders PR state from the
-// last-known batch result instead of flashing empty for ~3-5s while the
-// fresh `gh pr view` is in flight.
+// Single-workspace summary. Freshness is driven by the 60s batch poll, focus,
+// and SSE invalidation; placeholderData keeps workspace switches instant.
 export function useWorkspaceCockpitSummary(
   workspace: Workspace | null,
   placeholderSummary?: WorkspaceCockpitSummary | undefined,
 ) {
-  return useQuery({
+  return useQuery(workspaceCockpitSummaryQueryOptions(workspace, placeholderSummary));
+}
+
+export function workspaceCockpitSummaryQueryOptions(
+  workspace: Workspace | null,
+  placeholderSummary?: WorkspaceCockpitSummary | undefined,
+) {
+  return {
     queryKey: ["workspace-cockpit", workspace?.id],
     enabled: Boolean(workspace),
-    // Bumped from 10s → 30s as part of the gh-quota optimization. The daemon
-    // serves from a 60s cache for most requests; polling faster than that
-    // just spends FE→daemon round-trips for no fresh data.
-    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
     queryFn: () => api<WorkspaceCockpitSummary>(`/api/workspaces/${workspace?.id}/cockpit-summary`),
     // Conditional spread — exactOptionalPropertyTypes disallows passing
     // `undefined` explicitly, but omitting the key is fine.
     ...(placeholderSummary ? { placeholderData: placeholderSummary } : {}),
-  });
+  };
+}
+
+export function invalidateActiveWorkspaceFromBatch(
+  queryClient: Pick<QueryClient, "invalidateQueries">,
+  activeWorkspaceId: string | null | undefined,
+  dataUpdatedAt: number,
+) {
+  if (!activeWorkspaceId || dataUpdatedAt === 0) return;
+  queryClient.invalidateQueries({ queryKey: ["workspace-cockpit", activeWorkspaceId] });
 }
 
 // Client-side filtering: only root workspaces are dropped here. The daemon
