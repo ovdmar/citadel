@@ -10,10 +10,26 @@ export type TmuxMissingReason =
   | "sentinel_missing_no_exit_record"
   | "sentinel_missing_tmux_alive";
 
+// Status reasons the shell-first pane lifecycle writes on running → idle:
+//  - `idle_after_unexpected_exit`: agent exited without a recent operator
+//    Stop/Restart in the past 5s. Surfaces a red attention pulse for 30 min
+//    (auto-clears via the `statusReasonAt` field).
+//  - `idle_user_action`: cleared to NULL — the operator's recent action is
+//    a sufficient signal; no banner needed.
+export const REASON_IDLE_AFTER_UNEXPECTED_EXIT = "idle_after_unexpected_exit";
+export const RECENT_USER_ACTION_MS = 5_000;
+export const IDLE_AFTER_UNEXPECTED_EXIT_AUTO_CLEAR_MS = 30 * 60 * 1000;
+
 export type StatusSignal =
   | { type: "launch_succeeded" }
   | { type: "launch_failed"; reason: string }
   | { type: "tmux_missing"; reason: TmuxMissingReason }
+  // `exited_clean` / `exited_failed` are RESERVED (the reducer still accepts
+  // them — emitting from the legacy wrapper / background runs is unaffected)
+  // but the shell-first pane lifecycle no longer generates them: the daemon
+  // can't reliably observe an agent's exit code when the agent is a child of
+  // the pane's shell, so foreground transitions go through `pane_idle`
+  // instead.
   | { type: "exited_clean"; exitCode: number; endedAt: string }
   | { type: "exited_failed"; exitCode: number; endedAt: string }
   | { type: "active"; lastOutputAt: string }
@@ -22,6 +38,19 @@ export type StatusSignal =
       observed: "running" | "idle" | "waiting_for_input" | "rate_limited" | "usage_limited";
       reason?: string;
     }
+  // Shell-first lifecycle signal: the foreground command in the pane has
+  // transitioned to a shell binary (agent stopped running for any reason —
+  // Ctrl+C, /quit, crash). When `recentUserAction` is true, the daemon
+  // observed an operator-initiated termination (Restart endpoint or xterm
+  // Ctrl+C POST) within the prior RECENT_USER_ACTION_MS window; the reducer
+  // clears statusReason. When false, the reducer labels with
+  // REASON_IDLE_AFTER_UNEXPECTED_EXIT plus statusReasonAt for the 30-min
+  // attention pulse.
+  | { type: "pane_idle"; recentUserAction: boolean; observedAt: string }
+  // Shell-first auto-clear: a previously-labeled
+  // `idle_after_unexpected_exit` session has been idle past the 30-minute
+  // window with no operator Restart. Clear the reason + statusReasonAt.
+  | { type: "idle_after_unexpected_exit_expired" }
   | { type: "optimistic_send" };
 
 // Subset of AgentSession the reducer needs. Callers can pass the full row.
@@ -32,7 +61,11 @@ export type ReducerPrev = Pick<AgentSession, "status" | "lastOutputAt" | "status
 // leave it undefined so the persistence layer can keep the prior timestamp.
 export interface StatusUpdate {
   status: AgentSession["status"];
-  reason?: string;
+  reason?: string | null;
+  // ISO timestamp tied to the reason write. Drives the 30-min auto-clear of
+  // `idle_after_unexpected_exit` independently of lastStatusAt (which is
+  // reset by every benign sub-status flip from runtime adapters).
+  reasonAt?: string | null;
   lastStatusAt?: string;
   lastOutputAt?: string | null;
   endedAt?: string | null;
@@ -170,6 +203,31 @@ export function reduceStatus(prev: ReducerPrev, signal: StatusSignal, now: () =>
         return reasonRefinement(prev, target, reason);
       }
       return statusUpdate(prev, target, reason, t);
+    }
+
+    case "pane_idle": {
+      const targetReason = signal.recentUserAction ? null : REASON_IDLE_AFTER_UNEXPECTED_EXIT;
+      const targetReasonAt = signal.recentUserAction ? null : signal.observedAt;
+      // Status already idle: refine reason only (avoid bumping lastStatusAt).
+      if (prev.status === "idle") {
+        if (prev.statusReason === targetReason) return null;
+        return { status: "idle", reason: targetReason, reasonAt: targetReasonAt };
+      }
+      // Status transition into idle: write the reason + bump lastStatusAt.
+      return {
+        status: "idle",
+        reason: targetReason,
+        reasonAt: targetReasonAt,
+        lastStatusAt: t,
+      };
+    }
+
+    case "idle_after_unexpected_exit_expired": {
+      // Auto-clear path: only fires when reason is currently the
+      // idle_after_unexpected_exit sentinel. Clear reason + reasonAt without
+      // bumping lastStatusAt (the bedrock status didn't change).
+      if (prev.status !== "idle" || prev.statusReason !== REASON_IDLE_AFTER_UNEXPECTED_EXIT) return null;
+      return { status: "idle", reason: null, reasonAt: null };
     }
 
     case "optimistic_send": {

@@ -145,12 +145,31 @@ export function createDaemonApp(input: {
       });
     }
   }
+  // In-memory map shared between the user-action recorder (Restart endpoint
+  // and the user-action POST hit by the terminal-key-shim Ctrl+C
+  // interceptor) and the status-monitor tick body. Lifecycle is process-
+  // scoped — cleared on daemon restart, which is fine because boot-restore
+  // re-establishes `running` independently.
+  const recentUserAction = new Map<string, number>();
+
   const respawnTmux = async (session: import("@citadel/contracts").AgentSession) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     const runtime = config.runtimes.find((candidate) => candidate.id === session.runtimeId);
     if (!workspace || !runtime) return null;
     const sessionName = session.tmuxSessionName ?? `citadel_${workspace.id}_${session.id.slice(-8)}`;
-    return ensureTmuxSession({ sessionName, cwd: workspace.path, command: runtime.command, args: runtime.args });
+    // Shell-first three-step: spawn `bash -l` then send-keys the runtime
+    // argv (skipped for the `shell` runtime — bash IS the runtime there).
+    const tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path });
+    const isShell = ["bash", "sh", "zsh", "fish"].includes(runtime.command);
+    if (!isShell) {
+      const { launchAgentInSession } = await import("@citadel/terminal");
+      const argv = [...runtime.args];
+      if (session.runtimeSessionId && runtime.resumeArg) {
+        argv.push(runtime.resumeArg, session.runtimeSessionId);
+      }
+      await launchAgentInSession(sessionName, runtime.command, argv);
+    }
+    return tmux;
   };
   registerTerminalRoutes({ app, server, store, ttyd, dataDir: config.dataDir, emit, respawnTmux });
 
@@ -742,7 +761,7 @@ export function createDaemonApp(input: {
   }
 
   // Status monitor / auto-recovery / auto-resume / terminal reaper: see their own modules for context.
-  const statusMonitor = startDaemonStatusMonitor(store, emit);
+  const statusMonitor = startDaemonStatusMonitor(store, emit, config, recentUserAction);
   if (statusMonitor) server.on("close", () => statusMonitor.stop());
   const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({ store, config, operations, emit });
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());

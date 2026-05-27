@@ -1,26 +1,19 @@
 // Wires the @citadel/operations status monitor with real daemon I/O —
-// tmux queries, sentinel-file reads, store, SSE emit. Kept out of app.ts so
-// that file stays under the 800-line gate.
+// tmux queries, shell-first pane-foreground reads, store, SSE emit. Kept
+// out of app.ts so that file stays under the 800-line gate.
 
 import { execFileSync } from "node:child_process";
-import fsPromises from "node:fs/promises";
+import type { CitadelConfig } from "@citadel/config";
 import type { SqliteStore } from "@citadel/db";
 import {
   type MonitorSessionState,
   type MonitorTickDeps,
-  type SentinelReading,
   type StatusMonitorHandle,
   startStatusMonitor,
 } from "@citadel/operations";
 import type { RuntimeStatusAdapter, SessionAdapterState } from "@citadel/runtimes";
 import { getStatusAdapter } from "@citadel/runtimes";
-import {
-  agentExitSentinelPath,
-  agentLiveSentinelPath,
-  captureTmux,
-  readAgentExitCode,
-  tmuxPrefix,
-} from "@citadel/terminal";
+import { captureTmux, panePidProcess, tmuxPrefix } from "@citadel/terminal";
 
 // Dedupe monitor-side failures so a persistent tmux outage doesn't flood
 // stderr at 2 Hz. Key is `kind:message` so distinct error messages are still
@@ -38,9 +31,18 @@ function logMonitorFailureOnce(kind: string, err: unknown): void {
 export function buildStatusMonitorDeps(
   store: SqliteStore,
   emit: (event: string, payload: unknown) => void,
+  config: CitadelConfig,
+  recentUserAction: Map<string, number>,
 ): MonitorTickDeps {
   const adapterStates = new Map<string, SessionAdapterState>();
   const monitorStates = new Map<string, MonitorSessionState>();
+  // Build runtimeId → command map once at deps construction. Re-reading
+  // config on every tick would be wasteful; runtimes are static for the
+  // daemon's lifetime (a config change triggers daemon restart).
+  const runtimeBinaryByRuntimeId = new Map<string, string>();
+  for (const rt of config.runtimes ?? []) {
+    if (rt.id && rt.command) runtimeBinaryByRuntimeId.set(rt.id, rt.command);
+  }
   return {
     now: () => new Date().toISOString(),
     listSessions: () => store.listSessions(),
@@ -49,6 +51,7 @@ export function buildStatusMonitorDeps(
       store.updateSessionStatus(id, {
         ...(update.status !== undefined ? { status: update.status } : {}),
         ...(update.reason !== undefined ? { statusReason: update.reason } : {}),
+        ...(update.reasonAt !== undefined ? { statusReasonAt: update.reasonAt } : {}),
         ...(update.lastStatusAt !== undefined ? { lastStatusAt: update.lastStatusAt } : {}),
         ...(update.lastOutputAt !== undefined ? { lastOutputAt: update.lastOutputAt } : {}),
         ...(update.endedAt !== undefined ? { endedAt: update.endedAt } : {}),
@@ -57,6 +60,16 @@ export function buildStatusMonitorDeps(
     },
     deleteSession: (id) => store.deleteSession(id),
     emit: (event, payload) => emit(event, payload),
+    panePidProcess: (name) => {
+      try {
+        return panePidProcess(name);
+      } catch (err) {
+        logMonitorFailureOnce("panePidProcess", err);
+        return null;
+      }
+    },
+    runtimeBinaryFor: (runtimeId) => runtimeBinaryByRuntimeId.get(runtimeId) ?? null,
+    recentUserAction,
     // Single batched tmux query per tick — `#{session_activity}` is epoch sec.
     // Errors are caught and reported once per (kind × error-message) so a
     // persistent tmux failure (binary missing, permission denied) surfaces in
@@ -93,24 +106,6 @@ export function buildStatusMonitorDeps(
         return "";
       }
     },
-    readSentinels: async (name): Promise<SentinelReading> => {
-      const [liveStat, exitStat] = await Promise.all([
-        fsPromises.stat(agentLiveSentinelPath(name)).catch(() => null),
-        fsPromises.stat(agentExitSentinelPath(name)).catch(() => null),
-      ]);
-      // Stale-.exit guard: if both files exist and .live is newer than .exit,
-      // the .exit is leftover from a prior wrapper incarnation with the same
-      // tmux session name (e.g., daemon restart re-spawned the session before
-      // /tmp was cleared). Treat the exit signal as absent so the live agent
-      // doesn't get marked stopped.
-      const liveNewerThanExit = liveStat !== null && exitStat !== null && liveStat.mtimeMs > exitStat.mtimeMs;
-      const exitCode = exitStat && !liveNewerThanExit ? readAgentExitCode(name) : null;
-      return {
-        live: liveStat !== null,
-        exitCode,
-        exitedAt: exitStat && !liveNewerThanExit ? exitStat.ctime.toISOString() : null,
-      };
-    },
     getAdapter: (runtimeId): RuntimeStatusAdapter => getStatusAdapter(runtimeId),
     adapterStates,
     monitorStates,
@@ -120,8 +115,10 @@ export function buildStatusMonitorDeps(
 export function startDaemonStatusMonitor(
   store: SqliteStore,
   emit: (event: string, payload: unknown) => void,
+  config: CitadelConfig,
+  recentUserAction: Map<string, number>,
 ): StatusMonitorHandle | null {
   if (process.env.CITADEL_DISABLE_STATUS_MONITOR === "1") return null;
-  const deps = buildStatusMonitorDeps(store, emit);
+  const deps = buildStatusMonitorDeps(store, emit, config, recentUserAction);
   return startStatusMonitor(deps, 2000);
 }

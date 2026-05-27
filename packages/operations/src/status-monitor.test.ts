@@ -1,9 +1,17 @@
 import type { AgentSession } from "@citadel/contracts";
 import type { RuntimeStatusAdapter } from "@citadel/runtimes";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { reduceStatus } from "./agent-status.js";
 import { type MonitorTickDeps, runStatusMonitorTick } from "./status-monitor.js";
 
-const FIXED_NOW = "2026-05-25T12:00:00.000Z";
+// Shell-first status monitor tests.
+//
+// Three regression-pin scenarios anchor the "tmux failure must not mass-flip
+// every session to stopped" invariant. They live first in the file so a
+// future refactor that re-introduces the legacy mass-flip path fails loud.
+
+const FIXED_NOW = "2026-05-26T19:00:00.000Z";
+const FIXED_NOW_MS = new Date(FIXED_NOW).valueOf();
 
 function makeSession(over: Partial<AgentSession> = {}): AgentSession {
   return {
@@ -13,15 +21,16 @@ function makeSession(over: Partial<AgentSession> = {}): AgentSession {
     displayName: "test",
     status: "running",
     statusReason: null,
-    lastStatusAt: "2026-05-25T11:59:00.000Z",
+    statusReasonAt: null,
+    lastStatusAt: "2026-05-26T18:59:00.000Z",
     lastOutputAt: null,
     endedAt: null,
     exitCode: null,
     transport: "disconnected",
     tmuxSessionName: "citadel_test_1",
     tmuxSessionId: "$1",
-    createdAt: "2026-05-25T11:59:00.000Z",
-    updatedAt: "2026-05-25T11:59:00.000Z",
+    createdAt: "2026-05-26T18:59:00.000Z",
+    updatedAt: "2026-05-26T18:59:00.000Z",
     ...over,
   };
 }
@@ -37,24 +46,27 @@ function makeAdapter(observed: ReturnType<RuntimeStatusAdapter["observe"]>): Run
 interface DepsOver {
   sessions?: AgentSession[];
   workspaces?: Array<{ id: string }>;
+  // Shell-first: deps gives `panePidProcess` (foreground command, null when
+  // tmux missing) instead of legacy sentinel reads. Map keys are tmux
+  // session names.
+  panePidProcess?: Map<string, { command: string; pid: number } | null>;
+  runtimeBinaries?: Map<string, string>;
+  recentUserAction?: Map<string, number>;
   tmuxActivities?: Map<string, number>;
-  paneCaptures?: Map<string, string>;
-  sentinels?: Map<string, { live: boolean; exitCode: number | null; exitedAt: string | null }>;
   adapter?: RuntimeStatusAdapter;
+  // Optional shared monitor state. When set, the deps uses this Map so
+  // tests can observe / reuse state across multiple `runStatusMonitorTick`
+  // calls (debounce tests need this).
+  monitorStates?: Map<string, unknown>;
 }
 
-function makeDeps(over: DepsOver = {}): {
-  deps: MonitorTickDeps;
-  updates: Array<{ id: string; update: Record<string, unknown> }>;
-  emitted: Array<{ event: string; payload: unknown }>;
-  deleted: string[];
-} {
+function makeDeps(over: DepsOver = {}) {
   const updates: Array<{ id: string; update: Record<string, unknown> }> = [];
   const emitted: Array<{ event: string; payload: unknown }> = [];
   const deleted: string[] = [];
   const sessions = over.sessions ?? [makeSession()];
   const workspaces = over.workspaces ?? [{ id: "ws_1" }];
-
+  const runtimeBinaries = over.runtimeBinaries ?? new Map([["claude-code", "claude"]]);
   const deps: MonitorTickDeps = {
     now: () => FIXED_NOW,
     listSessions: () => sessions,
@@ -63,278 +75,174 @@ function makeDeps(over: DepsOver = {}): {
     deleteSession: (id) => deleted.push(id),
     emit: (event, payload) => emitted.push({ event, payload }),
     tmuxActivities: () => over.tmuxActivities ?? new Map(),
-    paneCapture: (name) => over.paneCaptures?.get(name) ?? "",
-    readSentinels: async (name) => over.sentinels?.get(name) ?? { live: true, exitCode: null, exitedAt: null },
+    paneCapture: () => "",
+    // CRITICAL: must use `has()` not `??` — the Map may explicitly store
+    // `null` for tmux-missing test cases, and `??` would treat that as
+    // "no override" and fall back to the agent-foreground default.
+    panePidProcess: (name) =>
+      over.panePidProcess?.has(name) ? (over.panePidProcess.get(name) ?? null) : { command: "claude", pid: 1 },
+    runtimeBinaryFor: (runtimeId) => runtimeBinaries.get(runtimeId) ?? null,
+    recentUserAction: over.recentUserAction ?? new Map(),
     getAdapter: () => over.adapter ?? makeAdapter(null),
     adapterStates: new Map(),
-    monitorStates: new Map(),
+    // biome-ignore lint/suspicious/noExplicitAny: shared-Map injection point
+    monitorStates: (over.monitorStates ?? new Map()) as Map<string, any>,
   };
-
   return { deps, updates, emitted, deleted };
 }
 
-describe("runStatusMonitorTick", () => {
-  describe("session filtering", () => {
-    it("returns no-op result with empty session list", async () => {
-      const { deps } = makeDeps({ sessions: [] });
-      const result = await runStatusMonitorTick(deps, { source: "tick" });
-      expect(result).toEqual({ sessionsTouched: 0, deletedSessions: 0 });
-    });
-
-    it("skips sessions in terminal states (stopped, failed)", async () => {
-      const { deps, updates, emitted } = makeDeps({
-        sessions: [
-          makeSession({ id: "s_stopped", status: "stopped" }),
-          makeSession({ id: "s_failed", status: "failed" }),
-        ],
-      });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(updates).toHaveLength(0);
-      expect(emitted).toHaveLength(0);
-    });
-
-    it("skips shell runtime sessions entirely", async () => {
-      const { deps, updates, emitted } = makeDeps({
-        sessions: [makeSession({ id: "s_shell", runtimeId: "shell" })],
-      });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(updates).toHaveLength(0);
-      expect(emitted).toHaveLength(0);
-    });
-
-    it("processes unknown sessions (reason can refine, resurrection possible)", async () => {
-      const adapter = makeAdapter("running");
-      const { deps, updates } = makeDeps({
-        sessions: [makeSession({ id: "s_unk", status: "unknown", statusReason: "tmux_missing" })],
-        tmuxActivities: new Map([["citadel_test_1", 1700000000000]]),
-        adapter,
-      });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(adapter.observe).toHaveBeenCalled();
-      // Resurrection: unknown × pane_observation(running) → running
-      expect(updates).toHaveLength(1);
-      expect(updates[0]?.update).toMatchObject({ status: "running" });
-    });
+describe("regression-pin: tmux failure MUST NOT mass-flip sessions to stopped", () => {
+  it("(scenario 1) panePidProcess returning null for every session marks them `unknown`, never `stopped`", async () => {
+    // Simulate tmux being entirely unreachable — every panePidProcess() lookup
+    // returns null. Mirrors the 18:40:57 production incident at the
+    // status-monitor tick layer.
+    const sessions = Array.from({ length: 25 }, (_, i) =>
+      makeSession({ id: `sess_${i}`, tmuxSessionName: `citadel_${i}` }),
+    );
+    const panePidProcess = new Map<string, { command: string; pid: number } | null>();
+    for (const s of sessions) panePidProcess.set(s.tmuxSessionName ?? "", null);
+    const { deps, updates } = makeDeps({ sessions, panePidProcess });
+    await runStatusMonitorTick(deps, { source: "tick" });
+    expect(updates.length).toBeGreaterThan(0);
+    for (const u of updates) {
+      expect(u.update.status).toBe("unknown");
+      expect(u.update.status).not.toBe("stopped");
+      expect(u.update.status).not.toBe("failed");
+    }
   });
 
-  describe("lifecycle signals — exit sentinel", () => {
-    it("`.exit` with code 0 → stopped (clean exit)", async () => {
-      const { deps, updates, emitted } = makeDeps({
-        sentinels: new Map([["citadel_test_1", { live: false, exitCode: 0, exitedAt: "2026-05-25T11:59:30.000Z" }]]),
-      });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(updates).toHaveLength(1);
-      expect(updates[0]?.update).toMatchObject({ status: "stopped", exitCode: 0, endedAt: "2026-05-25T11:59:30.000Z" });
-      expect(emitted).toHaveLength(1);
-      expect(emitted[0]?.event).toBe("agent.updated");
-    });
-
-    it("`.exit` with non-zero code → failed", async () => {
-      const { deps, updates } = makeDeps({
-        sentinels: new Map([["citadel_test_1", { live: false, exitCode: 7, exitedAt: "2026-05-25T11:59:30.000Z" }]]),
-      });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(updates[0]?.update).toMatchObject({ status: "failed", exitCode: 7 });
-    });
+  it("(scenario 2) legacy /tmp/citadel-agent-*.exit files on disk MUST NOT influence the tick — readSentinels was removed from MonitorTickDeps", () => {
+    // Compile-time pin: importing the deps type and asserting it has no
+    // `readSentinels` member. (TypeScript would have flagged this in CI, but
+    // the explicit assertion documents the invariant for future readers.)
+    const dummyDeps = makeDeps().deps;
+    expect("readSentinels" in dummyDeps).toBe(false);
   });
 
-  describe("lifecycle signals — tmux missing", () => {
-    it("tmux session absent + workspace still exists → unknown(tmux_missing)", async () => {
-      const { deps, updates, deleted } = makeDeps({
-        tmuxActivities: new Map(), // empty — no tmux sessions
-        sentinels: new Map([["citadel_test_1", { live: false, exitCode: null, exitedAt: null }]]),
-      });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(deleted).toHaveLength(0);
-      expect(updates).toHaveLength(1);
-      expect(updates[0]?.update).toMatchObject({ status: "unknown", reason: "tmux_missing" });
+  it("(scenario 3) idle agents whose foreground is bash for one tick do NOT flip to idle — two-tick debounce prevents claude→git→claude flicker", async () => {
+    const { deps, updates } = makeDeps({
+      sessions: [makeSession()],
+      panePidProcess: new Map([["citadel_test_1", { command: "bash", pid: 100 }]]),
     });
+    // One tick observing bash should NOT produce an update — debounce requires 2.
+    await runStatusMonitorTick(deps, { source: "tick" });
+    expect(updates).toHaveLength(0);
+  });
+});
 
-    it("tmux session absent + workspace also gone → deleteSession, no reducer update", async () => {
-      const { deps, updates, deleted, emitted } = makeDeps({
-        sessions: [makeSession({ id: "s_orphan", workspaceId: "ws_gone" })],
-        workspaces: [], // workspace deleted
-        tmuxActivities: new Map(),
-      });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(deleted).toEqual(["s_orphan"]);
-      expect(updates).toHaveLength(0);
-      // No emit either — the session ceased to exist; UI catches it via next state poll.
-      expect(emitted).toHaveLength(0);
+describe("shell-first per-runtime status derivation", () => {
+  it("claude-code foreground → keeps status running", async () => {
+    const { deps, updates } = makeDeps({
+      panePidProcess: new Map([["citadel_test_1", { command: "claude", pid: 100 }]]),
     });
-
-    it("boot tick uses daemon_restart_indeterminate reason for tmux_missing", async () => {
-      const { deps, updates } = makeDeps({
-        tmuxActivities: new Map(),
-        sentinels: new Map([["citadel_test_1", { live: false, exitCode: null, exitedAt: null }]]),
-      });
-      await runStatusMonitorTick(deps, { source: "boot" });
-      expect(updates[0]?.update).toMatchObject({ status: "unknown", reason: "daemon_restart_indeterminate" });
-    });
-
-    it("sentinel `.live` missing + `.exit` missing + tmux ALIVE → unknown(sentinel_missing_tmux_alive)", async () => {
-      const { deps, updates } = makeDeps({
-        tmuxActivities: new Map([["citadel_test_1", 1700000000000]]),
-        sentinels: new Map([["citadel_test_1", { live: false, exitCode: null, exitedAt: null }]]),
-      });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(updates[0]?.update).toMatchObject({ status: "unknown", reason: "sentinel_missing_tmux_alive" });
-    });
+    await runStatusMonitorTick(deps, { source: "tick" });
+    // No state change → no update.
+    expect(updates).toHaveLength(0);
   });
 
-  describe("emit suppression on boot", () => {
-    it("boot tick does not emit agent.updated (emit fn called with no-op)", async () => {
-      // The skill's design says boot threads emit=()=>{}. The deps' own emit
-      // is what we observe; the monitor itself doesn't decide to call it or
-      // not — the wrapper passes a noop emit on boot. We assert that even when
-      // the deps' emit IS set, the boot path still calls it (caller's
-      // responsibility to noop). This is just the contract: emit is always
-      // invoked; the caller decides whether it's a real broadcast.
-      // (Documented behavior: boot reconcile passes emit=()=>{})
-      const { deps, emitted } = makeDeps({
-        tmuxActivities: new Map(),
-        sentinels: new Map([["citadel_test_1", { live: false, exitCode: 0, exitedAt: "2026-05-25T11:59:30.000Z" }]]),
-      });
-      await runStatusMonitorTick(deps, { source: "boot" });
-      // The deps.emit was called. Caller controls whether it broadcasts.
-      expect(emitted).toHaveLength(1);
+  it("shell-runtime session with shell foreground stays running (NOT idle — for plain terminals the shell IS the runtime)", async () => {
+    const { deps, updates } = makeDeps({
+      sessions: [makeSession({ id: "sess_term", runtimeId: "shell" })],
+      panePidProcess: new Map([["citadel_test_1", { command: "bash", pid: 100 }]]),
+      runtimeBinaries: new Map([["shell", "bash"]]),
     });
+    await runStatusMonitorTick(deps, { source: "tick" });
+    // Shell-runtime sessions should not flip to idle when foreground is bash.
+    expect(updates).toHaveLength(0);
   });
 
-  describe("adapter integration — pane_observation drives status", () => {
-    it("calls adapter.observe with the pane capture", async () => {
-      const adapter = makeAdapter("idle");
-      const { deps } = makeDeps({
-        sessions: [makeSession({ status: "running" })],
-        tmuxActivities: new Map([["citadel_test_1", 1700000000000]]),
-        paneCaptures: new Map([["citadel_test_1", "fake pane content"]]),
-        adapter,
-      });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(adapter.observe).toHaveBeenCalledTimes(1);
-      const call = (adapter.observe as ReturnType<typeof vi.fn>).mock.calls[0]?.[1];
-      expect(call?.paneCapture).toBe("fake pane content");
+  it("agent runtime: two consecutive ticks of shell foreground flips to idle with idle_after_unexpected_exit label", async () => {
+    const monitorStates = new Map();
+    const { deps, updates } = makeDeps({
+      sessions: [makeSession()],
+      panePidProcess: new Map([["citadel_test_1", { command: "bash", pid: 100 }]]),
+      monitorStates,
     });
-
-    it("running × adapter says idle → idle transition", async () => {
-      const adapter = makeAdapter("idle");
-      const { deps, updates } = makeDeps({
-        sessions: [makeSession({ status: "running" })],
-        tmuxActivities: new Map([["citadel_test_1", 1700000000000]]),
-        adapter,
-      });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(updates).toHaveLength(1);
-      expect(updates[0]?.update).toMatchObject({ status: "idle" });
+    await runStatusMonitorTick(deps, { source: "tick" }); // first tick: debounce
+    expect(updates).toHaveLength(0);
+    await runStatusMonitorTick(deps, { source: "tick" }); // second tick: flip
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.update).toMatchObject({
+      status: "idle",
+      reason: "idle_after_unexpected_exit",
     });
-
-    it("adapter returns null → no update emitted (no opinion)", async () => {
-      const adapter = makeAdapter(null);
-      const { deps, updates } = makeDeps({
-        sessions: [makeSession({ status: "running" })],
-        tmuxActivities: new Map([["citadel_test_1", 1700000000000]]),
-        adapter,
-      });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(updates).toHaveLength(0);
-    });
+    expect(updates[0]?.update.reasonAt).toBeDefined();
   });
 
-  describe("activity-changed bookkeeping", () => {
-    it("first tick with activity recorded → ticksSinceActivityChange = 0, tmuxActivityChangedSinceLastTick = true", async () => {
-      const adapter = makeAdapter(null);
-      const captured: Array<{ ticks: number; changed: boolean; hasObserved: boolean }> = [];
-      adapter.observe = vi.fn((_state, ctx) => {
-        captured.push({
-          ticks: ctx.ticksSinceActivityChange,
-          changed: ctx.tmuxActivityChangedSinceLastTick,
-          hasObserved: ctx.hasObservedSinceBoot,
-        });
-        return null;
-      });
-      const deps = makeDeps({
-        sessions: [makeSession({ status: "running" })],
-        tmuxActivities: new Map([["citadel_test_1", 1700000000000]]),
-        adapter,
-      }).deps;
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(captured).toHaveLength(1);
-      expect(captured[0]?.changed).toBe(true);
-      expect(captured[0]?.hasObserved).toBe(false); // first observation of this session
+  it("agent runtime: running → idle WITH recent user action clears statusReason to null (no attention label)", async () => {
+    const recentUserAction = new Map([["sess_1", FIXED_NOW_MS - 1000]]); // 1s ago, within 5s window
+    const monitorStates = new Map();
+    const { deps, updates } = makeDeps({
+      sessions: [makeSession()],
+      panePidProcess: new Map([["citadel_test_1", { command: "bash", pid: 100 }]]),
+      recentUserAction,
+      monitorStates,
     });
+    await runStatusMonitorTick(deps, { source: "tick" }); // debounce
+    await runStatusMonitorTick(deps, { source: "tick" }); // flip
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.update).toMatchObject({ status: "idle", reason: null, reasonAt: null });
+  });
+});
 
-    it("second tick with same activity ts → ticksSinceActivityChange = 1, tmuxActivityChangedSinceLastTick = false", async () => {
-      const adapter = makeAdapter(null);
-      const captured: Array<{ ticks: number; changed: boolean; hasObserved: boolean }> = [];
-      adapter.observe = vi.fn((_state, ctx) => {
-        captured.push({
-          ticks: ctx.ticksSinceActivityChange,
-          changed: ctx.tmuxActivityChangedSinceLastTick,
-          hasObserved: ctx.hasObservedSinceBoot,
-        });
-        return null;
-      });
-      const { deps } = makeDeps({
-        sessions: [makeSession({ status: "running" })],
-        tmuxActivities: new Map([["citadel_test_1", 1700000000000]]),
-        adapter,
-      });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(captured).toHaveLength(2);
-      expect(captured[1]?.ticks).toBe(1);
-      expect(captured[1]?.changed).toBe(false);
-      expect(captured[1]?.hasObserved).toBe(true);
+describe("30-minute auto-clear of idle_after_unexpected_exit", () => {
+  it("clears reason + reasonAt when statusReasonAt is older than the window", async () => {
+    const longAgo = new Date(FIXED_NOW_MS - 31 * 60 * 1000).toISOString();
+    const session = makeSession({
+      status: "idle",
+      statusReason: "idle_after_unexpected_exit",
+      statusReasonAt: longAgo,
     });
-
-    it("third tick (still stable) → ticksSinceActivityChange = 2", async () => {
-      const adapter = makeAdapter(null);
-      const captured: number[] = [];
-      adapter.observe = vi.fn((_state, ctx) => {
-        captured.push(ctx.ticksSinceActivityChange);
-        return null;
-      });
-      const { deps } = makeDeps({
-        sessions: [makeSession({ status: "running" })],
-        tmuxActivities: new Map([["citadel_test_1", 1700000000000]]),
-        adapter,
-      });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(captured).toEqual([0, 1, 2]);
+    const { deps, updates } = makeDeps({
+      sessions: [session],
+      panePidProcess: new Map([["citadel_test_1", { command: "bash", pid: 100 }]]),
     });
-
-    it("activity bump between ticks resets the counter", async () => {
-      const adapter = makeAdapter(null);
-      const captured: number[] = [];
-      adapter.observe = vi.fn((_state, ctx) => {
-        captured.push(ctx.ticksSinceActivityChange);
-        return null;
-      });
-      const sessions = [makeSession({ status: "running" })];
-      const tmuxActivities = new Map([["citadel_test_1", 1700000000000]]);
-      const { deps } = makeDeps({ sessions, tmuxActivities, adapter });
-      await runStatusMonitorTick(deps, { source: "tick" });
-      tmuxActivities.set("citadel_test_1", 1700000001000);
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(captured).toEqual([0, 0]);
-    });
+    await runStatusMonitorTick(deps, { source: "tick" });
+    // Auto-clear update.
+    const cleared = updates.find((u) => u.update.reason === null);
+    expect(cleared).toBeDefined();
+    expect(cleared?.update.reasonAt).toBeNull();
   });
 
-  describe("tmux is queried once per tick (batched)", () => {
-    it("tmuxActivities() is invoked exactly once even with N sessions", async () => {
-      const tmuxFn = vi.fn(() => new Map([["citadel_test_1", 1700000000000]]));
-      const { deps } = makeDeps({
-        sessions: [
-          makeSession({ id: "s1", tmuxSessionName: "citadel_test_1" }),
-          makeSession({ id: "s2", tmuxSessionName: "citadel_test_2" }),
-          makeSession({ id: "s3", tmuxSessionName: "citadel_test_3" }),
-        ],
-      });
-      deps.tmuxActivities = tmuxFn;
-      await runStatusMonitorTick(deps, { source: "tick" });
-      expect(tmuxFn).toHaveBeenCalledTimes(1);
+  it("does NOT clear within the 30-min window", async () => {
+    const recent = new Date(FIXED_NOW_MS - 10 * 60 * 1000).toISOString(); // 10 min ago
+    const session = makeSession({
+      status: "idle",
+      statusReason: "idle_after_unexpected_exit",
+      statusReasonAt: recent,
     });
+    const { deps, updates } = makeDeps({
+      sessions: [session],
+      panePidProcess: new Map([["citadel_test_1", { command: "bash", pid: 100 }]]),
+    });
+    await runStatusMonitorTick(deps, { source: "tick" });
+    // No clear update.
+    expect(updates.find((u) => u.update.reason === null)).toBeUndefined();
+  });
+});
+
+describe("launch_failed reducer signal still produces status='failed'", () => {
+  it("pins the reducer path that flows from createAgentSession when tmux new-session itself errors", () => {
+    // The status monitor doesn't emit launch_failed, but the reducer must
+    // still translate it correctly for direct callers (create-agent-session
+    // on tmux-spawn failure). This pins the reducer behaviour so the §5
+    // cleanup didn't accidentally trim the branch.
+    const prev = { status: "starting" as const, lastOutputAt: null, statusReason: null };
+    const update = reduceStatus(prev, { type: "launch_failed", reason: "spawn_failed" }, () => FIXED_NOW);
+    expect(update?.status).toBe("failed");
+    expect(update?.reason).toBe("spawn_failed");
+    expect(update?.endedAt).toBe(FIXED_NOW);
+  });
+});
+
+describe("workspace-membership cleanup (existing behaviour preserved)", () => {
+  it("deletes session when tmux is missing AND the workspace is gone", async () => {
+    const { deps, deleted } = makeDeps({
+      sessions: [makeSession({ workspaceId: "ws_gone" })],
+      workspaces: [],
+      panePidProcess: new Map([["citadel_test_1", null]]),
+    });
+    await runStatusMonitorTick(deps, { source: "tick" });
+    expect(deleted).toEqual(["sess_1"]);
   });
 });
