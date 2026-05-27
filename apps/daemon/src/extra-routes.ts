@@ -333,7 +333,8 @@ async function readGitHubQuota(
       timeout: 8000,
       maxBuffer: 256 * 1024,
     });
-    return applyQuotaCooldown(normalizeGitHubQuota(stdout, checkedAt, automationEnabled), cooldown);
+    const quota = normalizeGitHubQuota(stdout, checkedAt, automationEnabled);
+    return applyQuotaCooldown(quota, cooldown ?? quotaCooldownFromResources(quota));
   } catch (error) {
     const reason = isRateLimitError(error);
     if (reason) {
@@ -358,6 +359,18 @@ async function readGitHubQuota(
       resources: previous?.resources ?? [],
     };
   }
+}
+
+function quotaCooldownFromResources(quota: GitHubQuotaSummary): { until: number; reason: string } | null {
+  const exhausted = quota.resources.find(
+    (resource) => (resource.name === "graphql" || resource.name === "core") && resource.remaining === 0,
+  );
+  if (!exhausted?.resetAt) return null;
+  const resetMs = Date.parse(exhausted.resetAt);
+  if (!Number.isFinite(resetMs) || resetMs <= Date.now()) return null;
+  const reason = `GitHub ${exhausted.name} quota exhausted until ${exhausted.resetAt}`;
+  const until = setGhCooldown(reason, Math.max(1, resetMs - Date.now()));
+  return { until, reason };
 }
 
 function applyQuotaCooldown(

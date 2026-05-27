@@ -334,6 +334,48 @@ exit 1
     }
   });
 
+  it("starts GitHub cooldown from an exhausted quota response before PR polling retries", async () => {
+    const { clearGhCooldown } = await import("@citadel/providers");
+    const fixture = createFixture();
+    const fakeGh = path.join(fixture.config.dataDir, "fake-gh");
+    fs.writeFileSync(
+      fakeGh,
+      `#!/usr/bin/env bash
+if [ "$1" = "api" ] && [ "$2" = "rate_limit" ]; then
+  cat <<'JSON'
+{"resources":{"core":{"limit":5000,"used":25,"remaining":4975,"reset":4102444800},"graphql":{"limit":5000,"used":5000,"remaining":0,"reset":4102444800},"search":{"limit":30,"used":0,"remaining":30,"reset":4102444800}}}
+JSON
+  exit 0
+fi
+exit 1
+`,
+      { mode: 0o755 },
+    );
+    fixture.config.providers.github.enabled = true;
+    fixture.config.providers.github.command = fakeGh;
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const body = await getJson<{
+        quota: {
+          status: string;
+          reason: string | null;
+          cooldownUntil: string | null;
+          resources: Array<{ name: string; percentUsed: number }>;
+        };
+      }>(`${baseUrl}/api/integrations/github/quota`);
+      expect(body.quota.status).toBe("degraded");
+      expect(body.quota.reason).toContain("GitHub graphql quota exhausted");
+      expect(body.quota.cooldownUntil).toBeTruthy();
+      expect(body.quota.resources.find((resource) => resource.name === "graphql")).toMatchObject({
+        percentUsed: 100,
+      });
+    } finally {
+      clearGhCooldown();
+      await closeServer(server);
+    }
+  });
+
   it("injects versionControl.cooldownUntil into provider-summary while gh is in cooldown (review #6)", async () => {
     const { clearGhCooldown, setGhCooldown } = await import("@citadel/providers");
     const fixture = createFixture();
