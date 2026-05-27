@@ -27,28 +27,52 @@ export function tmuxPrefix(): string[] {
   return sock ? ["-L", sock] : [];
 }
 
+/**
+ * Shell-first session request. The pane's PID is `bash -l` — the agent (if
+ * any) is launched as a child of the shell via `launchAgentInSession` after
+ * `ensureTmuxSession` returns. The legacy wrapper that exec'd the agent as
+ * the pane process is gone; with it go the /tmp sentinel files, the EXIT
+ * trap, and the post-exit fallback shell.
+ *
+ * For the background-hook path that must run a command that exits cleanly
+ * (no shell phase, pane terminates with the command), use
+ * `ensureTmuxSessionRaw` instead.
+ */
 export type TerminalSessionRequest = {
   sessionName: string;
   cwd: string;
-  command: string;
-  args: string[];
 };
 
 export async function ensureTmuxSession(input: TerminalSessionRequest) {
   const exists = tmuxSessionExists(input.sessionName);
   const freshlyCreated = !exists;
   if (!exists) {
-    // Pre-create the live sentinel so reconciliation between tmux launch and
-    // the wrapper's own `touch` cannot race into a spurious "stopped".
-    try {
-      fs.writeFileSync(agentLiveSentinelPath(input.sessionName), "");
-    } catch {
-      // best-effort: status detection degrades gracefully if tmpdir is read-only
-    }
-    const command = terminalCommand(input.sessionName, input.command, input.args);
+    // Shell-first: the pane PID is `bash -l`. The agent, if there is one, is
+    // launched into this shell via send-keys (see launchAgentInSession). The
+    // -e flags propagate the colour-env tokens the legacy wrapper used to set
+    // via `env -u NO_COLOR ...` — same tokens, just exported into the shell
+    // (and from there, into any child process the shell launches).
     await execFileAsync(
       "tmux",
-      [...tmuxPrefix(), "new-session", "-d", "-s", input.sessionName, "-c", input.cwd, command],
+      [
+        ...tmuxPrefix(),
+        "new-session",
+        "-d",
+        "-s",
+        input.sessionName,
+        "-c",
+        input.cwd,
+        "-e",
+        "TERM=xterm-256color",
+        "-e",
+        "COLORTERM=truecolor",
+        "-e",
+        "FORCE_COLOR=1",
+        "-e",
+        "CLICOLOR_FORCE=1",
+        "bash",
+        "-l",
+      ],
       {
         timeout: 10000,
         maxBuffer: 128 * 1024,
@@ -73,18 +97,25 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
       encoding: "utf8",
     },
   ).trim();
-  // After freshly spawning the wrapper there is a brief window where the outer
-  // `bash -c` is still running the script and the inner interactive shell
-  // hasn't yet taken over the PTY foreground. Keystrokes (and crucially,
-  // Ctrl+C) delivered during that window can reach the wrong process. Wait
-  // for the pane to settle so callers can rely on "ensureTmuxSession returned
-  // → keys are safe to send."
+  // Wait for the shell prompt to settle so callers can immediately
+  // `launchAgentInSession` or `submitPrompt` without losing keystrokes to
+  // bash's startup window.
   if (freshlyCreated) await waitForTerminalIdle(input.sessionName, { timeoutMs: 1500, idleMs: 200 });
   return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
 }
 
 import { attachPipePaneLog } from "./pipe-pane-log.js";
 export { pipePaneLogPath, readPipePaneTail, sweepPtyLogs } from "./pipe-pane-log.js";
+export {
+  COMM_TRUNCATION,
+  DEFAULT_SENTINEL_MARKER_PATH,
+  DEFAULT_SENTINEL_MAX_AGE_MS,
+  DEFAULT_SENTINEL_SAFEGUARD,
+  launchAgentInSession,
+  panePidProcess,
+  sweepLegacyAgentSentinels,
+} from "./pane-lifecycle.js";
+export type { PanePidProcess, SweepLegacySentinelsResult } from "./pane-lifecycle.js";
 
 // Path of the "agent still running" sentinel file for a given tmux session.
 // The wrapper script touches this before exec'ing the agent and removes it
@@ -119,45 +150,6 @@ export function readAgentExitCode(sessionName: string): number | null {
   }
 }
 
-// Wrap the agent so the tmux pane survives its exit: Ctrl+C in Claude Code
-// would otherwise kill PID 1 of the pane. After exit we drop into a fresh
-// interactive login shell at the workspace cwd. A tmpdir sentinel marks
-// "agent live" so the reconciler can flip session status without killing the
-// pane. Outer shell is non-login (`bash -c`) so we don't silently source
-// ~/.bash_profile per agent; the post-exit fallback IS a login shell and
-// respects $SHELL so zsh/fish users aren't forced into bash.
-function terminalCommand(sessionName: string, command: string, args: string[]) {
-  const argv = [command, ...args].map(shellQuote).join(" ");
-  const envPrefix = "env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor FORCE_COLOR=1 CLICOLOR_FORCE=1";
-  const liveSentinel = shellQuote(agentLiveSentinelPath(sessionName));
-  const exitSentinel = shellQuote(agentExitSentinelPath(sessionName));
-  const exitHint = "[citadel] Agent exited. Run any command, or restart the agent (e.g. `claude resume <sessionId>`).";
-  // The trap fires on bash signal-death (the bash shell receives SIGTERM/SIGINT
-  // mid-`<agent>`); the explicit lines after `<agent>` cover the happy-path
-  // (natural agent exit) before `exec` replaces this bash with the fallback
-  // shell. The explicit lines run normally; the trap also runs on signal but
-  // `exec` skips the trap on the happy path. `$?` at trap time reflects the
-  // killed agent's exit status (typically 130/SIGINT or 143/SIGTERM).
-  //
-  // `rm -f ${exitSentinel}` first: if a previous incarnation with the same
-  // tmux session name left a stale .exit on disk (daemon restart, /tmp not
-  // cleared), the status monitor would read it and mark this fresh session
-  // as already-stopped. Clearing before touching .live guarantees a clean
-  // slate per wrapper invocation.
-  const script = [
-    `rm -f ${exitSentinel}`,
-    `touch ${liveSentinel}`,
-    `trap 'rc=$?; echo $rc > ${exitSentinel}; rm -f ${liveSentinel}' EXIT`,
-    `${envPrefix} ${argv}`,
-    "rc=$?",
-    `echo $rc > ${exitSentinel}`,
-    `rm -f ${liveSentinel}`,
-    `printf '\\n%s\\n' ${shellQuote(exitHint)}`,
-    'exec "${SHELL:-/bin/bash}" -l',
-  ].join("; ");
-  return `bash -c ${shellQuote(script)}`;
-}
-
 export function shellQuote(value: string) {
   if (/^[A-Za-z0-9_/:=.,+@%-]+$/.test(value)) return value;
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -172,16 +164,27 @@ export function shellQuote(value: string) {
 export const LOG_TRUNCATION_BYTES = 16 * 1024 * 1024;
 
 /**
- * Like ensureTmuxSession but bypasses the agent-wrapper script — runs
- * `command args` directly under tmux. When the command exits, the pane
- * terminates. Used by background scheduled-agent runs where:
- *  - There is no human to "fall back" to a shell for.
- *  - We do NOT want the wrapper's "[citadel] Agent exited" line + fallback
- *    shell PS1 to stream into the per-run log file via pipe-pane.
- *  - We DO want the reconciler to see `tmuxSessionExists === false` on the
- *    next tick after the agent exits so the run row closes promptly.
+ * Background-run session. Runs `command args` as the pane process directly
+ * — when the command exits, the pane terminates. This is distinct from
+ * `ensureTmuxSession`'s shell-first model because background scheduled-agent
+ * runs:
+ *  - Have no human to "fall back" to a shell for.
+ *  - Do NOT want a shell prompt streamed into the per-run pipe-pane log file.
+ *  - DO want the reconciler to see `tmuxSessionExists === false` on the next
+ *    tick after the command exits so the run row closes promptly.
+ *
+ * Background runs continue to produce a /tmp/citadel-agent-<name>.live
+ * sentinel pre-creation guard because they don't go through the shell-first
+ * code path; the reconciler tolerates legacy sentinels for raw sessions.
  */
-export async function ensureTmuxSessionRaw(input: TerminalSessionRequest) {
+export type RawTerminalSessionRequest = {
+  sessionName: string;
+  cwd: string;
+  command: string;
+  args: string[];
+};
+
+export async function ensureTmuxSessionRaw(input: RawTerminalSessionRequest) {
   if (tmuxSessionExists(input.sessionName)) {
     const id = execFileSync(
       "tmux",
@@ -199,7 +202,7 @@ export async function ensureTmuxSessionRaw(input: TerminalSessionRequest) {
   }
   // tmux new-session takes a single `shell-command` string and hands it to
   // /bin/sh -c. Build it ourselves with shellQuote so an arg with spaces is
-  // preserved correctly. Compare to ensureTmuxSession which wraps in `bash -c`.
+  // preserved correctly.
   const shellCommand = [input.command, ...input.args].map(shellQuote).join(" ");
   await execFileAsync(
     "tmux",
