@@ -53,11 +53,7 @@ import {
 } from "./workspace-apps.js";
 
 export class OperationService {
-  // Optional terminal-layer hook. The daemon registers a release() that maps
-  // sessionId → ttyd entry; calling it on stopAgentSession ensures the ttyd
-  // process is reaped at the same time as the tmux session, no matter which
-  // entrypoint (REST, MCP, restore route) invoked the stop. Tests and
-  // standalone consumers of OperationService can leave it null.
+  // Daemon registers onSessionStopped to release the ttyd whenever stopAgentSession runs (REST, MCP, restore route).
   private terminalHooks: { onSessionStopped?: (sessionId: string) => void } = {};
 
   constructor(
@@ -74,9 +70,8 @@ export class OperationService {
     },
   ) {}
 
-  setTerminalHooks(hooks: { onSessionStopped?: (sessionId: string) => void }) {
-    this.terminalHooks = hooks;
-  }
+  // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+  setTerminalHooks(hooks: { onSessionStopped?: (sessionId: string) => void }) { this.terminalHooks = hooks; }
 
   registerRepo(input: { rootPath: string; name?: string | undefined; worktreeParent?: string | undefined }) {
     const now = nowIso();
@@ -99,7 +94,6 @@ export class OperationService {
     };
     this.store.insertRepo(repo);
     this.activity("repo.registered", "user", `Registered ${repo.name}`, repo.id, null, null);
-    // Non-removable root workspace exposes the repo's main checkout to agents/terminals (cf. Superset).
     const rootWorkspace: Workspace = {
       id: createId("ws"),
       repoId: repo.id,
@@ -332,9 +326,6 @@ export class OperationService {
     const session = this.store.listSessions().find((candidate) => candidate.id === input.sessionId);
     if (!session) return { stopped: false, reason: "session_not_found" as const };
     if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
-    // Release the ttyd before deleting the DB row. The terminal-hook is
-    // best-effort — release() is itself idempotent (no-op when key isn't in
-    // the map), so doing it here unconditionally is safe.
     this.terminalHooks.onSessionStopped?.(session.id);
     this.store.deleteSession(session.id);
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
@@ -407,8 +398,7 @@ export class OperationService {
     const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
     if (!repo) throw new Error(`Workspace repo is missing: ${workspace.repoId}`);
     if (workspace.kind === "root") {
-      // The root workspace tracks the repo's main checkout; it can only be
-      // removed by removing the repository itself.
+      // Root workspace can only be dropped via repo removal.
       const operation = this.operation(
         "workspace.remove",
         "failed",
