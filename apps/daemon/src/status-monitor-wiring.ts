@@ -43,6 +43,17 @@ export function buildStatusMonitorDeps(
   for (const rt of config.runtimes ?? []) {
     if (rt.id && rt.command) runtimeBinaryByRuntimeId.set(rt.id, rt.command);
   }
+  // Per-session capture cache keyed by tmux session_activity. Adapter
+  // ObservationContext requires `paneCapture: string`, so we can't defer
+  // it cheaply at the adapter boundary — but we can avoid forking `tmux
+  // capture-pane` for sessions whose activity timestamp didn't advance
+  // since the last call. Eliminates 95%+ of capture-pane forks once the
+  // user has a workspace full of mostly-idle agents.
+  const captureCache = new Map<string, { activityMs: number; content: string }>();
+  // Shared snapshot of session_activity from the most recent tick. Updated
+  // by `tmuxActivities()` (which the status monitor calls first each tick),
+  // read by `paneCapture()` to know whether its cache is fresh.
+  let lastActivitiesSnapshot: Map<string, number> = new Map();
   return {
     now: () => new Date().toISOString(),
     listSessions: () => store.listSessions(),
@@ -92,15 +103,58 @@ export function buildStatusMonitorDeps(
             if (Number.isFinite(n)) map.set(name, n * 1000);
           }
         }
+        lastActivitiesSnapshot = map;
         return map;
       } catch (err) {
         logMonitorFailureOnce("tmuxActivities", err);
+        lastActivitiesSnapshot = new Map();
+        return lastActivitiesSnapshot;
+      }
+    },
+    // Batched pane snapshot — one fork per tick instead of N per-session
+    // `tmux display-message` calls. Returns "" for `command` when tmux
+    // can't determine it (shouldn't happen, defensive). Sessions absent
+    // from the map are treated by the monitor as "tmux session missing"
+    // (same semantic as panePidProcess returning null).
+    panes: () => {
+      try {
+        const out = execFileSync(
+          "tmux",
+          [...tmuxPrefix(), "list-panes", "-a", "-F", "#{session_name}\t#{pane_current_command}\t#{pane_pid}"],
+          {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
+          },
+        );
+        const map = new Map<string, { command: string; pid: number }>();
+        for (const line of out.split("\n")) {
+          if (!line) continue;
+          const [name, command, pidStr] = line.split("\t");
+          if (!name || !command || !pidStr) continue;
+          const pid = Number.parseInt(pidStr, 10);
+          if (!Number.isFinite(pid) || pid <= 0) continue;
+          // First pane in the session wins. Multi-pane sessions aren't
+          // something citadel creates, but if a user splits one, we
+          // arbitrarily pick the first row tmux returns.
+          if (!map.has(name)) map.set(name, { command, pid });
+        }
+        return map;
+      } catch (err) {
+        logMonitorFailureOnce("panes", err);
         return new Map();
       }
     },
     paneCapture: (name) => {
+      // Cache check: if tmux says the session's activity timestamp hasn't
+      // advanced since we last captured, the pane content is byte-for-byte
+      // identical and another `tmux capture-pane` fork would just burn CPU.
+      const activityMs = lastActivitiesSnapshot.get(name) ?? 0;
+      const cached = captureCache.get(name);
+      if (cached && cached.activityMs === activityMs) return cached.content;
       try {
-        return captureTmux(name, 50);
+        const content = captureTmux(name, 50);
+        captureCache.set(name, { activityMs, content });
+        return content;
       } catch (err) {
         logMonitorFailureOnce("paneCapture", err);
         return "";

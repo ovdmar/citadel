@@ -48,7 +48,14 @@ export interface MonitorTickDeps {
   // runtime binary when the agent is running, a shell when it isn't, null
   // when tmux is unreachable). Replaces the legacy `readSentinels` —
   // tmux-native, no /tmp sentinels needed.
+  //
+  // When `panes` is provided, the tick MUST prefer it over `panePidProcess`
+  // — a single batched `tmux list-panes -a` per tick costs one fork instead
+  // of N (saw ~270ms of event-loop blocking with 27 sessions before this).
+  // `panePidProcess` is retained for legacy callers/tests that don't wire
+  // the batched provider.
   panePidProcess: (tmuxSessionName: string) => { command: string; pid: number } | null;
+  panes?: () => Map<string, { command: string; pid: number }>;
   // Map runtimeId → binary name expected as the pane's foreground when the
   // agent is running. Null when the runtime is unknown.
   runtimeBinaryFor: (runtimeId: string) => string | null;
@@ -100,6 +107,10 @@ export async function runStatusMonitorTick(
 
   const workspaceIds = deps.listWorkspaceIds();
   const tmuxActivities = deps.tmuxActivities();
+  // Batched pane snapshot for this tick — one fork instead of N per-session
+  // `tmux display-message` calls. Falls back to the per-session callback so
+  // tests that haven't wired the batched provider still work.
+  const panesByName = deps.panes?.() ?? null;
   // Derive `nowMs` from deps.now() so tests can inject a fixed time and
   // get deterministic behaviour for the recentUserAction window + the
   // 30-min auto-clear elapsed check. Production passes a real ISO.
@@ -124,8 +135,13 @@ export async function runStatusMonitorTick(
 
     const tmuxActivityMs = tmuxActivities.get(session.tmuxSessionName) ?? null;
     // Shell-first lifecycle: pane foreground IS the source of truth for
-    // "is the agent running". Read tmux-native, no /tmp sentinels.
-    const pane = deps.panePidProcess(session.tmuxSessionName);
+    // "is the agent running". Prefer the batched snapshot when present;
+    // a `null` map means "no batched provider wired"; a missing entry in
+    // the map means "tmux server has no such session" — same semantic as
+    // panePidProcess returning null.
+    const pane = panesByName
+      ? (panesByName.get(session.tmuxSessionName) ?? null)
+      : deps.panePidProcess(session.tmuxSessionName);
     const tmuxAlive = pane !== null;
     const runtimeBinary = deps.runtimeBinaryFor(session.runtimeId);
 
