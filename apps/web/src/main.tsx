@@ -136,26 +136,22 @@ function Shell() {
 }
 
 function CockpitLayout() {
+  const location = useLocation();
+  // The Outlet is ALWAYS rendered (in a stable DOM position) so TanStack
+  // Router never sees its mount point appear/disappear across route changes
+  // — child route components mount/unmount around it, but the outer wrapper
+  // is constant. The overlay is hidden by CSS when on the index route so the
+  // cockpit is fully visible and clickable; on any other route the overlay
+  // turns opaque and covers the cockpit, but the cockpit (including every
+  // TerminalPane iframe) stays mounted underneath.
+  const isIndex = location.pathname === "/" || location.pathname === "";
   return (
     <>
       <Cockpit />
-      <RouteOverlay />
+      <div className="route-overlay" data-hidden={isIndex ? "" : undefined} aria-hidden={isIndex}>
+        <Outlet />
+      </div>
     </>
-  );
-}
-
-function RouteOverlay() {
-  const location = useLocation();
-  const path = location.pathname;
-  // On the index route Cockpit is the entire UI — no overlay needed (and
-  // rendering one would steal pointer events from the cockpit grid). Anywhere
-  // else, mount the child route in an opaque overlay so the Cockpit (with
-  // its live terminal iframes) stays mounted but hidden behind.
-  if (path === "/" || path === "") return null;
-  return (
-    <div className="route-overlay">
-      <Outlet />
-    </div>
   );
 }
 
