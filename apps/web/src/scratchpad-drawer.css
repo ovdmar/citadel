@@ -1,35 +1,57 @@
-/* ─── Drawer presentation ───────────────────────────────────────────────────
+/* ─── Centered-modal presentation ──────────────────────────────────────────
  * Mounted at Shell level (sibling to <Outlet/>); visibility toggled via the
  * `hidden` attribute so React state stays alive across close/reopen and across
- * route changes. */
+ * route changes. The outer `.scratchpad-drawer` is now a full-screen overlay
+ * (backdrop wrapper); the actual centered modal lives in `.scratchpad-modal`. */
 .scratchpad-drawer {
   position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: min(720px, 60vw);
-  background: var(--bg-panel, var(--panel));
-  border-left: 1px solid var(--line-strong, var(--line));
-  box-shadow: -2px 0 16px rgba(0, 0, 0, 0.18);
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   z-index: 1000;
-  transition: transform 120ms ease-out;
 }
 
 .scratchpad-drawer[hidden] {
   display: none;
 }
 
+.scratchpad-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.scratchpad-modal {
+  position: relative;
+  width: min(960px, 92vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel, var(--panel));
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 8px;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+}
+
 @media (max-width: 767px) {
-  .scratchpad-drawer {
+  .scratchpad-modal {
     width: 100vw;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
   }
 }
 
 .scratchpad-drawer-header {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: 1fr auto auto auto auto;
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
@@ -79,8 +101,13 @@
 .scratchpad-drawer-body {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 220px;
+  grid-template-columns: 1fr;
   overflow: hidden;
+  min-height: 0;
+}
+
+.scratchpad-drawer-body[data-history="visible"] {
+  grid-template-columns: 1fr 280px;
 }
 
 .scratchpad-drawer .scratchpad-blocks-pane {
@@ -342,7 +369,8 @@
   color: var(--color-danger, #ef4444);
 }
 
-.scratchpad-drawer-refine {
+.scratchpad-drawer-refine,
+.scratchpad-drawer-history-toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -355,134 +383,24 @@
   cursor: pointer;
 }
 
-.scratchpad-drawer-refine:hover {
+.scratchpad-drawer-refine:hover:not(:disabled),
+.scratchpad-drawer-history-toggle:hover {
   background: var(--c-line-1, rgba(255, 255, 255, 0.06));
 }
 
-/* ─── Refine modal ───────────────────────────────────────────────────── */
-.scratchpad-refine-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  border: 0;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1100;
+.scratchpad-drawer-refine:disabled {
+  opacity: 0.6;
+  cursor: progress;
 }
 
-.scratchpad-refine-overlay[open] {
-  display: flex;
+.scratchpad-drawer-history-toggle.is-active {
+  background: var(--c-line-2, rgba(255, 255, 255, 0.1));
 }
 
-.scratchpad-refine-backdrop {
-  position: absolute;
-  inset: 0;
-  border: 0;
-  background: transparent;
-  cursor: default;
-}
-
-.scratchpad-refine-panel {
-  position: relative;
-  width: min(640px, 92vw);
-  max-height: 80vh;
-  background: var(--bg-panel, var(--panel));
-  border: 1px solid var(--line-strong, var(--line));
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-}
-
-.scratchpad-refine-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
-}
-
-.scratchpad-refine-close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-}
-
-.scratchpad-refine-body {
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  overflow-y: auto;
-}
-
-.scratchpad-refine-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.scratchpad-refine-label {
-  font-size: 11px;
-  color: var(--text-muted, #888);
-}
-
-.scratchpad-refine-row select,
-.scratchpad-refine-row textarea {
-  font: inherit;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  padding: 6px 8px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--bg-panel, var(--panel));
-  color: inherit;
-}
-
-.scratchpad-refine-prompt-row textarea {
-  min-height: 200px;
-  resize: vertical;
-}
-
-.scratchpad-refine-warning {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 8px 10px;
-  border-radius: 4px;
-  background: rgba(255, 200, 0, 0.12);
-  color: var(--color-warn, #f59e0b);
+.scratchpad-refine-inline-error {
+  padding: 6px 14px;
   font-size: 12px;
-}
-
-.scratchpad-refine-error {
-  padding: 8px 10px;
-  border-radius: 4px;
-  background: rgba(255, 60, 60, 0.12);
   color: var(--color-danger, #ef4444);
-  font-size: 12px;
-}
-
-.scratchpad-refine-empty {
-  font-size: 12px;
-  color: var(--text-muted, #888);
-}
-
-.scratchpad-refine-loading {
-  font-size: 12px;
-  color: var(--text-muted, #888);
-}
-
-.scratchpad-refine-actions {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-top: 4px;
+  background: rgba(255, 60, 60, 0.08);
+  border-bottom: 1px solid var(--line);
 }

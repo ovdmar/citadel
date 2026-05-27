@@ -1,24 +1,46 @@
-// Scratchpad drawer panel. Mounted once at the Shell level (sibling to the
-// router <Outlet />) so the drawer is reachable from every route without
-// replacing the underlying view. Visibility is driven by the shared
+// Scratchpad panel — rendered as a centered modal on top of the underlying
+// view. Mounted once at the Shell level (sibling to the router <Outlet />) so
+// it is reachable from every route. Visibility is driven by the shared
 // `scratchpad-drawer-store`; when closed, the panel root carries the `hidden`
 // HTML attribute so React keeps state mounted (scrollTop, edit state, etc.)
 // across close/reopen and across route changes.
 //
+// History sidebar is hidden by default; the user reveals it via the "History"
+// toggle in the header. Class names retain the `scratchpad-drawer-*` prefix
+// for continuity (the drawer-store and CSS file are still named that way).
+//
 // The SSE listener is panel-lifetime-scoped (NOT gated on open) so block /
 // history updates from other tabs or MCP writers keep converging into local
-// state even while the drawer is closed.
-import type { ScratchpadBlockSummary, ScratchpadHistorySummary, ScratchpadSnapshot } from "@citadel/contracts";
+// state even while the panel is closed.
+import type {
+  ScratchpadBlockSummary,
+  ScratchpadHistorySummary,
+  ScratchpadSnapshot,
+  Workspace,
+} from "@citadel/contracts";
 import type { FuzzyBlockMatch } from "@citadel/core";
-import { Wand2, X } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { History, Wand2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
-import { sideBySideDiff } from "./routes/scratchpad-diff.js";
 import { formatBytes, pillLabel, pillSlug } from "./routes/scratchpad-helpers.js";
 import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { BlockItem, type UiBlock } from "./scratchpad-panel-block.js";
 import { ScratchpadPanelSearch } from "./scratchpad-panel-search.js";
-import { ScratchpadRefineModal } from "./scratchpad-refine-modal.js";
+import { ScratchpadVersionDiffDialog } from "./scratchpad-version-diff-dialog.js";
+
+// Matches cockpit.tsx's STORAGE_LAST_WORKSPACE constant — duplicated to avoid
+// importing the cockpit module just for a single string.
+const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";
+
+type RefineResult =
+  | { ok: true; workspaceId: string; sessionId: string | null; operationId: string; warning?: string }
+  | {
+      ok: false;
+      error: "runtime_unavailable" | "repo_required" | "launch_failed" | "invalid_input";
+      detail: string;
+      workspaceId?: string;
+    };
 
 type HistorySummary = ScratchpadHistorySummary;
 type BlockSummary = ScratchpadBlockSummary;
@@ -34,6 +56,7 @@ const BOTTOM_TOLERANCE = 4;
 
 export function ScratchpadPanel() {
   const { open, setOpen } = useScratchpadDrawer();
+  const navigate = useNavigate();
   const [blocks, setBlocks] = useState<UiBlock[]>([]);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -51,7 +74,10 @@ export function ScratchpadPanel() {
   const [savePulse, setSavePulse] = useState<"ok" | "err" | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchResults, setSearchResults] = useState<FuzzyBlockMatch[] | null>(null);
-  const [refineOpen, setRefineOpen] = useState(false);
+  // History sidebar is hidden by default; user toggles with the History button.
+  const [showHistory, setShowHistory] = useState(false);
+  const [refineLaunching, setRefineLaunching] = useState(false);
+  const [refineError, setRefineError] = useState<string | null>(null);
 
   const listRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
@@ -507,29 +533,6 @@ export function ScratchpadPanel() {
     [blocks],
   );
 
-  const diff = useMemo(() => {
-    if (selectedContent === null) return null;
-    const result = sideBySideDiff(selectedContent, currentContent);
-    if (result.kind === "too_large") return result;
-    let lastOld = 0;
-    let lastNew = 0;
-    const mapped = result.rows.map((row) => {
-      if (row.kind === "skip") return { row, key: `skip-${lastOld}-${lastNew}-${row.hiddenCount}` };
-      if (row.kind === "context") {
-        lastOld = row.oldNo;
-        lastNew = row.newNo;
-        return { row, key: `ctx-${row.oldNo}-${row.newNo}` };
-      }
-      if (row.kind === "remove") {
-        lastOld = row.oldNo;
-        return { row, key: `rem-${row.oldNo}` };
-      }
-      lastNew = row.newNo;
-      return { row, key: `add-${row.newNo}` };
-    });
-    return { kind: "rows" as const, rows: mapped };
-  }, [selectedContent, currentContent]);
-
   // Filter visible blocks by search results when search is active.
   const visibleBlocks = useMemo(() => {
     if (!searchResults) return blocks;
@@ -537,223 +540,212 @@ export function ScratchpadPanel() {
     return blocks.filter((b) => order.has(b.id)).sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
   }, [blocks, searchResults]);
 
+  const launchRefine = useCallback(async () => {
+    setRefineLaunching(true);
+    setRefineError(null);
+    // Best-effort: pick the repo of the last-opened workspace (mirrors the
+    // cockpit's `citadel.last-workspace` localStorage). If we can't resolve it,
+    // omit repoId — the daemon falls back to the first non-archived workspace's
+    // repo (see scratchpad-refine.ts).
+    let repoId: string | undefined;
+    const lastWorkspaceId = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_LAST_WORKSPACE) : null;
+    if (lastWorkspaceId) {
+      try {
+        const state = await api<{ workspaces: Workspace[] }>("/api/state");
+        repoId = state.workspaces.find((w) => w.id === lastWorkspaceId)?.repoId;
+      } catch {
+        /* fall back to daemon's default resolution */
+      }
+    }
+    try {
+      const result = await api<RefineResult>("/api/scratchpad/refine", {
+        method: "POST",
+        body: JSON.stringify(repoId ? { repoId } : {}),
+      });
+      if (!result.ok) {
+        setRefineError(result.detail || result.error);
+        return;
+      }
+      setOpen(false);
+      void navigate({ to: "/" });
+    } catch (err) {
+      setRefineError(err instanceof Error ? err.message : "refine_failed");
+    } finally {
+      if (mountedRef.current) setRefineLaunching(false);
+    }
+  }, [navigate, setOpen]);
+
   return (
     <div className="scratchpad-drawer" hidden={!open} aria-hidden={!open} aria-label="Scratchpad">
-      <header className="scratchpad-drawer-header" data-saving={savePulse ?? undefined}>
-        <span className="scratchpad-drawer-title">Scratchpad</span>
-        <span className="scratchpad-drawer-status command-result-meta" aria-live="polite">
-          {renderStatus(updatedAt, savePulse)}
-        </span>
-        <button
-          type="button"
-          className="scratchpad-drawer-refine"
-          aria-label="Refine scratchpad"
-          title="Refine scratchpad — launch an agent to dedupe and group blocks"
-          onClick={() => setRefineOpen(true)}
-        >
-          <Wand2 size={14} /> Refine
-        </button>
-        <button
-          type="button"
-          className="scratchpad-drawer-close"
-          aria-label="Close scratchpad"
-          title="Close scratchpad (Esc)"
-          onClick={() => setOpen(false)}
-        >
-          <X size={14} />
-        </button>
-      </header>
-      <ScratchpadRefineModal open={refineOpen} onClose={() => setRefineOpen(false)} />
-      <ScratchpadPanelSearch
-        blocks={blocks}
-        open={searchOpen}
-        onClose={() => setSearchOpen(false)}
-        onResultsChange={setSearchResults}
+      <button
+        type="button"
+        className="scratchpad-drawer-backdrop"
+        aria-label="Close scratchpad"
+        onClick={() => setOpen(false)}
+        tabIndex={-1}
       />
-      <div className="scratchpad-drawer-body">
-        <div className="scratchpad-blocks-pane">
-          {loadError ? (
-            <div className="scratchpad-load-error" role="alert">
-              <p>Couldn't load the scratchpad: {loadError}</p>
-              <button type="button" onClick={retryLoad}>
-                Retry
-              </button>
-            </div>
-          ) : (
-            <>
-              <div ref={listRef} className="scratchpad-block-list">
-                {visibleBlocks.length === 0 ? (
-                  <p className="scratchpad-block-empty">
-                    {searchResults
-                      ? "No blocks match the search."
-                      : "No blocks yet. Use the composer below to add one."}
-                  </p>
-                ) : null}
-                {visibleBlocks.map((block) => (
-                  <BlockItem
-                    key={block.id}
-                    block={block}
-                    onStartEditing={startEditing}
-                    onCancel={cancelEditing}
-                    onChange={onBlockChange}
-                    onBlur={onBlockBlur}
-                    onKey={onBlockKey}
-                    onDelete={requestDelete}
-                  />
-                ))}
-              </div>
-              <div className="scratchpad-composer">
-                {composerError ? (
-                  <p className="scratchpad-composer-error" role="alert">
-                    {composerError}
-                  </p>
-                ) : null}
-                <textarea
-                  ref={composerRef}
-                  className="scratchpad-composer-input"
-                  aria-label="New scratchpad block"
-                  placeholder="Add a note. ⌘/Ctrl-Enter creates a new block."
-                  value={composer}
-                  onChange={(event) => setComposer(event.target.value)}
-                  onInput={(event) => {
-                    const el = event.currentTarget;
-                    el.style.height = "auto";
-                    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-                  }}
-                  onKeyDown={onComposerKey}
-                  onBlur={onComposerBlur}
-                  disabled={!loaded}
-                  rows={2}
-                />
-              </div>
-              {undo ? (
-                <output className="scratchpad-undo-toast">
-                  <span>Block deleted.</span>
-                  <button type="button" onClick={() => void performUndo()}>
-                    Undo
-                  </button>
-                  <button type="button" aria-label="Dismiss undo" onClick={dismissUndo}>
-                    <X size={12} />
-                  </button>
-                </output>
-              ) : null}
-            </>
-          )}
-        </div>
-        <aside className="scratchpad-history" aria-label="Scratchpad version history">
-          <header className="scratchpad-history-header">
-            <span>Versions</span>
-            <span className="scratchpad-history-count">{history.length}</span>
-          </header>
-          <ul className="scratchpad-history-list">
-            {history.length === 0 ? (
-              <li className="scratchpad-history-empty">No versions yet.</li>
-            ) : (
-              history.map((entry) => (
-                <li key={entry.id}>
-                  <button
-                    type="button"
-                    className={`scratchpad-history-row${selectedEntryId === entry.id ? " is-selected" : ""}`}
-                    onClick={() => void openEntry(entry.id)}
-                  >
-                    <div className="scratchpad-history-meta">
-                      <span className="scratchpad-history-time">{formatStamp(entry.ts)}</span>
-                      <span className={`scratchpad-history-pill source-${pillSlug(entry.source)}`}>
-                        {pillLabel(entry.source)}
-                      </span>
-                      <span className="scratchpad-history-size">{formatBytes(entry.byteLength)}</span>
-                    </div>
-                    <div className="scratchpad-history-preview">{entry.preview.slice(0, 60)}</div>
-                  </button>
-                </li>
-              ))
-            )}
-          </ul>
-        </aside>
-      </div>
-      {selectedEntryId ? (
-        <dialog className="scratchpad-diff-overlay" open aria-modal="true" aria-label="Scratchpad version diff">
-          <button type="button" className="scratchpad-diff-backdrop" onClick={closeDiff} aria-label="Close diff" />
-          <div className="scratchpad-diff-panel">
-            <header className="scratchpad-diff-header">
-              <span>Older version vs current</span>
-              <button type="button" className="scratchpad-diff-close" onClick={closeDiff} aria-label="Close diff">
-                <X size={14} />
-              </button>
-            </header>
-            <div className="scratchpad-diff-columns">
-              <div className="scratchpad-diff-col-label">
-                <span>Older version</span>
-                <button
-                  type="button"
-                  className="scratchpad-restore-btn"
-                  onClick={() => void restoreSelected()}
-                  disabled={restoring || selectedContent === null}
-                >
-                  {restoring ? "Restoring…" : "Restore this version"}
+      {/* biome-ignore lint/a11y/useSemanticElements: the native <dialog> open/close lifecycle clashes with our hidden-attribute toggle (panel is mounted persistently to preserve scroll/edit state), so we keep a plain element with explicit ARIA. */}
+      <div className="scratchpad-modal" role="dialog" aria-modal="true" aria-label="Scratchpad">
+        <header className="scratchpad-drawer-header" data-saving={savePulse ?? undefined}>
+          <span className="scratchpad-drawer-title">Scratchpad</span>
+          <span className="scratchpad-drawer-status command-result-meta" aria-live="polite">
+            {renderStatus(updatedAt, savePulse)}
+          </span>
+          <button
+            type="button"
+            className={`scratchpad-drawer-history-toggle${showHistory ? " is-active" : ""}`}
+            aria-label={showHistory ? "Hide history" : "Show history"}
+            aria-pressed={showHistory}
+            title={showHistory ? "Hide history sidebar" : "Show history sidebar"}
+            onClick={() => setShowHistory((v) => !v)}
+          >
+            <History size={14} /> History
+          </button>
+          <button
+            type="button"
+            className="scratchpad-drawer-refine"
+            aria-label="Refine scratchpad"
+            title="Refine scratchpad — launch an agent in the last-opened workspace's repo"
+            onClick={() => void launchRefine()}
+            disabled={refineLaunching}
+          >
+            <Wand2 size={14} /> {refineLaunching ? "Launching…" : "Refine"}
+          </button>
+          <button
+            type="button"
+            className="scratchpad-drawer-close"
+            aria-label="Close scratchpad"
+            title="Close scratchpad (Esc)"
+            onClick={() => setOpen(false)}
+          >
+            <X size={14} />
+          </button>
+        </header>
+        {refineError ? (
+          <div className="scratchpad-refine-inline-error" role="alert">
+            Refine failed: {refineError}
+          </div>
+        ) : null}
+        <ScratchpadPanelSearch
+          blocks={blocks}
+          open={searchOpen}
+          onClose={() => setSearchOpen(false)}
+          onResultsChange={setSearchResults}
+        />
+        <div className="scratchpad-drawer-body" data-history={showHistory ? "visible" : "hidden"}>
+          <div className="scratchpad-blocks-pane">
+            {loadError ? (
+              <div className="scratchpad-load-error" role="alert">
+                <p>Couldn't load the scratchpad: {loadError}</p>
+                <button type="button" onClick={retryLoad}>
+                  Retry
                 </button>
               </div>
-              <div className="scratchpad-diff-col-label">
-                <span>Current</span>
-              </div>
-            </div>
-            <div className="scratchpad-diff-body">
-              {diffError ? (
-                <p className="scratchpad-diff-error">{diffError}</p>
-              ) : diff === null ? (
-                <p className="scratchpad-diff-loading">Loading…</p>
-              ) : diff.kind === "too_large" ? (
-                <p className="scratchpad-diff-empty">
-                  Diff is too large to render ({diff.oldLines} vs {diff.newLines} lines; limit {diff.limit}). Use
-                  Restore to swap in this version, or open the file directly.
-                </p>
-              ) : diff.rows.length === 0 ? (
-                <p className="scratchpad-diff-empty">No differences.</p>
-              ) : (
-                <div className="scratchpad-diff-grid">
-                  {diff.rows.map(({ row, key }) => {
-                    if (row.kind === "skip") {
-                      return (
-                        <div key={key} className="scratchpad-diff-skip">
-                          ··· {row.hiddenCount} unchanged {row.hiddenCount === 1 ? "line" : "lines"} ···
-                        </div>
-                      );
-                    }
-                    if (row.kind === "context") {
-                      return (
-                        <div key={key} className="scratchpad-diff-row kind-context">
-                          <span className="scratchpad-diff-no">{row.oldNo}</span>
-                          <pre className="scratchpad-diff-cell">{row.text}</pre>
-                          <span className="scratchpad-diff-no">{row.newNo}</span>
-                          <pre className="scratchpad-diff-cell">{row.text}</pre>
-                        </div>
-                      );
-                    }
-                    if (row.kind === "remove") {
-                      return (
-                        <div key={key} className="scratchpad-diff-row kind-remove">
-                          <span className="scratchpad-diff-no">{row.oldNo}</span>
-                          <pre className="scratchpad-diff-cell side-remove">{row.text}</pre>
-                          <span className="scratchpad-diff-no" />
-                          <pre className="scratchpad-diff-cell is-empty" />
-                        </div>
-                      );
-                    }
-                    return (
-                      <div key={key} className="scratchpad-diff-row kind-add">
-                        <span className="scratchpad-diff-no" />
-                        <pre className="scratchpad-diff-cell is-empty" />
-                        <span className="scratchpad-diff-no">{row.newNo}</span>
-                        <pre className="scratchpad-diff-cell side-add">{row.text}</pre>
-                      </div>
-                    );
-                  })}
+            ) : (
+              <>
+                <div ref={listRef} className="scratchpad-block-list">
+                  {visibleBlocks.length === 0 ? (
+                    <p className="scratchpad-block-empty">
+                      {searchResults
+                        ? "No blocks match the search."
+                        : "No blocks yet. Use the composer below to add one."}
+                    </p>
+                  ) : null}
+                  {visibleBlocks.map((block) => (
+                    <BlockItem
+                      key={block.id}
+                      block={block}
+                      onStartEditing={startEditing}
+                      onCancel={cancelEditing}
+                      onChange={onBlockChange}
+                      onBlur={onBlockBlur}
+                      onKey={onBlockKey}
+                      onDelete={requestDelete}
+                    />
+                  ))}
                 </div>
-              )}
-            </div>
+                <div className="scratchpad-composer">
+                  {composerError ? (
+                    <p className="scratchpad-composer-error" role="alert">
+                      {composerError}
+                    </p>
+                  ) : null}
+                  <textarea
+                    ref={composerRef}
+                    className="scratchpad-composer-input"
+                    aria-label="New scratchpad block"
+                    placeholder="Add a note. ⌘/Ctrl-Enter creates a new block."
+                    value={composer}
+                    onChange={(event) => setComposer(event.target.value)}
+                    onInput={(event) => {
+                      const el = event.currentTarget;
+                      el.style.height = "auto";
+                      el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+                    }}
+                    onKeyDown={onComposerKey}
+                    onBlur={onComposerBlur}
+                    disabled={!loaded}
+                    rows={2}
+                  />
+                </div>
+                {undo ? (
+                  <output className="scratchpad-undo-toast">
+                    <span>Block deleted.</span>
+                    <button type="button" onClick={() => void performUndo()}>
+                      Undo
+                    </button>
+                    <button type="button" aria-label="Dismiss undo" onClick={dismissUndo}>
+                      <X size={12} />
+                    </button>
+                  </output>
+                ) : null}
+              </>
+            )}
           </div>
-        </dialog>
-      ) : null}
+          {showHistory ? (
+            <aside className="scratchpad-history" aria-label="Scratchpad version history">
+              <header className="scratchpad-history-header">
+                <span>Versions</span>
+                <span className="scratchpad-history-count">{history.length}</span>
+              </header>
+              <ul className="scratchpad-history-list">
+                {history.length === 0 ? (
+                  <li className="scratchpad-history-empty">No versions yet.</li>
+                ) : (
+                  history.map((entry) => (
+                    <li key={entry.id}>
+                      <button
+                        type="button"
+                        className={`scratchpad-history-row${selectedEntryId === entry.id ? " is-selected" : ""}`}
+                        onClick={() => void openEntry(entry.id)}
+                      >
+                        <div className="scratchpad-history-meta">
+                          <span className="scratchpad-history-time">{formatStamp(entry.ts)}</span>
+                          <span className={`scratchpad-history-pill source-${pillSlug(entry.source)}`}>
+                            {pillLabel(entry.source)}
+                          </span>
+                          <span className="scratchpad-history-size">{formatBytes(entry.byteLength)}</span>
+                        </div>
+                        <div className="scratchpad-history-preview">{entry.preview.slice(0, 60)}</div>
+                      </button>
+                    </li>
+                  ))
+                )}
+              </ul>
+            </aside>
+          ) : null}
+        </div>
+        {selectedEntryId ? (
+          <ScratchpadVersionDiffDialog
+            selectedContent={selectedContent}
+            currentContent={currentContent}
+            diffError={diffError}
+            restoring={restoring}
+            onClose={closeDiff}
+            onRestore={() => void restoreSelected()}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }

@@ -27,9 +27,11 @@ test.describe("scratchpad blocks", () => {
     await expect(blockList.getByText("first idea")).toBeVisible();
     await expect(blockList.getByText("second idea")).toBeVisible();
 
-    // The history sidebar is hidden on the narrow (mobile/tablet) layouts;
-    // assert the migrate-to-blocks pill via the API on those projects.
+    // The history sidebar is hidden by default — reveal it via the toggle
+    // (desktop only). On narrow projects the toggle is still rendered but the
+    // sidebar layout uses the API assertion path below for stability.
     if (testInfo.project.name === "desktop") {
+      await page.getByRole("button", { name: "Show history" }).click();
       const history = page.locator(".scratchpad-history-list");
       await expect(history.locator(".source-migrate")).toBeVisible();
     } else {
