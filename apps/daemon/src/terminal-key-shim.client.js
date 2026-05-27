@@ -386,10 +386,17 @@
   // Derive the sessionId from the iframe's URL path. ttyd is mounted at
   // `/terminals/<sessionId>/` (see packages/terminal/src/ttyd.ts:147 — basePath
   // is `${basePathPrefix}/<sessionId>`). Cached at module init since the URL
-  // never changes for a given iframe's lifetime.
+  // never changes for a given iframe's lifetime. Defensive against test
+  // runtimes that don't provide window.location (the shim is eval'd inside a
+  // jsdom-lite Function() in apps/daemon/src/terminal-key-shim.test.ts).
   const SESSION_ID = (() => {
-    const match = /^\/terminals\/([^/]+)/.exec(window.location.pathname || "");
-    return match ? decodeURIComponent(match[1]) : null;
+    try {
+      const pathname = window.location?.pathname || "";
+      const match = /^\/terminals\/([^/]+)/.exec(pathname);
+      return match ? decodeURIComponent(match[1]) : null;
+    } catch (_err) {
+      return null;
+    }
   })();
 
   // Fire-and-forget POST to the user-action endpoint. The daemon writes the
