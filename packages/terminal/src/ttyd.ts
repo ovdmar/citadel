@@ -36,8 +36,13 @@ export type TtydManagerConfig = {
 const DEFAULTS = {
   ttydBin: process.env.TTYD_BIN || "/home/linuxbrew/.linuxbrew/bin/ttyd",
   shellBin: process.env.CITADEL_SHELL_BIN || process.env.SHELL || "/bin/bash",
-  portBase: Number.parseInt(process.env.CITADEL_TTYD_PORT_BASE ?? "", 10) || 7681,
-  portMax: Number.parseInt(process.env.CITADEL_TTYD_PORT_MAX ?? "", 10) || 7720,
+  // Default range is 11000-11999 (1000 ports) — empirically high enough that
+  // we never bump into the cap with realistic agent-session counts, and far
+  // from common low-port ranges (services, dev servers, etc.). Multi-daemon
+  // co-existence carves this out via apps/daemon/src/ttyd-slot.ts which
+  // assigns each daemon a disjoint 1000-port slice (slot k → 11000+k*1000).
+  portBase: Number.parseInt(process.env.CITADEL_TTYD_PORT_BASE ?? "", 10) || 11000,
+  portMax: Number.parseInt(process.env.CITADEL_TTYD_PORT_MAX ?? "", 10) || 11999,
   basePathPrefix: "/terminals",
   // 10s readiness budget: under spawn storms (multiple ttyds respawning at
   // once after `make deploy`) ttyd can take several seconds to bind, and a

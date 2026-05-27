@@ -70,6 +70,7 @@ export type DaemonApp = {
   app: express.Express;
   server: http.Server;
   emit: (type: string, payload: unknown) => void;
+  ttyd: ReturnType<typeof createTtydManager>;
 };
 
 type ProviderCollectors = {
@@ -104,6 +105,14 @@ export function createDaemonApp(input: {
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
   const ttyd = createTtydManager(resolveTtydPortRange(config.port));
+  // Register the terminal-layer hook on OperationService so that every
+  // stopAgentSession path (REST, MCP, restore route, anything else) releases
+  // the ttyd alongside killing the tmux session. Without this, terminating
+  // an agent from MCP would leak the ttyd process until cleanupStale fired.
+  // Guarded for tests that hand-roll a partial OperationService stub.
+  if (typeof operations.setTerminalHooks === "function") {
+    operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId) });
+  }
 
   // gh-quota wiring: viewer-gate, per-PR scheduler, main-watcher. Hydrates from SQLite PR snapshots so restart doesn't re-fetch every PR.
   const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
@@ -784,7 +793,7 @@ export function createDaemonApp(input: {
   const terminalReaper = startTerminalReaper();
   server.on("close", () => terminalReaper.stop());
 
-  return { app, server, emit };
+  return { app, server, emit, ttyd };
 
   function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderValue(providerCache, key, load, ttlMs);

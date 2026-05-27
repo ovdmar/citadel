@@ -253,6 +253,27 @@ a:hover {
   display: grid;
   min-height: 100vh;
   background: var(--surface);
+  /* Positioning context for .route-overlay (Settings/Scratchpad/etc render
+   * inside it as absolute overlays so the Cockpit and its ttyd iframes stay
+   * mounted underneath). Without this the overlay would anchor to the
+   * viewport via the default initial containing block and the cockpit-shell
+   * grid below would still receive pointer events. */
+  position: relative;
+}
+
+/* Holds the active child route content when the URL is anything other than
+ * `/`. Sits over the Cockpit (which is always mounted in CockpitLayout) so
+ * Settings/Scratchpad/etc. visually replace the cockpit without unmounting
+ * its TerminalPane iframes. Returning to `/` simply removes this layer and
+ * the live iframes are right where they were. */
+.route-overlay {
+  position: absolute;
+  inset: 0;
+  background: var(--surface);
+  z-index: 10;
+  overflow: hidden;
+  display: grid;
+  min-height: 0;
 }
 
 /* Pulse / dots — shared across sidebar, tabs, deploys, bottom bar */
