@@ -104,6 +104,22 @@ export function applyStickyUpdates(
         const summary = entry.summary as WorkspaceCockpitSummary;
         if (summary.versionControl.status === "healthy") {
           cache.set(entry.workspaceId, summary);
+        } else if (summary.versionControl.cooldownUntil && cache.has(entry.workspaceId)) {
+          // Degraded response carrying an active gh cooldown — merge cooldownUntil
+          // onto the previous healthy entry so the banner has a data source even
+          // when the daemon's vc: cache was empty at cooldown time. We do NOT
+          // overwrite the previous pullRequest / reviewers / checks shape — those
+          // come from the last healthy fetch and the operator wants to see them.
+          const previous = cache.get(entry.workspaceId);
+          if (previous) {
+            cache.set(entry.workspaceId, {
+              ...previous,
+              versionControl: {
+                ...previous.versionControl,
+                cooldownUntil: summary.versionControl.cooldownUntil,
+              },
+            });
+          }
         }
       } else if (AUTHORITATIVE_EMPTY_REASONS.has(entry.reason)) {
         cache.delete(entry.workspaceId);

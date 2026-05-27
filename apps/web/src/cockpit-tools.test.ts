@@ -246,4 +246,46 @@ describe("applyStickyUpdates + cooldownUntil (R2 SUG-1)", () => {
     applyStickyUpdates(cache, new Set(["ws_a"]), batch);
     expect(cache.get("ws_a")?.versionControl.cooldownUntil).toBe(cooldownIso);
   });
+
+  // Review #4 regression: a degraded response carrying cooldownUntil used to
+  // be dropped entirely by the sticky cache, so the banner had no data
+  // source when the daemon's vc: cache was empty at cooldown time. Now we
+  // merge cooldownUntil onto the previous healthy entry.
+  it("merges cooldownUntil onto the previous healthy entry when refetch returns degraded", () => {
+    const cache = new Map<string, WorkspaceCockpitSummary>();
+    cache.set("ws_a", makeSummary("ws_a", "healthy", makePr({ number: 7 })));
+    const cooldownIso = new Date(Date.now() + 12 * 60_000).toISOString();
+    const batch: WorkspaceCockpitSummaryBatchResponse = {
+      summaries: [{ workspaceId: "ws_a", ok: true, summary: makeSummary("ws_a", "degraded", null, cooldownIso) }],
+    };
+    applyStickyUpdates(cache, new Set(["ws_a"]), batch);
+    const entry = cache.get("ws_a");
+    expect(entry?.versionControl.cooldownUntil).toBe(cooldownIso);
+    // Previous pullRequest data is preserved — the operator keeps seeing the
+    // last-known PR underneath the rate-limit banner.
+    expect(entry?.versionControl.pullRequest?.number).toBe(7);
+    expect(entry?.versionControl.status).toBe("healthy");
+  });
+
+  it("degraded without cooldownUntil still preserves the previous entry (no merge)", () => {
+    const cache = new Map<string, WorkspaceCockpitSummary>();
+    cache.set("ws_a", makeSummary("ws_a", "healthy", makePr({ number: 7 })));
+    const batch: WorkspaceCockpitSummaryBatchResponse = {
+      summaries: [{ workspaceId: "ws_a", ok: true, summary: makeSummary("ws_a", "degraded", null) }],
+    };
+    applyStickyUpdates(cache, new Set(["ws_a"]), batch);
+    const entry = cache.get("ws_a");
+    expect(entry?.versionControl.pullRequest?.number).toBe(7);
+    expect(entry?.versionControl.cooldownUntil).toBeUndefined();
+  });
+
+  it("degraded with cooldownUntil but no prior cache entry is a no-op (nothing to merge onto)", () => {
+    const cache = new Map<string, WorkspaceCockpitSummary>();
+    const cooldownIso = new Date(Date.now() + 10 * 60_000).toISOString();
+    const batch: WorkspaceCockpitSummaryBatchResponse = {
+      summaries: [{ workspaceId: "ws_a", ok: true, summary: makeSummary("ws_a", "degraded", null, cooldownIso) }],
+    };
+    applyStickyUpdates(cache, new Set(["ws_a"]), batch);
+    expect(cache.has("ws_a")).toBe(false);
+  });
 });

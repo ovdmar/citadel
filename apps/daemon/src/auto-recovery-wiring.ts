@@ -5,6 +5,7 @@ import type { CitadelConfig } from "@citadel/config";
 import type { SqliteStore } from "@citadel/db";
 import { type AutoRecoveryMonitorHandle, type OperationService, startAutoRecoveryMonitor } from "@citadel/operations";
 import { collectGitHubCiRuns, collectGitHubVersionControlSummary } from "@citadel/providers";
+import { parsePositiveInt } from "./app-helpers.js";
 import { FIX_CI_PROMPT, decideAutoRecoveryAction } from "./auto-recovery.js";
 
 export type AutoRecoveryWiringDeps = {
@@ -28,12 +29,6 @@ function readEnvKnobs() {
   const debounceMs = parsePositiveInt(process.env.CITADEL_AUTO_RECOVERY_DEBOUNCE_MS, 30 * 60 * 1000);
   const intervalMs = parsePositiveInt(process.env.CITADEL_AUTO_RECOVERY_INTERVAL_MS, 60 * 1000);
   return { disabled, idleThresholdMs, debounceMs, intervalMs };
-}
-
-function parsePositiveInt(raw: string | undefined, fallback: number): number {
-  if (!raw) return fallback;
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 export function startDaemonAutoRecoveryMonitor(deps: AutoRecoveryWiringDeps): AutoRecoveryMonitorHandle | null {

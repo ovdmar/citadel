@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { promisify } from "node:util";
 import type { Repo, Workspace } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
+import { parsePositiveInt } from "./app-helpers.js";
 import type { GhScheduler } from "./gh-scheduler.js";
 
 const execFileAsync = promisify(execFile);
@@ -46,12 +47,6 @@ function readEnvKnobs(): MainWatcherOptions {
     disabled: process.env.CITADEL_MAIN_WATCHER_DISABLED === "1",
     intervalMs: parsePositiveInt(process.env.CITADEL_MAIN_WATCHER_INTERVAL_MS, DEFAULT_INTERVAL_MS),
   };
-}
-
-function parsePositiveInt(raw: string | undefined, fallback: number): number {
-  if (!raw) return fallback;
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 /** Pick a cwd to run `git ls-remote` from. Prefers the repo's rootPath when

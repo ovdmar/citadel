@@ -28,3 +28,12 @@ export async function cachedProviderValue<T>(
   cache.set(key, { expiresAt: now + ttlMs, value });
   return value;
 }
+
+/** Parse a positive integer from an env var, falling back to `fallback` for
+ * unset / non-numeric / non-positive values. Used by every "interval / timeout
+ * in ms" knob in the daemon. */
+export function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
