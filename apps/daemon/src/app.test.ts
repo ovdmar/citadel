@@ -289,6 +289,51 @@ describe("createDaemonApp", () => {
     }
   });
 
+  it("keeps GitHub quota resources visible while gh automation is cooling down", async () => {
+    const { clearGhCooldown, setGhCooldown } = await import("@citadel/providers");
+    const fixture = createFixture();
+    const fakeGh = path.join(fixture.config.dataDir, "fake-gh");
+    const logPath = path.join(fixture.config.dataDir, "fake-gh.log");
+    fs.writeFileSync(
+      fakeGh,
+      `#!/usr/bin/env bash
+echo "$*" >> "${logPath}"
+if [ "$1" = "api" ] && [ "$2" = "rate_limit" ]; then
+  cat <<'JSON'
+{"resources":{"core":{"limit":5000,"used":25,"remaining":4975,"reset":1770000000},"graphql":{"limit":5000,"used":5000,"remaining":0,"reset":1770000300},"search":{"limit":30,"used":0,"remaining":30,"reset":1770000600}}}
+JSON
+  exit 0
+fi
+exit 1
+`,
+      { mode: 0o755 },
+    );
+    fixture.config.providers.github.enabled = true;
+    fixture.config.providers.github.command = fakeGh;
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const until = setGhCooldown("GraphQL: API rate limit already exceeded", 60_000);
+      const first = await getJson<{
+        quota: { status: string; cooldownUntil: string | null; resources: Array<{ name: string; percentUsed: number }> };
+      }>(`${baseUrl}/api/integrations/github/quota`);
+      expect(first.quota).toMatchObject({
+        status: "degraded",
+        cooldownUntil: new Date(until).toISOString(),
+      });
+      expect(first.quota.resources.find((resource) => resource.name === "graphql")).toMatchObject({
+        percentUsed: 100,
+      });
+
+      await getJson(`${baseUrl}/api/integrations/github/quota`);
+      const calls = fs.readFileSync(logPath, "utf8").trim().split("\n");
+      expect(calls).toEqual(["api rate_limit"]);
+    } finally {
+      clearGhCooldown();
+      await closeServer(server);
+    }
+  });
+
   it("injects versionControl.cooldownUntil into provider-summary while gh is in cooldown (review #6)", async () => {
     const { clearGhCooldown, setGhCooldown } = await import("@citadel/providers");
     const fixture = createFixture();

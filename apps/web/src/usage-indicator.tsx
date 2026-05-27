@@ -75,7 +75,7 @@ function GitHubQuotaPill(props: { quota: GitHubQuotaSummary | undefined }) {
       ? "off"
       : cooldownLeft
         ? resource
-          ? `${resource.percentUsed}% · ${cooldownLeft}`
+          ? `${resource.percentUsed}% · ${resetLeft ?? cooldownLeft}`
           : cooldownLeft
         : resource
           ? `${resource.percentUsed}%${resetLeft ? ` · ${resetLeft}` : ""}`
@@ -165,7 +165,6 @@ function buildGitHubTooltip(
 ): string {
   if (!summary) return "GitHub quota loading";
   if (!summary.automationEnabled) return summary.reason ?? "GitHub automation disabled";
-  if (summary.cooldownUntil) return `GitHub rate-limited; retry ${formatLocalReset(summary.cooldownUntil) ?? "later"}`;
   if (summary.resources.length === 0) return summary.reason ?? "No GitHub quota data";
   const selectedName = selected?.name;
   const lines = summary.resources.map((resource) => {
@@ -173,5 +172,8 @@ function buildGitHubTooltip(
     const reset = resource.resetAt ? ` · resets ${formatLocalReset(resource.resetAt) ?? "later"}` : "";
     return `${marker}${resource.name}: ${resource.percentUsed}% used (${resource.remaining}/${resource.limit} left)${reset}`;
   });
-  return `GitHub quota\n${lines.join("\n")}`;
+  const header = summary.cooldownUntil
+    ? `GitHub rate-limited; retry ${formatLocalReset(summary.cooldownUntil) ?? "later"}`
+    : "GitHub quota";
+  return `${header}\n${lines.join("\n")}`;
 }

@@ -137,7 +137,7 @@ export function registerWorkspaceExtraRoutes(input: {
   app.get(
     "/api/integrations/github/quota",
     asyncRoute(async (_req: express.Request, res: express.Response) => {
-      if (!getGhCooldown() && githubQuotaCache && githubQuotaCache.expiresAt > Date.now())
+      if (githubQuotaCache && githubQuotaCache.expiresAt > Date.now())
         return res.json({ quota: githubQuotaCache.value });
       const quota = await readGitHubQuota(config, githubQuotaCache?.value ?? null);
       if (quota.status !== "unavailable") {
@@ -306,17 +306,6 @@ async function readGitHubQuota(
   const checkedAt = new Date().toISOString();
   const automationEnabled = automatedGhEnabled();
   const cooldown = getGhCooldown();
-  if (cooldown) {
-    return {
-      providerId: "github-gh",
-      status: "degraded",
-      reason: cooldown.reason,
-      checkedAt,
-      cooldownUntil: new Date(cooldown.until).toISOString(),
-      automationEnabled,
-      resources: previous?.resources ?? [],
-    };
-  }
   if (!automationEnabled) {
     return {
       providerId: "github-gh",
@@ -344,7 +333,7 @@ async function readGitHubQuota(
       timeout: 8000,
       maxBuffer: 256 * 1024,
     });
-    return normalizeGitHubQuota(stdout, checkedAt, automationEnabled);
+    return applyQuotaCooldown(normalizeGitHubQuota(stdout, checkedAt, automationEnabled), cooldown);
   } catch (error) {
     const reason = isRateLimitError(error);
     if (reason) {
@@ -362,13 +351,26 @@ async function readGitHubQuota(
     return {
       providerId: "github-gh",
       status: "degraded",
-      reason: error instanceof Error ? error.message : "GitHub quota lookup failed",
+      reason: cooldown?.reason ?? (error instanceof Error ? error.message : "GitHub quota lookup failed"),
       checkedAt,
-      cooldownUntil: null,
+      cooldownUntil: cooldown ? new Date(cooldown.until).toISOString() : null,
       automationEnabled,
       resources: previous?.resources ?? [],
     };
   }
+}
+
+function applyQuotaCooldown(
+  quota: GitHubQuotaSummary,
+  cooldown: { until: number; reason: string } | null,
+): GitHubQuotaSummary {
+  if (!cooldown) return quota;
+  return {
+    ...quota,
+    status: "degraded",
+    reason: cooldown.reason,
+    cooldownUntil: new Date(cooldown.until).toISOString(),
+  };
 }
 
 function normalizeGitHubQuota(raw: string, checkedAt: string, automationEnabled: boolean): GitHubQuotaSummary {
