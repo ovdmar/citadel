@@ -28,6 +28,10 @@ clone without ever installing the systemd service.
    - `CITADEL_WEB_PORT` — derived vite port (`5210 + cksum(absolute_path/web) % 100`)
    - `CITADEL_DATA_DIR` — `<checkout>/.citadel/data/` (own SQLite, own config)
    - `CITADEL_DAEMON_URL` — pointing vite's proxy at the worktree daemon
+   - `CITADEL_AUTOMATED_GH=0` — automated GitHub polling is off for worktree
+     deploys by default, so multiple agent worktrees do not drain the shared
+     `gh` quota. Opt in for one worktree with
+     `CITADEL_ENABLE_WORKTREE_GH_AUTOMATION=1 make deploy`.
 5. Polls `/api/state` until the daemon answers (≤20s), then prints the URLs
    and returns. The user clicks the cockpit URL; subsequent source edits
    hot-reload — no need to re-run `make deploy`.
@@ -58,8 +62,8 @@ backend routes appear to 404. Audit-friendly file:line citations:
 - **Makefile env scrub** — `Makefile:145-157`. Before launching `pnpm dev`,
   `env -u`s every inherited `CITADEL_*` variable and then re-sets
   `CITADEL_WORKTREE=1`, `CITADEL_PORT`, `CITADEL_WEB_PORT`, `CITADEL_DATA_DIR`,
-  and `CITADEL_DAEMON_URL` to worktree-pinned values. This is the primary
-  isolation seam.
+  `CITADEL_DAEMON_URL`, and `CITADEL_AUTOMATED_GH=0` to worktree-pinned
+  values. This is the primary isolation seam.
 - **Daemon env validation** — `apps/daemon/src/index.ts:26-43`. When
   `CITADEL_WORKTREE=1`, the daemon rejects any inherited `CITADEL_CONFIG` or
   `CITADEL_DATA_DIR` that points outside the worktree, and forces the data dir
@@ -95,6 +99,50 @@ classification:
 
 Doc/README references to `:4010` describe the systemd port for operators —
 they are not leaks. Don't grep-and-replace them.
+
+## Seeding worktree data (so the cockpit isn't empty)
+
+A fresh worktree starts with an empty SQLite — no workspaces, no namespaces,
+no scratchpad. That's useless for QA: you can't see whether your branch
+changed something in the cockpit if the cockpit has nothing to render. Two
+make targets paper over this with a shared, per-machine seed at
+`~/.citadel-seed/`:
+
+| Command | What it does |
+|---|---|
+| `make seed-snapshot` | Reads from the long-term daemon's data dir at `~/.local/share/citadel/` and writes a checkpointed snapshot to `~/.citadel-seed/`. Uses `sqlite3 .backup` (WAL-safe) for the DB and rsync for everything else (config, scratchpad, scheduled-runs, TLS certs). Re-run whenever you want a fresher baseline. |
+| `make seed-reset` | Stops *this* worktree's dev stack, wipes `<checkout>/.citadel/data/`, copies the seed in. Use this on an existing worktree that's already got an empty DB. Requires a prior `seed-snapshot`. |
+
+`make deploy` also auto-seeds: if `<checkout>/.citadel/data/citadel.sqlite`
+doesn't exist and the seed does, it copies the seed in before launching the
+daemon. So the first `make deploy` in a new worktree comes up populated;
+subsequent deploys preserve whatever state has accumulated there.
+
+Typical flow:
+
+```
+make seed-snapshot          # once per machine, refresh when you want
+cd /path/to/some-worktree
+make deploy                 # auto-seeded on first run; cockpit has data
+# …work in the worktree, mutate state freely…
+make seed-reset && make deploy   # back to a clean QA baseline
+```
+
+The seed is intentionally machine-local (`$HOME/.citadel-seed/`) and not
+versioned — it's a personal QA fixture, not project source. Different
+machines have different baselines; that's fine.
+
+**Caveats — actions in the cockpit:**
+
+- Workspaces, repos, and namespaces seeded from prod reference absolute
+  paths to your main checkout. Visual QA (lists, counts, layout) is what
+  this is for. Clicking a "launch agent" or "redeploy" on a seeded row will
+  target those original paths, not your worktree — fine for read-only QA,
+  surprising for action QA.
+- The seed includes `citadel.config.json`. The worktree daemon still gets
+  `CITADEL_PORT`, `CITADEL_DATA_DIR`, `CITADEL_WEB_PORT` etc. via the env
+  scrub in `make deploy`, so its port/data binding stays worktree-scoped
+  regardless of what the seeded config says.
 
 ## Typical flows
 

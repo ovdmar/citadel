@@ -26,7 +26,16 @@ DEV_STATE         := $(CURDIR)/.citadel/dev.json
 EFFECTIVE_PORT     := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/null 2>&1 && jq -r '.port    // empty' $(DEV_STATE) 2>/dev/null); echo $${v:-$(WORKTREE_PORT)})
 EFFECTIVE_WEB_PORT := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/null 2>&1 && jq -r '.webPort // empty' $(DEV_STATE) 2>/dev/null); echo $${v:-$(WORKTREE_WEB_PORT)})
 
-.PHONY: help setup deploy install tmux-service build check typecheck lint test coverage e2e smoke performance clean stop logs
+# Seeding worktree data dirs. `make seed-snapshot` captures the long-term
+# daemon's data dir into $(SEED_DIR); `make deploy` lazily copies that into a
+# fresh worktree so the cockpit isn't empty; `make seed-reset` wipes the
+# worktree data dir and re-copies. Seed location is per-machine ($HOME), not
+# per-checkout — same baseline serves every worktree.
+PROD_DATA_DIR := $(HOME)/.local/share/citadel
+SEED_DIR      := $(HOME)/.citadel-seed
+SEED_SQLITE   := $(SEED_DIR)/citadel.sqlite
+
+.PHONY: help setup deploy install tmux-service build check typecheck lint test coverage e2e smoke performance clean stop logs seed-snapshot seed-reset
 
 help:
 	@echo "Citadel — scoped to: $(CURDIR)"
@@ -47,6 +56,12 @@ help:
 	@echo "  make tmux-service Restart citadel-tmux.service (DESTRUCTIVE — kills live tmux sessions;"
 	@echo "                    boot-restore resumes them via claude --resume). Use only to apply"
 	@echo "                    tmux-unit changes or recover from an orphan tmux server."
+	@echo ""
+	@echo "Seeding (so a fresh worktree cockpit isn't empty):"
+	@echo "  make seed-snapshot Snapshot the long-term daemon's data dir into $(SEED_DIR)."
+	@echo "                    Re-run whenever you want a fresher baseline."
+	@echo "  make seed-reset   Stop this worktree's stack, wipe its data dir, re-copy from seed."
+	@echo "                    'make deploy' on a fresh worktree auto-seeds from the same place."
 	@echo ""
 	@echo "Quality:"
 	@echo "  make check       typecheck + lint + test + build"
@@ -105,6 +120,14 @@ deploy:
 	fi
 	@mkdir -p $(WORKTREE_LOGS_DIR) $(WORKTREE_DATA_DIR)
 	@command -v setsid >/dev/null 2>&1 || { echo "setsid required — install util-linux"; exit 127; }
+	@# Lazy seed: if this worktree's DB doesn't exist yet and a seed snapshot is
+	@# available, copy the whole seed (config, sqlite, scratchpad, tls, scheduled
+	@# runs) so the cockpit has data to QA against. Never overwrites existing
+	@# worktree state. Run `make seed-reset` to force a re-seed.
+	@if [ ! -f "$(WORKTREE_DATA_DIR)/citadel.sqlite" ] && [ -d "$(SEED_DIR)" ] && [ -f "$(SEED_SQLITE)" ]; then \
+		echo "→ Seeding worktree data from $(SEED_DIR)"; \
+		rsync -a "$(SEED_DIR)/" "$(WORKTREE_DATA_DIR)/"; \
+	fi
 	@# Seed dev.json with the webPort so the deploy hook can advertise the vite
 	# (HMR) URL — the daemon writes its own port on boot but doesn't know about
 	# vite. The daemon merges this with its port on next boot.
@@ -218,3 +241,55 @@ stop:
 logs:
 	@touch $(WORKTREE_LOG)
 	@tail -n 80 -f $(WORKTREE_LOG)
+
+# `make seed-snapshot` captures the long-term daemon's data dir at
+# $(PROD_DATA_DIR) into the shared seed at $(SEED_DIR). The seed is what
+# `make deploy` lazily copies into a fresh worktree so the cockpit isn't
+# empty — same baseline for every worktree on this machine.
+#
+# Why two-step (not "cp live data into the worktree on deploy"): the live DB
+# has open WAL/SHM handles and the worktree daemon would inherit incoherent
+# state. We use `sqlite3 .backup` to get a checkpointed standalone copy and
+# rsync everything else (config, scratchpad, scheduled-runs, tls). Re-run
+# this any time you want a fresher baseline; existing worktrees keep their
+# own data dir (use `make seed-reset` per-worktree to pick up the new seed).
+seed-snapshot:
+	@if [ ! -d "$(PROD_DATA_DIR)" ]; then \
+		echo "✗ No prod data dir at $(PROD_DATA_DIR). Is the long-term daemon installed?"; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(PROD_DATA_DIR)/citadel.sqlite" ]; then \
+		echo "✗ No SQLite at $(PROD_DATA_DIR)/citadel.sqlite — nothing to snapshot."; \
+		exit 1; \
+	fi
+	@command -v sqlite3 >/dev/null 2>&1 || { echo "✗ sqlite3 binary required for hot-safe DB snapshot"; exit 127; }
+	@command -v rsync   >/dev/null 2>&1 || { echo "✗ rsync required";   exit 127; }
+	@mkdir -p $(SEED_DIR)
+	@echo "→ Snapshotting $(PROD_DATA_DIR) → $(SEED_DIR)"
+	@# Mirror everything except the live SQLite (its WAL/SHM are inconsistent
+	@# if copied raw); .backup writes a checkpointed standalone DB.
+	@rsync -a --delete \
+		--exclude 'citadel.sqlite' \
+		--exclude 'citadel.sqlite-wal' \
+		--exclude 'citadel.sqlite-shm' \
+		"$(PROD_DATA_DIR)/" "$(SEED_DIR)/"
+	@sqlite3 "$(PROD_DATA_DIR)/citadel.sqlite" ".backup '$(SEED_SQLITE)'"
+	@echo "✓ Seed ready at $(SEED_DIR)"
+	@echo "  Next: 'make deploy' on a fresh worktree auto-copies this in; 'make seed-reset' refreshes an existing worktree."
+
+# `make seed-reset` is for an existing worktree: stop the stack (the daemon
+# has the DB open), wipe the worktree data dir, copy the seed in. Safe to
+# run whenever you want a clean QA baseline. Requires a prior `seed-snapshot`.
+seed-reset:
+	@if [ ! -d "$(SEED_DIR)" ] || [ ! -f "$(SEED_SQLITE)" ]; then \
+		echo "✗ No seed at $(SEED_DIR). Run 'make seed-snapshot' first."; \
+		exit 1; \
+	fi
+	@command -v rsync >/dev/null 2>&1 || { echo "✗ rsync required"; exit 127; }
+	@$(MAKE) -s stop
+	@echo "→ Wiping $(WORKTREE_DATA_DIR)"
+	@rm -rf "$(WORKTREE_DATA_DIR)"
+	@mkdir -p "$(WORKTREE_DATA_DIR)"
+	@echo "→ Re-seeding from $(SEED_DIR)"
+	@rsync -a "$(SEED_DIR)/" "$(WORKTREE_DATA_DIR)/"
+	@echo "✓ Worktree data reset. Run 'make deploy' to start a fresh stack on the seeded data."
