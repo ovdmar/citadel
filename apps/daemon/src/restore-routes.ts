@@ -15,7 +15,12 @@ import type { CitadelConfig } from "@citadel/config";
 import type { AgentSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
-import { claudeProjectsDir, parseClaudeTranscript } from "@citadel/runtimes";
+import {
+  claudeProjectsDir,
+  findCodexRolloutForSession,
+  parseClaudeTranscript,
+  parseCodexRollout,
+} from "@citadel/runtimes";
 import type express from "express";
 
 type AsyncRoute = (
@@ -171,6 +176,33 @@ function isLive(s: AgentSession): boolean {
   );
 }
 
+// Codex auto-generates its UUID at spawn (no `--session-id` flag, see
+// create-agent-session.ts). The post-spawn poll has a 5s budget — if the
+// rollout file is slow to appear, the UUID never gets persisted and the row
+// becomes invisible to restore. This lazy backfill re-runs the disk lookup
+// for every codex row missing a UUID at candidate-collection time: by then
+// the rollout has had minutes to settle. Returns the recovered UUID or null;
+// writes through to the DB so subsequent collections short-circuit.
+function backfillCodexRuntimeSessionId(
+  store: SqliteStore,
+  workspacePath: string,
+  session: AgentSession,
+): string | null {
+  try {
+    const rolloutPath = findCodexRolloutForSession({
+      workspacePath,
+      sessionStartedAt: session.createdAt,
+    });
+    if (!rolloutPath) return null;
+    const { meta } = parseCodexRollout(rolloutPath);
+    if (!meta.id) return null;
+    store.setSessionRuntimeSessionId(session.id, meta.id);
+    return meta.id;
+  } catch {
+    return null;
+  }
+}
+
 export function collectRestoreCandidates(store: SqliteStore): RestoreCandidate[] {
   const workspaces = store.listWorkspaces().filter((w) => !w.archivedAt);
   const candidates: RestoreCandidate[] = [];
@@ -183,22 +215,27 @@ export function collectRestoreCandidates(store: SqliteStore): RestoreCandidate[]
     // which to bring back — restoring one shouldn't hide the others.
     const seenUuids = new Set<string>();
     for (const candidate of sessions) {
-      if (!candidate.runtimeSessionId) continue;
+      let runtimeSessionId = candidate.runtimeSessionId;
+      if (!runtimeSessionId && candidate.runtimeId === "codex") {
+        runtimeSessionId = backfillCodexRuntimeSessionId(store, ws.path, candidate);
+      }
+      if (!runtimeSessionId) continue;
       if (isLive(candidate)) continue;
       // Dedupe by UUID within a workspace — if the same UUID got written onto
       // multiple rows (shouldn't happen, but safety net), surface one.
-      if (seenUuids.has(candidate.runtimeSessionId)) continue;
+      if (seenUuids.has(runtimeSessionId)) continue;
       // Skip when another row holds the same UUID and is currently live
-      // (it's already running; no need to offer "restore").
-      const live = sessions.find((s) => s.runtimeSessionId === candidate.runtimeSessionId && isLive(s));
+      // (it's already running; no need to offer "restore"). Use the
+      // post-backfill value so codex rows reuse the freshly-recovered UUID.
+      const live = sessions.find((s) => s.runtimeSessionId === runtimeSessionId && isLive(s));
       if (live) continue;
-      seenUuids.add(candidate.runtimeSessionId);
+      seenUuids.add(runtimeSessionId);
       candidates.push({
         workspaceId: ws.id,
         workspaceName: ws.name,
         workspacePath: ws.path,
         runtimeId: candidate.runtimeId,
-        runtimeSessionId: candidate.runtimeSessionId,
+        runtimeSessionId,
         lastActivityAt: candidate.lastOutputAt ?? candidate.updatedAt,
         sourceSessionId: candidate.id,
       });

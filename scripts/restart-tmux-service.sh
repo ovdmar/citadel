@@ -47,12 +47,21 @@ systemctl --user stop citadel.service || true
 sleep 0.4
 
 echo "→ tmux kill-server (socket=$TMUX_SOCK)"
+# Graceful kill exits the tmux server with rc 0 → systemd marks the unit
+# inactive (succeeded). We deliberately go via tmux, not `systemctl stop`,
+# because the unit has RefuseManualStop=true to block accidental restarts;
+# this script is the sanctioned path so it bypasses systemd's stop.
 "$TMUX_BIN_PATH" -L "$TMUX_SOCK" kill-server 2>/dev/null || true
-sleep 0.4
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  if [[ "$(systemctl --user show -p ActiveState --value citadel-tmux.service)" != "active" ]]; then
+    break
+  fi
+  sleep 0.2
+done
 
-echo "→ reset-failed + restart citadel-tmux.service"
+echo "→ reset-failed + start citadel-tmux.service"
 systemctl --user reset-failed citadel-tmux.service 2>/dev/null || true
-systemctl --user restart citadel-tmux.service
+systemctl --user start citadel-tmux.service
 sleep 0.6
 if ! systemctl --user is-active --quiet citadel-tmux.service; then
   echo "✗ citadel-tmux.service did not become active"

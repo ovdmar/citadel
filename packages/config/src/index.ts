@@ -45,6 +45,12 @@ const BUILTIN_RUNTIMES: BuiltinRuntime[] = [
     displayName: "Codex",
     command: "codex",
     args: [],
+    // `codex resume <uuid>` is a subcommand (not a flag), but the daemon's
+    // resume splice is `[resumeArg, <uuid>]` either way — passing "resume"
+    // here yields the right argv. No `sessionIdArg`: codex auto-generates the
+    // UUID at spawn and we recover it via discoverCodexSessionId (with a
+    // lazy backfill at restore-collection time, see restore-routes.ts).
+    resumeArg: "resume",
     supportsResume: true,
     supportsPrompt: true,
   },

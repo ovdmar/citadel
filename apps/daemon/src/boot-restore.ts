@@ -34,16 +34,39 @@ const LIVE_STATUSES: ReadonlyArray<string> = [
   "usage_limited",
 ];
 
+// systemd starts citadel.service with Wants/After=citadel-tmux.service, but
+// "After" only orders the *start command*, not socket readiness. Empirically
+// the daemon can beat tmux to readiness by a few hundred ms, in which case
+// listAllTmuxSessions() returns null on the first call — and the original
+// reconcile path treated that as "skip", leaving every DB row pinned in
+// `running` until status-monitor caught up minutes later. Retry briefly so
+// the common race resolves itself without a user-visible "0 sessions
+// restored" outcome.
+async function awaitTmuxSessions(
+  probe: () => Set<string> | null,
+  timeoutMs: number,
+  pollMs = 250,
+): Promise<Set<string> | null> {
+  const first = probe();
+  if (first !== null || timeoutMs <= 0) return first;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    const next = probe();
+    if (next !== null) return next;
+  }
+  return null;
+}
+
 // Walk every DB session marked live and, if its tmux session is missing from
 // the live tmux server, flip it to `terminated` so collectRestoreCandidates
 // returns it. Returns the count of flipped rows for logging. Idempotent and
 // cheap — a single `tmux list-sessions` plus N row updates only for the
 // stale rows.
-function reconcileStaleLiveRows(store: SqliteStore, probe: () => Set<string> | null): number {
-  const liveTmuxNames = probe();
-  // null = tmux server unreachable (not yet started, or not installed).
-  // Don't flip anything — we can't distinguish "fresh boot" from "tmux
-  // momentarily unavailable" and false-positive flips lose user trust.
+function reconcileStaleLiveRows(store: SqliteStore, liveTmuxNames: Set<string> | null): number {
+  // null = tmux server unreachable even after the readiness wait. Don't flip
+  // anything — we can't distinguish "fresh boot" from "tmux genuinely down"
+  // and false-positive flips lose user trust.
   if (liveTmuxNames === null) return 0;
   let flipped = 0;
   const nowIso = new Date().toISOString();
@@ -115,6 +138,11 @@ export type BootRestoreDeps = {
   // they craft DB rows whose tmux pane intentionally does not exist. Default
   // production behaviour talks to the real `listAllTmuxSessions`.
   listTmuxSessions?: () => Set<string> | null;
+  // How long to keep retrying the tmux probe before giving up. Production
+  // default covers the systemd startup race (citadel.service can outrun
+  // citadel-tmux.service's socket readiness by a few hundred ms). Tests pass
+  // 0 to short-circuit since their stubs are deterministic.
+  tmuxReadinessTimeoutMs?: number;
 };
 
 export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestoreSummary> {
@@ -125,7 +153,16 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
   // exactly the failure mode where the user expects everything to come back
   // but nothing does. Flip them to `terminated` first; then they appear as
   // candidates below and get resumed via `claude --resume <uuid>`.
-  const flippedStale = reconcileStaleLiveRows(deps.store, deps.listTmuxSessions ?? listAllTmuxSessions);
+  const probe = deps.listTmuxSessions ?? listAllTmuxSessions;
+  const tmuxReadinessTimeoutMs = deps.tmuxReadinessTimeoutMs ?? 5000;
+  const liveTmuxNames = await awaitTmuxSessions(probe, tmuxReadinessTimeoutMs);
+  if (liveTmuxNames === null && tmuxReadinessTimeoutMs > 0) {
+    console.warn(
+      `[boot-restore] tmux unreachable after ${tmuxReadinessTimeoutMs}ms — skipping fresh-boot reconciliation; ` +
+        `live DB rows will only flip once status-monitor's first probe succeeds`,
+    );
+  }
+  const flippedStale = reconcileStaleLiveRows(deps.store, liveTmuxNames);
   if (flippedStale > 0) {
     console.log(`[boot-restore] reconciled ${flippedStale} stale 'live' rows (fresh-boot)`);
   }

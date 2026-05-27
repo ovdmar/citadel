@@ -45,7 +45,15 @@ echo "→ Writing citadel-tmux.service (tmux server, socket=$TMUX_SOCK)"
 TMUX_UNIT_TMP="$(mktemp)"
 {
   echo "[Unit]"
-  echo "Description=Citadel tmux server (long-lived; survives citadel.service restarts)"
+  echo "Description=Citadel tmux server (DESTRUCTIVE TO STOP — every live agent pane lives in it; use scripts/restart-tmux-service.sh)"
+  # Block accidental `systemctl --user stop|restart citadel-tmux.service`.
+  # Stopping this server SIGKILLs every claude/codex/cursor pane attached to
+  # it — irreversible session loss for the operator. The intended path for
+  # applying unit changes is scripts/restart-tmux-service.sh, which bypasses
+  # systemd by `tmux kill-server`-ing the actual process and then `start`-ing
+  # the unit fresh (RefuseManualStop blocks `stop`/`restart`, not `start`).
+  # NB: this directive lives in [Unit], not [Service].
+  echo "RefuseManualStop=true"
   echo ""
   echo "[Service]"
   # `tmux -L $SOCK -D` runs the server in the foreground (no daemonise) and

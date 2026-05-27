@@ -126,6 +126,7 @@ describe("runBootRestore", () => {
       // Suppress fresh-boot reconciliation: tests fabricate DB rows whose
       // tmuxSessionName intentionally does not exist on the host tmux.
       listTmuxSessions: () => null,
+      tmuxReadinessTimeoutMs: 0,
     });
 
     expect(summary.entries).toHaveLength(2);
@@ -146,6 +147,7 @@ describe("runBootRestore", () => {
       // Suppress fresh-boot reconciliation: tests fabricate DB rows whose
       // tmuxSessionName intentionally does not exist on the host tmux.
       listTmuxSessions: () => null,
+      tmuxReadinessTimeoutMs: 0,
     });
     expect(summary.entries).toHaveLength(0);
     expect(summary.skippedOlder).toBe(0);
@@ -169,10 +171,59 @@ describe("runBootRestore", () => {
       // Suppress fresh-boot reconciliation: tests fabricate DB rows whose
       // tmuxSessionName intentionally does not exist on the host tmux.
       listTmuxSessions: () => null,
+      tmuxReadinessTimeoutMs: 0,
     });
     expect(summary.entries).toHaveLength(2);
     expect(summary.entries.every((e) => e.sessionId === null && e.error?.startsWith("runtime_not_found:"))).toBe(true);
     expect(spawned).toHaveLength(0);
+  });
+
+  it("retries the tmux probe when it initially returns null (systemd race)", async () => {
+    const { config, store } = fixture();
+    // Insert a live row whose tmux session is missing — the post-readiness
+    // reconcile should flip it. If we treated the first null as definitive
+    // (the pre-fix behavior), this row stays in `running` and boot-restore
+    // would skip it as live.
+    const ts = new Date().toISOString();
+    store.insertSession({
+      id: "sess_race",
+      workspaceId: "ws_1",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
+      status: "running",
+      statusReason: "launched",
+      lastStatusAt: ts,
+      lastOutputAt: ts,
+      endedAt: null,
+      exitCode: null,
+      transport: "disconnected",
+      tmuxSessionName: "citadel_ws_1_race",
+      tmuxSessionId: "$1",
+      runtimeSessionId: "uuid-race",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    let calls = 0;
+    const probe = () => {
+      calls += 1;
+      // First two calls model "tmux socket not yet ready"; third call returns
+      // an empty Set ("server up, no sessions") — race resolved.
+      return calls >= 3 ? new Set<string>() : null;
+    };
+    const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null }> = [];
+    const summary = await runBootRestore({
+      store,
+      operations: fakeOps(spawned),
+      config,
+      emit: () => {},
+      listTmuxSessions: probe,
+      // Keep the test fast — the production default is 5s with 250ms polls.
+      tmuxReadinessTimeoutMs: 500,
+    });
+    expect(calls).toBeGreaterThanOrEqual(3);
+    expect(summary.entries).toHaveLength(1);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]?.resumeRuntimeSessionId).toBe("uuid-race");
   });
 
   it("skips a candidate whose UUID is already live (e.g. manual restore raced us)", async () => {
@@ -208,6 +259,7 @@ describe("runBootRestore", () => {
       // Suppress fresh-boot reconciliation: tests fabricate DB rows whose
       // tmuxSessionName intentionally does not exist on the host tmux.
       listTmuxSessions: () => null,
+      tmuxReadinessTimeoutMs: 0,
     });
     // collectRestoreCandidates already drops UUIDs that have a live owner,
     // so the candidate doesn't even reach the loop. Either way: no spawn.
