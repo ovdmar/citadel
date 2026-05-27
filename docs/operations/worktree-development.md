@@ -44,6 +44,7 @@ clone without ever installing the systemd service.
 | Cockpit / vite port | `5210 + cksum(absolute_path/web) mod 100` (range 5210–5309) |
 | Effective port (after EADDRINUSE fallback) | `.citadel/dev.json:.port` / `.webPort` |
 | SQLite + config | `<checkout>/.citadel/data/` |
+| tmux socket | `citadel-w-<cksum(absolute_path)>` (per worktree, disjoint from prod's `citadel`) |
 | Combined daemon+vite log | `<checkout>/.citadel/logs/daemon.log` |
 | PGID of the dev stack | `<checkout>/.citadel/logs/daemon.pid` |
 
@@ -55,15 +56,25 @@ match where the stack is actually listening.
 ## Worktree isolation: how it works
 
 A worktree dev stack must never accidentally talk to the systemd long-term
-daemon at `:4010`. Five hard isolation points enforce that contract — if any
-of them regress, the cockpit silently routes to the wrong daemon and new
-backend routes appear to 404. Audit-friendly file:line citations:
+daemon at `:4010`, **and must never share runtime state (DB, tmux sessions,
+ttyds) with the prod daemon**. Six hard isolation points enforce that
+contract — if any of them regress, the cockpit silently routes to the wrong
+daemon, new backend routes 404, *or* the worktree's orphan-reaper SIGKILLs
+prod's live agent panes (2026-05-27 incident). Audit-friendly file:line
+citations:
 
 - **Makefile env scrub** — `Makefile:145-157`. Before launching `pnpm dev`,
   `env -u`s every inherited `CITADEL_*` variable and then re-sets
   `CITADEL_WORKTREE=1`, `CITADEL_PORT`, `CITADEL_WEB_PORT`, `CITADEL_DATA_DIR`,
-  `CITADEL_DAEMON_URL`, and `CITADEL_AUTOMATED_GH=0` to worktree-pinned
-  values. This is the primary isolation seam.
+  `CITADEL_DAEMON_URL`, `CITADEL_AUTOMATED_GH=0`, and `CITADEL_TMUX_SOCKET`
+  to worktree-pinned values. This is the primary isolation seam.
+- **Per-worktree tmux socket** — `Makefile` sets `CITADEL_TMUX_SOCKET=citadel-w-<cksum>`;
+  `apps/daemon/src/index.ts` branches on `isWorktreeDaemon` and calls
+  `ensureWorktreeTmuxRunning(socket)` (`packages/terminal/src/index.ts`)
+  instead of the systemd-aware `ensureCitadelTmuxRunning()`. The worktree
+  tmux server is spawned detached so it survives HMR restarts; its socket
+  is disjoint from the systemd-managed `citadel` socket, so `reapOrphans`
+  on the worktree daemon can never see prod sessions.
 - **Daemon env validation** — `apps/daemon/src/index.ts:26-43`. When
   `CITADEL_WORKTREE=1`, the daemon rejects any inherited `CITADEL_CONFIG` or
   `CITADEL_DATA_DIR` that points outside the worktree, and forces the data dir
@@ -74,7 +85,11 @@ backend routes appear to 404. Audit-friendly file:line citations:
 - **ttyd slot disjointness** — `apps/daemon/src/ttyd-slot.ts`. Each daemon
   computes a per-instance ttyd port slot from `(((daemonPort - 4010) % 11) + 11) % 11`
   (200 ports wide). The systemd daemon and worktree daemons land in disjoint
-  slots so ttyd ports never collide.
+  slots so ttyd ports never collide. NB: ~9% of worktree ports (every 11th
+  in the 4110–4209 range) hash into slot 0 — same as prod. With the
+  per-worktree tmux socket now in place, this is no longer catastrophic
+  (the adopted ttyds would point at sessions on a *different* tmux server),
+  but it still leaks process names — track as a follow-up.
 - **Vite proxy reads `CITADEL_DAEMON_URL`** — `apps/web/vite.config.ts:21-32`.
   Every proxy target (`/api`, `/events`, `/terminals`, `/terminal`) reads the
   env var. `make deploy` sets it explicitly, so the cockpit always reaches its
