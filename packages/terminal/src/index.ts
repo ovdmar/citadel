@@ -313,7 +313,9 @@ export function listAllTmuxSessions(): Set<string> | null {
       if (stderr.includes("no server running")) return null;
       // Fall back to the original execFileSync error's stderr.
       const origStderr =
-        error && typeof error === "object" && "stderr" in error ? String((error as { stderr: unknown }).stderr ?? "") : "";
+        error && typeof error === "object" && "stderr" in error
+          ? String((error as { stderr: unknown }).stderr ?? "")
+          : "";
       if (origStderr.includes("no server running")) return null;
       return new Set();
     }
