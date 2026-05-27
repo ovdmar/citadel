@@ -120,7 +120,6 @@ export function registerTerminalRoutes(input: {
     const message = error instanceof Error ? error.message : "terminal_proxy_failed";
     if (process.env.CITADEL_DEBUG_TERMINAL_WS === "1") {
       const stamp = new Date().toISOString();
-      // biome-ignore lint/suspicious/noConsole: deliberate diagnostic channel
       console.log(`[ws] ${stamp} proxy-error`, { url: req?.url, message });
     }
     if (target && "headersSent" in target && typeof (target as express.Response).status === "function") {
@@ -140,19 +139,15 @@ export function registerTerminalRoutes(input: {
   if (process.env.CITADEL_DEBUG_TERMINAL_WS === "1") {
     const stamp = () => new Date().toISOString();
     proxy.on("open", (proxySocket: Duplex) => {
-      // biome-ignore lint/suspicious/noConsole: deliberate diagnostic channel
       console.log(`[ws] ${stamp()} upstream-open`);
       proxySocket.once("close", (hadError: boolean) => {
-        // biome-ignore lint/suspicious/noConsole: deliberate diagnostic channel
         console.log(`[ws] ${stamp()} upstream-close`, { hadError });
       });
       proxySocket.once("end", () => {
-        // biome-ignore lint/suspicious/noConsole: deliberate diagnostic channel
         console.log(`[ws] ${stamp()} upstream-end`);
       });
     });
     proxy.on("close", (_req, _socket, _head) => {
-      // biome-ignore lint/suspicious/noConsole: deliberate diagnostic channel
       console.log(`[ws] ${stamp()} proxy-ws-close`);
     });
   }
@@ -369,7 +364,6 @@ export function registerTerminalRoutes(input: {
   const logWs = (...args: unknown[]) => {
     if (!debugWs) return;
     const stamp = new Date().toISOString();
-    // biome-ignore lint/suspicious/noConsole: deliberate diagnostic channel
     console.log(`[ws] ${stamp}`, ...args);
   };
   const instrumentSocket = (label: string, sessionId: string, socket: Duplex) => {
