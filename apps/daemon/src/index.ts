@@ -114,7 +114,9 @@ server.listen(config.port, config.bindHost, () => {
         setTmuxOwnership(ownership);
       })
       .catch((error) => {
-        console.warn(`[tmux-guard] worktree tmux start failed: ${error instanceof Error ? error.message : String(error)}`);
+        console.warn(
+          `[tmux-guard] worktree tmux start failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
       });
   } else {
     ensureCitadelTmuxRunning()
