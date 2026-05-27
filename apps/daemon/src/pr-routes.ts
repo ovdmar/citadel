@@ -6,11 +6,13 @@ import {
   type collectGitHubCiRuns,
   type collectGitHubVersionControlSummary,
   fetchCommitChecks,
+  getGhCooldown,
   mergePr,
   pLimit,
 } from "@citadel/providers";
 import type express from "express";
 import { ZodError } from "zod";
+import { decorateWithCooldown } from "./gh-quota-wiring.js";
 import { bustCacheByPrefixes } from "./workspace-fs-watcher.js";
 
 // Cap per-PR per-commit check fetches at the most recent N commits. A 50-commit
@@ -104,10 +106,12 @@ export function registerPrRoutes(input: {
       if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const versionControl: VersionControlSummary = await cachedProvider(`vc:${repo.id}:${repo.updatedAt}`, () =>
-        providers.collectGitHubVersionControlSummary(repo.rootPath),
+      const versionControl: VersionControlSummary = await cachedProvider(
+        `vc:${repo.id}:${repo.updatedAt}`,
+        () => providers.collectGitHubVersionControlSummary(repo.rootPath),
+        60_000,
       );
-      res.json({ versionControl });
+      res.json({ versionControl: decorateWithCooldown(versionControl) });
     }),
   );
 
@@ -118,8 +122,10 @@ export function registerPrRoutes(input: {
       if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const ci: CiProviderSummary = await cachedProvider(`ci:${repo.id}:${repo.updatedAt}`, () =>
-        providers.collectGitHubCiRuns(repo.rootPath),
+      const ci: CiProviderSummary = await cachedProvider(
+        `ci:${repo.id}:${repo.updatedAt}`,
+        () => providers.collectGitHubCiRuns(repo.rootPath),
+        60_000,
       );
       res.json({ ci });
     }),
@@ -187,12 +193,18 @@ export function registerPrRoutes(input: {
       if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
       const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
       if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      bustCacheByPrefixes(providerCache, [`vc:${workspace.id}`, `ci:${workspace.id}`]);
+      // During gh cooldown, skip the cache-bust + fetch — serve whatever's in
+      // cache decorated with cooldownUntil so the FE banner can render. No 503;
+      // the response shape stays uniform across cooldown / normal.
+      if (!getGhCooldown()) {
+        bustCacheByPrefixes(providerCache, [`vc:${workspace.id}`, `ci:${workspace.id}`]);
+      }
       const versionControl: VersionControlSummary = await cachedProvider(
         `vc:${workspace.id}:${workspace.updatedAt}`,
         () => providers.collectGitHubVersionControlSummary(workspace.path),
+        60_000,
       );
-      res.json({ versionControl });
+      res.json({ versionControl: decorateWithCooldown(versionControl) });
     }),
   );
 
@@ -210,8 +222,10 @@ export function registerPrRoutes(input: {
         if (error instanceof ZodError) return res.status(400).json({ error: "invalid_merge_request" });
         throw error;
       }
-      const summary = await cachedProvider(`vc:${workspace.id}:${workspace.updatedAt}`, () =>
-        providers.collectGitHubVersionControlSummary(workspace.path),
+      const summary = await cachedProvider(
+        `vc:${workspace.id}:${workspace.updatedAt}`,
+        () => providers.collectGitHubVersionControlSummary(workspace.path),
+        60_000,
       );
       const number = summary.pullRequest?.number;
       if (typeof number !== "number")

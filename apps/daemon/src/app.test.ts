@@ -258,6 +258,62 @@ describe("createDaemonApp", () => {
     }
   });
 
+  it("injects versionControl.cooldownUntil into provider-summary while gh is in cooldown (review #6)", async () => {
+    const { clearGhCooldown, setGhCooldown } = await import("@citadel/providers");
+    const fixture = createFixture();
+    const now = new Date().toISOString();
+    fixture.store.insertRepo({
+      id: "repo_cooldown",
+      name: "Cooldown Repo",
+      rootPath: fixture.config.dataDir,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: ["github-gh"],
+      deployHookCommand: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    const { server } = createDaemonApp({
+      ...fixture,
+      providers: {
+        collectGitHubVersionControlSummary: async () => ({
+          providerId: "github-gh",
+          status: "healthy" as const,
+          reason: null,
+          defaultBranch: "main",
+          currentBranch: "main",
+          remotes: ["origin"],
+          pullRequest: null,
+          checkedAt: new Date().toISOString(),
+        }),
+      },
+    });
+    const baseUrl = await listen(server);
+    try {
+      // First fetch primes the cache without cooldown set — cooldownUntil omitted.
+      const before = await getJson<{ versionControl: { cooldownUntil?: string | null } }>(
+        `${baseUrl}/api/repos/repo_cooldown/provider-summary`,
+      );
+      expect(before.versionControl.cooldownUntil).toBeUndefined();
+      // Activate cooldown; subsequent response — served from the same daemon
+      // cache — must be decorated by the response builder. The cache itself
+      // doesn't carry cooldownUntil; the decoration must happen at the
+      // boundary, regardless of code path.
+      const until = setGhCooldown("API rate limit exceeded for user ID 1", 60_000);
+      const during = await getJson<{ versionControl: { cooldownUntil?: string | null } }>(
+        `${baseUrl}/api/repos/repo_cooldown/provider-summary`,
+      );
+      expect(during.versionControl.cooldownUntil).toBe(new Date(until).toISOString());
+    } finally {
+      clearGhCooldown(); // module-global state — undo for the next test
+      await closeServer(server);
+    }
+  });
+
   it("caches provider summaries and clears them on config updates", async () => {
     const fixture = createFixture();
     const now = new Date().toISOString();

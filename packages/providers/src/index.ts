@@ -16,6 +16,27 @@ import type {
 import { PrMergeStateStatusSchema } from "@citadel/contracts";
 import type { ParentPr, PrCommit, PrMergeResponse, PrMergeStrategy } from "@citadel/contracts/pr-routes";
 import { runtimeUsageFetchers } from "@citadel/runtimes";
+import {
+  GhRateLimitedError,
+  getGhCooldown,
+  getGhCooldownReason,
+  getGhCooldownUntil,
+  isRateLimitError,
+  setGhCooldown,
+} from "./gh-cooldown.js";
+
+// Re-export the cooldown surface so existing consumers (apps/daemon,
+// gh-quota-wiring, tests) keep their import paths. setGhCooldown is
+// exported for tests / the future "retry now" button; production code
+// only sets cooldown through gh() catching a rate-limit error.
+export {
+  clearGhCooldown,
+  DEFAULT_GH_COOLDOWN_MS,
+  GhRateLimitedError,
+  getGhCooldown,
+  isRateLimitError,
+  setGhCooldown,
+} from "./gh-cooldown.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -577,13 +598,30 @@ export function setGithubCommand(command: string | undefined) {
   githubCommandOverride = command?.length ? command : "gh";
 }
 
+// Global gh rate-limit circuit breaker. The cooldown state lives in
+// ./gh-cooldown.ts (extracted to keep this file under the 800-line gate);
+// every gh-touching code path in this module funnels through gh() below, so
+// the gate is uniform.
 async function gh(rootPath: string, args: string[]) {
-  const result = await execFileAsync(githubCommandOverride, args, {
-    cwd: rootPath,
-    timeout: 12000,
-    maxBuffer: 1024 * 1024,
-  });
-  return result.stdout.trim();
+  const until = getGhCooldownUntil();
+  if (until > Date.now()) {
+    throw new GhRateLimitedError(until, getGhCooldownReason() ?? "rate limit");
+  }
+  try {
+    const result = await execFileAsync(githubCommandOverride, args, {
+      cwd: rootPath,
+      timeout: 12000,
+      maxBuffer: 1024 * 1024,
+    });
+    return result.stdout.trim();
+  } catch (error) {
+    const reason = isRateLimitError(error);
+    if (reason) {
+      const newUntil = setGhCooldown(reason);
+      throw new GhRateLimitedError(newUntil, reason);
+    }
+    throw error;
+  }
 }
 
 // PR display helpers — used by the daemon's PR routes for the always-on
@@ -735,11 +773,17 @@ const ghAvailableCache = new Map<string, { expiresAt: number; available: boolean
 export async function isGhAvailable(rootPath: string): Promise<boolean> {
   const cached = ghAvailableCache.get(rootPath);
   if (cached && cached.expiresAt > Date.now()) return cached.available;
+  // During gh cooldown, don't spawn `gh auth status` — we already know any gh
+  // call will throw. Preserve the previous cached answer (assume gh was wired
+  // up before we hit the rate limit) so the merge button doesn't disappear
+  // mid-cooldown. If we never had a cached answer, fall back to false.
+  if (getGhCooldown()) return cached?.available ?? false;
   let available = false;
   try {
     await gh(rootPath, ["auth", "status"]);
     available = true;
-  } catch {
+  } catch (error) {
+    if (error instanceof GhRateLimitedError) return cached?.available ?? false;
     available = false;
   }
   ghAvailableCache.set(rootPath, { expiresAt: Date.now() + 60_000, available });

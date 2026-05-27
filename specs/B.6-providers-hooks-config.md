@@ -13,7 +13,7 @@
 [ ] 5. Usage provider is provider/hook based.
 [ ] 6. Provider health is visible per provider AND per interaction method.
 [ ] 7. Provider degraded state explains missing/stale data.
-[ ] 8. Provider data includes refresh age.
+[ ] 8. Provider data includes refresh age. The GitHub provider additionally surfaces an active rate-limit cooldown via `versionControl.cooldownUntil` (ISO timestamp) so the cockpit can render an explicit "retrying at HH:MM" banner instead of an opaque "degraded".
 [ ] 9. Citadel prefers existing external tool auth for the first production baseline.
 
 ## Provider Category Model (source of truth)
