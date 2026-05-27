@@ -1,4 +1,38 @@
 import { describe, expect, it } from "vitest";
+import { sessionNeedsAttention } from "./index.js";
+
+describe("sessionNeedsAttention (shell-first attention predicate)", () => {
+  it("returns true for status='idle' with statusReason='idle_after_unexpected_exit' (crashed agent signal)", () => {
+    expect(
+      sessionNeedsAttention({ status: "idle", statusReason: "idle_after_unexpected_exit" }),
+    ).toBe(true);
+  });
+
+  it("returns false for status='idle' with statusReason=null (user-initiated Ctrl+C / Restart cleared the label)", () => {
+    expect(sessionNeedsAttention({ status: "idle", statusReason: null })).toBe(false);
+  });
+
+  it("preserves the existing unknown-with-tmux_missing path (still attention-worthy)", () => {
+    expect(sessionNeedsAttention({ status: "unknown", statusReason: "tmux_missing" })).toBe(true);
+    expect(sessionNeedsAttention({ status: "unknown", statusReason: "sentinel_missing_tmux_alive" })).toBe(true);
+    expect(sessionNeedsAttention({ status: "unknown", statusReason: "migrated_from_orphaned" })).toBe(true);
+  });
+
+  it("preserves the existing daemon_restart_indeterminate path (NOT attention-worthy)", () => {
+    expect(sessionNeedsAttention({ status: "unknown", statusReason: "daemon_restart_indeterminate" })).toBe(false);
+  });
+
+  it("preserves the existing status='failed' (always attention)", () => {
+    expect(sessionNeedsAttention({ status: "failed", statusReason: null })).toBe(true);
+  });
+
+  it("returns false for normal living statuses (running / waiting_for_input / rate_limited / usage_limited)", () => {
+    for (const status of ["running", "waiting_for_input", "rate_limited", "usage_limited"] as const) {
+      expect(sessionNeedsAttention({ status, statusReason: null })).toBe(false);
+    }
+  });
+});
+
 import {
   assertUniqueRepoPath,
   assertUniqueWorkspaceName,
