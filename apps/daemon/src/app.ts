@@ -43,6 +43,13 @@ import { getBootRestoreSummary } from "./boot-restore.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import {
+  AUTOMATED_GH_DISABLED_REASON,
+  automatedGhEnabled,
+  cachedCiOrDisabled,
+  disabledVersionControlSummary,
+  shouldFetchGithubCi,
+} from "./gh-automation.js";
+import {
   type GhQuotaWiringWithDetach,
   decorateWithCooldown,
   resolveRepoFullNameFromWorkspaces,
@@ -113,6 +120,7 @@ export function createDaemonApp(input: {
   // gh-quota wiring: viewer-gate, per-PR scheduler, main-watcher. Hydrates from SQLite PR snapshots so restart doesn't re-fetch every PR.
   const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
   const ghQuota: GhQuotaWiringWithDetach = wireGhQuota({ sseClients, store, resolveRepoFullName });
+  const ghAutomationEnabled = automatedGhEnabled();
   server.on("close", () => ghQuota.stop());
   const gatedVcDeps = {
     store,
@@ -172,7 +180,14 @@ export function createDaemonApp(input: {
   const { recentUserAction } = wireTerminalRoutes({ app, server, store, ttyd, dataDir: config.dataDir, emit, config });
 
   const cachedProviderHealth = () =>
-    cachedProvider("provider-health", () => collectProviderHealth(config.providers), 15_000);
+    cachedProvider(
+      "provider-health",
+      () =>
+        collectProviderHealth(config.providers, {
+          ...(ghAutomationEnabled ? {} : { skipGithubReason: AUTOMATED_GH_DISABLED_REASON }),
+        }),
+      60_000,
+    );
 
   app.get(
     "/api/health",
@@ -382,14 +397,22 @@ export function createDaemonApp(input: {
     if (!workspace) return null;
     const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
     if (!repo) return null;
+    const ciKey = `ci:${workspace.id}:${workspace.updatedAt}`;
+    const shouldFetchCi = ghAutomationEnabled && shouldFetchGithubCi(store, workspace);
     const [git, versionControlRaw, ci, issueTracker, apps] = await Promise.all([
       cachedProvider(`git:${workspace.id}:${workspace.updatedAt}`, () => readWorkspaceGitStatus(workspace.path), 3000),
-      fetchVersionControlGated(gatedVcDeps, workspace, repo, `vc:${workspace.id}:${workspace.updatedAt}`),
-      cachedProvider(
-        `ci:${workspace.id}:${workspace.updatedAt}`,
-        () => providers.collectGitHubCiRuns(workspace.path),
-        60_000,
-      ),
+      ghAutomationEnabled
+        ? fetchVersionControlGated(gatedVcDeps, workspace, repo, `vc:${workspace.id}:${workspace.updatedAt}`)
+        : Promise.resolve(disabledVersionControlSummary(workspace, repo)),
+      shouldFetchCi
+        ? cachedProvider(ciKey, () => providers.collectGitHubCiRuns(workspace.path), 60_000)
+        : Promise.resolve(
+            cachedCiOrDisabled(
+              providerCache,
+              ciKey,
+              ghAutomationEnabled ? "GitHub CI is cached until the PR receives a new local commit" : AUTOMATED_GH_DISABLED_REASON,
+            ),
+          ),
       workspace.issueKey
         ? cachedProvider(`issue:${workspace.issueKey}`, () =>
             providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
@@ -782,7 +805,7 @@ export function createDaemonApp(input: {
     // Skip ticks when no SSE viewer is connected (2-min grace). Auto-recovery
     // is a viewer-visible feature; consuming GitHub quota with nobody watching
     // is the largest pre-optimization quota sink.
-    shouldRun: () => ghQuota.hasViewers() || ghQuota.msSinceLastViewer() <= 2 * 60_000,
+    shouldRun: () => ghAutomationEnabled && (ghQuota.hasViewers() || ghQuota.msSinceLastViewer() <= 2 * 60_000),
   });
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
   const autoResume = startDaemonAutoResumeLoop(store, operations);

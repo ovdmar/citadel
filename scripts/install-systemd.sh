@@ -96,6 +96,7 @@ CITADEL_UNIT_TMP="$(mktemp)"
   # without an explicit CITADEL_PORT, to keep ad-hoc invocations from
   # clobbering this service.
   echo "Environment=CITADEL_PORT=4010"
+  echo "Environment=CITADEL_AUTOMATED_GH=1"
   echo "Environment=CITADEL_CONFIG=$CITADEL_CONFIG_PATH"
   echo "Environment=OPENCLAW_ROOT=$OPENCLAW_ROOT"
   echo "Environment=CITADEL_OPENCLAW_STATUS_TIMEOUT_MS=15000"
