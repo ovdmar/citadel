@@ -1,5 +1,13 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Link, Outlet, RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import {
+  Link,
+  Outlet,
+  RouterProvider,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  useLocation,
+} from "@tanstack/react-router";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
@@ -19,6 +27,7 @@ import "./styles.css";
 import "./chrome.css";
 import "./stage-terminal.css";
 import "./cockpit-extras.css";
+import "./pr-card-actions.css";
 import "./inspector-stats.css";
 import "./inspector-checks.css";
 import "./inspector-deploy.css";
@@ -53,56 +62,70 @@ const rootRoute = createRootRoute({
   component: () => <Shell />,
 });
 
-const indexRoute = createRoute({
+// Pathless layout route whose component renders the Cockpit unconditionally
+// plus an overlay slot for any child route. Every non-index route mounts as
+// a child here, so the Cockpit (and the TerminalPane iframes inside it) is
+// kept alive across navigations to Settings, Scratchpad, etc. Without this,
+// every route transition unmounted Cockpit → ttyd iframes were destroyed →
+// returning forced a fresh ttyd handshake (the user's "reloads first" gripe).
+const cockpitLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
+  id: "cockpit-layout",
+  component: CockpitLayout,
+});
+
+const indexRoute = createRoute({
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/",
-  component: Cockpit,
+  // No body: Cockpit is rendered by the parent layout. The empty Outlet here
+  // is what lets RouteOverlay decide "we're on /, don't render the overlay."
+  component: () => null,
 });
 
 const settingsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/settings",
   component: SettingsView,
 });
 
 const repoSettingsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/repos/$repoId",
   component: RepoSettingsView,
 });
 
 const operationsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/operations",
   component: OperationsView,
 });
 
 const onboardingRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/onboarding",
   component: OnboardingView,
 });
 
 const dashboardRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/dashboard",
   component: DashboardView,
 });
 
 const historyRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/history",
   component: HistoryView,
 });
 
 const scratchpadRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/scratchpad",
   component: ScratchpadView,
 });
 
 const scheduledAgentsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/scheduled-agents",
   component: ScheduledAgentsView,
 });
@@ -157,6 +180,26 @@ function syncDrawerToUrl(open: boolean) {
   }
 }
 
+function CockpitLayout() {
+  const location = useLocation();
+  // The Outlet is ALWAYS rendered (in a stable DOM position) so TanStack
+  // Router never sees its mount point appear/disappear across route changes
+  // — child route components mount/unmount around it, but the outer wrapper
+  // is constant. The overlay is hidden by CSS when on the index route so the
+  // cockpit is fully visible and clickable; on any other route the overlay
+  // turns opaque and covers the cockpit, but the cockpit (including every
+  // TerminalPane iframe) stays mounted underneath.
+  const isIndex = location.pathname === "/" || location.pathname === "";
+  return (
+    <>
+      <Cockpit />
+      <div className="route-overlay" data-hidden={isIndex ? "" : undefined} aria-hidden={isIndex}>
+        <Outlet />
+      </div>
+    </>
+  );
+}
+
 function NotFoundView() {
   // A stale persisted route (e.g. a removed page) would otherwise loop the user
   // back into 404 on every reload. Clear the saved value once on mount so the
@@ -184,15 +227,17 @@ if (typeof window !== "undefined") {
 
 const router = createRouter({
   routeTree: rootRoute.addChildren([
-    indexRoute,
-    settingsRoute,
-    repoSettingsRoute,
-    operationsRoute,
-    onboardingRoute,
-    dashboardRoute,
-    historyRoute,
-    scratchpadRoute,
-    scheduledAgentsRoute,
+    cockpitLayoutRoute.addChildren([
+      indexRoute,
+      settingsRoute,
+      repoSettingsRoute,
+      operationsRoute,
+      onboardingRoute,
+      dashboardRoute,
+      historyRoute,
+      scratchpadRoute,
+      scheduledAgentsRoute,
+    ]),
   ]),
   defaultNotFoundComponent: NotFoundView,
 });

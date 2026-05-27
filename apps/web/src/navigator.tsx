@@ -1,4 +1,4 @@
-import type { AgentSession, Namespace, Operation, Repo, Workspace, WorkspaceCockpitSummary } from "@citadel/contracts";
+import type { AgentSession, Namespace, Operation, PullRequestSummary, Repo, Workspace } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
@@ -37,7 +37,7 @@ export function Navigator(props: {
   workspaces: Workspace[];
   sessions: AgentSession[];
   operations: Operation[];
-  activeSummary: WorkspaceCockpitSummary | undefined;
+  prByWorkspaceId: Map<string, PullRequestSummary | null>;
   activeWorkspaceId: string;
   runtimes: import("@citadel/contracts").AgentRuntime[];
   namespaces: Namespace[];
@@ -170,11 +170,7 @@ export function Navigator(props: {
         key={workspace.id}
         workspace={workspace}
         sessions={sessions}
-        pullRequest={
-          workspace.id === props.activeSummary?.workspaceId
-            ? (props.activeSummary.versionControl.pullRequest ?? null)
-            : null
-        }
+        pullRequest={props.prByWorkspaceId.get(workspace.id) ?? null}
         namespace={workspace.namespaceId ? (namespacesById.get(workspace.namespaceId) ?? null) : null}
         namespaces={props.namespaces}
         active={workspace.id === props.activeWorkspaceId}
@@ -182,7 +178,7 @@ export function Navigator(props: {
         onSelect={() => props.onPickWorkspace(workspace)}
       />
     ),
-    [props.activeSummary, props.activeWorkspaceId, props.onPickWorkspace, props.namespaces, namespacesById, grouping],
+    [props.prByWorkspaceId, props.activeWorkspaceId, props.onPickWorkspace, props.namespaces, namespacesById, grouping],
   );
 
   const flatEntries = useMemo<WorkspaceEntry[]>(

@@ -78,23 +78,6 @@ export function recordHistoryWrite(
   return entry;
 }
 
-// Runs the one-shot scratchpad-history backfill on daemon boot. Reads the
-// raw scratchpad file, and if there is any content, feeds it to
-// `backfillIfEmpty`. Errors are logged but never throw — backfill is best
-// effort. Lives here (not in app.ts) so app.ts stays under the file-size cap.
-export function backfillScratchpadHistoryOnBoot(dataDir: string, scratchpadPath: (d: string) => string): void {
-  try {
-    const spPath = scratchpadPath(dataDir);
-    if (!fs.existsSync(spPath)) return;
-    const content = fs.readFileSync(spPath, "utf8");
-    if (content.length === 0) return;
-    const stat = fs.statSync(spPath);
-    backfillIfEmpty(dataDir, { content, updatedAt: stat.mtime.toISOString() });
-  } catch (error) {
-    console.error(`[scratchpad-history] backfill skipped: ${error instanceof Error ? error.message : error}`);
-  }
-}
-
 export function backfillIfEmpty(
   dataDir: string,
   current: { content: string; updatedAt: string } | null,

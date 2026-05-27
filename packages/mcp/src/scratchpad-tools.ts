@@ -18,7 +18,7 @@ export const SCRATCHPAD_TOOL_DEFINITIONS: McpToolDefinition[] = [
   {
     name: "read_scratchpad",
     description:
-      "Read the user's scratchpad. The user notes thoughts and TODOs here for orchestrator agents to pick up. Returns { content, updatedAt }. The file is fenced markdown (block-based); see list_blocks for structured access.",
+      "Read the user's scratchpad. The user notes thoughts and TODOs here for orchestrator agents to pick up. Returns { content, updatedAt, path } — `path` is the absolute filesystem location of the notes file (configurable via `scratchpad.path` in CitadelConfig; defaults to `<dataDir>/scratchpad.md`). The file is fenced markdown (block-based); see list_blocks for structured access.",
     inputSchema: { type: "object", additionalProperties: false },
     destructive: false,
   },

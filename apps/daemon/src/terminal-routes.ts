@@ -45,6 +45,12 @@ export function registerTerminalRoutes(input: {
   emit?: (type: string, payload: unknown) => void;
   /** Recreate the tmux session a terminal needs. Returns the live tmux name/id. */
   respawnTmux?: (session: AgentSession) => Promise<{ tmuxSessionName: string; tmuxSessionId: string } | null>;
+  /** Relaunch the agent inside an existing pane (shell-first Restart endpoint). */
+  restartAgent?: (session: AgentSession) => Promise<void>;
+  /** In-memory map of recent operator-initiated terminations. Written by the
+   * Restart endpoint and the user-action endpoint. The status-monitor reads
+   * it on each tick to label `running → idle` transitions correctly. */
+  recentUserAction?: Map<string, number>;
 }) {
   const { app, server, store, ttyd } = input;
   const proxy = httpProxy.createProxyServer({
@@ -110,8 +116,12 @@ export function registerTerminalRoutes(input: {
   // reconnect after restart.
   const themePreferences = new ThemePrefStore(input.dataDir);
 
-  proxy.on("error", (error, _req, target) => {
+  proxy.on("error", (error, req, target) => {
     const message = error instanceof Error ? error.message : "terminal_proxy_failed";
+    if (process.env.CITADEL_DEBUG_TERMINAL_WS === "1") {
+      const stamp = new Date().toISOString();
+      console.log(`[ws] ${stamp} proxy-error`, { url: req?.url, message });
+    }
     if (target && "headersSent" in target && typeof (target as express.Response).status === "function") {
       const response = target as express.Response;
       if (!response.headersSent) response.status(502).type("text/plain").send(message);
@@ -125,6 +135,22 @@ export function registerTerminalRoutes(input: {
       }
     }
   });
+
+  if (process.env.CITADEL_DEBUG_TERMINAL_WS === "1") {
+    const stamp = () => new Date().toISOString();
+    proxy.on("open", (proxySocket: Duplex) => {
+      console.log(`[ws] ${stamp()} upstream-open`);
+      proxySocket.once("close", (hadError: boolean) => {
+        console.log(`[ws] ${stamp()} upstream-close`, { hadError });
+      });
+      proxySocket.once("end", () => {
+        console.log(`[ws] ${stamp()} upstream-end`);
+      });
+    });
+    proxy.on("close", (_req, _socket, _head) => {
+      console.log(`[ws] ${stamp()} proxy-ws-close`);
+    });
+  }
 
   const resolveSession = (sessionId: string): ResolvedSession | null => {
     const session = store.listSessions().find((candidate) => candidate.id === sessionId);
@@ -231,6 +257,45 @@ export function registerTerminalRoutes(input: {
     res.status(202).json({ released: true });
   });
 
+  // Restart endpoint — relaunches the agent inside an existing pane.
+  // Records recentUserAction BEFORE the mutation so the next status-monitor
+  // tick sees the operator action and clears statusReason (rather than
+  // labelling the resulting transition as `idle_after_unexpected_exit`).
+  // Defensive check: if the agent is ALREADY running (pane foreground IS
+  // the runtime binary, stale UI or race), return 409 instead of typing
+  // `env … claude …` into the live TUI as a chat message.
+  app.post("/api/agent-sessions/:sessionId/restart", async (req, res) => {
+    const sessionId = String(req.params.sessionId ?? "");
+    const dbSession = store.listSessions().find((candidate) => candidate.id === sessionId);
+    if (!dbSession) return res.status(404).json({ error: "session_not_found" });
+    if (!input.restartAgent) return res.status(503).json({ error: "restart_not_wired" });
+    input.recentUserAction?.set(sessionId, Date.now());
+    try {
+      await input.restartAgent(dbSession);
+      input.emit?.("agent.updated", { workspaceId: dbSession.workspaceId, sessionId });
+      return res.status(202).json({ ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "restart_failed";
+      // 409 for the defensive "agent_already_running" check; 500 for anything else.
+      if (message === "agent_already_running") {
+        return res.status(409).json({ error: "agent_already_running" });
+      }
+      return res.status(500).json({ error: "restart_failed", detail: message });
+    }
+  });
+
+  // User-action endpoint — the terminal-key-shim (injected into ttyd's
+  // iframe page) hits this with `{reason: 'ctrl_c'}` whenever the operator
+  // types Ctrl+C inside the embedded terminal, in parallel with letting the
+  // keystroke propagate to ttyd. Fire-and-forget: caller doesn't block on
+  // the response. No rate-limit needed — the write is in-memory Map.set,
+  // no DB or I/O.
+  app.post("/api/agent-sessions/:sessionId/user-action", (req, res) => {
+    const sessionId = String(req.params.sessionId ?? "");
+    input.recentUserAction?.set(sessionId, Date.now());
+    res.status(204).end();
+  });
+
   app.get("/api/terminals", (_req, res) => {
     res.json({
       terminals: ttyd
@@ -290,9 +355,31 @@ export function registerTerminalRoutes(input: {
   // lands here. Mirror the HTTP path's self-heal so a stale iframe that opens
   // a ws after the daemon restarted / ttyd was reaped picks up a freshly
   // spawned instance instead of hard-failing with terminal_not_found.
+  // Lifecycle logging for terminal WS upgrades. Active only when
+  // CITADEL_DEBUG_TERMINAL_WS=1 — captures which side closed (client vs
+  // upstream ttyd), with reason, so "random terminal reload" reports can
+  // be traced to a real cause (proxy timeout, ttyd ping miss, browser
+  // navigation, etc).
+  const debugWs = process.env.CITADEL_DEBUG_TERMINAL_WS === "1";
+  const logWs = (...args: unknown[]) => {
+    if (!debugWs) return;
+    const stamp = new Date().toISOString();
+    console.log(`[ws] ${stamp}`, ...args);
+  };
+  const instrumentSocket = (label: string, sessionId: string, socket: Duplex) => {
+    if (!debugWs) return;
+    socket.once("close", (hadError: boolean) => logWs(label, sessionId, "close", { hadError }));
+    socket.once("end", () => logWs(label, sessionId, "end"));
+    socket.once("error", (err: Error) => logWs(label, sessionId, "error", err.message));
+  };
+
   const upgradeHandler = (request: http.IncomingMessage, socket: Duplex, head: Buffer) => {
     const urlPath = request.url || "";
     if (!urlPath.startsWith(TERMINAL_PROXY_PREFIX)) return;
+    const sessionMatch = /^\/terminals\/([^/]+)/.exec(urlPath);
+    const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1] ?? "") : "?";
+    logWs("upgrade", sessionId, { path: urlPath });
+    instrumentSocket("client", sessionId, socket);
     const resolved = resolveProxyTarget(urlPath);
     if (!resolved) {
       // Hold the socket open while we try to revive ttyd. Browsers retry on
@@ -300,13 +387,16 @@ export function registerTerminalRoutes(input: {
       reviveProxyTarget(urlPath)
         .then((revived) => {
           if (!revived) {
+            logWs("revive-failed", sessionId);
             socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
             socket.destroy();
             return;
           }
+          logWs("revived", sessionId, { target: revived.target });
           proxy.ws(request, socket, head, { target: revived.target });
         })
-        .catch(() => {
+        .catch((err: Error) => {
+          logWs("revive-error", sessionId, err.message);
           try {
             socket.destroy();
           } catch {
@@ -321,6 +411,10 @@ export function registerTerminalRoutes(input: {
 
   server.on("close", () => {
     server.off("upgrade", upgradeHandler);
+    // Intentionally do NOT signal ttyd children — they were spawned detached
+    // so they outlive this daemon process and get re-adopted at next boot
+    // (see discoverExistingTtyds() in apps/daemon/src/app.ts). shutdown()
+    // just clears the in-memory map.
     ttyd.shutdown();
     proxy.close();
   });

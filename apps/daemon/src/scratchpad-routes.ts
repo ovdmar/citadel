@@ -1,5 +1,9 @@
-import type { CitadelConfig } from "@citadel/config";
-import type { ProviderHealth } from "@citadel/contracts";
+// All handlers resolve `effectiveNotesPath(config)` inside the request body —
+// `config` is mutated in place by `PUT /api/config` (see app.ts:194), so
+// capturing the path in a closure at registration time would silently miss
+// runtime updates to `scratchpad.path`.
+import { type CitadelConfig, effectiveNotesPath } from "@citadel/config";
+import type { ProviderHealth, ReadScratchpadResult } from "@citadel/contracts";
 import { SEARCH_LIMITS, fuzzySearchBlocks } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
@@ -28,9 +32,13 @@ export function registerScratchpadRoutes(input: {
   providerHealth?: () => Promise<ProviderHealth[]>;
 }) {
   const { app, config, emit, store, operations, providerHealth } = input;
+  const paths = () => ({ notesPath: effectiveNotesPath(config), dataDir: config.dataDir });
 
   app.get("/api/scratchpad", (_req, res) => {
-    res.json(readScratchpad(config.dataDir));
+    const p = paths();
+    const snapshot = readScratchpad(p);
+    const body: ReadScratchpadResult = { ...snapshot, path: p.notesPath };
+    res.json(body);
   });
 
   app.put("/api/scratchpad", (req, res) => {
@@ -42,7 +50,7 @@ export function registerScratchpadRoutes(input: {
     if (Buffer.byteLength(body.content, "utf8") > SCRATCHPAD_MAX_BYTES) {
       return res.status(413).json({ error: "scratchpad_too_large", limit: SCRATCHPAD_MAX_BYTES });
     }
-    const snapshot = writeScratchpad(config.dataDir, body.content, "ui");
+    const snapshot = writeScratchpad(paths(), body.content, "ui");
     emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
     emit("scratchpad.history.updated", { updatedAt: snapshot.updatedAt });
     res.json(snapshot);
@@ -65,14 +73,14 @@ export function registerScratchpadRoutes(input: {
     }
     const entry = findHistoryEntry(config.dataDir, body.entryId);
     if (!entry) return res.status(404).json({ error: "history_entry_not_found" });
-    const snapshot = writeScratchpad(config.dataDir, entry.content, `restore:${entry.id}`);
+    const snapshot = writeScratchpad(paths(), entry.content, `restore:${entry.id}`);
     emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
     emit("scratchpad.history.updated", { updatedAt: snapshot.updatedAt });
     res.json(snapshot);
   });
 
   app.get("/api/scratchpad/blocks", (_req, res) => {
-    res.json(listBlocks(config.dataDir));
+    res.json(listBlocks(paths()));
   });
 
   // Fuzzy search over block text. Shares the `fuzzySearchBlocks` core function
@@ -83,7 +91,7 @@ export function registerScratchpadRoutes(input: {
     if (q.trim().length === 0) return res.status(400).json({ error: "query_required" });
     const limitRaw = typeof req.query.limit === "string" ? Number.parseInt(req.query.limit, 10) : SEARCH_LIMITS.default;
     const limit = Number.isFinite(limitRaw) ? limitRaw : SEARCH_LIMITS.default;
-    const { blocks } = listBlocks(config.dataDir);
+    const { blocks } = listBlocks(paths());
     const matches = fuzzySearchBlocks(blocks, q, limit);
     res.json({ matches });
   });
@@ -93,7 +101,7 @@ export function registerScratchpadRoutes(input: {
     if (typeof body.text !== "string") return res.status(400).json({ error: "text_required" });
     const position = parsePosition(body.position);
     if (position === "invalid") return res.status(400).json({ error: "position_invalid" });
-    const result = addBlock(config.dataDir, body.text, position, "ui:add_block");
+    const result = addBlock(paths(), body.text, position, "ui:add_block");
     if ("error" in result) {
       return res.status(errorStatus(result.error)).json({ error: result.error, ...sizeLimitField(result.error) });
     }
@@ -106,12 +114,7 @@ export function registerScratchpadRoutes(input: {
     const body = (req.body ?? {}) as { text?: unknown };
     if (typeof body.text !== "string") return res.status(400).json({ error: "text_required" });
     const deleting = body.text.trim().length === 0;
-    const result = updateBlock(
-      config.dataDir,
-      req.params.id,
-      body.text,
-      deleting ? "ui:delete_block" : "ui:edit_block",
-    );
+    const result = updateBlock(paths(), req.params.id, body.text, deleting ? "ui:delete_block" : "ui:edit_block");
     if ("error" in result) {
       return res.status(errorStatus(result.error)).json({ error: result.error, ...sizeLimitField(result.error) });
     }
@@ -124,7 +127,7 @@ export function registerScratchpadRoutes(input: {
   });
 
   app.delete("/api/scratchpad/blocks/:id", (req, res) => {
-    const result = deleteBlock(config.dataDir, req.params.id, "ui:delete_block");
+    const result = deleteBlock(paths(), req.params.id, "ui:delete_block");
     if ("error" in result) {
       return res.status(errorStatus(result.error)).json({ error: result.error });
     }

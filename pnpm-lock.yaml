@@ -105,6 +105,9 @@ importers:
       '@citadel/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@citadel/hooks':
+        specifier: workspace:*
+        version: link:../../packages/hooks
       '@citadel/mcp':
         specifier: workspace:*
         version: link:../../packages/mcp

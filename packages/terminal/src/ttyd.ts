@@ -1,4 +1,5 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import fs from "node:fs";
 import net from "node:net";
 import { tmuxPrefix } from "./index.js";
 
@@ -35,8 +36,13 @@ export type TtydManagerConfig = {
 const DEFAULTS = {
   ttydBin: process.env.TTYD_BIN || "/home/linuxbrew/.linuxbrew/bin/ttyd",
   shellBin: process.env.CITADEL_SHELL_BIN || process.env.SHELL || "/bin/bash",
-  portBase: Number.parseInt(process.env.CITADEL_TTYD_PORT_BASE ?? "", 10) || 7681,
-  portMax: Number.parseInt(process.env.CITADEL_TTYD_PORT_MAX ?? "", 10) || 7720,
+  // Default range is 11000-11999 (1000 ports) — empirically high enough that
+  // we never bump into the cap with realistic agent-session counts, and far
+  // from common low-port ranges (services, dev servers, etc.). Multi-daemon
+  // co-existence carves this out via apps/daemon/src/ttyd-slot.ts which
+  // assigns each daemon a disjoint 1000-port slice (slot k → 11000+k*1000).
+  portBase: Number.parseInt(process.env.CITADEL_TTYD_PORT_BASE ?? "", 10) || 11000,
+  portMax: Number.parseInt(process.env.CITADEL_TTYD_PORT_MAX ?? "", 10) || 11999,
   basePathPrefix: "/terminals",
   // 10s readiness budget: under spawn storms (multiple ttyds respawning at
   // once after `make deploy`) ttyd can take several seconds to bind, and a
@@ -55,7 +61,39 @@ export class TtydUnavailableError extends Error {
   }
 }
 
-type ManagedEntry = TtydEntry & { child: ChildProcess };
+// `child` is null when the entry was *adopted* at boot from a ttyd left
+// behind by a previous daemon incarnation — we have the PID but no live
+// ChildProcess handle. Liveness/kill go through the helpers below so the
+// two flavours behave the same to callers.
+type ManagedEntry = TtydEntry & { child: ChildProcess | null };
+
+function isEntryAlive(entry: ManagedEntry): boolean {
+  if (entry.child) return entry.child.exitCode === null && !entry.child.killed;
+  if (!entry.pid || entry.pid <= 0) return false;
+  try {
+    process.kill(entry.pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function signalEntry(entry: ManagedEntry, signal: NodeJS.Signals): void {
+  if (entry.child) {
+    try {
+      entry.child.kill(signal);
+    } catch {
+      // ignore
+    }
+    return;
+  }
+  if (!entry.pid || entry.pid <= 0) return;
+  try {
+    process.kill(entry.pid, signal);
+  } catch {
+    // ignore
+  }
+}
 
 export type TtydManager = {
   ensure(input: {
@@ -79,6 +117,15 @@ export type TtydManager = {
   release(key: string): void;
   list(): TtydEntry[];
   cleanupStale(): { killed: number; portRange: [number, number] };
+  /**
+   * Adopt ttyd processes left behind by a previous daemon incarnation.
+   * Called at boot with the output of `discoverExistingTtyds()` — adopted
+   * entries reuse the same `TtydEntry` shape but have no in-process
+   * ChildProcess handle (liveness/kill go via PID). If multiple records
+   * share a key (zombies from prior racey respawns), the oldest wins and
+   * the rest get SIGTERMed.
+   */
+  adopt(records: TtydEntry[]): { adopted: number; reapedDuplicates: number };
   shutdown(): void;
   config: Required<Omit<TtydManagerConfig, "publicPath">> & Pick<TtydManagerConfig, "publicPath">;
 };
@@ -128,13 +175,9 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     // the daemon then SIGTERMs the live ttyd and respawns it, the cockpit's
     // WebSocket drops → "Reconnecting/Reconnected" overlay storm, repeats
     // per session for every ensure() call landing during the burst.
-    if (existing && existing.child.exitCode === null && !existing.child.killed) {
+    if (existing && isEntryAlive(existing)) {
       if (!args.force) return toEntry(existing);
-      try {
-        existing.child.kill("SIGTERM");
-      } catch {
-        // ignore
-      }
+      signalEntry(existing, "SIGTERM");
       entries.delete(args.key);
     }
     if (!tmuxSessionAlive(args.tmuxSession)) {
@@ -167,8 +210,15 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
           "-lc",
           attachCommand,
         ],
-        { detached: false, stdio: "ignore" },
+        // detached + unref: put ttyd in its own process group / session so
+        // signals sent to the daemon's pgrp (Ctrl-C, etc) don't reach it,
+        // and the daemon's event loop doesn't keep a handle on the child.
+        // Combined with KillMode=process on citadel.service, this lets
+        // ttyd survive daemon restarts — terminal sessions stay connected
+        // and the boot-time discover-and-adopt path picks them back up.
+        { detached: true, stdio: "ignore" },
       );
+      child.unref();
     } catch (error) {
       reservedPorts.delete(port);
       throw new TtydUnavailableError("spawn_failed", error instanceof Error ? error.message : "failed to spawn ttyd");
@@ -208,24 +258,24 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
 
   function lookup(key: string): TtydEntry | null {
     const entry = entries.get(key);
-    if (!entry || entry.child.exitCode !== null) return null;
+    if (!entry) return null;
+    if (!isEntryAlive(entry)) {
+      entries.delete(key);
+      return null;
+    }
     return toEntry(entry);
   }
 
   function release(key: string) {
     const entry = entries.get(key);
     if (!entry) return;
-    try {
-      entry.child.kill("SIGTERM");
-    } catch {
-      // ignore
-    }
+    signalEntry(entry, "SIGTERM");
     entries.delete(key);
   }
 
   function list() {
     return Array.from(entries.values())
-      .filter((entry) => entry.child.exitCode === null)
+      .filter((entry) => isEntryAlive(entry))
       .map(toEntry);
   }
 
@@ -234,14 +284,42 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     return { killed, portRange: [config.portBase, config.portMax] as [number, number] };
   }
 
-  function shutdown() {
-    for (const entry of entries.values()) {
-      try {
-        entry.child.kill("SIGTERM");
-      } catch {
-        // ignore
+  function adopt(records: TtydEntry[]): { adopted: number; reapedDuplicates: number } {
+    let adopted = 0;
+    let reapedDuplicates = 0;
+    // Sort by startedAt ascending so we keep the OLDEST ttyd per key — that
+    // is the one the cockpit iframe is most likely already talking to. Any
+    // newer duplicates (from prior race-condition respawns across daemon
+    // restarts) get SIGTERMed to free the port + tmux client slot.
+    const sorted = [...records].sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    for (const record of sorted) {
+      if (entries.has(record.key)) {
+        if (record.pid > 0) {
+          try {
+            process.kill(record.pid, "SIGTERM");
+            reapedDuplicates += 1;
+          } catch {
+            // ignore — already gone
+          }
+        }
+        continue;
       }
+      // Adopted entries have no live ChildProcess — only the PID. They are
+      // ttyds spawned by a previous daemon incarnation that survived
+      // restart thanks to detached:true + KillMode=process on the unit.
+      const managed: ManagedEntry = { ...record, child: null };
+      if (!isEntryAlive(managed)) continue;
+      entries.set(record.key, managed);
+      adopted += 1;
     }
+    return { adopted, reapedDuplicates };
+  }
+
+  function shutdown() {
+    // Intentionally does NOT signal entries. ttyds are spawned detached so
+    // they outlive the daemon; they get adopted back on the next boot. Use
+    // release(key) to terminate a specific session, or rely on the OS to
+    // reap them on user logout / reboot.
     entries.clear();
     reservedPorts.clear();
   }
@@ -259,6 +337,7 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     release,
     list,
     cleanupStale,
+    adopt,
     shutdown,
     config: { ...config, publicPath: () => publicPathFor("") },
   };
@@ -425,7 +504,8 @@ async function waitForPort(port: number, timeoutMs: number) {
   return false;
 }
 
-function killStaleTtydInRange(portBase: number, portMax: number) {
+function listListeningTtydsInRange(portBase: number, portMax: number): Map<number, number> {
+  const pidPort = new Map<number, number>();
   let lsofOutput = "";
   try {
     lsofOutput = execFileSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN"], {
@@ -433,9 +513,8 @@ function killStaleTtydInRange(portBase: number, portMax: number) {
       stdio: ["ignore", "pipe", "ignore"],
     });
   } catch {
-    return 0;
+    return pidPort;
   }
-  const pids = new Set<number>();
   for (const line of lsofOutput.split("\n")) {
     if (!line.includes("ttyd")) continue;
     const parts = line.trim().split(/\s+/);
@@ -445,8 +524,13 @@ function killStaleTtydInRange(portBase: number, portMax: number) {
     const address = parts[8] ?? "";
     const portMatch = /:(\d+)$/.exec(address);
     const port = portMatch ? Number(portMatch[1]) : Number.NaN;
-    if (name === "ttyd" && Number.isFinite(pid) && port >= portBase && port <= portMax) pids.add(pid);
+    if (name === "ttyd" && Number.isFinite(pid) && port >= portBase && port <= portMax) pidPort.set(pid, port);
   }
+  return pidPort;
+}
+
+function killStaleTtydInRange(portBase: number, portMax: number) {
+  const pids = new Set(listListeningTtydsInRange(portBase, portMax).keys());
   for (const pid of pids) {
     try {
       process.kill(pid, "SIGTERM");
@@ -459,4 +543,77 @@ function killStaleTtydInRange(portBase: number, portMax: number) {
 
 function trimSlashes(value: string) {
   return value.replace(/^\/+|\/+$/g, "");
+}
+
+/**
+ * Scan the host for ttyd processes left behind by a previous daemon
+ * incarnation that we can re-attach to instead of killing-and-respawning.
+ * Filters by port range so we never touch a ttyd a different Citadel
+ * checkout owns (each worktree gets its own slot via ttyd-slot.ts) and by
+ * the `-b /<basePathPrefix>/<key>` argv shape so non-Citadel ttyds in the
+ * range are ignored.
+ *
+ * Linux-only — relies on `/proc/<pid>/cmdline`. On other platforms returns
+ * an empty list (caller falls back to spawning fresh ttyds).
+ */
+export function discoverExistingTtyds(
+  opts: {
+    portBase?: number;
+    portMax?: number;
+    basePathPrefix?: string;
+  } = {},
+): TtydEntry[] {
+  const portBase = opts.portBase ?? DEFAULTS.portBase;
+  const portMax = opts.portMax ?? DEFAULTS.portMax;
+  const basePathPrefix = trimSlashes(opts.basePathPrefix ?? DEFAULTS.basePathPrefix);
+  const found: TtydEntry[] = [];
+  for (const [pid, port] of listListeningTtydsInRange(portBase, portMax)) {
+    const entry = readTtydEntryFromProc(pid, port, basePathPrefix);
+    if (entry) found.push(entry);
+  }
+  return found;
+}
+
+function readTtydEntryFromProc(pid: number, port: number, basePathPrefix: string): TtydEntry | null {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
+  } catch {
+    return null;
+  }
+  const args = raw.split("\0").filter((arg) => arg.length > 0);
+  let basePath: string | null = null;
+  let themeJson: string | null = null;
+  for (let i = 0; i < args.length - 1; i++) {
+    const flag = args[i];
+    const value = args[i + 1] ?? "";
+    if (flag === "-b") basePath = value;
+    if (flag === "-t" && value.startsWith("theme=")) themeJson = value.slice("theme=".length);
+  }
+  if (!basePath) return null;
+  const prefix = `/${basePathPrefix}/`;
+  if (!basePath.startsWith(prefix)) return null;
+  const key = decodeURIComponent(basePath.slice(prefix.length));
+  if (!key) return null;
+  // The shell command is the last argv after the shell binary and `-lc`.
+  // It looks like `…; exec tmux … attach -t "<session>"`.
+  const attachCommand = args[args.length - 1] ?? "";
+  const sessionMatch = /attach\s+-t\s+"((?:\\.|[^"\\])+)"/.exec(attachCommand);
+  const sessionRaw = sessionMatch?.[1];
+  if (!sessionRaw) return null;
+  const tmuxSession = sessionRaw.replace(/\\(.)/g, "$1");
+  // Theme: match by the unique light/dark background hex; default to dark.
+  let theme: TtydTheme = "dark";
+  if (themeJson) {
+    if (themeJson.includes(`"${LIGHT_XTERM_THEME.background}"`)) theme = "light";
+    else if (themeJson.includes(`"${DARK_XTERM_THEME.background}"`)) theme = "dark";
+  }
+  let startedAt = new Date().toISOString();
+  try {
+    const stat = fs.statSync(`/proc/${pid}`);
+    startedAt = stat.ctime.toISOString();
+  } catch {
+    // ignore — falls back to "now", harmless for callers.
+  }
+  return { key, port, pid, basePath, tmuxSession, worktreePath: null, startedAt, theme };
 }

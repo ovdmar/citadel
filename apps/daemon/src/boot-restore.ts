@@ -17,7 +17,73 @@
 import type { CitadelConfig } from "@citadel/config";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
+import { listAllTmuxSessions } from "@citadel/terminal";
 import { type RestoreCandidate, collectRestoreCandidates } from "./restore-routes.js";
+
+// Statuses that collectRestoreCandidates treats as "live" — sessions in any
+// of these states are excluded from the restore-candidate list because their
+// tmux pane is presumed alive. After a fresh boot (or any kill-server event)
+// the DB rows still look live but tmux is empty; reconcileStaleLiveRows()
+// flips them so the candidate walk picks them up.
+const LIVE_STATUSES: ReadonlyArray<string> = [
+  "running",
+  "starting",
+  "idle",
+  "waiting_for_input",
+  "rate_limited",
+  "usage_limited",
+];
+
+// systemd starts citadel.service with Wants/After=citadel-tmux.service, but
+// "After" only orders the *start command*, not socket readiness. Empirically
+// the daemon can beat tmux to readiness by a few hundred ms, in which case
+// listAllTmuxSessions() returns null on the first call — and the original
+// reconcile path treated that as "skip", leaving every DB row pinned in
+// `running` until status-monitor caught up minutes later. Retry briefly so
+// the common race resolves itself without a user-visible "0 sessions
+// restored" outcome.
+async function awaitTmuxSessions(
+  probe: () => Set<string> | null,
+  timeoutMs: number,
+  pollMs = 250,
+): Promise<Set<string> | null> {
+  const first = probe();
+  if (first !== null || timeoutMs <= 0) return first;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    const next = probe();
+    if (next !== null) return next;
+  }
+  return null;
+}
+
+// Walk every DB session marked live and, if its tmux session is missing from
+// the live tmux server, flip it to `terminated` so collectRestoreCandidates
+// returns it. Returns the count of flipped rows for logging. Idempotent and
+// cheap — a single `tmux list-sessions` plus N row updates only for the
+// stale rows.
+function reconcileStaleLiveRows(store: SqliteStore, liveTmuxNames: Set<string> | null): number {
+  // null = tmux server unreachable even after the readiness wait. Don't flip
+  // anything — we can't distinguish "fresh boot" from "tmux genuinely down"
+  // and false-positive flips lose user trust.
+  if (liveTmuxNames === null) return 0;
+  let flipped = 0;
+  const nowIso = new Date().toISOString();
+  for (const session of store.listSessions()) {
+    if (!LIVE_STATUSES.includes(session.status)) continue;
+    if (!session.tmuxSessionName) continue;
+    if (liveTmuxNames.has(session.tmuxSessionName)) continue;
+    store.updateSessionStatus(session.id, {
+      status: "unknown",
+      statusReason: "fresh_boot_recovery",
+      statusReasonAt: nowIso,
+      lastStatusAt: nowIso,
+    });
+    flipped += 1;
+  }
+  return flipped;
+}
 
 export type BootRestoreEntry = {
   workspaceId: string;
@@ -67,10 +133,39 @@ export type BootRestoreDeps = {
   operations: OperationService;
   config: CitadelConfig;
   emit: (type: string, payload: unknown) => void;
+  // Override the tmux-session probe used by the fresh-boot reconciler. Tests
+  // pass a stub (e.g. `() => null`) to suppress the reconciliation, since
+  // they craft DB rows whose tmux pane intentionally does not exist. Default
+  // production behaviour talks to the real `listAllTmuxSessions`.
+  listTmuxSessions?: () => Set<string> | null;
+  // How long to keep retrying the tmux probe before giving up. Production
+  // default covers the systemd startup race (citadel.service can outrun
+  // citadel-tmux.service's socket readiness by a few hundred ms). Tests pass
+  // 0 to short-circuit since their stubs are deterministic.
+  tmuxReadinessTimeoutMs?: number;
 };
 
 export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestoreSummary> {
   const bootedAt = new Date().toISOString();
+  // Fresh-boot reconciliation: after a power-off, the tmux server is empty
+  // but the DB still shows pre-crash sessions as live. Without this, those
+  // rows pass collectRestoreCandidates' isLive() filter and get skipped —
+  // exactly the failure mode where the user expects everything to come back
+  // but nothing does. Flip them to `terminated` first; then they appear as
+  // candidates below and get resumed via `claude --resume <uuid>`.
+  const probe = deps.listTmuxSessions ?? listAllTmuxSessions;
+  const tmuxReadinessTimeoutMs = deps.tmuxReadinessTimeoutMs ?? 5000;
+  const liveTmuxNames = await awaitTmuxSessions(probe, tmuxReadinessTimeoutMs);
+  if (liveTmuxNames === null && tmuxReadinessTimeoutMs > 0) {
+    console.warn(
+      `[boot-restore] tmux unreachable after ${tmuxReadinessTimeoutMs}ms — skipping fresh-boot reconciliation; ` +
+        `live DB rows will only flip once status-monitor's first probe succeeds`,
+    );
+  }
+  const flippedStale = reconcileStaleLiveRows(deps.store, liveTmuxNames);
+  if (flippedStale > 0) {
+    console.log(`[boot-restore] reconciled ${flippedStale} stale 'live' rows (fresh-boot)`);
+  }
   const allCandidates = collectRestoreCandidates(deps.store);
   const cutoffMs = Date.now() - RECENT_WINDOW_MS;
   const recent: RestoreCandidate[] = [];
@@ -146,6 +241,9 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
           runtimeId: candidate.runtimeId,
           displayName: runtime.displayName,
           resumeRuntimeSessionId: candidate.runtimeSessionId,
+          // Inherit the source row's tab slot so the cockpit places the
+          // restored conversation back where it lived before.
+          tabId: candidate.sourceTabId,
         },
         {
           command: runtime.command,
@@ -158,6 +256,18 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
       );
       entry.sessionId = session.id;
       deps.emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
+      // Drop the source row whose conversation we just resumed. It points at
+      // a dead pane; leaving it in the DB surfaces as a duplicate tab in the
+      // cockpit (same tabId, older createdAt) and — worse — the cockpit's
+      // terminal-attach handler ensureTmuxSession-creates an empty pane under
+      // the dead name, giving the user two tabs per conversation: one with
+      // the resumed agent and one with a bare bash shell.
+      try {
+        deps.operations.stopAgentSession({ sessionId: candidate.sourceSessionId });
+        deps.emit("agent.updated", { workspaceId: candidate.workspaceId, sessionId: candidate.sourceSessionId });
+      } catch {
+        /* best-effort */
+      }
     } catch (error) {
       entry.error = error instanceof Error ? error.message : String(error);
     }

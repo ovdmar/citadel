@@ -6,7 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { WebSocketServer } from "ws";
 
-export { createTtydManager, TtydUnavailableError } from "./ttyd.js";
+export { createTtydManager, discoverExistingTtyds, TtydUnavailableError } from "./ttyd.js";
 export type { TtydEntry, TtydManager, TtydManagerConfig, TtydTheme } from "./ttyd.js";
 export { submitPrompt } from "./submit-prompt.js";
 
@@ -27,28 +27,52 @@ export function tmuxPrefix(): string[] {
   return sock ? ["-L", sock] : [];
 }
 
+/**
+ * Shell-first session request. The pane's PID is `bash -l` — the agent (if
+ * any) is launched as a child of the shell via `launchAgentInSession` after
+ * `ensureTmuxSession` returns. The legacy wrapper that exec'd the agent as
+ * the pane process is gone; with it go the /tmp sentinel files, the EXIT
+ * trap, and the post-exit fallback shell.
+ *
+ * For the background-hook path that must run a command that exits cleanly
+ * (no shell phase, pane terminates with the command), use
+ * `ensureTmuxSessionRaw` instead.
+ */
 export type TerminalSessionRequest = {
   sessionName: string;
   cwd: string;
-  command: string;
-  args: string[];
 };
 
 export async function ensureTmuxSession(input: TerminalSessionRequest) {
   const exists = tmuxSessionExists(input.sessionName);
   const freshlyCreated = !exists;
   if (!exists) {
-    // Pre-create the live sentinel so reconciliation between tmux launch and
-    // the wrapper's own `touch` cannot race into a spurious "stopped".
-    try {
-      fs.writeFileSync(agentLiveSentinelPath(input.sessionName), "");
-    } catch {
-      // best-effort: status detection degrades gracefully if tmpdir is read-only
-    }
-    const command = terminalCommand(input.sessionName, input.command, input.args);
+    // Shell-first: the pane PID is `bash -l`. The agent, if there is one, is
+    // launched into this shell via send-keys (see launchAgentInSession). The
+    // -e flags propagate the colour-env tokens the legacy wrapper used to set
+    // via `env -u NO_COLOR ...` — same tokens, just exported into the shell
+    // (and from there, into any child process the shell launches).
     await execFileAsync(
       "tmux",
-      [...tmuxPrefix(), "new-session", "-d", "-s", input.sessionName, "-c", input.cwd, command],
+      [
+        ...tmuxPrefix(),
+        "new-session",
+        "-d",
+        "-s",
+        input.sessionName,
+        "-c",
+        input.cwd,
+        "-e",
+        "TERM=xterm-256color",
+        "-e",
+        "COLORTERM=truecolor",
+        "-e",
+        "FORCE_COLOR=1",
+        "-e",
+        "CLICOLOR_FORCE=1",
+        "bash",
+        "-l",
+      ],
       {
         timeout: 10000,
         maxBuffer: 128 * 1024,
@@ -73,18 +97,25 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
       encoding: "utf8",
     },
   ).trim();
-  // After freshly spawning the wrapper there is a brief window where the outer
-  // `bash -c` is still running the script and the inner interactive shell
-  // hasn't yet taken over the PTY foreground. Keystrokes (and crucially,
-  // Ctrl+C) delivered during that window can reach the wrong process. Wait
-  // for the pane to settle so callers can rely on "ensureTmuxSession returned
-  // → keys are safe to send."
+  // Wait for the shell prompt to settle so callers can immediately
+  // `launchAgentInSession` or `submitPrompt` without losing keystrokes to
+  // bash's startup window.
   if (freshlyCreated) await waitForTerminalIdle(input.sessionName, { timeoutMs: 1500, idleMs: 200 });
   return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
 }
 
 import { attachPipePaneLog } from "./pipe-pane-log.js";
 export { pipePaneLogPath, readPipePaneTail, sweepPtyLogs } from "./pipe-pane-log.js";
+export {
+  COMM_TRUNCATION,
+  DEFAULT_SENTINEL_MARKER_PATH,
+  DEFAULT_SENTINEL_MAX_AGE_MS,
+  DEFAULT_SENTINEL_SAFEGUARD,
+  launchAgentInSession,
+  panePidProcess,
+  sweepLegacyAgentSentinels,
+} from "./pane-lifecycle.js";
+export type { PanePidProcess, SweepLegacySentinelsResult } from "./pane-lifecycle.js";
 
 // Path of the "agent still running" sentinel file for a given tmux session.
 // The wrapper script touches this before exec'ing the agent and removes it
@@ -119,45 +150,6 @@ export function readAgentExitCode(sessionName: string): number | null {
   }
 }
 
-// Wrap the agent so the tmux pane survives its exit: Ctrl+C in Claude Code
-// would otherwise kill PID 1 of the pane. After exit we drop into a fresh
-// interactive login shell at the workspace cwd. A tmpdir sentinel marks
-// "agent live" so the reconciler can flip session status without killing the
-// pane. Outer shell is non-login (`bash -c`) so we don't silently source
-// ~/.bash_profile per agent; the post-exit fallback IS a login shell and
-// respects $SHELL so zsh/fish users aren't forced into bash.
-function terminalCommand(sessionName: string, command: string, args: string[]) {
-  const argv = [command, ...args].map(shellQuote).join(" ");
-  const envPrefix = "env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor FORCE_COLOR=1 CLICOLOR_FORCE=1";
-  const liveSentinel = shellQuote(agentLiveSentinelPath(sessionName));
-  const exitSentinel = shellQuote(agentExitSentinelPath(sessionName));
-  const exitHint = "[citadel] Agent exited. Run any command, or restart the agent (e.g. `claude resume <sessionId>`).";
-  // The trap fires on bash signal-death (the bash shell receives SIGTERM/SIGINT
-  // mid-`<agent>`); the explicit lines after `<agent>` cover the happy-path
-  // (natural agent exit) before `exec` replaces this bash with the fallback
-  // shell. The explicit lines run normally; the trap also runs on signal but
-  // `exec` skips the trap on the happy path. `$?` at trap time reflects the
-  // killed agent's exit status (typically 130/SIGINT or 143/SIGTERM).
-  //
-  // `rm -f ${exitSentinel}` first: if a previous incarnation with the same
-  // tmux session name left a stale .exit on disk (daemon restart, /tmp not
-  // cleared), the status monitor would read it and mark this fresh session
-  // as already-stopped. Clearing before touching .live guarantees a clean
-  // slate per wrapper invocation.
-  const script = [
-    `rm -f ${exitSentinel}`,
-    `touch ${liveSentinel}`,
-    `trap 'rc=$?; echo $rc > ${exitSentinel}; rm -f ${liveSentinel}' EXIT`,
-    `${envPrefix} ${argv}`,
-    "rc=$?",
-    `echo $rc > ${exitSentinel}`,
-    `rm -f ${liveSentinel}`,
-    `printf '\\n%s\\n' ${shellQuote(exitHint)}`,
-    'exec "${SHELL:-/bin/bash}" -l',
-  ].join("; ");
-  return `bash -c ${shellQuote(script)}`;
-}
-
 export function shellQuote(value: string) {
   if (/^[A-Za-z0-9_/:=.,+@%-]+$/.test(value)) return value;
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -172,16 +164,27 @@ export function shellQuote(value: string) {
 export const LOG_TRUNCATION_BYTES = 16 * 1024 * 1024;
 
 /**
- * Like ensureTmuxSession but bypasses the agent-wrapper script — runs
- * `command args` directly under tmux. When the command exits, the pane
- * terminates. Used by background scheduled-agent runs where:
- *  - There is no human to "fall back" to a shell for.
- *  - We do NOT want the wrapper's "[citadel] Agent exited" line + fallback
- *    shell PS1 to stream into the per-run log file via pipe-pane.
- *  - We DO want the reconciler to see `tmuxSessionExists === false` on the
- *    next tick after the agent exits so the run row closes promptly.
+ * Background-run session. Runs `command args` as the pane process directly
+ * — when the command exits, the pane terminates. This is distinct from
+ * `ensureTmuxSession`'s shell-first model because background scheduled-agent
+ * runs:
+ *  - Have no human to "fall back" to a shell for.
+ *  - Do NOT want a shell prompt streamed into the per-run pipe-pane log file.
+ *  - DO want the reconciler to see `tmuxSessionExists === false` on the next
+ *    tick after the command exits so the run row closes promptly.
+ *
+ * Background runs continue to produce a /tmp/citadel-agent-<name>.live
+ * sentinel pre-creation guard because they don't go through the shell-first
+ * code path; the reconciler tolerates legacy sentinels for raw sessions.
  */
-export async function ensureTmuxSessionRaw(input: TerminalSessionRequest) {
+export type RawTerminalSessionRequest = {
+  sessionName: string;
+  cwd: string;
+  command: string;
+  args: string[];
+};
+
+export async function ensureTmuxSessionRaw(input: RawTerminalSessionRequest) {
   if (tmuxSessionExists(input.sessionName)) {
     const id = execFileSync(
       "tmux",
@@ -199,7 +202,7 @@ export async function ensureTmuxSessionRaw(input: TerminalSessionRequest) {
   }
   // tmux new-session takes a single `shell-command` string and hands it to
   // /bin/sh -c. Build it ourselves with shellQuote so an arg with spaces is
-  // preserved correctly. Compare to ensureTmuxSession which wraps in `bash -c`.
+  // preserved correctly.
   const shellCommand = [input.command, ...input.args].map(shellQuote).join(" ");
   await execFileAsync(
     "tmux",
@@ -266,6 +269,149 @@ export function tmuxSessionExists(sessionName: string) {
   } catch {
     return false;
   }
+}
+
+// Snapshot of every session currently on the citadel tmux socket. Returns a
+// Set when the tmux server is reachable (possibly empty if it has zero
+// sessions), or `null` when the server itself isn't reachable — the caller
+// can distinguish "server up with no sessions" from "server down / not yet
+// started," which matters for the fresh-boot reconciler: in tests and in
+// pre-tmux-service environments we don't want to mass-flip live DB rows
+// just because we couldn't talk to a server. Used by:
+//   - boot-restore's reconciler (flip DB rows whose tmux is missing)
+//   - orphan reaper (find tmux sessions no DB row knows about)
+export function listAllTmuxSessions(): Set<string> | null {
+  try {
+    const output = execFileSync("tmux", [...tmuxPrefix(), "list-sessions", "-F", "#{session_name}"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return new Set(
+      output
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0),
+    );
+  } catch (error) {
+    // `list-sessions` on a reachable server with zero sessions exits 1 with
+    // stderr "no server running on …" — distinguish that from the
+    // server-is-up-with-sessions case using has-session as a probe. A bare
+    // `has-session` (no `-t`) returns 0 when the server is up and has at
+    // least one session, 1 when up with zero sessions, and non-zero with
+    // stderr "no server running" when the socket is unbound.
+    try {
+      execFileSync("tmux", [...tmuxPrefix(), "has-session"], { stdio: ["ignore", "ignore", "pipe"] });
+      // Server up with sessions — list-sessions shouldn't have failed; fall through.
+      return new Set();
+    } catch (probeError) {
+      const stderr =
+        probeError && typeof probeError === "object" && "stderr" in probeError
+          ? String((probeError as { stderr: unknown }).stderr ?? "")
+          : "";
+      // "no server running" → unreachable. Any other failure (e.g. has-session
+      // saying "no sessions") still means the server IS up, just empty.
+      if (stderr.includes("no server running")) return null;
+      // Fall back to the original execFileSync error's stderr.
+      const origStderr =
+        error && typeof error === "object" && "stderr" in error
+          ? String((error as { stderr: unknown }).stderr ?? "")
+          : "";
+      if (origStderr.includes("no server running")) return null;
+      return new Set();
+    }
+  }
+}
+
+// Inspect who actually owns `/tmp/tmux-<uid>/<socket>` vs. who systemd thinks
+// should own it. Three kinds:
+//   - "absent": no socket / no server bound to the socket.
+//   - "supervised": socket owner PID == citadel-tmux.service's MainPID.
+//   - "orphan": socket owner is a tmux process NOT under citadel-tmux.service
+//     (e.g. auto-spawned by a stray `tmux -L citadel new-session` call from
+//     the daemon or a user shell). The unit can't bind a second server to the
+//     same socket name, so `systemctl start citadel-tmux.service` fails until
+//     the orphan exits. The daemon surfaces this state in /api/health so the
+//     cockpit can show a degraded banner with a "Run make tmux-service to
+//     reconcile" hint — that command is the only safe way to graceful-restart
+//     into a supervised tmux server, and it's destructive (every live agent
+//     pane dies and is `claude --resume`d back).
+export type TmuxServerOwnership =
+  | { kind: "absent" }
+  | { kind: "supervised"; pid: number }
+  | { kind: "orphan"; pid: number; supervisedPid: number | null };
+
+export function getTmuxServerOwnership(): TmuxServerOwnership {
+  const sock = process.env.CITADEL_TMUX_SOCKET;
+  // Without a configured socket the daemon has no opinion (legacy/test mode).
+  // Report absent so callers don't gate on a state that doesn't apply.
+  if (!sock) return { kind: "absent" };
+  const socketPath = path.join(`/tmp/tmux-${process.getuid?.() ?? ""}`, sock);
+  if (!fs.existsSync(socketPath)) return { kind: "absent" };
+  // `fuser` is in psmisc on every distro we ship to and answers in O(ms).
+  // Output format: "<path>: <pid>". A single owner is the normal case (tmux's
+  // server holds the listening fd); multiple owners are abnormal but we just
+  // take the first since they're all under the same tmux server.
+  let ownerPid: number | null = null;
+  try {
+    const out = execFileSync("fuser", [socketPath], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const match = out.match(/(\d+)/);
+    if (match?.[1]) ownerPid = Number(match[1]);
+  } catch {
+    return { kind: "absent" };
+  }
+  if (!ownerPid) return { kind: "absent" };
+  // `systemctl --user show -p MainPID --value citadel-tmux.service` returns
+  // the supervised PID, or "0" when the unit is inactive. Failing the call
+  // (no systemd, not a user session) just means we can't make the supervised
+  // determination — treat the owner as orphan with supervisedPid=null and
+  // let the caller decide.
+  let supervisedPid: number | null = null;
+  try {
+    const out = execFileSync("systemctl", ["--user", "show", "-p", "MainPID", "--value", "citadel-tmux.service"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const parsed = Number(out.trim());
+    supervisedPid = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  } catch {
+    supervisedPid = null;
+  }
+  if (supervisedPid !== null && supervisedPid === ownerPid) return { kind: "supervised", pid: ownerPid };
+  return { kind: "orphan", pid: ownerPid, supervisedPid };
+}
+
+// Make sure citadel-tmux.service is running before we issue tmux commands the
+// daemon needs to spawn through it. The contract:
+//   - "supervised": no-op, return ok.
+//   - "absent": start the unit and re-probe; return ok if it's now supervised.
+//   - "orphan": refuse to take action (starting the unit will fail anyway and
+//     SIGKILLing the orphan would lose every live pane). Return the ownership
+//     so the caller can degrade the daemon's state.
+// Idempotent and safe to call from many places. The systemctl start is
+// allowed even with RefuseManualStop=true — that directive only blocks stop
+// and restart.
+export async function ensureCitadelTmuxRunning(): Promise<TmuxServerOwnership> {
+  const initial = getTmuxServerOwnership();
+  if (initial.kind === "supervised" || initial.kind === "orphan") return initial;
+  // absent — try to start the unit. Best-effort: the install/uninstall script
+  // is the source of truth for the unit definition; we just nudge it active.
+  try {
+    execFileSync("systemctl", ["--user", "start", "citadel-tmux.service"], {
+      stdio: ["ignore", "ignore", "pipe"],
+      timeout: 5000,
+    });
+  } catch {
+    // Fall through to re-probe; the caller decides what to do with absent.
+  }
+  // Poll for readiness. tmux can take ~200ms to bind its socket after the
+  // process starts. Cap the wait so we don't hold up daemon boot indefinitely.
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const current = getTmuxServerOwnership();
+    if (current.kind !== "absent") return current;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  return getTmuxServerOwnership();
 }
 
 export function ensureTmuxExtendedKeys() {
