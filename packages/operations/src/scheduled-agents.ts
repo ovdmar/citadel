@@ -60,7 +60,14 @@ function ensureLogParentDir(logFilePath: string) {
 export type BackgroundSessionCreator = (input: {
   cwd: string;
   runtimeId: string;
-  runtime: { command: string; args: string[]; displayName: string; promptArg: string | null };
+  runtime: {
+    command: string;
+    args: string[];
+    displayName: string;
+    promptArg: string | null;
+    sessionIdArg?: string | null;
+    resumeArg?: string | null;
+  };
   prompt?: string;
   scheduledAgentId: string;
   logFilePath: string;
@@ -604,6 +611,8 @@ export class ScheduledAgentRunner {
           args: runtime.args,
           displayName: runtime.displayName,
           promptArg: runtime.promptArg ?? null,
+          sessionIdArg: runtime.sessionIdArg ?? null,
+          resumeArg: runtime.resumeArg ?? null,
         },
       );
       return {

@@ -1,12 +1,19 @@
 import { expect, test } from "@playwright/test";
+import { assertDaemonIsSandbox } from "./helpers/sandbox-guard.js";
 
 const API_BASE =
-  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "4012"}`;
+  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012"}`;
 
 // Seed the scratchpad with legacy (blank-line-separated) content directly via the
 // daemon HTTP, then verify the cockpit migrates it on first read and surfaces
 // the `migrate-to-blocks` history entry.
 test.describe("scratchpad blocks", () => {
+  test.beforeAll(async ({ request }) => {
+    // Defense in depth against the prod-clobbering bug: refuse to run if the
+    // daemon we're about to PUT empty content into is not a sandbox install.
+    await assertDaemonIsSandbox(request, API_BASE);
+  });
+
   test.beforeEach(async ({ request }) => {
     // Reset to a known stub before each test so prior fixtures don't carry over.
     await request.put(`${API_BASE}/api/scratchpad`, { data: { content: "" } });

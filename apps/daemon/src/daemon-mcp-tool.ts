@@ -1,4 +1,4 @@
-import type { CitadelConfig } from "@citadel/config";
+import { type CitadelConfig, effectiveNotesPath } from "@citadel/config";
 import {
   AssignWorkspaceToNamespaceInputSchema,
   CreateAgentSessionInputSchema,
@@ -105,6 +105,8 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
       args: runtime.args,
       displayName: runtime.displayName,
       promptArg: runtime.promptArg ?? null,
+      sessionIdArg: runtime.sessionIdArg ?? null,
+      resumeArg: runtime.resumeArg ?? null,
     });
     emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
     return { session };
@@ -119,6 +121,8 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
         args: runtime.args,
         displayName: runtime.displayName,
         promptArg: runtime.promptArg ?? null,
+        sessionIdArg: runtime.sessionIdArg ?? null,
+        resumeArg: runtime.resumeArg ?? null,
       });
       emit("workspace.updated", { workspaceId: result.workspaceId, operationId: result.operationId });
       if (result.sessionId) emit("agent.updated", { workspaceId: result.workspaceId, sessionId: result.sessionId });
@@ -207,13 +211,17 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     const includeArchived = call.arguments?.includeArchived === true;
     return { namespaces: store.listNamespaces(includeArchived) };
   }
+  // The scratchpad paths bundle is computed per call (not captured) because
+  // `config` is mutated in place by `PUT /api/config` — see app.ts.
+  const spPaths = () => ({ notesPath: effectiveNotesPath(config), dataDir: config.dataDir });
   if (call.name === "read_scratchpad") {
-    return readScratchpad(config.dataDir);
+    const p = spPaths();
+    return { ...readScratchpad(p), path: p.notesPath };
   }
   if (call.name === "write_scratchpad") {
     if (typeof call.arguments?.content !== "string") return { error: "content_required" };
     try {
-      const snapshot = writeScratchpad(config.dataDir, call.arguments.content, "mcp:write_scratchpad");
+      const snapshot = writeScratchpad(spPaths(), call.arguments.content, "mcp:write_scratchpad");
       emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
       emit("scratchpad.history.updated", { updatedAt: snapshot.updatedAt });
       return snapshot;
@@ -227,7 +235,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
       return { error: "content_required" };
     }
     try {
-      const snapshot = appendScratchpad(config.dataDir, call.arguments.content, "mcp:append_scratchpad");
+      const snapshot = appendScratchpad(spPaths(), call.arguments.content, "mcp:append_scratchpad");
       emit("scratchpad.updated", { updatedAt: snapshot.updatedAt });
       emit("scratchpad.history.updated", { updatedAt: snapshot.updatedAt });
       return snapshot;
@@ -237,13 +245,13 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     }
   }
   if (call.name === "list_blocks") {
-    return listBlocks(config.dataDir);
+    return listBlocks(spPaths());
   }
   if (call.name === "add_block") {
     if (typeof call.arguments?.text !== "string") return { error: "text_required" };
     const position = parsePosition(call.arguments?.position);
     if (position === "invalid") return { error: "position_invalid" };
-    const result = addBlock(config.dataDir, call.arguments.text, position, "mcp:add_block");
+    const result = addBlock(spPaths(), call.arguments.text, position, "mcp:add_block");
     if ("error" in result) {
       if (result.error === "scratchpad_too_large") return { error: result.error, limit: 1_000_000 };
       return result;
@@ -257,7 +265,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     if (typeof call.arguments?.text !== "string") return { error: "text_required" };
     const deleting = call.arguments.text.trim().length === 0;
     const result = updateBlock(
-      config.dataDir,
+      spPaths(),
       call.arguments.id,
       call.arguments.text,
       deleting ? "mcp:delete_block" : "mcp:update_block",
@@ -273,7 +281,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
   }
   if (call.name === "delete_block") {
     if (typeof call.arguments?.id !== "string" || call.arguments.id === "") return { error: "block_id_required" };
-    const result = deleteBlock(config.dataDir, call.arguments.id, "mcp:delete_block");
+    const result = deleteBlock(spPaths(), call.arguments.id, "mcp:delete_block");
     if ("error" in result) return result;
     emit("scratchpad.updated", { updatedAt: result.snapshot.updatedAt });
     emit("scratchpad.history.updated", { updatedAt: result.snapshot.updatedAt });
@@ -389,6 +397,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     runtimes: listRuntimeHealth(config.runtimes),
     scheduledAgents: scheduledAgents.list(),
     namespaces: store.listNamespaces(),
+    scratchpadPath: effectiveNotesPath(config),
     // Per-session summary comes from the runtime's own transcript via the
     // adapter dispatcher. mtime pre-filter inside each adapter keeps list
     // calls cheap even on big project dirs.

@@ -370,7 +370,8 @@
   letter-spacing: 0.02em;
 }
 
-.ins-pr-badge.tone-failing {
+.ins-pr-badge.tone-failing,
+.ins-pr-badge.tone-conflicting {
   background: oklch(60% 0.16 25 / 0.16);
   color: oklch(45% 0.16 25);
 }
@@ -389,7 +390,8 @@
   color: oklch(75% 0.12 145);
 }
 
-[data-theme="dark"] .ins-pr-badge.tone-failing {
+[data-theme="dark"] .ins-pr-badge.tone-failing,
+[data-theme="dark"] .ins-pr-badge.tone-conflicting {
   color: oklch(75% 0.16 25);
 }
 
@@ -497,4 +499,66 @@
   gap: 6px;
   font-size: 11px;
   color: var(--c-fg-3);
+}
+
+/* PR head: copy-branch, parent-PR chip, merge button, force-refresh, elapsed */
+
+.ins-pr-copy {
+  display: inline-flex;
+  align-items: center;
+  background: transparent;
+  border: 0;
+  padding: 0 2px;
+  color: var(--c-fg-4);
+  cursor: pointer;
+}
+.ins-pr-copy:hover {
+  color: var(--c-fg-2);
+}
+
+.ins-pr-parent {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--c-line-2);
+  color: var(--c-fg-3);
+  text-decoration: none;
+}
+.ins-pr-parent[data-state="merged"] {
+  color: oklch(45% 0.18 295);
+  border-color: oklch(60% 0.18 295 / 0.4);
+}
+
+.ins-pr-refresh {
+  margin-left: auto;
+}
+
+/* Right-aligned action row at the bottom of the inspector PR card. Holds
+ * exactly one of the mutually-exclusive PR actions (Fix conflicts when
+ * the PR is in conflict, Merge otherwise). The wrapper is a flex row so
+ * the .pr-card-action `margin-left: auto` resolves against it. */
+.ins-pr-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.ins-pr-elapsed {
+  font-size: 10px;
+  color: var(--c-fg-4);
+  font-family: var(--font-mono);
+}
+
+.spin {
+  animation: cit-spin 1s linear infinite;
+}
+@keyframes cit-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

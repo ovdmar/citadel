@@ -40,6 +40,7 @@ function baseState(workspaces: Workspace[]): StateResponse {
     mcp: { enabled: false, resources: [], tools: [] },
     scheduledAgents: [],
     namespaces: [],
+    bootRestore: null,
   };
 }
 

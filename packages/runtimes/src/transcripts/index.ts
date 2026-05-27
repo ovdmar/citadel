@@ -11,7 +11,13 @@ export {
   parseClaudeTranscript,
   renderClaudeTranscriptAsText,
 } from "./claude-code.js";
-export { codexAdapter, codexSessionsRoot, findCodexRolloutForSession, parseCodexRollout } from "./codex.js";
+export {
+  codexAdapter,
+  codexSessionsRoot,
+  discoverCodexSessionId,
+  findCodexRolloutForSession,
+  parseCodexRollout,
+} from "./codex.js";
 export { cursorAgentAdapter } from "./cursor-agent.js";
 
 const adapters: Record<string, RuntimeTranscriptAdapter> = {

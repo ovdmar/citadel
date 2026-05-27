@@ -13,6 +13,23 @@ import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, createContext, createElement, useContext, useEffect, useMemo, useState } from "react";
 import { api, queryClient } from "./api.js";
 
+// Boot-time auto-restore summary. Surfaced in /api/state so the cockpit
+// banner can show "Restored N sessions from previous run" the first time the
+// user loads the cockpit after a daemon restart.
+export type BootRestoreSummary = {
+  bootedAt: string;
+  finishedAt: string | null;
+  entries: Array<{
+    workspaceId: string;
+    workspaceName: string;
+    runtimeId: string;
+    runtimeSessionId: string;
+    sessionId: string | null;
+    error: string | null;
+  }>;
+  skippedOlder: number;
+};
+
 export type StateResponse = {
   repos: Repo[];
   workspaces: Workspace[];
@@ -24,6 +41,7 @@ export type StateResponse = {
   mcp: { enabled: boolean; resources: string[]; tools: string[] };
   scheduledAgents: ScheduledAgent[];
   namespaces: Namespace[];
+  bootRestore: BootRestoreSummary | null;
 };
 
 export function useStateQuery(options?: { enabled?: boolean }) {
