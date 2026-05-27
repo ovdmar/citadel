@@ -104,45 +104,48 @@ they are not leaks. Don't grep-and-replace them.
 
 A fresh worktree starts with an empty SQLite — no workspaces, no namespaces,
 no scratchpad. That's useless for QA: you can't see whether your branch
-changed something in the cockpit if the cockpit has nothing to render. Two
-make targets paper over this with a shared, per-machine seed at
-`~/.citadel-seed/`:
+changed something in the cockpit if the cockpit has nothing to render.
+
+The seed is a checked-in, fully synthetic fixture (under `seeds/` in this
+repo): a tiny mock git repo and a small set of `INSERT`s. It is intentionally
+**not** sourced from the systemd long-term daemon's data — that would copy
+live `agent_sessions` rows that reference real tmux sessions, and the
+worktree daemon booted on top would race the live daemon for ownership of
+those sessions, breaking the live cockpit.
 
 | Command | What it does |
 |---|---|
-| `make seed-snapshot` | Reads from the long-term daemon's data dir at `~/.local/share/citadel/` and writes a checkpointed snapshot to `~/.citadel-seed/`. Uses `sqlite3 .backup` (WAL-safe) for the DB and rsync for everything else (config, scratchpad, scheduled-runs, TLS certs). Re-run whenever you want a fresher baseline. |
-| `make seed-reset` | Stops *this* worktree's dev stack, wipes `<checkout>/.citadel/data/`, copies the seed in. Use this on an existing worktree that's already got an empty DB. Requires a prior `seed-snapshot`. |
+| `make seed` | Materializes `<checkout>/.citadel/mock-repo/` (a git repo with two `feature/*` worktrees under `mock-worktrees/`) and inserts fixture rows into `<checkout>/.citadel/data/citadel.sqlite`: 1 namespace, 1 repo, 2 workspaces (one with a PR snapshot + Jira issue), 10 activity events, and a 3-block scratchpad. Idempotent. Touches **only** safe-to-seed tables — never `agent_sessions`, `background_sessions`, `operations`, or `scheduled_agents`. |
+| `make seed-reset` | Stops this worktree's dev stack, removes the SQLite + mock repo + mock worktrees, and re-seeds from scratch. Use for a clean QA baseline. |
 
-`make deploy` also auto-seeds: if `<checkout>/.citadel/data/citadel.sqlite`
-doesn't exist and the seed does, it copies the seed in before launching the
-daemon. So the first `make deploy` in a new worktree comes up populated;
-subsequent deploys preserve whatever state has accumulated there.
+`make deploy` auto-runs `make seed` if neither the mock repo nor the SQLite
+exist (i.e., on the very first deploy of a fresh worktree). After that, it
+leaves the worktree's data alone — use `seed-reset` to refresh.
 
 Typical flow:
 
 ```
-make seed-snapshot          # once per machine, refresh when you want
 cd /path/to/some-worktree
-make deploy                 # auto-seeded on first run; cockpit has data
+make setup                       # pnpm install (once per checkout)
+make deploy                      # auto-seeds; cockpit has data
 # …work in the worktree, mutate state freely…
 make seed-reset && make deploy   # back to a clean QA baseline
 ```
 
-The seed is intentionally machine-local (`$HOME/.citadel-seed/`) and not
-versioned — it's a personal QA fixture, not project source. Different
-machines have different baselines; that's fine.
+**What's NOT seeded, and why:**
 
-**Caveats — actions in the cockpit:**
+- No `agent_sessions` / `background_sessions` rows — those carry tmux
+  session names that the daemon will try to attach to at boot, and any
+  collision with the systemd long-term daemon's sessions would steal them
+  away from the live cockpit.
+- No `operations` rows — they reference in-flight async work that doesn't
+  exist after a daemon restart.
+- No scheduled agents — they'd start firing crons against the mock repo.
 
-- Workspaces, repos, and namespaces seeded from prod reference absolute
-  paths to your main checkout. Visual QA (lists, counts, layout) is what
-  this is for. Clicking a "launch agent" or "redeploy" on a seeded row will
-  target those original paths, not your worktree — fine for read-only QA,
-  surprising for action QA.
-- The seed includes `citadel.config.json`. The worktree daemon still gets
-  `CITADEL_PORT`, `CITADEL_DATA_DIR`, `CITADEL_WEB_PORT` etc. via the env
-  scrub in `make deploy`, so its port/data binding stays worktree-scoped
-  regardless of what the seeded config says.
+If you need to QA agent-launch / scheduled-agent / background-session flows,
+trigger them through the seeded cockpit yourself (start an agent on
+`demo-feature`, etc.). That way the rows reference *this* worktree's tmux
+and daemon.
 
 ## Typical flows
 

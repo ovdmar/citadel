@@ -232,6 +232,22 @@ describe("runAutoRecoveryTick (integration via in-memory store)", () => {
     expect(spawnCount).toBe(0);
   });
 
+  it("does not fetch CI for workspaces without a PR", async () => {
+    const store = makeStore();
+    seedRepoAndWorkspace(store, "ws_no_pr");
+    let ciCalls = 0;
+    const deps = makeDeps(store, async () => ({ id: "x" }));
+    deps.fetchVersionControl = async () => ({ ...FAILING_VC, pullRequest: null });
+    deps.fetchCi = async () => {
+      ciCalls += 1;
+      return FAILING_CI;
+    };
+
+    await runAutoRecoveryTick(deps, new Date("2026-05-25T12:00:00.000Z"));
+
+    expect(ciCalls).toBe(0);
+  });
+
   it("shouldRun=false short-circuits the tick (no provider calls, no spawn)", async () => {
     const store = makeStore();
     seedRepoAndWorkspace(store, "ws_gated");

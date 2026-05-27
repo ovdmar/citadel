@@ -1,5 +1,4 @@
 import { execFileSync } from "node:child_process";
-import type { CitadelConfig } from "@citadel/config";
 import type { SqliteStore } from "@citadel/db";
 import type express from "express";
 import type { ProviderCache } from "./app-helpers.js";
@@ -10,7 +9,7 @@ type AsyncRoute = (
 ) => (req: express.Request, res: express.Response, next: express.NextFunction) => void;
 
 type PrDiffPayload = {
-  provider: "github-gh";
+  provider: "local-git";
   truncated: boolean;
   diff: string;
   checkedAt: string;
@@ -19,11 +18,10 @@ type PrDiffPayload = {
 export function registerPrDiffRoute(input: {
   app: express.Express;
   store: SqliteStore;
-  config: CitadelConfig;
   providerCache: ProviderCache;
   asyncRoute: AsyncRoute;
 }) {
-  const { app, store, config, providerCache, asyncRoute } = input;
+  const { app, store, providerCache, asyncRoute } = input;
   app.get(
     "/api/workspaces/:workspaceId/pr-diff",
     asyncRoute(async (req, res) => {
@@ -31,20 +29,14 @@ export function registerPrDiffRoute(input: {
       if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
       const snapshot = store.getWorkspacePrSnapshot(workspace.id);
       const headSha = readLocalHead(workspace.path) ?? snapshot?.lastHeadSha ?? null;
-      const cacheKey = headSha ? `pr-diff:${workspace.id}:${headSha}` : null;
+      const baseSha = readBaseSha(workspace.path, workspace.baseBranch);
+      const cacheKey = headSha ? `pr-diff:${workspace.id}:${baseSha ?? "unknown-base"}:${headSha}` : null;
       const cached = cacheKey ? providerCache.get(cacheKey) : null;
       if (cached && cached.expiresAt > Date.now()) return res.json(cached.value);
       try {
-        const { execFile: execFileCb } = await import("node:child_process");
-        const { promisify } = await import("node:util");
-        const exec = promisify(execFileCb);
-        const { stdout } = await exec(config.providers.github.command ?? "gh", ["pr", "diff"], {
-          cwd: workspace.path,
-          timeout: 12_000,
-          maxBuffer: 4 * 1024 * 1024,
-        });
+        const stdout = readLocalPrDiff(workspace.path, workspace.baseBranch);
         const payload: PrDiffPayload = {
-          provider: "github-gh",
+          provider: "local-git",
           truncated: stdout.length > 256 * 1024,
           diff: stdout.slice(0, 256 * 1024),
           checkedAt: new Date().toISOString(),
@@ -53,10 +45,10 @@ export function registerPrDiffRoute(input: {
         res.json(payload);
       } catch (error) {
         res.status(424).json({
-          provider: "github-gh",
+          provider: "local-git",
           diff: "",
           truncated: false,
-          error: error instanceof Error ? error.message : "gh_pr_diff_failed",
+          error: error instanceof Error ? error.message : "git_pr_diff_failed",
           checkedAt: new Date().toISOString(),
         });
       }
@@ -64,15 +56,48 @@ export function registerPrDiffRoute(input: {
   );
 }
 
-function readLocalHead(workspacePath: string): string | null {
+function readLocalPrDiff(workspacePath: string, baseBranch: string): string {
+  const baseRef = resolveBaseRef(workspacePath, baseBranch);
+  const mergeBase = execGit(workspacePath, ["merge-base", "HEAD", baseRef]);
+  return execGit(workspacePath, ["diff", "--no-ext-diff", mergeBase, "HEAD", "--"]);
+}
+
+function readBaseSha(workspacePath: string, baseBranch: string): string | null {
   try {
-    return execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: workspacePath,
-      timeout: 3000,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
+    return execGit(workspacePath, ["rev-parse", resolveBaseRef(workspacePath, baseBranch)]);
   } catch {
     return null;
   }
+}
+
+function resolveBaseRef(workspacePath: string, baseBranch: string): string {
+  const branch = baseBranch.replace(/^origin\//, "");
+  const candidates = [`origin/${branch}`, baseBranch];
+  for (const candidate of candidates) {
+    try {
+      execGit(workspacePath, ["rev-parse", "--verify", `${candidate}^{commit}`]);
+      return candidate;
+    } catch {
+      // Try the next local ref candidate.
+    }
+  }
+  throw new Error(`base_ref_not_found:${baseBranch}`);
+}
+
+function readLocalHead(workspacePath: string): string | null {
+  try {
+    return execGit(workspacePath, ["rev-parse", "HEAD"]);
+  } catch {
+    return null;
+  }
+}
+
+function execGit(workspacePath: string, args: string[]): string {
+  return execFileSync("git", args, {
+    cwd: workspacePath,
+    timeout: 12_000,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+    maxBuffer: 4 * 1024 * 1024,
+  }).trim();
 }

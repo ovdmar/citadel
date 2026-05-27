@@ -16,6 +16,7 @@ import type { SqliteStore } from "@citadel/db";
 import { mcpStatus, mcpToolDefinitions } from "@citadel/mcp";
 import { OperationService } from "@citadel/operations";
 import {
+  type CollectGitHubVersionControlSummaryDeps,
   collectGitHubCiRunLog,
   collectGitHubCiRuns,
   collectGitHubVersionControlSummary,
@@ -128,7 +129,8 @@ export function createDaemonApp(input: {
     store,
     scheduler: ghQuota.scheduler,
     providerCache,
-    collectVc: (path: string) => providers.collectGitHubVersionControlSummary(path),
+    collectVc: (path: string, deps?: CollectGitHubVersionControlSummaryDeps) =>
+      providers.collectGitHubVersionControlSummary(path, deps),
     resolveRepoFullName,
     cachedProvider: <T>(k: string, l: () => T | Promise<T>, t?: number) => cachedProvider(k, l, t),
   };
@@ -602,7 +604,7 @@ export function createDaemonApp(input: {
     }),
   );
 
-  registerPrDiffRoute({ app, store, config, providerCache, asyncRoute });
+  registerPrDiffRoute({ app, store, providerCache, asyncRoute });
 
   app.post(
     "/api/workspaces/:workspaceId/refresh",
@@ -778,6 +780,10 @@ export function createDaemonApp(input: {
     // is a viewer-visible feature; consuming GitHub quota with nobody watching
     // is the largest pre-optimization quota sink.
     shouldRun: () => ghAutomationEnabled && (ghQuota.hasViewers() || ghQuota.msSinceLastViewer() <= 2 * 60_000),
+    providerCache,
+    scheduler: ghQuota.scheduler,
+    resolveRepoFullName,
+    cachedProvider,
   });
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
   const autoResume = startDaemonAutoResumeLoop(store, operations);
