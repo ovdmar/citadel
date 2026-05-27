@@ -34,9 +34,6 @@ export function InspectorPrSection(props: {
   const checksSummary = summarizeChecks(checks);
   const reviewerAggregate = aggregateReviewerCounts(pr?.reviewers ?? []);
   const elapsed = useElapsed(checkedAt);
-  const [commitsExpanded, setCommitsExpanded] = useState(false);
-  const commits = pr?.commits ?? [];
-  const visibleCommits = commitsExpanded ? commits : commits.slice(0, 5);
   const refresh = useMutation({
     mutationFn: () => api(`/api/workspaces/${workspace.id}/pr-refresh`, { method: "POST", body: JSON.stringify({}) }),
     onSuccess: () => {
@@ -238,59 +235,8 @@ export function InspectorPrSection(props: {
         </div>
       </section>
 
-      {pr ? (
-        <section className="ins-section">
-          <div className="ins-section-head">
-            <span className="ins-section-label">Commits</span>
-          </div>
-          <div className="ins-section-body">
-            {commits.length === 0 ? (
-              <div className="ins-empty">
-                <div className="ins-empty-text">No commits yet.</div>
-              </div>
-            ) : (
-              <>
-                <ul className="ins-pr-commits">
-                  {visibleCommits.map((commit) => (
-                    <li key={commit.sha} className="ins-pr-commit" title={commit.message}>
-                      <span className={`ins-pr-commit-dot tone-${commitTone(commit.checks)}`} aria-hidden />
-                      <span className="ins-pr-commit-sha">{commit.shortSha}</span>
-                      <span className="ins-pr-commit-msg">{commit.message}</span>
-                    </li>
-                  ))}
-                </ul>
-                {commits.length > 5 ? (
-                  <button type="button" className="ins-pr-commits-more" onClick={() => setCommitsExpanded((v) => !v)}>
-                    {commitsExpanded ? "Show fewer" : `Show ${commits.length - 5} more`}
-                  </button>
-                ) : null}
-              </>
-            )}
-          </div>
-        </section>
-      ) : null}
     </>
   );
-}
-
-// Roll up the per-commit checks into a single tone for the dot. Mirror the
-// PR-level prToneFor logic: failing > pending > passing.
-function commitTone(
-  checks: PullRequestSummary["commits"][number]["checks"],
-): "failing" | "pending" | "passing" | "missing" {
-  if (!checks || checks.length === 0) return "missing";
-  if (
-    checks.some((c) =>
-      ["failure", "cancelled", "timed_out", "action_required"].includes((c.conclusion ?? "").toLowerCase()),
-    )
-  ) {
-    return "failing";
-  }
-  if (checks.some((c) => ["queued", "in_progress", "pending"].includes(c.status.toLowerCase()))) {
-    return "pending";
-  }
-  if (checks.every((c) => (c.conclusion ?? "").toLowerCase() === "success")) return "passing";
-  return "pending";
 }
 
 function CheckSummaryIcon({ tone }: { tone: "ok" | "bad" | "run" | "mixed" }) {

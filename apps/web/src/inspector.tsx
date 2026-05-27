@@ -93,10 +93,13 @@ function StatsTab(props: {
   const issueStatus = props.summary?.issueTracker?.issueStatus ?? null;
 
   const recent = useQuery<WorkspaceRecentCommits>({
-    queryKey: ["recent-commits", props.workspace.id, 6],
-    queryFn: () => api<WorkspaceRecentCommits>(`/api/workspaces/${props.workspace.id}/recent-commits?limit=6`),
+    queryKey: ["recent-commits", props.workspace.id, 20],
+    queryFn: () => api<WorkspaceRecentCommits>(`/api/workspaces/${props.workspace.id}/recent-commits?limit=20`),
     staleTime: 30_000,
   });
+  const [recentExpanded, setRecentExpanded] = useState(false);
+  const recentCommits = recent.data?.commits ?? [];
+  const visibleRecent = recentExpanded ? recentCommits : recentCommits.slice(0, 5);
 
   return (
     <>
@@ -156,16 +159,27 @@ function StatsTab(props: {
               <div className="ins-empty">
                 <div className="ins-empty-text">Reading git log…</div>
               </div>
-            ) : recent.data?.commits.length ? (
-              <ul className="ins-recent">
-                {recent.data.commits.map((commit) => (
-                  <li key={commit.sha} title={`${commit.author} · ${commit.isoTime}`}>
-                    <span className="ins-recent-sha">{commit.shortSha}</span>
-                    <span className="ins-recent-msg">{commit.message}</span>
-                    <span className="ins-recent-time">{shortenRelative(commit.relativeTime)}</span>
-                  </li>
-                ))}
-              </ul>
+            ) : recentCommits.length ? (
+              <>
+                <ul className="ins-recent">
+                  {visibleRecent.map((commit) => (
+                    <li key={commit.sha} title={`${commit.author} · ${commit.isoTime}`}>
+                      <span className="ins-recent-sha">{commit.shortSha}</span>
+                      <span className="ins-recent-msg">{commit.message}</span>
+                      <span className="ins-recent-time">{shortenRelative(commit.relativeTime)}</span>
+                    </li>
+                  ))}
+                </ul>
+                {recentCommits.length > 5 ? (
+                  <button
+                    type="button"
+                    className="ins-recent-more"
+                    onClick={() => setRecentExpanded((v) => !v)}
+                  >
+                    {recentExpanded ? "Show fewer" : `Show ${recentCommits.length - 5} more`}
+                  </button>
+                ) : null}
+              </>
             ) : (
               <div className="ins-empty">
                 <div className="ins-empty-text">No commits in this workspace yet.</div>
