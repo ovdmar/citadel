@@ -171,7 +171,45 @@ export function createDaemonApp(input: {
     }
     return tmux;
   };
-  registerTerminalRoutes({ app, server, store, ttyd, dataDir: config.dataDir, emit, respawnTmux });
+  const restartAgent = async (session: import("@citadel/contracts").AgentSession): Promise<void> => {
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
+    const runtime = config.runtimes.find((candidate) => candidate.id === session.runtimeId);
+    if (!workspace || !runtime) throw new Error("session_resolution_failed");
+    const sessionName = session.tmuxSessionName ?? `citadel_${workspace.id}_${session.id.slice(-8)}`;
+    // Defensive: if the agent is already foreground, refuse to send-keys —
+    // that would type the launch command INTO the live agent's TUI input.
+    const { launchAgentInSession, panePidProcess: paneOf } = await import("@citadel/terminal");
+    const pane = paneOf(sessionName);
+    if (pane && pane.command === runtime.command.slice(0, 15)) {
+      throw new Error("agent_already_running");
+    }
+    await ensureTmuxSession({ sessionName, cwd: workspace.path });
+    const isShell = ["bash", "sh", "zsh", "fish"].includes(runtime.command);
+    if (!isShell) {
+      const argv = [...runtime.args];
+      if (session.runtimeSessionId && runtime.resumeArg) {
+        argv.push(runtime.resumeArg, session.runtimeSessionId);
+      }
+      await launchAgentInSession(sessionName, runtime.command, argv);
+    }
+    store.updateSessionStatus(session.id, {
+      status: "running",
+      statusReason: null,
+      statusReasonAt: null,
+      lastStatusAt: new Date().toISOString(),
+    });
+  };
+  registerTerminalRoutes({
+    app,
+    server,
+    store,
+    ttyd,
+    dataDir: config.dataDir,
+    emit,
+    respawnTmux,
+    restartAgent,
+    recentUserAction,
+  });
 
   const cachedProviderHealth = () =>
     cachedProvider("provider-health", () => collectProviderHealth(config.providers), 15_000);

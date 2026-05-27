@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { sweepPtyLogs as defaultSweepPtyLogs, tmuxPrefix } from "@citadel/terminal";
+import { sweepLegacyAgentSentinels, sweepPtyLogs as defaultSweepPtyLogs, tmuxPrefix } from "@citadel/terminal";
 
 // citadel-tmux.service SEGV'd at 29.8 GB on 2026-05-26 after accumulating
 // per-client tmux server allocations. Each ttyd browser connection / WS
@@ -39,6 +39,15 @@ const DEFAULT_PTY_LOG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 export function startTerminalReaper(options: StartTerminalReaperOptions = {}): { stop: () => void } {
   if (process.env.CITADEL_DISABLE_TERMINAL_REAPER === "1") return { stop() {} };
+  // One-time sweep of /tmp/citadel-agent-*.{live,exit} files left behind by
+  // the pre-shell-first wrapper. Age-filter + marker file gate against
+  // concurrent old daemons during install rollover; safeguard caps wipe size.
+  // Best-effort — failures (read-only /tmp, etc.) are silently ignored.
+  try {
+    sweepLegacyAgentSentinels();
+  } catch {
+    /* non-fatal */
+  }
   const reapIntervalMs = options.reapIntervalMs ?? DEFAULT_REAP_INTERVAL_MS;
   const rotateIntervalMs = options.rotateIntervalMs ?? DEFAULT_ROTATE_INTERVAL_MS;
   const ptyLogMaxAgeMs = options.ptyLogMaxAgeMs ?? DEFAULT_PTY_LOG_MAX_AGE_MS;
