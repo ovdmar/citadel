@@ -387,7 +387,7 @@
   // `/terminals/<sessionId>/` (see packages/terminal/src/ttyd.ts:147 — basePath
   // is `${basePathPrefix}/<sessionId>`). Cached at module init since the URL
   // never changes for a given iframe's lifetime.
-  const SESSION_ID = (function () {
+  const SESSION_ID = (() => {
     const match = /^\/terminals\/([^/]+)/.exec(window.location.pathname || "");
     return match ? decodeURIComponent(match[1]) : null;
   })();
@@ -406,7 +406,7 @@
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ reason }),
         keepalive: true,
-      }).catch(function () {});
+      }).catch(() => {});
     } catch (_err) {
       // Network constructed-call errors are swallowed; the user's keystroke
       // already propagated to ttyd.

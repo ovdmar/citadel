@@ -174,8 +174,7 @@ export async function runStatusMonitorTick(
       monitorState.consecutiveShellTicks += 1;
       if (monitorState.consecutiveShellTicks >= RUNNING_TO_IDLE_DEBOUNCE_TICKS) {
         const userActionTs = deps.recentUserAction.get(session.id);
-        const recentUserAction =
-          userActionTs !== undefined && nowMs - userActionTs <= RECENT_USER_ACTION_MS;
+        const recentUserAction = userActionTs !== undefined && nowMs - userActionTs <= RECENT_USER_ACTION_MS;
         signals.push({ type: "pane_idle", recentUserAction, observedAt: deps.now() });
       }
     } else {
@@ -204,9 +203,7 @@ export async function runStatusMonitorTick(
 
     // Adapter observation (pane-derived) — only when the session is alive
     // and we don't already have a tmux_missing or pane_idle signal.
-    const liveBranch =
-      tmuxAlive &&
-      !signals.some((s) => s.type === "tmux_missing" || s.type === "pane_idle");
+    const liveBranch = tmuxAlive && !signals.some((s) => s.type === "tmux_missing" || s.type === "pane_idle");
     if (liveBranch && tmuxAlive) {
       const observation = adapter.observe(
         adapterState,

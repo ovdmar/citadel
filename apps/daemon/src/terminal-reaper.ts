@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { sweepLegacyAgentSentinels, sweepPtyLogs as defaultSweepPtyLogs, tmuxPrefix } from "@citadel/terminal";
+import { sweepPtyLogs as defaultSweepPtyLogs, sweepLegacyAgentSentinels, tmuxPrefix } from "@citadel/terminal";
 
 // citadel-tmux.service SEGV'd at 29.8 GB on 2026-05-26 after accumulating
 // per-client tmux server allocations. Each ttyd browser connection / WS

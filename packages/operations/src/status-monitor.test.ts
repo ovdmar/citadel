@@ -60,6 +60,17 @@ interface DepsOver {
   monitorStates?: Map<string, unknown>;
 }
 
+// Only used to give the test fixture's monitorStates Map a precise type
+// (avoids `any` per repo biome rule).
+function makeMonitorStateForFixture() {
+  return {
+    lastActivityMs: null as number | null,
+    ticksSinceActivityChange: 0,
+    hasObservedSinceBoot: false,
+    consecutiveShellTicks: 0,
+  };
+}
+
 function makeDeps(over: DepsOver = {}) {
   const updates: Array<{ id: string; update: Record<string, unknown> }> = [];
   const emitted: Array<{ event: string; payload: unknown }> = [];
@@ -85,8 +96,7 @@ function makeDeps(over: DepsOver = {}) {
     recentUserAction: over.recentUserAction ?? new Map(),
     getAdapter: () => over.adapter ?? makeAdapter(null),
     adapterStates: new Map(),
-    // biome-ignore lint/suspicious/noExplicitAny: shared-Map injection point
-    monitorStates: (over.monitorStates ?? new Map()) as Map<string, any>,
+    monitorStates: (over.monitorStates ?? new Map()) as Map<string, ReturnType<typeof makeMonitorStateForFixture>>,
   };
   return { deps, updates, emitted, deleted };
 }

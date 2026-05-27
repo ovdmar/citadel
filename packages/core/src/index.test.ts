@@ -3,9 +3,7 @@ import { sessionNeedsAttention } from "./index.js";
 
 describe("sessionNeedsAttention (shell-first attention predicate)", () => {
   it("returns true for status='idle' with statusReason='idle_after_unexpected_exit' (crashed agent signal)", () => {
-    expect(
-      sessionNeedsAttention({ status: "idle", statusReason: "idle_after_unexpected_exit" }),
-    ).toBe(true);
+    expect(sessionNeedsAttention({ status: "idle", statusReason: "idle_after_unexpected_exit" })).toBe(true);
   });
 
   it("returns false for status='idle' with statusReason=null (user-initiated Ctrl+C / Restart cleared the label)", () => {
