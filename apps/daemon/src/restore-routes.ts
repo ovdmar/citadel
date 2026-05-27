@@ -45,6 +45,11 @@ export type RestoreCandidate = {
   // Source session row whose UUID we'd resume. Useful for the UI to surface
   // "last seen N hours ago" without a second round-trip.
   sourceSessionId: string;
+  // Stable tab slot the restored session should reuse. Boot-restore + the
+  // /run handler pass this to createAgentSession so the new row inherits the
+  // same tabId — the cockpit then renders the restored session in place
+  // rather than appending it at the end of the tab strip.
+  sourceTabId: string;
 };
 
 export function registerRestoreRoutes(app: express.Express, deps: Deps) {
@@ -97,6 +102,12 @@ export function registerRestoreRoutes(app: express.Express, deps: Deps) {
           runtimeId: candidate.runtimeId,
           displayName: candidate.displayName,
           resumeRuntimeSessionId: candidate.runtimeSessionId,
+          // Inherit the source row's tab slot so the cockpit places the
+          // restored conversation back where it lived before. Fallback to the
+          // source row id keeps ordering stable for legacy rows whose tab_id
+          // pre-dates migration 11 (sessionFromRow already falls back to id
+          // when the column is empty, so this is just belt-and-braces).
+          tabId: candidate.tabId ?? candidate.id,
         },
         {
           command: runtime.command,
@@ -238,6 +249,10 @@ export function collectRestoreCandidates(store: SqliteStore): RestoreCandidate[]
         runtimeSessionId,
         lastActivityAt: candidate.lastOutputAt ?? candidate.updatedAt,
         sourceSessionId: candidate.id,
+        // Fall back to the source row id when tabId is unset — sessionFromRow
+        // applies the same fallback for the in-memory shape, so this keeps
+        // legacy rows (pre-migration 11) routing to their own tab slot.
+        sourceTabId: candidate.tabId ?? candidate.id,
       });
     }
   }

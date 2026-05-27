@@ -136,6 +136,11 @@ export async function createAgentSession(
     transport: "disconnected",
     tmuxSessionName: tmux.tmuxSessionName,
     tmuxSessionId: tmux.tmuxSessionId,
+    // Restore paths pass the source row's tabId here so the new session lands
+    // in the same tab slot. Cold-start spawns generate a fresh time-encoded
+    // id — the cockpit sorts tabs by tabId, so first-spawn ordering is
+    // identical to ordering by createdAt.
+    tabId: input.tabId ?? createId("tab"),
     runtimeSessionId,
     createdAt: now,
     updatedAt: now,

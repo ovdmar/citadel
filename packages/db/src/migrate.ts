@@ -255,4 +255,20 @@ export function runMigrations(
     INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
       (10, 'agent-sessions-status-reason-at', datetime('now'));
   `);
+
+  // tab_id: stable per-tab identifier. New sessions get a fresh time-encoded
+  // id; restored sessions inherit their source row's tab_id so the cockpit's
+  // tab strip puts the restored conversation back in its original slot
+  // instead of appending it to the end of the row. Backfill existing rows
+  // with their own primary id — that keeps current ordering identical since
+  // both id and tab_id are time-encoded with the same generator. Wrapped in
+  // a transaction so a crash mid-migration leaves rows untouched.
+  ensureColumn("agent_sessions", "tab_id", "TEXT");
+  db.exec(`
+    BEGIN;
+    UPDATE agent_sessions SET tab_id = id WHERE tab_id IS NULL OR tab_id = '';
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (11, 'agent-sessions-tab-id', datetime('now'));
+    COMMIT;
+  `);
 }

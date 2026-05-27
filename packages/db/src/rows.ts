@@ -87,6 +87,10 @@ export function sessionFromRow(row: Record<string, unknown>): AgentSession {
     transport: asString(row, "transport") as AgentSession["transport"],
     tmuxSessionName: row.tmux_session_name ? asString(row, "tmux_session_name") : null,
     tmuxSessionId: row.tmux_session_id ? asString(row, "tmux_session_id") : null,
+    // Fall back to the row id when tab_id is unset (older rows from before
+    // migration 11, or in-memory fixtures that skip the migration). Treats
+    // every legacy row as its own tab — matches pre-migration ordering.
+    tabId: row.tab_id ? asString(row, "tab_id") : asString(row, "id"),
     runtimeSessionId: row.runtime_session_id ? asString(row, "runtime_session_id") : null,
     rateLimitResumeAttempts:
       row.rate_limit_resume_attempts === null || row.rate_limit_resume_attempts === undefined

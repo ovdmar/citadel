@@ -322,6 +322,98 @@ export function listAllTmuxSessions(): Set<string> | null {
   }
 }
 
+// Inspect who actually owns `/tmp/tmux-<uid>/<socket>` vs. who systemd thinks
+// should own it. Three kinds:
+//   - "absent": no socket / no server bound to the socket.
+//   - "supervised": socket owner PID == citadel-tmux.service's MainPID.
+//   - "orphan": socket owner is a tmux process NOT under citadel-tmux.service
+//     (e.g. auto-spawned by a stray `tmux -L citadel new-session` call from
+//     the daemon or a user shell). The unit can't bind a second server to the
+//     same socket name, so `systemctl start citadel-tmux.service` fails until
+//     the orphan exits. The daemon surfaces this state in /api/health so the
+//     cockpit can show a degraded banner with a "Run make tmux-service to
+//     reconcile" hint — that command is the only safe way to graceful-restart
+//     into a supervised tmux server, and it's destructive (every live agent
+//     pane dies and is `claude --resume`d back).
+export type TmuxServerOwnership =
+  | { kind: "absent" }
+  | { kind: "supervised"; pid: number }
+  | { kind: "orphan"; pid: number; supervisedPid: number | null };
+
+export function getTmuxServerOwnership(): TmuxServerOwnership {
+  const sock = process.env.CITADEL_TMUX_SOCKET;
+  // Without a configured socket the daemon has no opinion (legacy/test mode).
+  // Report absent so callers don't gate on a state that doesn't apply.
+  if (!sock) return { kind: "absent" };
+  const socketPath = path.join(`/tmp/tmux-${process.getuid?.() ?? ""}`, sock);
+  if (!fs.existsSync(socketPath)) return { kind: "absent" };
+  // `fuser` is in psmisc on every distro we ship to and answers in O(ms).
+  // Output format: "<path>: <pid>". A single owner is the normal case (tmux's
+  // server holds the listening fd); multiple owners are abnormal but we just
+  // take the first since they're all under the same tmux server.
+  let ownerPid: number | null = null;
+  try {
+    const out = execFileSync("fuser", [socketPath], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const match = out.match(/(\d+)/);
+    if (match?.[1]) ownerPid = Number(match[1]);
+  } catch {
+    return { kind: "absent" };
+  }
+  if (!ownerPid) return { kind: "absent" };
+  // `systemctl --user show -p MainPID --value citadel-tmux.service` returns
+  // the supervised PID, or "0" when the unit is inactive. Failing the call
+  // (no systemd, not a user session) just means we can't make the supervised
+  // determination — treat the owner as orphan with supervisedPid=null and
+  // let the caller decide.
+  let supervisedPid: number | null = null;
+  try {
+    const out = execFileSync("systemctl", ["--user", "show", "-p", "MainPID", "--value", "citadel-tmux.service"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const parsed = Number(out.trim());
+    supervisedPid = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  } catch {
+    supervisedPid = null;
+  }
+  if (supervisedPid !== null && supervisedPid === ownerPid) return { kind: "supervised", pid: ownerPid };
+  return { kind: "orphan", pid: ownerPid, supervisedPid };
+}
+
+// Make sure citadel-tmux.service is running before we issue tmux commands the
+// daemon needs to spawn through it. The contract:
+//   - "supervised": no-op, return ok.
+//   - "absent": start the unit and re-probe; return ok if it's now supervised.
+//   - "orphan": refuse to take action (starting the unit will fail anyway and
+//     SIGKILLing the orphan would lose every live pane). Return the ownership
+//     so the caller can degrade the daemon's state.
+// Idempotent and safe to call from many places. The systemctl start is
+// allowed even with RefuseManualStop=true — that directive only blocks stop
+// and restart.
+export async function ensureCitadelTmuxRunning(): Promise<TmuxServerOwnership> {
+  const initial = getTmuxServerOwnership();
+  if (initial.kind === "supervised" || initial.kind === "orphan") return initial;
+  // absent — try to start the unit. Best-effort: the install/uninstall script
+  // is the source of truth for the unit definition; we just nudge it active.
+  try {
+    execFileSync("systemctl", ["--user", "start", "citadel-tmux.service"], {
+      stdio: ["ignore", "ignore", "pipe"],
+      timeout: 5000,
+    });
+  } catch {
+    // Fall through to re-probe; the caller decides what to do with absent.
+  }
+  // Poll for readiness. tmux can take ~200ms to bind its socket after the
+  // process starts. Cap the wait so we don't hold up daemon boot indefinitely.
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const current = getTmuxServerOwnership();
+    if (current.kind !== "absent") return current;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  return getTmuxServerOwnership();
+}
+
 export function ensureTmuxExtendedKeys() {
   execFileSync("tmux", [...tmuxPrefix(), "set-option", "-s", "extended-keys", "on"], { stdio: "ignore" });
   const features = execFileSync("tmux", [...tmuxPrefix(), "show-options", "-s", "-g", "terminal-features"], {

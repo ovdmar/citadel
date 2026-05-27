@@ -119,6 +119,15 @@ export const AgentSessionSchema = z.object({
   transport: TransportStatusSchema,
   tmuxSessionName: z.string().nullable(),
   tmuxSessionId: z.string().nullable(),
+  // Stable per-tab identifier that survives across restore-spawn-restore
+  // cycles. Generated fresh on first session create in a workspace; inherited
+  // by every subsequent row that resumes the same conversation (the restored
+  // session takes the original's tabId). The cockpit's tab strip sorts by
+  // tabId (time-encoded by createId) so a restored session re-appears in the
+  // same slot the original lived in, instead of jumping to the end of the row.
+  // Optional in the contract so older test fixtures keep parsing; the DB
+  // layer always materializes a value via the migration backfill.
+  tabId: z.string().optional(),
   // Runtime-native session UUID (e.g. Claude Code's --session-id). Populated at
   // spawn time so we can resume the same conversation across daemon and machine
   // restarts, and so the Settings restore flow has a stable handle.
@@ -519,6 +528,11 @@ export const CreateAgentSessionInputSchema = z.object({
   // session's transcript on disk must exist; the caller is responsible for
   // validating that (see the Settings restore flow / backfill).
   resumeRuntimeSessionId: z.string().uuid().optional(),
+  // When set, the new session is bound to an existing tab slot (instead of
+  // generating a fresh tabId). Restore paths pass the source row's tabId so
+  // the restored session reuses the original tab position in the cockpit's
+  // tab strip. Non-restore callers leave this unset and get a fresh tabId.
+  tabId: z.string().optional(),
 });
 
 // High-level one-shot launcher used by MCP orchestrators: create a workspace

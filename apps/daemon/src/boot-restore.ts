@@ -241,6 +241,9 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
           runtimeId: candidate.runtimeId,
           displayName: runtime.displayName,
           resumeRuntimeSessionId: candidate.runtimeSessionId,
+          // Inherit the source row's tab slot so the cockpit places the
+          // restored conversation back where it lived before.
+          tabId: candidate.sourceTabId,
         },
         {
           command: runtime.command,

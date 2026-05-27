@@ -1,9 +1,11 @@
 import { defaultConfigPath, loadConfig, loadDevState, resolveWorktreeRoot, saveDevState } from "@citadel/config";
 import { SqliteStore } from "@citadel/db";
 import { OperationService } from "@citadel/operations";
+import { ensureCitadelTmuxRunning } from "@citadel/terminal";
 import { createDaemonApp } from "./app.js";
 import { runBootRestore } from "./boot-restore.js";
 import { reapOrphans } from "./orphan-reaper.js";
+import { setTmuxOwnership } from "./tmux-ownership.js";
 
 // Resolve the worktree root before loading config. When running inside a
 // Citadel checkout, env always wins over dev.json; dev.json wins over an
@@ -96,6 +98,31 @@ server.listen(config.port, config.bindHost, () => {
       ...(devState?.webPort ? { webPort: devState.webPort } : {}),
     });
   }
+  // Tmux ownership probe + auto-start. citadel-tmux.service is a separate
+  // systemd unit (intentionally — its lifecycle is decoupled from this
+  // daemon's so daemon restarts don't kill agent panes). But the daemon
+  // can't function without it, so if the unit's down we kick it up. If the
+  // socket is owned by an orphan tmux server (someone ran `tmux -L citadel`
+  // outside the unit, e.g. during a botched install), report it as degraded
+  // but DO NOT kill the orphan — every live agent pane lives in it. The
+  // user resolves it by running `make tmux-service` when they're ready.
+  ensureCitadelTmuxRunning()
+    .then((ownership) => {
+      setTmuxOwnership(ownership);
+      if (ownership.kind === "absent") {
+        console.warn(
+          "[tmux-guard] citadel-tmux.service is absent after start attempt — agent spawns will fail until it's up",
+        );
+      } else if (ownership.kind === "orphan") {
+        console.warn(
+          `[tmux-guard] orphan tmux server holding socket (pid=${ownership.pid}, supervised=${ownership.supervisedPid ?? "none"}) — run \`make tmux-service\` to reconcile (destructive: restarts all agents)`,
+        );
+      }
+    })
+    .catch((error) => {
+      console.warn(`[tmux-guard] probe failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+
   // Boot-time auto-restore. Fires once after listen() succeeds — the
   // cockpit polls /api/state.bootRestore for the running summary while we
   // walk the candidate list. Skipped when CITADEL_DISABLE_BOOT_RESTORE=1

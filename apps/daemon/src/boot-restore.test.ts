@@ -94,12 +94,19 @@ function insertStoppedSession(
   });
 }
 
-function fakeOps(spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null }>) {
+function fakeOps(
+  spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }>,
+) {
   return {
-    createAgentSession: async (input: { workspaceId: string; resumeRuntimeSessionId?: string | null }) => {
+    createAgentSession: async (input: {
+      workspaceId: string;
+      resumeRuntimeSessionId?: string | null;
+      tabId?: string | null;
+    }) => {
       spawned.push({
         workspaceId: input.workspaceId,
         resumeRuntimeSessionId: input.resumeRuntimeSessionId ?? null,
+        tabId: input.tabId ?? null,
       });
       return {
         id: `sess_new_${spawned.length}`,
@@ -117,7 +124,7 @@ describe("runBootRestore", () => {
     insertStoppedSession(store, { id: "sess_recent_2", uuid: "uuid-bbbb", ageMs: 60 * 60_000 });
     insertStoppedSession(store, { id: "sess_old", uuid: "uuid-cccc", ageMs: 48 * 60 * 60_000 });
 
-    const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null }> = [];
+    const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }> = [];
     const summary = await runBootRestore({
       store,
       operations: fakeOps(spawned),
@@ -138,7 +145,7 @@ describe("runBootRestore", () => {
 
   it("returns an empty summary when there are no candidates at all", async () => {
     const { config, store } = fixture();
-    const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null }> = [];
+    const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }> = [];
     const summary = await runBootRestore({
       store,
       operations: fakeOps(spawned),
@@ -162,7 +169,7 @@ describe("runBootRestore", () => {
     config.runtimes = [];
     insertStoppedSession(store, { id: "sess_a", uuid: "uuid-aaaa", ageMs: 5 * 60_000 });
     insertStoppedSession(store, { id: "sess_b", uuid: "uuid-bbbb", ageMs: 5 * 60_000 });
-    const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null }> = [];
+    const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }> = [];
     const summary = await runBootRestore({
       store,
       operations: fakeOps(spawned),
@@ -176,6 +183,44 @@ describe("runBootRestore", () => {
     expect(summary.entries).toHaveLength(2);
     expect(summary.entries.every((e) => e.sessionId === null && e.error?.startsWith("runtime_not_found:"))).toBe(true);
     expect(spawned).toHaveLength(0);
+  });
+
+  it("propagates the source row's tabId so the restored session reuses its tab slot", async () => {
+    const { config, store } = fixture();
+    // Insert a stopped row WITH an explicit tab_id. Boot-restore should pass
+    // that tabId into createAgentSession so the cockpit places the restored
+    // session in the same tab the original lived in.
+    const ts = new Date(Date.now() - 5 * 60_000).toISOString();
+    store.insertSession({
+      id: "sess_recent_tab",
+      workspaceId: "ws_1",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
+      status: "stopped",
+      statusReason: "exit_code_0",
+      lastStatusAt: ts,
+      lastOutputAt: ts,
+      endedAt: ts,
+      exitCode: 0,
+      transport: "disconnected",
+      tmuxSessionName: "citadel_ws_1_tab",
+      tmuxSessionId: null,
+      tabId: "tab_explicit_42",
+      runtimeSessionId: "uuid-tabprop",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }> = [];
+    await runBootRestore({
+      store,
+      operations: fakeOps(spawned),
+      config,
+      emit: () => {},
+      listTmuxSessions: () => null,
+      tmuxReadinessTimeoutMs: 0,
+    });
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]?.tabId).toBe("tab_explicit_42");
   });
 
   it("retries the tmux probe when it initially returns null (systemd race)", async () => {
@@ -210,7 +255,7 @@ describe("runBootRestore", () => {
       // an empty Set ("server up, no sessions") — race resolved.
       return calls >= 3 ? new Set<string>() : null;
     };
-    const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null }> = [];
+    const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }> = [];
     const summary = await runBootRestore({
       store,
       operations: fakeOps(spawned),
@@ -250,7 +295,7 @@ describe("runBootRestore", () => {
       createdAt: ts,
       updatedAt: ts,
     });
-    const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null }> = [];
+    const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }> = [];
     const summary = await runBootRestore({
       store,
       operations: fakeOps(spawned),
