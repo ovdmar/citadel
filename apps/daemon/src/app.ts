@@ -59,7 +59,7 @@ import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { backfillScratchpadOnStartup } from "./scratchpad.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
-import { registerTerminalRoutes } from "./terminal-routes.js";
+import { wireTerminalRoutes } from "./terminal-routes-helpers.js";
 import { resolveTtydPortRange } from "./ttyd-slot.js";
 import { fetchVersionControlGated } from "./vc-fetch-gated.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
@@ -164,14 +164,7 @@ export function createDaemonApp(input: {
       });
     }
   }
-  const respawnTmux = async (session: import("@citadel/contracts").AgentSession) => {
-    const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
-    const runtime = config.runtimes.find((candidate) => candidate.id === session.runtimeId);
-    if (!workspace || !runtime) return null;
-    const sessionName = session.tmuxSessionName ?? `citadel_${workspace.id}_${session.id.slice(-8)}`;
-    return ensureTmuxSession({ sessionName, cwd: workspace.path, command: runtime.command, args: runtime.args });
-  };
-  registerTerminalRoutes({ app, server, store, ttyd, dataDir: config.dataDir, emit, respawnTmux });
+  const { recentUserAction } = wireTerminalRoutes({ app, server, store, ttyd, dataDir: config.dataDir, emit, config });
 
   const cachedProviderHealth = () =>
     cachedProvider("provider-health", () => collectProviderHealth(config.providers), 15_000);
@@ -773,7 +766,7 @@ export function createDaemonApp(input: {
   }
 
   // Status monitor / auto-recovery / auto-resume / terminal reaper: see their own modules for context.
-  const statusMonitor = startDaemonStatusMonitor(store, emit);
+  const statusMonitor = startDaemonStatusMonitor(store, emit, config, recentUserAction);
   if (statusMonitor) server.on("close", () => statusMonitor.stop());
   const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({
     store,

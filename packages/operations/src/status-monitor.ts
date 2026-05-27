@@ -1,54 +1,67 @@
 import type { AgentSession } from "@citadel/contracts";
 import type { ObservationContext, RuntimeStatusAdapter, SessionAdapterState } from "@citadel/runtimes";
-import { type ReducerPrev, type StatusSignal, type StatusUpdate, reduceStatus } from "./agent-status.js";
+import {
+  IDLE_AFTER_UNEXPECTED_EXIT_AUTO_CLEAR_MS,
+  REASON_IDLE_AFTER_UNEXPECTED_EXIT,
+  RECENT_USER_ACTION_MS,
+  type ReducerPrev,
+  type StatusSignal,
+  type StatusUpdate,
+  reduceStatus,
+} from "./agent-status.js";
 import { startGuardedInterval } from "./guarded-interval.js";
 
 // Per-session bookkeeping that the monitor maintains across ticks. The
 // adapter has its own SessionAdapterState (for runtime-specific internals);
-// the monitor owns activity-change tracking which is runtime-agnostic.
+// the monitor owns activity-change tracking + the two-tick debounce for
+// running → idle transitions (avoids false flips when claude shells out to
+// git/rg briefly).
 export interface MonitorSessionState {
   lastActivityMs: number | null;
   ticksSinceActivityChange: number;
   hasObservedSinceBoot: boolean;
+  // Number of consecutive ticks observing a shell foreground for an agent
+  // runtime that was previously `running`. The transition fires when this
+  // reaches 2 (debounce).
+  consecutiveShellTicks: number;
 }
 
-export interface SentinelReading {
-  live: boolean;
-  exitCode: number | null;
-  // ISO timestamp of when the .exit file was created (≈ when the agent exited).
-  exitedAt: string | null;
-}
+// Foreground commands that signal "pane is at a shell prompt, not running
+// the agent". When the foreground transitions from the agent binary to one
+// of these, the status flips to `idle`.
+const SHELL_BINARIES = new Set(["bash", "sh", "zsh", "fish", "dash"]);
+const RUNNING_TO_IDLE_DEBOUNCE_TICKS = 2;
 
 // Dependencies the tick needs. All I/O is dependency-injected so the tick
 // can be tested without real tmux/fs/store. The real daemon wires real
 // implementations in apps/daemon/src/app.ts.
 export interface MonitorTickDeps {
   now: () => string;
-  // Snapshot of non-terminal candidate sessions. The monitor itself filters
-  // by status + runtime.
   listSessions: () => AgentSession[];
-  // Workspace ids currently in the store. Used to detect "tmux + workspace
-  // both gone" and prune the session row.
   listWorkspaceIds: () => Set<string>;
-  // Persist a status update. The reducer-derived StatusUpdate is passed
-  // verbatim; the store decides which columns to write.
   updateSession: (sessionId: string, update: StatusUpdate) => void;
-  // Drop a session row entirely (used by the workspace-membership check).
   deleteSession: (sessionId: string) => void;
-  // SSE broadcast. Boot reconcile passes emit=()=>{} so the tick body
-  // doesn't need to branch on source.
   emit: (event: string, payload: unknown) => void;
-  // Single batched tmux query — map of tmux_session_name → activity ts (ms).
-  // Called once per tick regardless of N sessions.
   tmuxActivities: () => Map<string, number>;
-  // Capture the visible pane (no scrollback). Called per session.
   paneCapture: (tmuxSessionName: string) => string;
-  // Async stat of .live + .exit sentinel files. Called per session in parallel.
-  readSentinels: (tmuxSessionName: string) => Promise<SentinelReading>;
-  // Adapter selector + state map.
+  // Shell-first lifecycle hook: foreground command of the pane (the
+  // runtime binary when the agent is running, a shell when it isn't, null
+  // when tmux is unreachable). Replaces the legacy `readSentinels` —
+  // tmux-native, no /tmp sentinels needed.
+  panePidProcess: (tmuxSessionName: string) => { command: string; pid: number } | null;
+  // Map runtimeId → binary name expected as the pane's foreground when the
+  // agent is running. Null when the runtime is unknown.
+  runtimeBinaryFor: (runtimeId: string) => string | null;
+  // Map of sessionId → Date.now() timestamp of the most recent operator-
+  // initiated termination (Restart endpoint or xterm Ctrl+C POST). When a
+  // running → idle transition fires within RECENT_USER_ACTION_MS of an
+  // entry, the reducer clears `statusReason`; otherwise it labels
+  // `idle_after_unexpected_exit` for the 30-min attention pulse. Lifecycle
+  // is in-memory; cleared on daemon restart (acceptable — the window is
+  // shorter than any restart, and boot-restore re-establishes `running`).
+  recentUserAction: Map<string, number>;
   getAdapter: (runtimeId: string) => RuntimeStatusAdapter;
   adapterStates: Map<string, SessionAdapterState>;
-  // Monitor's own state map (activity tracking).
   monitorStates: Map<string, MonitorSessionState>;
 }
 
@@ -64,7 +77,12 @@ export interface MonitorTickResult {
 const TERMINAL_STATUSES = new Set<AgentSession["status"]>(["stopped", "failed"]);
 
 function makeMonitorState(): MonitorSessionState {
-  return { lastActivityMs: null, ticksSinceActivityChange: 0, hasObservedSinceBoot: false };
+  return {
+    lastActivityMs: null,
+    ticksSinceActivityChange: 0,
+    hasObservedSinceBoot: false,
+    consecutiveShellTicks: 0,
+  };
 }
 
 // Walks non-terminal sessions and applies one round of status detection.
@@ -75,21 +93,17 @@ export async function runStatusMonitorTick(
   deps: MonitorTickDeps,
   opts: MonitorTickOptions,
 ): Promise<MonitorTickResult> {
-  const sessions = deps.listSessions().filter((s) => !TERMINAL_STATUSES.has(s.status) && s.runtimeId !== "shell");
+  // Include shell-runtime sessions so the auto-clear path can run on them
+  // too; the per-session derivation below treats them specially.
+  const sessions = deps.listSessions().filter((s) => !TERMINAL_STATUSES.has(s.status));
   if (sessions.length === 0) return { sessionsTouched: 0, deletedSessions: 0 };
 
   const workspaceIds = deps.listWorkspaceIds();
   const tmuxActivities = deps.tmuxActivities();
-
-  // Parallel sentinel reads.
-  const sentinelByName = new Map<string, SentinelReading>();
-  await Promise.all(
-    sessions.map(async (s) => {
-      if (!s.tmuxSessionName) return;
-      const reading = await deps.readSentinels(s.tmuxSessionName);
-      sentinelByName.set(s.tmuxSessionName, reading);
-    }),
-  );
+  // Derive `nowMs` from deps.now() so tests can inject a fixed time and
+  // get deterministic behaviour for the recentUserAction window + the
+  // 30-min auto-clear elapsed check. Production passes a real ISO.
+  const nowMs = new Date(deps.now()).valueOf();
 
   let sessionsTouched = 0;
   let deletedSessions = 0;
@@ -109,13 +123,14 @@ export async function runStatusMonitorTick(
     }
 
     const tmuxActivityMs = tmuxActivities.get(session.tmuxSessionName) ?? null;
-    const tmuxAlive = tmuxActivityMs !== null;
-    const sentinel = sentinelByName.get(session.tmuxSessionName);
+    // Shell-first lifecycle: pane foreground IS the source of truth for
+    // "is the agent running". Read tmux-native, no /tmp sentinels.
+    const pane = deps.panePidProcess(session.tmuxSessionName);
+    const tmuxAlive = pane !== null;
+    const runtimeBinary = deps.runtimeBinaryFor(session.runtimeId);
 
     // Activity-change tracking. Done BEFORE adapter invocation so the
     // context the adapter sees reflects this tick's bookkeeping.
-    // The first observation of a session is also "activity changed" — there
-    // was no prior reference; we're freshly observing it.
     const isFirstObservation = monitorState.lastActivityMs === null;
     const activityChanged =
       tmuxActivityMs !== null &&
@@ -132,13 +147,7 @@ export async function runStatusMonitorTick(
     // First-pass lifecycle signals (deterministic). At most one applies.
     const signals: StatusSignal[] = [];
 
-    if (sentinel && sentinel.exitCode !== null && sentinel.exitedAt) {
-      if (sentinel.exitCode === 0) {
-        signals.push({ type: "exited_clean", exitCode: 0, endedAt: sentinel.exitedAt });
-      } else {
-        signals.push({ type: "exited_failed", exitCode: sentinel.exitCode, endedAt: sentinel.exitedAt });
-      }
-    } else if (!tmuxAlive) {
+    if (!tmuxAlive) {
       // Workspace-membership check: if the workspace is gone too, prune
       // the session row instead of marking it unknown. Existing reaper
       // semantic preserved.
@@ -149,25 +158,52 @@ export async function runStatusMonitorTick(
         deps.monitorStates.delete(session.id);
         continue;
       }
+      // tmux unreachable. NEVER `stopped` (the 18:40:57 mass-flip incident
+      // was caused by reading exited_failed signals from the wrapper's EXIT
+      // trap when tmux died; with the wrapper gone, the only valid response
+      // to tmux-missing is `unknown`).
       signals.push({
         type: "tmux_missing",
         reason: opts.source === "boot" ? "daemon_restart_indeterminate" : "tmux_missing",
       });
-    } else if (sentinel && !sentinel.live) {
-      // tmux is alive but the bash wrapper's .live sentinel is gone and
-      // no .exit was recorded. /tmp got cleared, or the wrapper crashed.
-      signals.push({ type: "tmux_missing", reason: "sentinel_missing_tmux_alive" });
-    } else if (activityChanged && tmuxActivityMs !== null) {
-      signals.push({ type: "active", lastOutputAt: new Date(tmuxActivityMs).toISOString() });
+      monitorState.consecutiveShellTicks = 0;
+    } else if (pane && SHELL_BINARIES.has(pane.command) && session.runtimeId !== "shell") {
+      // Agent runtime, pane foreground is a shell binary → agent stopped
+      // running. Two-tick debounce: claude routinely shells out to git/rg
+      // briefly; a single tick of "shell" doesn't constitute "agent exited".
+      monitorState.consecutiveShellTicks += 1;
+      if (monitorState.consecutiveShellTicks >= RUNNING_TO_IDLE_DEBOUNCE_TICKS) {
+        const userActionTs = deps.recentUserAction.get(session.id);
+        const recentUserAction = userActionTs !== undefined && nowMs - userActionTs <= RECENT_USER_ACTION_MS;
+        signals.push({ type: "pane_idle", recentUserAction, observedAt: deps.now() });
+      }
+    } else {
+      // Agent foreground (or shell runtime with any tmux-alive). Reset the
+      // debounce counter so a future running→idle transition starts fresh.
+      monitorState.consecutiveShellTicks = 0;
+      if (activityChanged && tmuxActivityMs !== null) {
+        signals.push({ type: "active", lastOutputAt: new Date(tmuxActivityMs).toISOString() });
+      }
+    }
+
+    // Auto-clear: previously-labeled idle_after_unexpected_exit beyond the
+    // 30-min window with no operator Restart. Driven by `statusReasonAt`,
+    // independent of lastStatusAt (which is reset by every benign
+    // sub-status flip from runtime adapters).
+    if (
+      session.status === "idle" &&
+      session.statusReason === REASON_IDLE_AFTER_UNEXPECTED_EXIT &&
+      session.statusReasonAt
+    ) {
+      const elapsed = nowMs - new Date(session.statusReasonAt).valueOf();
+      if (elapsed > IDLE_AFTER_UNEXPECTED_EXIT_AUTO_CLEAR_MS) {
+        signals.push({ type: "idle_after_unexpected_exit_expired" });
+      }
     }
 
     // Adapter observation (pane-derived) — only when the session is alive
-    // and we don't already have a lifecycle terminal signal pending.
-    const liveBranch =
-      signals.length === 0 ||
-      (signals[0]?.type !== "exited_clean" &&
-        signals[0]?.type !== "exited_failed" &&
-        signals[0]?.type !== "tmux_missing");
+    // and we don't already have a tmux_missing or pane_idle signal.
+    const liveBranch = tmuxAlive && !signals.some((s) => s.type === "tmux_missing" || s.type === "pane_idle");
     if (liveBranch && tmuxAlive) {
       const observation = adapter.observe(
         adapterState,
@@ -204,6 +240,7 @@ export async function runStatusMonitorTick(
       anyChange = true;
       merged.status = update.status;
       if (update.reason !== undefined) merged.reason = update.reason;
+      if (update.reasonAt !== undefined) merged.reasonAt = update.reasonAt;
       if (update.lastStatusAt !== undefined) merged.lastStatusAt = update.lastStatusAt;
       if (update.lastOutputAt !== undefined) merged.lastOutputAt = update.lastOutputAt;
       if (update.endedAt !== undefined) merged.endedAt = update.endedAt;
@@ -222,7 +259,12 @@ export async function runStatusMonitorTick(
       // state poll picks up lastOutputAt from the tmux side, and the
       // cockpit-summary endpoint can read it on demand.
       const statusChanged = merged.status !== originalPrev.status;
-      const reasonChanged = merged.reason !== undefined && merged.reason !== originalPrev.statusReason;
+      // `merged.reason` can legitimately be `null` (clearing a reason after
+      // recent user action) — compare against `originalPrev.statusReason`
+      // which may also be null, and treat distinct nullable values as a
+      // change. `undefined` means "no change to reason in this tick".
+      const reasonChanged =
+        Object.prototype.hasOwnProperty.call(merged, "reason") && merged.reason !== originalPrev.statusReason;
       if (statusChanged || reasonChanged) {
         deps.updateSession(session.id, merged);
         sessionsTouched += 1;

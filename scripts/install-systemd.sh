@@ -39,19 +39,20 @@ CITADEL_CONFIG_PATH="${CITADEL_CONFIG:-$HOME/.local/share/citadel/citadel.config
 SERVICE_PATH="${CITADEL_SERVICE_PATH:-/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 
 echo "→ Installing citadel-tmux.service (tmux server, socket=$TMUX_SOCK)"
+TMUX_UNIT_TMP="$(mktemp)"
 {
   echo "[Unit]"
   echo "Description=Citadel tmux server (long-lived; survives citadel.service restarts)"
   echo ""
   echo "[Service]"
-  # `tmux new-session -d` daemonises and exits — Type=forking matches that.
-  # The __citadel_keepalive session keeps the server alive even when all
-  # real agent sessions are closed, so the server doesn't churn on idle.
-  echo "Type=forking"
+  # `tmux -L $SOCK -F` runs the server in the FOREGROUND. With Type=simple,
+  # systemd tracks the actual server process — `Restart=on-failure` finally
+  # fires on tmux crashes (the previous Type=forking + RemainAfterExit=yes
+  # made systemd think the unit was healthy when tmux had SEGV'd; that's
+  # what hid both 2026-05-26 incidents from auto-restart).
+  echo "Type=simple"
   echo "Environment=PATH=$SERVICE_PATH"
-  echo "ExecStart=$TMUX_BIN_PATH -L $TMUX_SOCK new-session -d -s __citadel_keepalive 'sleep infinity'"
-  echo "ExecStop=$TMUX_BIN_PATH -L $TMUX_SOCK kill-server"
-  echo "RemainAfterExit=yes"
+  echo "ExecStart=$TMUX_BIN_PATH -L $TMUX_SOCK -F"
   echo "Restart=on-failure"
   echo "RestartSec=2"
   # Default KillMode=control-group is fine here — when this unit stops, we
@@ -61,19 +62,36 @@ echo "→ Installing citadel-tmux.service (tmux server, socket=$TMUX_SOCK)"
   echo ""
   echo "[Install]"
   echo "WantedBy=default.target"
-} > "$TMUX_UNIT_PATH"
+} > "$TMUX_UNIT_TMP"
+
+# Hash-compare against the installed unit so we only `systemctl restart` when
+# the unit content actually changed. Blanket-restarting on every `make install`
+# would re-trigger boot-restore's spawn cascade for no behavioural change.
+TMUX_UNIT_CHANGED=false
+if ! cmp -s "$TMUX_UNIT_TMP" "$TMUX_UNIT_PATH" 2>/dev/null; then
+  TMUX_UNIT_CHANGED=true
+  mv "$TMUX_UNIT_TMP" "$TMUX_UNIT_PATH"
+  echo "  ↳ citadel-tmux.service content changed; will restart"
+else
+  rm -f "$TMUX_UNIT_TMP"
+  echo "  ↳ citadel-tmux.service content unchanged; skipping restart"
+fi
 
 echo "→ Installing citadel.service → $ROOT"
+CITADEL_UNIT_TMP="$(mktemp)"
 {
   echo "[Unit]"
   echo "Description=Citadel local operator cockpit"
   echo "After=network-online.target citadel-tmux.service"
   echo "Wants=network-online.target"
-  # Hard dependency: if the tmux server isn't up, the daemon can't manage
-  # agent panes. Requires= triggers citadel-tmux.service start when citadel
-  # starts; BindsTo is intentionally NOT used (we want citadel to keep
-  # running even if tmux is being restarted manually).
-  echo "Requires=citadel-tmux.service"
+  # Soft dependency on the tmux server: systemd brings tmux up alongside
+  # citadel, but a tmux crash no longer forces citadel to restart. Combined
+  # with Type=simple on the tmux unit (systemd tracks the actual process
+  # and auto-restarts on failure), tmux is back in ~2 s and the daemon
+  # detects the new server on its next status-monitor tick without losing
+  # any non-tmux state. The previous Requires= forced a daemon restart
+  # cascade — boot-restore would re-spawn every session, hammering load avg.
+  echo "Wants=citadel-tmux.service"
   echo ""
   echo "[Service]"
   echo "Type=simple"
@@ -104,17 +122,29 @@ echo "→ Installing citadel.service → $ROOT"
   echo ""
   echo "[Install]"
   echo "WantedBy=default.target"
-} > "$UNIT_PATH"
+} > "$CITADEL_UNIT_TMP"
 
-echo "→ daemon-reload"
-systemctl --user daemon-reload
+CITADEL_UNIT_CHANGED=false
+if ! cmp -s "$CITADEL_UNIT_TMP" "$UNIT_PATH" 2>/dev/null; then
+  CITADEL_UNIT_CHANGED=true
+  mv "$CITADEL_UNIT_TMP" "$UNIT_PATH"
+  echo "  ↳ citadel.service content changed; will restart"
+else
+  rm -f "$CITADEL_UNIT_TMP"
+  echo "  ↳ citadel.service content unchanged; skipping restart"
+fi
 
-# Make sure the tmux server is up under its own unit BEFORE we (re)start
-# citadel.service — that way citadel's first tmux call hits the new
-# dedicated socket, and any existing agent sessions on the old server stay
-# untouched on the user's default socket (recoverable separately).
-echo "→ enable --now citadel-tmux.service"
-systemctl --user enable --now citadel-tmux.service
+if $TMUX_UNIT_CHANGED || $CITADEL_UNIT_CHANGED; then
+  echo "→ daemon-reload"
+  systemctl --user daemon-reload
+fi
+
+echo "→ enable citadel-tmux.service"
+systemctl --user enable citadel-tmux.service >/dev/null 2>&1 || true
+if $TMUX_UNIT_CHANGED || ! systemctl --user is-active --quiet citadel-tmux.service; then
+  echo "→ (re)start citadel-tmux.service"
+  systemctl --user restart citadel-tmux.service
+fi
 sleep 0.4
 if ! systemctl --user is-active --quiet citadel-tmux.service; then
   echo "✗ citadel-tmux.service failed to start"
@@ -126,8 +156,11 @@ echo "✓ citadel-tmux.service running (socket=$TMUX_SOCK)"
 echo "→ pnpm build (so the supervised process has a fresh dist)"
 ( cd "$ROOT" && pnpm build )
 
-echo "→ enable --now + restart citadel.service"
-systemctl --user enable --now citadel.service
+echo "→ enable citadel.service"
+systemctl --user enable citadel.service >/dev/null 2>&1 || true
+# Always restart citadel.service when content changed OR when the new build
+# needs to be picked up (this is the normal `make install` rebuild path).
+echo "→ restart citadel.service"
 systemctl --user restart citadel.service
 sleep 0.6
 

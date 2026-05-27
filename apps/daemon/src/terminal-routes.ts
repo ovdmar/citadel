@@ -45,6 +45,12 @@ export function registerTerminalRoutes(input: {
   emit?: (type: string, payload: unknown) => void;
   /** Recreate the tmux session a terminal needs. Returns the live tmux name/id. */
   respawnTmux?: (session: AgentSession) => Promise<{ tmuxSessionName: string; tmuxSessionId: string } | null>;
+  /** Relaunch the agent inside an existing pane (shell-first Restart endpoint). */
+  restartAgent?: (session: AgentSession) => Promise<void>;
+  /** In-memory map of recent operator-initiated terminations. Written by the
+   * Restart endpoint and the user-action endpoint. The status-monitor reads
+   * it on each tick to label `running → idle` transitions correctly. */
+  recentUserAction?: Map<string, number>;
 }) {
   const { app, server, store, ttyd } = input;
   const proxy = httpProxy.createProxyServer({
@@ -254,6 +260,45 @@ export function registerTerminalRoutes(input: {
     const sessionId = String(req.params.sessionId ?? "");
     ttyd.release(sessionId);
     res.status(202).json({ released: true });
+  });
+
+  // Restart endpoint — relaunches the agent inside an existing pane.
+  // Records recentUserAction BEFORE the mutation so the next status-monitor
+  // tick sees the operator action and clears statusReason (rather than
+  // labelling the resulting transition as `idle_after_unexpected_exit`).
+  // Defensive check: if the agent is ALREADY running (pane foreground IS
+  // the runtime binary, stale UI or race), return 409 instead of typing
+  // `env … claude …` into the live TUI as a chat message.
+  app.post("/api/agent-sessions/:sessionId/restart", async (req, res) => {
+    const sessionId = String(req.params.sessionId ?? "");
+    const dbSession = store.listSessions().find((candidate) => candidate.id === sessionId);
+    if (!dbSession) return res.status(404).json({ error: "session_not_found" });
+    if (!input.restartAgent) return res.status(503).json({ error: "restart_not_wired" });
+    input.recentUserAction?.set(sessionId, Date.now());
+    try {
+      await input.restartAgent(dbSession);
+      input.emit?.("agent.updated", { workspaceId: dbSession.workspaceId, sessionId });
+      return res.status(202).json({ ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "restart_failed";
+      // 409 for the defensive "agent_already_running" check; 500 for anything else.
+      if (message === "agent_already_running") {
+        return res.status(409).json({ error: "agent_already_running" });
+      }
+      return res.status(500).json({ error: "restart_failed", detail: message });
+    }
+  });
+
+  // User-action endpoint — the terminal-key-shim (injected into ttyd's
+  // iframe page) hits this with `{reason: 'ctrl_c'}` whenever the operator
+  // types Ctrl+C inside the embedded terminal, in parallel with letting the
+  // keystroke propagate to ttyd. Fire-and-forget: caller doesn't block on
+  // the response. No rate-limit needed — the write is in-memory Map.set,
+  // no DB or I/O.
+  app.post("/api/agent-sessions/:sessionId/user-action", (req, res) => {
+    const sessionId = String(req.params.sessionId ?? "");
+    input.recentUserAction?.set(sessionId, Date.now());
+    res.status(204).end();
   });
 
   app.get("/api/terminals", (_req, res) => {

@@ -424,6 +424,7 @@ export class SqliteStore {
     update: {
       status?: AgentSession["status"];
       statusReason?: string | null;
+      statusReasonAt?: string | null;
       lastStatusAt?: string;
       lastOutputAt?: string | null;
       endedAt?: string | null;
@@ -439,6 +440,10 @@ export class SqliteStore {
     if (update.statusReason !== undefined) {
       sets.push("status_reason = ?");
       values.push(update.statusReason);
+    }
+    if (update.statusReasonAt !== undefined) {
+      sets.push("status_reason_at = ?");
+      values.push(update.statusReasonAt);
     }
     if (update.lastStatusAt !== undefined) {
       sets.push("last_status_at = ?");

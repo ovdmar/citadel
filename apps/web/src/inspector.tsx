@@ -171,11 +171,7 @@ function StatsTab(props: {
                   ))}
                 </ul>
                 {recentCommits.length > 5 ? (
-                  <button
-                    type="button"
-                    className="ins-recent-more"
-                    onClick={() => setRecentExpanded((v) => !v)}
-                  >
+                  <button type="button" className="ins-recent-more" onClick={() => setRecentExpanded((v) => !v)}>
                     {recentExpanded ? "Show fewer" : `Show ${recentCommits.length - 5} more`}
                   </button>
                 ) : null}

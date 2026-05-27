@@ -234,7 +234,6 @@ export function InspectorPrSection(props: {
           )}
         </div>
       </section>
-
     </>
   );
 }
