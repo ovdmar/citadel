@@ -47,16 +47,16 @@
 
 ## Background Refresh
 
-[x] 1. PR state for every workspace with a remote and an open PR is refreshed in the background on a per-PR adaptive cadence decided by the daemon: 60s default, 3min once checks are green and the head SHA has been stable for >10min, never once the PR is merged. The cockpit asks at a fast rhythm (60s batch, 30s active workspace); the daemon serves cache or fetches based on the per-PR schedule.
-[x] 2. Background polling pauses when the cockpit tab is hidden (`document.visibilityState === 'hidden'`) and resumes on focus. It also pauses entirely when no cockpit tab is connected at all (no SSE viewers) after a 2-minute grace window so brief tab-reloads don't trip it.
-[x] 3. Workspaces with no remote, repository-root workspaces, workspaces with no PR, and PRs in the merged state are skipped to avoid useless gh invocations. Workspaces in active gh-cooldown are not skipped — they are queued and served from snapshot/cache.
+[~] 1. PR state for every workspace with a remote and an open PR is refreshed in the background on a per-PR adaptive cadence decided by the daemon: 60s default, 3min once checks are green and the head SHA has been stable for >10min, never once the PR is merged. The cockpit asks at a fast rhythm (60s batch, 30s active workspace); the daemon serves cache or fetches based on the per-PR schedule.
+[~] 2. Background polling pauses when the cockpit tab is hidden (`document.visibilityState === 'hidden'`) and resumes on focus. It also pauses entirely when no cockpit tab is connected at all (no SSE viewers) after a 2-minute grace window so brief tab-reloads don't trip it.
+[~] 3. Workspaces with no remote, repository-root workspaces, workspaces with no PR, and PRs in the merged state are skipped to avoid useless gh invocations. Workspaces in active gh-cooldown are not skipped — they are queued and served from snapshot/cache.
 
 ## GitHub Rate Limiting
 
 [x] 1. When any gh subprocess returns a rate-limit error ("API rate limit exceeded", "secondary rate limit", "abuse rate limit"), the daemon enters a 15-minute global cooldown. Every subsequent gh call short-circuits without spawning a subprocess.
-[x] 2. Cooldown state surfaces to the FE through `versionControl.cooldownUntil` (ISO timestamp). The pr-routes response builder decorates every outgoing `versionControl` payload with this field during cooldown — regardless of whether the payload came from a fresh fetch, a scheduler-skip cache fallback, or a stale snapshot.
-[x] 3. The cockpit renders a single top-of-page pill "GitHub rate-limited — retrying at HH:MM" when any workspace carries a non-null `cooldownUntil` in the sticky cache. Last-known PR data stays visible underneath.
-[x] 4. Force-refresh (`pr-refresh` endpoint) during cooldown returns 200 + the cached snapshot decorated with `cooldownUntil`, not 503 — the FE banner explains the situation; no special-case error toast.
+[~] 2. Cooldown state surfaces to the FE through `versionControl.cooldownUntil` (ISO timestamp). The pr-routes response builder decorates every outgoing `versionControl` payload with this field during cooldown — regardless of whether the payload came from a fresh fetch, a scheduler-skip cache fallback, or a stale snapshot.
+[ ] 3. The cockpit renders a single top-of-page pill "GitHub rate-limited — retrying at HH:MM" when any workspace carries a non-null `cooldownUntil` in the sticky cache. Last-known PR data stays visible underneath.
+[~] 4. Force-refresh (`pr-refresh` endpoint) during cooldown returns 200 + the cached snapshot decorated with `cooldownUntil`, not 503 — the FE banner explains the situation; no special-case error toast.
 
 ## Diff
 
