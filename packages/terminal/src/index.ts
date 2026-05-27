@@ -338,7 +338,8 @@ export function listAllTmuxSessions(): Set<string> | null {
 export type TmuxServerOwnership =
   | { kind: "absent" }
   | { kind: "supervised"; pid: number }
-  | { kind: "orphan"; pid: number; supervisedPid: number | null };
+  | { kind: "orphan"; pid: number; supervisedPid: number | null }
+  | { kind: "worktree-self"; pid: number; socket: string };
 
 export function getTmuxServerOwnership(): TmuxServerOwnership {
   const sock = process.env.CITADEL_TMUX_SOCKET;
@@ -390,6 +391,61 @@ export function getTmuxServerOwnership(): TmuxServerOwnership {
 // Idempotent and safe to call from many places. The systemctl start is
 // allowed even with RefuseManualStop=true — that directive only blocks stop
 // and restart.
+// Worktree daemons own a tmux server on a per-checkout socket (set via
+// CITADEL_TMUX_SOCKET=citadel-w-<hash> by `make deploy`). The server is
+// spawned detached so it survives `tsx watch` HMR restarts of the daemon —
+// agent panes keep their tmux home across reloads. Idempotent: re-running
+// after the server is up is a no-op.
+//
+// Why per-worktree (not the systemd-managed `citadel` socket): every daemon's
+// orphan-reaper SIGKILLs tmux sessions not in its own DB. A worktree daemon
+// sharing the prod socket would see prod's sessions as orphans and reap them
+// — the bug that took out 162 live panes on 2026-05-27.
+//
+// NOT for the prod daemon. That path goes through ensureCitadelTmuxRunning,
+// which probes systemd ownership (citadel-tmux.service); worktrees aren't
+// systemd-supervised and the unit isn't aware of them.
+export async function ensureWorktreeTmuxRunning(socket: string): Promise<TmuxServerOwnership> {
+  if (!socket) throw new Error("ensureWorktreeTmuxRunning requires a non-empty socket name");
+  const socketPath = path.join(`/tmp/tmux-${process.getuid?.() ?? ""}`, socket);
+  const probePid = (): number | null => {
+    if (!fs.existsSync(socketPath)) return null;
+    try {
+      execFileSync("tmux", ["-L", socket, "list-sessions"], {
+        stdio: ["ignore", "ignore", "ignore"],
+        timeout: 2000,
+      });
+    } catch {
+      return null;
+    }
+    try {
+      const out = execFileSync("fuser", [socketPath], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      const match = out.match(/(\d+)/);
+      return match?.[1] ? Number(match[1]) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  let pid = probePid();
+  if (pid) return { kind: "worktree-self", pid, socket };
+
+  // `-D` runs the server in foreground with exit-empty=off (stays alive with
+  // zero sessions). `detached: true` puts the child in its own process group
+  // so `make stop` (which kills the daemon's pgid) doesn't take the tmux
+  // server down — agent panes survive daemon restarts.
+  const subproc = spawn("tmux", ["-L", socket, "-D"], { detached: true, stdio: "ignore" });
+  subproc.unref();
+
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    pid = probePid();
+    if (pid) return { kind: "worktree-self", pid, socket };
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Worktree tmux server on socket "${socket}" failed to bind within 3s`);
+}
+
 export async function ensureCitadelTmuxRunning(): Promise<TmuxServerOwnership> {
   const initial = getTmuxServerOwnership();
   if (initial.kind === "supervised" || initial.kind === "orphan") return initial;
