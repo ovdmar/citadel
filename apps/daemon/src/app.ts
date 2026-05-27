@@ -42,6 +42,12 @@ import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
+import {
+  type GhQuotaWiringWithDetach,
+  decorateWithCooldown,
+  resolveRepoFullNameFromWorkspaces,
+  wireGhQuota,
+} from "./gh-quota-wiring.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { registerPrRoutes } from "./pr-routes.js";
@@ -49,14 +55,14 @@ import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
-import { backfillIfEmpty } from "./scratchpad-history.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
-import { scratchpadPath } from "./scratchpad.js";
+import { backfillScratchpadOnStartup } from "./scratchpad.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
 import { buildRespawnTmux, buildRestartAgent } from "./terminal-routes-helpers.js";
 import { registerTerminalRoutes } from "./terminal-routes.js";
 import { resolveTtydPortRange } from "./ttyd-slot.js";
+import { fetchVersionControlGated } from "./vc-fetch-gated.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
 import { readWorkspaceGitStatus } from "./workspace-diff.js";
 import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
@@ -99,6 +105,19 @@ export function createDaemonApp(input: {
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
   const ttyd = createTtydManager(resolveTtydPortRange(config.port));
+
+  // gh-quota wiring: viewer-gate, per-PR scheduler, main-watcher. Hydrates from SQLite PR snapshots so restart doesn't re-fetch every PR.
+  const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
+  const ghQuota: GhQuotaWiringWithDetach = wireGhQuota({ sseClients, store, resolveRepoFullName });
+  server.on("close", () => ghQuota.stop());
+  const gatedVcDeps = {
+    store,
+    scheduler: ghQuota.scheduler,
+    providerCache,
+    collectVc: (path: string) => providers.collectGitHubVersionControlSummary(path),
+    resolveRepoFullName,
+    cachedProvider: <T>(k: string, l: () => T | Promise<T>, t?: number) => cachedProvider(k, l, t),
+  };
 
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
@@ -378,12 +397,14 @@ export function createDaemonApp(input: {
     if (!workspace) return null;
     const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
     if (!repo) return null;
-    const [git, versionControl, ci, issueTracker, apps] = await Promise.all([
+    const [git, versionControlRaw, ci, issueTracker, apps] = await Promise.all([
       cachedProvider(`git:${workspace.id}:${workspace.updatedAt}`, () => readWorkspaceGitStatus(workspace.path), 3000),
-      cachedProvider(`vc:${workspace.id}:${workspace.updatedAt}`, () =>
-        providers.collectGitHubVersionControlSummary(workspace.path),
+      fetchVersionControlGated(gatedVcDeps, workspace, repo, `vc:${workspace.id}:${workspace.updatedAt}`),
+      cachedProvider(
+        `ci:${workspace.id}:${workspace.updatedAt}`,
+        () => providers.collectGitHubCiRuns(workspace.path),
+        60_000,
       ),
-      cachedProvider(`ci:${workspace.id}:${workspace.updatedAt}`, () => providers.collectGitHubCiRuns(workspace.path)),
       workspace.issueKey
         ? cachedProvider(`issue:${workspace.issueKey}`, () =>
             providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
@@ -395,6 +416,12 @@ export function createDaemonApp(input: {
         60_000,
       ),
     ]);
+    // Cooldown injection (P1 surface): when the daemon's global gh cooldown
+    // is active, decorate every outgoing versionControl payload with the
+    // cooldownUntil ISO timestamp — regardless of whether it came from a
+    // fresh fetch or the cache. The FE sticky cache + banner read this on
+    // every code path.
+    const versionControl = decorateWithCooldown(versionControlRaw);
     return {
       workspaceId: workspace.id,
       readiness: deriveReadiness({
@@ -643,6 +670,14 @@ export function createDaemonApp(input: {
         force: req.query.force === "true",
         archiveOnly: req.query.archiveOnly === "true",
       });
+      // Evict from the scheduler regardless of removed-vs-archived outcome.
+      // An archived workspace has no UI presence either, so its cadence slot
+      // is dead weight and (if it shared a PR with another workspace) the
+      // workspaceIds refcount should drop. evict is a no-op if the id wasn't
+      // tracked.
+      if (result.removed || result.archived) {
+        ghQuota.scheduler.evict(workspaceId);
+      }
       emit("workspace.updated", result);
       res.status(result.removed || result.archived ? 202 : 409).json(result);
     }),
@@ -678,18 +713,7 @@ export function createDaemonApp(input: {
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, config });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit });
-  try {
-    const spPath = scratchpadPath(config.dataDir);
-    if (fs.existsSync(spPath)) {
-      const content = fs.readFileSync(spPath, "utf8");
-      if (content.length > 0) {
-        const stat = fs.statSync(spPath);
-        backfillIfEmpty(config.dataDir, { content, updatedAt: stat.mtime.toISOString() });
-      }
-    }
-  } catch (error) {
-    console.error(`[scratchpad-history] backfill skipped: ${error instanceof Error ? error.message : error}`);
-  }
+  backfillScratchpadOnStartup(config);
 
   fsWatchers = createWorkspaceFsWatchers({
     listWorkspaces: () => store.listWorkspaces(),
@@ -709,8 +733,15 @@ export function createDaemonApp(input: {
       Connection: "keep-alive",
     });
     sseClients.add(res);
+    // Fire AFTER the add so hasViewers() in the wiring sees the new state.
+    // 0→1 transition triggers scheduler.invalidateNotDue() so the next FE
+    // poll fetches fresh instead of waiting for the cadence window.
+    ghQuota.onViewerAttached();
     res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
-    req.on("close", () => sseClients.delete(res));
+    req.on("close", () => {
+      sseClients.delete(res);
+      ghQuota.onViewerDetached(); // stamps lastDetachAt iff this was the last viewer
+    });
   });
 
   const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
@@ -757,7 +788,16 @@ export function createDaemonApp(input: {
   // Status monitor / auto-recovery / auto-resume / terminal reaper: see their own modules for context.
   const statusMonitor = startDaemonStatusMonitor(store, emit, config, recentUserAction);
   if (statusMonitor) server.on("close", () => statusMonitor.stop());
-  const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({ store, config, operations, emit });
+  const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({
+    store,
+    config,
+    operations,
+    emit,
+    // Skip ticks when no SSE viewer is connected (2-min grace). Auto-recovery
+    // is a viewer-visible feature; consuming GitHub quota with nobody watching
+    // is the largest pre-optimization quota sink.
+    shouldRun: () => ghQuota.hasViewers() || ghQuota.msSinceLastViewer() <= 2 * 60_000,
+  });
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
   const autoResume = startDaemonAutoResumeLoop(store, operations);
   if (autoResume) server.on("close", () => autoResume.stop());

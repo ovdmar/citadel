@@ -1,4 +1,9 @@
-import type { ScratchpadBlockSummary, ScratchpadHistorySummary, ScratchpadSnapshot } from "@citadel/contracts";
+import type {
+  ReadScratchpadResult,
+  ScratchpadBlockSummary,
+  ScratchpadHistorySummary,
+  ScratchpadSnapshot,
+} from "@citadel/contracts";
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -20,6 +25,7 @@ const UNDO_WINDOW_MS = 5000;
 export function ScratchpadView() {
   const [blocks, setBlocks] = useState<UiBlock[]>([]);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [notesPath, setNotesPath] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [composer, setComposer] = useState("");
@@ -78,9 +84,10 @@ export function ScratchpadView() {
 
   const loadCurrentMeta = useCallback(async () => {
     try {
-      const snapshot = await api<ScratchpadSnapshot>("/api/scratchpad");
+      const snapshot = await api<ReadScratchpadResult>("/api/scratchpad");
       if (!mountedRef.current) return;
       setUpdatedAt(snapshot.updatedAt);
+      setNotesPath(snapshot.path);
     } catch {
       /* meta is best-effort */
     }
@@ -425,6 +432,11 @@ export function ScratchpadView() {
         <span className="command-result-meta scratchpad-status" aria-live="polite">
           {renderStatus(updatedAt)}
         </span>
+        {notesPath ? (
+          <span className="command-result-meta" title={notesPath} data-testid="scratchpad-path">
+            {notesPath}
+          </span>
+        ) : null}
       </header>
       <div className="scratchpad-body">
         <div className="scratchpad-blocks-pane">

@@ -17,6 +17,7 @@ import "./styles.css";
 import "./chrome.css";
 import "./stage-terminal.css";
 import "./cockpit-extras.css";
+import "./pr-card-actions.css";
 import "./inspector-stats.css";
 import "./inspector-checks.css";
 import "./inspector-deploy.css";

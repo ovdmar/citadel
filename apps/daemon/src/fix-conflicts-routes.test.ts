@@ -112,6 +112,85 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
     }
   }, 20_000);
 
+  it("selects a non-shell runtime even when it has no promptArg (claude-code default)", async () => {
+    // Regression: the route previously required runtime.promptArg, which
+    // meant the default claude-code runtime (no promptArg by design — `-p`
+    // is non-interactive print mode) always 404'd as runtime_not_found.
+    // The real invariant is "not a shell" (so multi-line text isn't
+    // executed by bash); createAgentSession pastes the prompt into the
+    // agent TUI when promptArg is absent.
+    const fixture = createFixture();
+    fixture.config.runtimes = [
+      { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
+      // Mirror the real built-in: no promptArg. Use a quick-running command
+      // so createAgentSession's submitPrompt waits a bounded time before
+      // returning — the route still returns 202 from the selection path,
+      // which is all this test exercises.
+      { id: "claude-code", displayName: "Claude Code", command: "sleep", args: ["30"] },
+    ];
+    const git = createGitRepo(fixture.config.dataDir);
+    const now = new Date().toISOString();
+    fixture.store.insertRepo({
+      id: "repo_nopromptarg",
+      name: "No PromptArg Repo",
+      rootPath: git.repoPath,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: ["github-gh"],
+      deployHookCommand: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fixture.store.insertWorkspace({
+      id: "ws_nopromptarg",
+      repoId: "repo_nopromptarg",
+      name: "No PromptArg Workspace",
+      path: git.repoPath,
+      branch: "feature",
+      baseBranch: "main",
+      source: "scratch",
+      kind: "worktree",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      namespaceId: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const response = await fetch(`${baseUrl}/api/workspaces/ws_nopromptarg/fix-conflicts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      // The selection logic must accept the non-shell claude-code runtime.
+      // The eventual outcome may be 202 (selection + spawn succeeded, with
+      // a best-effort submitPrompt) or 500 (submitPrompt timed out because
+      // `sleep` never paints a TUI prompt). Either way it must NOT be the
+      // old 404 runtime_not_found that this fix is regression-testing.
+      expect(response.status).not.toBe(404);
+      if (response.status === 404) {
+        const body = (await response.json()) as { error: string };
+        expect(body.error).not.toBe("runtime_not_found");
+      }
+    } finally {
+      await closeServer(server);
+    }
+  }, 30_000);
+
   it("returns 404 runtime_not_found when the only configured runtime is shell", async () => {
     const fixture = createFixture();
     const git = createGitRepo(fixture.config.dataDir);

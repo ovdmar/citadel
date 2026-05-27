@@ -51,6 +51,12 @@ export type AutoRecoveryMonitorDeps = {
   idleThresholdMs: number;
   debounceMs: number;
   disabled: boolean;
+  // Optional gate consulted at the top of each tick. When provided and it
+  // returns false, the entire tick short-circuits — no provider calls, no
+  // decide invocations, no agent spawn. Used by the daemon's viewer-gate to
+  // stop consuming GitHub quota when no cockpit tab is connected.
+  // Backwards compatible: omitted ⇒ tick always runs (prior behavior).
+  shouldRun?: () => boolean;
   // Optional emitter for tests / observability.
   onEvent?: (event: { workspaceId: string; reason: string; fired: boolean }) => void;
 };
@@ -79,6 +85,7 @@ function pickRuntime(config: CitadelConfig): string | null {
 // own function so tests can drive it directly without setInterval.
 export async function runAutoRecoveryTick(deps: AutoRecoveryMonitorDeps, now: Date = new Date()): Promise<void> {
   if (deps.disabled) return;
+  if (deps.shouldRun && !deps.shouldRun()) return;
   const runtimeId = pickRuntime(deps.config);
   if (!runtimeId) return;
 

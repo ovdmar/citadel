@@ -22,6 +22,13 @@ import {
   sessionFromRow,
   workspaceFromRow,
 } from "./rows.js";
+import {
+  type WorkspacePrSnapshot,
+  getWorkspacePrSnapshot,
+  updateWorkspacePrSnapshot,
+} from "./workspace-pr-snapshot.js";
+
+export type { WorkspacePrSnapshot };
 
 // Avoid a static `import "node:sqlite"` so vite-based test runners do not
 // try to bundle the built-in. Resolved through `createRequire` at runtime.
@@ -330,6 +337,17 @@ export class SqliteStore {
       )
       .run(input.sha, input.now, input.workspaceId, input.sha, input.debounceCutoff);
     return result.changes > 0;
+  }
+
+  // Per-workspace PR snapshot — thin wrappers around the free functions in
+  // ./workspace-pr-snapshot.ts (extracted to keep this file under the
+  // 800-line check:size gate).
+  getWorkspacePrSnapshot(workspaceId: string): WorkspacePrSnapshot | null {
+    return getWorkspacePrSnapshot(this.database, workspaceId);
+  }
+
+  updateWorkspacePrSnapshot(workspaceId: string, patch: Partial<WorkspacePrSnapshot>): void {
+    updateWorkspacePrSnapshot(this.database, workspaceId, patch);
   }
 
   archiveRepo(repoId: string) {

@@ -5,6 +5,7 @@ import type { CitadelConfig } from "@citadel/config";
 import type { SqliteStore } from "@citadel/db";
 import { type AutoRecoveryMonitorHandle, type OperationService, startAutoRecoveryMonitor } from "@citadel/operations";
 import { collectGitHubCiRuns, collectGitHubVersionControlSummary } from "@citadel/providers";
+import { parsePositiveInt } from "./app-helpers.js";
 import { FIX_CI_PROMPT, decideAutoRecoveryAction } from "./auto-recovery.js";
 
 export type AutoRecoveryWiringDeps = {
@@ -12,6 +13,11 @@ export type AutoRecoveryWiringDeps = {
   config: CitadelConfig;
   operations: OperationService;
   emit: (event: string, payload: unknown) => void;
+  // Optional viewer-gate predicate. When provided, the monitor consults it
+  // at the top of every tick and short-circuits when false — wired to the
+  // gh-quota viewer-gate so auto-recovery doesn't burn GitHub quota when no
+  // cockpit tab is connected.
+  shouldRun?: () => boolean;
 };
 
 // Parse env knobs once at startup. Caller may override defaults; the env-var
@@ -23,12 +29,6 @@ function readEnvKnobs() {
   const debounceMs = parsePositiveInt(process.env.CITADEL_AUTO_RECOVERY_DEBOUNCE_MS, 30 * 60 * 1000);
   const intervalMs = parsePositiveInt(process.env.CITADEL_AUTO_RECOVERY_INTERVAL_MS, 60 * 1000);
   return { disabled, idleThresholdMs, debounceMs, intervalMs };
-}
-
-function parsePositiveInt(raw: string | undefined, fallback: number): number {
-  if (!raw) return fallback;
-  const n = Number.parseInt(raw, 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 export function startDaemonAutoRecoveryMonitor(deps: AutoRecoveryWiringDeps): AutoRecoveryMonitorHandle | null {
@@ -71,6 +71,10 @@ export function startDaemonAutoRecoveryMonitor(deps: AutoRecoveryWiringDeps): Au
       idleThresholdMs: knobs.idleThresholdMs,
       debounceMs: knobs.debounceMs,
       disabled: knobs.disabled,
+      // Conditionally spread — exactOptionalPropertyTypes disallows explicit
+      // undefined; omit the key when no predicate is provided so the monitor
+      // keeps its prior always-runs behavior.
+      ...(deps.shouldRun ? { shouldRun: deps.shouldRun } : {}),
     },
     knobs.intervalMs,
   );

@@ -20,6 +20,7 @@
 [ ] 12. Running and failed workspace-specific operations are visible in the workspace cockpit.
 [ ] 13. Operations support retry/cancel when safe.
 [~] 14. When a workspace's PR has failing CI and no agent session has been active for the configured idle window, Citadel may auto-launch a `fix-ci` agent. Auto-launches are deduplicated per-PR-head-SHA and debounced by a minimum-interval window; activity events emitted by such launches use `source: "automatic-rule"`.
+[~] 15. `AutoRecoveryMonitorOptions` accepts an optional `shouldRun?: () => boolean` predicate. When provided, the monitor consults it at the top of every tick and short-circuits the tick (no provider calls, no agent spawn decisions) when it returns false. The daemon wires this to its viewer-gate predicate so auto-recovery doesn't consume GitHub quota when no cockpit tab is connected.
 
 ## Activity
 
@@ -86,7 +87,7 @@ The file remains a regular markdown file so external tooling (git, editors, grep
 
 **MCP tool surface:**
 
-- `read_scratchpad()` → `{ content, updatedAt }`. Auto-migrates the file on first read after upgrade.
+- `read_scratchpad()` → `{ content, updatedAt, path }`. Auto-migrates the file on first read after upgrade. `path` is the absolute filesystem path the daemon read from — see "Configurable location" below.
 - `write_scratchpad(content)` → `{ content, updatedAt }`. Byte-faithful overwrite; the next read normalizes if needed.
 - `append_scratchpad(text)` → **creates a new block** (fresh UUID, end of file). Each call produces exactly one block. **Behavior change** from prior versions, which inserted a blank-line separator; downstream agents that built multi-line content by repeated `append_scratchpad` calls now get one block per call instead of concatenated text.
 - `list_blocks()` → `[{ id, text, createdAt, updatedAt }]`. Timestamps are best-effort, derived from version history; due to same-source 60s coalesce, they bracket the real edit time but may be aliased within a coalesce window. Blocks predating history fall back to the file's `mtime`.
@@ -95,6 +96,21 @@ The file remains a regular markdown file so external tooling (git, editors, grep
 - `delete_block(id)`.
 
 All block-level tools go through the same version-history coalesce path; sources are `mcp:add_block`, `mcp:update_block`, `mcp:delete_block` (or `ui:*_block` from the cockpit). Empty blocks are never persisted.
+
+**Configurable location.** The notes file path is configurable via the `scratchpad.path` field on `CitadelConfig`. Defaults to `<dataDir>/scratchpad.md` (preserving the legacy location for every existing install). Configurable to any absolute path; the schema tilde-expands leading `~/` against `os.homedir()` before validating absoluteness. Settable from the cockpit's structured config form ("Notes location") and persisted via `PUT /api/config`. Edits take effect on the next request — no daemon restart.
+
+Both `read_scratchpad` and `inspect_status` expose the resolved absolute path so MCP-using agents can discover where notes live without a separate config call:
+
+- `read_scratchpad()` → `{ content, updatedAt, path }`.
+- `inspect_status()` → `{ ..., scratchpad: { path } }`.
+
+The `path` field is always populated on the daemon-dispatched MCP path (`scratchpadPath` is a required field on the daemon's `McpToolContext`). The snapshot-fallback response for `read_scratchpad` continues to be `{ error: "scratchpad_tool_requires_daemon" }` — unchanged.
+
+**Worktree-mode strip.** In worktree mode (`CITADEL_WORKTREE=1`), `scratchpad.path` is stripped from the raw config on **load** the same way `dataDir`/`databasePath` are stripped today, preventing a worktree daemon from inheriting a prod-installed notes path through a shared config file. A `PUT /api/config` from a worktree daemon may still persist `scratchpad.path` to its worktree-scoped config file in memory and on disk; the next `loadConfig` drops it. This asymmetry matches existing dataDir/databasePath behavior and is intentional — strip-on-load is the load-bearing defense; the worktree's config is scoped under `<dataDir>/worktrees/<name>/citadel.config.json` and cannot pollute the prod install's file regardless.
+
+**History stays in `<dataDir>`.** The version-history JSONL (`scratchpad-history.jsonl`) remains under `<dataDir>` even when the notes file is configured to live elsewhere. History is internal daemon state, not user-facing markdown: keeping it pinned to `<dataDir>` matches the database, runtime logs, and other internal state, and avoids leaking daemon internals into user-controlled sync folders.
+
+**First-read migration on a user-supplied file.** If `scratchpad.path` points at a pre-existing non-fenced markdown file, the first read triggers `migrateIfNeeded` and rewrites it to fenced-block form (history entry: `migrate-to-blocks`). The daemon emits a single `console.warn` line naming the path so the rewrite is not silent. A UI banner is **future polish** — not in the initial implementation.
 
 ---
 
