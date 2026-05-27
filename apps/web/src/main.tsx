@@ -1,5 +1,13 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Link, Outlet, RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import {
+  Link,
+  Outlet,
+  RouterProvider,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  useLocation,
+} from "@tanstack/react-router";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
@@ -51,56 +59,70 @@ const rootRoute = createRootRoute({
   component: () => <Shell />,
 });
 
-const indexRoute = createRoute({
+// Pathless layout route whose component renders the Cockpit unconditionally
+// plus an overlay slot for any child route. Every non-index route mounts as
+// a child here, so the Cockpit (and the TerminalPane iframes inside it) is
+// kept alive across navigations to Settings, Scratchpad, etc. Without this,
+// every route transition unmounted Cockpit → ttyd iframes were destroyed →
+// returning forced a fresh ttyd handshake (the user's "reloads first" gripe).
+const cockpitLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
+  id: "cockpit-layout",
+  component: CockpitLayout,
+});
+
+const indexRoute = createRoute({
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/",
-  component: Cockpit,
+  // No body: Cockpit is rendered by the parent layout. The empty Outlet here
+  // is what lets RouteOverlay decide "we're on /, don't render the overlay."
+  component: () => null,
 });
 
 const settingsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/settings",
   component: SettingsView,
 });
 
 const repoSettingsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/repos/$repoId",
   component: RepoSettingsView,
 });
 
 const operationsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/operations",
   component: OperationsView,
 });
 
 const onboardingRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/onboarding",
   component: OnboardingView,
 });
 
 const dashboardRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/dashboard",
   component: DashboardView,
 });
 
 const historyRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/history",
   component: HistoryView,
 });
 
 const scratchpadRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/scratchpad",
   component: ScratchpadView,
 });
 
 const scheduledAgentsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/scheduled-agents",
   component: ScheduledAgentsView,
 });
@@ -108,6 +130,30 @@ const scheduledAgentsRoute = createRoute({
 function Shell() {
   return (
     <div className="app-root">
+      <Outlet />
+    </div>
+  );
+}
+
+function CockpitLayout() {
+  return (
+    <>
+      <Cockpit />
+      <RouteOverlay />
+    </>
+  );
+}
+
+function RouteOverlay() {
+  const location = useLocation();
+  const path = location.pathname;
+  // On the index route Cockpit is the entire UI — no overlay needed (and
+  // rendering one would steal pointer events from the cockpit grid). Anywhere
+  // else, mount the child route in an opaque overlay so the Cockpit (with
+  // its live terminal iframes) stays mounted but hidden behind.
+  if (path === "/" || path === "") return null;
+  return (
+    <div className="route-overlay">
       <Outlet />
     </div>
   );
@@ -140,15 +186,17 @@ if (typeof window !== "undefined") {
 
 const router = createRouter({
   routeTree: rootRoute.addChildren([
-    indexRoute,
-    settingsRoute,
-    repoSettingsRoute,
-    operationsRoute,
-    onboardingRoute,
-    dashboardRoute,
-    historyRoute,
-    scratchpadRoute,
-    scheduledAgentsRoute,
+    cockpitLayoutRoute.addChildren([
+      indexRoute,
+      settingsRoute,
+      repoSettingsRoute,
+      operationsRoute,
+      onboardingRoute,
+      dashboardRoute,
+      historyRoute,
+      scratchpadRoute,
+      scheduledAgentsRoute,
+    ]),
   ]),
   defaultNotFoundComponent: NotFoundView,
 });

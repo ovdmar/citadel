@@ -123,6 +123,9 @@ describe("runBootRestore", () => {
       operations: fakeOps(spawned),
       config,
       emit: () => {},
+      // Suppress fresh-boot reconciliation: tests fabricate DB rows whose
+      // tmuxSessionName intentionally does not exist on the host tmux.
+      listTmuxSessions: () => null,
     });
 
     expect(summary.entries).toHaveLength(2);
@@ -140,6 +143,9 @@ describe("runBootRestore", () => {
       operations: fakeOps(spawned),
       config,
       emit: () => {},
+      // Suppress fresh-boot reconciliation: tests fabricate DB rows whose
+      // tmuxSessionName intentionally does not exist on the host tmux.
+      listTmuxSessions: () => null,
     });
     expect(summary.entries).toHaveLength(0);
     expect(summary.skippedOlder).toBe(0);
@@ -160,6 +166,9 @@ describe("runBootRestore", () => {
       operations: fakeOps(spawned),
       config,
       emit: () => {},
+      // Suppress fresh-boot reconciliation: tests fabricate DB rows whose
+      // tmuxSessionName intentionally does not exist on the host tmux.
+      listTmuxSessions: () => null,
     });
     expect(summary.entries).toHaveLength(2);
     expect(summary.entries.every((e) => e.sessionId === null && e.error?.startsWith("runtime_not_found:"))).toBe(true);
@@ -196,6 +205,9 @@ describe("runBootRestore", () => {
       operations: fakeOps(spawned),
       config,
       emit: () => {},
+      // Suppress fresh-boot reconciliation: tests fabricate DB rows whose
+      // tmuxSessionName intentionally does not exist on the host tmux.
+      listTmuxSessions: () => null,
     });
     // collectRestoreCandidates already drops UUIDs that have a live owner,
     // so the candidate doesn't even reach the loop. Either way: no spawn.

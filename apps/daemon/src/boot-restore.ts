@@ -17,7 +17,50 @@
 import type { CitadelConfig } from "@citadel/config";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
+import { listAllTmuxSessions } from "@citadel/terminal";
 import { type RestoreCandidate, collectRestoreCandidates } from "./restore-routes.js";
+
+// Statuses that collectRestoreCandidates treats as "live" — sessions in any
+// of these states are excluded from the restore-candidate list because their
+// tmux pane is presumed alive. After a fresh boot (or any kill-server event)
+// the DB rows still look live but tmux is empty; reconcileStaleLiveRows()
+// flips them so the candidate walk picks them up.
+const LIVE_STATUSES: ReadonlyArray<string> = [
+  "running",
+  "starting",
+  "idle",
+  "waiting_for_input",
+  "rate_limited",
+  "usage_limited",
+];
+
+// Walk every DB session marked live and, if its tmux session is missing from
+// the live tmux server, flip it to `terminated` so collectRestoreCandidates
+// returns it. Returns the count of flipped rows for logging. Idempotent and
+// cheap — a single `tmux list-sessions` plus N row updates only for the
+// stale rows.
+function reconcileStaleLiveRows(store: SqliteStore, probe: () => Set<string> | null): number {
+  const liveTmuxNames = probe();
+  // null = tmux server unreachable (not yet started, or not installed).
+  // Don't flip anything — we can't distinguish "fresh boot" from "tmux
+  // momentarily unavailable" and false-positive flips lose user trust.
+  if (liveTmuxNames === null) return 0;
+  let flipped = 0;
+  const nowIso = new Date().toISOString();
+  for (const session of store.listSessions()) {
+    if (!LIVE_STATUSES.includes(session.status)) continue;
+    if (!session.tmuxSessionName) continue;
+    if (liveTmuxNames.has(session.tmuxSessionName)) continue;
+    store.updateSessionStatus(session.id, {
+      status: "unknown",
+      statusReason: "fresh_boot_recovery",
+      statusReasonAt: nowIso,
+      lastStatusAt: nowIso,
+    });
+    flipped += 1;
+  }
+  return flipped;
+}
 
 export type BootRestoreEntry = {
   workspaceId: string;
@@ -67,10 +110,25 @@ export type BootRestoreDeps = {
   operations: OperationService;
   config: CitadelConfig;
   emit: (type: string, payload: unknown) => void;
+  // Override the tmux-session probe used by the fresh-boot reconciler. Tests
+  // pass a stub (e.g. `() => null`) to suppress the reconciliation, since
+  // they craft DB rows whose tmux pane intentionally does not exist. Default
+  // production behaviour talks to the real `listAllTmuxSessions`.
+  listTmuxSessions?: () => Set<string> | null;
 };
 
 export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestoreSummary> {
   const bootedAt = new Date().toISOString();
+  // Fresh-boot reconciliation: after a power-off, the tmux server is empty
+  // but the DB still shows pre-crash sessions as live. Without this, those
+  // rows pass collectRestoreCandidates' isLive() filter and get skipped —
+  // exactly the failure mode where the user expects everything to come back
+  // but nothing does. Flip them to `terminated` first; then they appear as
+  // candidates below and get resumed via `claude --resume <uuid>`.
+  const flippedStale = reconcileStaleLiveRows(deps.store, deps.listTmuxSessions ?? listAllTmuxSessions);
+  if (flippedStale > 0) {
+    console.log(`[boot-restore] reconciled ${flippedStale} stale 'live' rows (fresh-boot)`);
+  }
   const allCandidates = collectRestoreCandidates(deps.store);
   const cutoffMs = Date.now() - RECENT_WINDOW_MS;
   const recent: RestoreCandidate[] = [];

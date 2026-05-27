@@ -271,6 +271,55 @@ export function tmuxSessionExists(sessionName: string) {
   }
 }
 
+// Snapshot of every session currently on the citadel tmux socket. Returns a
+// Set when the tmux server is reachable (possibly empty if it has zero
+// sessions), or `null` when the server itself isn't reachable — the caller
+// can distinguish "server up with no sessions" from "server down / not yet
+// started," which matters for the fresh-boot reconciler: in tests and in
+// pre-tmux-service environments we don't want to mass-flip live DB rows
+// just because we couldn't talk to a server. Used by:
+//   - boot-restore's reconciler (flip DB rows whose tmux is missing)
+//   - orphan reaper (find tmux sessions no DB row knows about)
+export function listAllTmuxSessions(): Set<string> | null {
+  try {
+    const output = execFileSync("tmux", [...tmuxPrefix(), "list-sessions", "-F", "#{session_name}"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return new Set(
+      output
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0),
+    );
+  } catch (error) {
+    // `list-sessions` on a reachable server with zero sessions exits 1 with
+    // stderr "no server running on …" — distinguish that from the
+    // server-is-up-with-sessions case using has-session as a probe. A bare
+    // `has-session` (no `-t`) returns 0 when the server is up and has at
+    // least one session, 1 when up with zero sessions, and non-zero with
+    // stderr "no server running" when the socket is unbound.
+    try {
+      execFileSync("tmux", [...tmuxPrefix(), "has-session"], { stdio: ["ignore", "ignore", "pipe"] });
+      // Server up with sessions — list-sessions shouldn't have failed; fall through.
+      return new Set();
+    } catch (probeError) {
+      const stderr =
+        probeError && typeof probeError === "object" && "stderr" in probeError
+          ? String((probeError as { stderr: unknown }).stderr ?? "")
+          : "";
+      // "no server running" → unreachable. Any other failure (e.g. has-session
+      // saying "no sessions") still means the server IS up, just empty.
+      if (stderr.includes("no server running")) return null;
+      // Fall back to the original execFileSync error's stderr.
+      const origStderr =
+        error && typeof error === "object" && "stderr" in error ? String((error as { stderr: unknown }).stderr ?? "") : "";
+      if (origStderr.includes("no server running")) return null;
+      return new Set();
+    }
+  }
+}
+
 export function ensureTmuxExtendedKeys() {
   execFileSync("tmux", [...tmuxPrefix(), "set-option", "-s", "extended-keys", "on"], { stdio: "ignore" });
   const features = execFileSync("tmux", [...tmuxPrefix(), "show-options", "-s", "-g", "terminal-features"], {
