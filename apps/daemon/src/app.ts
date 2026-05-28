@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type http from "node:http";
 import type https from "node:https";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CitadelConfig } from "@citadel/config";
@@ -15,8 +16,9 @@ import {
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { mcpStatus, mcpToolDefinitions } from "@citadel/mcp";
-import { OperationService } from "@citadel/operations";
+import { type DiagnosticsLogger, OperationService, createDiagnosticsLogger } from "@citadel/operations";
 import {
+  type CollectGitHubVersionControlSummaryDeps,
   collectGitHubCiRunLog,
   collectGitHubCiRuns,
   collectGitHubVersionControlSummary,
@@ -41,11 +43,28 @@ import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
+import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerDoctorRoutes } from "./doctor-routes.js";
+import { buildDiagnosticsSnapshot, streamDiagnosticsBundle } from "./diagnostics-bundle.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
+import {
+  AUTOMATED_GH_DISABLED_REASON,
+  automatedGhEnabled,
+  cachedCiOrDisabled,
+  disabledVersionControlSummary,
+  githubCiCacheKey,
+  shouldFetchGithubCi,
+} from "./gh-automation.js";
+import {
+  type GhQuotaWiringWithDetach,
+  decorateWithCooldown,
+  resolveRepoFullNameFromWorkspaces,
+  wireGhQuota,
+} from "./gh-quota-wiring.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
+import { registerPrDiffRoute } from "./pr-diff-route.js";
 import { registerPrRoutes } from "./pr-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
@@ -57,8 +76,9 @@ import { backfillScratchpadOnStartup } from "./scratchpad.js";
 import { createDaemonServer } from "./server-factory.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
-import { registerTerminalRoutes } from "./terminal-routes.js";
+import { wireTerminalRoutes } from "./terminal-routes-helpers.js";
 import { resolveTtydPortRange } from "./ttyd-slot.js";
+import { fetchVersionControlGated } from "./vc-fetch-gated.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
 import { readWorkspaceGitStatus } from "./workspace-diff.js";
 import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
@@ -70,6 +90,8 @@ export type DaemonApp = {
   server: AnyServer;
   protocol: "http" | "https";
   emit: (type: string, payload: unknown) => void;
+  ttyd: ReturnType<typeof createTtydManager>;
+  diagnostics: DiagnosticsLogger;
 };
 
 type ProviderCollectors = {
@@ -79,6 +101,21 @@ type ProviderCollectors = {
   collectJiraIssueSummary: typeof collectJiraIssueSummary;
   transitionJiraIssue: typeof transitionJiraIssue;
 };
+
+function expandTilde(input: string): string {
+  if (input === "~") return os.homedir();
+  if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2));
+  return input;
+}
+
+function clippedString(value: unknown, fallback: string, max: number): string {
+  if (typeof value !== "string") return fallback;
+  return value.length > max ? value.slice(0, max) : value;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
 
 export function createDaemonApp(input: {
   config: CitadelConfig;
@@ -103,7 +140,38 @@ export function createDaemonApp(input: {
   const { server, protocol: serverProtocol } = createDaemonServer(app, config);
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
-  const ttyd = createTtydManager(resolveTtydPortRange(config.port));
+  // Always-on structured diagnostics. Writes JSONL to <dataDir>/diagnostics.jsonl
+  // (rotated at 50 MB) and keeps the last 1000 events in memory for the
+  // Settings → Debug panel + the /api/diagnostics/bundle.tar.gz download.
+  // Sprinkled through every session-killing path so that when a user reports
+  // "all my sessions died", we have the lifecycle trail to share.
+  const diagnostics = createDiagnosticsLogger({ dataDir: config.dataDir });
+  diagnostics.log("daemon", "createDaemonApp", {
+    port: config.port,
+    dataDir: config.dataDir,
+    worktree: process.env.CITADEL_WORKTREE === "1",
+    pid: process.pid,
+    nodeVersion: process.versions.node,
+  });
+  const ttyd = createTtydManager({ ...resolveTtydPortRange(config.port), diagnostics });
+  // Release the ttyd on every stopAgentSession path; guarded for test stubs.
+  if (typeof operations.setTerminalHooks === "function") {
+    operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId, "session-stopped-hook") });
+  }
+
+  const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
+  const ghQuota: GhQuotaWiringWithDetach = wireGhQuota({ sseClients, store, resolveRepoFullName });
+  const ghAutomationEnabled = automatedGhEnabled();
+  server.on("close", () => ghQuota.stop());
+  const gatedVcDeps = {
+    store,
+    scheduler: ghQuota.scheduler,
+    providerCache,
+    collectVc: (path: string, deps?: CollectGitHubVersionControlSummaryDeps) =>
+      providers.collectGitHubVersionControlSummary(path, deps),
+    resolveRepoFullName,
+    cachedProvider: <T>(k: string, l: () => T | Promise<T>, t?: number) => cachedProvider(k, l, t),
+  };
 
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
@@ -127,41 +195,61 @@ export function createDaemonApp(input: {
   //
   // Boot-time discover-and-adopt: ttyds are spawned detached and the systemd
   // unit runs with KillMode=process, so they outlive daemon restarts. Scan
-  // the ttyd port range for survivors from the previous incarnation and
-  // adopt them back into the manager — same key, same PID, no respawn.
-  // The browser's WebSocket auto-reconnect (xterm `reconnect=3`) lands on
-  // the *same* ttyd it was talking to before the restart.
+  // the host for survivors from the previous incarnation and adopt them back
+  // into the manager — same key, same PID, no respawn. The browser's
+  // WebSocket auto-reconnect (xterm `reconnect=3`) lands on the *same* ttyd
+  // it was talking to before the restart.
   //
-  // Skipped under vitest: tests that boot a daemon all derive the same slot
-  // 0 range as the production install for config.port=4010, so an adopt()
-  // pass would re-attach to the live cockpit's ttyds and the next test that
-  // calls release() would kill them.
+  // Discovery is scoped to this daemon's port slot before adopt() routes by
+  // DB membership. That port filter is a hard safety boundary: sandbox
+  // daemons can carry prod-looking DB rows, but they must not see or SIGTERM
+  // the installed daemon's ttyds.
+  //
+  // Skipped under vitest: tests that boot a daemon would otherwise re-attach
+  // to the live cockpit's ttyds and the next test that calls release() would
+  // kill them.
   if (!process.env.VITEST) {
     const survivors = discoverExistingTtyds({
+      basePathPrefix: ttyd.config.basePathPrefix,
       portBase: ttyd.config.portBase,
       portMax: ttyd.config.portMax,
-      basePathPrefix: ttyd.config.basePathPrefix,
     });
-    const { adopted, reapedDuplicates } = ttyd.adopt(survivors);
-    if (adopted > 0 || reapedDuplicates > 0) {
+    const sessionTabIds = new Map<string, string>();
+    for (const session of store.listSessions()) {
+      sessionTabIds.set(session.id, session.tabId ?? session.id);
+    }
+    const resolveTabId = (key: string): string | null => sessionTabIds.get(key) ?? null;
+    const { adopted, reapedDuplicates, reapedUnknown } = ttyd.adopt(survivors, resolveTabId);
+    if (adopted > 0 || reapedDuplicates > 0 || reapedUnknown > 0) {
       emit("terminal.adopted", {
         adopted,
         reapedDuplicates,
+        reapedUnknown,
         portRange: [ttyd.config.portBase, ttyd.config.portMax],
       });
     }
   }
-  const respawnTmux = async (session: import("@citadel/contracts").AgentSession) => {
-    const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
-    const runtime = config.runtimes.find((candidate) => candidate.id === session.runtimeId);
-    if (!workspace || !runtime) return null;
-    const sessionName = session.tmuxSessionName ?? `citadel_${workspace.id}_${session.id.slice(-8)}`;
-    return ensureTmuxSession({ sessionName, cwd: workspace.path, command: runtime.command, args: runtime.args });
-  };
-  registerTerminalRoutes({ app, server, store, ttyd, dataDir: config.dataDir, emit, respawnTmux });
+  const { recentUserAction } = wireTerminalRoutes({
+    app,
+    server,
+    store,
+    ttyd,
+    dataDir: config.dataDir,
+    emit,
+    config,
+    diagnostics,
+  });
 
   const cachedProviderHealth = () =>
-    cachedProvider("provider-health", () => collectProviderHealth(config.providers), 15_000);
+    cachedProvider(
+      "provider-health",
+      () =>
+        collectProviderHealth(
+          config.providers,
+          ghAutomationEnabled ? {} : { skipGithubReason: AUTOMATED_GH_DISABLED_REASON },
+        ),
+      60_000,
+    );
 
   app.get(
     "/api/health",
@@ -208,6 +296,48 @@ export function createDaemonApp(input: {
     res.json({ config, configPath });
   });
 
+  // Diagnostics surface. /snapshot returns the in-memory ring + a small
+  // structured snapshot of "what the daemon thinks the world looks like"
+  // (sessions/workspaces/ttyd inventory/live tmux session names). /bundle
+  // streams a tar.gz that includes the JSONL file(s) on disk plus that same
+  // snapshot — what the user emails over when reporting "all my sessions
+  // died".
+  app.get("/api/diagnostics/snapshot", (_req, res) => {
+    res.json(buildDiagnosticsSnapshot({ store, ttyd, diagnostics, config }));
+  });
+  app.post("/api/diagnostics/client-event", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    diagnostics.log("ui-client", clippedString(body.event, "unknown", 80), {
+      pageId: clippedString(body.pageId, "", 80),
+      path: clippedString(body.path, "", 240),
+      href: clippedString(body.href, "", 360),
+      visibility: clippedString(body.visibility, "unknown", 40),
+      navigationType: clippedString(body.navigationType, "", 40),
+      ageMs: finiteNumber(body.ageMs),
+      persisted: typeof body.persisted === "boolean" ? body.persisted : null,
+      online: typeof body.online === "boolean" ? body.online : null,
+      wasDiscarded: typeof body.wasDiscarded === "boolean" ? body.wasDiscarded : null,
+      swController: typeof body.swController === "boolean" ? body.swController : null,
+      userAgent: clippedString(req.header("user-agent"), "", 240),
+    });
+    res.status(204).end();
+  });
+  app.get("/api/diagnostics/bundle.tar.gz", async (_req, res) => {
+    try {
+      await streamDiagnosticsBundle(res, { store, ttyd, diagnostics, config });
+    } catch (error) {
+      if (!res.headersSent) {
+        res.status(500).json({ error: error instanceof Error ? error.message : "diagnostics_bundle_failed" });
+      } else {
+        try {
+          res.end();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  });
+
   app.put("/api/config", (req, res) => {
     const nextConfig = mergeConfigPatch(config, req.body);
     const saved = saveConfig(nextConfig, configPath);
@@ -241,7 +371,7 @@ export function createDaemonApp(input: {
     asyncRoute(async (req, res) => {
       const inputPath = typeof req.body?.rootPath === "string" ? req.body.rootPath : "";
       if (!inputPath) return res.status(400).json({ error: "root_path_required" });
-      const resolved = path.resolve(inputPath);
+      const resolved = path.resolve(expandTilde(inputPath));
       const exists = fs.existsSync(resolved);
       const isGit = exists && fs.existsSync(path.join(resolved, ".git"));
       let defaultBranch: string | null = null;
@@ -281,6 +411,42 @@ export function createDaemonApp(input: {
       });
     }),
   );
+
+  app.get("/api/fs/complete", (req, res) => {
+    const raw = typeof req.query.prefix === "string" ? req.query.prefix : "";
+    const seed = raw || "~/";
+    const trailingSlash = seed.endsWith("/");
+    const expanded = expandTilde(seed);
+    const baseDir = trailingSlash ? path.resolve(expanded || os.homedir()) : path.resolve(path.dirname(expanded));
+    const filter = trailingSlash ? "" : path.basename(expanded);
+    let entries: Array<{ name: string; path: string; isGit: boolean }> = [];
+    try {
+      const filterLower = filter.toLowerCase();
+      const showHidden = filter.startsWith(".");
+      const dirents = fs.readdirSync(baseDir, { withFileTypes: true });
+      for (const dirent of dirents) {
+        if (!dirent.isDirectory() && !dirent.isSymbolicLink()) continue;
+        if (!showHidden && dirent.name.startsWith(".")) continue;
+        if (filterLower && !dirent.name.toLowerCase().startsWith(filterLower)) continue;
+        const full = path.join(baseDir, dirent.name);
+        if (dirent.isSymbolicLink()) {
+          try {
+            if (!fs.statSync(full).isDirectory()) continue;
+          } catch {
+            continue;
+          }
+        }
+        const isGit = fs.existsSync(path.join(full, ".git"));
+        entries.push({ name: dirent.name, path: full, isGit });
+        if (entries.length >= 100) break;
+      }
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      entries = entries.slice(0, 50);
+    } catch {
+      entries = [];
+    }
+    res.json({ baseDir, filter, entries });
+  });
 
   app.get("/api/repos", (_req, res) => {
     res.json({ repos: store.listRepos() });
@@ -362,21 +528,35 @@ export function createDaemonApp(input: {
     }),
   );
 
-  // Build a full workspace cockpit summary. Shared between the single-workspace
-  // endpoint and the batch endpoint registered by registerPrRoutes — the batch
-  // endpoint fan-outs with a concurrency cap so 20+ workspaces don't spawn
-  // 20+ concurrent `gh` subprocesses every 30s.
+  // Shared by the active-workspace and batch cockpit summary endpoints.
   async function buildWorkspaceCockpitSummary(workspaceId: string): Promise<WorkspaceCockpitSummary | null> {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
     if (!workspace) return null;
     const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
     if (!repo) return null;
-    const [git, versionControl, ci, issueTracker, apps] = await Promise.all([
+    const ciKey = githubCiCacheKey(
+      workspace,
+      repo,
+      resolveRepoFullName(repo.id),
+      store.getWorkspacePrSnapshot(workspace.id),
+    );
+    const shouldFetchCi = ghAutomationEnabled && shouldFetchGithubCi(store, workspace);
+    const [git, versionControlRaw, ci, issueTracker, apps] = await Promise.all([
       cachedProvider(`git:${workspace.id}:${workspace.updatedAt}`, () => readWorkspaceGitStatus(workspace.path), 3000),
-      cachedProvider(`vc:${workspace.id}:${workspace.updatedAt}`, () =>
-        providers.collectGitHubVersionControlSummary(workspace.path),
-      ),
-      cachedProvider(`ci:${workspace.id}:${workspace.updatedAt}`, () => providers.collectGitHubCiRuns(workspace.path)),
+      ghAutomationEnabled
+        ? fetchVersionControlGated(gatedVcDeps, workspace, repo, `vc:${workspace.id}:${workspace.updatedAt}`)
+        : Promise.resolve(disabledVersionControlSummary(workspace, repo)),
+      shouldFetchCi
+        ? cachedProvider(ciKey, () => providers.collectGitHubCiRuns(workspace.path), 60_000)
+        : Promise.resolve(
+            cachedCiOrDisabled(
+              providerCache,
+              ciKey,
+              ghAutomationEnabled
+                ? "GitHub CI is cached until the PR receives a new local commit"
+                : AUTOMATED_GH_DISABLED_REASON,
+            ),
+          ),
       workspace.issueKey
         ? cachedProvider(`issue:${workspace.issueKey}`, () =>
             providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
@@ -388,6 +568,7 @@ export function createDaemonApp(input: {
         60_000,
       ),
     ]);
+    const versionControl = decorateWithCooldown(versionControlRaw);
     return {
       workspaceId: workspace.id,
       readiness: deriveReadiness({
@@ -487,6 +668,7 @@ export function createDaemonApp(input: {
     cachedProvider,
     providerCache,
     buildWorkspaceCockpitSummary,
+    resolveRepoFullName,
   });
 
   registerAgentSessionRoutes(app, { operations, emit, asyncRoute, config, ttyd });
@@ -559,38 +741,7 @@ export function createDaemonApp(input: {
     }),
   );
 
-  app.get(
-    "/api/workspaces/:workspaceId/pr-diff",
-    asyncRoute(async (req, res) => {
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      try {
-        const { execFile: execFileCb } = await import("node:child_process");
-        const { promisify } = await import("node:util");
-        const exec = promisify(execFileCb);
-        const { stdout } = await exec(config.providers.github.command ?? "gh", ["pr", "diff"], {
-          cwd: workspace.path,
-          timeout: 12_000,
-          maxBuffer: 4 * 1024 * 1024,
-        });
-        const truncated = stdout.length > 256 * 1024;
-        res.json({
-          provider: "github-gh",
-          truncated,
-          diff: stdout.slice(0, 256 * 1024),
-          checkedAt: new Date().toISOString(),
-        });
-      } catch (error) {
-        res.status(424).json({
-          provider: "github-gh",
-          diff: "",
-          truncated: false,
-          error: error instanceof Error ? error.message : "gh_pr_diff_failed",
-          checkedAt: new Date().toISOString(),
-        });
-      }
-    }),
-  );
+  registerPrDiffRoute({ app, store, providerCache, asyncRoute });
 
   app.post(
     "/api/workspaces/:workspaceId/refresh",
@@ -638,6 +789,14 @@ export function createDaemonApp(input: {
         force: req.query.force === "true",
         archiveOnly: req.query.archiveOnly === "true",
       });
+      // Evict from the scheduler regardless of removed-vs-archived outcome.
+      // An archived workspace has no UI presence either, so its cadence slot
+      // is dead weight and (if it shared a PR with another workspace) the
+      // workspaceIds refcount should drop. evict is a no-op if the id wasn't
+      // tracked.
+      if (result.removed || result.archived) {
+        ghQuota.scheduler.evict(workspaceId);
+      }
       emit("workspace.updated", result);
       res.status(result.removed || result.archived ? 202 : 409).json(result);
     }),
@@ -672,7 +831,8 @@ export function createDaemonApp(input: {
 
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, config });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
-  registerScratchpadRoutes({ app, config, emit });
+  registerScratchpadRoutes({ app, config, emit, store, operations, providerHealth: cachedProviderHealth });
+  registerCitadelActionRoutes({ app, config, emit });
   backfillScratchpadOnStartup(config);
 
   fsWatchers = createWorkspaceFsWatchers({
@@ -693,8 +853,15 @@ export function createDaemonApp(input: {
       Connection: "keep-alive",
     });
     sseClients.add(res);
+    // Fire AFTER the add so hasViewers() in the wiring sees the new state.
+    // 0→1 transition triggers scheduler.invalidateNotDue() so the next FE
+    // poll fetches fresh instead of waiting for the cadence window.
+    ghQuota.onViewerAttached();
     res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
-    req.on("close", () => sseClients.delete(res));
+    req.on("close", () => {
+      sseClients.delete(res);
+      ghQuota.onViewerDetached(); // stamps lastDetachAt iff this was the last viewer
+    });
   });
 
   const webDist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
@@ -739,16 +906,29 @@ export function createDaemonApp(input: {
   }
 
   // Status monitor / auto-recovery / auto-resume / terminal reaper: see their own modules for context.
-  const statusMonitor = startDaemonStatusMonitor(store, emit);
+  const statusMonitor = startDaemonStatusMonitor(store, emit, config, recentUserAction, diagnostics);
   if (statusMonitor) server.on("close", () => statusMonitor.stop());
-  const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({ store, config, operations, emit });
+  const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({
+    store,
+    config,
+    operations,
+    emit,
+    // Skip ticks when no SSE viewer is connected (2-min grace). Auto-recovery
+    // is a viewer-visible feature; consuming GitHub quota with nobody watching
+    // is the largest pre-optimization quota sink.
+    shouldRun: () => ghAutomationEnabled && (ghQuota.hasViewers() || ghQuota.msSinceLastViewer() <= 2 * 60_000),
+    providerCache,
+    scheduler: ghQuota.scheduler,
+    resolveRepoFullName,
+    cachedProvider,
+  });
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
-  const autoResume = startDaemonAutoResumeLoop(store, operations);
+  const autoResume = startDaemonAutoResumeLoop(store, operations, config);
   if (autoResume) server.on("close", () => autoResume.stop());
   const terminalReaper = startTerminalReaper();
   server.on("close", () => terminalReaper.stop());
 
-  return { app, server, protocol: serverProtocol, emit };
+  return { app, server, protocol: serverProtocol, emit, ttyd, diagnostics };
 
   function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderValue(providerCache, key, load, ttlMs);

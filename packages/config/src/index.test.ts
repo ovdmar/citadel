@@ -31,6 +31,7 @@ describe("loadConfig", () => {
     expect(config.version).toBe(1);
     expect(config.mcp.enabled).toBe(true);
     expect(config.runtimes.map((runtime) => runtime.id)).toContain("shell");
+    expect(config.runtimes.find((runtime) => runtime.id === "codex")?.args).toEqual(["--yolo"]);
     expect(config.usageProviders).toEqual([]);
     expect(fs.existsSync(configPath)).toBe(true);
   });

@@ -215,3 +215,127 @@ describe("updateSessionRateLimitResume", () => {
     expect(after?.updatedAt).toBe(before?.updatedAt); // updated_at not touched
   });
 });
+
+describe("workspaces-pr-snapshot migration (v9)", () => {
+  it("adds 7 nullable pr_* columns to workspaces", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    type PragmaRow = { name: string; type: string; notnull: number; dflt_value: string | null };
+    const cols = db.prepare("PRAGMA table_info(workspaces)").all() as PragmaRow[];
+    const expected: Array<[string, string]> = [
+      ["pr_number", "INTEGER"],
+      ["pr_state", "TEXT"],
+      ["pr_last_fetch_at", "TEXT"],
+      ["pr_last_checks_green_at", "TEXT"],
+      ["pr_last_head_sha", "TEXT"],
+      ["pr_last_head_sha_changed_at", "TEXT"],
+      ["pr_last_merge_state_status", "TEXT"],
+    ];
+    for (const [name, type] of expected) {
+      const col = cols.find((c) => c.name === name);
+      expect(col, `column ${name} missing`).toBeDefined();
+      expect(col?.type.toUpperCase()).toBe(type);
+      expect(col?.notnull, `column ${name} should be nullable`).toBe(0);
+    }
+  });
+
+  it("records schema_migrations version 9 row with name 'workspaces-pr-snapshot'", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    const row = db.prepare("SELECT name FROM schema_migrations WHERE version = 9").get() as
+      | { name: string }
+      | undefined;
+    expect(row?.name).toBe("workspaces-pr-snapshot");
+  });
+
+  it("existing workspace rows survive the v9 migration with NULL snapshot columns", () => {
+    const dbPath = makeTempPath();
+    // Seed a workspace via the legacy helper (uses ws_test).
+    seedLegacySession(dbPath, { id: "sess_legacy_v9", legacyStatus: "idle" });
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const snapshot = store.getWorkspacePrSnapshot("ws_test");
+    expect(snapshot).toEqual({
+      prNumber: null,
+      prState: null,
+      lastFetchAt: null,
+      lastChecksGreenAt: null,
+      lastHeadSha: null,
+      lastHeadShaChangedAt: null,
+      lastMergeStateStatus: null,
+    });
+  });
+});
+
+describe("updateWorkspacePrSnapshot / getWorkspacePrSnapshot", () => {
+  function freshStore(): SqliteStore {
+    const dbPath = makeTempPath();
+    seedLegacySession(dbPath, { id: "sess_snap", legacyStatus: "idle" });
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    return store;
+  }
+
+  it("round-trips all 7 fields", () => {
+    const store = freshStore();
+    store.updateWorkspacePrSnapshot("ws_test", {
+      prNumber: 42,
+      prState: "open",
+      lastFetchAt: "2026-05-26T20:00:00.000Z",
+      lastChecksGreenAt: "2026-05-26T19:50:00.000Z",
+      lastHeadSha: "abc1234",
+      lastHeadShaChangedAt: "2026-05-26T19:00:00.000Z",
+      lastMergeStateStatus: "CLEAN",
+    });
+    const snapshot = store.getWorkspacePrSnapshot("ws_test");
+    expect(snapshot).toEqual({
+      prNumber: 42,
+      prState: "open",
+      lastFetchAt: "2026-05-26T20:00:00.000Z",
+      lastChecksGreenAt: "2026-05-26T19:50:00.000Z",
+      lastHeadSha: "abc1234",
+      lastHeadShaChangedAt: "2026-05-26T19:00:00.000Z",
+      lastMergeStateStatus: "CLEAN",
+    });
+  });
+
+  it("partial patch only touches named fields", () => {
+    const store = freshStore();
+    store.updateWorkspacePrSnapshot("ws_test", { prNumber: 7, prState: "open", lastHeadSha: "deadbee" });
+    store.updateWorkspacePrSnapshot("ws_test", { prState: "merged" });
+    const snapshot = store.getWorkspacePrSnapshot("ws_test");
+    expect(snapshot?.prNumber).toBe(7);
+    expect(snapshot?.prState).toBe("merged");
+    expect(snapshot?.lastHeadSha).toBe("deadbee"); // untouched
+  });
+
+  it("explicit null clears a field (vs omission preserves)", () => {
+    const store = freshStore();
+    store.updateWorkspacePrSnapshot("ws_test", { lastChecksGreenAt: "2026-05-26T19:50:00.000Z" });
+    store.updateWorkspacePrSnapshot("ws_test", { lastChecksGreenAt: null });
+    expect(store.getWorkspacePrSnapshot("ws_test")?.lastChecksGreenAt).toBeNull();
+  });
+
+  it("getWorkspacePrSnapshot returns null for unknown workspace id", () => {
+    const store = freshStore();
+    expect(store.getWorkspacePrSnapshot("ws_does_not_exist")).toBeNull();
+  });
+
+  it("getWorkspacePrSnapshot rejects unexpected pr_state values via normalization", () => {
+    const store = freshStore();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    db.exec("UPDATE workspaces SET pr_state = 'gobbledygook' WHERE id = 'ws_test'");
+    expect(store.getWorkspacePrSnapshot("ws_test")?.prState).toBeNull();
+  });
+
+  it("empty patch is a no-op", () => {
+    const store = freshStore();
+    store.updateWorkspacePrSnapshot("ws_test", { prNumber: 1 });
+    store.updateWorkspacePrSnapshot("ws_test", {});
+    expect(store.getWorkspacePrSnapshot("ws_test")?.prNumber).toBe(1);
+  });
+});

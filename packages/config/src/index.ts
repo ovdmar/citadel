@@ -45,7 +45,18 @@ const BUILTIN_RUNTIMES: BuiltinRuntime[] = [
     id: "codex",
     displayName: "Codex",
     command: "codex",
-    args: [],
+    // `--yolo` (alias for `--dangerously-bypass-approvals-and-sandbox`) is a
+    // global flag — codex accepts it before the `resume` subcommand, so the
+    // same default works for both launch (`codex --yolo`) and resume
+    // (`codex --yolo resume <uuid>`). Operators can clear it via Settings →
+    // Runtimes if they want approval prompts back.
+    args: ["--yolo"],
+    // `codex resume <uuid>` is a subcommand (not a flag), but the daemon's
+    // resume splice is `[resumeArg, <uuid>]` either way — passing "resume"
+    // here yields the right argv. No `sessionIdArg`: codex auto-generates the
+    // UUID at spawn and we recover it via discoverCodexSessionId (with a
+    // lazy backfill at restore-collection time, see restore-routes.ts).
+    resumeArg: "resume",
     supportsResume: true,
     supportsPrompt: true,
   },

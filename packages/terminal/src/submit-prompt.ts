@@ -144,8 +144,11 @@ function pasteVisible(sessionName: string, snippet: string): boolean {
   }
   const normalized = collapseWhitespace(captured);
   if (normalized.includes(snippet)) return true;
+  return hasCollapsedPasteMarker(normalized);
+}
+
+export function hasCollapsedPasteMarker(normalized: string): boolean {
   // Claude Code: `[Pasted text #1 +101 lines]` (or "#1 paste again to expand").
-  // We match loosely on "Pasted" + "#" + a digit because the exact suffix
-  // varies with paste size and Claude version.
-  return /\[Pasted [^\]]*#\d+/u.test(normalized);
+  // Codex: `[Pasted Content 3298 chars]`.
+  return /\[Pasted [^\]]*#\d+/u.test(normalized) || /\[Pasted Content \d+ chars\]/u.test(normalized);
 }

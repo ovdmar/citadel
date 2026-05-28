@@ -1,20 +1,27 @@
 import type { Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
 import { useEventRefresh, useStateQuery } from "./app-state.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
-import { prMapFromBatch, useAllWorkspacesPrSummary, useWorkspaceCockpitSummary } from "./cockpit-tools.js";
+import {
+  invalidateActiveWorkspaceFromBatch,
+  prMapFromSummaries,
+  useAllWorkspacesPrSummary,
+  useStickyWorkspaceSummaries,
+  useWorkspaceCockpitSummary,
+} from "./cockpit-tools.js";
 import { CommandPalette } from "./command-palette.js";
+import { GhCooldownBanner } from "./gh-cooldown-banner.js";
 import { Inspector } from "./inspector.js";
 import { Navigator } from "./navigator.js";
 import { RestoreBanner } from "./restore-banner.js";
 import { Stage } from "./stage.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
-import { useResolvedTheme } from "./use-resolved-theme.js";
+import { applyThemePreference, useResolvedTheme } from "./use-resolved-theme.js";
 import { prToneFor } from "./workspace-card.js";
 
 const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";
@@ -27,6 +34,7 @@ export function Cockpit() {
   const state = useStateQuery();
   useEventRefresh();
   const data = state.data;
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const search = (useSearch({ strict: false }) ?? {}) as { workspace?: string };
   const location = useLocation();
@@ -60,9 +68,28 @@ export function Cockpit() {
     if (activeWorkspace && activeWorkspace.repoId !== lastRepoId) setLastRepoId(activeWorkspace.repoId);
   }, [activeWorkspace, activeWorkspaceId, lastRepoId, setActiveWorkspaceId, setLastRepoId]);
 
-  const cockpitSummary = useWorkspaceCockpitSummary(activeWorkspace);
+  // Order matters: the batch poll + sticky cache must run before the single-
+  // workspace fetch so we can hand the cached summary to React Query as
+  // `placeholderData`. That makes the inspector render the last-known PR
+  // state instantly on workspace switch (otherwise the 10s `gh pr view`
+  // round-trip leaves the PR section blank for several seconds).
   const batchPrSummary = useAllWorkspacesPrSummary(data?.workspaces ?? []);
-  const prByWorkspaceId = useMemo(() => prMapFromBatch(batchPrSummary.data), [batchPrSummary.data]);
+  const stickySummaries = useStickyWorkspaceSummaries(data?.workspaces ?? [], batchPrSummary.data);
+  const placeholderSummary = activeWorkspace ? stickySummaries.get(activeWorkspace.id) : undefined;
+  const cockpitSummary = useWorkspaceCockpitSummary(activeWorkspace, placeholderSummary);
+  useEffect(() => {
+    invalidateActiveWorkspaceFromBatch(queryClient, activeWorkspace?.id, batchPrSummary.dataUpdatedAt);
+  }, [activeWorkspace?.id, batchPrSummary.dataUpdatedAt, queryClient]);
+  // Feed the active workspace result back into the sticky cache by recomputing
+  // the PR map from both sources. The active query is preferred for the
+  // selected workspace; the batch covers everyone else.
+  const prByWorkspaceId = useMemo(() => {
+    const map = prMapFromSummaries(stickySummaries);
+    if (cockpitSummary.data) {
+      map.set(cockpitSummary.data.workspaceId, cockpitSummary.data.versionControl.pullRequest ?? null);
+    }
+    return map;
+  }, [stickySummaries, cockpitSummary.data]);
   const selectedRepo = activeWorkspace
     ? (data?.repos.find((repo) => repo.id === activeWorkspace.repoId) ?? null)
     : (data?.repos[0] ?? null);
@@ -173,6 +200,7 @@ export function Cockpit() {
         repo={selectedRepo}
         runtimes={data?.runtimes ?? []}
       />
+      <GhCooldownBanner summaries={stickySummaries} />
       <RestoreBanner bootRestore={data?.bootRestore ?? null} />
       <div
         className={`cockpit-body ${layout.state.leftCollapsed ? "left-collapsed" : ""} ${
@@ -215,7 +243,6 @@ export function Cockpit() {
               workspaces={data?.workspaces ?? []}
               sessions={data?.sessions ?? []}
               operations={data?.operations ?? []}
-              activeSummary={cockpitSummary.data}
               prByWorkspaceId={prByWorkspaceId}
               activeWorkspaceId={activeWorkspace?.id ?? ""}
               runtimes={data?.runtimes ?? []}
@@ -435,12 +462,7 @@ function ThemeToggle() {
   const isDark = resolved === "dark";
   const toggle = () => {
     const next = isDark ? "light" : "dark";
-    document.documentElement.dataset.theme = next;
-    try {
-      localStorage.setItem("citadel.theme", next);
-    } catch {
-      // localStorage is best-effort
-    }
+    applyThemePreference(next);
   };
   return (
     <button

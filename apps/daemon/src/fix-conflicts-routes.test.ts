@@ -1,6 +1,8 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   closeServer,
   createFixture as createFixtureBase,
@@ -11,8 +13,52 @@ import {
 import { createDaemonApp } from "./app.js";
 
 const dirs: string[] = [];
+const previousTmuxSocket = process.env.CITADEL_TMUX_SOCKET;
+const testTmuxSocket = `citadel-fix-conflicts-test-${process.pid}`;
+const nodeHoldAgentArgs = ["--no-warnings", "-e", "setInterval(() => {}, 1000)", "--"];
+const nodeEchoAgentArgs = [
+  "--no-warnings",
+  "-e",
+  "process.stdin.setRawMode?.(true); process.stdin.resume(); process.stdin.on('data', (chunk) => process.stdout.write(chunk)); setInterval(() => {}, 1000);",
+];
+
+function killTestTmuxServer() {
+  try {
+    execFileSync("tmux", ["-L", testTmuxSocket, "kill-server"], { stdio: "ignore" });
+  } catch {
+    // No test tmux server exists.
+  }
+}
+
+function removeTestPipeLogs() {
+  const dir = path.join(os.tmpdir(), "citadel-pty");
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!/^citadel_ws_(fc|nopromptarg)_[^.]+\.log$/u.test(name)) continue;
+    fs.rmSync(path.join(dir, name), { force: true });
+  }
+}
+
+beforeAll(() => {
+  process.env.CITADEL_TMUX_SOCKET = testTmuxSocket;
+});
+
 afterEach(() => {
+  killTestTmuxServer();
+  removeTestPipeLogs();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+afterAll(() => {
+  killTestTmuxServer();
+  removeTestPipeLogs();
+  if (previousTmuxSocket === undefined) Reflect.deleteProperty(process.env, "CITADEL_TMUX_SOCKET");
+  else process.env.CITADEL_TMUX_SOCKET = previousTmuxSocket;
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
@@ -27,13 +73,19 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
     const fixture = createFixture();
     // Non-shell runtime required: the route refuses to paste the multi-line
     // fix-conflicts prompt into a bash pane (which would execute it line by
-    // line as shell commands). Stub a no-op claude-code runtime alongside
-    // shell so the route picks it for the spawn. promptArg embeds the
-    // prompt as a CLI flag, so createAgentSession skips the submitPrompt
-    // key-paste path (15s ready-wait) and the test stays fast.
+    // line as shell commands). Stub a no-op node runtime alongside shell so
+    // the route picks it for the spawn. The "--" makes the synthetic promptArg
+    // a script argument instead of a node option, so the fake agent stays
+    // alive until test cleanup.
     fixture.config.runtimes = [
       { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
-      { id: "claude-code", displayName: "Claude Code", command: "sleep", args: ["30"], promptArg: "--prompt" },
+      {
+        id: "claude-code",
+        displayName: "Claude Code",
+        command: "node",
+        args: nodeHoldAgentArgs,
+        promptArg: "--prompt",
+      },
     ];
     const git = createGitRepo(fixture.config.dataDir);
     const now = new Date().toISOString();
@@ -111,6 +163,79 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
       await closeServer(server);
     }
   }, 20_000);
+
+  it("selects a non-shell runtime even when it has no promptArg (claude-code default)", async () => {
+    // Regression: the route previously required runtime.promptArg, which
+    // meant the default claude-code runtime (no promptArg by design — `-p`
+    // is non-interactive print mode) always 404'd as runtime_not_found.
+    // The real invariant is "not a shell" (so multi-line text isn't
+    // executed by bash); createAgentSession pastes the prompt into the
+    // agent TUI when promptArg is absent.
+    const fixture = createFixture();
+    fixture.config.runtimes = [
+      { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
+      // Mirror the real built-in: no promptArg. The raw-mode node process is
+      // a non-shell stdin consumer that echoes bytes as they arrive, so
+      // submitPrompt can verify the multiline paste without bash executing it.
+      { id: "claude-code", displayName: "Claude Code", command: "node", args: nodeEchoAgentArgs },
+    ];
+    const git = createGitRepo(fixture.config.dataDir);
+    const now = new Date().toISOString();
+    fixture.store.insertRepo({
+      id: "repo_nopromptarg",
+      name: "No PromptArg Repo",
+      rootPath: git.repoPath,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: ["github-gh"],
+      deployHookCommand: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fixture.store.insertWorkspace({
+      id: "ws_nopromptarg",
+      repoId: "repo_nopromptarg",
+      name: "No PromptArg Workspace",
+      path: git.repoPath,
+      branch: "feature",
+      baseBranch: "main",
+      source: "scratch",
+      kind: "worktree",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      namespaceId: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const response = await fetch(`${baseUrl}/api/workspaces/ws_nopromptarg/fix-conflicts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      // The selection logic must accept the non-shell claude-code runtime.
+      expect(response.status).toBe(202);
+      const body = (await response.json()) as { session: { workspaceId: string; displayName: string } };
+      expect(body.session.workspaceId).toBe("ws_nopromptarg");
+      expect(body.session.displayName).toBe("Fix conflicts");
+    } finally {
+      await closeServer(server);
+    }
+  }, 30_000);
 
   it("returns 404 runtime_not_found when the only configured runtime is shell", async () => {
     const fixture = createFixture();

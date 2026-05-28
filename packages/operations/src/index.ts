@@ -21,6 +21,13 @@ export { ScheduledAgentRunner, parseCronExpression, cronMatches, nextCronRun, de
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
+export {
+  createDiagnosticsLogger,
+  noopDiagnosticsLogger,
+  type DiagnosticEvent,
+  type DiagnosticsLogger,
+  type DiagnosticsLoggerOptions,
+} from "./diagnostics.js";
 export { parseUsageLimitResetFromReason, deriveAccountUsageLimit } from "./usage-limit.js";
 export type { AccountRateLimitInfo } from "./usage-limit.js";
 export { DEFAULT_AUTO_RESUME_INTERVAL_MS, startAutoResumeLoop } from "./auto-resume.js";
@@ -53,6 +60,9 @@ import {
 } from "./workspace-apps.js";
 
 export class OperationService {
+  // Daemon registers onSessionStopped to release the ttyd whenever stopAgentSession runs (REST, MCP, restore route).
+  private terminalHooks: { onSessionStopped?: (sessionId: string) => void } = {};
+
   constructor(
     private readonly store: SqliteStore,
     private readonly config?: {
@@ -66,6 +76,9 @@ export class OperationService {
       commandPolicy: CitadelConfig["commandPolicy"];
     },
   ) {}
+
+  // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+  setTerminalHooks(hooks: { onSessionStopped?: (sessionId: string) => void }) { this.terminalHooks = hooks; }
 
   registerRepo(input: { rootPath: string; name?: string | undefined; worktreeParent?: string | undefined }) {
     const now = nowIso();
@@ -88,7 +101,6 @@ export class OperationService {
     };
     this.store.insertRepo(repo);
     this.activity("repo.registered", "user", `Registered ${repo.name}`, repo.id, null, null);
-    // Non-removable root workspace exposes the repo's main checkout to agents/terminals (cf. Superset).
     const rootWorkspace: Workspace = {
       id: createId("ws"),
       repoId: repo.id,
@@ -321,6 +333,7 @@ export class OperationService {
     const session = this.store.listSessions().find((candidate) => candidate.id === input.sessionId);
     if (!session) return { stopped: false, reason: "session_not_found" as const };
     if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
+    this.terminalHooks.onSessionStopped?.(session.id);
     this.store.deleteSession(session.id);
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     this.activity(
@@ -392,8 +405,7 @@ export class OperationService {
     const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
     if (!repo) throw new Error(`Workspace repo is missing: ${workspace.repoId}`);
     if (workspace.kind === "root") {
-      // The root workspace tracks the repo's main checkout; it can only be
-      // removed by removing the repository itself.
+      // Root workspace can only be dropped via repo removal.
       const operation = this.operation(
         "workspace.remove",
         "failed",
@@ -441,6 +453,12 @@ export class OperationService {
     const ownedSessions = this.store.listSessions(workspace.id);
     for (const session of ownedSessions) {
       if (session.tmuxSessionName && !input.archiveOnly) killTmuxSession(session.tmuxSessionName);
+      // Always release the ttyd alongside — applies to both archive and full
+      // remove. Otherwise the ttyd process keeps running detached, holding a
+      // port + a tmux client slot, and a future iframe attempt for the
+      // (now-archived) session can't re-attach cleanly. The hook is a no-op
+      // when no manager is wired (tests).
+      this.terminalHooks.onSessionStopped?.(session.id);
     }
     if (ownedSessions.length && !input.archiveOnly) {
       this.logOp(operation.id, "info", `Killed ${ownedSessions.length} tmux session(s) attached to workspace`);

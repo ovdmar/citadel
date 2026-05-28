@@ -6,51 +6,14 @@ import { type APIRequestContext, expect, test } from "@playwright/test";
 
 // PR display & management — focused E2E coverage.
 //
-// Strategy: register a real repo + workspace via the daemon API, then check
-// the cockpit's PR strip rendering. Real GitHub PRs aren't feasible in CI, so
-// PR-populated states (chip color, base ← head, force-refresh, merge button)
-// are validated manually per CLAUDE.md and covered indirectly by the unit
-// tests for prToneFor + the daemon endpoint tests. What we verify here is
-// the regression-prone path: that the *always-visible* PR row renders even
-// when no PR exists and even when the workspace isn't selected.
+// The workspace card itself only carries the PR status icon (tone applied to
+// the branch-icon chip in the card head). PR identity (number, title, base ←
+// head, merge action) lives in the inspector. Real GitHub PRs aren't feasible
+// in CI, so PR-populated inspector states are validated manually per
+// CLAUDE.md; we just guard that the inspector PR section renders.
 
 const API_BASE =
-  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "4012"}`;
-
-test("non-selected workspace cards show the PR placeholder slot", async ({ page, request }, testInfo) => {
-  // On mobile the navigator is collapsed by default; the test would need to
-  // explicitly switch into it. Desktop+tablet still cover the regression.
-  test.skip(testInfo.project.name === "mobile", "mobile layout hides the navigator by default");
-  const fixture = createGitFixture();
-  try {
-    const repo = await registerRepo(request, fixture);
-    const first = await createWorkspace(request, repo.id, `pr-display-a-${Date.now().toString(36)}`);
-    const second = await createWorkspace(request, repo.id, `pr-display-b-${Date.now().toString(36)}`);
-
-    await page.goto("/");
-    // Wait for both cards to appear in the navigator.
-    const firstCard = page.locator(`button[aria-label*="${first.workspaceId.slice(-6)}"]`).first();
-    const secondCard = page.locator(`button[aria-label*="${second.workspaceId.slice(-6)}"]`).first();
-    // Either we'll match the workspace card title text directly or the
-    // surrounding wrap — the PR placeholder lives just below it in the same
-    // .workspace-card-wrap.
-    await expect(page.locator(".workspace-card-wrap").first()).toBeVisible();
-
-    // Both wraps should render the always-visible PR slot (placeholder when
-    // no PR exists). This guards the regression where the row only showed
-    // for the selected workspace.
-    const placeholders = page.locator(".workspace-card-pr-empty");
-    await expect(placeholders.first()).toBeVisible();
-    expect(await placeholders.count()).toBeGreaterThanOrEqual(2);
-
-    // No need to click a specific card — placeholders should already be visible
-    // for non-selected workspaces too.
-    void firstCard;
-    void secondCard;
-  } finally {
-    fs.rmSync(fixture.dir, { recursive: true, force: true });
-  }
-});
+  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012"}`;
 
 test("inspector PR section renders even when the workspace has no PR", async ({ page, request }, testInfo) => {
   // Mobile collapses to one column; the inspector isn't directly visible without

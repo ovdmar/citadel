@@ -9,9 +9,12 @@ import {
   collectGitHubCiRuns,
   collectGitHubVersionControlSummary,
   collectJiraIssueSummary,
+  collectProviderHealth,
   collectRuntimeUsage,
   commandHealth,
   detectParentPr,
+  isGhNoPullRequestError,
+  isRateLimitError,
   mergePr,
   normalizeCheck,
   normalizeCiRun,
@@ -21,6 +24,7 @@ import {
   pLimit,
   parseJiraIssueOutput,
   parseJiraTransitionsOutput,
+  setGithubCommand,
   transitionJiraIssue,
 } from "./index.js";
 
@@ -28,6 +32,7 @@ const dirs: string[] = [];
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  setGithubCommand(undefined);
 });
 
 describe("commandHealth", () => {
@@ -69,6 +74,22 @@ describe("commandHealth", () => {
 
     expect(health.status).toBe("degraded");
     expect(health.reason).toContain("Command failed");
+  });
+
+  it("can skip GitHub health without spawning gh", async () => {
+    const [github] = await collectProviderHealth(
+      {
+        github: { enabled: true, command: "missing-gh-command" },
+        jira: { enabled: false, command: "missing-jira-command" },
+      },
+      { skipGithubReason: "automation disabled" },
+    );
+
+    expect(github).toMatchObject({
+      id: "github-gh",
+      status: "unavailable",
+      reason: "automation disabled",
+    });
   });
 
   it("returns degraded normalized summaries for invalid repos", async () => {
@@ -436,6 +457,151 @@ describe("PR display helpers", () => {
       state: "OPEN",
     });
   });
+
+  it("isGhNoPullRequestError recognises gh's 'no pull requests found' messages so transient gh failures stay distinct", () => {
+    expect(isGhNoPullRequestError(new Error('no pull requests found for branch "feature/x"'))).toBe(true);
+    expect(isGhNoPullRequestError(new Error("no open pull requests found in org/repo"))).toBe(true);
+    expect(isGhNoPullRequestError({ stderr: "no pull request found for branch foo" })).toBe(true);
+    // Transient failures must not match — those propagate up so the VC summary
+    // degrades and the client preserves the cached PR.
+    expect(isGhNoPullRequestError(new Error("HTTP 502 from api.github.com"))).toBe(false);
+    expect(isGhNoPullRequestError(new Error("gh auth status: not logged in"))).toBe(false);
+    expect(isGhNoPullRequestError(undefined)).toBe(false);
+  });
+
+  it("fetchParentPr uses cached branch lookup before spawning gh pr list", async () => {
+    const repoPath = createGitFixture();
+    addOriginRemote(repoPath);
+    const gh = fakeGh();
+    setGithubCommand(gh.script);
+
+    const summary = await collectGitHubVersionControlSummary(repoPath, {
+      resolveNameWithOwner: () => "owner/repo",
+      lookupCachedPrByBranch: () => ({
+        number: 6,
+        title: "Parent",
+        url: "https://example.test/pr/6",
+        state: "OPEN",
+        draft: false,
+        reviewDecision: null,
+        checks: [],
+        additions: null,
+        deletions: null,
+        reviewers: [],
+        commits: [],
+        headRefName: "parent",
+        parentPr: null,
+        mergeable: "unknown",
+        allowedMergeStrategies: [],
+        mergeStateStatus: null,
+        headSha: null,
+      }),
+    });
+
+    expect(summary.pullRequest?.parentPr).toEqual({
+      number: 6,
+      url: "https://example.test/pr/6",
+      headRefName: "parent",
+      state: "OPEN",
+    });
+    expect(gh.calls().filter((call) => call === "pr list")).toHaveLength(0);
+  });
+
+  it("fetchParentPr falls through to cached gh pr list when no global parent is cached", async () => {
+    const repoPath = createGitFixture();
+    addOriginRemote(repoPath);
+    const gh = fakeGh();
+    setGithubCommand(gh.script);
+    const repoCache = new Map<string, string>();
+    const repoCacheLookup = async (key: string, load: () => Promise<string>) => {
+      const cached = repoCache.get(key);
+      if (cached) return cached;
+      const value = await load();
+      repoCache.set(key, value);
+      return value;
+    };
+
+    await collectGitHubVersionControlSummary(repoPath, {
+      repoCacheLookup,
+      resolveNameWithOwner: () => "owner/repo",
+      lookupCachedPrByBranch: () => null,
+    });
+    const second = await collectGitHubVersionControlSummary(repoPath, {
+      repoCacheLookup,
+      resolveNameWithOwner: () => "owner/repo",
+      lookupCachedPrByBranch: () => null,
+    });
+
+    expect(second.pullRequest?.parentPr?.number).toBe(6);
+    expect(gh.calls().filter((call) => call === "pr list")).toHaveLength(1);
+  });
+
+  it("fetchAllowedMergeStrategies uses the repo cache only when nameWithOwner resolves", async () => {
+    const repoPath = createGitFixture();
+    addOriginRemote(repoPath);
+    const gh = fakeGh();
+    setGithubCommand(gh.script);
+    const repoCache = new Map<string, string>();
+    const repoCacheLookup = async (key: string, load: () => Promise<string>) => {
+      const cached = repoCache.get(key);
+      if (cached) return cached;
+      const value = await load();
+      repoCache.set(key, value);
+      return value;
+    };
+
+    await collectGitHubVersionControlSummary(repoPath, {
+      repoCacheLookup,
+      resolveNameWithOwner: () => "owner/repo",
+      lookupCachedPrByBranch: () => null,
+    });
+    await collectGitHubVersionControlSummary(repoPath, {
+      repoCacheLookup,
+      resolveNameWithOwner: () => "owner/repo",
+      lookupCachedPrByBranch: () => null,
+    });
+    expect(gh.calls().filter((call) => call === "repo view")).toHaveLength(1);
+
+    const uncachedGh = fakeGh();
+    setGithubCommand(uncachedGh.script);
+    await collectGitHubVersionControlSummary(repoPath, {
+      repoCacheLookup,
+      resolveNameWithOwner: () => null,
+      lookupCachedPrByBranch: () => null,
+    });
+    await collectGitHubVersionControlSummary(repoPath, {
+      repoCacheLookup,
+      resolveNameWithOwner: () => null,
+      lookupCachedPrByBranch: () => null,
+    });
+    expect(uncachedGh.calls().filter((call) => call === "repo view")).toHaveLength(2);
+  });
+});
+
+describe("isRateLimitError", () => {
+  it("matches the GraphQL rate-limit message gh prints in stderr", () => {
+    expect(
+      isRateLimitError({
+        stderr:
+          "could not load events: failed to get current username: GraphQL: API rate limit already exceeded for user ID 15231070",
+      }),
+    ).toBeTruthy();
+  });
+
+  it("matches the REST rate-limit message", () => {
+    expect(isRateLimitError({ stderr: "API rate limit exceeded for user ID 1." })).toBeTruthy();
+  });
+
+  it("matches secondary/abuse rate-limit messages", () => {
+    expect(isRateLimitError({ stderr: "You have exceeded a secondary rate limit." })).toBeTruthy();
+    expect(isRateLimitError({ stderr: "abuse-rate-limit triggered" })).toBeTruthy();
+  });
+
+  it("does not match unrelated gh errors", () => {
+    expect(isRateLimitError({ stderr: "no pull requests found for branch" })).toBe(false);
+    expect(isRateLimitError({ stderr: "could not resolve host: api.github.com" })).toBe(false);
+    expect(isRateLimitError(undefined)).toBe(false);
+  });
 });
 
 function createGitFixture() {
@@ -454,4 +620,40 @@ function createGitFixture() {
 
 function run(command: string, args: string[], cwd: string) {
   execFileSync(command, args, { cwd, stdio: "pipe" });
+}
+
+function addOriginRemote(repoPath: string) {
+  run("git", ["remote", "add", "origin", "https://github.com/owner/repo.git"], repoPath);
+  run("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], repoPath);
+  run("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], repoPath);
+}
+
+function fakeGh() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-provider-gh-"));
+  dirs.push(dir);
+  const callsPath = path.join(dir, "calls.txt");
+  const script = path.join(dir, "gh");
+  fs.writeFileSync(
+    script,
+    `#!/usr/bin/env bash
+echo "$1 $2" >> "${callsPath}"
+if [ "$1 $2" = "pr view" ]; then
+  cat <<'JSON'
+{"number":7,"title":"Child","url":"https://example.test/pr/7","state":"OPEN","isDraft":false,"reviewDecision":null,"statusCheckRollup":[],"additions":1,"deletions":2,"reviews":[],"reviewRequests":[],"commits":[],"baseRefName":"parent","headRefName":"feature","headRepository":{"nameWithOwner":"owner/repo"},"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","headRefOid":"abc123"}
+JSON
+elif [ "$1 $2" = "repo view" ]; then
+  echo '{"mergeCommitAllowed":true,"squashMergeAllowed":true,"rebaseMergeAllowed":false}'
+elif [ "$1 $2" = "pr list" ]; then
+  echo '[{"number":6,"url":"https://example.test/pr/6","headRefName":"parent","headRepository":{"nameWithOwner":"owner/repo"},"state":"OPEN"}]'
+else
+  echo '{}'
+fi
+`,
+  );
+  fs.chmodSync(script, 0o755);
+  return {
+    script,
+    calls: () =>
+      fs.existsSync(callsPath) ? fs.readFileSync(callsPath, "utf8").trim().split("\n").filter(Boolean) : [],
+  };
 }

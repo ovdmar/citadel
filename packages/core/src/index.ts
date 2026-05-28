@@ -14,15 +14,27 @@ const ATTENTION_UNKNOWN_REASONS: ReadonlySet<string> = new Set([
   "migrated_from_orphaned",
 ]);
 
+// `status: "idle"` reasons that indicate the agent crashed or exited
+// without operator intervention — surfaces a red attention pulse so the
+// "your agent died" signal isn't lost (per shell-first-panes spec B.3 #8).
+// Pairs with the 30-min auto-clear in the status-monitor.
+const ATTENTION_IDLE_REASONS: ReadonlySet<string> = new Set(["idle_after_unexpected_exit"]);
+
 // True iff the session needs the operator's attention — either it failed,
 // or it's unknown because we have positive evidence the agent went away
-// (tmux gone, sentinel mismatched). Used by readiness derivations and the
+// (tmux gone, sentinel mismatched), or it crashed mid-session
+// (idle_after_unexpected_exit). Used by readiness derivations and the
 // workspace-card status dot. Single source of truth for the predicate.
 export function sessionNeedsAttention(session: Pick<AgentSession, "status" | "statusReason">): boolean {
   if (session.status === "failed") return true;
-  if (session.status !== "unknown") return false;
   const reason = session.statusReason;
-  return reason !== null && reason !== undefined && ATTENTION_UNKNOWN_REASONS.has(reason);
+  if (session.status === "unknown") {
+    return reason !== null && reason !== undefined && ATTENTION_UNKNOWN_REASONS.has(reason);
+  }
+  if (session.status === "idle") {
+    return reason !== null && reason !== undefined && ATTENTION_IDLE_REASONS.has(reason);
+  }
+  return false;
 }
 
 export function createId(prefix: string) {
@@ -90,3 +102,10 @@ export function summarizeWorkspaceState(input: {
 }
 
 export { groupChecksByKind, statusLabel, summarizeDoctor } from "./doctor.js";
+export {
+  type FuzzyBlockMatch,
+  type FuzzyMatchIndex,
+  SEARCH_LIMITS,
+  buildFuzzyIndex,
+  fuzzySearchBlocks,
+} from "./scratchpad-search.js";

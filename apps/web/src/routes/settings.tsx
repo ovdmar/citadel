@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   ArrowLeft,
+  Bug,
   Cable,
   CheckCircle2,
   ChevronRight,
@@ -12,6 +13,7 @@ import {
   Moon,
   Server,
   Stethoscope,
+  Sparkles,
   Sun,
   Workflow,
 } from "lucide-react";
@@ -19,13 +21,26 @@ import { useEffect, useState } from "react";
 import { api, queryClient } from "../api.js";
 import { useStateQuery } from "../app-state.js";
 import { mcpUrlFromOrigin } from "../lib/mcp-url.js";
+import { CitadelActionsPanel } from "../settings-citadel-actions.js";
+import { DebugPanel } from "../settings-debug.js";
 import { DiagnosticsPanel } from "../settings-diagnostics.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
-import { RestorePanel } from "../settings-restore.js";
+import { RestoreModal, RestorePanelBody } from "../settings-restore.js";
 import { AgentsPanel } from "../settings-runtimes.js";
+import { applyThemePreference, useResolvedTheme } from "../use-resolved-theme.js";
 
-type SectionId = "overview" | "providers" | "agents" | "repositories" | "restore" | "mcp" | "notes" | "diagnostics";
+type SectionId =
+  | "overview"
+  | "providers"
+  | "agents"
+  | "repositories"
+  | "restore"
+  | "actions"
+  | "mcp"
+  | "diagnostics"
+  | "notes"
+  | "debug";
 
 type Section = {
   id: SectionId;
@@ -60,6 +75,12 @@ const SECTIONS: Section[] = [
     description: "Resume conversations whose agent died.",
     icon: History,
   },
+  {
+    id: "actions",
+    label: "Citadel Actions",
+    description: "Configurable prompt presets (e.g. scratchpad Refine).",
+    icon: Sparkles,
+  },
   { id: "mcp", label: "MCP", description: "Model Context Protocol servers Citadel exposes to agents.", icon: Workflow },
   {
     id: "diagnostics",
@@ -73,11 +94,18 @@ const SECTIONS: Section[] = [
     description: "Where the shared markdown scratchpad lives on disk.",
     icon: FileText,
   },
+  {
+    id: "debug",
+    label: "Debug",
+    description: "Download a diagnostics bundle when something is going wrong.",
+    icon: Bug,
+  },
 ];
 
 export function SettingsView() {
   const state = useStateQuery();
   const [section, setSection] = useState<SectionId>("overview");
+  const [restoreModalOpen, setRestoreModalOpen] = useState(false);
 
   const data = state.data;
   const current = SECTIONS.find((entry) => entry.id === section) ?? SECTIONS[0];
@@ -125,7 +153,14 @@ export function SettingsView() {
                   key={entry.id}
                   type="button"
                   className={`set-nav-item ${section === entry.id ? "is-active" : ""}`}
-                  onClick={() => setSection(entry.id)}
+                  onClick={() => {
+                    // Restore opens as a modal — there's no "settings page" UX
+                    // for it because restoring is a transient action, not a
+                    // persistent setting. Click flicks the modal open and
+                    // leaves the previous section selection intact.
+                    if (entry.id === "restore") setRestoreModalOpen(true);
+                    else setSection(entry.id);
+                  }}
                   aria-current={section === entry.id ? "page" : undefined}
                 >
                   <Icon size={15} />
@@ -143,7 +178,10 @@ export function SettingsView() {
               runtimes={data?.runtimes ?? []}
               repos={data?.repos ?? []}
               mcpEnabled={Boolean(data?.mcp.enabled)}
-              onNavigate={setSection}
+              onNavigate={(id) => {
+                if (id === "restore") setRestoreModalOpen(true);
+                else setSection(id);
+              }}
             />
           ) : null}
           {section === "providers" ? (
@@ -179,9 +217,20 @@ export function SettingsView() {
                 sub="Resume conversations whose agent died."
                 help="When the daemon restarts or a tmux pane gets killed, the runtime's transcript on disk survives. Citadel registers a UUID at spawn (claude-code --session-id, codex post-spawn discovery), so any workspace whose latest session row has a UUID but no live pane can be brought back via `--resume <uuid>`. Empty here means nothing to restore."
               />
-              <RestorePanel />
+              <RestorePanelBody />
             </>
           ) : null}
+          {section === "actions" ? (
+            <>
+              <PageHead
+                title="Citadel Actions"
+                sub="Configurable prompt presets surfaced as buttons in the cockpit."
+                help="Each action stores a name + description + icon + prompt template at <dataDir>/citadel-actions.json. The built-in 'Refine scratchpad' action seeds on first read; it can be edited or reset to default but not deleted."
+              />
+              <CitadelActionsPanel />
+            </>
+          ) : null}
+          {restoreModalOpen ? <RestoreModal onClose={() => setRestoreModalOpen(false)} /> : null}
           {section === "mcp" ? (
             <>
               <PageHead title="MCP servers" sub="Model Context Protocol servers Citadel exposes to agents." />
@@ -204,6 +253,16 @@ export function SettingsView() {
               <NotesSection />
             </>
           ) : null}
+          {section === "debug" ? (
+            <>
+              <PageHead
+                title="Debug"
+                sub="Download a diagnostics bundle when sessions misbehave."
+                help="Citadel keeps a structured event log (.citadel/diagnostics.jsonl) covering tmux/ttyd lifecycle, status-monitor decisions, and boot-restore. The bundle includes that log plus a state snapshot and a 30-minute slice of the citadel.service systemd journal."
+              />
+              <DebugPanel />
+            </>
+          ) : null}
         </main>
       </div>
     </div>
@@ -223,19 +282,9 @@ function PageHead(props: { title: string; sub?: string; help?: string }) {
 }
 
 function ThemeToggle() {
-  const [theme, setTheme] = useState(() => localStorage.getItem("citadel.theme") || "system");
-  useEffect(() => {
-    localStorage.setItem("citadel.theme", theme);
-    if (theme === "system") {
-      delete document.documentElement.dataset.theme;
-    } else {
-      document.documentElement.dataset.theme = theme;
-    }
-  }, [theme]);
-
-  // Light <-> Dark cycle (system stays accessible via the existing CockpitTools menu).
-  const isDark = theme === "dark";
-  const toggle = () => setTheme(isDark ? "light" : "dark");
+  const resolved = useResolvedTheme();
+  const isDark = resolved === "dark";
+  const toggle = () => applyThemePreference(isDark ? "light" : "dark");
   return (
     <button
       type="button"

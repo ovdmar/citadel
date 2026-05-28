@@ -24,6 +24,13 @@ import {
   sessionFromRow,
   workspaceFromRow,
 } from "./rows.js";
+import {
+  type WorkspacePrSnapshot,
+  getWorkspacePrSnapshot,
+  updateWorkspacePrSnapshot,
+} from "./workspace-pr-snapshot.js";
+
+export type { WorkspacePrSnapshot };
 
 // Avoid a static `import "node:sqlite"` so vite-based test runners do not
 // try to bundle the built-in. Resolved through `createRequire` at runtime.
@@ -334,6 +341,17 @@ export class SqliteStore {
     return result.changes > 0;
   }
 
+  // Per-workspace PR snapshot — thin wrappers around the free functions in
+  // ./workspace-pr-snapshot.ts (extracted to keep this file under the
+  // 800-line check:size gate).
+  getWorkspacePrSnapshot(workspaceId: string): WorkspacePrSnapshot | null {
+    return getWorkspacePrSnapshot(this.database, workspaceId);
+  }
+
+  updateWorkspacePrSnapshot(workspaceId: string, patch: Partial<WorkspacePrSnapshot>): void {
+    updateWorkspacePrSnapshot(this.database, workspaceId, patch);
+  }
+
   archiveRepo(repoId: string) {
     const now = new Date().toISOString();
     this.database.prepare("UPDATE repos SET archived_at = ?, updated_at = ? WHERE id = ?").run(now, now, repoId);
@@ -357,10 +375,10 @@ export class SqliteStore {
       .prepare(
         `INSERT INTO agent_sessions (id, workspace_id, runtime_id, display_name, status, status_reason,
           last_status_at, last_output_at, ended_at, exit_code, transport,
-          tmux_session_name, tmux_session_id, runtime_session_id,
+          tmux_session_name, tmux_session_id, tab_id, runtime_session_id,
           rate_limit_resume_attempts, next_resume_at, last_resume_from_rate_limit_at,
           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -379,6 +397,11 @@ export class SqliteStore {
         session.transport,
         session.tmuxSessionName ?? null,
         session.tmuxSessionId ?? null,
+        // Default tab_id to the row id so callers that forget to supply one
+        // still get sensible tab ordering (each session becomes its own tab,
+        // matching pre-migration behaviour). Restore paths supply the source
+        // session's tabId so the restored row reuses the original slot.
+        session.tabId ?? session.id,
         session.runtimeSessionId ?? null,
         session.rateLimitResumeAttempts ?? 0,
         session.nextResumeAt ?? null,
@@ -408,6 +431,7 @@ export class SqliteStore {
     update: {
       status?: AgentSession["status"];
       statusReason?: string | null;
+      statusReasonAt?: string | null;
       lastStatusAt?: string;
       lastOutputAt?: string | null;
       endedAt?: string | null;
@@ -423,6 +447,10 @@ export class SqliteStore {
     if (update.statusReason !== undefined) {
       sets.push("status_reason = ?");
       values.push(update.statusReason);
+    }
+    if (update.statusReasonAt !== undefined) {
+      sets.push("status_reason_at = ?");
+      values.push(update.statusReasonAt);
     }
     if (update.lastStatusAt !== undefined) {
       sets.push("last_status_at = ?");

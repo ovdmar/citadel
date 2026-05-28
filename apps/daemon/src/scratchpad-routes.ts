@@ -3,9 +3,13 @@
 // capturing the path in a closure at registration time would silently miss
 // runtime updates to `scratchpad.path`.
 import { type CitadelConfig, effectiveNotesPath } from "@citadel/config";
-import type { ReadScratchpadResult } from "@citadel/contracts";
+import type { ProviderHealth, ReadScratchpadResult } from "@citadel/contracts";
+import { SEARCH_LIMITS, fuzzySearchBlocks } from "@citadel/core";
+import type { SqliteStore } from "@citadel/db";
+import type { OperationService } from "@citadel/operations";
 import type express from "express";
 import { findHistoryEntry, listHistorySummaries } from "./scratchpad-history.js";
+import { refineScratchpad } from "./scratchpad-refine.js";
 import {
   SCRATCHPAD_MAX_BYTES,
   addBlock,
@@ -19,8 +23,15 @@ import {
 
 type Emit = (type: string, payload: unknown) => void;
 
-export function registerScratchpadRoutes(input: { app: express.Express; config: CitadelConfig; emit: Emit }) {
-  const { app, config, emit } = input;
+export function registerScratchpadRoutes(input: {
+  app: express.Express;
+  config: CitadelConfig;
+  emit: Emit;
+  store?: SqliteStore;
+  operations?: OperationService;
+  providerHealth?: () => Promise<ProviderHealth[]>;
+}) {
+  const { app, config, emit, store, operations, providerHealth } = input;
   const paths = () => ({ notesPath: effectiveNotesPath(config), dataDir: config.dataDir });
 
   app.get("/api/scratchpad", (_req, res) => {
@@ -72,6 +83,19 @@ export function registerScratchpadRoutes(input: { app: express.Express; config: 
     res.json(listBlocks(paths()));
   });
 
+  // Fuzzy search over block text. Shares the `fuzzySearchBlocks` core function
+  // with the cockpit's floating searchbar so ranking is identical UI ↔ API ↔
+  // MCP. Empty q → 400; limit is clamped to [1, SEARCH_LIMITS.max].
+  app.get("/api/scratchpad/blocks/search", (req, res) => {
+    const q = typeof req.query.q === "string" ? req.query.q : "";
+    if (q.trim().length === 0) return res.status(400).json({ error: "query_required" });
+    const limitRaw = typeof req.query.limit === "string" ? Number.parseInt(req.query.limit, 10) : SEARCH_LIMITS.default;
+    const limit = Number.isFinite(limitRaw) ? limitRaw : SEARCH_LIMITS.default;
+    const { blocks } = listBlocks(paths());
+    const matches = fuzzySearchBlocks(blocks, q, limit);
+    res.json({ matches });
+  });
+
   app.post("/api/scratchpad/blocks", (req, res) => {
     const body = (req.body ?? {}) as { text?: unknown; position?: unknown };
     if (typeof body.text !== "string") return res.status(400).json({ error: "text_required" });
@@ -111,6 +135,28 @@ export function registerScratchpadRoutes(input: { app: express.Express; config: 
     emit("scratchpad.history.updated", { updatedAt: result.snapshot.updatedAt });
     res.json({ snapshot: result.snapshot });
   });
+
+  // Refine scratchpad — launches an agent with the saved Citadel Action prompt
+  // (or an override). Full degradation matrix lives in `scratchpad-refine.ts`.
+  // Requires store + operations + providerHealth — only registered when the
+  // caller supplied them (vitest fixtures that don't need refine can omit).
+  if (store && operations && providerHealth) {
+    app.post("/api/scratchpad/refine", async (req, res) => {
+      const body = (req.body ?? {}) as { repoId?: unknown; repoName?: unknown; prompt?: unknown };
+      const input: { repoId?: string; repoName?: string; prompt?: string } = {};
+      if (typeof body.repoId === "string") input.repoId = body.repoId;
+      if (typeof body.repoName === "string") input.repoName = body.repoName;
+      if (typeof body.prompt === "string") input.prompt = body.prompt;
+      const result = await refineScratchpad({ config, store, operations, providerHealth }, input);
+      if (result.ok) {
+        emit("workspace.updated", { workspaceId: result.workspaceId, operationId: result.operationId });
+        if (result.sessionId) emit("agent.updated", { workspaceId: result.workspaceId, sessionId: result.sessionId });
+        return res.json(result);
+      }
+      const status = result.error === "launch_failed" ? 502 : 400;
+      res.status(status).json(result);
+    });
+  }
 }
 
 function errorStatus(code: string): number {
