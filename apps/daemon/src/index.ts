@@ -1,7 +1,7 @@
 import { defaultConfigPath, loadConfig, loadDevState, resolveWorktreeRoot, saveDevState } from "@citadel/config";
 import { SqliteStore } from "@citadel/db";
 import { OperationService } from "@citadel/operations";
-import { ensureCitadelTmuxRunning } from "@citadel/terminal";
+import { ensureCitadelTmuxRunning, ensureWorktreeTmuxRunning } from "@citadel/terminal";
 import { createDaemonApp } from "./app.js";
 import { runBootRestore } from "./boot-restore.js";
 import { reapOrphans } from "./orphan-reaper.js";
@@ -98,30 +98,44 @@ server.listen(config.port, config.bindHost, () => {
       ...(devState?.webPort ? { webPort: devState.webPort } : {}),
     });
   }
-  // Tmux ownership probe + auto-start. citadel-tmux.service is a separate
-  // systemd unit (intentionally — its lifecycle is decoupled from this
-  // daemon's so daemon restarts don't kill agent panes). But the daemon
-  // can't function without it, so if the unit's down we kick it up. If the
-  // socket is owned by an orphan tmux server (someone ran `tmux -L citadel`
-  // outside the unit, e.g. during a botched install), report it as degraded
-  // but DO NOT kill the orphan — every live agent pane lives in it. The
-  // user resolves it by running `make tmux-service` when they're ready.
-  ensureCitadelTmuxRunning()
-    .then((ownership) => {
-      setTmuxOwnership(ownership);
-      if (ownership.kind === "absent") {
+  // Tmux ownership probe + auto-start. Two paths, decided by isWorktreeDaemon:
+  //   - Prod (systemd): citadel-tmux.service owns a single shared `citadel`
+  //     socket. The daemon kicks the unit up if absent, and reports orphan
+  //     ownership (someone ran `tmux -L citadel` outside the unit) without
+  //     killing — every live agent pane lives in that server.
+  //   - Worktree: the daemon owns a per-checkout socket (CITADEL_TMUX_SOCKET=
+  //     citadel-w-<hash>, set by `make deploy`). Spawned detached so HMR
+  //     restarts of the daemon don't kill agent panes. Per-worktree isolation
+  //     means the orphan-reaper can never SIGKILL prod's sessions.
+  if (isWorktreeDaemon) {
+    const socket = process.env.CITADEL_TMUX_SOCKET ?? "";
+    ensureWorktreeTmuxRunning(socket)
+      .then((ownership) => {
+        setTmuxOwnership(ownership);
+      })
+      .catch((error) => {
         console.warn(
-          "[tmux-guard] citadel-tmux.service is absent after start attempt — agent spawns will fail until it's up",
+          `[tmux-guard] worktree tmux start failed: ${error instanceof Error ? error.message : String(error)}`,
         );
-      } else if (ownership.kind === "orphan") {
-        console.warn(
-          `[tmux-guard] orphan tmux server holding socket (pid=${ownership.pid}, supervised=${ownership.supervisedPid ?? "none"}) — run \`make tmux-service\` to reconcile (destructive: restarts all agents)`,
-        );
-      }
-    })
-    .catch((error) => {
-      console.warn(`[tmux-guard] probe failed: ${error instanceof Error ? error.message : String(error)}`);
-    });
+      });
+  } else {
+    ensureCitadelTmuxRunning()
+      .then((ownership) => {
+        setTmuxOwnership(ownership);
+        if (ownership.kind === "absent") {
+          console.warn(
+            "[tmux-guard] citadel-tmux.service is absent after start attempt — agent spawns will fail until it's up",
+          );
+        } else if (ownership.kind === "orphan") {
+          console.warn(
+            `[tmux-guard] orphan tmux server holding socket (pid=${ownership.pid}, supervised=${ownership.supervisedPid ?? "none"}) — run \`make tmux-service\` to reconcile (destructive: restarts all agents)`,
+          );
+        }
+      })
+      .catch((error) => {
+        console.warn(`[tmux-guard] probe failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+  }
 
   // Boot-time auto-restore. Fires once after listen() succeeds — the
   // cockpit polls /api/state.bootRestore for the running summary while we

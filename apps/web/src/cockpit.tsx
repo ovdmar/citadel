@@ -28,8 +28,15 @@ import { prToneFor } from "./workspace-card.js";
 const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";
 const STORAGE_LAST_REPO = "citadel.last-repo";
 const STORAGE_SESSION_BY_WORKSPACE = "citadel.session-by-workspace";
+const TERMINAL_FOCUS_DELAYS_MS = [0, 50, 160, 400];
 
 type MobileView = "navigator" | "stage" | "inspector";
+
+function focusTerminalSoon(sessionId: string) {
+  for (const delay of TERMINAL_FOCUS_DELAYS_MS) {
+    window.setTimeout(() => focusActiveTerminal(sessionId), delay);
+  }
+}
 
 export function Cockpit() {
   // Use the filtered variant so workspaces in the optimistic-remove
@@ -162,10 +169,15 @@ export function Cockpit() {
     // limitation: xterm keyboard capture still needs a click inside the
     // pane. Scheduled in a microtask so React's commit (mounting the new
     // active terminal) completes before we try to focus.
-    const targetSessionId = activeSessionByWorkspace[workspace.id];
+    const targetSessionId =
+      activeSessionByWorkspace[workspace.id] ?? allSessions.find((session) => session.workspaceId === workspace.id)?.id;
     if (targetSessionId) {
-      queueMicrotask(() => focusActiveTerminal(targetSessionId));
+      focusTerminalSoon(targetSessionId);
     }
+  };
+  const focusWorkspaceId = (workspaceId: string) => {
+    setActiveWorkspaceId(workspaceId);
+    setMobileView("stage");
   };
 
   const repoNames = useMemo(() => {
@@ -268,6 +280,7 @@ export function Cockpit() {
               onCloseCreateWorkspace={() => setCreateWorkspaceOpen(false)}
               onCollapse={layout.toggleLeft}
               onPickWorkspace={focusWorkspace}
+              onPickWorkspaceId={focusWorkspaceId}
             />
           </aside>
         )}
@@ -288,9 +301,10 @@ export function Cockpit() {
               allSessions={allSessions}
               runtimes={data?.runtimes ?? []}
               activeSessionId={activeSessionId}
-              onActiveSession={(sessionId) =>
-                setActiveSessionByWorkspace((current) => ({ ...current, [activeWorkspace.id]: sessionId }))
-              }
+              onActiveSession={(sessionId) => {
+                setActiveSessionByWorkspace((current) => ({ ...current, [activeWorkspace.id]: sessionId }));
+                focusTerminalSoon(sessionId);
+              }}
             />
           ) : (
             <EmptyStage hasRepos={Boolean(data?.repos.length)} />

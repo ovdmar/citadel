@@ -158,8 +158,7 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
   const liveTmuxNames = await awaitTmuxSessions(probe, tmuxReadinessTimeoutMs);
   if (liveTmuxNames === null && tmuxReadinessTimeoutMs > 0) {
     console.warn(
-      `[boot-restore] tmux unreachable after ${tmuxReadinessTimeoutMs}ms — skipping fresh-boot reconciliation; ` +
-        `live DB rows will only flip once status-monitor's first probe succeeds`,
+      `[boot-restore] tmux unreachable after ${tmuxReadinessTimeoutMs}ms — skipping fresh-boot reconciliation; live DB rows will only flip once status-monitor's first probe succeeds`,
     );
   }
   const flippedStale = reconcileStaleLiveRows(deps.store, liveTmuxNames);

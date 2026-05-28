@@ -348,7 +348,7 @@ describe("collectRestoreCandidates — codex UUID backfill", () => {
       const reread = fixture.store.listSessions("ws_1").find((s) => s.id === "sess_codex_orphan");
       expect(reread?.runtimeSessionId).toBe(sessionId);
     } finally {
-      if (originalHome === undefined) delete process.env.HOME;
+      if (originalHome === undefined) Reflect.deleteProperty(process.env, "HOME");
       else process.env.HOME = originalHome;
     }
   });
@@ -383,7 +383,7 @@ describe("collectRestoreCandidates — codex UUID backfill", () => {
       const candidates = collectRestoreCandidates(fixture.store);
       expect(candidates.find((c) => c.sourceSessionId === "sess_codex_nofile")).toBeUndefined();
     } finally {
-      if (originalHome === undefined) delete process.env.HOME;
+      if (originalHome === undefined) Reflect.deleteProperty(process.env, "HOME");
       else process.env.HOME = originalHome;
     }
   });

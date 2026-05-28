@@ -41,6 +41,7 @@ import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
+import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import {
@@ -152,19 +153,8 @@ export function createDaemonApp(input: {
     }
   };
 
-  // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
-  //
-  // Boot-time discover-and-adopt: ttyds are spawned detached and the systemd
-  // unit runs with KillMode=process, so they outlive daemon restarts. Scan
-  // the ttyd port range for survivors from the previous incarnation and
-  // adopt them back into the manager — same key, same PID, no respawn.
-  // The browser's WebSocket auto-reconnect (xterm `reconnect=3`) lands on
-  // the *same* ttyd it was talking to before the restart.
-  //
-  // Skipped under vitest: tests that boot a daemon all derive the same slot
-  // 0 range as the production install for config.port=4010, so an adopt()
-  // pass would re-attach to the live cockpit's ttyds and the next test that
-  // calls release() would kill them.
+  // Register terminal proxy before the SPA fallback; adopt detached ttyds on daemon restart.
+  // Skip adoption under Vitest so tests cannot attach to and release live cockpit ttyds.
   if (!process.env.VITEST) {
     const survivors = discoverExistingTtyds({
       portBase: ttyd.config.portBase,
@@ -511,7 +501,10 @@ export function createDaemonApp(input: {
     "/api/workspaces",
     asyncRoute(async (req, res) => {
       const input = CreateWorkspaceInputSchema.parse(req.body);
-      const result = await operations.createWorkspace(input);
+      const result = await operations.createWorkspace(input, {
+        deferProvisioning: true,
+        onWorkspaceUpdated: (payload) => emit("workspace.updated", payload),
+      });
       emit("workspace.updated", result);
       res.status(202).json(result);
     }),
@@ -693,7 +686,8 @@ export function createDaemonApp(input: {
 
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, config });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
-  registerScratchpadRoutes({ app, config, emit });
+  registerScratchpadRoutes({ app, config, emit, store, operations, providerHealth: cachedProviderHealth });
+  registerCitadelActionRoutes({ app, config, emit });
   backfillScratchpadOnStartup(config);
 
   fsWatchers = createWorkspaceFsWatchers({

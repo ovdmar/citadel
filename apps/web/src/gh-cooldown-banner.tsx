@@ -64,12 +64,14 @@ export function GhCooldownBanner(props: { summaries: Map<string, WorkspaceCockpi
   return (
     <NoticeModal title="GitHub rate-limited" onDismiss={dismiss}>
       <p>
-        Citadel paused GitHub requests until <strong>{hh}:{mm}</strong>. PR and CI data
-        will keep showing the last successful snapshot until the cooldown lifts.
+        Citadel paused GitHub requests until{" "}
+        <strong>
+          {hh}:{mm}
+        </strong>
+        . PR and CI data will keep showing the last successful snapshot until the cooldown lifts.
       </p>
       <p className="cit-notice-modal__hint">
-        The cockpit stays usable while this is dismissed; the notice will
-        re-appear if a new cooldown is triggered.
+        The cockpit stays usable while this is dismissed; the notice will re-appear if a new cooldown is triggered.
       </p>
       <div className="cit-notice-modal__actions">
         <button type="button" className="cit-notice-modal__primary" onClick={dismiss}>

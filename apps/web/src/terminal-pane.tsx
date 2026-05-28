@@ -64,8 +64,9 @@ export function subscribeTerminalHandle(listener: (sessionId: string) => void): 
 //   - no handle is registered (session not yet mounted)
 //   - document.activeElement is a text input or contenteditable (don't steal
 //     focus while the user is typing — e.g. inline workspace-title rename).
-// The cross-origin ttyd iframe means this delivers focus to the iframe
-// element only; xterm needs one click inside the pane to capture the keyboard.
+// The cross-origin ttyd iframe may not always allow the parent to drive xterm
+// keyboard focus, but focusing both the frame element and WindowProxy gives
+// Chrome/ttyd the best chance of making workspace selection ready for typing.
 export function focusActiveTerminal(sessionId: string | null | undefined): void {
   if (!sessionId) return;
   const handle = REGISTRY.get(sessionId);
@@ -160,12 +161,19 @@ export function TerminalPane(props: { session: AgentSession }) {
     void ensure({ bumpFrame: true, force: true });
   }, [ensure]);
 
-  // Focus the iframe element (NOT contentWindow — the ttyd payload is on a
-  // different origin so contentWindow.focus() cannot deliver xterm
-  // keyboard focus). preventScroll keeps the cockpit layout stable when
-  // selecting a workspace far down the nav.
+  // Focus the iframe element first, then ask the nested browsing context to
+  // focus itself. The try/catch keeps cross-origin focus restrictions from
+  // breaking workspace selection; preventScroll keeps the cockpit layout
+  // stable when selecting a workspace far down the nav.
   const focusIframe = useCallback(() => {
-    iframeRef.current?.focus({ preventScroll: true });
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    iframe.focus({ preventScroll: true });
+    try {
+      iframe.contentWindow?.focus();
+    } catch {
+      // Cross-origin focus restrictions are browser-dependent.
+    }
   }, []);
 
   // Publish the live URL + reload + focus callbacks so the stage tab and

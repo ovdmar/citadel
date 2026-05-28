@@ -24,9 +24,7 @@ export async function assertDaemonIsSandbox(request: APIRequestContext, apiBase:
   const dbPath = body.databasePath;
   if (typeof dbPath !== "string" || !dbPath.startsWith(expectedPrefix)) {
     throw new Error(
-      `[sandbox-guard] daemon at ${apiBase} reports databasePath=${dbPath ?? "<missing>"}, which is not under ${expectedPrefix}. ` +
-        "Refusing to run — this would overwrite real user data (see incident 2026-05-27: e2e suite clobbered ~/.local/share/citadel/scratchpad.md). " +
-        "If this is intentional, set CITADEL_PLAYWRIGHT_SANDBOX_PREFIX to a prefix that matches the target daemon's data dir.",
+      `[sandbox-guard] daemon at ${apiBase} reports databasePath=${dbPath ?? "<missing>"}, which is not under ${expectedPrefix}. Refusing to run — this would overwrite real user data (see incident 2026-05-27: e2e suite clobbered ~/.local/share/citadel/scratchpad.md). If this is intentional, set CITADEL_PLAYWRIGHT_SANDBOX_PREFIX to a prefix that matches the target daemon's data dir.`,
     );
   }
 }

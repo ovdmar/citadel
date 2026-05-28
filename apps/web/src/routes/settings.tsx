@@ -11,6 +11,7 @@ import {
   History,
   Moon,
   Server,
+  Sparkles,
   Sun,
   Workflow,
 } from "lucide-react";
@@ -18,12 +19,13 @@ import { useEffect, useState } from "react";
 import { api, queryClient } from "../api.js";
 import { useStateQuery } from "../app-state.js";
 import { mcpUrlFromOrigin } from "../lib/mcp-url.js";
+import { CitadelActionsPanel } from "../settings-citadel-actions.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { RestoreModal, RestorePanelBody } from "../settings-restore.js";
 import { AgentsPanel } from "../settings-runtimes.js";
 
-type SectionId = "overview" | "providers" | "agents" | "repositories" | "restore" | "mcp" | "notes";
+type SectionId = "overview" | "providers" | "agents" | "repositories" | "restore" | "actions" | "mcp" | "notes";
 
 type Section = {
   id: SectionId;
@@ -57,6 +59,12 @@ const SECTIONS: Section[] = [
     label: "Restore sessions",
     description: "Resume conversations whose agent died.",
     icon: History,
+  },
+  {
+    id: "actions",
+    label: "Citadel Actions",
+    description: "Configurable prompt presets (e.g. scratchpad Refine).",
+    icon: Sparkles,
   },
   { id: "mcp", label: "MCP", description: "Model Context Protocol servers Citadel exposes to agents.", icon: Workflow },
   {
@@ -183,6 +191,16 @@ export function SettingsView() {
                 help="When the daemon restarts or a tmux pane gets killed, the runtime's transcript on disk survives. Citadel registers a UUID at spawn (claude-code --session-id, codex post-spawn discovery), so any workspace whose latest session row has a UUID but no live pane can be brought back via `--resume <uuid>`. Empty here means nothing to restore."
               />
               <RestorePanelBody />
+            </>
+          ) : null}
+          {section === "actions" ? (
+            <>
+              <PageHead
+                title="Citadel Actions"
+                sub="Configurable prompt presets surfaced as buttons in the cockpit."
+                help="Each action stores a name + description + icon + prompt template at <dataDir>/citadel-actions.json. The built-in 'Refine scratchpad' action seeds on first read; it can be edited or reset to default but not deleted."
+              />
+              <CitadelActionsPanel />
             </>
           ) : null}
           {restoreModalOpen ? <RestoreModal onClose={() => setRestoreModalOpen(false)} /> : null}

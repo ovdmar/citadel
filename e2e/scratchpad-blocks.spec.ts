@@ -34,9 +34,11 @@ test.describe("scratchpad blocks", () => {
     await expect(blockList.getByText("first idea")).toBeVisible();
     await expect(blockList.getByText("second idea")).toBeVisible();
 
-    // The history sidebar is hidden on the narrow (mobile/tablet) layouts;
-    // assert the migrate-to-blocks pill via the API on those projects.
+    // The history sidebar is hidden by default — reveal it via the toggle
+    // (desktop only). On narrow projects the toggle is still rendered but the
+    // sidebar layout uses the API assertion path below for stability.
     if (testInfo.project.name === "desktop") {
+      await page.getByRole("button", { name: "Show history" }).click();
       const history = page.locator(".scratchpad-history-list");
       await expect(history.locator(".source-migrate")).toBeVisible();
     } else {
@@ -86,8 +88,10 @@ test.describe("scratchpad blocks", () => {
     const composer = page.locator(".scratchpad-composer-input");
     await composer.focus();
     await composer.fill("blur should save this");
-    // Defocus by clicking elsewhere — onBlur should fire and submit.
-    await page.locator(".dashboard-title").click();
+    // Defocus by clicking elsewhere — onBlur should fire and submit. The
+    // drawer title is a static span inside the panel, so clicking it removes
+    // focus from the composer without closing the drawer or navigating.
+    await page.locator(".scratchpad-drawer-title").click();
     await expect(page.locator(".scratchpad-block-list").getByText("blur should save this")).toBeVisible();
     const list = await request.get(`${API_BASE}/api/scratchpad/blocks`);
     const body = (await list.json()) as { blocks: Array<{ text: string }> };

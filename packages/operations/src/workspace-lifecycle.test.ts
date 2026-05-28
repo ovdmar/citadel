@@ -47,6 +47,57 @@ describe("workspace lifecycle", () => {
     expect((result.dirtySummary?.unpushedCommits.length ?? 0) >= 1).toBe(true);
   });
 
+  it("preflights dirty removal without starting a remove operation", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "DirtyCheck", source: "scratch" });
+    const workspace = store.listWorkspaces().find((w) => w.id === created.workspaceId);
+    fs.writeFileSync(path.join(workspace?.path ?? "", "dirty.txt"), "dirty\n");
+
+    const result = service.checkWorkspaceRemoval({ workspaceId: created.workspaceId });
+
+    expect(result.removable).toBe(false);
+    expect(result.reason).toBe("dirty");
+    expect(result.dirtySummary?.files.map((file) => file.path)).toContain("dirty.txt");
+    expect(store.listOperations().filter((operation) => operation.type === "workspace.remove")).toHaveLength(0);
+  });
+
+  it("can return after inserting the workspace while provisioning continues", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [
+        {
+          id: "slow-setup",
+          kind: "command",
+          event: "workspace.setup",
+          command: "node",
+          args: ["-e", "setTimeout(() => process.exit(0), 250)"],
+          blocking: true,
+        },
+      ],
+      repoDefaults: { setupHookIds: ["slow-setup"], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+
+    const created = await service.createWorkspace(
+      { repoId: repo.id, name: "AsyncSetup", source: "scratch" },
+      { deferProvisioning: true },
+    );
+
+    expect(store.listWorkspaces().find((w) => w.id === created.workspaceId)?.lifecycle).toBe("creating");
+    await waitFor(() => store.listWorkspaces().find((w) => w.id === created.workspaceId)?.lifecycle === "ready");
+  });
+
   it("omits dirtySummary on a successful removeWorkspace (clean worktree)", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
@@ -133,4 +184,12 @@ function createGitFixture() {
 
 function run(command: string, args: string[], cwd: string) {
   execFileSync(command, args, { cwd, stdio: "pipe" });
+}
+
+async function waitFor(predicate: () => boolean) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("timed_out");
 }

@@ -1,9 +1,10 @@
-import type { AgentRuntime, Namespace, Repo } from "@citadel/contracts";
+import type { AgentRuntime, Namespace, Repo, Workspace } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, Search, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
+import { useToast } from "./toast.js";
 
 export type GroupKey = "repo" | "status" | "namespace" | "none";
 
@@ -305,6 +306,8 @@ const JIRA_KEY_FROM_URL = /\/browse\/([A-Z][A-Z0-9]+-\d+)/i;
 const JIRA_KEY_BARE = /^[A-Z][A-Z0-9]+-\d+$/;
 const GITHUB_PR_URL = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/i;
 const SLACK_URL = /^https?:\/\/[a-z0-9.-]*slack\.com\//i;
+const WORKSPACE_READY_POLL_MS = 1000;
+const WORKSPACE_READY_MAX_ATTEMPTS = 180;
 
 // Parse the freeform "link" field — Jira issue, GitHub PR, or Slack thread —
 // into the structured fields the workspace API expects. Returning a `source`
@@ -355,6 +358,7 @@ function defaultNameForSubmit(linked: LinkedContext): string {
 }
 
 export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
+  const toast = useToast();
   const initialRepo = props.repos.find((repo) => repo.id === props.lastRepoId)?.id ?? props.repos[0]?.id ?? "";
   const [repoId, setRepoId] = useState(initialRepo);
   const [prompt, setPrompt] = useState("");
@@ -362,7 +366,6 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   const [name, setName] = useState("");
   const [branch, setBranch] = useState("");
   const [namespaceId, setNamespaceId] = useState("");
-  const [error, setError] = useState("");
 
   const launchableRuntimes = useMemo(
     () => props.runtimes.filter((runtime) => runtime.id !== "shell" && runtime.health === "healthy"),
@@ -416,15 +419,12 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
         body: JSON.stringify(payload),
       });
       if (runtimeId) {
-        const sessionPayload: Record<string, unknown> = {
-          workspaceId: result.workspaceId,
-          runtimeId,
-        };
-        if (prompt.trim()) sessionPayload.prompt = prompt.trim();
-        await api("/api/agent-sessions", {
-          method: "POST",
-          body: JSON.stringify(sessionPayload),
-        }).catch(() => {});
+        void launchAgentWhenWorkspaceReady(result.workspaceId, runtimeId, prompt.trim()).catch((error) => {
+          toast.push({
+            tone: "error",
+            message: `Agent launch failed: ${error instanceof Error ? error.message : "unknown error"}`,
+          });
+        });
       }
       return result;
     },
@@ -432,7 +432,12 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
       queryClient.invalidateQueries({ queryKey: ["state"] });
       props.onCreated(result.workspaceId);
     },
-    onError: (err) => setError(err instanceof Error ? err.message : "create_failed"),
+    onError: (err) => {
+      toast.push({
+        tone: "error",
+        message: `Workspace creation failed: ${err instanceof Error ? err.message : "create_failed"}`,
+      });
+    },
   });
 
   const linkBadge =
@@ -528,22 +533,44 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
             No healthy agents configured. The workspace will be created without launching one.
           </div>
         ) : null}
-        {error ? (
-          <div className="empty compact" style={{ color: "var(--color-danger)" }}>
-            {error}
-          </div>
-        ) : null}
       </div>
       <div className="modal-footer">
         <Button type="button" variant="secondary" onClick={props.onClose}>
           Cancel
         </Button>
-        <Button type="button" disabled={!repoId || create.isPending} onClick={() => create.mutate()}>
+        <Button
+          type="button"
+          disabled={!repoId || create.isPending}
+          onClick={() => {
+            create.mutate();
+            props.onClose();
+          }}
+        >
           {create.isPending ? "Creating…" : runtimeId ? "Create & launch agent" : "Create workspace"}
         </Button>
       </div>
     </Modal>
   );
+}
+
+async function launchAgentWhenWorkspaceReady(workspaceId: string, runtimeId: string, prompt: string) {
+  for (let attempt = 0; attempt < WORKSPACE_READY_MAX_ATTEMPTS; attempt += 1) {
+    const state = await api<{ workspaces: Array<Pick<Workspace, "id" | "lifecycle">> }>("/api/workspaces");
+    const workspace = state.workspaces.find((entry) => entry.id === workspaceId);
+    if (workspace?.lifecycle === "ready") {
+      const sessionPayload: Record<string, unknown> = { workspaceId, runtimeId };
+      if (prompt) sessionPayload.prompt = prompt;
+      await api("/api/agent-sessions", {
+        method: "POST",
+        body: JSON.stringify(sessionPayload),
+      });
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      return;
+    }
+    if (workspace?.lifecycle === "failed") throw new Error("workspace_setup_failed");
+    await new Promise((resolve) => window.setTimeout(resolve, WORKSPACE_READY_POLL_MS));
+  }
+  throw new Error("workspace_setup_timeout");
 }
 
 export function Modal(props: { title: string; onClose: () => void; children: ReactNode }) {

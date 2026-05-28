@@ -1,14 +1,8 @@
 // Extracted from `index.ts` to keep that file under the 800-line cap
-// (`scripts/checks/file-size.ts`) and to colocate the funny-name retry
-// loop + provisioning shape with the future async-create event emitter
-// (Step 6 in workspace-nav-lifecycle plan).
-//
-// TODO(implement-task): AC3 (async create + setup-progress UI) is deferred
-// to a follow-up PR. The plan's Step 6 splits this function into
-// `beginCreateWorkspace` + `runWorkspaceProvisioning` + `createWorkspaceAndWait`,
-// adds a `workspace.setup.stage` SSE event, and renders an inline progress
-// overlay on the workspace card. Out of scope here to keep the PR
-// reviewable — see .agents/plans/workspace-nav-lifecycle.md §Step 6.
+// (`scripts/checks/file-size.ts`) and to colocate the funny-name retry loop
+// with workspace provisioning. The daemon HTTP route uses the optional
+// deferred provisioning mode so the create modal can close as soon as the
+// workspace row exists while setup continues in the background.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -208,7 +202,7 @@ async function provisionWorkspace(
     branch: string;
     workspacePath: string;
     existingBranch: string | null;
-    onWorkspaceUpdated?: (payload: { workspaceId: string; operationId: string }) => void;
+    onWorkspaceUpdated: ((payload: { workspaceId: string; operationId: string }) => void) | undefined;
   },
 ): Promise<void> {
   const { repo, workspace, operation, baseBranch, branch, workspacePath, existingBranch, onWorkspaceUpdated } = input;

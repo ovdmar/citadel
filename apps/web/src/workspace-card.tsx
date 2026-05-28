@@ -1,6 +1,13 @@
-import type { AgentSession, Namespace, PullRequestSummary, Workspace, WorkspaceDirtySummary } from "@citadel/contracts";
+import type {
+  AgentSession,
+  Namespace,
+  Operation,
+  PullRequestSummary,
+  Workspace,
+  WorkspaceDirtySummary,
+} from "@citadel/contracts";
 import { sessionNeedsAttention } from "@citadel/core";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
@@ -12,6 +19,7 @@ import "./workspace-status-dot.css";
 export type WorkspaceCardData = {
   workspace: Workspace;
   sessions: AgentSession[];
+  operation?: Operation | null;
   pullRequest?: PullRequestSummary | null;
   approval?: ApprovalTone;
   // When provided, skip the global state lookup and use these directly.
@@ -84,6 +92,14 @@ export function WorkspaceCard(
   const additions = pullRequest?.additions ?? null;
   const deletions = pullRequest?.deletions ?? null;
   const hasDiff = additions !== null || deletions !== null;
+  const lifecycleText =
+    workspace.lifecycle === "creating"
+      ? props.operation?.message
+        ? `${props.operation.message} · ${props.operation.progress}%`
+        : "Setting up workspace…"
+      : workspace.lifecycle === "failed"
+        ? (props.operation?.error ?? "Workspace setup failed")
+        : null;
 
   // Only hit the global state query when callers haven't already passed the
   // resolved namespace / namespace list in via props.
@@ -202,10 +218,11 @@ export function WorkspaceCard(
     .join(" ");
 
   return (
-    <div className={wrapClassName} {...dragHandlers} {...reorderDropHandlers}>
+    <div className={wrapClassName} {...reorderDropHandlers}>
       <button
         type="button"
         className={`workspace-card ${props.active ? "active" : ""}`}
+        {...dragHandlers}
         onClick={() => {
           if (!editing) props.onSelect();
         }}
@@ -271,6 +288,11 @@ export function WorkspaceCard(
           <span className="workspace-card-branch" title={workspace.branch}>
             {workspace.branch}
           </span>
+          {lifecycleText ? (
+            <span className={`workspace-card-lifecycle ${workspace.lifecycle}`} title={lifecycleText}>
+              {lifecycleText}
+            </span>
+          ) : null}
         </span>
         <span className="workspace-card-right" aria-hidden>
           {namespace ? (
@@ -469,10 +491,37 @@ type DropResult = {
   dirtySummary?: WorkspaceDirtySummary | null;
 };
 
+type DropCheckResult = {
+  removable: boolean;
+  dirty: boolean;
+  reason: "ok" | "root_workspace" | "dirty";
+  dirtySummary?: WorkspaceDirtySummary | null;
+  error?: string | null;
+};
+
 function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void }) {
   const optimistic = useOptimisticRemove();
   const toast = useToast();
   const workspaceId = props.workspace.id;
+  const check = useQuery({
+    queryKey: ["workspace-removal-check", workspaceId],
+    queryFn: async (): Promise<DropCheckResult> => {
+      const response = await fetch(`/api/workspaces/${workspaceId}/removal-check`);
+      const body = (await response.json().catch(() => ({}))) as Partial<DropCheckResult> & { error?: string };
+      if (!response.ok && response.status !== 409) {
+        throw new Error(body.error ?? "workspace_removal_check_failed");
+      }
+      return {
+        removable: Boolean(body.removable),
+        dirty: Boolean(body.dirty),
+        reason: body.reason === "root_workspace" || body.reason === "dirty" ? body.reason : "ok",
+        dirtySummary: body.dirtySummary ?? null,
+        error: body.error ?? null,
+      };
+    },
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
   const drop = useMutation({
     mutationFn: async (): Promise<DropResult> => {
       const response = await fetch(`/api/workspaces/${workspaceId}`, {
@@ -538,11 +587,16 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
     },
   });
   const result = drop.data;
-  const dirtyBlocked = Boolean(result && !result.removed && result.dirty);
+  const preflight = check.data;
+  const preflightBlocked = Boolean(preflight && !preflight.removable);
+  const dirtyBlocked =
+    Boolean(preflight && !preflight.removable && preflight.dirty) || Boolean(result && !result.removed && result.dirty);
+  const rootBlocked = Boolean(preflight && !preflight.removable && preflight.reason === "root_workspace");
   const teardownBlocked = Boolean(result && !result.removed && !result.dirty);
-  const dirtySummary = result?.dirtySummary ?? null;
+  const dirtySummary = result?.dirtySummary ?? preflight?.dirtySummary ?? null;
   const hasStructuredSummary =
     dirtyBlocked && dirtySummary !== null && (dirtySummary.files.length > 0 || dirtySummary.unpushedCommits.length > 0);
+  const dropDisabled = drop.isPending || check.isLoading || check.isError || preflightBlocked || !preflight?.removable;
   return (
     <div className="drop-workspace-backdrop" onMouseDown={props.onClose}>
       <dialog
@@ -556,11 +610,14 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
           This runs the repo's teardown hook (if any) and removes the git worktree. Deletion is blocked if the worktree
           has uncommitted changes or unpushed commits.
         </p>
+        {check.isLoading ? <p className="empty compact">Checking workspace status…</p> : null}
+        {check.error instanceof Error ? <p className="drop-workspace-error">{check.error.message}</p> : null}
         {dirtyBlocked ? (
           <p className="drop-workspace-error">
             Workspace has uncommitted changes or unpushed commits. Commit and push before dropping.
           </p>
         ) : null}
+        {rootBlocked ? <p className="drop-workspace-error">The root workspace is not removable.</p> : null}
         {hasStructuredSummary && dirtySummary ? (
           <fieldset className="drop-workspace-summary" aria-label="Blocking changes">
             {dirtySummary.files.length > 0 ? (
@@ -603,7 +660,7 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
             type="button"
             className="drop-workspace-confirm"
             onClick={() => drop.mutate()}
-            disabled={drop.isPending || dirtyBlocked}
+            disabled={dropDisabled}
           >
             {drop.isPending ? "Dropping..." : "Drop workspace"}
           </button>

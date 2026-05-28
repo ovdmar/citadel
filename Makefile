@@ -15,13 +15,18 @@ SHELL := /bin/bash
 # daemon may shift to the next free port on EADDRINUSE and persist that to
 # .citadel/dev.json; the deploy hook and EFFECTIVE_PORT below pick that up so
 # the URLs printed here match where the daemon actually listens.
-WORKTREE_PORT     := $(shell printf '%s' "$(CURDIR)"      | cksum 2>/dev/null | awk '{print 4110 + ($$1 % 100)}')
-WORKTREE_WEB_PORT := $(shell printf '%s' "$(CURDIR)/web"  | cksum 2>/dev/null | awk '{print 5210 + ($$1 % 100)}')
-WORKTREE_DATA_DIR := $(CURDIR)/.citadel/data
-WORKTREE_LOGS_DIR := $(CURDIR)/.citadel/logs
-WORKTREE_PID      := $(WORKTREE_LOGS_DIR)/daemon.pid
-WORKTREE_LOG      := $(WORKTREE_LOGS_DIR)/daemon.log
-DEV_STATE         := $(CURDIR)/.citadel/dev.json
+WORKTREE_PORT        := $(shell printf '%s' "$(CURDIR)"      | cksum 2>/dev/null | awk '{print 4110 + ($$1 % 100)}')
+WORKTREE_WEB_PORT    := $(shell printf '%s' "$(CURDIR)/web"  | cksum 2>/dev/null | awk '{print 5210 + ($$1 % 100)}')
+# tmux socket name. Per-checkout cksum (not port) so the socket stays stable
+# even if the daemon walks ports on EADDRINUSE — agents keep the same tmux
+# home across restarts. Disjoint from the systemd-managed `citadel` socket so
+# the worktree daemon's orphan-reaper can never see prod sessions.
+WORKTREE_TMUX_SOCKET := citadel-w-$(shell printf '%s' "$(CURDIR)" | cksum 2>/dev/null | awk '{print $$1}')
+WORKTREE_DATA_DIR    := $(CURDIR)/.citadel/data
+WORKTREE_LOGS_DIR    := $(CURDIR)/.citadel/logs
+WORKTREE_PID         := $(WORKTREE_LOGS_DIR)/daemon.pid
+WORKTREE_LOG         := $(WORKTREE_LOGS_DIR)/daemon.log
+DEV_STATE            := $(CURDIR)/.citadel/dev.json
 
 EFFECTIVE_PORT     := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/null 2>&1 && jq -r '.port    // empty' $(DEV_STATE) 2>/dev/null); echo $${v:-$(WORKTREE_PORT)})
 EFFECTIVE_WEB_PORT := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/null 2>&1 && jq -r '.webPort // empty' $(DEV_STATE) 2>/dev/null); echo $${v:-$(WORKTREE_WEB_PORT)})
@@ -175,12 +180,14 @@ deploy:
 			-u CITADEL_WEB_PORT \
 			-u CITADEL_BIND_HOST \
 			-u CITADEL_AUTOMATED_GH \
+			-u CITADEL_TMUX_SOCKET \
 			CITADEL_WORKTREE=1 \
 			CITADEL_AUTOMATED_GH=$${CITADEL_ENABLE_WORKTREE_GH_AUTOMATION:-0} \
 			CITADEL_PORT=$(WORKTREE_PORT) \
 			CITADEL_DATA_DIR=$(WORKTREE_DATA_DIR) \
 			CITADEL_DAEMON_URL=http://127.0.0.1:$(WORKTREE_PORT) \
 			CITADEL_WEB_PORT=$(WORKTREE_WEB_PORT) \
+			CITADEL_TMUX_SOCKET=$(WORKTREE_TMUX_SOCKET) \
 			pnpm dev >>$(WORKTREE_LOG) 2>&1 & \
 		pgid=$$!; \
 		echo "$$pgid" > $(WORKTREE_PID); \

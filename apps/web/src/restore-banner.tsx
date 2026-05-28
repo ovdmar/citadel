@@ -53,12 +53,7 @@ export function RestoreBanner(props: { bootRestore: BootRestoreSummary | null })
     setDismissedBootedAt(bootRestore.bootedAt);
   };
 
-  const title =
-    inProgress > 0
-      ? "Restoring sessions"
-      : failed > 0
-        ? "Session restore — partial"
-        : "Sessions restored";
+  const title = inProgress > 0 ? "Restoring sessions" : failed > 0 ? "Session restore — partial" : "Sessions restored";
 
   const message =
     inProgress > 0

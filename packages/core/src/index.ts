@@ -102,3 +102,10 @@ export function summarizeWorkspaceState(input: {
 }
 
 export { FUNNY_ADJECTIVES, FUNNY_ANIMALS, generateFunnyName } from "./funny-name.js";
+export {
+  type FuzzyBlockMatch,
+  type FuzzyMatchIndex,
+  SEARCH_LIMITS,
+  buildFuzzyIndex,
+  fuzzySearchBlocks,
+} from "./scratchpad-search.js";
