@@ -46,7 +46,10 @@ export default defineConfig({
         "CITADEL_DISABLE_STATUS_MONITOR=1",
         "CITADEL_DISABLE_AUTO_RESUME=1",
         "CITADEL_DISABLE_TERMINAL_REAPER=1",
-        "pnpm --filter @citadel/daemon dev",
+        // E2E writes screenshot artifacts under docs/campaigns. A watch-mode
+        // daemon can restart between tests when those files change, causing
+        // transient ECONNRESETs on the next API setup call.
+        "pnpm --filter @citadel/daemon exec tsx src/index.ts",
       ].join(" "),
       url: `${daemonBase}/api/health`,
       reuseExistingServer: false,
