@@ -30,7 +30,14 @@ function liveChildPid(): number {
   return child.pid;
 }
 
-function record(opts: { key: string; port: number; tmuxSession?: string; startedAt?: string; pid?: number }) {
+function record(opts: {
+  key: string;
+  port: number;
+  tmuxSession?: string;
+  startedAt?: string;
+  pid?: number;
+  theme?: "light" | "dark";
+}) {
   return {
     key: opts.key,
     port: opts.port,
@@ -39,7 +46,7 @@ function record(opts: { key: string; port: number; tmuxSession?: string; started
     tmuxSession: opts.tmuxSession ?? `tmux_${opts.key}`,
     worktreePath: null,
     startedAt: opts.startedAt ?? "2026-05-27T20:00:00.000Z",
-    theme: "dark" as const,
+    theme: opts.theme ?? ("dark" as const),
     tabId: null,
   };
 }
@@ -114,6 +121,25 @@ describe("ttyd manager — adopt()", () => {
     ).rejects.toBeInstanceOf(TtydUnavailableError);
 
     expect(manager.list().map((entry) => entry.key)).toEqual(["sess_force"]);
+    expect(() => process.kill(pid, 0)).not.toThrow();
+  });
+
+  it("reuses an alive ttyd when only the requested theme differs", async () => {
+    const manager = createTtydManager();
+    const pid = liveChildPid();
+    const tmuxSession = "citadel_existing_theme";
+    manager.adopt([record({ key: "sess_theme", port: 11001, pid, tmuxSession, theme: "dark" })]);
+
+    const entry = await manager.ensure({
+      key: "sess_theme",
+      tabId: "tab_theme",
+      tmuxSession,
+      theme: "light",
+    });
+
+    expect(entry.pid).toBe(pid);
+    expect(entry.theme).toBe("dark");
+    expect(manager.list().map((entry) => entry.key)).toEqual(["sess_theme"]);
     expect(() => process.kill(pid, 0)).not.toThrow();
   });
 

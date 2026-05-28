@@ -16,6 +16,30 @@ type StageTab = {
 // would inevitably fail to bind a terminal port.
 const WORKSPACE_AGENT_CAP = 20;
 
+function compareStageSessions(a: AgentSession, b: AgentSession) {
+  const aKey = a.tabId ?? a.id;
+  const bKey = b.tabId ?? b.id;
+  const cmp = aKey.localeCompare(bKey);
+  return cmp !== 0 ? cmp : a.createdAt.localeCompare(b.createdAt);
+}
+
+export function stableVisitedSessions(allSessions: AgentSession[], visitedIds: Set<string>): AgentSession[] {
+  const byId = new Map(allSessions.map((session) => [session.id, session]));
+  const result: AgentSession[] = [];
+  for (const id of visitedIds) {
+    const session = byId.get(id);
+    if (session) result.push(session);
+  }
+  return result;
+}
+
+export function stableWorkspaceSessionIdsKey(sessions: AgentSession[]): string {
+  return [...sessions]
+    .sort(compareStageSessions)
+    .map((session) => session.id)
+    .join("\0");
+}
+
 export function Stage(props: {
   workspace: Workspace;
   sessions: AgentSession[];
@@ -30,12 +54,7 @@ export function Stage(props: {
   // the new row inherits the source row's tabId, so the restored tab appears
   // in the same slot the original lived in — sorting by createdAt instead would
   // jump the restored session to the end of the strip.
-  const sortedSessions = [...props.sessions].sort((a, b) => {
-    const aKey = a.tabId ?? a.id;
-    const bKey = b.tabId ?? b.id;
-    const cmp = aKey.localeCompare(bKey);
-    return cmp !== 0 ? cmp : a.createdAt.localeCompare(b.createdAt);
-  });
+  const sortedSessions = [...props.sessions].sort(compareStageSessions);
   const tabs: StageTab[] = sortedSessions.map((session) => ({ session, label: session.displayName }));
   const allSessions = props.allSessions ?? props.sessions;
 
@@ -97,8 +116,8 @@ export function Stage(props: {
       return next.size === prev.size ? prev : next;
     });
   }, [allSessions]);
-  const visitedPanes = allSessions.filter((session) => visitedIds.has(session.id));
-  const workspaceSessionIdsKey = props.sessions.map((session) => session.id).join("\0");
+  const visitedPanes = stableVisitedSessions(allSessions, visitedIds);
+  const workspaceSessionIdsKey = stableWorkspaceSessionIdsKey(props.sessions);
 
   useEffect(() => {
     if (!workspaceSessionIdsKey) return;

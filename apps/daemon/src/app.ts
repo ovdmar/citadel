@@ -101,6 +101,15 @@ function expandTilde(input: string): string {
   return input;
 }
 
+function clippedString(value: unknown, fallback: string, max: number): string {
+  if (typeof value !== "string") return fallback;
+  return value.length > max ? value.slice(0, max) : value;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 export function createDaemonApp(input: {
   config: CitadelConfig;
   configPath: string;
@@ -140,7 +149,7 @@ export function createDaemonApp(input: {
   const ttyd = createTtydManager({ ...resolveTtydPortRange(config.port), diagnostics });
   // Release the ttyd on every stopAgentSession path; guarded for test stubs.
   if (typeof operations.setTerminalHooks === "function") {
-    operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId) });
+    operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId, "session-stopped-hook") });
   }
 
   const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
@@ -213,7 +222,16 @@ export function createDaemonApp(input: {
       });
     }
   }
-  const { recentUserAction } = wireTerminalRoutes({ app, server, store, ttyd, dataDir: config.dataDir, emit, config });
+  const { recentUserAction } = wireTerminalRoutes({
+    app,
+    server,
+    store,
+    ttyd,
+    dataDir: config.dataDir,
+    emit,
+    config,
+    diagnostics,
+  });
 
   const cachedProviderHealth = () =>
     cachedProvider(
@@ -279,6 +297,23 @@ export function createDaemonApp(input: {
   // died".
   app.get("/api/diagnostics/snapshot", (_req, res) => {
     res.json(buildDiagnosticsSnapshot({ store, ttyd, diagnostics, config }));
+  });
+  app.post("/api/diagnostics/client-event", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    diagnostics.log("ui-client", clippedString(body.event, "unknown", 80), {
+      pageId: clippedString(body.pageId, "", 80),
+      path: clippedString(body.path, "", 240),
+      href: clippedString(body.href, "", 360),
+      visibility: clippedString(body.visibility, "unknown", 40),
+      navigationType: clippedString(body.navigationType, "", 40),
+      ageMs: finiteNumber(body.ageMs),
+      persisted: typeof body.persisted === "boolean" ? body.persisted : null,
+      online: typeof body.online === "boolean" ? body.online : null,
+      wasDiscarded: typeof body.wasDiscarded === "boolean" ? body.wasDiscarded : null,
+      swController: typeof body.swController === "boolean" ? body.swController : null,
+      userAgent: clippedString(req.header("user-agent"), "", 240),
+    });
+    res.status(204).end();
   });
   app.get("/api/diagnostics/bundle.tar.gz", async (_req, res) => {
     try {
@@ -879,7 +914,7 @@ export function createDaemonApp(input: {
     cachedProvider,
   });
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
-  const autoResume = startDaemonAutoResumeLoop(store, operations);
+  const autoResume = startDaemonAutoResumeLoop(store, operations, config);
   if (autoResume) server.on("close", () => autoResume.stop());
   const terminalReaper = startTerminalReaper();
   server.on("close", () => terminalReaper.stop());

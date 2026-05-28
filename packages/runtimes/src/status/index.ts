@@ -14,6 +14,7 @@
 
 import { claudeCodeStatusAdapter } from "./claude-code.js";
 import { codexStatusAdapter } from "./codex.js";
+import type { ActiveElapsedTimerProbe } from "./elapsed-timer.js";
 
 export type PaneObservation = "running" | "idle" | "waiting_for_input" | "rate_limited" | "usage_limited";
 
@@ -44,6 +45,10 @@ export interface ObservationContext {
   // claude-code's `resets HH:MMam (UTC)` usage-limit banner) stay
   // deterministic under test. Wiring supplies `new Date()` per tick.
   now?: () => Date;
+  // Runtime-agnostic first-pass probe. The status monitor may precompute it
+  // before lifecycle checks so an advancing visible timer can beat weaker
+  // foreground-process heuristics.
+  activeElapsedTimer?: ActiveElapsedTimerProbe;
 }
 
 export interface SessionAdapterState {
@@ -84,13 +89,14 @@ export function getStatusAdapter(runtimeId: string): RuntimeStatusAdapter {
 
 export { claudeCodeStatusAdapter } from "./claude-code.js";
 export {
-  CODEX_REASON_ACTIVITY,
   CODEX_REASON_CURRENT_TURN_DIVIDER,
   CODEX_REASON_INTERRUPT,
   CODEX_REASON_SANDBOX_APPROVAL,
   CODEX_REASON_STABLE_TIMEOUT,
   codexStatusAdapter,
 } from "./codex.js";
+export { REASON_ELAPSED_TIMER, observeActiveElapsedTimer } from "./elapsed-timer.js";
+export type { ActiveElapsedTimerProbe } from "./elapsed-timer.js";
 
 // Utility shared by adapters: bottom-most non-empty line of the visible pane,
 // trimmed of surrounding whitespace. All chrome regexes are anchored to this

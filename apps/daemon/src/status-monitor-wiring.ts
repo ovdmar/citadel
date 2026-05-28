@@ -19,6 +19,8 @@ import { captureTmux, panePidProcess, tmuxPrefix, tmuxSessionExists } from "@cit
 // stderr at 2 Hz. Key is `kind:message` so distinct error messages are still
 // reported (e.g., "ENOENT" vs "EACCES"). Cleared on process exit.
 const reportedMonitorFailures = new Set<string>();
+const DEFAULT_STATUS_MONITOR_INTERVAL_MS = 5000;
+
 function logMonitorFailureOnce(kind: string, err: unknown): void {
   const msg = err instanceof Error ? err.message : String(err);
   const key = `${kind}:${msg}`;
@@ -49,8 +51,9 @@ export function buildStatusMonitorDeps(
   // ObservationContext requires `paneCapture: string`, so we can't defer
   // it cheaply at the adapter boundary — but we can avoid forking `tmux
   // capture-pane` for sessions whose activity timestamp didn't advance
-  // since the last call. Eliminates 95%+ of capture-pane forks once the
-  // user has a workspace full of mostly-idle agents.
+  // since the last call. This is critical because the daemon also proxies
+  // ttyd WebSockets; sync capture storms in this process cause terminal
+  // input lag and reconnects.
   const captureCache = new Map<string, { activityMs: number; content: string }>();
   // Shared snapshot of session_activity from the most recent tick. Updated
   // by `tmuxActivities()` (which the status monitor calls first each tick),
@@ -206,5 +209,7 @@ export function startDaemonStatusMonitor(
 ): StatusMonitorHandle | null {
   if (process.env.CITADEL_DISABLE_STATUS_MONITOR === "1") return null;
   const deps = buildStatusMonitorDeps(store, emit, config, recentUserAction, diagnostics);
-  return startStatusMonitor(deps, 2000);
+  const intervalMs =
+    Number.parseInt(process.env.CITADEL_STATUS_MONITOR_INTERVAL_MS ?? "", 10) || DEFAULT_STATUS_MONITOR_INTERVAL_MS;
+  return startStatusMonitor(deps, intervalMs);
 }

@@ -1,10 +1,12 @@
 import type { AgentSession } from "@citadel/contracts";
 import type {
+  ActiveElapsedTimerProbe,
   ObservationContext,
   PaneObservationResult,
   RuntimeStatusAdapter,
   SessionAdapterState,
 } from "@citadel/runtimes";
+import { REASON_ELAPSED_TIMER, observeActiveElapsedTimer } from "@citadel/runtimes";
 import {
   IDLE_AFTER_UNEXPECTED_EXIT_AUTO_CLEAR_MS,
   REASON_IDLE_AFTER_UNEXPECTED_EXIT,
@@ -256,8 +258,6 @@ export async function runStatusMonitorTick(
         });
       }
     }
-    const runtimeBinary = deps.runtimeBinaryFor(session.runtimeId);
-
     if (!session.runtimeSessionId && tmuxAlive && deps.recoverRuntimeSessionId && deps.setRuntimeSessionId) {
       const runtimeSessionId = deps.recoverRuntimeSessionId(session, pane);
       if (runtimeSessionId) {
@@ -280,6 +280,17 @@ export async function runStatusMonitorTick(
       } else {
         monitorState.ticksSinceActivityChange += 1;
       }
+    }
+    let paneCaptureForObservation: string | null = null;
+    let activeElapsedTimer: ActiveElapsedTimerProbe | null = null;
+    const capturePaneForObservation = () => {
+      if (paneCaptureForObservation === null) {
+        paneCaptureForObservation = session.tmuxSessionName ? deps.paneCapture(session.tmuxSessionName) : "";
+      }
+      return paneCaptureForObservation;
+    };
+    if (tmuxAlive && pane && session.runtimeId !== "shell") {
+      activeElapsedTimer = observeActiveElapsedTimer(adapterState, capturePaneForObservation());
     }
 
     // First-pass lifecycle signals (deterministic). At most one applies.
@@ -312,14 +323,19 @@ export async function runStatusMonitorTick(
       });
       monitorState.consecutiveShellTicks = 0;
     } else if (pane && SHELL_BINARIES.has(pane.command) && session.runtimeId !== "shell") {
-      // Agent runtime, pane foreground is a shell binary → agent stopped
-      // running. Two-tick debounce: claude routinely shells out to git/rg
-      // briefly; a single tick of "shell" doesn't constitute "agent exited".
-      monitorState.consecutiveShellTicks += 1;
-      if (monitorState.consecutiveShellTicks >= RUNNING_TO_IDLE_DEBOUNCE_TICKS) {
-        const userActionTs = deps.recentUserAction.get(session.id);
-        const recentUserAction = userActionTs !== undefined && nowMs - userActionTs <= RECENT_USER_ACTION_MS;
-        signals.push({ type: "pane_idle", recentUserAction, observedAt: deps.now() });
+      if (activeElapsedTimer?.advanced) {
+        monitorState.consecutiveShellTicks = 0;
+        signals.push({ type: "pane_observation", observed: "running", reason: REASON_ELAPSED_TIMER });
+      } else {
+        // Agent runtime, pane foreground is a shell binary → agent stopped
+        // running. Two-tick debounce: claude routinely shells out to git/rg
+        // briefly; a single tick of "shell" doesn't constitute "agent exited".
+        monitorState.consecutiveShellTicks += 1;
+        if (monitorState.consecutiveShellTicks >= RUNNING_TO_IDLE_DEBOUNCE_TICKS) {
+          const userActionTs = deps.recentUserAction.get(session.id);
+          const recentUserAction = userActionTs !== undefined && nowMs - userActionTs <= RECENT_USER_ACTION_MS;
+          signals.push({ type: "pane_idle", recentUserAction, observedAt: deps.now() });
+        }
       }
     } else {
       // Agent foreground (or shell runtime with any tmux-alive). Reset the
@@ -351,7 +367,7 @@ export async function runStatusMonitorTick(
     if (liveBranch && tmuxAlive) {
       const observation = adapter.observe(
         adapterState,
-        buildContext(deps, session, monitorState, opts, activityChanged),
+        buildContext(deps, session, monitorState, opts, activityChanged, paneCaptureForObservation, activeElapsedTimer),
       );
       monitorState.hasObservedSinceBoot = true;
       if (observation !== null) {
@@ -437,14 +453,17 @@ function buildContext(
   monitorState: MonitorSessionState,
   opts: MonitorTickOptions,
   activityChanged: boolean,
+  paneCapture: string | null,
+  activeElapsedTimer: ActiveElapsedTimerProbe | null,
 ): ObservationContext {
   return {
-    paneCapture: session.tmuxSessionName ? deps.paneCapture(session.tmuxSessionName) : "",
+    paneCapture: paneCapture ?? (session.tmuxSessionName ? deps.paneCapture(session.tmuxSessionName) : ""),
     tmuxActivityChangedSinceLastTick: activityChanged,
     ticksSinceActivityChange: monitorState.ticksSinceActivityChange,
     source: opts.source,
     hasObservedSinceBoot: monitorState.hasObservedSinceBoot,
     now: () => new Date(deps.now()),
+    ...(activeElapsedTimer ? { activeElapsedTimer } : {}),
   };
 }
 

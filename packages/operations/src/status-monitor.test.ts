@@ -1,5 +1,6 @@
 import type { AgentSession } from "@citadel/contracts";
 import type { RuntimeStatusAdapter } from "@citadel/runtimes";
+import { REASON_ELAPSED_TIMER } from "@citadel/runtimes";
 import { describe, expect, it, vi } from "vitest";
 import { reduceStatus } from "./agent-status.js";
 import { type MonitorTickDeps, runStatusMonitorTick } from "./status-monitor.js";
@@ -60,6 +61,7 @@ interface DepsOver {
   runtimeBinaries?: Map<string, string>;
   recentUserAction?: Map<string, number>;
   tmuxActivities?: Map<string, number>;
+  paneCapture?: string | ((name: string) => string);
   adapter?: RuntimeStatusAdapter;
   recoverRuntimeSessionId?: MonitorTickDeps["recoverRuntimeSessionId"];
   setRuntimeSessionId?: MonitorTickDeps["setRuntimeSessionId"];
@@ -97,7 +99,7 @@ function makeDeps(over: DepsOver = {}) {
     deleteSession: (id) => deleted.push(id),
     emit: (event, payload) => emitted.push({ event, payload }),
     tmuxActivities: () => over.tmuxActivities ?? new Map(),
-    paneCapture: () => "",
+    paneCapture: (name) => (typeof over.paneCapture === "function" ? over.paneCapture(name) : (over.paneCapture ?? "")),
     // CRITICAL: must use `has()` not `??` — the Map may explicitly store
     // `null` for tmux-missing test cases, and `??` would treat that as
     // "no override" and fall back to the agent-foreground default.
@@ -308,6 +310,26 @@ describe("shell-first per-runtime status derivation", () => {
     await runStatusMonitorTick(deps, { source: "tick" }); // flip
     expect(updates).toHaveLength(1);
     expect(updates[0]?.update).toMatchObject({ status: "idle", reason: null, reasonAt: null });
+  });
+
+  it("agent runtime: an advancing visible timer beats shell-foreground idle detection", async () => {
+    const monitorStates = new Map();
+    let captureTick = 0;
+    const { deps, updates } = makeDeps({
+      sessions: [makeSession({ runtimeId: "codex", statusReason: null })],
+      panePidProcess: new Map([["citadel_test_1", { command: "bash", pid: 100 }]]),
+      runtimeBinaries: new Map([["codex", "codex"]]),
+      paneCapture: () => {
+        captureTick += 1;
+        return `output\n◦ Working (${10 + captureTick}s)\n  gpt-5.5 default · ~/wherever`;
+      },
+      monitorStates,
+    });
+    await runStatusMonitorTick(deps, { source: "tick" });
+    await runStatusMonitorTick(deps, { source: "tick" });
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.update).toMatchObject({ status: "running", reason: REASON_ELAPSED_TIMER });
+    expect(updates[0]?.update.status).not.toBe("idle");
   });
 });
 

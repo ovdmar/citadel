@@ -184,6 +184,21 @@ describe("createDaemonApp", () => {
         },
       });
       expect(
+        await postJson<{ error: { code: number; message: string } }>(`${baseUrl}/api/mcp/rpc`, {
+          jsonrpc: "2.0",
+          id: "tool-error",
+          method: "tools/call",
+          params: {
+            name: "start_agent_session",
+            arguments: { workspaceId: "ws_test", runtimeId: "missing" },
+          },
+        }),
+      ).toMatchObject({
+        jsonrpc: "2.0",
+        id: "tool-error",
+        error: { code: -32000, message: "Unknown runtime: missing" },
+      });
+      expect(
         await postJson<{ result: Record<string, never> }>(`${baseUrl}/api/mcp/rpc`, {
           jsonrpc: "2.0",
           id: "ping",

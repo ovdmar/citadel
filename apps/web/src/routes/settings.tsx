@@ -26,6 +26,7 @@ import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { RestoreModal, RestorePanelBody } from "../settings-restore.js";
 import { AgentsPanel } from "../settings-runtimes.js";
+import { applyThemePreference, useResolvedTheme } from "../use-resolved-theme.js";
 
 type SectionId =
   | "overview"
@@ -266,19 +267,9 @@ function PageHead(props: { title: string; sub?: string; help?: string }) {
 }
 
 function ThemeToggle() {
-  const [theme, setTheme] = useState(() => localStorage.getItem("citadel.theme") || "system");
-  useEffect(() => {
-    localStorage.setItem("citadel.theme", theme);
-    if (theme === "system") {
-      delete document.documentElement.dataset.theme;
-    } else {
-      document.documentElement.dataset.theme = theme;
-    }
-  }, [theme]);
-
-  // Light <-> Dark cycle (system stays accessible via the existing CockpitTools menu).
-  const isDark = theme === "dark";
-  const toggle = () => setTheme(isDark ? "light" : "dark");
+  const resolved = useResolvedTheme();
+  const isDark = resolved === "dark";
+  const toggle = () => applyThemePreference(isDark ? "light" : "dark");
   return (
     <button
       type="button"

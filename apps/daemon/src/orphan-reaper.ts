@@ -101,7 +101,7 @@ export async function reapOrphans(deps: {
         port: entry.port,
         reason: "tmux-session-gone (3-strike)",
       });
-      deps.ttyd.release(entry.key);
+      deps.ttyd.release(entry.key, "orphan-reaper-tmux-session-gone");
       summary.ttydReleased.push(entry.key);
     }
   }

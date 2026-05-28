@@ -35,15 +35,16 @@ export {
 export type { RuntimeUsageFetcher } from "./usage/index.js";
 
 export {
-  CODEX_REASON_ACTIVITY,
   CODEX_REASON_CURRENT_TURN_DIVIDER,
   CODEX_REASON_INTERRUPT,
   CODEX_REASON_SANDBOX_APPROVAL,
   CODEX_REASON_STABLE_TIMEOUT,
+  REASON_ELAPSED_TIMER,
   getStatusAdapter,
   claudeCodeStatusAdapter,
   codexStatusAdapter,
   lastNonEmptyLine,
+  observeActiveElapsedTimer,
 } from "./status/index.js";
 export type {
   RuntimeStatusAdapter,
@@ -51,6 +52,7 @@ export type {
   ObservationContext,
   PaneObservation,
   PaneObservationResult,
+  ActiveElapsedTimerProbe,
 } from "./status/index.js";
 
 const baseCapabilities = {

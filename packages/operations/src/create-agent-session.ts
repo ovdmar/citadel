@@ -6,6 +6,7 @@ import { discoverCodexSessionId } from "@citadel/runtimes";
 import {
   COMM_TRUNCATION,
   ensureTmuxSession,
+  killTmuxSession,
   launchAgentInSession,
   panePidProcess,
   submitPrompt,
@@ -55,13 +56,14 @@ export async function createAgentSession(
   if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
   const now = nowIso();
   const sessionName = `citadel_${workspace.id}_${createId("agent").slice(-8)}`;
-  // If the runtime exposes a CLI flag for the initial prompt, embed it there;
-  // otherwise we paste it into the tmux pane once the TUI is ready (claude-code
-  // pattern — input typed before paint gets dropped).
+  // Prefer runtime-native initial-prompt argv when available. Codex accepts
+  // the prompt as a positional argument; Claude Code's interactive mode does
+  // not, so for runtimes without argv support we paste once the TUI is ready.
   const runtimeArgs = [...runtime.args];
   let promptForKeys: string | null = null;
   if (input.prompt?.length) {
     if (runtime.promptArg) runtimeArgs.push(runtime.promptArg, input.prompt);
+    else if (input.runtimeId === "codex") runtimeArgs.push(input.prompt);
     else promptForKeys = input.prompt;
   }
   // Pin a UUID at spawn time when the runtime supports it (claude-code's
@@ -95,40 +97,46 @@ export async function createAgentSession(
   // and is already foreground; calling launchAgentInSession with "bash"
   // would re-launch bash inside the existing bash. Skip it.
   const isShellRuntime = ["bash", "sh", "zsh", "fish"].includes(runtime.command);
-  const tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path });
+  let tmux: Awaited<ReturnType<typeof ensureTmuxSession>>;
   let runtimeLaunchStartedMs: number | null = null;
-  if (!isShellRuntime) {
-    runtimeLaunchStartedMs = Date.now();
-    await launchAgentInSession(sessionName, runtime.command, runtimeArgs);
-  }
-  if (promptForKeys) {
-    // Treat the initial prompt as load-bearing: if submitPrompt couldn't
-    // verify delivery, the agent will sit on a blank prompt forever, which
-    // is exactly the failure mode launch_agent's callers can't recover from.
-    // Surface it as an explicit error instead of a phantom success.
-    //
-    // Tune the cold-start budget by runtime kind. Interactive TUIs (Claude
-    // Code with MCP servers connecting, Codex) routinely take 8–15 s before
-    // they're ready to accept input. Shell runtimes paint a prompt in
-    // milliseconds and `read` is ready instantly; using the TUI budget there
-    // makes every test session sit waiting for a 1 s silence threshold that
-    // doesn't apply.
-    const runtimeBinaryTruncated = runtime.command.slice(0, COMM_TRUNCATION);
-    const submitted = await submitPrompt(sessionName, promptForKeys, {
-      ...(isShellRuntime
-        ? { waitForReadyMs: 1500, submitDelayMs: 800 }
-        : {
-            waitForReadyMs: 15000,
-            submitDelayMs: 3000,
-            // POSITIVE predicate: match the runtime's binary name (truncated
-            // to `comm`'s 15-char limit) so transient subprocesses claude
-            // spawns mid-startup (`git`, `rg`, etc.) cannot satisfy the wait.
-            runtimeReadyPredicate: (cmd) => cmd === runtimeBinaryTruncated,
-          }),
-    });
-    if (!submitted.ok) {
-      throw new Error(`initial_prompt_not_delivered: ${submitted.error ?? "unknown"}`);
+  try {
+    tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path });
+    if (!isShellRuntime) {
+      runtimeLaunchStartedMs = Date.now();
+      await launchAgentInSession(sessionName, runtime.command, runtimeArgs);
     }
+    if (promptForKeys) {
+      // Treat the initial prompt as load-bearing: if submitPrompt couldn't
+      // verify delivery, the agent will sit on a blank prompt forever, which
+      // is exactly the failure mode launch_agent's callers can't recover from.
+      // Surface it as an explicit error instead of a phantom success.
+      //
+      // Tune the cold-start budget by runtime kind. Interactive TUIs (Claude
+      // Code with MCP servers connecting, Codex) routinely take 8–15 s before
+      // they're ready to accept input. Shell runtimes paint a prompt in
+      // milliseconds and `read` is ready instantly; using the TUI budget there
+      // makes every test session sit waiting for a 1 s silence threshold that
+      // doesn't apply.
+      const runtimeBinaryTruncated = runtime.command.slice(0, COMM_TRUNCATION);
+      const submitted = await submitPrompt(sessionName, promptForKeys, {
+        ...(isShellRuntime
+          ? { waitForReadyMs: 1500, submitDelayMs: 800 }
+          : {
+              waitForReadyMs: 15000,
+              submitDelayMs: 3000,
+              // POSITIVE predicate: match the runtime's binary name (truncated
+              // to `comm`'s 15-char limit) so transient subprocesses claude
+              // spawns mid-startup (`git`, `rg`, etc.) cannot satisfy the wait.
+              runtimeReadyPredicate: (cmd) => cmd === runtimeBinaryTruncated,
+            }),
+      });
+      if (!submitted.ok) {
+        throw new Error(`initial_prompt_not_delivered: ${submitted.error ?? "unknown"}`);
+      }
+    }
+  } catch (error) {
+    killTmuxSession(sessionName);
+    throw error;
   }
   const session: AgentSession = {
     id: createId("sess"),
