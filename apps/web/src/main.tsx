@@ -25,6 +25,8 @@ import { SettingsView } from "./routes/settings.js";
 import { getScratchpadDrawerOpen, setScratchpadDrawerOpen, toggleScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { ScratchpadPanel } from "./scratchpad-panel.js";
 import { ToastProvider } from "./toast.js";
+import { installUiDiagnostics } from "./ui-diagnostics.js";
+import { applyThemePreference, readThemePreference } from "./use-resolved-theme.js";
 import "./styles.css";
 import "./chrome.css";
 import "./stage-terminal.css";
@@ -54,11 +56,10 @@ import "./responsive.css";
 // TerminalPane to spawn ttyd with the matching xterm palette) doesn't
 // race ThemeControls's useEffect that writes the attribute later.
 (() => {
-  const stored = localStorage.getItem("citadel.theme");
-  if (stored === "light" || stored === "dark") {
-    document.documentElement.dataset.theme = stored;
-  }
+  applyThemePreference(readThemePreference());
 })();
+
+installUiDiagnostics();
 
 const rootRoute = createRootRoute({
   component: () => <Shell />,

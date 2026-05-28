@@ -39,6 +39,7 @@ export type TerminalHandle = {
   // xterm keyboard capture still requires one click inside the terminal
   // area. See spec B.2 §Center Stage Sessions / select-focuses-terminal.
   focusIframe: () => void;
+  recoverIfDisconnected: () => boolean;
 };
 
 const REGISTRY = new Map<string, TerminalHandle>();
@@ -81,11 +82,10 @@ export function TerminalPane(props: { session: AgentSession }) {
   const sessionId = props.session.id;
   const theme = useResolvedTheme();
   // Capture the theme in a ref so ensure() reads the current value without
-  // re-creating its identity on every theme change. We deliberately do NOT
-  // auto-respawn on theme change — that would trigger reconnect storms when
-  // the cockpit theme toggles. The user picks up a new palette by clicking
-  // the tab's reload button, which calls ensure({ force: true }) and forces
-  // the daemon to spawn a fresh ttyd with the current themeRef value.
+  // re-creating its identity on every theme change. We deliberately do not
+  // auto-respawn on theme change — ttyd bakes its palette at spawn time, so
+  // active sessions pick up a new palette only through the explicit reload
+  // affordance.
   const themeRef = useRef(theme);
   themeRef.current = theme;
   const [url, setUrl] = useState<string | null>(null);
@@ -94,6 +94,7 @@ export function TerminalPane(props: { session: AgentSession }) {
   const [iframeKey, setIframeKey] = useState(0);
   const requestSeqRef = useRef(0);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const httpErrorRecoveryRef = useRef(false);
 
   const ensure = useCallback(
     async (options: { bumpFrame?: boolean; force?: boolean } = {}) => {
@@ -109,6 +110,7 @@ export function TerminalPane(props: { session: AgentSession }) {
         if (requestSeqRef.current !== seq) return;
         setUrl(response.terminal.url);
         setError(null);
+        httpErrorRecoveryRef.current = false;
         if (options.bumpFrame) setIframeKey((value) => value + 1);
       } catch (raw) {
         if (requestSeqRef.current !== seq) return;
@@ -132,7 +134,8 @@ export function TerminalPane(props: { session: AgentSession }) {
       return;
     }
     if (retryOnceRef.current) return;
-    if (!["tmux_session_missing", "terminal_unavailable", "spawn_failed"].includes(error.code)) return;
+    if (!["tmux_session_missing", "terminal_unavailable", "spawn_failed", "ttyd_start_timeout"].includes(error.code))
+      return;
     retryOnceRef.current = true;
     const timer = window.setTimeout(() => {
       void ensure({ bumpFrame: true });
@@ -151,9 +154,7 @@ export function TerminalPane(props: { session: AgentSession }) {
     void ensure();
   }, [ensure]);
 
-  // Reload re-runs ensure() with force=true so the daemon respawns ttyd with
-  // the current cockpit theme. ttyd bakes the xterm palette at spawn time, so
-  // this is the only way to repaint a live session after a theme toggle. It
+  // Reload re-runs ensure() with force=true so the daemon respawns ttyd. It
   // also self-heals stale entries from daemon restarts / orphan kills.
   // Bumping the iframe key forces React to remount even if the URL is the
   // same — the underlying ttyd process is new, so reconnecting is required.
@@ -176,12 +177,32 @@ export function TerminalPane(props: { session: AgentSession }) {
     }
   }, []);
 
-  // Publish the live URL + reload + focus callbacks so the stage tab and
-  // workspace-card onClick can drive them.
+  const recoverIfTerminalHttpError = useCallback(() => {
+    if (!isTtydHttpErrorPageVisible(iframeRef.current)) {
+      httpErrorRecoveryRef.current = false;
+      return false;
+    }
+    if (httpErrorRecoveryRef.current) return true;
+    httpErrorRecoveryRef.current = true;
+    recordTerminalClientEvent(sessionId, "iframe.http-error");
+    void ensure({ bumpFrame: true, force: true });
+    return true;
+  }, [ensure, sessionId]);
+
+  const recoverIfDisconnected = useCallback(() => {
+    if (!isTtydReconnectPromptVisible(iframeRef.current)) return false;
+    reload();
+    return true;
+  }, [reload]);
+
+  // Publish the live URL + reload/focus/recover callbacks so nav selection and
+  // tab actions can drive state owned by TerminalPane.
+  // The status bar used to render these affordances inside the pane; that was
+  // removed in favour of the tab actions, but the state still lives here.
   useEffect(() => {
-    publish(sessionId, { url, reload, focusIframe });
+    publish(sessionId, { url, reload, focusIframe, recoverIfDisconnected });
     return () => publish(sessionId, null);
-  }, [sessionId, url, reload, focusIframe]);
+  }, [sessionId, url, reload, focusIframe, recoverIfDisconnected]);
   return (
     <div className="terminal-shell">
       <div className="terminal-surface terminal-surface-iframe">
@@ -196,6 +217,7 @@ export function TerminalPane(props: { session: AgentSession }) {
             // tabIndex makes the iframe a programmatic-focus target without
             // adding it to the natural tab order.
             tabIndex={-1}
+            onLoad={recoverIfTerminalHttpError}
           />
         ) : error ? (
           <TerminalErrorState error={error} onRetry={retry} retrying={pending} />
@@ -255,4 +277,71 @@ function guidanceFor(code: string) {
     default:
       return "Open the terminal runbook below for diagnostic steps.";
   }
+}
+
+export function isTtydReconnectPromptVisible(iframe: HTMLIFrameElement | null): boolean {
+  try {
+    const doc = iframe?.contentDocument;
+    const view = iframe?.contentWindow;
+    if (!doc || !view) return false;
+
+    const ttydOverlayCandidates = Array.from(doc.querySelectorAll(".xterm > div"));
+    for (const element of ttydOverlayCandidates) {
+      if (isHiddenElement(element, view)) continue;
+      if (isReconnectPromptText(element.textContent ?? "")) return true;
+    }
+
+    for (const button of Array.from(doc.querySelectorAll("button"))) {
+      if (isHiddenElement(button, view)) continue;
+      if (/\breconnect\b/i.test(normalizeText(button.textContent ?? ""))) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+export function isTtydHttpErrorPageVisible(iframe: HTMLIFrameElement | null): boolean {
+  try {
+    const doc = iframe?.contentDocument;
+    if (!doc?.body) return false;
+    if (doc.querySelector(".xterm")) return false;
+    const text = normalizeText(doc.body.textContent ?? "").toLowerCase();
+    const title = normalizeText(doc.title).toLowerCase();
+    if (!text && !title) return false;
+    return (
+      text === "terminal_not_found" || text === "404 page not found" || text.startsWith("404") || title.includes("404")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isHiddenElement(element: Element, view: Window): boolean {
+  const style = view.getComputedStyle(element);
+  if (style.display === "none" || style.visibility === "hidden") return true;
+  const opacity = Number.parseFloat(style.opacity || "1");
+  return Number.isFinite(opacity) && opacity <= 0.05;
+}
+
+function isReconnectPromptText(value: string): boolean {
+  const text = normalizeText(value);
+  return /^press (?:⏎|enter|return) to reconnect$/i.test(text);
+}
+
+function normalizeText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function recordTerminalClientEvent(sessionId: string, event: string) {
+  fetch(`/api/agent-sessions/${encodeURIComponent(sessionId)}/terminal-client-event`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      event,
+      path: window.location.pathname,
+      visibility: document.visibilityState,
+    }),
+    keepalive: true,
+  }).catch(() => undefined);
 }
