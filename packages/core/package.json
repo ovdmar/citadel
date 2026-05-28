@@ -13,6 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@citadel/contracts": "workspace:*"
+    "@citadel/contracts": "workspace:*",
+    "fuse.js": "^7.3.0"
   }
 }

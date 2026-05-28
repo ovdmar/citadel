@@ -41,6 +41,7 @@ import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
+import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import {
@@ -693,7 +694,8 @@ export function createDaemonApp(input: {
 
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, config });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
-  registerScratchpadRoutes({ app, config, emit });
+  registerScratchpadRoutes({ app, config, emit, store, operations, providerHealth: cachedProviderHealth });
+  registerCitadelActionRoutes({ app, config, emit });
   backfillScratchpadOnStartup(config);
 
   fsWatchers = createWorkspaceFsWatchers({

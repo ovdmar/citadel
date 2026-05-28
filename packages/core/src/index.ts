@@ -100,3 +100,11 @@ export function summarizeWorkspaceState(input: {
   ].filter((reason): reason is string => Boolean(reason));
   return { suggestedSection, reasons };
 }
+
+export {
+  type FuzzyBlockMatch,
+  type FuzzyMatchIndex,
+  SEARCH_LIMITS,
+  buildFuzzyIndex,
+  fuzzySearchBlocks,
+} from "./scratchpad-search.js";
