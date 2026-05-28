@@ -44,7 +44,10 @@ export default defineConfig({
         "CITADEL_DISABLE_BOOT_RESTORE=1",
         "CITADEL_DISABLE_REAPER=1",
         "CITADEL_DISABLE_STATUS_MONITOR=1",
+        "CITADEL_DISABLE_SCHEDULER=1",
+        "CITADEL_AUTO_RECOVERY_DISABLED=1",
         "CITADEL_DISABLE_AUTO_RESUME=1",
+        "CITADEL_DISABLE_FS_WATCHERS=1",
         "CITADEL_DISABLE_TERMINAL_REAPER=1",
         // E2E writes screenshot artifacts under docs/campaigns. Run the
         // built daemon, not tsx watch/source mode, so CI cannot restart the

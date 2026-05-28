@@ -684,13 +684,15 @@ export function createDaemonApp(input: {
   registerCitadelActionRoutes({ app, config, emit });
   backfillScratchpadOnStartup(config);
 
-  fsWatchers = createWorkspaceFsWatchers({
-    listWorkspaces: () => store.listWorkspaces(),
-    providerCache,
-    emit,
-  });
-  fsWatchers.reconcile();
-  server.on("close", () => fsWatchers?.close());
+  if (process.env.CITADEL_DISABLE_FS_WATCHERS !== "1") {
+    fsWatchers = createWorkspaceFsWatchers({
+      listWorkspaces: () => store.listWorkspaces(),
+      providerCache,
+      emit,
+    });
+    fsWatchers.reconcile();
+    server.on("close", () => fsWatchers?.close());
+  }
 
   registerWorkspaceDiffRoutes({ app, store, asyncRoute });
 
