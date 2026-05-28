@@ -1,9 +1,4 @@
-import type {
-  DoctorCheck,
-  DoctorCheckKind,
-  DoctorCheckStatus,
-  DoctorSummary,
-} from "@citadel/contracts/doctor";
+import type { DoctorCheck, DoctorCheckKind, DoctorCheckStatus, DoctorSummary } from "@citadel/contracts/doctor";
 
 // Pure helpers for the doctor surface. No fs/process/config/network access —
 // those live in `@citadel/operations` per the architecture-boundary gate.
@@ -28,7 +23,11 @@ export function summarizeDoctor(checks: readonly DoctorCheck[]): DoctorSummary {
 export function groupChecksByKind(checks: readonly DoctorCheck[]): Partial<Record<DoctorCheckKind, DoctorCheck[]>> {
   const out: Partial<Record<DoctorCheckKind, DoctorCheck[]>> = {};
   for (const c of checks) {
-    const bucket = out[c.kind] ?? (out[c.kind] = []);
+    let bucket = out[c.kind];
+    if (!bucket) {
+      bucket = [];
+      out[c.kind] = bucket;
+    }
     bucket.push(c);
   }
   return out;

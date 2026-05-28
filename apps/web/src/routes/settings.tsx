@@ -19,21 +19,13 @@ import { useEffect, useState } from "react";
 import { api, queryClient } from "../api.js";
 import { useStateQuery } from "../app-state.js";
 import { mcpUrlFromOrigin } from "../lib/mcp-url.js";
+import { DiagnosticsPanel } from "../settings-diagnostics.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { RestorePanel } from "../settings-restore.js";
 import { AgentsPanel } from "../settings-runtimes.js";
-import { DiagnosticsPanel } from "../settings-diagnostics.js";
 
-type SectionId =
-  | "overview"
-  | "providers"
-  | "agents"
-  | "repositories"
-  | "restore"
-  | "mcp"
-  | "notes"
-  | "diagnostics";
+type SectionId = "overview" | "providers" | "agents" | "repositories" | "restore" | "mcp" | "notes" | "diagnostics";
 
 type Section = {
   id: SectionId;
@@ -72,7 +64,7 @@ const SECTIONS: Section[] = [
   {
     id: "diagnostics",
     label: "Diagnostics",
-    description: 'Is everything configured? Runs the same checks as `make doctor`.',
+    description: "Is everything configured? Runs the same checks as `make doctor`.",
     icon: Stethoscope,
   },
   {
@@ -198,10 +190,7 @@ export function SettingsView() {
           ) : null}
           {section === "diagnostics" ? (
             <>
-              <PageHead
-                title="Diagnostics"
-                sub="Is everything configured? Same checks as `make doctor`."
-              />
+              <PageHead title="Diagnostics" sub="Is everything configured? Same checks as `make doctor`." />
               <DiagnosticsPanel />
             </>
           ) : null}

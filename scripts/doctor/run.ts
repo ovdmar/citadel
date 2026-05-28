@@ -9,18 +9,14 @@
 //   pnpm exec tsx scripts/doctor/run.ts --json
 
 import { execFile as execFileCb } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import { promisify } from "node:util";
 import { loadConfig } from "@citadel/config";
 import type { DoctorReport } from "@citadel/contracts/doctor";
 import { groupChecksByKind, statusLabel, summarizeDoctor } from "@citadel/core";
-import {
-  type DeployHookStatus,
-  type DoctorDeps,
-  runDoctorChecks,
-} from "@citadel/operations";
 import { DEPLOY_HOOK_RELATIVE_PATH } from "@citadel/hooks";
-import fs from "node:fs";
-import path from "node:path";
+import { type DeployHookStatus, type DoctorDeps, runDoctorChecks } from "@citadel/operations";
 
 const execFile = promisify(execFileCb);
 
@@ -114,8 +110,7 @@ function statusGlyph(status: string): string {
 
 function renderHuman(report: DoctorReport): string {
   const lines: string[] = [];
-  const summaryBadge =
-    report.summary === "ok" ? "OK" : report.summary === "degraded" ? "DEGRADED" : "FAILING";
+  const summaryBadge = report.summary === "ok" ? "OK" : report.summary === "degraded" ? "DEGRADED" : "FAILING";
   lines.push(`Citadel doctor — ${summaryBadge}`);
   lines.push(`URL:  ${report.bindUrl}  (protocol: ${report.protocol})`);
   lines.push(`Time: ${report.generatedAt}`);

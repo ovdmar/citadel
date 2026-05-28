@@ -1,5 +1,6 @@
 import { execFile as execFileCb } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { promisify } from "node:util";
 import type { CitadelConfig } from "@citadel/config";
 import type { Repo } from "@citadel/contracts";
@@ -16,7 +17,6 @@ import {
   type DoctorRepo,
   runDoctorChecks,
 } from "@citadel/operations";
-import path from "node:path";
 import type express from "express";
 
 const execFile = promisify(execFileCb);

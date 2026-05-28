@@ -1,12 +1,8 @@
-import express from "express";
 import http from "node:http";
+import express from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { asyncRoute } from "./app-helpers.js";
-import {
-  buildHookScaffoldPrompt,
-  findInFlightScaffold,
-  registerScaffoldHookRoutes,
-} from "./scaffold-hook-routes.js";
+import { buildHookScaffoldPrompt, findInFlightScaffold, registerScaffoldHookRoutes } from "./scaffold-hook-routes.js";
 
 const TEST_TEMPLATE = "#!/usr/bin/env bash\n# canonical citadel deploy template\necho stub\n";
 

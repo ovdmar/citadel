@@ -423,9 +423,7 @@ function validateHookReferences(
 // Refuses if cert/key files don't exist, are empty, or the cert is expired.
 // Returns a "validation result" rather than throwing so callers can decide
 // whether to fail-fast (daemon boot) or surface as a doctor check.
-export type TlsAssetValidationResult =
-  | { ok: true; notBefore: Date; notAfter: Date }
-  | { ok: false; reason: string };
+export type TlsAssetValidationResult = { ok: true; notBefore: Date; notAfter: Date } | { ok: false; reason: string };
 
 export function validateTlsAssets(config: Pick<CitadelConfig, "tls">): TlsAssetValidationResult | null {
   if (!config.tls) return null;

@@ -1,7 +1,7 @@
+import http from "node:http";
 import type { DoctorReport } from "@citadel/contracts/doctor";
 import { DoctorReportSchema } from "@citadel/contracts/doctor";
 import express from "express";
-import http from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { asyncRoute } from "./app-helpers.js";
 import { defaultDoctorDeps, registerDoctorRoutes } from "./doctor-routes.js";

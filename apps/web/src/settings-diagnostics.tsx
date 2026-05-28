@@ -9,15 +9,7 @@ import { Button } from "./components/ui/button.js";
 // version unknown" banner when the daemon's report disagrees with the
 // cockpit's expected version (forward-compat).
 
-const KIND_ORDER: DoctorCheckKind[] = [
-  "binary",
-  "service",
-  "daemon",
-  "config",
-  "database",
-  "repo-hooks",
-  "provider",
-];
+const KIND_ORDER: DoctorCheckKind[] = ["binary", "service", "daemon", "config", "database", "repo-hooks", "provider"];
 
 const KIND_LABEL: Record<DoctorCheckKind, string> = {
   binary: "Binaries",
@@ -82,7 +74,11 @@ export function DiagnosticsPanel() {
   const summary = SUMMARY_LABEL[data.summary];
   const grouped: Partial<Record<DoctorCheckKind, DoctorCheck[]>> = {};
   for (const c of data.checks) {
-    const bucket = grouped[c.kind] ?? (grouped[c.kind] = []);
+    let bucket = grouped[c.kind];
+    if (!bucket) {
+      bucket = [];
+      grouped[c.kind] = bucket;
+    }
     bucket.push(c);
   }
 

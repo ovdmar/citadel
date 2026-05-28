@@ -73,8 +73,7 @@ const { server, protocol } = daemon;
   const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
   if (!LOOPBACK.has(config.bindHost) && !config.tls) {
     console.warn(
-      `[citadel] WARNING: bindHost=${config.bindHost} is non-loopback but TLS is not configured. ` +
-        "Set config.tls={certPath,keyPath} or bind 127.0.0.1.",
+      `[citadel] WARNING: bindHost=${config.bindHost} is non-loopback but TLS is not configured. Set config.tls={certPath,keyPath} or bind 127.0.0.1.`,
     );
   }
 }

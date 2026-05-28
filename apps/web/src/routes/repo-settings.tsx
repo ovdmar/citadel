@@ -23,8 +23,7 @@ type ScaffoldHookResponse = {
 function useScaffoldHook(repoId: string) {
   const navigate = useNavigate();
   return useMutation({
-    mutationFn: () =>
-      api<ScaffoldHookResponse>(`/api/repos/${repoId}/scaffold-hook`, { method: "POST" }),
+    mutationFn: () => api<ScaffoldHookResponse>(`/api/repos/${repoId}/scaffold-hook`, { method: "POST" }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["state"] });
       navigate({ to: "/" });
@@ -40,8 +39,7 @@ function useInFlightScaffold(repoId: string) {
   const state = useStateQuery();
   const workspaces = state.data?.workspaces ?? [];
   return workspaces.find(
-    (ws) =>
-      ws.repoId === repoId && ws.lifecycle === "ready" && ws.branch.startsWith("hook-scaffold-"),
+    (ws) => ws.repoId === repoId && ws.lifecycle === "ready" && ws.branch.startsWith("hook-scaffold-"),
   );
 }
 
@@ -232,9 +230,7 @@ function RepoHooksSection(props: { repo: Repo }) {
             {hook.validationErrors.length ? <pre>{hook.validationErrors.join("\n")}</pre> : null}
           </details>
         ))}
-        {diagnostics.data && !diagnostics.data.diagnostics.length ? (
-          <NoHooksEmptyState repoId={props.repo.id} />
-        ) : null}
+        {diagnostics.data && !diagnostics.data.diagnostics.length ? <NoHooksEmptyState repoId={props.repo.id} /> : null}
       </div>
     </section>
   );
@@ -246,12 +242,7 @@ function NoHooksEmptyState(props: { repoId: string }) {
   return (
     <div className="empty compact scaffold-empty">
       <div>No hooks bound to this repo.</div>
-      <Button
-        type="button"
-        variant="secondary"
-        onClick={() => scaffold.mutate()}
-        disabled={scaffold.isPending}
-      >
+      <Button type="button" variant="secondary" onClick={() => scaffold.mutate()} disabled={scaffold.isPending}>
         <Sparkles size={14} />
         {inFlight ? "Resume scaffold session" : "Scaffold with AI"}
       </Button>

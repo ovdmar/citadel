@@ -119,10 +119,7 @@ describe("scripts/install/upgrade.sh — refusal contracts", () => {
     // Write a fake unit pointing at /tmp/some-other-citadel and ask upgrade.sh
     // to run from env.root — it must refuse with both paths in the error.
     const otherUnit = path.join(env.root, "wrong-unit.service");
-    fs.writeFileSync(
-      otherUnit,
-      ["[Service]", "WorkingDirectory=/tmp/some-other-citadel", ""].join("\n"),
-    );
+    fs.writeFileSync(otherUnit, ["[Service]", "WorkingDirectory=/tmp/some-other-citadel", ""].join("\n"));
     const result = runUpgrade([], {
       CITADEL_INSTALL_ROOT: env.root,
       CITADEL_SERVICE_UNIT: otherUnit,

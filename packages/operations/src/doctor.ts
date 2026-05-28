@@ -1,9 +1,5 @@
+import type { DoctorCheck, DoctorCheckStatus, DoctorReport } from "@citadel/contracts/doctor";
 import { summarizeDoctor } from "@citadel/core";
-import type {
-  DoctorCheck,
-  DoctorCheckStatus,
-  DoctorReport,
-} from "@citadel/contracts/doctor";
 
 // Status used by the doctor for an individual provider probe. Mirrors the
 // vocabulary of @citadel/contracts ProviderStatus but kept local so the
@@ -140,7 +136,7 @@ async function checkDaemonReachability(config: DoctorConfig, deps: DoctorDeps): 
     label: "daemon /api/health",
     status: "fail",
     detail: `unreachable after ${deps.retries} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
-    hint: `confirm citadel.service is running: \`systemctl --user status citadel.service\` (or \`make deploy\` for worktree dev)`,
+    hint: "confirm citadel.service is running: `systemctl --user status citadel.service` (or `make deploy` for worktree dev)",
   };
 }
 
@@ -215,9 +211,7 @@ async function checkProviders(
     const enabled = settings.enabled;
     const status = byId.get(id) ?? "unknown";
     if (!enabled || binaryPresent === false) {
-      const reason = !enabled
-        ? "provider disabled in config"
-        : `command "${settings.command}" not found in PATH`;
+      const reason = !enabled ? "provider disabled in config" : `command "${settings.command}" not found in PATH`;
       checks.push({
         id: `provider.${id}`,
         kind: "provider",

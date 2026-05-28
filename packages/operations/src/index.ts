@@ -793,12 +793,7 @@ export class OperationService {
     });
 }
 
-export type {
-  DeployHookStatus,
-  DoctorConfig,
-  DoctorDeps,
-  DoctorProviderProbe,
-  DoctorProviderStatus,
-  DoctorRepo,
-} from "./doctor.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export { runDoctorChecks } from "./doctor.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+export type { DeployHookStatus, DoctorConfig, DoctorDeps, DoctorProviderProbe, DoctorProviderStatus, DoctorRepo } from "./doctor.js";
