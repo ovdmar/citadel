@@ -640,6 +640,59 @@ h1.set-nav-title,
   border-top: 0.5px solid var(--c-line-1);
 }
 
+.set-path-autocomplete {
+  position: relative;
+}
+.set-path-suggestions {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 5;
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--c-card);
+  border: 0.5px solid var(--c-line-2);
+  border-radius: 7px;
+  box-shadow: var(--sh-2, var(--sh-1));
+}
+.set-path-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--c-fg-2);
+  cursor: pointer;
+}
+.set-path-suggestion.is-focused {
+  background: var(--c-line-1);
+  color: var(--c-fg-1);
+}
+.set-path-suggestion-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.set-path-suggestion-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--c-elev);
+  border: 0.5px solid var(--c-line-2);
+  color: var(--c-fg-4);
+}
+
 /* ─── Generic list (used for MCP + Danger zone rows) ───────────────── */
 .set-repo-list {
   display: flex;

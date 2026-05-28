@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CitadelConfig } from "@citadel/config";
@@ -91,6 +92,12 @@ type ProviderCollectors = {
   collectJiraIssueSummary: typeof collectJiraIssueSummary;
   transitionJiraIssue: typeof transitionJiraIssue;
 };
+
+function expandTilde(input: string): string {
+  if (input === "~") return os.homedir();
+  if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2));
+  return input;
+}
 
 export function createDaemonApp(input: {
   config: CitadelConfig;
@@ -281,7 +288,7 @@ export function createDaemonApp(input: {
     asyncRoute(async (req, res) => {
       const inputPath = typeof req.body?.rootPath === "string" ? req.body.rootPath : "";
       if (!inputPath) return res.status(400).json({ error: "root_path_required" });
-      const resolved = path.resolve(inputPath);
+      const resolved = path.resolve(expandTilde(inputPath));
       const exists = fs.existsSync(resolved);
       const isGit = exists && fs.existsSync(path.join(resolved, ".git"));
       let defaultBranch: string | null = null;
@@ -321,6 +328,44 @@ export function createDaemonApp(input: {
       });
     }),
   );
+
+  app.get("/api/fs/complete", (req, res) => {
+    const raw = typeof req.query.prefix === "string" ? req.query.prefix : "";
+    const seed = raw || "~/";
+    const trailingSlash = seed.endsWith("/");
+    const expanded = expandTilde(seed);
+    const baseDir = trailingSlash
+      ? path.resolve(expanded || os.homedir())
+      : path.resolve(path.dirname(expanded));
+    const filter = trailingSlash ? "" : path.basename(expanded);
+    let entries: Array<{ name: string; path: string; isGit: boolean }> = [];
+    try {
+      const filterLower = filter.toLowerCase();
+      const showHidden = filter.startsWith(".");
+      const dirents = fs.readdirSync(baseDir, { withFileTypes: true });
+      for (const dirent of dirents) {
+        if (!dirent.isDirectory() && !dirent.isSymbolicLink()) continue;
+        if (!showHidden && dirent.name.startsWith(".")) continue;
+        if (filterLower && !dirent.name.toLowerCase().startsWith(filterLower)) continue;
+        const full = path.join(baseDir, dirent.name);
+        if (dirent.isSymbolicLink()) {
+          try {
+            if (!fs.statSync(full).isDirectory()) continue;
+          } catch {
+            continue;
+          }
+        }
+        const isGit = fs.existsSync(path.join(full, ".git"));
+        entries.push({ name: dirent.name, path: full, isGit });
+        if (entries.length >= 100) break;
+      }
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      entries = entries.slice(0, 50);
+    } catch {
+      entries = [];
+    }
+    res.json({ baseDir, filter, entries });
+  });
 
   app.get("/api/repos", (_req, res) => {
     res.json({ repos: store.listRepos() });
