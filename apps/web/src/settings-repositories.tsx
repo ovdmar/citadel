@@ -1,15 +1,7 @@
 import type { AgentSession, Operation, Repo, Workspace } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import {
-  ExternalLink,
-  Folder,
-  FolderGit2,
-  FolderPlus,
-  Search,
-  Settings as SettingsIcon,
-  Trash2,
-} from "lucide-react";
+import { ExternalLink, Folder, FolderGit2, FolderPlus, Search, Settings as SettingsIcon, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import type { StateResponse } from "./app-state.js";
@@ -290,11 +282,12 @@ function PathAutocomplete(props: {
         }}
       />
       {open && entries.length ? (
-        <ul className="set-path-suggestions" role="listbox">
+        <div className="set-path-suggestions">
           {entries.map((entry, index) => (
-            <li
+            <button
               key={entry.path}
-              role="option"
+              type="button"
+              tabIndex={-1}
               aria-selected={focused === index}
               className={`set-path-suggestion ${focused === index ? "is-focused" : ""}`}
               onMouseEnter={() => setFocused(index)}
@@ -306,9 +299,9 @@ function PathAutocomplete(props: {
               {entry.isGit ? <FolderGit2 size={13} /> : <Folder size={13} />}
               <span className="set-path-suggestion-name">{entry.name}</span>
               {entry.isGit ? <span className="set-path-suggestion-tag">git</span> : null}
-            </li>
+            </button>
           ))}
-        </ul>
+        </div>
       ) : null}
     </div>
   );
@@ -379,7 +372,7 @@ function AddRepoModal(props: { onClose: () => void }) {
 
         <form onSubmit={submit}>
           <div className="set-modal-body">
-            <label className="set-modal-field">
+            <div className="set-modal-field">
               <span className="set-field-label">Path</span>
               <PathAutocomplete
                 inputRef={pathRef}
@@ -390,7 +383,7 @@ function AddRepoModal(props: { onClose: () => void }) {
                   inspect.reset();
                 }}
               />
-            </label>
+            </div>
             <label className="set-modal-field">
               <span className="set-field-label">
                 Display name <span className="set-field-opt">(optional)</span>

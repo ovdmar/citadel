@@ -663,10 +663,14 @@ h1.set-nav-title,
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
   padding: 5px 8px;
+  border: none;
   border-radius: 5px;
+  background: transparent;
   font-family: var(--font-mono);
   font-size: 12px;
+  text-align: left;
   color: var(--c-fg-2);
   cursor: pointer;
 }
