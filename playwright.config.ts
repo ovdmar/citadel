@@ -46,10 +46,10 @@ export default defineConfig({
         "CITADEL_DISABLE_STATUS_MONITOR=1",
         "CITADEL_DISABLE_AUTO_RESUME=1",
         "CITADEL_DISABLE_TERMINAL_REAPER=1",
-        // E2E writes screenshot artifacts under docs/campaigns. A watch-mode
-        // daemon can restart between tests when those files change, causing
-        // transient ECONNRESETs on the next API setup call.
-        "pnpm --filter @citadel/daemon exec tsx src/index.ts",
+        // E2E writes screenshot artifacts under docs/campaigns. Run the
+        // built daemon, not tsx watch/source mode, so CI cannot restart the
+        // API server between tests and surface transient ECONNRESETs.
+        "sh -c 'pnpm --filter @citadel/daemon build >/dev/null && pnpm --filter @citadel/daemon start'",
       ].join(" "),
       url: `${daemonBase}/api/health`,
       reuseExistingServer: false,
