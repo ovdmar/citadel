@@ -132,11 +132,8 @@ export function WorkspaceCard(
   //   - In namespace mode: emit `application/x-citadel-workspace-id` so
   //     namespace drop targets in the nav/dashboard can reassign via
   //     /api/namespaces/assign. Existing behavior.
-  //   - In reorder mode: emit `application/x-citadel-workspace-reorder+<groupPath>`
-  //     so other cards in the SAME group accept the drop. The group path
-  //     lives in the mime-type suffix because `dataTransfer.getData` is
-  //     restricted to the `drop` event, but `dataTransfer.types` IS readable
-  //     on `dragover` (needed for the cross-group early-exit).
+  //   - In reorder mode: emit `application/x-citadel-workspace-reorder+<hex>`
+  //     so other cards in the SAME group accept the drop during dragover.
   const canDrag = namespaceMode || Boolean(reorder);
   const dragHandlers = canDrag
     ? {

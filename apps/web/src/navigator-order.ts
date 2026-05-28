@@ -7,23 +7,45 @@
 export const NAV_ORDER_STORAGE = "citadel.navigator-order";
 
 // dataTransfer mime types. The source group path is encoded into the mime
-// type SUFFIX because `dataTransfer.getData` is restricted to the `drop`
-// event in HTML5 drag-and-drop — but `dataTransfer.types` IS readable on
-// `dragover`, where the early-exit for cross-group drops must happen.
+// type suffix because `dataTransfer.getData` is not reliably readable during
+// `dragover`, where we need to reject cross-group drops. Browsers lowercase
+// drag MIME types, so the path is hex-encoded first.
 const REORDER_MIME_PREFIX = "application/x-citadel-workspace-reorder";
 
 export function encodeReorderMimeType(groupPath: string): string {
-  return `${REORDER_MIME_PREFIX}+${groupPath}`;
+  return `${REORDER_MIME_PREFIX}+${encodeGroupPath(groupPath)}`;
 }
 
 export function parseReorderMimeType(mime: string): string | null {
   if (!mime.startsWith(`${REORDER_MIME_PREFIX}+`)) return null;
-  return mime.slice(REORDER_MIME_PREFIX.length + 1);
+  return decodeGroupPath(mime.slice(REORDER_MIME_PREFIX.length + 1));
 }
 
 export function findReorderMimeType(types: readonly string[]): string | null {
   for (const type of types) if (type.startsWith(`${REORDER_MIME_PREFIX}+`)) return type;
   return null;
+}
+
+function encodeGroupPath(value: string): string {
+  let output = "";
+  const escaped = encodeURIComponent(value);
+  for (let i = 0; i < escaped.length; i++) {
+    output += escaped.charCodeAt(i).toString(16).padStart(2, "0");
+  }
+  return output;
+}
+
+function decodeGroupPath(value: string): string | null {
+  if (!value || value.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(value)) return null;
+  let escaped = "";
+  for (let i = 0; i < value.length; i += 2) {
+    escaped += String.fromCharCode(Number.parseInt(value.slice(i, i + 2), 16));
+  }
+  try {
+    return decodeURIComponent(escaped);
+  } catch {
+    return null;
+  }
 }
 
 // Apply a per-group user-provided order to a list of workspace entries.

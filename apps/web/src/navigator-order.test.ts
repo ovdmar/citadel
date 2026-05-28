@@ -41,9 +41,10 @@ describe("applyLocalOrder", () => {
 });
 
 describe("encode/parse reorder mime type", () => {
-  it("roundtrips a simple group path", () => {
-    const mime = encodeReorderMimeType("repo/abc-123");
-    expect(parseReorderMimeType(mime)).toBe("repo/abc-123");
+  it("roundtrips a group path without lowercasing it", () => {
+    const mime = encodeReorderMimeType("repo=Citadel UI/status=Needs Review");
+    expect(mime).toBe(mime.toLowerCase());
+    expect(parseReorderMimeType(mime)).toBe("repo=Citadel UI/status=Needs Review");
   });
 
   it("recognizes the reorder prefix", () => {

@@ -76,9 +76,15 @@ export type WorkspaceOpsDeps = {
   ) => Promise<void>;
 };
 
+export type CreateWorkspaceOptions = {
+  deferProvisioning?: boolean;
+  onWorkspaceUpdated?: (payload: { workspaceId: string; operationId: string }) => void;
+};
+
 export async function createWorkspaceImpl(
   deps: WorkspaceOpsDeps,
   input: CreateWorkspaceInput,
+  options: CreateWorkspaceOptions = {},
 ): Promise<{ operationId: string; workspaceId: string }> {
   const repo = deps.store.listRepos().find((candidate) => candidate.id === input.repoId);
   if (!repo) throw new Error(`Unknown repo: ${input.repoId}`);
@@ -165,12 +171,54 @@ export async function createWorkspaceImpl(
     "info",
     `Created workspace record name=${workspace.name} branch=${workspace.branch} base=${baseBranch} source=${input.source}`,
   );
+  options.onWorkspaceUpdated?.({ workspaceId: workspace.id, operationId: operation.id });
+
+  const provision = () =>
+    provisionWorkspace(deps, {
+      repo,
+      workspace,
+      operation,
+      baseBranch,
+      branch,
+      workspacePath,
+      existingBranch,
+      onWorkspaceUpdated: options.onWorkspaceUpdated,
+    });
+
+  if (options.deferProvisioning) {
+    void provision().catch(() => {
+      // provisionWorkspace records failure details on the operation and
+      // workspace. Swallow here so background setup does not create an
+      // unhandled rejection after the HTTP request has already returned.
+    });
+    return { operationId: operation.id, workspaceId: workspace.id };
+  }
+
+  await provision();
+  return { operationId: operation.id, workspaceId: workspace.id };
+}
+
+async function provisionWorkspace(
+  deps: WorkspaceOpsDeps,
+  input: {
+    repo: Repo;
+    workspace: Workspace;
+    operation: Operation;
+    baseBranch: string;
+    branch: string;
+    workspacePath: string;
+    existingBranch: string | null;
+    onWorkspaceUpdated?: (payload: { workspaceId: string; operationId: string }) => void;
+  },
+): Promise<void> {
+  const { repo, workspace, operation, baseBranch, branch, workspacePath, existingBranch, onWorkspaceUpdated } = input;
   deps.store.upsertOperation({
     ...operation,
     workspaceId: workspace.id,
     progress: 20,
     message: "Fetching remote metadata",
   });
+  onWorkspaceUpdated?.({ workspaceId: workspace.id, operationId: operation.id });
   fs.mkdirSync(repo.worktreeParent, { recursive: true });
   try {
     tryRunGit(repo.rootPath, ["fetch", "--prune", repo.defaultRemote]);
@@ -192,6 +240,7 @@ export async function createWorkspaceImpl(
       message: "Running workspace setup hooks",
       updatedAt: nowIso(),
     });
+    onWorkspaceUpdated?.({ workspaceId: workspace.id, operationId: operation.id });
     deps.logOp(
       operation.id,
       "info",
@@ -199,6 +248,7 @@ export async function createWorkspaceImpl(
     );
     await deps.runWorkspaceHooks("workspace.setup", repo.setupHookIds, repo, workspace, operation.id);
     deps.store.updateWorkspaceLifecycle(workspace.id, "ready");
+    onWorkspaceUpdated?.({ workspaceId: workspace.id, operationId: operation.id });
     deps.activity(
       "workspace.created",
       "system",
@@ -216,6 +266,7 @@ export async function createWorkspaceImpl(
       message: "Workspace ready",
       updatedAt: nowIso(),
     });
+    onWorkspaceUpdated?.({ workspaceId: workspace.id, operationId: operation.id });
   } catch (error) {
     deps.store.updateWorkspaceLifecycle(workspace.id, "failed");
     const errorMessage = error instanceof Error ? error.message : "workspace_create_failed";
@@ -228,10 +279,10 @@ export async function createWorkspaceImpl(
       error: errorMessage,
       updatedAt: nowIso(),
     });
+    onWorkspaceUpdated?.({ workspaceId: workspace.id, operationId: operation.id });
     const classified = classifyWorktreeError(errorMessage);
     if (classified) throw new BranchInUseByWorktreeError(classified.branch, classified.worktreePath);
     if (/invalid reference: \S+/i.test(errorMessage) && existingBranch)
       throw new RemoteRefMissingError(existingBranch, repo.defaultRemote);
   }
-  return { operationId: operation.id, workspaceId: workspace.id };
 }

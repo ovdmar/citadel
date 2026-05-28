@@ -20,6 +20,34 @@ export type RemoveWorkspaceResult = {
   dirtySummary?: WorkspaceDirtySummary;
 };
 
+export type WorkspaceRemovalCheckResult = {
+  removable: boolean;
+  dirty: boolean;
+  reason: "ok" | "root_workspace" | "dirty";
+  dirtySummary?: WorkspaceDirtySummary;
+};
+
+export function checkWorkspaceRemovalImpl(
+  deps: WorkspaceOpsDeps,
+  input: { workspaceId: string; archiveOnly?: boolean },
+): WorkspaceRemovalCheckResult {
+  const workspace = deps.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+  if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+  if (workspace.kind === "root") {
+    return { removable: false, dirty: false, reason: "root_workspace" };
+  }
+  const dirty = workspaceIsDirty(workspace.path);
+  if (dirty && !input.archiveOnly) {
+    return {
+      removable: false,
+      dirty,
+      reason: "dirty",
+      dirtySummary: workspaceDirtySummary(workspace.path),
+    };
+  }
+  return { removable: true, dirty, reason: "ok" };
+}
+
 export async function removeWorkspaceImpl(
   deps: WorkspaceOpsDeps,
   input: RemoveWorkspaceInput,

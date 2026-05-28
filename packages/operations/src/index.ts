@@ -9,10 +9,10 @@ import { killTmuxSession } from "@citadel/terminal";
 import * as agentHistory from "./agent-history.js";
 import * as agentMessages from "./agent-messages.js";
 import { createAgentSession as createAgentSessionImpl } from "./create-agent-session.js";
-import { type WorkspaceOpsDeps, createWorkspaceImpl } from "./create-workspace.js";
+import { type CreateWorkspaceOptions, type WorkspaceOpsDeps, createWorkspaceImpl } from "./create-workspace.js";
 import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 import * as namespaceOps from "./namespaces.js";
-import { removeWorkspaceImpl } from "./remove-workspace.js";
+import { checkWorkspaceRemovalImpl, removeWorkspaceImpl } from "./remove-workspace.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
 export type { LaunchAgentResult } from "./launch-agent.js";
 export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
@@ -125,7 +125,8 @@ export class OperationService {
     return repo;
   }
 
-  createWorkspace = (input: CreateWorkspaceInput) => createWorkspaceImpl(this.workspaceOpsDeps(), input);
+  createWorkspace = (input: CreateWorkspaceInput, options?: CreateWorkspaceOptions) =>
+    createWorkspaceImpl(this.workspaceOpsDeps(), input, options);
 
   createAgentSession = (
     input: CreateAgentSessionInput,
@@ -261,6 +262,8 @@ export class OperationService {
   removeWorkspace = (input: { workspaceId: string; force?: boolean; archiveOnly?: boolean }) =>
     removeWorkspaceImpl(this.workspaceOpsDeps(), input);
 
+  checkWorkspaceRemoval = (input: { workspaceId: string; archiveOnly?: boolean }) =>
+    checkWorkspaceRemovalImpl(this.workspaceOpsDeps(), input);
 
   async removeRepo(input: { repoId: string; force?: boolean; cleanupWorktrees?: boolean }) {
     const repo = this.store.listRepos().find((candidate) => candidate.id === input.repoId);
