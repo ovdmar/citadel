@@ -15,8 +15,7 @@ import {
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { mcpStatus, mcpToolDefinitions } from "@citadel/mcp";
-import { OperationService, createDiagnosticsLogger, type DiagnosticsLogger } from "@citadel/operations";
-import { buildDiagnosticsSnapshot, streamDiagnosticsBundle } from "./diagnostics-bundle.js";
+import { type DiagnosticsLogger, OperationService, createDiagnosticsLogger } from "@citadel/operations";
 import {
   type CollectGitHubVersionControlSummaryDeps,
   collectGitHubCiRunLog,
@@ -45,6 +44,7 @@ import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
 import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
+import { buildDiagnosticsSnapshot, streamDiagnosticsBundle } from "./diagnostics-bundle.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import {
   AUTOMATED_GH_DISABLED_REASON,
@@ -184,11 +184,10 @@ export function createDaemonApp(input: {
   // WebSocket auto-reconnect (xterm `reconnect=3`) lands on the *same* ttyd
   // it was talking to before the restart.
   //
-  // Discovery is host-wide (NOT scoped to this daemon's port slot) so we can
-  // also reap ttyds that pre-date the current port-slot scheme (the 7xxx
-  // generation from before ttyd-slot.ts shipped on 2026-05-27). adopt()
-  // routes by DB membership via the resolveTabId callback: known sessionIds
-  // get adopted, unknown ones get SIGTERMed.
+  // Discovery is scoped to this daemon's port slot before adopt() routes by
+  // DB membership. That port filter is a hard safety boundary: sandbox
+  // daemons can carry prod-looking DB rows, but they must not see or SIGTERM
+  // the installed daemon's ttyds.
   //
   // Skipped under vitest: tests that boot a daemon would otherwise re-attach
   // to the live cockpit's ttyds and the next test that calls release() would
@@ -196,6 +195,8 @@ export function createDaemonApp(input: {
   if (!process.env.VITEST) {
     const survivors = discoverExistingTtyds({
       basePathPrefix: ttyd.config.basePathPrefix,
+      portBase: ttyd.config.portBase,
+      portMax: ttyd.config.portMax,
     });
     const sessionTabIds = new Map<string, string>();
     for (const session of store.listSessions()) {

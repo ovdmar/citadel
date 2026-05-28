@@ -12,6 +12,9 @@ import { type MonitorTickDeps, runStatusMonitorTick } from "./status-monitor.js"
 
 const FIXED_NOW = "2026-05-26T19:00:00.000Z";
 const FIXED_NOW_MS = new Date(FIXED_NOW).valueOf();
+const CODEX_REASON_CURRENT_TURN_DIVIDER = "pane:codex:current_turn_divider";
+const CODEX_REASON_STABLE_TIMEOUT = "pane:codex:stable_timeout";
+type DiagnosticEvent = { category: string; event: string; data?: Record<string, unknown> };
 
 function makeSession(over: Partial<AgentSession> = {}): AgentSession {
   return {
@@ -58,6 +61,9 @@ interface DepsOver {
   recentUserAction?: Map<string, number>;
   tmuxActivities?: Map<string, number>;
   adapter?: RuntimeStatusAdapter;
+  recoverRuntimeSessionId?: MonitorTickDeps["recoverRuntimeSessionId"];
+  setRuntimeSessionId?: MonitorTickDeps["setRuntimeSessionId"];
+  diagnosticsEvents?: DiagnosticEvent[];
   // Optional shared monitor state. When set, the deps uses this Map so
   // tests can observe / reuse state across multiple `runStatusMonitorTick`
   // calls (debounce tests need this).
@@ -99,6 +105,17 @@ function makeDeps(over: DepsOver = {}) {
       over.panePidProcess?.has(name) ? (over.panePidProcess.get(name) ?? null) : { command: "claude", pid: 1 },
     ...(over.hasTmuxSession ? { hasTmuxSession: over.hasTmuxSession } : {}),
     runtimeBinaryFor: (runtimeId) => runtimeBinaries.get(runtimeId) ?? null,
+    ...(over.recoverRuntimeSessionId ? { recoverRuntimeSessionId: over.recoverRuntimeSessionId } : {}),
+    ...(over.setRuntimeSessionId ? { setRuntimeSessionId: over.setRuntimeSessionId } : {}),
+    ...(over.diagnosticsEvents
+      ? {
+          diagnostics: {
+            log: (category: string, event: string, data?: Record<string, unknown>) => {
+              over.diagnosticsEvents?.push(data === undefined ? { category, event } : { category, event, data });
+            },
+          },
+        }
+      : {}),
     recentUserAction: over.recentUserAction ?? new Map(),
     getAdapter: () => over.adapter ?? makeAdapter(null),
     adapterStates: new Map(),
@@ -181,6 +198,45 @@ describe("regression-pin: tmux failure MUST NOT mass-flip sessions to stopped", 
     expect(updates).toHaveLength(0);
   });
 
+  it("(scenario 1d) tmux-missing diagnostics fire once at the debounce threshold, not every later tick", async () => {
+    const diagnosticsEvents: DiagnosticEvent[] = [];
+    const sessions = [makeSession({ id: "sess_diag", tmuxSessionName: "citadel_diag" })];
+    const panePidProcess = new Map<string, { command: string; pid: number } | null>([["citadel_diag", null]]);
+    const monitorStates = new Map<string, unknown>();
+    const { deps } = makeDeps({ sessions, panePidProcess, monitorStates, diagnosticsEvents });
+
+    for (let i = 0; i < 6; i++) {
+      await runStatusMonitorTick(deps, { source: "tick" });
+    }
+
+    expect(diagnosticsEvents.filter((event) => event.event === "missing-counter.bump")).toHaveLength(2);
+    const fired = diagnosticsEvents.filter((event) => event.event === "tmux-missing.fired");
+    expect(fired).toHaveLength(1);
+    expect(fired[0]?.data).toMatchObject({ sessionId: "sess_diag", count: 3, threshold: 3 });
+  });
+
+  it("(scenario 1e) already-unknown tmux-missing rows do not keep emitting missing diagnostics", async () => {
+    const diagnosticsEvents: DiagnosticEvent[] = [];
+    const sessions = [
+      makeSession({
+        id: "sess_unknown_diag",
+        tmuxSessionName: "citadel_unknown_diag",
+        status: "unknown",
+        statusReason: "tmux_missing",
+      }),
+    ];
+    const panePidProcess = new Map<string, { command: string; pid: number } | null>([["citadel_unknown_diag", null]]);
+    const monitorStates = new Map<string, unknown>();
+    const { deps } = makeDeps({ sessions, panePidProcess, monitorStates, diagnosticsEvents });
+
+    for (let i = 0; i < 6; i++) {
+      await runStatusMonitorTick(deps, { source: "tick" });
+    }
+
+    expect(diagnosticsEvents.filter((event) => event.event.startsWith("missing-counter"))).toHaveLength(0);
+    expect(diagnosticsEvents.filter((event) => event.event === "tmux-missing.fired")).toHaveLength(0);
+  });
+
   it("(scenario 2) legacy /tmp/citadel-agent-*.exit files on disk MUST NOT influence the tick — readSentinels was removed from MonitorTickDeps", () => {
     // Compile-time pin: importing the deps type and asserting it has no
     // `readSentinels` member. (TypeScript would have flagged this in CI, but
@@ -252,6 +308,97 @@ describe("shell-first per-runtime status derivation", () => {
     await runStatusMonitorTick(deps, { source: "tick" }); // flip
     expect(updates).toHaveLength(1);
     expect(updates[0]?.update).toMatchObject({ status: "idle", reason: null, reasonAt: null });
+  });
+});
+
+describe("codex optimistic-send idle suppression", () => {
+  it("suppresses weak stable-timeout idle immediately after optimistic_send", async () => {
+    const { deps, updates } = makeDeps({
+      sessions: [
+        makeSession({
+          runtimeId: "codex",
+          status: "running",
+          statusReason: "optimistic_send",
+          lastStatusAt: "2026-05-26T18:59:55.000Z",
+        }),
+      ],
+      panePidProcess: new Map([["citadel_test_1", { command: "codex", pid: 100 }]]),
+      runtimeBinaries: new Map([["codex", "codex"]]),
+      adapter: makeAdapter({ observed: "idle", reason: CODEX_REASON_STABLE_TIMEOUT }),
+    });
+    await runStatusMonitorTick(deps, { source: "tick" });
+    expect(updates).toHaveLength(0);
+  });
+
+  it("allows positive current-turn divider idle even inside the optimistic_send window", async () => {
+    const { deps, updates } = makeDeps({
+      sessions: [
+        makeSession({
+          runtimeId: "codex",
+          status: "running",
+          statusReason: "optimistic_send",
+          lastStatusAt: "2026-05-26T18:59:55.000Z",
+        }),
+      ],
+      panePidProcess: new Map([["citadel_test_1", { command: "codex", pid: 100 }]]),
+      runtimeBinaries: new Map([["codex", "codex"]]),
+      adapter: makeAdapter({ observed: "idle", reason: CODEX_REASON_CURRENT_TURN_DIVIDER }),
+    });
+    await runStatusMonitorTick(deps, { source: "tick" });
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.update).toMatchObject({
+      status: "idle",
+      reason: CODEX_REASON_CURRENT_TURN_DIVIDER,
+    });
+  });
+
+  it("allows stable-timeout idle after the optimistic_send grace window expires", async () => {
+    const { deps, updates } = makeDeps({
+      sessions: [
+        makeSession({
+          runtimeId: "codex",
+          status: "running",
+          statusReason: "optimistic_send",
+          lastStatusAt: "2026-05-26T18:59:00.000Z",
+        }),
+      ],
+      panePidProcess: new Map([["citadel_test_1", { command: "codex", pid: 100 }]]),
+      runtimeBinaries: new Map([["codex", "codex"]]),
+      adapter: makeAdapter({ observed: "idle", reason: CODEX_REASON_STABLE_TIMEOUT }),
+    });
+    await runStatusMonitorTick(deps, { source: "tick" });
+    expect(updates).toHaveLength(1);
+    expect(updates[0]?.update).toMatchObject({
+      status: "idle",
+      reason: CODEX_REASON_STABLE_TIMEOUT,
+    });
+  });
+});
+
+describe("runtime session id repair", () => {
+  it("backfills a missing runtimeSessionId for a live codex pane", async () => {
+    const setCalls: Array<{ sessionId: string; runtimeSessionId: string }> = [];
+    const session = makeSession({
+      id: "sess_codex",
+      runtimeId: "codex",
+      runtimeSessionId: null,
+    });
+    const { deps, emitted } = makeDeps({
+      sessions: [session],
+      panePidProcess: new Map([["citadel_test_1", { command: "codex", pid: 100 }]]),
+      runtimeBinaries: new Map([["codex", "codex"]]),
+      recoverRuntimeSessionId: (candidate, pane) =>
+        candidate.id === "sess_codex" && pane?.pid === 100 ? "019e6fb1-4632-7492-b175-cd9de9afb5bf" : null,
+      setRuntimeSessionId: (sessionId, runtimeSessionId) => setCalls.push({ sessionId, runtimeSessionId }),
+    });
+    const result = await runStatusMonitorTick(deps, { source: "tick" });
+
+    expect(setCalls).toEqual([{ sessionId: "sess_codex", runtimeSessionId: "019e6fb1-4632-7492-b175-cd9de9afb5bf" }]);
+    expect(emitted).toContainEqual({
+      event: "agent.updated",
+      payload: { workspaceId: "ws_1", sessionId: "sess_codex" },
+    });
+    expect(result.sessionsTouched).toBe(1);
   });
 });
 

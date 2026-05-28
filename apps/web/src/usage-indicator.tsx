@@ -1,7 +1,7 @@
 import type { AgentRuntime, GitHubQuotaSummary, RuntimeUsageSummary } from "@citadel/contracts";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { Github } from "lucide-react";
+import { CircleOff, Github } from "lucide-react";
 import { api } from "./api.js";
 import { categoryKey, formatLocalReset, formatTimeUntilReset, pickTopBarCategory } from "./lib/usage-format.js";
 import { RuntimeMark } from "./runtime-mark.js";
@@ -16,9 +16,10 @@ type ConfigResponse = { config: { runtimes: RuntimeConfigEntry[] } };
 
 // Low-contrast usage pill rendered in the cockpit top bar, left of the
 // Settings icon. One pill per runtime where:
-//   - health === "healthy"            (unhealthy runtimes have nothing to fetch)
 //   - capabilities.supportsUsage      (only runtimes with a fetcher)
 //   - showUsageInTopBar               (operator opted in from Settings)
+// Unhealthy runtimes stay visible so the usage route can surface why no usage
+// can be fetched (for example Claude Code subscription/auth failures).
 // Click navigates to /settings so the user can drill into the full breakdown.
 export function UsageIndicator(props: { runtimes: AgentRuntime[] }) {
   const configQuery = useQuery({
@@ -32,15 +33,7 @@ export function UsageIndicator(props: { runtimes: AgentRuntime[] }) {
     refetchInterval: 60_000,
     staleTime: 60_000,
   });
-  const enabled = props.runtimes
-    .map((runtime) => {
-      if (runtime.health !== "healthy") return null;
-      if (!runtime.capabilities.supportsUsage) return null;
-      const entry = configRuntimes.find((candidate) => candidate.id === runtime.id);
-      if (entry?.showUsageInTopBar !== true) return null;
-      return { runtime, topBarKey: entry.topBarCategoryKey };
-    })
-    .filter((entry): entry is { runtime: AgentRuntime; topBarKey: string | undefined } => entry !== null);
+  const enabled = selectTopBarUsageRuntimes(props.runtimes, configRuntimes);
 
   const usageQueries = useQueries({
     queries: enabled.map(({ runtime }) => ({
@@ -61,6 +54,22 @@ export function UsageIndicator(props: { runtimes: AgentRuntime[] }) {
       ))}
     </div>
   );
+}
+
+export type TopBarUsageRuntime = { runtime: AgentRuntime; topBarKey: string | undefined };
+
+export function selectTopBarUsageRuntimes(
+  runtimes: AgentRuntime[],
+  configRuntimes: RuntimeConfigEntry[],
+): TopBarUsageRuntime[] {
+  return runtimes
+    .map((runtime) => {
+      if (!runtime.capabilities.supportsUsage) return null;
+      const entry = configRuntimes.find((candidate) => candidate.id === runtime.id);
+      if (entry?.showUsageInTopBar !== true) return null;
+      return { runtime, topBarKey: entry.topBarCategoryKey };
+    })
+    .filter((entry): entry is TopBarUsageRuntime => entry !== null);
 }
 
 function GitHubQuotaPill(props: { quota: GitHubQuotaSummary | undefined }) {
@@ -100,41 +109,85 @@ function UsagePill(props: {
   topBarKey: string | undefined;
   usage: RuntimeUsageSummary | undefined;
 }) {
-  const summary = props.usage;
-  const category = summary ? pickTopBarCategory(summary.categories, props.topBarKey) : null;
-  const timeLeft = category ? formatTimeUntilReset(category.reset) : null;
-  const tooltip = buildTooltip(props.runtime.displayName, summary, category);
+  const state = resolveUsagePillState(props.runtime, props.usage, props.topBarKey);
   return (
-    <Link to="/settings" className="cit-usage-pill" title={tooltip} aria-label={tooltip}>
+    <Link to="/settings" className={usagePillClassName(state.tone)} title={state.tooltip} aria-label={state.tooltip}>
       <span className="cit-usage-pill-mark" aria-hidden>
-        <RuntimeMark runtimeId={props.runtime.id} size={14} />
+        {state.tone === "unavailable" ? (
+          <CircleOff size={14} />
+        ) : (
+          <RuntimeMark runtimeId={props.runtime.id} size={14} />
+        )}
       </span>
       <span className="cit-usage-pill-value">
-        {category ? (
+        {state.category ? (
           <>
-            <span className="cit-usage-pill-pct">{category.percentUsed}%</span>
-            {timeLeft ? (
+            <span className="cit-usage-pill-pct">{state.category.percentUsed}%</span>
+            {state.timeLeft ? (
               <>
                 <span className="cit-usage-pill-sep" aria-hidden>
                   ·
                 </span>
-                <span className="cit-usage-pill-time">{timeLeft}</span>
+                <span className="cit-usage-pill-time">{state.timeLeft}</span>
               </>
             ) : null}
           </>
         ) : (
-          "—"
+          state.value
         )}
       </span>
     </Link>
   );
 }
 
+type UsagePillTone = RuntimeUsageSummary["status"] | "loading";
+type SelectedUsageCategory = ReturnType<typeof pickTopBarCategory>;
+
+export type UsagePillState = {
+  tone: UsagePillTone;
+  value: string;
+  tooltip: string;
+  category: SelectedUsageCategory;
+  timeLeft: string | null;
+};
+
+export function resolveUsagePillState(
+  runtime: AgentRuntime,
+  summary: RuntimeUsageSummary | undefined,
+  topBarKey: string | undefined,
+): UsagePillState {
+  const tone: UsagePillTone = summary?.status ?? (runtime.health !== "healthy" ? runtime.health : "loading");
+  const category = summary?.status === "healthy" ? pickTopBarCategory(summary.categories, topBarKey) : null;
+  const timeLeft = category ? formatTimeUntilReset(category.reset) : null;
+  return {
+    tone,
+    value: usagePillFallbackValue(tone),
+    tooltip: buildTooltip(runtime.displayName, summary, category, runtime),
+    category,
+    timeLeft,
+  };
+}
+
+function usagePillClassName(tone: UsagePillTone): string {
+  const modifier = tone === "unavailable" ? "is-bad" : tone === "degraded" || tone === "unknown" ? "is-warn" : "";
+  return modifier ? `cit-usage-pill ${modifier}` : "cit-usage-pill";
+}
+
+function usagePillFallbackValue(tone: UsagePillTone): string {
+  if (tone === "loading") return "...";
+  if (tone === "unavailable") return "off";
+  return "--";
+}
+
 function buildTooltip(
   displayName: string,
   summary: RuntimeUsageSummary | undefined,
   selected: { label: string; section: string | null } | null,
+  runtime?: AgentRuntime,
 ): string {
+  if (!summary && runtime && runtime.health !== "healthy") {
+    return `${displayName}: ${runtime.healthReason ?? `runtime is ${runtime.health}`}`;
+  }
   if (!summary) return `${displayName} — loading usage…`;
   if (summary.status !== "healthy" || summary.categories.length === 0) {
     return `${displayName}: ${summary.reason ?? "no usage data"}`;

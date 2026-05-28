@@ -10,7 +10,7 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
-import { createTtydManager } from "./ttyd.js";
+import { TtydUnavailableError, createTtydManager } from "./ttyd.js";
 
 const spawnedChildren: ChildProcess[] = [];
 afterEach(() => {
@@ -97,5 +97,40 @@ describe("ttyd manager — adopt()", () => {
     const released = manager.releaseTab("tab_a");
     expect(released).toBe(1);
     expect(manager.list()).toHaveLength(0);
+  });
+
+  it("keeps an existing ttyd alive when force respawn targets a missing tmux session", async () => {
+    const manager = createTtydManager();
+    const pid = liveChildPid();
+    manager.adopt([record({ key: "sess_force", port: 11001, pid, tmuxSession: "citadel_old_force" })]);
+
+    await expect(
+      manager.ensure({
+        key: "sess_force",
+        tabId: "tab_force",
+        tmuxSession: `citadel_missing_force_${Date.now()}`,
+        force: true,
+      }),
+    ).rejects.toBeInstanceOf(TtydUnavailableError);
+
+    expect(manager.list().map((entry) => entry.key)).toEqual(["sess_force"]);
+    expect(() => process.kill(pid, 0)).not.toThrow();
+  });
+
+  it("keeps the incumbent tab ttyd alive when replacement tmux is missing", async () => {
+    const manager = createTtydManager();
+    const pid = liveChildPid();
+    manager.adopt([record({ key: "sess_old", port: 11001, pid, tmuxSession: "citadel_old_tab" })], () => "tab_shared");
+
+    await expect(
+      manager.ensure({
+        key: "sess_new",
+        tabId: "tab_shared",
+        tmuxSession: `citadel_missing_tab_${Date.now()}`,
+      }),
+    ).rejects.toBeInstanceOf(TtydUnavailableError);
+
+    expect(manager.list().map((entry) => entry.key)).toEqual(["sess_old"]);
+    expect(() => process.kill(pid, 0)).not.toThrow();
   });
 });

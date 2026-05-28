@@ -12,7 +12,7 @@ import {
   startStatusMonitor,
 } from "@citadel/operations";
 import type { RuntimeStatusAdapter, SessionAdapterState } from "@citadel/runtimes";
-import { getStatusAdapter } from "@citadel/runtimes";
+import { discoverCodexSessionIdFromProcess, getStatusAdapter } from "@citadel/runtimes";
 import { captureTmux, panePidProcess, tmuxPrefix, tmuxSessionExists } from "@citadel/terminal";
 
 // Dedupe monitor-side failures so a persistent tmux outage doesn't flood
@@ -37,6 +37,7 @@ export function buildStatusMonitorDeps(
 ): MonitorTickDeps {
   const adapterStates = new Map<string, SessionAdapterState>();
   const monitorStates = new Map<string, MonitorSessionState>();
+  const runtimeSessionBackfillAttempts = new Map<string, number>();
   // Build runtimeId → command map once at deps construction. Re-reading
   // config on every tick would be wasteful; runtimes are static for the
   // daemon's lifetime (a config change triggers daemon restart).
@@ -97,6 +98,19 @@ export function buildStatusMonitorDeps(
     },
     ...(diagnostics ? { diagnostics } : {}),
     runtimeBinaryFor: (runtimeId) => runtimeBinaryByRuntimeId.get(runtimeId) ?? null,
+    recoverRuntimeSessionId: (session, pane) => {
+      if (session.runtimeId !== "codex") return null;
+      if (!pane || pane.command !== "codex") return null;
+      const lastAttemptMs = runtimeSessionBackfillAttempts.get(session.id) ?? 0;
+      const nowMs = Date.now();
+      if (nowMs - lastAttemptMs < 30_000) return null;
+      runtimeSessionBackfillAttempts.set(session.id, nowMs);
+      return discoverCodexSessionIdFromProcess({ rootPid: pane.pid });
+    },
+    setRuntimeSessionId: (sessionId, runtimeSessionId) => {
+      store.setSessionRuntimeSessionId(sessionId, runtimeSessionId);
+      runtimeSessionBackfillAttempts.delete(sessionId);
+    },
     recentUserAction,
     // Single batched tmux query per tick — `#{session_activity}` is epoch sec.
     // Errors are caught and reported once per (kind × error-message) so a

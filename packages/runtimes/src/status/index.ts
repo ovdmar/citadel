@@ -83,7 +83,14 @@ export function getStatusAdapter(runtimeId: string): RuntimeStatusAdapter {
 }
 
 export { claudeCodeStatusAdapter } from "./claude-code.js";
-export { codexStatusAdapter } from "./codex.js";
+export {
+  CODEX_REASON_ACTIVITY,
+  CODEX_REASON_CURRENT_TURN_DIVIDER,
+  CODEX_REASON_INTERRUPT,
+  CODEX_REASON_SANDBOX_APPROVAL,
+  CODEX_REASON_STABLE_TIMEOUT,
+  codexStatusAdapter,
+} from "./codex.js";
 
 // Utility shared by adapters: bottom-most non-empty line of the visible pane,
 // trimmed of surrounding whitespace. All chrome regexes are anchored to this

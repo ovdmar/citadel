@@ -264,6 +264,19 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
   }): Promise<TtydEntry> {
     const desiredTheme: TtydTheme = args.theme ?? "dark";
     const tabId = args.tabId ?? null;
+    let targetTmuxAlive: boolean | null = null;
+
+    function assertTargetTmuxAlive(context: Record<string, unknown>): void {
+      targetTmuxAlive ??= tmuxSessionAlive(args.tmuxSession);
+      if (targetTmuxAlive) return;
+      diag.log("ttyd", "ensure.tmux-missing", {
+        key: args.key,
+        tabId,
+        tmuxSession: args.tmuxSession,
+        ...context,
+      });
+      throw new TtydUnavailableError("tmux_session_missing", `tmux session ${args.tmuxSession} not found`);
+    }
 
     // Tab-level dedup: if a different key already serves this tab, that's
     // a stale entry (typically the source row of a just-completed restore,
@@ -274,8 +287,15 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
       const incumbentKey = tabIndex.get(tabId);
       if (incumbentKey && incumbentKey !== args.key) {
         const incumbent = entries.get(incumbentKey);
-        if (incumbent) {
+        if (incumbent && isEntryAlive(incumbent)) {
+          assertTargetTmuxAlive({
+            phase: "tab-replace",
+            incumbentKey,
+            incumbentTmuxSession: incumbent.tmuxSession,
+          });
           signalEntry(incumbent, "SIGTERM");
+          deleteEntry(incumbentKey);
+        } else if (incumbent) {
           deleteEntry(incumbentKey);
         } else {
           tabIndex.delete(tabId);
@@ -312,6 +332,12 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
         }
         return toEntry(existing);
       }
+      assertTargetTmuxAlive({
+        phase: "respawn",
+        port: existing.port,
+        reason: tmuxMismatch ? "tmux-mismatch" : "force",
+        oldTmuxSession: existing.tmuxSession,
+      });
       diag.log("ttyd", "respawn", {
         key: args.key,
         tabId,
@@ -323,10 +349,7 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
       signalEntry(existing, "SIGTERM");
       deleteEntry(args.key);
     }
-    if (!tmuxSessionAlive(args.tmuxSession)) {
-      diag.log("ttyd", "ensure.tmux-missing", { key: args.key, tabId, tmuxSession: args.tmuxSession });
-      throw new TtydUnavailableError("tmux_session_missing", `tmux session ${args.tmuxSession} not found`);
-    }
+    assertTargetTmuxAlive({ phase: "spawn" });
     if (!binaryExists(config.ttydBin)) {
       throw new TtydUnavailableError("ttyd_missing", `ttyd binary not found at ${config.ttydBin}`);
     }
@@ -743,10 +766,6 @@ async function waitForPort(port: number, timeoutMs: number) {
   return false;
 }
 
-function listListeningTtyds(): Map<number, number> {
-  return listListeningTtydsInRange(0, Number.MAX_SAFE_INTEGER);
-}
-
 function listListeningTtydsInRange(portBase: number, portMax: number): Map<number, number> {
   const pidPort = new Map<number, number>();
   let lsofOutput = "";
@@ -792,12 +811,10 @@ function trimSlashes(value: string) {
  * Scan the host for ttyd processes left behind by a previous daemon
  * incarnation that we can re-attach to instead of killing-and-respawning.
  * Filters by the `-b /<basePathPrefix>/<key>` argv shape (so non-Citadel
- * ttyds are skipped). NOT filtered by port range — adoption uses the DB to
- * decide ownership instead, so this picks up ttyds spawned by codebases
- * that pre-date the current port slot (ttyd-slot.ts moved the systemd
- * daemon's slot from 7000-ish to 11000+ on 2026-05-27, stranding the
- * pre-existing ttyds). The DB-membership filter on the caller side
- * (`adopt(records, resolveTabId)`) decides which records to keep vs SIGTERM.
+ * ttyds are skipped) and, when supplied, the caller's ttyd port range. The
+ * range filter is a safety boundary: a sandbox daemon with a fixture DB must
+ * not scan host-wide ttyds and SIGTERM production terminals whose keys are
+ * absent from the sandbox DB.
  *
  * Linux-only — relies on `/proc/<pid>/cmdline`. On other platforms returns
  * an empty list (caller falls back to spawning fresh ttyds).
@@ -805,11 +822,15 @@ function trimSlashes(value: string) {
 export function discoverExistingTtyds(
   opts: {
     basePathPrefix?: string;
+    portBase?: number;
+    portMax?: number;
   } = {},
 ): TtydEntry[] {
   const basePathPrefix = trimSlashes(opts.basePathPrefix ?? DEFAULTS.basePathPrefix);
+  const portBase = opts.portBase ?? 0;
+  const portMax = opts.portMax ?? Number.MAX_SAFE_INTEGER;
   const found: TtydEntry[] = [];
-  for (const [pid, port] of listListeningTtyds()) {
+  for (const [pid, port] of listListeningTtydsInRange(portBase, portMax)) {
     const entry = readTtydEntryFromProc(pid, port, basePathPrefix);
     if (entry) found.push(entry);
   }

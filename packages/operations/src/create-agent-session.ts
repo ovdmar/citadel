@@ -3,7 +3,13 @@ import type { ActivityEvent, AgentSession, CreateAgentSessionInput, Repo, Worksp
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { discoverCodexSessionId } from "@citadel/runtimes";
-import { COMM_TRUNCATION, ensureTmuxSession, launchAgentInSession, submitPrompt } from "@citadel/terminal";
+import {
+  COMM_TRUNCATION,
+  ensureTmuxSession,
+  launchAgentInSession,
+  panePidProcess,
+  submitPrompt,
+} from "@citadel/terminal";
 
 export type RuntimeDescriptor = {
   command: string;
@@ -90,7 +96,9 @@ export async function createAgentSession(
   // would re-launch bash inside the existing bash. Skip it.
   const isShellRuntime = ["bash", "sh", "zsh", "fish"].includes(runtime.command);
   const tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path });
+  let runtimeLaunchStartedMs: number | null = null;
   if (!isShellRuntime) {
+    runtimeLaunchStartedMs = Date.now();
     await launchAgentInSession(sessionName, runtime.command, runtimeArgs);
   }
   if (promptForKeys) {
@@ -148,15 +156,21 @@ export async function createAgentSession(
   store.insertSession(session);
   // Codex (and similarly runtimes without `sessionIdArg`) auto-generates its
   // UUID at spawn — we can't pin it via a CLI flag, so kick off a best-effort
-  // background poll of ~/.codex/sessions/ to find the rollout this spawn
-  // produced, then write its session_meta.id back onto the row. Fire-and-
-  // forget: the user's create call returns immediately; the UUID lands in
-  // the DB within a few seconds and any subsequent restore picks it up.
+  // background poll of the live Codex process / ~/.codex/sessions/ to find
+  // the rollout this spawn produced, then write its session_meta.id back
+  // onto the row. Fire-and-forget: the user's create call returns
+  // immediately; the status monitor can repair the row later if this misses.
   if (!runtimeSessionId && input.runtimeId === "codex") {
-    const spawnTimeMs = Date.now();
+    const paneRootPid = panePidProcess(sessionName)?.pid;
+    const spawnTimeMs = runtimeLaunchStartedMs ?? Date.now();
     void (async () => {
       try {
-        const found = await discoverCodexSessionId({ workspacePath: workspace.path, spawnTimeMs });
+        const found = await discoverCodexSessionId({
+          workspacePath: workspace.path,
+          spawnTimeMs,
+          timeoutMs: 120_000,
+          ...(paneRootPid ? { rootPid: paneRootPid } : {}),
+        });
         if (found) store.setSessionRuntimeSessionId(session.id, found);
       } catch {
         // Discovery is best-effort — codex still works, just isn't resumable

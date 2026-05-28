@@ -9,6 +9,9 @@ import { defineConfig, devices } from "@playwright/test";
 // data dir at /tmp/citadel-playwright-data.
 const daemonPort = process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012";
 const webPort = process.env.CITADEL_PLAYWRIGHT_WEB_PORT || "15174";
+const tmuxSocket = process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}`;
+const ttydPortBase = process.env.CITADEL_PLAYWRIGHT_TTYD_PORT_BASE || "24000";
+const ttydPortMax = process.env.CITADEL_PLAYWRIGHT_TTYD_PORT_MAX || "24999";
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
 
@@ -33,7 +36,13 @@ export default defineConfig({
       // `reuseExistingServer: false` so the suite always launches a daemon
       // it owns (with the sandbox CITADEL_DATA_DIR below). Reusing whatever
       // happens to listen on `daemonPort` was how prod data got clobbered.
-      command: `CITADEL_DATA_DIR=/tmp/citadel-playwright-data CITADEL_PORT=${daemonPort} pnpm --filter @citadel/daemon dev`,
+      //
+      // The e2e daemon must also own an isolated tmux socket and ttyd port
+      // range. A sandbox DB restored from prod can contain real session
+      // names; if the test process inherits CITADEL_TMUX_SOCKET=citadel, the
+      // boot orphan-reaper can mistake production tmux panes for sandbox
+      // orphans and kill the user's live terminals.
+      command: `CITADEL_DATA_DIR=/tmp/citadel-playwright-data CITADEL_PORT=${daemonPort} CITADEL_TMUX_SOCKET=${tmuxSocket} CITADEL_OWN_TMUX_SOCKET=1 CITADEL_TTYD_PORT_BASE=${ttydPortBase} CITADEL_TTYD_PORT_MAX=${ttydPortMax} pnpm --filter @citadel/daemon dev`,
       url: `${daemonBase}/api/health`,
       reuseExistingServer: false,
       timeout: 30_000,
