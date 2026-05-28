@@ -34,6 +34,7 @@ const RUNBOOK_URL = "/docs/operations/terminal-runbook";
 export type TerminalHandle = {
   url: string | null;
   reload: () => void;
+  recoverIfDisconnected: () => boolean;
 };
 
 const REGISTRY = new Map<string, TerminalHandle>();
@@ -70,6 +71,7 @@ export function TerminalPane(props: { session: AgentSession }) {
   const [pending, setPending] = useState(true);
   const [iframeKey, setIframeKey] = useState(0);
   const requestSeqRef = useRef(0);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
   const ensure = useCallback(
     async (options: { bumpFrame?: boolean; force?: boolean } = {}) => {
@@ -137,18 +139,25 @@ export function TerminalPane(props: { session: AgentSession }) {
     void ensure({ bumpFrame: true, force: true });
   }, [ensure]);
 
+  const recoverIfDisconnected = useCallback(() => {
+    if (!isTtydReconnectPromptVisible(iframeRef.current)) return false;
+    reload();
+    return true;
+  }, [reload]);
+
   // Publish the live URL + reload callback so the stage tab can drive them.
   // The status bar used to render these affordances inside the pane; that was
   // removed in favour of the tab actions, but the state still lives here.
   useEffect(() => {
-    publish(sessionId, { url, reload });
+    publish(sessionId, { url, reload, recoverIfDisconnected });
     return () => publish(sessionId, null);
-  }, [sessionId, url, reload]);
+  }, [sessionId, url, reload, recoverIfDisconnected]);
   return (
     <div className="terminal-shell">
       <div className="terminal-surface terminal-surface-iframe">
         {url ? (
           <iframe
+            ref={iframeRef}
             key={`${sessionId}-${iframeKey}`}
             className="terminal-iframe"
             src={url}
@@ -213,4 +222,42 @@ function guidanceFor(code: string) {
     default:
       return "Open the terminal runbook below for diagnostic steps.";
   }
+}
+
+export function isTtydReconnectPromptVisible(iframe: HTMLIFrameElement | null): boolean {
+  try {
+    const doc = iframe?.contentDocument;
+    const view = iframe?.contentWindow;
+    if (!doc || !view) return false;
+
+    const ttydOverlayCandidates = Array.from(doc.querySelectorAll(".xterm > div"));
+    for (const element of ttydOverlayCandidates) {
+      if (isHiddenElement(element, view)) continue;
+      if (isReconnectPromptText(element.textContent ?? "")) return true;
+    }
+
+    for (const button of Array.from(doc.querySelectorAll("button"))) {
+      if (isHiddenElement(button, view)) continue;
+      if (/\breconnect\b/i.test(normalizeText(button.textContent ?? ""))) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function isHiddenElement(element: Element, view: Window): boolean {
+  const style = view.getComputedStyle(element);
+  if (style.display === "none" || style.visibility === "hidden") return true;
+  const opacity = Number.parseFloat(style.opacity || "1");
+  return Number.isFinite(opacity) && opacity <= 0.05;
+}
+
+function isReconnectPromptText(value: string): boolean {
+  const text = normalizeText(value);
+  return /^press (?:⏎|enter|return) to reconnect$/i.test(text);
+}
+
+function normalizeText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }

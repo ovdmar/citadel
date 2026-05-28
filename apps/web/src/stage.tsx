@@ -98,6 +98,18 @@ export function Stage(props: {
     });
   }, [allSessions]);
   const visitedPanes = allSessions.filter((session) => visitedIds.has(session.id));
+  const workspaceSessionIdsKey = props.sessions.map((session) => session.id).join("\0");
+
+  useEffect(() => {
+    if (!workspaceSessionIdsKey) return;
+    const sessionIds = workspaceSessionIdsKey.split("\0").filter(Boolean);
+    const timer = window.setTimeout(() => {
+      for (const sessionId of sessionIds) {
+        getTerminalHandle(sessionId)?.recoverIfDisconnected();
+      }
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [workspaceSessionIdsKey]);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
