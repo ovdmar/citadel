@@ -13,7 +13,7 @@ import {
 } from "@citadel/operations";
 import type { RuntimeStatusAdapter, SessionAdapterState } from "@citadel/runtimes";
 import { getStatusAdapter } from "@citadel/runtimes";
-import { captureTmux, panePidProcess, tmuxPrefix } from "@citadel/terminal";
+import { captureTmux, panePidProcess, tmuxPrefix, tmuxSessionExists } from "@citadel/terminal";
 
 // Dedupe monitor-side failures so a persistent tmux outage doesn't flood
 // stderr at 2 Hz. Key is `kind:message` so distinct error messages are still
@@ -77,6 +77,21 @@ export function buildStatusMonitorDeps(
       } catch (err) {
         logMonitorFailureOnce("panePidProcess", err);
         return null;
+      }
+    },
+    // Authoritative single-session existence probe. The status-monitor uses
+    // it to second-opinion the batched `panes()` snapshot before flipping a
+    // session to `tmux_missing`. tmuxSessionExists already returns false on
+    // any IO error, so a transient tmux hiccup that takes down the batched
+    // probe AND this one will still flip — but the common-case "list-panes
+    // failed under load while has-session succeeds" is the one we're trying
+    // to stop from wiping every session every couple minutes.
+    hasTmuxSession: (name) => {
+      try {
+        return tmuxSessionExists(name);
+      } catch (err) {
+        logMonitorFailureOnce("hasTmuxSession", err);
+        return false;
       }
     },
     runtimeBinaryFor: (runtimeId) => runtimeBinaryByRuntimeId.get(runtimeId) ?? null,

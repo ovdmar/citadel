@@ -146,7 +146,7 @@ server.listen(config.port, config.bindHost, () => {
       .catch((error) => {
         console.warn(`Boot-restore failed: ${error instanceof Error ? error.message : String(error)}`);
       })
-      .finally(() => {
+      .finally(async () => {
         // One-shot orphan reaper. Runs once boot-restore has had a chance to
         // re-spawn the recoverable sessions — anything still on the tmux
         // socket without a DB row at this point is an actual orphan from a
@@ -154,7 +154,7 @@ server.listen(config.port, config.bindHost, () => {
         // boot-restore could kill a tmux session right as boot-restore is
         // about to claim its name.
         try {
-          const summary = reapOrphans({ store, ttyd: daemon.ttyd });
+          const summary = await reapOrphans({ store, ttyd: daemon.ttyd });
           if (summary.tmuxReaped.length > 0 || summary.ttydReleased.length > 0) {
             console.log(`[orphan-reaper] tmux=${summary.tmuxReaped.length} ttyd=${summary.ttydReleased.length}`);
           }

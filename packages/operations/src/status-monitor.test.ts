@@ -50,6 +50,10 @@ interface DepsOver {
   // tmux missing) instead of legacy sentinel reads. Map keys are tmux
   // session names.
   panePidProcess?: Map<string, { command: string; pid: number } | null>;
+  // Second-opinion has-session probe. Defaults to a stub that says every
+  // session is missing, matching the legacy "no pane → dead" semantic
+  // existing tests rely on.
+  hasTmuxSession?: (name: string) => boolean;
   runtimeBinaries?: Map<string, string>;
   recentUserAction?: Map<string, number>;
   tmuxActivities?: Map<string, number>;
@@ -68,6 +72,7 @@ function makeMonitorStateForFixture() {
     ticksSinceActivityChange: 0,
     hasObservedSinceBoot: false,
     consecutiveShellTicks: 0,
+    consecutiveMissingTicks: 0,
   };
 }
 
@@ -92,6 +97,7 @@ function makeDeps(over: DepsOver = {}) {
     // "no override" and fall back to the agent-foreground default.
     panePidProcess: (name) =>
       over.panePidProcess?.has(name) ? (over.panePidProcess.get(name) ?? null) : { command: "claude", pid: 1 },
+    ...(over.hasTmuxSession ? { hasTmuxSession: over.hasTmuxSession } : {}),
     runtimeBinaryFor: (runtimeId) => runtimeBinaries.get(runtimeId) ?? null,
     recentUserAction: over.recentUserAction ?? new Map(),
     getAdapter: () => over.adapter ?? makeAdapter(null),
@@ -102,16 +108,24 @@ function makeDeps(over: DepsOver = {}) {
 }
 
 describe("regression-pin: tmux failure MUST NOT mass-flip sessions to stopped", () => {
-  it("(scenario 1) panePidProcess returning null for every session marks them `unknown`, never `stopped`", async () => {
+  it("(scenario 1) panePidProcess returning null for every session marks them `unknown` after the 3-tick debounce, never `stopped`", async () => {
     // Simulate tmux being entirely unreachable — every panePidProcess() lookup
     // returns null. Mirrors the 18:40:57 production incident at the
-    // status-monitor tick layer.
+    // status-monitor tick layer. With the 3-strike rule the first two ticks
+    // are no-ops (durable absence isn't yet proven); the third tick is when
+    // the flip lands. Anything below 3 means a 50ms tmux hiccup could wipe
+    // every cockpit terminal (the 2026-05-28 05:49 incident).
     const sessions = Array.from({ length: 25 }, (_, i) =>
       makeSession({ id: `sess_${i}`, tmuxSessionName: `citadel_${i}` }),
     );
     const panePidProcess = new Map<string, { command: string; pid: number } | null>();
     for (const s of sessions) panePidProcess.set(s.tmuxSessionName ?? "", null);
-    const { deps, updates } = makeDeps({ sessions, panePidProcess });
+    const monitorStates = new Map<string, unknown>();
+    const { deps, updates } = makeDeps({ sessions, panePidProcess, monitorStates });
+    await runStatusMonitorTick(deps, { source: "tick" });
+    expect(updates).toHaveLength(0);
+    await runStatusMonitorTick(deps, { source: "tick" });
+    expect(updates).toHaveLength(0);
     await runStatusMonitorTick(deps, { source: "tick" });
     expect(updates.length).toBeGreaterThan(0);
     for (const u of updates) {
@@ -119,6 +133,52 @@ describe("regression-pin: tmux failure MUST NOT mass-flip sessions to stopped", 
       expect(u.update.status).not.toBe("stopped");
       expect(u.update.status).not.toBe("failed");
     }
+  });
+
+  it("(scenario 1b) a single null probe followed by a found pane resets the counter and never flips", async () => {
+    // Models the 05:49 failure mode: list-panes errors on one tick, returns
+    // normal output on the next. With the 3-strike rule a single missing
+    // observation never flips — and once pane is seen again the counter
+    // resets, so even an unlucky sequence (miss, miss, alive, miss, miss)
+    // can't trip the flip.
+    const sessions = [makeSession({ id: "sess_1", tmuxSessionName: "citadel_1" })];
+    const monitorStates = new Map<string, unknown>();
+    // Tick 1: pane missing
+    let panePidProcess = new Map<string, { command: string; pid: number } | null>([["citadel_1", null]]);
+    let fixture = makeDeps({ sessions, panePidProcess, monitorStates });
+    await runStatusMonitorTick(fixture.deps, { source: "tick" });
+    expect(fixture.updates).toHaveLength(0);
+    // Tick 2: pane back (claude foreground) — counter resets, no flip.
+    panePidProcess = new Map([["citadel_1", { command: "claude", pid: 100 }]]);
+    fixture = makeDeps({ sessions, panePidProcess, monitorStates });
+    await runStatusMonitorTick(fixture.deps, { source: "tick" });
+    expect(fixture.updates).toHaveLength(0);
+    // Ticks 3-4: pane missing again, still no flip (counter resumes from 0).
+    panePidProcess = new Map([["citadel_1", null]]);
+    fixture = makeDeps({ sessions, panePidProcess, monitorStates });
+    await runStatusMonitorTick(fixture.deps, { source: "tick" });
+    expect(fixture.updates).toHaveLength(0);
+    fixture = makeDeps({ sessions, panePidProcess, monitorStates });
+    await runStatusMonitorTick(fixture.deps, { source: "tick" });
+    expect(fixture.updates).toHaveLength(0);
+  });
+
+  it("(scenario 1c) has-session second opinion returning true keeps the session alive even when panePidProcess is null", async () => {
+    // The defining failure mode: batched `tmux list-panes -a` errored and
+    // returned an empty Map, but `tmux has-session -t <name>` still works.
+    // The tick must trust has-session and skip the flip.
+    const sessions = [makeSession({ id: "sess_1", tmuxSessionName: "citadel_1" })];
+    const panePidProcess = new Map<string, { command: string; pid: number } | null>([["citadel_1", null]]);
+    const { deps, updates } = makeDeps({
+      sessions,
+      panePidProcess,
+      hasTmuxSession: (name) => name === "citadel_1",
+    });
+    // Tick repeatedly — even past the debounce — and assert no flip.
+    for (let i = 0; i < 5; i++) {
+      await runStatusMonitorTick(deps, { source: "tick" });
+    }
+    expect(updates).toHaveLength(0);
   });
 
   it("(scenario 2) legacy /tmp/citadel-agent-*.exit files on disk MUST NOT influence the tick — readSentinels was removed from MonitorTickDeps", () => {
@@ -246,13 +306,21 @@ describe("launch_failed reducer signal still produces status='failed'", () => {
 });
 
 describe("workspace-membership cleanup (existing behaviour preserved)", () => {
-  it("deletes session when tmux is missing AND the workspace is gone", async () => {
-    const { deps, deleted } = makeDeps({
-      sessions: [makeSession({ workspaceId: "ws_gone" })],
-      workspaces: [],
-      panePidProcess: new Map([["citadel_test_1", null]]),
-    });
-    await runStatusMonitorTick(deps, { source: "tick" });
-    expect(deleted).toEqual(["sess_1"]);
+  it("deletes session when tmux is missing AND the workspace is gone — only after the missing-tick debounce", async () => {
+    // Same 3-strike rule as the flip-to-unknown path: deletion is irreversible
+    // so we must not act on a single failed probe. Workspace-gone tightens the
+    // gate (the session is doubly orphaned) but doesn't change the cadence.
+    const monitorStates = new Map<string, unknown>();
+    const sessions = [makeSession({ workspaceId: "ws_gone" })];
+    const panePidProcess = new Map<string, { command: string; pid: number } | null>([["citadel_test_1", null]]);
+    let fixture = makeDeps({ sessions, workspaces: [], panePidProcess, monitorStates });
+    await runStatusMonitorTick(fixture.deps, { source: "tick" });
+    expect(fixture.deleted).toHaveLength(0);
+    fixture = makeDeps({ sessions, workspaces: [], panePidProcess, monitorStates });
+    await runStatusMonitorTick(fixture.deps, { source: "tick" });
+    expect(fixture.deleted).toHaveLength(0);
+    fixture = makeDeps({ sessions, workspaces: [], panePidProcess, monitorStates });
+    await runStatusMonitorTick(fixture.deps, { source: "tick" });
+    expect(fixture.deleted).toEqual(["sess_1"]);
   });
 });

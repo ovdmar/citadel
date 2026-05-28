@@ -27,7 +27,27 @@ export type OrphanReaperSummary = {
   ttydReleased: string[];
 };
 
-export function reapOrphans(deps: { store: SqliteStore; ttyd: TtydManager }): OrphanReaperSummary {
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 3-strike has-session probe. Mirrors the helper in boot-restore.ts; we
+// duplicate rather than re-export so the orphan-reaper stays independent
+// of boot-restore's module surface. See feedback_reaper_retries.md: no
+// session-killing path may trust a single failed tmux probe.
+async function hasSessionWithRetries(
+  probe: (name: string) => boolean,
+  name: string,
+  opts: { attempts: number; delayMs: number },
+): Promise<boolean> {
+  for (let i = 0; i < opts.attempts; i++) {
+    if (probe(name)) return true;
+    if (i < opts.attempts - 1) await sleep(opts.delayMs);
+  }
+  return false;
+}
+
+export async function reapOrphans(deps: { store: SqliteStore; ttyd: TtydManager }): Promise<OrphanReaperSummary> {
   const summary: OrphanReaperSummary = { tmuxReaped: [], ttydReleased: [] };
 
   // Every tmux session referenced by any DB row, regardless of status —
@@ -38,7 +58,9 @@ export function reapOrphans(deps: { store: SqliteStore; ttyd: TtydManager }): Or
   }
 
   // Tmux side: kill sessions on the socket that no DB row knows about.
-  // null = tmux server unreachable → nothing to reap.
+  // null = tmux server unreachable → nothing to reap. The DB-membership
+  // criterion isn't a tmux probe so it doesn't need retry — only the
+  // ttyd-side existence check below does.
   const liveTmuxNames = listAllTmuxSessions();
   if (liveTmuxNames !== null) {
     for (const name of liveTmuxNames) {
@@ -53,9 +75,13 @@ export function reapOrphans(deps: { store: SqliteStore; ttyd: TtydManager }): Or
   }
 
   // ttyd side: release manager entries pointing at vanished tmux sessions.
-  // ttyd.release() SIGTERMs the process and drops it from the map.
+  // 3-strike check: a single negative `tmux has-session` is never grounds
+  // to kill the ttyd, because under load has-session can return non-zero
+  // for a perfectly alive session. Three losses with 250ms between is the
+  // floor for "really gone".
   for (const entry of deps.ttyd.list()) {
-    if (!tmuxSessionExists(entry.tmuxSession)) {
+    const alive = await hasSessionWithRetries(tmuxSessionExists, entry.tmuxSession, { attempts: 3, delayMs: 250 });
+    if (!alive) {
       deps.ttyd.release(entry.key);
       summary.ttydReleased.push(entry.key);
     }
