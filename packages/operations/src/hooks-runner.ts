@@ -1,5 +1,5 @@
 import type { CitadelConfig, HookConfig } from "@citadel/config";
-import type { HookEvent, HookOutput, Repo, Workspace } from "@citadel/contracts";
+import type { ActivityEvent, HookEvent, HookOutput, Repo, Workspace } from "@citadel/contracts";
 import {
   type FileHook,
   type FileHookDiagnostic,
@@ -13,7 +13,7 @@ import { asObject } from "./helpers.js";
 
 type ActivityFn = (
   type: string,
-  source: "user" | "system" | "hook",
+  source: ActivityEvent["source"],
   message: string,
   repoId: string | null,
   workspaceId: string | null,

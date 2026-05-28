@@ -36,6 +36,13 @@ export function pickTopBarCategory(
 export function parseResetTime(input: string, now: Date = new Date()): Date | null {
   const trimmed = input.trim();
   if (!trimmed) return null;
+
+  // GitHub quota reset timestamps are ISO strings from `gh api rate_limit`.
+  if (/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) {
+    const at = new Date(trimmed);
+    return Number.isNaN(at.getTime()) ? null : at;
+  }
+
   // UTC flag is the only timezone we recognize; everything else assumes the
   // operator's local zone (matches v1 behavior and what users expect on
   // single-host installs).

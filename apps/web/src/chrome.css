@@ -33,6 +33,126 @@
   color: var(--c-fg-1);
 }
 
+/* Boot-restore and GitHub-cooldown advisories render as NoticeModal popups
+ * (see notice-modal.tsx + .cit-notice-modal in modals.css). The old top-of-
+ * cockpit bar styling used to live here. */
+
+.cit-restore-banner__open {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--c-fg-1);
+  background: var(--c-line-2);
+  border: 0.5px solid var(--c-line-1);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.cit-restore-banner__open:hover {
+  background: var(--c-line-1);
+}
+
+/* Modal body for Settings → Restore lost sessions. The Modal frame
+ * (modal-backdrop + modal-frame in modals.css) supplies the backdrop blur,
+ * centering, and Esc/click-outside dismissal; these rules just style the
+ * inner candidate list. */
+.restore-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 480px;
+  max-width: 640px;
+}
+
+.restore-panel__lead {
+  margin: 0;
+  font-size: 12px;
+  color: var(--c-fg-2);
+  line-height: 1.5;
+}
+
+.restore-panel__empty {
+  padding: 24px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--c-fg-3, var(--c-fg-2));
+  background: var(--c-app-2, var(--c-app));
+  border: 0.5px dashed var(--c-line-2);
+  border-radius: 6px;
+}
+
+.restore-panel__error {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--c-danger, #c0392b);
+  background: var(--c-danger-soft, rgba(192, 57, 43, 0.08));
+  border: 0.5px solid var(--c-danger, #c0392b);
+  border-radius: 6px;
+}
+
+.restore-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 56vh;
+  overflow-y: auto;
+}
+
+.restore-panel__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--c-app-2, var(--c-app));
+  border: 0.5px solid var(--c-line-2);
+  border-radius: 6px;
+}
+
+.restore-panel__row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.restore-panel__row-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-fg-1);
+}
+
+.restore-panel__row-detail {
+  font-size: 11px;
+  color: var(--c-fg-2);
+  margin-top: 2px;
+}
+
+.restore-panel__mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+
+.restore-panel__btn {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--c-fg-1);
+  background: var(--c-line-2);
+  border: 0.5px solid var(--c-line-1);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.restore-panel__btn:hover:not(:disabled) {
+  background: var(--c-line-1);
+}
+
+.restore-panel__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .cit-brand-text {
   display: flex;
   flex-direction: column;
@@ -171,6 +291,14 @@
   color: var(--c-fg-1);
   border-color: var(--c-line-1);
   text-decoration: none;
+}
+
+.cit-usage-pill.is-warn {
+  color: oklch(48% 0.15 55);
+}
+
+:root[data-theme="dark"] .cit-usage-pill.is-warn {
+  color: oklch(78% 0.13 65);
 }
 
 .cit-usage-pill-mark {
@@ -324,4 +452,111 @@
   .cit-search .cit-kbd {
     display: none;
   }
+}
+
+/* ────────────────────────────── Settings → Debug ──────────────────────────
+ * Tiny, function-over-form styling. The panel reuses `.restore-panel` for
+ * outer chrome (lead, empty/error states) and adds these for the unique
+ * bits: a metadata grid + an event tail. Anything more elaborate belongs
+ * in the diagnostics tooling itself, not the UI. */
+.debug-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 16px;
+}
+.debug-panel__primary,
+.debug-panel__secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--c-border-1);
+  background: var(--c-elev);
+  color: var(--c-fg-1);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.debug-panel__primary {
+  background: var(--c-accent, #3a6dd2);
+  border-color: transparent;
+  color: #fff;
+}
+.debug-panel__primary:hover {
+  filter: brightness(1.05);
+}
+.debug-panel__secondary:hover {
+  background: var(--c-elev-2, var(--c-elev));
+}
+.debug-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 16px;
+  margin: 0 0 18px;
+}
+.debug-panel__grid div {
+  display: flex;
+  flex-direction: column;
+}
+.debug-panel__grid dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--c-fg-2);
+}
+.debug-panel__grid dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--c-fg-1);
+}
+.debug-panel__heading {
+  margin: 16px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-fg-1);
+}
+.debug-panel__events {
+  border: 1px solid var(--c-border-1);
+  border-radius: 6px;
+  overflow: auto;
+  max-height: 360px;
+}
+.debug-panel__events table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.debug-panel__events th,
+.debug-panel__events td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--c-border-1);
+  vertical-align: top;
+}
+.debug-panel__events th {
+  background: var(--c-elev);
+  position: sticky;
+  top: 0;
+  font-weight: 600;
+}
+.debug-panel__ts {
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+  color: var(--c-fg-2);
+}
+.debug-panel__cat {
+  color: var(--c-fg-2);
+  white-space: nowrap;
+}
+.debug-panel__name {
+  font-weight: 500;
+  white-space: nowrap;
+}
+.debug-panel__data {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  word-break: break-all;
+  color: var(--c-fg-2);
 }

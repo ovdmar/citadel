@@ -1,15 +1,29 @@
-import type { AgentSession, CreateAgentSessionInput, Repo, Workspace } from "@citadel/contracts";
+import { randomUUID } from "node:crypto";
+import type { ActivityEvent, AgentSession, CreateAgentSessionInput, Repo, Workspace } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
-import { ensureTmuxSession, submitPrompt } from "@citadel/terminal";
+import { discoverCodexSessionId } from "@citadel/runtimes";
+import { COMM_TRUNCATION, ensureTmuxSession, launchAgentInSession, submitPrompt } from "@citadel/terminal";
 
-type RuntimeDescriptor = { command: string; args: string[]; displayName: string; promptArg?: string | null };
+export type RuntimeDescriptor = {
+  command: string;
+  args: string[];
+  displayName: string;
+  promptArg?: string | null;
+  // CLI flag that pins a caller-chosen session UUID (e.g. "--session-id" for
+  // claude-code). When set, createAgentSession generates a UUID, pushes the
+  // pair onto argv, and persists it on the row so respawn can `--resume`.
+  sessionIdArg?: string | null;
+  // CLI flag for resuming a previous conversation by UUID (e.g. "--resume").
+  // Used in the restore path when input.resumeRuntimeSessionId is set.
+  resumeArg?: string | null;
+};
 
 export type CreateAgentSessionDeps = {
   store: SqliteStore;
   activity: (
     type: string,
-    source: "user" | "system" | "hook",
+    source: ActivityEvent["source"],
     message: string,
     repoId: string | null,
     workspaceId: string | null,
@@ -28,6 +42,7 @@ export async function createAgentSession(
   deps: CreateAgentSessionDeps,
   input: CreateAgentSessionInput,
   runtime: RuntimeDescriptor,
+  options: { activitySource?: ActivityEvent["source"] } = {},
 ): Promise<AgentSession> {
   const { store } = deps;
   const workspace = store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
@@ -43,12 +58,41 @@ export async function createAgentSession(
     if (runtime.promptArg) runtimeArgs.push(runtime.promptArg, input.prompt);
     else promptForKeys = input.prompt;
   }
-  const tmux = await ensureTmuxSession({
-    sessionName,
-    cwd: workspace.path,
-    command: runtime.command,
-    args: runtimeArgs,
-  });
+  // Pin a UUID at spawn time when the runtime supports it (claude-code's
+  // --session-id), so we can resume this exact conversation across daemon/
+  // machine restarts. Persisted on AgentSession.runtimeSessionId below.
+  // Runtimes without `sessionIdArg` (codex, cursor-agent) need post-spawn
+  // discovery from their own session store — handled in a separate path.
+  //
+  // When the caller passes `resumeRuntimeSessionId` (Settings restore flow /
+  // backfill), prefer `--resume <uuid>` over `--session-id <new-uuid>` so we
+  // continue the existing conversation rather than fork a fresh one. The
+  // caller is responsible for verifying the on-disk transcript exists.
+  let runtimeSessionId: string | null = null;
+  if (input.resumeRuntimeSessionId && runtime.resumeArg) {
+    runtimeSessionId = input.resumeRuntimeSessionId;
+    runtimeArgs.push(runtime.resumeArg, input.resumeRuntimeSessionId);
+  } else if (runtime.sessionIdArg) {
+    runtimeSessionId = randomUUID();
+    runtimeArgs.push(runtime.sessionIdArg, runtimeSessionId);
+  }
+  // Shell-first three-step spawn:
+  //  1) ensureTmuxSession  → pane PID is `bash -l` (the operator's shell).
+  //  2) launchAgentInSession → send-keys the agent's argv into the shell,
+  //     waits for the runtime binary to become pane foreground (positive
+  //     predicate matching runtime.command, NOT "not a shell" — transient
+  //     subprocesses like direnv during rc-load can't satisfy it).
+  //  3) submitPrompt (only when an initial prompt is provided) → paste +
+  //     Enter into the runtime's TUI input.
+  //
+  // For the `shell` runtime, step 2 is a no-op — the shell IS the runtime
+  // and is already foreground; calling launchAgentInSession with "bash"
+  // would re-launch bash inside the existing bash. Skip it.
+  const isShellRuntime = ["bash", "sh", "zsh", "fish"].includes(runtime.command);
+  const tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path });
+  if (!isShellRuntime) {
+    await launchAgentInSession(sessionName, runtime.command, runtimeArgs);
+  }
   if (promptForKeys) {
     // Treat the initial prompt as load-bearing: if submitPrompt couldn't
     // verify delivery, the agent will sit on a blank prompt forever, which
@@ -61,14 +105,17 @@ export async function createAgentSession(
     // milliseconds and `read` is ready instantly; using the TUI budget there
     // makes every test session sit waiting for a 1 s silence threshold that
     // doesn't apply.
-    const isShellRuntime = ["bash", "sh", "zsh", "fish"].includes(runtime.command);
+    const runtimeBinaryTruncated = runtime.command.slice(0, COMM_TRUNCATION);
     const submitted = await submitPrompt(sessionName, promptForKeys, {
       ...(isShellRuntime
         ? { waitForReadyMs: 1500, submitDelayMs: 800 }
         : {
             waitForReadyMs: 15000,
             submitDelayMs: 3000,
-            runtimeReadyPredicate: (cmd) => cmd !== "bash" && cmd !== "sh" && cmd !== "zsh" && cmd.length > 0,
+            // POSITIVE predicate: match the runtime's binary name (truncated
+            // to `comm`'s 15-char limit) so transient subprocesses claude
+            // spawns mid-startup (`git`, `rg`, etc.) cannot satisfy the wait.
+            runtimeReadyPredicate: (cmd) => cmd === runtimeBinaryTruncated,
           }),
     });
     if (!submitted.ok) {
@@ -89,10 +136,34 @@ export async function createAgentSession(
     transport: "disconnected",
     tmuxSessionName: tmux.tmuxSessionName,
     tmuxSessionId: tmux.tmuxSessionId,
+    // Restore paths pass the source row's tabId here so the new session lands
+    // in the same tab slot. Cold-start spawns generate a fresh time-encoded
+    // id — the cockpit sorts tabs by tabId, so first-spawn ordering is
+    // identical to ordering by createdAt.
+    tabId: input.tabId ?? createId("tab"),
+    runtimeSessionId,
     createdAt: now,
     updatedAt: now,
   };
   store.insertSession(session);
+  // Codex (and similarly runtimes without `sessionIdArg`) auto-generates its
+  // UUID at spawn — we can't pin it via a CLI flag, so kick off a best-effort
+  // background poll of ~/.codex/sessions/ to find the rollout this spawn
+  // produced, then write its session_meta.id back onto the row. Fire-and-
+  // forget: the user's create call returns immediately; the UUID lands in
+  // the DB within a few seconds and any subsequent restore picks it up.
+  if (!runtimeSessionId && input.runtimeId === "codex") {
+    const spawnTimeMs = Date.now();
+    void (async () => {
+      try {
+        const found = await discoverCodexSessionId({ workspacePath: workspace.path, spawnTimeMs });
+        if (found) store.setSessionRuntimeSessionId(session.id, found);
+      } catch {
+        // Discovery is best-effort — codex still works, just isn't resumable
+        // until the next spawn picks up an existing rollout.
+      }
+    })();
+  }
   // The runtime records the initial prompt in its own transcript — either
   // because we passed it as a CLI flag (claude-code, codex) or because we
   // pasted it into the tmux pane. read_agent_history surfaces it via the
@@ -100,9 +171,10 @@ export async function createAgentSession(
   // When the session was launched by a hook firing, operationId is set so the
   // session's lifecycle activity links back to the operation that triggered it.
   const launchedFromOperation = input.operationId ?? null;
+  const activitySource = options.activitySource ?? "user";
   deps.activity(
     "agent.started",
-    "user",
+    activitySource,
     `Started ${session.displayName}`,
     workspace.repoId,
     workspace.id,

@@ -334,3 +334,106 @@ describe("scratchpad HTTP + MCP routes", () => {
     }
   });
 });
+
+describe("configurable notes location — HTTP + MCP routes", () => {
+  it("GET /api/scratchpad includes the absolute path field, matching effectiveNotesPath(config)", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const body = await getJson<{ content: string; updatedAt: string; path: string }>(`${baseUrl}/api/scratchpad`);
+      expect(typeof body.path).toBe("string");
+      expect(path.isAbsolute(body.path)).toBe(true);
+      // Default location is `<dataDir>/scratchpad.md` when no override is set.
+      expect(body.path).toBe(path.join(fixture.config.dataDir, "scratchpad.md"));
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("honors scratchpad.path set via PUT /api/config mid-session, without daemon restart", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const customNotes = path.join(fixture.config.dataDir, "synced", "custom-notes.md");
+      // Patch the config through the live HTTP endpoint — proves handlers
+      // re-resolve effectiveNotesPath(config) per request rather than capturing
+      // it at registration.
+      await putJson(`${baseUrl}/api/config`, { scratchpad: { path: customNotes } });
+      const body = await getJson<{ path: string }>(`${baseUrl}/api/scratchpad`);
+      expect(body.path).toBe(customNotes);
+
+      // And clearing it falls back to the default.
+      await putJson(`${baseUrl}/api/config`, { scratchpad: {} });
+      const back = await getJson<{ path: string }>(`${baseUrl}/api/scratchpad`);
+      expect(back.path).toBe(path.join(fixture.config.dataDir, "scratchpad.md"));
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("PUT /api/scratchpad and block routes do NOT include path in their response (narrow internal type preserved)", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const putBody = await putJson<Record<string, unknown>>(`${baseUrl}/api/scratchpad`, { content: "x" });
+      expect(putBody).not.toHaveProperty("path");
+      expect(putBody).toHaveProperty("content");
+      expect(putBody).toHaveProperty("updatedAt");
+
+      const postBody = await postJson<{ block: Record<string, unknown>; snapshot: Record<string, unknown> }>(
+        `${baseUrl}/api/scratchpad/blocks`,
+        { text: "hello" },
+      );
+      expect(postBody.snapshot).not.toHaveProperty("path");
+      expect(postBody.block).not.toHaveProperty("path");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("read_scratchpad MCP dispatch returns { content, updatedAt, path }", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const result = await postJson<{
+        result: { structuredContent: { content: string; updatedAt: string; path: string } };
+      }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "rs",
+        method: "tools/call",
+        params: { name: "read_scratchpad", arguments: {} },
+      });
+      const sc = result.result.structuredContent;
+      expect(typeof sc.content).toBe("string");
+      expect(typeof sc.updatedAt).toBe("string");
+      expect(sc.path).toBe(path.join(fixture.config.dataDir, "scratchpad.md"));
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("inspect_status MCP response includes scratchpad.path", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const result = await postJson<{
+        result: { structuredContent: { scratchpad: { path: string } } };
+      }>(`${baseUrl}/api/mcp/rpc`, {
+        jsonrpc: "2.0",
+        id: "is",
+        method: "tools/call",
+        params: { name: "inspect_status", arguments: {} },
+      });
+      expect(result.result.structuredContent.scratchpad).toEqual({
+        path: path.join(fixture.config.dataDir, "scratchpad.md"),
+      });
+    } finally {
+      await closeServer(server);
+    }
+  });
+});

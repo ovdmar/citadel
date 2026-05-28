@@ -15,6 +15,8 @@ type RuntimeDescriptor = {
   args: string[];
   displayName: string;
   promptArg?: string | null;
+  sessionIdArg?: string | null;
+  resumeArg?: string | null;
 };
 
 type DispatchAgentHookInput = {
@@ -56,6 +58,8 @@ export async function dispatchAgentHook(
       args: runtime.args ?? [],
       displayName: runtime.displayName,
       ...(runtime.promptArg !== undefined ? { promptArg: runtime.promptArg } : {}),
+      ...(runtime.sessionIdArg !== undefined ? { sessionIdArg: runtime.sessionIdArg } : {}),
+      ...(runtime.resumeArg !== undefined ? { resumeArg: runtime.resumeArg } : {}),
     },
   );
   return { sessionId: session.id };

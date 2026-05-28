@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IdSchema } from "./ids.js";
+import { IdSchema } from "./primitives.js";
 
 // Hook-related schemas are colocated here so packages/contracts/index.ts
 // stays under the 800-line cap. Re-exports happen via index.ts.
