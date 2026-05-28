@@ -157,26 +157,35 @@ export function createDaemonApp(input: {
   //
   // Boot-time discover-and-adopt: ttyds are spawned detached and the systemd
   // unit runs with KillMode=process, so they outlive daemon restarts. Scan
-  // the ttyd port range for survivors from the previous incarnation and
-  // adopt them back into the manager — same key, same PID, no respawn.
-  // The browser's WebSocket auto-reconnect (xterm `reconnect=3`) lands on
-  // the *same* ttyd it was talking to before the restart.
+  // the host for survivors from the previous incarnation and adopt them back
+  // into the manager — same key, same PID, no respawn. The browser's
+  // WebSocket auto-reconnect (xterm `reconnect=3`) lands on the *same* ttyd
+  // it was talking to before the restart.
   //
-  // Skipped under vitest: tests that boot a daemon all derive the same slot
-  // 0 range as the production install for config.port=4010, so an adopt()
-  // pass would re-attach to the live cockpit's ttyds and the next test that
-  // calls release() would kill them.
+  // Discovery is host-wide (NOT scoped to this daemon's port slot) so we can
+  // also reap ttyds that pre-date the current port-slot scheme (the 7xxx
+  // generation from before ttyd-slot.ts shipped on 2026-05-27). adopt()
+  // routes by DB membership via the resolveTabId callback: known sessionIds
+  // get adopted, unknown ones get SIGTERMed.
+  //
+  // Skipped under vitest: tests that boot a daemon would otherwise re-attach
+  // to the live cockpit's ttyds and the next test that calls release() would
+  // kill them.
   if (!process.env.VITEST) {
     const survivors = discoverExistingTtyds({
-      portBase: ttyd.config.portBase,
-      portMax: ttyd.config.portMax,
       basePathPrefix: ttyd.config.basePathPrefix,
     });
-    const { adopted, reapedDuplicates } = ttyd.adopt(survivors);
-    if (adopted > 0 || reapedDuplicates > 0) {
+    const sessionTabIds = new Map<string, string>();
+    for (const session of store.listSessions()) {
+      sessionTabIds.set(session.id, session.tabId ?? session.id);
+    }
+    const resolveTabId = (key: string): string | null => sessionTabIds.get(key) ?? null;
+    const { adopted, reapedDuplicates, reapedUnknown } = ttyd.adopt(survivors, resolveTabId);
+    if (adopted > 0 || reapedDuplicates > 0 || reapedUnknown > 0) {
       emit("terminal.adopted", {
         adopted,
         reapedDuplicates,
+        reapedUnknown,
         portRange: [ttyd.config.portBase, ttyd.config.portMax],
       });
     }

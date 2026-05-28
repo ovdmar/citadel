@@ -17,7 +17,7 @@
 import type { CitadelConfig } from "@citadel/config";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
-import { listAllTmuxSessions } from "@citadel/terminal";
+import { listAllTmuxSessions, tmuxSessionExists } from "@citadel/terminal";
 import { type RestoreCandidate, collectRestoreCandidates } from "./restore-routes.js";
 
 // Statuses that collectRestoreCandidates treats as "live" — sessions in any
@@ -63,7 +63,11 @@ async function awaitTmuxSessions(
 // returns it. Returns the count of flipped rows for logging. Idempotent and
 // cheap — a single `tmux list-sessions` plus N row updates only for the
 // stale rows.
-function reconcileStaleLiveRows(store: SqliteStore, liveTmuxNames: Set<string> | null): number {
+function reconcileStaleLiveRows(
+  store: SqliteStore,
+  liveTmuxNames: Set<string> | null,
+  hasSession: (name: string) => boolean = tmuxSessionExists,
+): number {
   // null = tmux server unreachable even after the readiness wait. Don't flip
   // anything — we can't distinguish "fresh boot" from "tmux genuinely down"
   // and false-positive flips lose user trust.
@@ -74,6 +78,14 @@ function reconcileStaleLiveRows(store: SqliteStore, liveTmuxNames: Set<string> |
     if (!LIVE_STATUSES.includes(session.status)) continue;
     if (!session.tmuxSessionName) continue;
     if (liveTmuxNames.has(session.tmuxSessionName)) continue;
+    // The `list-sessions` snapshot can be partial under load — we've seen
+    // `tmux list-sessions` fail outright in the journal multiple times today
+    // (`[status-monitor] tmuxActivities failed`), which would surface here as
+    // a non-null but incomplete set. A direct `has-session -t <name>` is
+    // cheap (~1ms) and authoritative; skip the flip whenever it confirms
+    // the pane is still alive. This is what stops the cockpit from showing
+    // a Restore banner for sessions whose tmux + ttyd are perfectly fine.
+    if (hasSession(session.tmuxSessionName)) continue;
     store.updateSessionStatus(session.id, {
       status: "unknown",
       statusReason: "fresh_boot_recovery",
@@ -138,6 +150,12 @@ export type BootRestoreDeps = {
   // they craft DB rows whose tmux pane intentionally does not exist. Default
   // production behaviour talks to the real `listAllTmuxSessions`.
   listTmuxSessions?: () => Set<string> | null;
+  // Direct `tmux has-session -t <name>` probe used as the second opinion
+  // before flipping a row to "unknown". Tests can stub this to assert the
+  // safeguard fires; production hits the real tmux server. When undefined
+  // and the row's name isn't in `listTmuxSessions`, the row IS flipped —
+  // matches the pre-fix behaviour so tests that don't care still pass.
+  hasTmuxSession?: (name: string) => boolean;
   // How long to keep retrying the tmux probe before giving up. Production
   // default covers the systemd startup race (citadel.service can outrun
   // citadel-tmux.service's socket readiness by a few hundred ms). Tests pass
@@ -161,7 +179,13 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
       `[boot-restore] tmux unreachable after ${tmuxReadinessTimeoutMs}ms — skipping fresh-boot reconciliation; live DB rows will only flip once status-monitor's first probe succeeds`,
     );
   }
-  const flippedStale = reconcileStaleLiveRows(deps.store, liveTmuxNames);
+  // Real `tmux has-session` probe as the second opinion. Tests can override
+  // via deps.hasTmuxSession. In test environments without a citadel-tmux
+  // socket the underlying execFileSync throws and tmuxSessionExists returns
+  // false, which is the same behaviour the existing fixtures expect ("session
+  // really isn't there → flip the row").
+  const hasSession = deps.hasTmuxSession ?? tmuxSessionExists;
+  const flippedStale = reconcileStaleLiveRows(deps.store, liveTmuxNames, hasSession);
   if (flippedStale > 0) {
     console.log(`[boot-restore] reconciled ${flippedStale} stale 'live' rows (fresh-boot)`);
   }

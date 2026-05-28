@@ -340,4 +340,51 @@ describe("runBootRestore", () => {
     expect(summary.entries).toHaveLength(0);
     expect(spawned).toHaveLength(0);
   });
+
+  it("does not flip a live row whose name is missing from list-sessions when has-session confirms it's alive", async () => {
+    // Models the partial-read failure mode: list-sessions returns a Set
+    // that's missing one of our tmux names (we've observed this in the
+    // journal under load — `tmuxActivities failed: Command failed: tmux
+    // list-sessions ...`), but `has-session -t <name>` confirms the pane
+    // is still there. Pre-fix, boot-restore flipped the row to "unknown"
+    // and the cockpit popped a Restore banner for a session whose tmux +
+    // ttyd were perfectly fine. With the double-check, the row stays in
+    // its live status and no restore work happens.
+    const { config, store } = fixture();
+    const ts = new Date().toISOString();
+    store.insertSession({
+      id: "sess_alive",
+      workspaceId: "ws_1",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
+      status: "running",
+      statusReason: "launched",
+      lastStatusAt: ts,
+      lastOutputAt: ts,
+      endedAt: null,
+      exitCode: null,
+      transport: "disconnected",
+      tmuxSessionName: "citadel_ws_alive",
+      tmuxSessionId: "$1",
+      runtimeSessionId: "uuid-alive",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }> = [];
+    const summary = await runBootRestore({
+      store,
+      operations: fakeOps(spawned),
+      config,
+      emit: () => {},
+      // Empty Set: list-sessions returned no entries (partial read).
+      listTmuxSessions: () => new Set<string>(),
+      // …but has-session says citadel_ws_alive is up. Don't flip.
+      hasTmuxSession: (name) => name === "citadel_ws_alive",
+      tmuxReadinessTimeoutMs: 0,
+    });
+    expect(summary.entries).toHaveLength(0);
+    expect(spawned).toHaveLength(0);
+    const row = store.listSessions("ws_1").find((s) => s.id === "sess_alive");
+    expect(row?.status).toBe("running");
+  });
 });
