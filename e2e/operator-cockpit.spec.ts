@@ -10,7 +10,7 @@ import { type APIRequestContext, expect, test } from "@playwright/test";
 // ".workspace-navigator" selectors that no longer exist).
 
 const API_BASE =
-  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "4012"}`;
+  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012"}`;
 
 test("cockpit renders top bar, navigator, stage, and inspector", async ({ page }, testInfo) => {
   await page.goto("/");

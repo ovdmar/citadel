@@ -13,6 +13,10 @@ export type McpRouteContext = {
   readMcpResource: (uri: string) => Promise<unknown>;
 };
 
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function registerMcpRoutes(
   app: express.Express,
   asyncRoute: (
@@ -70,48 +74,53 @@ export function registerMcpRoutes(
     asyncRoute(async (req, res) => {
       const request = req.body as { id?: string | number | null; method?: string; params?: Record<string, unknown> };
       const isNotification = request.id === undefined || request.id === null;
-      if (!config.mcp.enabled) return res.status(503).json(rpcError(request.id, -32000, "mcp_disabled"));
-      switch (request.method) {
-        case "initialize":
-          return res.json(
-            rpcResult(request.id, {
-              protocolVersion:
-                typeof request.params?.protocolVersion === "string" && request.params.protocolVersion === "2024-11-05"
-                  ? request.params.protocolVersion
-                  : "2024-11-05",
-              serverInfo: { name: "citadel", version: "0.2.0" },
-              capabilities: { resources: {}, tools: {} },
-            }),
-          );
-        case "notifications/initialized":
-          return res.status(202).end();
-        case "ping":
-          return res.json(rpcResult(request.id, {}));
-        case "tools/list":
-          return res.json(rpcResult(request.id, { tools: mcpToolDefinitions() }));
-        case "tools/call": {
-          const params = request.params as McpToolCall;
-          const result = await callDaemonMcpTool(params);
-          return res.json(rpcResult(request.id, rpcJsonContent(result)));
+      try {
+        if (!config.mcp.enabled) return res.status(503).json(rpcError(request.id, -32000, "mcp_disabled"));
+        switch (request.method) {
+          case "initialize":
+            return res.json(
+              rpcResult(request.id, {
+                protocolVersion:
+                  typeof request.params?.protocolVersion === "string" && request.params.protocolVersion === "2024-11-05"
+                    ? request.params.protocolVersion
+                    : "2024-11-05",
+                serverInfo: { name: "citadel", version: "0.2.0" },
+                capabilities: { resources: {}, tools: {} },
+              }),
+            );
+          case "notifications/initialized":
+            return res.status(202).end();
+          case "ping":
+            return res.json(rpcResult(request.id, {}));
+          case "tools/list":
+            return res.json(rpcResult(request.id, { tools: mcpToolDefinitions() }));
+          case "tools/call": {
+            const params = request.params as McpToolCall;
+            const result = await callDaemonMcpTool(params);
+            return res.json(rpcResult(request.id, rpcJsonContent(result)));
+          }
+          case "resources/list":
+            return res.json(
+              rpcResult(request.id, {
+                resources: mcpStatus(config.mcp.enabled).resources.map((uri) => ({
+                  uri,
+                  name: uri.replace("citadel://", ""),
+                })),
+              }),
+            );
+          case "resources/read": {
+            const uri = typeof request.params?.uri === "string" ? request.params.uri : "";
+            const resource = await readMcpResource(uri);
+            if (!resource) return res.json(rpcError(request.id, -32602, "unknown_resource"));
+            return res.json(rpcResult(request.id, { contents: [rpcResourceContent(uri, resource)] }));
+          }
+          default:
+            if (isNotification) return res.status(202).end();
+            return res.json(rpcError(request.id, -32601, "method_not_found"));
         }
-        case "resources/list":
-          return res.json(
-            rpcResult(request.id, {
-              resources: mcpStatus(config.mcp.enabled).resources.map((uri) => ({
-                uri,
-                name: uri.replace("citadel://", ""),
-              })),
-            }),
-          );
-        case "resources/read": {
-          const uri = typeof request.params?.uri === "string" ? request.params.uri : "";
-          const resource = await readMcpResource(uri);
-          if (!resource) return res.json(rpcError(request.id, -32602, "unknown_resource"));
-          return res.json(rpcResult(request.id, { contents: [rpcResourceContent(uri, resource)] }));
-        }
-        default:
-          if (isNotification) return res.status(202).end();
-          return res.json(rpcError(request.id, -32601, "method_not_found"));
+      } catch (error) {
+        if (isNotification) return res.status(202).end();
+        return res.json(rpcError(request.id, -32000, errorMessage(error)));
       }
     }),
   );

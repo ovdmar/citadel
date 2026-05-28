@@ -15,18 +15,32 @@ SHELL := /bin/bash
 # daemon may shift to the next free port on EADDRINUSE and persist that to
 # .citadel/dev.json; the deploy hook and EFFECTIVE_PORT below pick that up so
 # the URLs printed here match where the daemon actually listens.
-WORKTREE_PORT     := $(shell printf '%s' "$(CURDIR)"      | cksum 2>/dev/null | awk '{print 4110 + ($$1 % 100)}')
-WORKTREE_WEB_PORT := $(shell printf '%s' "$(CURDIR)/web"  | cksum 2>/dev/null | awk '{print 5210 + ($$1 % 100)}')
-WORKTREE_DATA_DIR := $(CURDIR)/.citadel/data
-WORKTREE_LOGS_DIR := $(CURDIR)/.citadel/logs
-WORKTREE_PID      := $(WORKTREE_LOGS_DIR)/daemon.pid
-WORKTREE_LOG      := $(WORKTREE_LOGS_DIR)/daemon.log
-DEV_STATE         := $(CURDIR)/.citadel/dev.json
+WORKTREE_PORT        := $(shell printf '%s' "$(CURDIR)"      | cksum 2>/dev/null | awk '{print 4110 + ($$1 % 100)}')
+WORKTREE_WEB_PORT    := $(shell printf '%s' "$(CURDIR)/web"  | cksum 2>/dev/null | awk '{print 5210 + ($$1 % 100)}')
+# tmux socket name. Per-checkout cksum (not port) so the socket stays stable
+# even if the daemon walks ports on EADDRINUSE — agents keep the same tmux
+# home across restarts. Disjoint from the systemd-managed `citadel` socket so
+# the worktree daemon's orphan-reaper can never see prod sessions.
+WORKTREE_TMUX_SOCKET := citadel-w-$(shell printf '%s' "$(CURDIR)" | cksum 2>/dev/null | awk '{print $$1}')
+WORKTREE_DATA_DIR    := $(CURDIR)/.citadel/data
+WORKTREE_LOGS_DIR    := $(CURDIR)/.citadel/logs
+WORKTREE_PID         := $(WORKTREE_LOGS_DIR)/daemon.pid
+WORKTREE_LOG         := $(WORKTREE_LOGS_DIR)/daemon.log
+DEV_STATE            := $(CURDIR)/.citadel/dev.json
 
 EFFECTIVE_PORT     := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/null 2>&1 && jq -r '.port    // empty' $(DEV_STATE) 2>/dev/null); echo $${v:-$(WORKTREE_PORT)})
 EFFECTIVE_WEB_PORT := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/null 2>&1 && jq -r '.webPort // empty' $(DEV_STATE) 2>/dev/null); echo $${v:-$(WORKTREE_WEB_PORT)})
 
-.PHONY: help setup deploy install build check typecheck lint test coverage e2e smoke performance clean stop logs
+# Seeding worktree data dirs. The seed is checked-in fixture data — a tiny
+# mock git repo materialized under $(WORKTREE_MOCK_REPO) plus synthetic rows
+# inserted into the worktree SQLite. It is intentionally isolated from the
+# systemd long-term daemon's prod data: seeding from prod would copy live
+# agent_sessions and the worktree daemon would race the live daemon for the
+# same tmux sessions.
+WORKTREE_MOCK_REPO       := $(CURDIR)/.citadel/mock-repo
+WORKTREE_MOCK_WORKTREES  := $(CURDIR)/.citadel/mock-worktrees
+
+.PHONY: help setup deploy install tmux-service build check typecheck lint test coverage e2e smoke performance clean stop logs seed seed-reset
 
 help:
 	@echo "Citadel — scoped to: $(CURDIR)"
@@ -41,9 +55,19 @@ help:
 	@echo "                     daemon  → http://localhost:$(EFFECTIVE_PORT)"
 	@echo ""
 	@echo "Lifecycle:"
-	@echo "  make setup       pnpm install"
-	@echo "  make stop        Stop this worktree's deploy stack"
-	@echo "  make logs        Tail the deploy stack's combined log (daemon + vite)"
+	@echo "  make setup        pnpm install"
+	@echo "  make stop         Stop this worktree's deploy stack"
+	@echo "  make logs         Tail the deploy stack's combined log (daemon + vite)"
+	@echo "  make tmux-service Restart citadel-tmux.service (DESTRUCTIVE — kills live tmux sessions;"
+	@echo "                    boot-restore resumes them via claude --resume). Use only to apply"
+	@echo "                    tmux-unit changes or recover from an orphan tmux server."
+	@echo ""
+	@echo "Seeding (so a fresh worktree cockpit isn't empty):"
+	@echo "  make seed         Materialize the checked-in mock repo + insert fixture rows into"
+	@echo "                    this worktree's SQLite. Idempotent. 'make deploy' auto-runs this"
+	@echo "                    on first launch of a fresh worktree."
+	@echo "  make seed-reset   Stop this worktree's stack, wipe data + mock-repo + mock-worktrees,"
+	@echo "                    re-seed from scratch. Use for a clean QA baseline."
 	@echo ""
 	@echo "Quality:"
 	@echo "  make check       typecheck + lint + test + build"
@@ -102,6 +126,12 @@ deploy:
 	fi
 	@mkdir -p $(WORKTREE_LOGS_DIR) $(WORKTREE_DATA_DIR)
 	@command -v setsid >/dev/null 2>&1 || { echo "setsid required — install util-linux"; exit 127; }
+	@# Auto-seed on a fresh worktree: if there's no mock repo AND no DB yet,
+	@# run `make seed` once. Never re-seeds an existing worktree — that's what
+	@# `make seed-reset` is for.
+	@if [ ! -d "$(WORKTREE_MOCK_REPO)/.git" ] && [ ! -f "$(WORKTREE_DATA_DIR)/citadel.sqlite" ]; then \
+		$(MAKE) -s seed; \
+	fi
 	@# Seed dev.json with the webPort so the deploy hook can advertise the vite
 	# (HMR) URL — the daemon writes its own port on boot but doesn't know about
 	# vite. The daemon merges this with its port on next boot.
@@ -149,11 +179,15 @@ deploy:
 			-u CITADEL_PORT \
 			-u CITADEL_WEB_PORT \
 			-u CITADEL_BIND_HOST \
+			-u CITADEL_AUTOMATED_GH \
+			-u CITADEL_TMUX_SOCKET \
 			CITADEL_WORKTREE=1 \
+			CITADEL_AUTOMATED_GH=$${CITADEL_ENABLE_WORKTREE_GH_AUTOMATION:-0} \
 			CITADEL_PORT=$(WORKTREE_PORT) \
 			CITADEL_DATA_DIR=$(WORKTREE_DATA_DIR) \
 			CITADEL_DAEMON_URL=http://127.0.0.1:$(WORKTREE_PORT) \
 			CITADEL_WEB_PORT=$(WORKTREE_WEB_PORT) \
+			CITADEL_TMUX_SOCKET=$(WORKTREE_TMUX_SOCKET) \
 			pnpm dev >>$(WORKTREE_LOG) 2>&1 & \
 		pgid=$$!; \
 		echo "$$pgid" > $(WORKTREE_PID); \
@@ -180,8 +214,19 @@ deploy:
 # pointing at THIS checkout and brings it up. Idempotent: re-run after a
 # `git pull` on the long-term checkout, or to swap the supervised daemon to a
 # different checkout entirely. Does NOT touch any worktree-local `deploy` stack.
+#
+# Critically: `make install` never restarts citadel-tmux.service. tmux is the
+# substrate every live agent session lives in; restarting it kills them all.
+# Apply tmux-unit changes via `make tmux-service` instead.
 install:
 	@bash scripts/install-systemd.sh
+
+# `make tmux-service` is the destructive sibling: (re)starts
+# citadel-tmux.service, killing every live tmux session on the citadel
+# socket. Used to apply tmux-unit changes or recover from an orphan-server
+# condition. Boot-restore resumes recoverable agents via `claude --resume`.
+tmux-service:
+	@bash scripts/restart-tmux-service.sh
 
 # `make stop` kills the detached `deploy` stack (daemon + vite, single pgid).
 # Doesn't touch the systemd unit (use `systemctl --user stop citadel.service`).
@@ -202,3 +247,39 @@ stop:
 logs:
 	@touch $(WORKTREE_LOG)
 	@tail -n 80 -f $(WORKTREE_LOG)
+
+# `make seed` materializes the checked-in fixture: a mock git repo at
+# $(WORKTREE_MOCK_REPO) (+ two mock worktrees under $(WORKTREE_MOCK_WORKTREES))
+# and a small set of synthetic rows in this worktree's SQLite. Idempotent — if
+# either piece is already in place, that piece is skipped. `make deploy`
+# auto-runs this on a fresh worktree so the cockpit isn't empty.
+#
+# Why not snapshot from prod: prod data carries live agent_sessions rows that
+# reference tmux sessions owned by the systemd long-term daemon. A worktree
+# daemon booted on that data races/steals those sessions, breaking the live
+# cockpit. The seed here is fully synthetic and references only paths inside
+# this checkout.
+seed:
+	@if [ ! -d node_modules ]; then \
+		echo "✗ node_modules missing — run 'make setup' first"; \
+		exit 1; \
+	fi
+	@bash seeds/setup.sh "$(CURDIR)"
+	@CITADEL_DATA_DIR="$(WORKTREE_DATA_DIR)" pnpm --silent seed
+
+# `make seed-reset` is the destructive sibling: stops this worktree's stack,
+# removes the SQLite, mock repo, and mock worktrees, then re-seeds. Use when
+# you want a clean QA baseline.
+seed-reset:
+	@$(MAKE) -s stop
+	@echo "→ Removing mock repo worktrees registered with $(WORKTREE_MOCK_REPO)"
+	@if [ -d "$(WORKTREE_MOCK_REPO)/.git" ]; then \
+		git -C "$(WORKTREE_MOCK_REPO)" worktree list --porcelain 2>/dev/null \
+			| awk '/^worktree / && $$2 != "$(WORKTREE_MOCK_REPO)" { print $$2 }' \
+			| while read -r wt; do git -C "$(WORKTREE_MOCK_REPO)" worktree remove --force "$$wt" 2>/dev/null || true; done; \
+	fi
+	@echo "→ Wiping seeded paths"
+	@rm -rf "$(WORKTREE_DATA_DIR)" "$(WORKTREE_MOCK_REPO)" "$(WORKTREE_MOCK_WORKTREES)"
+	@mkdir -p "$(WORKTREE_DATA_DIR)"
+	@$(MAKE) -s seed
+	@echo "✓ Worktree reset. Run 'make deploy' to start fresh."

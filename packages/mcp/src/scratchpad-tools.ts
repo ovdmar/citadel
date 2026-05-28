@@ -8,6 +8,8 @@ export const SCRATCHPAD_TOOL_NAMES = [
   "add_block",
   "update_block",
   "delete_block",
+  "fuzzy_search_scratchpad",
+  "refine_scratchpad",
 ] as const;
 
 export type ScratchpadToolName = (typeof SCRATCHPAD_TOOL_NAMES)[number];
@@ -16,7 +18,7 @@ export const SCRATCHPAD_TOOL_DEFINITIONS: McpToolDefinition[] = [
   {
     name: "read_scratchpad",
     description:
-      "Read the user's scratchpad. The user notes thoughts and TODOs here for orchestrator agents to pick up. Returns { content, updatedAt }. The file is fenced markdown (block-based); see list_blocks for structured access.",
+      "Read the user's scratchpad. The user notes thoughts and TODOs here for orchestrator agents to pick up. Returns { content, updatedAt, path } — `path` is the absolute filesystem location of the notes file (configurable via `scratchpad.path` in CitadelConfig; defaults to `<dataDir>/scratchpad.md`). The file is fenced markdown (block-based); see list_blocks for structured access.",
     inputSchema: { type: "object", additionalProperties: false },
     destructive: false,
   },
@@ -101,5 +103,35 @@ export const SCRATCHPAD_TOOL_DEFINITIONS: McpToolDefinition[] = [
       additionalProperties: false,
     },
     destructive: true,
+  },
+  {
+    name: "fuzzy_search_scratchpad",
+    description:
+      "Fuzzy-search the scratchpad's blocks by text content. Returns { matches: [{ block, score, matches: [{ indices: [[start, end], ...] }] }] } ordered by descending relevance (lower score = better match). Limit defaults to 20, max 50. Matches are character indices into the block's text. Shares ranking with the cockpit's floating searchbar so UI and MCP results stay consistent.",
+    inputSchema: {
+      type: "object",
+      required: ["query"],
+      properties: {
+        query: { type: "string", minLength: 1 },
+        limit: { type: "integer", minimum: 1, maximum: 50 },
+      },
+      additionalProperties: false,
+    },
+    destructive: false,
+  },
+  {
+    name: "refine_scratchpad",
+    description:
+      "Launch an agent in a fresh workspace to refine (deduplicate, group, tidy) the scratchpad. Uses the user's saved 'refine-scratchpad' Citadel Action prompt by default; override with `prompt` for this run only. Pass `repoId` or `repoName` to pick the host repo (defaults to the most-recently-active repo on the daemon). Returns the discriminated union { ok: true, workspaceId, sessionId, warning? } | { ok: false, error: 'runtime_unavailable'|'repo_required'|'launch_failed', detail, workspaceId? }. The agent is expected to skip blocks tagged `in-progress`; if the resolved prompt omits that substring the response includes a soft `warning` field.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        repoId: { type: "string", minLength: 1 },
+        repoName: { type: "string", minLength: 1 },
+        prompt: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
+    destructive: false,
   },
 ];

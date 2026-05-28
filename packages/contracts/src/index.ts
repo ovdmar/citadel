@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ParentPrSchema, PrCommitSchema, PrMergeStrategySchema } from "./pr-routes.js";
 import { IdSchema } from "./primitives.js";
 export { IdSchema } from "./primitives.js";
 
@@ -104,6 +105,13 @@ export const AgentSessionSchema = z.object({
   // Status-tracking fields written by the DB layer; optional at the TS level
   // so older test fixtures still typecheck.
   statusReason: z.string().nullable().optional(),
+  // ISO timestamp of when `statusReason` was last written, independent of
+  // `lastStatusAt` (which is reset on every status touch — including benign
+  // sub-status flips from the runtime adapter). The status-monitor uses this
+  // to drive the 30-minute auto-clear of `idle_after_unexpected_exit`: when
+  // the reason persists past the window with no operator Restart, the
+  // attention pulse fades naturally.
+  statusReasonAt: z.string().nullable().optional(),
   lastStatusAt: z.string().optional(),
   lastOutputAt: z.string().nullable().optional(),
   endedAt: z.string().nullable().optional(),
@@ -111,6 +119,15 @@ export const AgentSessionSchema = z.object({
   transport: TransportStatusSchema,
   tmuxSessionName: z.string().nullable(),
   tmuxSessionId: z.string().nullable(),
+  // Stable per-tab identifier that survives across restore-spawn-restore
+  // cycles. Generated fresh on first session create in a workspace; inherited
+  // by every subsequent row that resumes the same conversation (the restored
+  // session takes the original's tabId). The cockpit's tab strip sorts by
+  // tabId (time-encoded by createId) so a restored session re-appears in the
+  // same slot the original lived in, instead of jumping to the end of the row.
+  // Optional in the contract so older test fixtures keep parsing; the DB
+  // layer always materializes a value via the migration backfill.
+  tabId: z.string().optional(),
   // Runtime-native session UUID (e.g. Claude Code's --session-id). Populated at
   // spawn time so we can resume the same conversation across daemon and machine
   // restarts, and so the Settings restore flow has a stable handle.
@@ -185,6 +202,25 @@ export const RuntimeUsageSummarySchema = z.object({
   checkedAt: z.string(),
 });
 
+export const GitHubQuotaResourceSchema = z.object({
+  name: z.enum(["core", "graphql", "search"]),
+  limit: z.number().int().nonnegative(),
+  used: z.number().int().nonnegative(),
+  remaining: z.number().int().nonnegative(),
+  percentUsed: z.number().min(0).max(100),
+  resetAt: z.string().nullable(),
+});
+
+export const GitHubQuotaSummarySchema = z.object({
+  providerId: z.literal("github-gh"),
+  status: ProviderStatusSchema,
+  reason: z.string().nullable(),
+  checkedAt: z.string(),
+  cooldownUntil: z.string().nullable().default(null),
+  automationEnabled: z.boolean().default(true),
+  resources: z.array(GitHubQuotaResourceSchema).default([]),
+});
+
 export const PrReviewerStateSchema = z.enum(["approved", "changes_requested", "commented", "pending", "dismissed"]);
 
 export const PrReviewerSchema = z.object({
@@ -192,6 +228,14 @@ export const PrReviewerSchema = z.object({
   name: z.string().nullable().default(null),
   state: PrReviewerStateSchema,
 });
+
+// GitHub's mergeStateStatus enum; affects the workspace-card "conflicting"
+// tone (DIRTY → red border) but not the readiness state itself. Lowercase
+// "mergeable" enum on PullRequestSummarySchema is the source of truth for
+// the pr-conflicts readiness gate.
+export const PrMergeStateStatusSchema = z
+  .enum(["CLEAN", "BEHIND", "BLOCKED", "DIRTY", "HAS_HOOKS", "UNKNOWN", "UNSTABLE", "DRAFT"])
+  .catch("UNKNOWN");
 
 export const PullRequestSummarySchema = z.object({
   number: z.number(),
@@ -204,6 +248,17 @@ export const PullRequestSummarySchema = z.object({
   additions: z.number().nullable().default(null),
   deletions: z.number().nullable().default(null),
   reviewers: z.array(PrReviewerSchema).default([]),
+  commits: z.array(PrCommitSchema).default([]),
+  headRefName: z.string().nullable().default(null),
+  parentPr: ParentPrSchema.nullable().default(null),
+  mergeable: z.enum(["mergeable", "conflicting", "unknown"]).default("unknown"),
+  allowedMergeStrategies: z.array(PrMergeStrategySchema).default([]),
+  // gh `pr view --json mergeStateStatus` — affects card tone only.
+  mergeStateStatus: PrMergeStateStatusSchema.nullable().default(null),
+  // gh `pr view --json headRefOid` — the PR head commit SHA. Used by the
+  // CI auto-recovery tick to dedupe per-SHA so we don't re-launch agents
+  // on CI re-runs of the same commit.
+  headSha: z.string().nullable().default(null),
 });
 
 export const VersionControlSummarySchema = z.object({
@@ -215,6 +270,13 @@ export const VersionControlSummarySchema = z.object({
   remotes: z.array(z.string()),
   pullRequest: PullRequestSummarySchema.nullable(),
   checkedAt: z.string(),
+  // ISO timestamp of when the daemon's global gh rate-limit cooldown clears,
+  // present only while a cooldown is active. The pr-routes response builder
+  // decorates outgoing payloads with this regardless of whether the body came
+  // from a fresh fetch, a scheduler-skip cache fallback, or a stale snapshot,
+  // so the FE banner sees the same signal on every code path.
+  // Optional (not required) so older daemon ↔ newer FE remains compatible.
+  cooldownUntil: z.string().nullable().optional(),
 });
 
 export const IssueTransitionSchema = z.object({
@@ -391,6 +453,7 @@ export const WorkspaceReadinessSchema = z.object({
     "needs-review",
     "checks-failing",
     "conflicts",
+    "pr-conflicts",
     "dirty",
     "waiting-provider",
     "action-failed",
@@ -484,6 +547,11 @@ export const CreateAgentSessionInputSchema = z.object({
   // session's transcript on disk must exist; the caller is responsible for
   // validating that (see the Settings restore flow / backfill).
   resumeRuntimeSessionId: z.string().uuid().optional(),
+  // When set, the new session is bound to an existing tab slot (instead of
+  // generating a fresh tabId). Restore paths pass the source row's tabId so
+  // the restored session reuses the original tab position in the cockpit's
+  // tab strip. Non-restore callers leave this unset and get a fresh tabId.
+  tabId: z.string().optional(),
 });
 
 // High-level one-shot launcher used by MCP orchestrators: create a workspace
@@ -521,161 +589,6 @@ export const AgentPromptSchema = z.object({
 export const TransitionIssueInputSchema = z.object({
   transition: z.string().min(1),
   fields: z.record(z.string()).default({}),
-});
-
-export const ScheduledAgentWorkspaceStrategySchema = z.enum(["new", "existing"]);
-// Status of the denormalized cache on the agent row — includes "never" for
-// agents that have not yet fired.
-export const ScheduledAgentRunStatusSchema = z.enum(["never", "running", "succeeded", "failed"]);
-// Status of a single run row in scheduled_agent_runs — "never" is not valid
-// here (every row represents an actual fire).
-export const ScheduledAgentRunRowStatusSchema = z.enum(["queued", "running", "succeeded", "failed"]);
-export const ScheduledAgentScheduleTypeSchema = z.enum(["recurring", "once"]);
-export const ScheduledAgentRunModeSchema = z.enum(["workspace", "background"]);
-export const ScheduledAgentOverlapPolicySchema = z.enum(["skip", "queue"]);
-
-export const ScheduledAgentSchema = z.object({
-  id: IdSchema,
-  name: z.string().min(1).max(80),
-  description: z.string().max(280).nullable().default(null),
-  scheduleType: ScheduledAgentScheduleTypeSchema.default("recurring"),
-  cron: z.string().min(1).max(120).nullable().default(null),
-  runAt: z.string().nullable().default(null),
-  repoId: IdSchema,
-  runtimeId: IdSchema,
-  prompt: z.string().max(8000).nullable().default(null),
-  workspaceStrategy: ScheduledAgentWorkspaceStrategySchema,
-  workspaceName: z.string().min(1).max(80),
-  baseBranch: z.string().min(1).max(120).nullable().default(null),
-  runMode: ScheduledAgentRunModeSchema.default("workspace"),
-  backgroundCwd: z.string().min(1).max(4000).nullable().default(null),
-  overlapPolicy: ScheduledAgentOverlapPolicySchema.default("skip"),
-  enabled: z.boolean().default(true),
-  lastRunAt: z.string().nullable().default(null),
-  lastRunStatus: ScheduledAgentRunStatusSchema.default("never"),
-  lastRunMessage: z.string().nullable().default(null),
-  lastWorkspaceId: IdSchema.nullable().default(null),
-  lastSessionId: IdSchema.nullable().default(null),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
-
-// One row per fire (cron tick or manual runNow). Lifecycle:
-//   queued    → enqueuedAt = fire time, startedAt = null, logFilePath = null
-//   running   → startedAt = execution-start time (= enqueuedAt for skip-policy),
-//               logFilePath populated, workspace/session ids set per runMode
-//   succeeded / failed → endedAt populated, other fields preserved
-export const ScheduledAgentRunSchema = z.object({
-  id: IdSchema,
-  scheduledAgentId: IdSchema,
-  status: ScheduledAgentRunRowStatusSchema,
-  enqueuedAt: z.string(),
-  startedAt: z.string().nullable().default(null),
-  endedAt: z.string().nullable().default(null),
-  message: z.string().nullable().default(null),
-  workspaceId: IdSchema.nullable().default(null),
-  sessionId: IdSchema.nullable().default(null),
-  backgroundSessionId: IdSchema.nullable().default(null),
-  logFilePath: z.string().nullable().default(null),
-});
-
-// Tmux-backed agent session that is NOT tied to a workspace. Only fields with
-// a documented reader in v1 are surfaced — see plan step 1 for the reader map.
-export const BackgroundAgentSessionStatusSchema = z.enum(["running", "stopped", "failed"]);
-
-export const BackgroundAgentSessionSchema = z.object({
-  id: IdSchema,
-  scheduledAgentId: IdSchema.nullable().default(null),
-  cwd: z.string().min(1).max(4000),
-  logFilePath: z.string().min(1).max(4000),
-  tmuxSessionName: z.string().min(1),
-  tmuxSessionId: z.string().min(1),
-  status: BackgroundAgentSessionStatusSchema,
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
-
-// Recurring needs a cron; one-shot needs a runAt timestamp. The runner stores a
-// placeholder cron for one-shots so the DB column can stay NOT NULL.
-//
-// workspaceStrategy + workspaceName are required for runMode='workspace' (the
-// default) and ignored for runMode='background' (still accepted in the input
-// so the schema doesn't reject a payload that includes them).
-export const CreateScheduledAgentInputSchema = z
-  .object({
-    name: z.string().min(1).max(80),
-    description: z.string().max(280).optional(),
-    scheduleType: ScheduledAgentScheduleTypeSchema.optional(),
-    cron: z.string().min(1).max(120).optional(),
-    runAt: z.string().datetime({ offset: true }).optional(),
-    repoId: IdSchema,
-    runtimeId: IdSchema,
-    prompt: z.string().max(8000).optional(),
-    // workspaceStrategy + workspaceName are required for runMode='workspace'
-    // and ignored for runMode='background'. The refine below enforces this;
-    // the schema declares them optional so the UI doesn't have to send a
-    // placeholder for background runs.
-    workspaceStrategy: ScheduledAgentWorkspaceStrategySchema.optional(),
-    workspaceName: z.string().min(1).max(80).optional(),
-    baseBranch: z.string().min(1).max(120).optional(),
-    runMode: ScheduledAgentRunModeSchema.optional(),
-    backgroundCwd: z.string().min(1).max(4000).optional(),
-    overlapPolicy: ScheduledAgentOverlapPolicySchema.optional(),
-    enabled: z.boolean().optional(),
-  })
-  .superRefine((value, ctx) => {
-    const type = value.scheduleType ?? "recurring";
-    const runMode = value.runMode ?? "workspace";
-    if (type === "recurring" && !value.cron) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "cron is required for recurring schedules",
-        path: ["cron"],
-      });
-    }
-    if (type === "once" && !value.runAt) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "runAt is required for one-shot schedules",
-        path: ["runAt"],
-      });
-    }
-    if (runMode === "workspace") {
-      if (!value.workspaceStrategy) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "workspaceStrategy is required when runMode='workspace'",
-          path: ["workspaceStrategy"],
-        });
-      }
-      if (!value.workspaceName) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: "workspaceName is required when runMode='workspace'",
-          path: ["workspaceName"],
-        });
-      }
-    }
-  });
-
-// Partial form for PATCH: build it from the raw object (skip the refinement so a
-// PATCH that only touches `enabled` doesn't fail the cron/runAt presence check).
-export const UpdateScheduledAgentInputSchema = z.object({
-  name: z.string().min(1).max(80).optional(),
-  description: z.string().max(280).optional(),
-  scheduleType: ScheduledAgentScheduleTypeSchema.optional(),
-  cron: z.string().min(1).max(120).optional(),
-  runAt: z.string().datetime({ offset: true }).optional(),
-  repoId: IdSchema.optional(),
-  runtimeId: IdSchema.optional(),
-  prompt: z.string().max(8000).optional(),
-  runMode: ScheduledAgentRunModeSchema.optional(),
-  backgroundCwd: z.string().min(1).max(4000).optional(),
-  overlapPolicy: ScheduledAgentOverlapPolicySchema.optional(),
-  workspaceStrategy: ScheduledAgentWorkspaceStrategySchema.optional(),
-  workspaceName: z.string().min(1).max(80).optional(),
-  baseBranch: z.string().min(1).max(120).optional(),
-  enabled: z.boolean().optional(),
 });
 
 export const DiffFileSchema = z.object({
@@ -720,6 +633,8 @@ export type CiRunSummary = z.infer<typeof CiRunSummarySchema>;
 export type CiProviderSummary = z.infer<typeof CiProviderSummarySchema>;
 export type RuntimeUsageCategory = z.infer<typeof RuntimeUsageCategorySchema>;
 export type RuntimeUsageSummary = z.infer<typeof RuntimeUsageSummarySchema>;
+export type GitHubQuotaResource = z.infer<typeof GitHubQuotaResourceSchema>;
+export type GitHubQuotaSummary = z.infer<typeof GitHubQuotaSummarySchema>;
 export type PullRequestSummary = z.infer<typeof PullRequestSummarySchema>;
 export type PrReviewer = z.infer<typeof PrReviewerSchema>;
 export type PrReviewerState = z.infer<typeof PrReviewerStateSchema>;
@@ -761,18 +676,11 @@ export type DiffFile = z.infer<typeof DiffFileSchema>;
 export type WorkspaceDiff = z.infer<typeof WorkspaceDiffSchema>;
 export type RecentCommit = z.infer<typeof RecentCommitSchema>;
 export type WorkspaceRecentCommits = z.infer<typeof WorkspaceRecentCommitsSchema>;
-export type ScheduledAgent = z.infer<typeof ScheduledAgentSchema>;
-export type ScheduledAgentWorkspaceStrategy = z.infer<typeof ScheduledAgentWorkspaceStrategySchema>;
-export type ScheduledAgentRunStatus = z.infer<typeof ScheduledAgentRunStatusSchema>;
-export type ScheduledAgentScheduleType = z.infer<typeof ScheduledAgentScheduleTypeSchema>;
-export type ScheduledAgentRunMode = z.infer<typeof ScheduledAgentRunModeSchema>;
-export type ScheduledAgentOverlapPolicy = z.infer<typeof ScheduledAgentOverlapPolicySchema>;
-export type ScheduledAgentRun = z.infer<typeof ScheduledAgentRunSchema>;
-export type BackgroundAgentSession = z.infer<typeof BackgroundAgentSessionSchema>;
-export type CreateScheduledAgentInput = z.infer<typeof CreateScheduledAgentInputSchema>;
-export type UpdateScheduledAgentInput = z.infer<typeof UpdateScheduledAgentInputSchema>;
 
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-export type { ScratchpadSnapshot, ScratchpadHistorySource, ScratchpadHistoryEntry, ScratchpadHistorySummary, ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
+export type { ScratchpadSnapshot, ReadScratchpadResult, ScratchpadHistorySource, ScratchpadHistoryEntry, ScratchpadHistorySummary, ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
+
+export * from "./citadel-actions.js";
 
 export type ApiError = { error: string; detail?: string; fieldErrors?: Record<string, string[]> };
+export * from "./scheduled-agents.js";
