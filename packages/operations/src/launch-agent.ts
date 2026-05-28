@@ -1,4 +1,5 @@
 import type {
+  ActivityEvent,
   AgentSession,
   CreateAgentSessionInput,
   CreateWorkspaceInput,
@@ -36,7 +37,7 @@ export type LaunchAgentDeps = {
   ) => Promise<AgentSession>;
   activity: (event: {
     type: string;
-    source: "user" | "system" | "hook";
+    source: ActivityEvent["source"];
     message: string;
     repoId: string | null;
     workspaceId: string | null;

@@ -55,6 +55,18 @@ describe("last-route storage", () => {
   it("returns null when no value is stored", () => {
     expect(loadLastRoute(storage)).toBeNull();
   });
+
+  it("does not persist /scratchpad — it's a deep-link, not a destination", () => {
+    saveLastRoute("/scratchpad", storage);
+    expect(loadLastRoute(storage)).toBeNull();
+  });
+
+  it("does not persist /scratchpad with query/hash either", () => {
+    saveLastRoute("/scratchpad?foo=1", storage);
+    expect(loadLastRoute(storage)).toBeNull();
+    saveLastRoute("/scratchpad/anything", storage);
+    expect(loadLastRoute(storage)).toBeNull();
+  });
 });
 
 describe("isBareRootLanding", () => {

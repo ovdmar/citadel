@@ -1,6 +1,7 @@
-import type { AgentRuntime, RuntimeUsageSummary } from "@citadel/contracts";
+import type { AgentRuntime, GitHubQuotaSummary, RuntimeUsageSummary } from "@citadel/contracts";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { Github } from "lucide-react";
 import { api } from "./api.js";
 import { categoryKey, formatLocalReset, formatTimeUntilReset, pickTopBarCategory } from "./lib/usage-format.js";
 import { RuntimeMark } from "./runtime-mark.js";
@@ -25,6 +26,12 @@ export function UsageIndicator(props: { runtimes: AgentRuntime[] }) {
     queryFn: () => api<ConfigResponse>("/api/config"),
   });
   const configRuntimes = configQuery.data?.config.runtimes ?? [];
+  const githubQuota = useQuery({
+    queryKey: ["github-quota"],
+    queryFn: () => api<{ quota: GitHubQuotaSummary }>("/api/integrations/github/quota"),
+    refetchInterval: 60_000,
+    staleTime: 60_000,
+  });
   const enabled = props.runtimes
     .map((runtime) => {
       if (runtime.health !== "healthy") return null;
@@ -45,13 +52,46 @@ export function UsageIndicator(props: { runtimes: AgentRuntime[] }) {
     })),
   });
 
-  if (enabled.length === 0) return null;
+  if (enabled.length === 0 && !githubQuota.data?.quota) return null;
   return (
     <div className="cit-usage-indicator">
+      <GitHubQuotaPill quota={githubQuota.data?.quota} />
       {enabled.map(({ runtime, topBarKey }, index) => (
         <UsagePill key={runtime.id} runtime={runtime} topBarKey={topBarKey} usage={usageQueries[index]?.data?.usage} />
       ))}
     </div>
+  );
+}
+
+function GitHubQuotaPill(props: { quota: GitHubQuotaSummary | undefined }) {
+  const quota = props.quota;
+  const resource = pickGitHubQuotaResource(quota);
+  const cooldownLeft = quota?.cooldownUntil ? formatTimeUntilReset(quota.cooldownUntil) : null;
+  const resetLeft = resource?.resetAt ? formatTimeUntilReset(resource.resetAt) : null;
+  const tooltip = buildGitHubTooltip(quota, resource);
+  const value = !quota
+    ? "..."
+    : !quota.automationEnabled
+      ? "off"
+      : cooldownLeft
+        ? resource
+          ? `${resource.percentUsed}% · ${resetLeft ?? cooldownLeft}`
+          : cooldownLeft
+        : resource
+          ? `${resource.percentUsed}%${resetLeft ? ` · ${resetLeft}` : ""}`
+          : "--";
+  return (
+    <Link
+      to="/settings"
+      className={`cit-usage-pill ${quota?.cooldownUntil ? "is-warn" : ""}`}
+      title={tooltip}
+      aria-label={tooltip}
+    >
+      <span className="cit-usage-pill-mark" aria-hidden>
+        <Github size={14} />
+      </span>
+      <span className="cit-usage-pill-value">{value}</span>
+    </Link>
   );
 }
 
@@ -108,4 +148,32 @@ function buildTooltip(
     return `${marker}${sectionPrefix}${category.label}: ${category.percentUsed}% used${resetSuffix}`;
   });
   return `${displayName}\n${lines.join("\n")}`;
+}
+
+function pickGitHubQuotaResource(summary: GitHubQuotaSummary | undefined) {
+  return (
+    summary?.resources.reduce<GitHubQuotaSummary["resources"][number] | null>(
+      (best, resource) => (!best || resource.percentUsed > best.percentUsed ? resource : best),
+      null,
+    ) ?? null
+  );
+}
+
+function buildGitHubTooltip(
+  summary: GitHubQuotaSummary | undefined,
+  selected: GitHubQuotaSummary["resources"][number] | null,
+): string {
+  if (!summary) return "GitHub quota loading";
+  if (!summary.automationEnabled) return summary.reason ?? "GitHub automation disabled";
+  if (summary.resources.length === 0) return summary.reason ?? "No GitHub quota data";
+  const selectedName = selected?.name;
+  const lines = summary.resources.map((resource) => {
+    const marker = resource.name === selectedName ? "* " : "  ";
+    const reset = resource.resetAt ? ` · resets ${formatLocalReset(resource.resetAt) ?? "later"}` : "";
+    return `${marker}${resource.name}: ${resource.percentUsed}% used (${resource.remaining}/${resource.limit} left)${reset}`;
+  });
+  const header = summary.cooldownUntil
+    ? `GitHub rate-limited; retry ${formatLocalReset(summary.cooldownUntil) ?? "later"}`
+    : "GitHub quota";
+  return `${header}\n${lines.join("\n")}`;
 }

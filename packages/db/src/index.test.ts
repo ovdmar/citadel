@@ -44,7 +44,88 @@ describe("SqliteStore", () => {
       { version: 7 },
       { version: 8 },
       { version: 9 },
+      { version: 10 },
+      { version: 11 },
+      { version: 12 },
+      { version: 13 },
     ]);
+  });
+
+  it("round-trips agent_sessions.status_reason_at via updateSessionStatus", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
+    dirs.push(dir);
+    const store = new SqliteStore(path.join(dir, "test.sqlite"));
+    store.migrate();
+    store.insertRepo({
+      id: "repo_srr",
+      name: "Repo",
+      rootPath: dir,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: dir,
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      deployHookCommand: null,
+      createdAt: "2026-05-26T00:00:00.000Z",
+      updatedAt: "2026-05-26T00:00:00.000Z",
+      archivedAt: null,
+    });
+    store.insertWorkspace({
+      id: "ws_srr",
+      repoId: "repo_srr",
+      name: "ws",
+      path: dir,
+      branch: "main",
+      baseBranch: "main",
+      source: "imported",
+      kind: "root",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      namespaceId: null,
+      createdAt: "2026-05-26T00:00:00.000Z",
+      updatedAt: "2026-05-26T00:00:00.000Z",
+      archivedAt: null,
+    });
+    store.insertSession({
+      id: "sess_srr",
+      workspaceId: "ws_srr",
+      runtimeId: "shell",
+      displayName: "Shell",
+      status: "running",
+      statusReason: null,
+      lastStatusAt: "2026-05-26T00:00:00.000Z",
+      lastOutputAt: null,
+      endedAt: null,
+      exitCode: null,
+      transport: "connected",
+      tmuxSessionName: "citadel_srr",
+      tmuxSessionId: "$1",
+      createdAt: "2026-05-26T00:00:00.000Z",
+      updatedAt: "2026-05-26T00:00:00.000Z",
+    });
+    // Newly-created rows: statusReasonAt is null.
+    expect(store.listSessions().find((s) => s.id === "sess_srr")?.statusReasonAt).toBeNull();
+
+    // updateSessionStatus accepts statusReasonAt as a partial update.
+    const reasonAt = "2026-05-26T01:00:00.000Z";
+    store.updateSessionStatus("sess_srr", {
+      status: "idle",
+      statusReason: "idle_after_unexpected_exit",
+      statusReasonAt: reasonAt,
+    });
+    expect(store.listSessions().find((s) => s.id === "sess_srr")?.statusReasonAt).toBe(reasonAt);
+
+    // Setting statusReasonAt to null clears it (auto-clear path).
+    store.updateSessionStatus("sess_srr", { statusReason: null, statusReasonAt: null });
+    expect(store.listSessions().find((s) => s.id === "sess_srr")?.statusReasonAt).toBeNull();
   });
 
   it("round-trips workspace, session, operation, and activity state", () => {
@@ -660,72 +741,5 @@ describe("SqliteStore", () => {
 
     // Unknown id returns null without throwing.
     expect(store.deleteScheduledAgentCascade("missing")).toBeNull();
-  });
-
-  it("plan_registrations rows persist and cascade with their workspace", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
-    dirs.push(dir);
-    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
-    store.migrate();
-
-    store.insertRepo({
-      id: "repo_plan",
-      name: "Plan",
-      rootPath: path.join(dir, "repo"),
-      defaultBranch: "main",
-      defaultRemote: "origin",
-      worktreeParent: path.join(dir, "worktrees"),
-      setupHookIds: [],
-      teardownHookIds: [],
-      providerIds: [],
-      deployHookCommand: null,
-      createdAt: "2026-05-17T00:00:00.000Z",
-      updatedAt: "2026-05-17T00:00:00.000Z",
-      archivedAt: null,
-    });
-    store.insertWorkspace({
-      id: "ws_plan",
-      repoId: "repo_plan",
-      name: "plan-ws",
-      branch: "fb-plan-ws",
-      baseBranch: "main",
-      path: path.join(dir, "worktrees", "plan-ws"),
-      kind: "worktree",
-      lifecycle: "ready",
-      dirty: false,
-      source: "scratch",
-      prUrl: null,
-      issueKey: null,
-      issueTitle: null,
-      issueUrl: null,
-      slackThreadUrl: null,
-      section: "backlog",
-      pinned: false,
-      namespaceId: null,
-      createdAt: "2026-05-17T00:00:00.000Z",
-      updatedAt: "2026-05-17T00:00:00.000Z",
-      archivedAt: null,
-    });
-    store.insertPlanRegistration({
-      id: "plan-1",
-      workspaceId: "ws_plan",
-      path: "/tmp/plan/ws/.agents/plans/foo.md",
-      summary: "Foo plan",
-      registeredAt: "2026-05-17T00:00:00.000Z",
-      registeredBySessionId: null,
-    });
-
-    const list = store.listPlanRegistrationsForWorkspace("ws_plan");
-    expect(list).toHaveLength(1);
-    expect(list[0]?.summary).toBe("Foo plan");
-    expect(store.findPlanRegistration("plan-1")?.path).toBe("/tmp/plan/ws/.agents/plans/foo.md");
-
-    // CASCADE on workspace delete: registrations vanish.
-    store.deleteWorkspace("ws_plan");
-    expect(store.listPlanRegistrationsForWorkspace("ws_plan")).toEqual([]);
-    expect(store.findPlanRegistration("plan-1")).toBeNull();
-
-    // deletePlanRegistration is a no-op for unknown ids.
-    expect(store.deletePlanRegistration("missing")).toBe(false);
   });
 });

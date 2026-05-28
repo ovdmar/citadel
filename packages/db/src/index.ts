@@ -8,7 +8,6 @@ import type {
   Namespace,
   Operation,
   OperationLogEntry,
-  PlanRegistration,
   Repo,
   ScheduledAgent,
   Workspace,
@@ -23,6 +22,13 @@ import {
   sessionFromRow,
   workspaceFromRow,
 } from "./rows.js";
+import {
+  type WorkspacePrSnapshot,
+  getWorkspacePrSnapshot,
+  updateWorkspacePrSnapshot,
+} from "./workspace-pr-snapshot.js";
+
+export type { WorkspacePrSnapshot };
 
 // Avoid a static `import "node:sqlite"` so vite-based test runners do not
 // try to bundle the built-in. Resolved through `createRequire` at runtime.
@@ -293,6 +299,57 @@ export class SqliteStore {
       .run(now, workspaceId);
   }
 
+  // Internal — read the auto-recovery dedupe state for a workspace. Used by
+  // the auto-recovery monitor; not exposed via the contract Workspace type
+  // because operators don't see this directly.
+  getWorkspaceAutoRecoveryState(
+    workspaceId: string,
+  ): { lastCiSha: string | null; lastAttemptAt: string | null } | null {
+    const row = this.database
+      .prepare(
+        "SELECT auto_recovery_last_ci_sha AS lastCiSha, auto_recovery_last_attempt_at AS lastAttemptAt FROM workspaces WHERE id = ?",
+      )
+      .get(workspaceId) as { lastCiSha: string | null; lastAttemptAt: string | null } | undefined;
+    if (!row) return null;
+    return { lastCiSha: row.lastCiSha ?? null, lastAttemptAt: row.lastAttemptAt ?? null };
+  }
+
+  // Internal — atomic claim of the next auto-recovery slot for a workspace.
+  // Returns true iff the row was actually updated. The WHERE clause filters
+  // on the same SHA-or-debounce predicate as decideAutoRecoveryAction so a
+  // concurrent tick (or a manual same-SHA retry within the debounce window)
+  // sees zero affected rows and the caller knows to skip the spawn.
+  tryRecordAutoRecoveryAttempt(input: {
+    workspaceId: string;
+    sha: string;
+    now: string;
+    debounceCutoff: string;
+  }): boolean {
+    const result = this.database
+      .prepare(
+        `UPDATE workspaces
+         SET auto_recovery_last_ci_sha = ?, auto_recovery_last_attempt_at = ?
+         WHERE id = ?
+           AND (auto_recovery_last_ci_sha IS NULL
+                OR auto_recovery_last_ci_sha != ?
+                OR auto_recovery_last_attempt_at IS NULL
+                OR auto_recovery_last_attempt_at < ?)`,
+      )
+      .run(input.sha, input.now, input.workspaceId, input.sha, input.debounceCutoff);
+    return result.changes > 0;
+  }
+
+  // Per-workspace PR snapshot — thin wrappers around the free functions in
+  // ./workspace-pr-snapshot.ts (extracted to keep this file under the
+  // 800-line check:size gate).
+  getWorkspacePrSnapshot(workspaceId: string): WorkspacePrSnapshot | null {
+    return getWorkspacePrSnapshot(this.database, workspaceId);
+  }
+
+  updateWorkspacePrSnapshot(workspaceId: string, patch: Partial<WorkspacePrSnapshot>): void {
+    updateWorkspacePrSnapshot(this.database, workspaceId, patch);
+  }
+
   archiveRepo(repoId: string) {
     const now = new Date().toISOString();
     this.database.prepare("UPDATE repos SET archived_at = ?, updated_at = ? WHERE id = ?").run(now, now, repoId);
@@ -316,10 +373,10 @@ export class SqliteStore {
       .prepare(
         `INSERT INTO agent_sessions (id, workspace_id, runtime_id, display_name, status, status_reason,
           last_status_at, last_output_at, ended_at, exit_code, transport,
-          tmux_session_name, tmux_session_id, runtime_session_id,
+          tmux_session_name, tmux_session_id, tab_id, runtime_session_id,
           rate_limit_resume_attempts, next_resume_at, last_resume_from_rate_limit_at,
           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -338,6 +395,11 @@ export class SqliteStore {
         session.transport,
         session.tmuxSessionName ?? null,
         session.tmuxSessionId ?? null,
+        // Default tab_id to the row id so callers that forget to supply one
+        // still get sensible tab ordering (each session becomes its own tab,
+        // matching pre-migration behaviour). Restore paths supply the source
+        // session's tabId so the restored row reuses the original slot.
+        session.tabId ?? session.id,
         session.runtimeSessionId ?? null,
         session.rateLimitResumeAttempts ?? 0,
         session.nextResumeAt ?? null,
@@ -367,6 +429,7 @@ export class SqliteStore {
     update: {
       status?: AgentSession["status"];
       statusReason?: string | null;
+      statusReasonAt?: string | null;
       lastStatusAt?: string;
       lastOutputAt?: string | null;
       endedAt?: string | null;
@@ -382,6 +445,10 @@ export class SqliteStore {
     if (update.statusReason !== undefined) {
       sets.push("status_reason = ?");
       values.push(update.statusReason);
+    }
+    if (update.statusReasonAt !== undefined) {
+      sets.push("status_reason_at = ?");
+      values.push(update.statusReasonAt);
     }
     if (update.lastStatusAt !== undefined) {
       sets.push("last_status_at = ?");
@@ -710,55 +777,12 @@ export class SqliteStore {
     return next;
   }
 
-  insertPlanRegistration(row: PlanRegistration) {
-    this.database
-      .prepare(
-        `INSERT INTO plan_registrations (id, workspace_id, path, summary, registered_at, registered_by_session_id)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .run(row.id, row.workspaceId, row.path, row.summary, row.registeredAt, row.registeredBySessionId);
-  }
-
-  findPlanRegistration(id: string): PlanRegistration | null {
-    const row = this.database.prepare("SELECT * FROM plan_registrations WHERE id = ?").get(id) as
-      | Record<string, unknown>
-      | undefined;
-    if (!row) return null;
-    return planRegistrationFromRow(row);
-  }
-
-  listPlanRegistrationsForWorkspace(workspaceId: string): PlanRegistration[] {
-    const rows = this.database
-      .prepare("SELECT * FROM plan_registrations WHERE workspace_id = ? ORDER BY registered_at DESC")
-      .all(workspaceId) as Array<Record<string, unknown>>;
-    return rows.map(planRegistrationFromRow);
-  }
-
-  deletePlanRegistration(id: string): boolean {
-    const result = this.database.prepare("DELETE FROM plan_registrations WHERE id = ?").run(id);
-    return (result.changes ?? 0) > 0;
-  }
-
   private ensureColumn(table: string, column: string, definition: string) {
     const cols = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (!cols.some((entry) => entry.name === column)) {
       this.database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
     }
   }
-}
-
-function planRegistrationFromRow(row: Record<string, unknown>): PlanRegistration {
-  return {
-    id: String(row.id),
-    workspaceId: String(row.workspace_id),
-    path: String(row.path),
-    summary: row.summary === null || row.summary === undefined ? null : String(row.summary),
-    registeredAt: String(row.registered_at),
-    registeredBySessionId:
-      row.registered_by_session_id === null || row.registered_by_session_id === undefined
-        ? null
-        : String(row.registered_by_session_id),
-  };
 }
 
 // Attach the scheduled_agent_runs and background_sessions methods to
@@ -769,3 +793,5 @@ function planRegistrationFromRow(row: Record<string, unknown>): PlanRegistration
 // hoisting would run it before this class declaration completes.
 import { scheduledRunStoreMethods } from "./scheduled-run-store.js";
 Object.assign(SqliteStore.prototype, scheduledRunStoreMethods);
+import { planRegistrationStoreMethods } from "./plan-registration-store.js";
+Object.assign(SqliteStore.prototype, planRegistrationStoreMethods);

@@ -28,7 +28,7 @@ describe("createAgentSession session-id wiring", () => {
     // The tmux session still gets created — that's what we assert against.
     const session = await service.createAgentSession(
       { workspaceId: created.workspaceId, runtimeId: "claude-code" },
-      { command: "true", args: [], displayName: "Test", sessionIdArg: "--session-id" },
+      { command: "sleep", args: ["10"], displayName: "Test", sessionIdArg: "--session-id" },
     );
     try {
       expect(session.runtimeSessionId).toMatch(UUID_V4);
@@ -37,7 +37,7 @@ describe("createAgentSession session-id wiring", () => {
     } finally {
       service.stopAgentSession({ sessionId: session.id });
     }
-  });
+  }, 15_000);
 
   it("uses --resume + the provided UUID when input.resumeRuntimeSessionId is set", async () => {
     const fixture = createGitFixture();
@@ -51,8 +51,8 @@ describe("createAgentSession session-id wiring", () => {
     const session = await service.createAgentSession(
       { workspaceId: created.workspaceId, runtimeId: "claude-code", resumeRuntimeSessionId: existing },
       {
-        command: "true",
-        args: [],
+        command: "sleep",
+        args: ["10"],
         displayName: "Test",
         sessionIdArg: "--session-id",
         resumeArg: "--resume",
@@ -66,7 +66,7 @@ describe("createAgentSession session-id wiring", () => {
     } finally {
       service.stopAgentSession({ sessionId: session.id });
     }
-  });
+  }, 15_000);
 
   it("leaves runtimeSessionId null for runtimes without sessionIdArg (e.g. plain shell)", async () => {
     const fixture = createGitFixture();
@@ -78,14 +78,14 @@ describe("createAgentSession session-id wiring", () => {
 
     const session = await service.createAgentSession(
       { workspaceId: created.workspaceId, runtimeId: "shell" },
-      { command: "true", args: [], displayName: "Shell" },
+      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
     );
     try {
       expect(session.runtimeSessionId ?? null).toBeNull();
     } finally {
       service.stopAgentSession({ sessionId: session.id });
     }
-  });
+  }, 15_000);
 });
 
 function makeService(store: SqliteStore) {

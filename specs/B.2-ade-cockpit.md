@@ -105,16 +105,43 @@
 
 ## Scratchpad
 
-The cockpit's scratchpad view renders the per-workspace `scratchpad.md` (see B.7 for the storage format) as a stack of discrete, focusable blocks.
+The cockpit's scratchpad opens as a **right-anchored overlay drawer** rendered at the root `Shell` level so it is reachable from every route (`/`, `/settings`, `/history`, etc.) without replacing the underlying view. The drawer is always mounted; `hidden` toggles visibility, preserving local state across close/reopen and across route changes.
 
-[ ] 1. Blocks render as sanitized markdown when not focused (headings, lists, bold/italic, inline + fenced code, links). Raw HTML is sanitized (scripts and inline event handlers removed); `<img>` tags are stripped in v1 since block content can originate from external MCP agents.
-[ ] 2. Clicking a block enters inline edit mode with a `<textarea>` containing the raw markdown.
+[ ] 1. Blocks render as sanitized markdown when not focused (headings, lists, bold/italic, inline + fenced code, links). Raw HTML is sanitized (scripts and inline event handlers removed); `<img>` tags are stripped in v1 since block content can originate from external MCP agents. Bare angle-bracket text like `<user_id>` is preserved as visible text (not treated as raw HTML); markdown autolinks `<https://example.com>` and `<foo@bar.com>` continue to render as anchors.
+[ ] 2. Clicking a block enters inline edit mode with a `<textarea>` containing the raw markdown. The textarea uses `wrap="off"` so line numbers and visual lines stay 1:1; long lines force horizontal scroll inside the drawer.
 [ ] 3. Saving triggers: blur, Cmd/Ctrl-Enter (also exits edit mode), and ~1s debounce after the last keystroke. Esc cancels unsaved changes without a network call.
 [ ] 4. Editing a block to empty/whitespace deletes the block (empty blocks are never persisted).
 [ ] 5. A pinned composer at the bottom of the list is always visible. Cmd/Ctrl-Enter or blur-with-non-empty-content creates a new block at the end of the file. The list autoscrolls so the composer stays in view.
 [ ] 6. Each block has a hover-visible delete affordance; deletion is optimistic and reversible via an undo toast.
 [ ] 7. The version history sidebar continues to show whole-file snapshots, including the `migrate-to-blocks` entry that runs on the first read after upgrade.
 [ ] 8. No drag-drop reorder, no typed blocks (code/todo/heading), no per-block diff in v1 — out of scope.
+
+### Scratchpad shortcuts
+
+[ ] 9. `Shift+Cmd+S` (Mac) / `Shift+Ctrl+S` (other) toggles the drawer open/close from any route. The shortcut is registered at the `Shell` level. Closing the drawer returns the user to the underlying view without a route change. The left-nav scratchpad link shows the binding as a `<kbd>` hint using plain text labels (no Mac-specific glyph chars).
+[ ] 10. `Cmd+S` / `Ctrl+S` while the drawer is open flushes the debounced auto-save immediately and shows an animated check-mark pulse on success (or a red pulse on failure). The silent debounced auto-save remains the fallback.
+[ ] 11. `/` (when no input/textarea/contenteditable is focused) opens the floating fuzzy searchbar inside the drawer. `Esc` precedence inside the drawer: clear/close searchbar → cancel block edit → close diff modal → close drawer.
+
+### Auto-scroll on open
+
+[ ] 12. The drawer auto-scrolls to the bottom (latest block) on the first open per session. On subsequent reopens, scroll position is preserved unless the user was at the bottom when they closed.
+
+### Line numbers
+
+[ ] 13. Each block has a per-block line-number gutter restarting at 1, counting `\n` boundaries within the block's text. The gutter renders in both read-only and edit modes; the textarea's scroll position is forwarded to the gutter.
+
+### Fuzzy search
+
+[ ] 14. The floating searchbar performs fuzzy matching over block text only (using `fuse.js`). Matching blocks render with `<mark>` highlights around match index ranges; non-matching blocks collapse out. Input is debounced ~80ms; the `Fuse` instance is memoized on the blocks array identity.
+
+### Citadel Actions
+
+[ ] 15. A "Citadel Actions" section in Settings exposes configurable action presets (name, description, icon, prompt template) stored at `<dataDir>/citadel-actions.json` and serialized through a daemon-side mutex with `updatedAt` stale-write protection. A built-in `refine-scratchpad` action seeds on first read; built-ins can be edited or reset to default but not deleted.
+[ ] 16. A "Refine" button in the drawer header opens a modal pre-filled with the `refine-scratchpad` action's prompt template, the target repo (cockpit-active by default with override dropdown), and a "Save as default" option. Confirm launches an agent workspace named `refine-scratchpad-<timestamp>`. If the prompt does not mention `in-progress` (case-insensitive), the daemon returns a soft warning that the modal renders inline.
+
+### Deep link
+
+[ ] 17. The `/scratchpad` URL is a one-shot deep link: on visit, opens the drawer and normalizes the URL to `<last-route>?scratchpad=1` (or `/?scratchpad=1` if no prior route). The `scratchpad` query param drives drawer state at cold start; the in-memory drawer store is the source of truth thereafter.
 
 ## Agents nav
 
@@ -125,8 +152,8 @@ The cockpit exposes a dedicated "Agents" entry in the left navigation, immediate
 [ ] 3. Predefined agents are non-deletable but editable; each exposes a "Reset to citadel defaults" affordance that overwrites only that definition with its seeded value. Reset uses citadel-authored defaults, NOT the user's current `defaultRuntime` setting.
 [ ] 4. Custom agents support full CRUD. Save/Delete invalidate `["agents"]` and `["state"]` query keys.
 [ ] 5. Errors render as a banner above the form (`predefined_agent_cannot_be_deleted`, `name_collides`, `agent_storage_unavailable`).
-[ ] 6. The model selector shows a `probeError` banner when the runtime's model probe fails, and renders the fallback list so save still works. A small "↻ Refresh" affordance forces a re-probe (`?refresh=1`).
+[ ] 6. The model selector shows a `probeError` banner when the runtime's model probe fails, and renders the fallback list so save still works. A small "Refresh" affordance forces a re-probe (`?refresh=1`).
 
 ---
 
-keywords: ade, cockpit, readiness, next action, workspace detail, operator, attention state, agents, agent definitions, scratchpad, blocks
+keywords: ade, cockpit, readiness, next action, workspace detail, operator, attention state, agents, agent definitions, scratchpad, blocks, drawer, fuzzy search, refine, citadel actions, shortcuts
