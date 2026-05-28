@@ -11,6 +11,10 @@ const daemonPort = process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012";
 const webPort = process.env.CITADEL_PLAYWRIGHT_WEB_PORT || "15174";
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
+const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}`).replace(
+  /[^A-Za-z0-9_.-]/g,
+  "-",
+);
 
 export default defineConfig({
   testDir: "e2e",
@@ -33,7 +37,17 @@ export default defineConfig({
       // `reuseExistingServer: false` so the suite always launches a daemon
       // it owns (with the sandbox CITADEL_DATA_DIR below). Reusing whatever
       // happens to listen on `daemonPort` was how prod data got clobbered.
-      command: `CITADEL_DATA_DIR=/tmp/citadel-playwright-data CITADEL_PORT=${daemonPort} pnpm --filter @citadel/daemon dev`,
+      command: [
+        "CITADEL_DATA_DIR=/tmp/citadel-playwright-data",
+        `CITADEL_PORT=${daemonPort}`,
+        `CITADEL_TMUX_SOCKET=${tmuxSocket}`,
+        "CITADEL_DISABLE_BOOT_RESTORE=1",
+        "CITADEL_DISABLE_REAPER=1",
+        "CITADEL_DISABLE_STATUS_MONITOR=1",
+        "CITADEL_DISABLE_AUTO_RESUME=1",
+        "CITADEL_DISABLE_TERMINAL_REAPER=1",
+        "pnpm --filter @citadel/daemon dev",
+      ].join(" "),
       url: `${daemonBase}/api/health`,
       reuseExistingServer: false,
       timeout: 30_000,
