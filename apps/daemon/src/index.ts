@@ -142,7 +142,7 @@ server.listen(config.port, config.bindHost, () => {
   // walk the candidate list. Skipped when CITADEL_DISABLE_BOOT_RESTORE=1
   // for operators who want a quiet boot.
   if (process.env.CITADEL_DISABLE_BOOT_RESTORE !== "1") {
-    runBootRestore({ store, operations, config, emit: daemon.emit })
+    runBootRestore({ store, operations, config, emit: daemon.emit, diagnostics: daemon.diagnostics })
       .catch((error) => {
         console.warn(`Boot-restore failed: ${error instanceof Error ? error.message : String(error)}`);
       })
@@ -154,10 +154,14 @@ server.listen(config.port, config.bindHost, () => {
         // boot-restore could kill a tmux session right as boot-restore is
         // about to claim its name.
         try {
-          const summary = await reapOrphans({ store, ttyd: daemon.ttyd });
+          const summary = await reapOrphans({ store, ttyd: daemon.ttyd, diagnostics: daemon.diagnostics });
           if (summary.tmuxReaped.length > 0 || summary.ttydReleased.length > 0) {
             console.log(`[orphan-reaper] tmux=${summary.tmuxReaped.length} ttyd=${summary.ttydReleased.length}`);
           }
+          daemon.diagnostics.log("reaper", "orphan.done", {
+            tmuxReaped: summary.tmuxReaped,
+            ttydReleased: summary.ttydReleased,
+          });
         } catch (error) {
           console.warn(`Orphan reaper failed: ${error instanceof Error ? error.message : String(error)}`);
         }

@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   ArrowLeft,
+  Bug,
   Cable,
   CheckCircle2,
   ChevronRight,
@@ -20,12 +21,22 @@ import { api, queryClient } from "../api.js";
 import { useStateQuery } from "../app-state.js";
 import { mcpUrlFromOrigin } from "../lib/mcp-url.js";
 import { CitadelActionsPanel } from "../settings-citadel-actions.js";
+import { DebugPanel } from "../settings-debug.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { RestoreModal, RestorePanelBody } from "../settings-restore.js";
 import { AgentsPanel } from "../settings-runtimes.js";
 
-type SectionId = "overview" | "providers" | "agents" | "repositories" | "restore" | "actions" | "mcp" | "notes";
+type SectionId =
+  | "overview"
+  | "providers"
+  | "agents"
+  | "repositories"
+  | "restore"
+  | "actions"
+  | "mcp"
+  | "notes"
+  | "debug";
 
 type Section = {
   id: SectionId;
@@ -72,6 +83,12 @@ const SECTIONS: Section[] = [
     label: "Notes",
     description: "Where the shared markdown scratchpad lives on disk.",
     icon: FileText,
+  },
+  {
+    id: "debug",
+    label: "Debug",
+    description: "Download a diagnostics bundle when something is going wrong.",
+    icon: Bug,
   },
 ];
 
@@ -218,6 +235,16 @@ export function SettingsView() {
                 help="Defaults to <dataDir>/scratchpad.md. Override with an absolute path (e.g. a cloud-sync folder under ~/Documents) and Citadel reads/writes there instead. `~/` is expanded to your home directory. History (undo) always stays under <dataDir>."
               />
               <NotesSection />
+            </>
+          ) : null}
+          {section === "debug" ? (
+            <>
+              <PageHead
+                title="Debug"
+                sub="Download a diagnostics bundle when sessions misbehave."
+                help="Citadel keeps a structured event log (.citadel/diagnostics.jsonl) covering tmux/ttyd lifecycle, status-monitor decisions, and boot-restore. The bundle includes that log plus a state snapshot and a 30-minute slice of the citadel.service systemd journal."
+              />
+              <DebugPanel />
             </>
           ) : null}
         </main>

@@ -15,7 +15,8 @@ import {
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { mcpStatus, mcpToolDefinitions } from "@citadel/mcp";
-import { OperationService } from "@citadel/operations";
+import { OperationService, createDiagnosticsLogger, type DiagnosticsLogger } from "@citadel/operations";
+import { buildDiagnosticsSnapshot, streamDiagnosticsBundle } from "./diagnostics-bundle.js";
 import {
   type CollectGitHubVersionControlSummaryDeps,
   collectGitHubCiRunLog,
@@ -83,6 +84,7 @@ export type DaemonApp = {
   server: http.Server;
   emit: (type: string, payload: unknown) => void;
   ttyd: ReturnType<typeof createTtydManager>;
+  diagnostics: DiagnosticsLogger;
 };
 
 type ProviderCollectors = {
@@ -122,7 +124,20 @@ export function createDaemonApp(input: {
   const server = http.createServer(app);
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
-  const ttyd = createTtydManager(resolveTtydPortRange(config.port));
+  // Always-on structured diagnostics. Writes JSONL to <dataDir>/diagnostics.jsonl
+  // (rotated at 50 MB) and keeps the last 1000 events in memory for the
+  // Settings → Debug panel + the /api/diagnostics/bundle.tar.gz download.
+  // Sprinkled through every session-killing path so that when a user reports
+  // "all my sessions died", we have the lifecycle trail to share.
+  const diagnostics = createDiagnosticsLogger({ dataDir: config.dataDir });
+  diagnostics.log("daemon", "createDaemonApp", {
+    port: config.port,
+    dataDir: config.dataDir,
+    worktree: process.env.CITADEL_WORKTREE === "1",
+    pid: process.pid,
+    nodeVersion: process.versions.node,
+  });
+  const ttyd = createTtydManager({ ...resolveTtydPortRange(config.port), diagnostics });
   // Release the ttyd on every stopAgentSession path; guarded for test stubs.
   if (typeof operations.setTerminalHooks === "function") {
     operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId) });
@@ -255,6 +270,31 @@ export function createDaemonApp(input: {
     res.json({ config, configPath });
   });
 
+  // Diagnostics surface. /snapshot returns the in-memory ring + a small
+  // structured snapshot of "what the daemon thinks the world looks like"
+  // (sessions/workspaces/ttyd inventory/live tmux session names). /bundle
+  // streams a tar.gz that includes the JSONL file(s) on disk plus that same
+  // snapshot — what the user emails over when reporting "all my sessions
+  // died".
+  app.get("/api/diagnostics/snapshot", (_req, res) => {
+    res.json(buildDiagnosticsSnapshot({ store, ttyd, diagnostics, config }));
+  });
+  app.get("/api/diagnostics/bundle.tar.gz", async (_req, res) => {
+    try {
+      await streamDiagnosticsBundle(res, { store, ttyd, diagnostics, config });
+    } catch (error) {
+      if (!res.headersSent) {
+        res.status(500).json({ error: error instanceof Error ? error.message : "diagnostics_bundle_failed" });
+      } else {
+        try {
+          res.end();
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  });
+
   app.put("/api/config", (req, res) => {
     const nextConfig = mergeConfigPatch(config, req.body);
     const saved = saveConfig(nextConfig, configPath);
@@ -334,9 +374,7 @@ export function createDaemonApp(input: {
     const seed = raw || "~/";
     const trailingSlash = seed.endsWith("/");
     const expanded = expandTilde(seed);
-    const baseDir = trailingSlash
-      ? path.resolve(expanded || os.homedir())
-      : path.resolve(path.dirname(expanded));
+    const baseDir = trailingSlash ? path.resolve(expanded || os.homedir()) : path.resolve(path.dirname(expanded));
     const filter = trailingSlash ? "" : path.basename(expanded);
     let entries: Array<{ name: string; path: string; isGit: boolean }> = [];
     try {
@@ -823,7 +861,7 @@ export function createDaemonApp(input: {
   }
 
   // Status monitor / auto-recovery / auto-resume / terminal reaper: see their own modules for context.
-  const statusMonitor = startDaemonStatusMonitor(store, emit, config, recentUserAction);
+  const statusMonitor = startDaemonStatusMonitor(store, emit, config, recentUserAction, diagnostics);
   if (statusMonitor) server.on("close", () => statusMonitor.stop());
   const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({
     store,
@@ -845,7 +883,7 @@ export function createDaemonApp(input: {
   const terminalReaper = startTerminalReaper();
   server.on("close", () => terminalReaper.stop());
 
-  return { app, server, emit, ttyd };
+  return { app, server, emit, ttyd, diagnostics };
 
   function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderValue(providerCache, key, load, ttlMs);

@@ -24,6 +24,14 @@ export type TtydEntry = {
   tabId: string | null;
 };
 
+/** Structural type for the optional diagnostics logger. Defined here so
+ * @citadel/terminal doesn't have to import @citadel/operations (would create
+ * a circular dependency). The daemon hands in a real DiagnosticsLogger
+ * instance whose shape is a strict superset. */
+export type TtydDiagnosticsSink = {
+  log(category: string, event: string, data?: Record<string, unknown>): void;
+};
+
 export type TtydManagerConfig = {
   /** Absolute path to the ttyd binary. Defaults to TTYD_BIN env or `/home/linuxbrew/.linuxbrew/bin/ttyd`. */
   ttydBin?: string;
@@ -39,6 +47,10 @@ export type TtydManagerConfig = {
   readyTimeoutMs?: number;
   /** Public host used in the proxied URL emitted to clients. */
   publicPath?: (key: string) => string;
+  /** Optional structured-event sink. When wired, the manager records every
+   * spawn/exit/adopt/release/reap so the diagnostics bundle can reconstruct
+   * "where did my ttyd go". Defaults to a no-op. */
+  diagnostics?: TtydDiagnosticsSink;
 };
 
 const DEFAULTS = {
@@ -157,7 +169,8 @@ export type TtydManager = {
     resolveTabId?: (key: string) => string | null,
   ): { adopted: number; reapedDuplicates: number; reapedUnknown: number };
   shutdown(): void;
-  config: Required<Omit<TtydManagerConfig, "publicPath">> & Pick<TtydManagerConfig, "publicPath">;
+  config: Required<Omit<TtydManagerConfig, "publicPath" | "diagnostics">> &
+    Pick<TtydManagerConfig, "publicPath" | "diagnostics">;
 };
 
 export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
@@ -170,6 +183,7 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     readyTimeoutMs: input.readyTimeoutMs ?? DEFAULTS.readyTimeoutMs,
     publicPath: input.publicPath,
   };
+  const diag: TtydDiagnosticsSink = input.diagnostics ?? { log() {} };
   const entries = new Map<string, ManagedEntry>();
   const reservedPorts = new Set<number>();
   // tabId → key map so we can find the current ttyd for a tab without
@@ -298,10 +312,19 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
         }
         return toEntry(existing);
       }
+      diag.log("ttyd", "respawn", {
+        key: args.key,
+        tabId,
+        port: existing.port,
+        reason: tmuxMismatch ? "tmux-mismatch" : "force",
+        oldTmuxSession: existing.tmuxSession,
+        newTmuxSession: args.tmuxSession,
+      });
       signalEntry(existing, "SIGTERM");
       deleteEntry(args.key);
     }
     if (!tmuxSessionAlive(args.tmuxSession)) {
+      diag.log("ttyd", "ensure.tmux-missing", { key: args.key, tabId, tmuxSession: args.tmuxSession });
       throw new TtydUnavailableError("tmux_session_missing", `tmux session ${args.tmuxSession} not found`);
     }
     if (!binaryExists(config.ttydBin)) {
@@ -358,10 +381,19 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
       child,
     };
     setEntry(record);
-    child.on("exit", () => {
+    diag.log("ttyd", "spawn", {
+      key: args.key,
+      tabId,
+      port,
+      pid: record.pid,
+      tmuxSession: args.tmuxSession,
+      theme: desiredTheme,
+    });
+    child.on("exit", (code, signal) => {
       reservedPorts.delete(port);
       const current = entries.get(args.key);
       if (current && current.pid === record.pid) deleteEntry(args.key);
+      diag.log("ttyd", "exit", { key: args.key, tabId, port, pid: record.pid, code, signal });
     });
     const ready = await waitForPort(port, config.readyTimeoutMs);
     if (!ready) {
@@ -391,6 +423,7 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
   function release(key: string) {
     const entry = entries.get(key);
     if (!entry) return;
+    diag.log("ttyd", "release", { key, tabId: entry.tabId, port: entry.port, pid: entry.pid });
     signalEntry(entry, "SIGTERM");
     deleteEntry(key);
   }
@@ -509,6 +542,12 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
       setEntry(managed);
       adopted += 1;
     }
+    diag.log("ttyd", "adopt.summary", {
+      adopted,
+      reapedDuplicates,
+      reapedUnknown,
+      scanned: records.length,
+    });
     return { adopted, reapedDuplicates, reapedUnknown };
   }
 

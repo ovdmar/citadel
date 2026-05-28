@@ -77,6 +77,10 @@ export interface MonitorTickDeps {
   // without this double-check, a single failed `tmux list-panes` would mass-
   // flip every session to `unknown` (the 05:49 incident).
   hasTmuxSession?: (tmuxSessionName: string) => boolean;
+  // Optional structured-event sink for the diagnostics bundle. Same shape
+  // as @citadel/operations DiagnosticsLogger; declared structurally here to
+  // keep status-monitor free of an external dep.
+  diagnostics?: { log(category: string, event: string, data?: Record<string, unknown>): void };
   // Map runtimeId → binary name expected as the pane's foreground when the
   // agent is running. Null when the runtime is unknown.
   runtimeBinaryFor: (runtimeId: string) => string | null;
@@ -181,14 +185,38 @@ export async function runStatusMonitorTick(
     // existing regression-pin test pins exactly that progression.
     let tmuxAlive: boolean;
     if (pane !== null) {
+      if (monitorState.consecutiveMissingTicks > 0) {
+        deps.diagnostics?.log("monitor", "missing-counter.reset", {
+          sessionId: session.id,
+          tmuxSession: session.tmuxSessionName,
+          via: "pane",
+          previousCount: monitorState.consecutiveMissingTicks,
+        });
+      }
       tmuxAlive = true;
       monitorState.consecutiveMissingTicks = 0;
     } else if (deps.hasTmuxSession?.(session.tmuxSessionName) === true) {
+      if (monitorState.consecutiveMissingTicks > 0) {
+        deps.diagnostics?.log("monitor", "missing-counter.reset", {
+          sessionId: session.id,
+          tmuxSession: session.tmuxSessionName,
+          via: "has-session",
+          previousCount: monitorState.consecutiveMissingTicks,
+        });
+      }
       tmuxAlive = true;
       monitorState.consecutiveMissingTicks = 0;
     } else {
       monitorState.consecutiveMissingTicks += 1;
       tmuxAlive = monitorState.consecutiveMissingTicks < TMUX_MISSING_DEBOUNCE_TICKS;
+      deps.diagnostics?.log("monitor", tmuxAlive ? "missing-counter.bump" : "tmux-missing.fired", {
+        sessionId: session.id,
+        tmuxSession: session.tmuxSessionName,
+        count: monitorState.consecutiveMissingTicks,
+        threshold: TMUX_MISSING_DEBOUNCE_TICKS,
+        source: opts.source,
+        currentStatus: session.status,
+      });
     }
     const runtimeBinary = deps.runtimeBinaryFor(session.runtimeId);
 
@@ -215,6 +243,12 @@ export async function runStatusMonitorTick(
       // the session row instead of marking it unknown. Existing reaper
       // semantic preserved.
       if (!workspaceIds.has(session.workspaceId)) {
+        deps.diagnostics?.log("monitor", "session.deleted", {
+          sessionId: session.id,
+          workspaceId: session.workspaceId,
+          reason: "workspace-gone+tmux-missing",
+          tmuxSession: session.tmuxSessionName,
+        });
         deps.deleteSession(session.id);
         deletedSessions += 1;
         deps.adapterStates.delete(session.id);

@@ -185,6 +185,10 @@ export type BootRestoreDeps = {
   // citadel-tmux.service's socket readiness by a few hundred ms). Tests pass
   // 0 to short-circuit since their stubs are deterministic.
   tmuxReadinessTimeoutMs?: number;
+  // Optional diagnostics sink — same structural shape as the global
+  // DiagnosticsLogger. boot-restore emits one event per flip decision so the
+  // bundle records exactly which rows were reclassified at boot.
+  diagnostics?: { log(category: string, event: string, data?: Record<string, unknown>): void };
 };
 
 export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestoreSummary> {
@@ -215,6 +219,11 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
   if (flippedStale > 0) {
     console.log(`[boot-restore] reconciled ${flippedStale} stale 'live' rows (fresh-boot)`);
   }
+  deps.diagnostics?.log("restore", "reconcile.done", {
+    tmuxReachable: liveTmuxNames !== null,
+    liveTmuxCount: liveTmuxNames?.size ?? null,
+    flippedStaleRows: flippedStale,
+  });
   const allCandidates = collectRestoreCandidates(deps.store);
   const cutoffMs = Date.now() - RECENT_WINDOW_MS;
   const recent: RestoreCandidate[] = [];
@@ -243,6 +252,12 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
   };
   currentSummary = summary;
 
+  deps.diagnostics?.log("restore", "candidates.collected", {
+    total: allCandidates.length,
+    recent: recent.length,
+    skippedOlder,
+    recentWindowMs: RECENT_WINDOW_MS,
+  });
   if (recent.length === 0) {
     summary.finishedAt = new Date().toISOString();
     return summary;

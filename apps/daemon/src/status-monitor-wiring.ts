@@ -33,6 +33,7 @@ export function buildStatusMonitorDeps(
   emit: (event: string, payload: unknown) => void,
   config: CitadelConfig,
   recentUserAction: Map<string, number>,
+  diagnostics?: MonitorTickDeps["diagnostics"],
 ): MonitorTickDeps {
   const adapterStates = new Map<string, SessionAdapterState>();
   const monitorStates = new Map<string, MonitorSessionState>();
@@ -94,6 +95,7 @@ export function buildStatusMonitorDeps(
         return false;
       }
     },
+    ...(diagnostics ? { diagnostics } : {}),
     runtimeBinaryFor: (runtimeId) => runtimeBinaryByRuntimeId.get(runtimeId) ?? null,
     recentUserAction,
     // Single batched tmux query per tick — `#{session_activity}` is epoch sec.
@@ -186,8 +188,9 @@ export function startDaemonStatusMonitor(
   emit: (event: string, payload: unknown) => void,
   config: CitadelConfig,
   recentUserAction: Map<string, number>,
+  diagnostics?: MonitorTickDeps["diagnostics"],
 ): StatusMonitorHandle | null {
   if (process.env.CITADEL_DISABLE_STATUS_MONITOR === "1") return null;
-  const deps = buildStatusMonitorDeps(store, emit, config, recentUserAction);
+  const deps = buildStatusMonitorDeps(store, emit, config, recentUserAction, diagnostics);
   return startStatusMonitor(deps, 2000);
 }

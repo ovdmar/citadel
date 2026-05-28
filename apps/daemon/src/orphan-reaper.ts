@@ -47,7 +47,11 @@ async function hasSessionWithRetries(
   return false;
 }
 
-export async function reapOrphans(deps: { store: SqliteStore; ttyd: TtydManager }): Promise<OrphanReaperSummary> {
+export async function reapOrphans(deps: {
+  store: SqliteStore;
+  ttyd: TtydManager;
+  diagnostics?: { log(category: string, event: string, data?: Record<string, unknown>): void };
+}): Promise<OrphanReaperSummary> {
   const summary: OrphanReaperSummary = { tmuxReaped: [], ttydReleased: [] };
 
   // Every tmux session referenced by any DB row, regardless of status —
@@ -68,10 +72,16 @@ export async function reapOrphans(deps: { store: SqliteStore; ttyd: TtydManager 
       try {
         killTmuxSession(name);
         summary.tmuxReaped.push(name);
-      } catch {
-        // best-effort; skip and continue
+        deps.diagnostics?.log("reaper", "tmux.killed", { tmuxSession: name, reason: "no-db-row" });
+      } catch (err) {
+        deps.diagnostics?.log("reaper", "tmux.kill-failed", {
+          tmuxSession: name,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
+  } else {
+    deps.diagnostics?.log("reaper", "tmux.unreachable", { reason: "list-sessions returned null" });
   }
 
   // ttyd side: release manager entries pointing at vanished tmux sessions.
@@ -82,6 +92,12 @@ export async function reapOrphans(deps: { store: SqliteStore; ttyd: TtydManager 
   for (const entry of deps.ttyd.list()) {
     const alive = await hasSessionWithRetries(tmuxSessionExists, entry.tmuxSession, { attempts: 3, delayMs: 250 });
     if (!alive) {
+      deps.diagnostics?.log("reaper", "ttyd.released", {
+        key: entry.key,
+        tmuxSession: entry.tmuxSession,
+        port: entry.port,
+        reason: "tmux-session-gone (3-strike)",
+      });
       deps.ttyd.release(entry.key);
       summary.ttydReleased.push(entry.key);
     }

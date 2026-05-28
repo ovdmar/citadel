@@ -453,3 +453,110 @@
     display: none;
   }
 }
+
+/* ────────────────────────────── Settings → Debug ──────────────────────────
+ * Tiny, function-over-form styling. The panel reuses `.restore-panel` for
+ * outer chrome (lead, empty/error states) and adds these for the unique
+ * bits: a metadata grid + an event tail. Anything more elaborate belongs
+ * in the diagnostics tooling itself, not the UI. */
+.debug-panel__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 16px;
+}
+.debug-panel__primary,
+.debug-panel__secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--c-border-1);
+  background: var(--c-elev);
+  color: var(--c-fg-1);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.debug-panel__primary {
+  background: var(--c-accent, #3a6dd2);
+  border-color: transparent;
+  color: #fff;
+}
+.debug-panel__primary:hover {
+  filter: brightness(1.05);
+}
+.debug-panel__secondary:hover {
+  background: var(--c-elev-2, var(--c-elev));
+}
+.debug-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px 16px;
+  margin: 0 0 18px;
+}
+.debug-panel__grid div {
+  display: flex;
+  flex-direction: column;
+}
+.debug-panel__grid dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--c-fg-2);
+}
+.debug-panel__grid dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--c-fg-1);
+}
+.debug-panel__heading {
+  margin: 16px 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-fg-1);
+}
+.debug-panel__events {
+  border: 1px solid var(--c-border-1);
+  border-radius: 6px;
+  overflow: auto;
+  max-height: 360px;
+}
+.debug-panel__events table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.debug-panel__events th,
+.debug-panel__events td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--c-border-1);
+  vertical-align: top;
+}
+.debug-panel__events th {
+  background: var(--c-elev);
+  position: sticky;
+  top: 0;
+  font-weight: 600;
+}
+.debug-panel__ts {
+  font-family: ui-monospace, monospace;
+  white-space: nowrap;
+  color: var(--c-fg-2);
+}
+.debug-panel__cat {
+  color: var(--c-fg-2);
+  white-space: nowrap;
+}
+.debug-panel__name {
+  font-weight: 500;
+  white-space: nowrap;
+}
+.debug-panel__data {
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  word-break: break-all;
+  color: var(--c-fg-2);
+}
