@@ -16,6 +16,7 @@ const TERMINAL_PROXY_PREFIX = "/terminals";
 
 type ResolvedSession = {
   sessionId: string;
+  tabId: string | null;
   tmuxSession: string;
   worktreePath: string | null;
   runtimeId: string;
@@ -158,6 +159,7 @@ export function registerTerminalRoutes(input: {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     return {
       sessionId: session.id,
+      tabId: session.tabId ?? null,
       tmuxSession: session.tmuxSessionName,
       worktreePath: workspace?.path ?? null,
       runtimeId: session.runtimeId,
@@ -176,19 +178,37 @@ export function registerTerminalRoutes(input: {
   // Self-heal: if the ttyd entry for a known session is missing (daemon restart,
   // orphan kill, etc.) re-spawn it on demand so a stale iframe URL recovers
   // instead of dead-ending on terminal_not_found.
-  const reviveProxyTarget = async (urlPath: string) => {
+  //
+  // Single-flighted per sessionId: the cockpit iframe boots both a HEAD
+  // /terminals/<sid>/ HTTP request (for ttyd's HTML page) and a WebSocket
+  // upgrade on /terminals/<sid>/ws within a few milliseconds. Without the
+  // gate, BOTH branches enter the empty-manager fast path and each ends up
+  // calling ttyd.ensure() → two ttyds attach to the same tmux session, one
+  // ends up in the manager map, the other becomes a zombie. Re-using the
+  // same in-flight promise here is what pins the invariant of one ttyd per
+  // tab even before the ttyd-side per-tab lock has anything to deduplicate.
+  const reviveInflight = new Map<string, Promise<{ entry: TtydEntry; target: string; sessionId: string } | null>>();
+  const reviveProxyTarget = (urlPath: string) => {
     const match = /^\/terminals\/([^/]+)(\/.*)?$/.exec(urlPath);
-    if (!match) return null;
+    if (!match) return Promise.resolve(null);
     const sessionId = decodeURIComponent(match[1] ?? "");
-    const session = resolveSession(sessionId);
-    if (!session) return null;
-    try {
-      const entry = await ensureWithHeal(session, themePreferences.get(sessionId));
-      input.emit?.("terminal.ready", { sessionId: session.sessionId, port: entry.port });
-      return { entry, target: `http://127.0.0.1:${entry.port}`, sessionId };
-    } catch {
-      return null;
-    }
+    const existing = reviveInflight.get(sessionId);
+    if (existing) return existing;
+    const flight = (async () => {
+      const session = resolveSession(sessionId);
+      if (!session) return null;
+      try {
+        const entry = await ensureWithHeal(session, themePreferences.get(sessionId));
+        input.emit?.("terminal.ready", { sessionId: session.sessionId, port: entry.port });
+        return { entry, target: `http://127.0.0.1:${entry.port}`, sessionId };
+      } catch {
+        return null;
+      }
+    })().finally(() => {
+      reviveInflight.delete(sessionId);
+    });
+    reviveInflight.set(sessionId, flight);
+    return flight;
   };
 
   // Try ensure(); if tmux disappeared (system reboot, manual kill), call the
@@ -198,6 +218,7 @@ export function registerTerminalRoutes(input: {
     const enableTmuxMouse = MOUSE_GRABBING_RUNTIMES.has(session.runtimeId);
     const base = {
       key: session.sessionId,
+      tabId: session.tabId,
       tmuxSession: session.tmuxSession,
       worktreePath: session.worktreePath,
       enableTmuxMouse,
@@ -218,6 +239,7 @@ export function registerTerminalRoutes(input: {
       if (!respawn) throw error;
       const healArgs = {
         key: session.sessionId,
+        tabId: session.tabId,
         tmuxSession: respawn.tmuxSessionName,
         worktreePath: session.worktreePath,
         enableTmuxMouse,

@@ -14,9 +14,7 @@ const store = new SqliteStore(dbPath);
 store.migrate();
 
 const sentinelWorkspaceId = "33333333-3333-4333-8333-333333333333";
-const existing = store.query<{ c: number }>(
-  `SELECT COUNT(*) AS c FROM workspaces WHERE id = '${sentinelWorkspaceId}'`,
-);
+const existing = store.query<{ c: number }>(`SELECT COUNT(*) AS c FROM workspaces WHERE id = '${sentinelWorkspaceId}'`);
 const alreadySeeded = (existing[0]?.c ?? 0) > 0;
 
 if (alreadySeeded) {

@@ -315,7 +315,11 @@ exit 1
     try {
       const until = setGhCooldown("GraphQL: API rate limit already exceeded", 60_000);
       const first = await getJson<{
-        quota: { status: string; cooldownUntil: string | null; resources: Array<{ name: string; percentUsed: number }> };
+        quota: {
+          status: string;
+          cooldownUntil: string | null;
+          resources: Array<{ name: string; percentUsed: number }>;
+        };
       }>(`${baseUrl}/api/integrations/github/quota`);
       expect(first.quota).toMatchObject({
         status: "degraded",

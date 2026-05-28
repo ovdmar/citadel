@@ -446,6 +446,12 @@ export class OperationService {
     const ownedSessions = this.store.listSessions(workspace.id);
     for (const session of ownedSessions) {
       if (session.tmuxSessionName && !input.archiveOnly) killTmuxSession(session.tmuxSessionName);
+      // Always release the ttyd alongside — applies to both archive and full
+      // remove. Otherwise the ttyd process keeps running detached, holding a
+      // port + a tmux client slot, and a future iframe attempt for the
+      // (now-archived) session can't re-attach cleanly. The hook is a no-op
+      // when no manager is wired (tests).
+      this.terminalHooks.onSessionStopped?.(session.id);
     }
     if (ownedSessions.length && !input.archiveOnly) {
       this.logOp(operation.id, "info", `Killed ${ownedSessions.length} tmux session(s) attached to workspace`);
