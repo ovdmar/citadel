@@ -17,7 +17,7 @@
 import type { CitadelConfig } from "@citadel/config";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
-import { listAllTmuxSessions } from "@citadel/terminal";
+import { listAllTmuxSessions, tmuxSessionExists } from "@citadel/terminal";
 import { type RestoreCandidate, collectRestoreCandidates } from "./restore-routes.js";
 
 // Statuses that collectRestoreCandidates treats as "live" — sessions in any
@@ -58,12 +58,39 @@ async function awaitTmuxSessions(
   return null;
 }
 
+// Sleep helper for the retry loops — kept here so the rest of the file
+// doesn't need a top-level import for one usage.
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 3-strike has-session probe. A single negative result from tmux is never
+// authoritative (see feedback_reaper_retries.md); we want a tight, bounded
+// loop that gives the server a couple of chances under load. Returns true
+// the moment any attempt confirms the session exists; only returns false
+// when all three attempts agree it's gone.
+async function hasSessionWithRetries(
+  probe: (name: string) => boolean,
+  name: string,
+  opts: { attempts: number; delayMs: number },
+): Promise<boolean> {
+  for (let i = 0; i < opts.attempts; i++) {
+    if (probe(name)) return true;
+    if (i < opts.attempts - 1) await sleep(opts.delayMs);
+  }
+  return false;
+}
+
 // Walk every DB session marked live and, if its tmux session is missing from
 // the live tmux server, flip it to `terminated` so collectRestoreCandidates
 // returns it. Returns the count of flipped rows for logging. Idempotent and
 // cheap — a single `tmux list-sessions` plus N row updates only for the
 // stale rows.
-function reconcileStaleLiveRows(store: SqliteStore, liveTmuxNames: Set<string> | null): number {
+async function reconcileStaleLiveRows(
+  store: SqliteStore,
+  liveTmuxNames: Set<string> | null,
+  hasSession: (name: string) => Promise<boolean> | boolean,
+): Promise<number> {
   // null = tmux server unreachable even after the readiness wait. Don't flip
   // anything — we can't distinguish "fresh boot" from "tmux genuinely down"
   // and false-positive flips lose user trust.
@@ -74,6 +101,15 @@ function reconcileStaleLiveRows(store: SqliteStore, liveTmuxNames: Set<string> |
     if (!LIVE_STATUSES.includes(session.status)) continue;
     if (!session.tmuxSessionName) continue;
     if (liveTmuxNames.has(session.tmuxSessionName)) continue;
+    // The `list-sessions` snapshot can be partial under load — we've seen
+    // `tmux list-sessions` fail outright in the journal multiple times today
+    // (`[status-monitor] tmuxActivities failed`), which would surface here as
+    // a non-null but incomplete set. A retried `has-session -t <name>` is
+    // the second opinion (3 attempts, 250ms apart); skip the flip whenever
+    // it confirms the pane is still alive. This is what stops the cockpit
+    // from showing a Restore banner for sessions whose tmux + ttyd are
+    // perfectly fine.
+    if (await hasSession(session.tmuxSessionName)) continue;
     store.updateSessionStatus(session.id, {
       status: "unknown",
       statusReason: "fresh_boot_recovery",
@@ -138,11 +174,21 @@ export type BootRestoreDeps = {
   // they craft DB rows whose tmux pane intentionally does not exist. Default
   // production behaviour talks to the real `listAllTmuxSessions`.
   listTmuxSessions?: () => Set<string> | null;
+  // Direct `tmux has-session -t <name>` probe used as the second opinion
+  // before flipping a row to "unknown". Tests can stub this to assert the
+  // safeguard fires; production hits the real tmux server. When undefined
+  // and the row's name isn't in `listTmuxSessions`, the row IS flipped —
+  // matches the pre-fix behaviour so tests that don't care still pass.
+  hasTmuxSession?: (name: string) => boolean;
   // How long to keep retrying the tmux probe before giving up. Production
   // default covers the systemd startup race (citadel.service can outrun
   // citadel-tmux.service's socket readiness by a few hundred ms). Tests pass
   // 0 to short-circuit since their stubs are deterministic.
   tmuxReadinessTimeoutMs?: number;
+  // Optional diagnostics sink — same structural shape as the global
+  // DiagnosticsLogger. boot-restore emits one event per flip decision so the
+  // bundle records exactly which rows were reclassified at boot.
+  diagnostics?: { log(category: string, event: string, data?: Record<string, unknown>): void };
 };
 
 export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestoreSummary> {
@@ -161,10 +207,23 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
       `[boot-restore] tmux unreachable after ${tmuxReadinessTimeoutMs}ms — skipping fresh-boot reconciliation; live DB rows will only flip once status-monitor's first probe succeeds`,
     );
   }
-  const flippedStale = reconcileStaleLiveRows(deps.store, liveTmuxNames);
+  // Real `tmux has-session` probe wrapped in a 3-attempt retry. A single
+  // failed probe is never authoritative (see feedback_reaper_retries.md).
+  // Tests override via deps.hasTmuxSession and bypass the retry — their
+  // stubs are deterministic.
+  const hasSessionBase = deps.hasTmuxSession ?? tmuxSessionExists;
+  const hasSession = deps.hasTmuxSession
+    ? hasSessionBase
+    : (name: string) => hasSessionWithRetries(hasSessionBase, name, { attempts: 3, delayMs: 250 });
+  const flippedStale = await reconcileStaleLiveRows(deps.store, liveTmuxNames, hasSession);
   if (flippedStale > 0) {
     console.log(`[boot-restore] reconciled ${flippedStale} stale 'live' rows (fresh-boot)`);
   }
+  deps.diagnostics?.log("restore", "reconcile.done", {
+    tmuxReachable: liveTmuxNames !== null,
+    liveTmuxCount: liveTmuxNames?.size ?? null,
+    flippedStaleRows: flippedStale,
+  });
   const allCandidates = collectRestoreCandidates(deps.store);
   const cutoffMs = Date.now() - RECENT_WINDOW_MS;
   const recent: RestoreCandidate[] = [];
@@ -193,6 +252,12 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
   };
   currentSummary = summary;
 
+  deps.diagnostics?.log("restore", "candidates.collected", {
+    total: allCandidates.length,
+    recent: recent.length,
+    skippedOlder,
+    recentWindowMs: RECENT_WINDOW_MS,
+  });
   if (recent.length === 0) {
     summary.finishedAt = new Date().toISOString();
     return summary;

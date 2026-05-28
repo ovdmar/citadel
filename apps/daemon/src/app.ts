@@ -14,7 +14,7 @@ import {
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { mcpStatus, mcpToolDefinitions } from "@citadel/mcp";
-import { OperationService } from "@citadel/operations";
+import { type DiagnosticsLogger, OperationService, createDiagnosticsLogger } from "@citadel/operations";
 import {
   type CollectGitHubVersionControlSummaryDeps,
   collectGitHubCiRunLog,
@@ -43,6 +43,7 @@ import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
 import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
+import { registerDiagnosticsRoutes } from "./diagnostics-routes.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import {
   AUTOMATED_GH_DISABLED_REASON,
@@ -63,6 +64,7 @@ import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { registerPrDiffRoute } from "./pr-diff-route.js";
 import { registerPrRoutes } from "./pr-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
+import { registerRepoDiscoveryRoutes } from "./repo-discovery-routes.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
@@ -82,6 +84,7 @@ export type DaemonApp = {
   server: http.Server;
   emit: (type: string, payload: unknown) => void;
   ttyd: ReturnType<typeof createTtydManager>;
+  diagnostics: DiagnosticsLogger;
 };
 
 type ProviderCollectors = {
@@ -115,7 +118,20 @@ export function createDaemonApp(input: {
   const server = http.createServer(app);
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
-  const ttyd = createTtydManager(resolveTtydPortRange(config.port));
+  // Always-on structured diagnostics. Writes JSONL to <dataDir>/diagnostics.jsonl
+  // (rotated at 50 MB) and keeps the last 1000 events in memory for the
+  // Settings → Debug panel + the /api/diagnostics/bundle.tar.gz download.
+  // Sprinkled through every session-killing path so that when a user reports
+  // "all my sessions died", we have the lifecycle trail to share.
+  const diagnostics = createDiagnosticsLogger({ dataDir: config.dataDir });
+  diagnostics.log("daemon", "createDaemonApp", {
+    port: config.port,
+    dataDir: config.dataDir,
+    worktree: process.env.CITADEL_WORKTREE === "1",
+    pid: process.pid,
+    nodeVersion: process.versions.node,
+  });
+  const ttyd = createTtydManager({ ...resolveTtydPortRange(config.port), diagnostics });
   // Release the ttyd on every stopAgentSession path; guarded for test stubs.
   if (typeof operations.setTerminalHooks === "function") {
     operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId) });
@@ -153,19 +169,39 @@ export function createDaemonApp(input: {
     }
   };
 
-  // Register terminal proxy before the SPA fallback; adopt detached ttyds on daemon restart.
-  // Skip adoption under Vitest so tests cannot attach to and release live cockpit ttyds.
+  // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
+  //
+  // Boot-time discover-and-adopt: ttyds are spawned detached and the systemd
+  // unit runs with KillMode=process, so they outlive daemon restarts. Scan
+  // the host for survivors from the previous incarnation and adopt them back
+  // into the manager — same key, same PID, no respawn. The browser's
+  // WebSocket auto-reconnect (xterm `reconnect=3`) lands on the *same* ttyd
+  // it was talking to before the restart.
+  //
+  // Discovery is host-wide (NOT scoped to this daemon's port slot) so we can
+  // also reap ttyds that pre-date the current port-slot scheme (the 7xxx
+  // generation from before ttyd-slot.ts shipped on 2026-05-27). adopt()
+  // routes by DB membership via the resolveTabId callback: known sessionIds
+  // get adopted, unknown ones get SIGTERMed.
+  //
+  // Skipped under vitest: tests that boot a daemon would otherwise re-attach
+  // to the live cockpit's ttyds and the next test that calls release() would
+  // kill them.
   if (!process.env.VITEST) {
     const survivors = discoverExistingTtyds({
-      portBase: ttyd.config.portBase,
-      portMax: ttyd.config.portMax,
       basePathPrefix: ttyd.config.basePathPrefix,
     });
-    const { adopted, reapedDuplicates } = ttyd.adopt(survivors);
-    if (adopted > 0 || reapedDuplicates > 0) {
+    const sessionTabIds = new Map<string, string>();
+    for (const session of store.listSessions()) {
+      sessionTabIds.set(session.id, session.tabId ?? session.id);
+    }
+    const resolveTabId = (key: string): string | null => sessionTabIds.get(key) ?? null;
+    const { adopted, reapedDuplicates, reapedUnknown } = ttyd.adopt(survivors, resolveTabId);
+    if (adopted > 0 || reapedDuplicates > 0 || reapedUnknown > 0) {
       emit("terminal.adopted", {
         adopted,
         reapedDuplicates,
+        reapedUnknown,
         portRange: [ttyd.config.portBase, ttyd.config.portMax],
       });
     }
@@ -228,6 +264,8 @@ export function createDaemonApp(input: {
     res.json({ config, configPath });
   });
 
+  registerDiagnosticsRoutes({ app, store, ttyd, diagnostics, config });
+
   app.put("/api/config", (req, res) => {
     const nextConfig = mergeConfigPatch(config, req.body);
     const saved = saveConfig(nextConfig, configPath);
@@ -256,51 +294,7 @@ export function createDaemonApp(input: {
     res.status(201).json({ repo });
   });
 
-  app.post(
-    "/api/repos/inspect",
-    asyncRoute(async (req, res) => {
-      const inputPath = typeof req.body?.rootPath === "string" ? req.body.rootPath : "";
-      if (!inputPath) return res.status(400).json({ error: "root_path_required" });
-      const resolved = path.resolve(inputPath);
-      const exists = fs.existsSync(resolved);
-      const isGit = exists && fs.existsSync(path.join(resolved, ".git"));
-      let defaultBranch: string | null = null;
-      let remotes: string[] = [];
-      if (isGit) {
-        try {
-          const { execFile: execFileCb } = await import("node:child_process");
-          const { promisify } = await import("node:util");
-          const exec = promisify(execFileCb);
-          const headRef = await exec("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
-            cwd: resolved,
-            timeout: 6000,
-          }).catch(() => ({ stdout: "" }));
-          defaultBranch = (headRef.stdout || "").trim().replace("refs/remotes/origin/", "").trim() || "main";
-          const remoteList = await exec("git", ["remote"], { cwd: resolved, timeout: 6000 }).catch(() => ({
-            stdout: "",
-          }));
-          remotes = remoteList.stdout
-            .split("\n")
-            .map((line) => line.trim())
-            .filter(Boolean);
-        } catch {
-          defaultBranch = "main";
-        }
-      }
-      res.json({
-        rootPath: resolved,
-        exists,
-        isGit,
-        defaultBranch,
-        remotes,
-        suggestedWorktreeParent: path.join(path.dirname(resolved), `${path.basename(resolved)}-worktrees`),
-        providerCandidates: [
-          { id: "github-gh", displayName: "GitHub CLI", enabled: config.providers.github.enabled },
-          { id: "jira-jtk", displayName: "Jira CLI", enabled: config.providers.jira.enabled },
-        ],
-      });
-    }),
-  );
+  registerRepoDiscoveryRoutes({ app, config, asyncRoute });
 
   app.get("/api/repos", (_req, res) => {
     res.json({ repos: store.listRepos() });
@@ -761,7 +755,7 @@ export function createDaemonApp(input: {
   }
 
   // Status monitor / auto-recovery / auto-resume / terminal reaper: see their own modules for context.
-  const statusMonitor = startDaemonStatusMonitor(store, emit, config, recentUserAction);
+  const statusMonitor = startDaemonStatusMonitor(store, emit, config, recentUserAction, diagnostics);
   if (statusMonitor) server.on("close", () => statusMonitor.stop());
   const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({
     store,
@@ -783,7 +777,7 @@ export function createDaemonApp(input: {
   const terminalReaper = startTerminalReaper();
   server.on("close", () => terminalReaper.stop());
 
-  return { app, server, emit, ttyd };
+  return { app, server, emit, ttyd, diagnostics };
 
   function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderValue(providerCache, key, load, ttlMs);

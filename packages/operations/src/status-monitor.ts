@@ -24,6 +24,14 @@ export interface MonitorSessionState {
   // runtime that was previously `running`. The transition fires when this
   // reaches 2 (debounce).
   consecutiveShellTicks: number;
+  // Number of consecutive ticks where every available probe reported "no
+  // pane" for this tmux session. The `tmux_missing` signal only fires when
+  // this reaches TMUX_MISSING_DEBOUNCE_TICKS (3). Resets to 0 on ANY
+  // confirmed-alive observation (batched pane, per-session probe, or
+  // has-session). User-visible invariant: a single 50ms tmux hiccup must
+  // never flip a session to `unknown` — durable absence over multiple
+  // 2-second ticks is what counts as "really gone".
+  consecutiveMissingTicks: number;
 }
 
 // Foreground commands that signal "pane is at a shell prompt, not running
@@ -31,6 +39,11 @@ export interface MonitorSessionState {
 // of these, the status flips to `idle`.
 const SHELL_BINARIES = new Set(["bash", "sh", "zsh", "fish", "dash"]);
 const RUNNING_TO_IDLE_DEBOUNCE_TICKS = 2;
+// At 2s/tick this gives ~6 seconds of "every probe is missing" before we
+// concede the session is gone. Anything below that is dominated by transient
+// tmux load — the journal already shows `[status-monitor] panes failed`
+// surfacing under sustained list-panes pressure.
+const TMUX_MISSING_DEBOUNCE_TICKS = 3;
 
 // Dependencies the tick needs. All I/O is dependency-injected so the tick
 // can be tested without real tmux/fs/store. The real daemon wires real
@@ -56,6 +69,18 @@ export interface MonitorTickDeps {
   // the batched provider.
   panePidProcess: (tmuxSessionName: string) => { command: string; pid: number } | null;
   panes?: () => Map<string, { command: string; pid: number }>;
+  // Authoritative single-session probe used as the second opinion before
+  // flipping a row to `tmux_missing`. Defaults in the wiring to
+  // `tmuxSessionExists` (one `tmux has-session -t <name>` call). Tests can
+  // stub. Mandatory now that the batched `panes()` and per-session
+  // `panePidProcess()` both silently swallow tmux IO errors as "no pane" —
+  // without this double-check, a single failed `tmux list-panes` would mass-
+  // flip every session to `unknown` (the 05:49 incident).
+  hasTmuxSession?: (tmuxSessionName: string) => boolean;
+  // Optional structured-event sink for the diagnostics bundle. Same shape
+  // as @citadel/operations DiagnosticsLogger; declared structurally here to
+  // keep status-monitor free of an external dep.
+  diagnostics?: { log(category: string, event: string, data?: Record<string, unknown>): void };
   // Map runtimeId → binary name expected as the pane's foreground when the
   // agent is running. Null when the runtime is unknown.
   runtimeBinaryFor: (runtimeId: string) => string | null;
@@ -89,6 +114,7 @@ function makeMonitorState(): MonitorSessionState {
     ticksSinceActivityChange: 0,
     hasObservedSinceBoot: false,
     consecutiveShellTicks: 0,
+    consecutiveMissingTicks: 0,
   };
 }
 
@@ -142,7 +168,56 @@ export async function runStatusMonitorTick(
     const pane = panesByName
       ? (panesByName.get(session.tmuxSessionName) ?? null)
       : deps.panePidProcess(session.tmuxSessionName);
-    const tmuxAlive = pane !== null;
+    // Three-strike rule for "tmux is missing". A single probe that says
+    // "no pane" is NEVER authoritative — batched `tmux list-panes -a` and
+    // per-session probes both silently return empty on tmux IO errors, and
+    // the 05:49 incident showed how a single 50ms hiccup mass-flips every
+    // cockpit terminal. Pipeline:
+    //   1. If we found a pane, the session is alive — reset the counter.
+    //   2. If we didn't, try a direct `has-session -t <name>` as second
+    //      opinion. If has-session says alive, reset and treat as alive.
+    //   3. Only after the counter has crossed TMUX_MISSING_DEBOUNCE_TICKS
+    //      (= 3 ticks ≈ 6s of unanimous "gone") does the tick concede and
+    //      emit the tmux_missing signal.
+    // When `hasTmuxSession` is unwired (legacy tests), step 2 is skipped —
+    // the counter alone still gates the flip, so tests that wanted the
+    // immediate `unknown` outcome now need to tick three times. The
+    // existing regression-pin test pins exactly that progression.
+    let tmuxAlive: boolean;
+    if (pane !== null) {
+      if (monitorState.consecutiveMissingTicks > 0) {
+        deps.diagnostics?.log("monitor", "missing-counter.reset", {
+          sessionId: session.id,
+          tmuxSession: session.tmuxSessionName,
+          via: "pane",
+          previousCount: monitorState.consecutiveMissingTicks,
+        });
+      }
+      tmuxAlive = true;
+      monitorState.consecutiveMissingTicks = 0;
+    } else if (deps.hasTmuxSession?.(session.tmuxSessionName) === true) {
+      if (monitorState.consecutiveMissingTicks > 0) {
+        deps.diagnostics?.log("monitor", "missing-counter.reset", {
+          sessionId: session.id,
+          tmuxSession: session.tmuxSessionName,
+          via: "has-session",
+          previousCount: monitorState.consecutiveMissingTicks,
+        });
+      }
+      tmuxAlive = true;
+      monitorState.consecutiveMissingTicks = 0;
+    } else {
+      monitorState.consecutiveMissingTicks += 1;
+      tmuxAlive = monitorState.consecutiveMissingTicks < TMUX_MISSING_DEBOUNCE_TICKS;
+      deps.diagnostics?.log("monitor", tmuxAlive ? "missing-counter.bump" : "tmux-missing.fired", {
+        sessionId: session.id,
+        tmuxSession: session.tmuxSessionName,
+        count: monitorState.consecutiveMissingTicks,
+        threshold: TMUX_MISSING_DEBOUNCE_TICKS,
+        source: opts.source,
+        currentStatus: session.status,
+      });
+    }
     const runtimeBinary = deps.runtimeBinaryFor(session.runtimeId);
 
     // Activity-change tracking. Done BEFORE adapter invocation so the
@@ -168,6 +243,12 @@ export async function runStatusMonitorTick(
       // the session row instead of marking it unknown. Existing reaper
       // semantic preserved.
       if (!workspaceIds.has(session.workspaceId)) {
+        deps.diagnostics?.log("monitor", "session.deleted", {
+          sessionId: session.id,
+          workspaceId: session.workspaceId,
+          reason: "workspace-gone+tmux-missing",
+          tmuxSession: session.tmuxSessionName,
+        });
         deps.deleteSession(session.id);
         deletedSessions += 1;
         deps.adapterStates.delete(session.id);

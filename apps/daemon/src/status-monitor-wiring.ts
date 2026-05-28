@@ -13,7 +13,7 @@ import {
 } from "@citadel/operations";
 import type { RuntimeStatusAdapter, SessionAdapterState } from "@citadel/runtimes";
 import { getStatusAdapter } from "@citadel/runtimes";
-import { captureTmux, panePidProcess, tmuxPrefix } from "@citadel/terminal";
+import { captureTmux, panePidProcess, tmuxPrefix, tmuxSessionExists } from "@citadel/terminal";
 
 // Dedupe monitor-side failures so a persistent tmux outage doesn't flood
 // stderr at 2 Hz. Key is `kind:message` so distinct error messages are still
@@ -33,6 +33,7 @@ export function buildStatusMonitorDeps(
   emit: (event: string, payload: unknown) => void,
   config: CitadelConfig,
   recentUserAction: Map<string, number>,
+  diagnostics?: MonitorTickDeps["diagnostics"],
 ): MonitorTickDeps {
   const adapterStates = new Map<string, SessionAdapterState>();
   const monitorStates = new Map<string, MonitorSessionState>();
@@ -79,6 +80,22 @@ export function buildStatusMonitorDeps(
         return null;
       }
     },
+    // Authoritative single-session existence probe. The status-monitor uses
+    // it to second-opinion the batched `panes()` snapshot before flipping a
+    // session to `tmux_missing`. tmuxSessionExists already returns false on
+    // any IO error, so a transient tmux hiccup that takes down the batched
+    // probe AND this one will still flip — but the common-case "list-panes
+    // failed under load while has-session succeeds" is the one we're trying
+    // to stop from wiping every session every couple minutes.
+    hasTmuxSession: (name) => {
+      try {
+        return tmuxSessionExists(name);
+      } catch (err) {
+        logMonitorFailureOnce("hasTmuxSession", err);
+        return false;
+      }
+    },
+    ...(diagnostics ? { diagnostics } : {}),
     runtimeBinaryFor: (runtimeId) => runtimeBinaryByRuntimeId.get(runtimeId) ?? null,
     recentUserAction,
     // Single batched tmux query per tick — `#{session_activity}` is epoch sec.
@@ -171,8 +188,9 @@ export function startDaemonStatusMonitor(
   emit: (event: string, payload: unknown) => void,
   config: CitadelConfig,
   recentUserAction: Map<string, number>,
+  diagnostics?: MonitorTickDeps["diagnostics"],
 ): StatusMonitorHandle | null {
   if (process.env.CITADEL_DISABLE_STATUS_MONITOR === "1") return null;
-  const deps = buildStatusMonitorDeps(store, emit, config, recentUserAction);
+  const deps = buildStatusMonitorDeps(store, emit, config, recentUserAction, diagnostics);
   return startStatusMonitor(deps, 2000);
 }

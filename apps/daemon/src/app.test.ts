@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { OperationService } from "@citadel/operations";
 import { afterEach, describe, expect, it } from "vitest";
@@ -542,6 +543,37 @@ describe("createDaemonApp", () => {
       expect(after.operation.status).toBe("cancelled");
       const retry = await fetch(`${baseUrl}/api/operations/op_fake_running/retry`, { method: "POST" });
       expect(retry.status).toBe(409);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("completes filesystem paths for the add-repo autocomplete", async () => {
+    const fixture = createFixture();
+    const { repoPath } = createGitRepo(fixture.config.dataDir);
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const parent = path.dirname(repoPath);
+      const basename = path.basename(repoPath);
+      const dirPrefix = `${parent}/`;
+      const dirListing = await getJson<{
+        baseDir: string;
+        entries: Array<{ name: string; path: string; isGit: boolean }>;
+      }>(`${baseUrl}/api/fs/complete?prefix=${encodeURIComponent(dirPrefix)}`);
+      expect(dirListing.baseDir).toBe(path.resolve(parent));
+      const match = dirListing.entries.find((entry) => entry.name === basename);
+      expect(match).toBeTruthy();
+      expect(match?.isGit).toBe(true);
+
+      const filtered = await getJson<{ entries: Array<{ name: string; isGit: boolean }> }>(
+        `${baseUrl}/api/fs/complete?prefix=${encodeURIComponent(path.join(parent, basename.slice(0, 1)))}`,
+      );
+      expect(filtered.entries.find((entry) => entry.name === basename)).toBeTruthy();
+
+      // Tilde expansion: ~/ should resolve to the home directory listing without erroring.
+      const tilde = await getJson<{ baseDir: string }>(`${baseUrl}/api/fs/complete?prefix=~%2F`);
+      expect(tilde.baseDir).toBe(os.homedir());
     } finally {
       await closeServer(server);
     }
