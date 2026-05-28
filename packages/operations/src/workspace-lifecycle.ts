@@ -53,6 +53,7 @@ export type WorkspaceLifecycleDeps = {
         payload: { repo: Repo; workspace: Workspace },
       ) => Promise<void>)
     | null;
+  onSessionStopped?: (sessionId: string) => void;
 };
 
 export type RemoveWorkspaceInput = { workspaceId: string; force?: boolean; archiveOnly?: boolean };
@@ -114,6 +115,9 @@ export async function removeWorkspace(
   const ownedSessions = deps.store.listSessions(workspace.id);
   for (const session of ownedSessions) {
     if (session.tmuxSessionName && !input.archiveOnly) killTmuxSession(session.tmuxSessionName);
+    // Release the ttyd slot on both archive and full remove. Archived sessions
+    // have no active UI path, so keeping their ttyd attached leaks ports.
+    deps.onSessionStopped?.(session.id);
   }
   if (ownedSessions.length && !input.archiveOnly) {
     deps.logOp(operation.id, "info", `Killed ${ownedSessions.length} tmux session(s) attached to workspace`);

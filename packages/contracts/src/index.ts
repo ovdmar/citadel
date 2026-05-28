@@ -105,6 +105,13 @@ export const AgentSessionSchema = z.object({
   // Status-tracking fields written by the DB layer; optional at the TS level
   // so older test fixtures still typecheck.
   statusReason: z.string().nullable().optional(),
+  // ISO timestamp of when `statusReason` was last written, independent of
+  // `lastStatusAt` (which is reset on every status touch — including benign
+  // sub-status flips from the runtime adapter). The status-monitor uses this
+  // to drive the 30-minute auto-clear of `idle_after_unexpected_exit`: when
+  // the reason persists past the window with no operator Restart, the
+  // attention pulse fades naturally.
+  statusReasonAt: z.string().nullable().optional(),
   lastStatusAt: z.string().optional(),
   lastOutputAt: z.string().nullable().optional(),
   endedAt: z.string().nullable().optional(),
@@ -112,6 +119,15 @@ export const AgentSessionSchema = z.object({
   transport: TransportStatusSchema,
   tmuxSessionName: z.string().nullable(),
   tmuxSessionId: z.string().nullable(),
+  // Stable per-tab identifier that survives across restore-spawn-restore
+  // cycles. Generated fresh on first session create in a workspace; inherited
+  // by every subsequent row that resumes the same conversation (the restored
+  // session takes the original's tabId). The cockpit's tab strip sorts by
+  // tabId (time-encoded by createId) so a restored session re-appears in the
+  // same slot the original lived in, instead of jumping to the end of the row.
+  // Optional in the contract so older test fixtures keep parsing; the DB
+  // layer always materializes a value via the migration backfill.
+  tabId: z.string().optional(),
   // Runtime-native session UUID (e.g. Claude Code's --session-id). Populated at
   // spawn time so we can resume the same conversation across daemon and machine
   // restarts, and so the Settings restore flow has a stable handle.
@@ -186,6 +202,25 @@ export const RuntimeUsageSummarySchema = z.object({
   checkedAt: z.string(),
 });
 
+export const GitHubQuotaResourceSchema = z.object({
+  name: z.enum(["core", "graphql", "search"]),
+  limit: z.number().int().nonnegative(),
+  used: z.number().int().nonnegative(),
+  remaining: z.number().int().nonnegative(),
+  percentUsed: z.number().min(0).max(100),
+  resetAt: z.string().nullable(),
+});
+
+export const GitHubQuotaSummarySchema = z.object({
+  providerId: z.literal("github-gh"),
+  status: ProviderStatusSchema,
+  reason: z.string().nullable(),
+  checkedAt: z.string(),
+  cooldownUntil: z.string().nullable().default(null),
+  automationEnabled: z.boolean().default(true),
+  resources: z.array(GitHubQuotaResourceSchema).default([]),
+});
+
 export const PrReviewerStateSchema = z.enum(["approved", "changes_requested", "commented", "pending", "dismissed"]);
 
 export const PrReviewerSchema = z.object({
@@ -235,6 +270,13 @@ export const VersionControlSummarySchema = z.object({
   remotes: z.array(z.string()),
   pullRequest: PullRequestSummarySchema.nullable(),
   checkedAt: z.string(),
+  // ISO timestamp of when the daemon's global gh rate-limit cooldown clears,
+  // present only while a cooldown is active. The pr-routes response builder
+  // decorates outgoing payloads with this regardless of whether the body came
+  // from a fresh fetch, a scheduler-skip cache fallback, or a stale snapshot,
+  // so the FE banner sees the same signal on every code path.
+  // Optional (not required) so older daemon ↔ newer FE remains compatible.
+  cooldownUntil: z.string().nullable().optional(),
 });
 
 export {
@@ -487,6 +529,11 @@ export const CreateAgentSessionInputSchema = z.object({
   // session's transcript on disk must exist; the caller is responsible for
   // validating that (see the Settings restore flow / backfill).
   resumeRuntimeSessionId: z.string().uuid().optional(),
+  // When set, the new session is bound to an existing tab slot (instead of
+  // generating a fresh tabId). Restore paths pass the source row's tabId so
+  // the restored session reuses the original tab position in the cockpit's
+  // tab strip. Non-restore callers leave this unset and get a fresh tabId.
+  tabId: z.string().optional(),
 });
 
 // High-level one-shot launcher used by MCP orchestrators: create a workspace
@@ -568,6 +615,8 @@ export type CiRunSummary = z.infer<typeof CiRunSummarySchema>;
 export type CiProviderSummary = z.infer<typeof CiProviderSummarySchema>;
 export type RuntimeUsageCategory = z.infer<typeof RuntimeUsageCategorySchema>;
 export type RuntimeUsageSummary = z.infer<typeof RuntimeUsageSummarySchema>;
+export type GitHubQuotaResource = z.infer<typeof GitHubQuotaResourceSchema>;
+export type GitHubQuotaSummary = z.infer<typeof GitHubQuotaSummarySchema>;
 export type PullRequestSummary = z.infer<typeof PullRequestSummarySchema>;
 export type PrReviewer = z.infer<typeof PrReviewerSchema>;
 export type PrReviewerState = z.infer<typeof PrReviewerStateSchema>;
@@ -618,6 +667,8 @@ export type WorkspaceRecentCommits = z.infer<typeof WorkspaceRecentCommitsSchema
 
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export type { ScratchpadSnapshot, ReadScratchpadResult, ScratchpadHistorySource, ScratchpadHistoryEntry, ScratchpadHistorySummary, ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
+
+export * from "./citadel-actions.js";
 
 export type ApiError = { error: string; detail?: string; fieldErrors?: Record<string, string[]> };
 export * from "./scheduled-agents.js";

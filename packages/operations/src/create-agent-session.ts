@@ -10,7 +10,14 @@ import type {
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { discoverCodexSessionId } from "@citadel/runtimes";
-import { ensureTmuxSession, submitPrompt } from "@citadel/terminal";
+import {
+  COMM_TRUNCATION,
+  ensureTmuxSession,
+  killTmuxSession,
+  launchAgentInSession,
+  panePidProcess,
+  submitPrompt,
+} from "@citadel/terminal";
 
 export type RuntimeDescriptor = {
   command: string;
@@ -67,13 +74,14 @@ export async function createAgentSession(
   if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
   const now = nowIso();
   const sessionName = `citadel_${workspace.id}_${createId("agent").slice(-8)}`;
-  // If the runtime exposes a CLI flag for the initial prompt, embed it there;
-  // otherwise we paste it into the tmux pane once the TUI is ready (claude-code
-  // pattern — input typed before paint gets dropped).
+  // Prefer runtime-native initial-prompt argv when available. Codex accepts
+  // the prompt as a positional argument; Claude Code's interactive mode does
+  // not, so for runtimes without argv support we paste once the TUI is ready.
   const runtimeArgs = [...runtime.args];
   let promptForKeys: string | null = null;
   if (input.prompt?.length) {
     if (runtime.promptArg) runtimeArgs.push(runtime.promptArg, input.prompt);
+    else if (input.runtimeId === "codex") runtimeArgs.push(input.prompt);
     else promptForKeys = input.prompt;
   }
   // Pin a UUID at spawn time when the runtime supports it (claude-code's
@@ -94,37 +102,59 @@ export async function createAgentSession(
     runtimeSessionId = randomUUID();
     runtimeArgs.push(runtime.sessionIdArg, runtimeSessionId);
   }
-  const tmux = await ensureTmuxSession({
-    sessionName,
-    cwd: workspace.path,
-    command: runtime.command,
-    args: runtimeArgs,
-  });
-  if (promptForKeys) {
-    // Treat the initial prompt as load-bearing: if submitPrompt couldn't
-    // verify delivery, the agent will sit on a blank prompt forever, which
-    // is exactly the failure mode launch_agent's callers can't recover from.
-    // Surface it as an explicit error instead of a phantom success.
-    //
-    // Tune the cold-start budget by runtime kind. Interactive TUIs (Claude
-    // Code with MCP servers connecting, Codex) routinely take 8–15 s before
-    // they're ready to accept input. Shell runtimes paint a prompt in
-    // milliseconds and `read` is ready instantly; using the TUI budget there
-    // makes every test session sit waiting for a 1 s silence threshold that
-    // doesn't apply.
-    const isShellRuntime = ["bash", "sh", "zsh", "fish"].includes(runtime.command);
-    const submitted = await submitPrompt(sessionName, promptForKeys, {
-      ...(isShellRuntime
-        ? { waitForReadyMs: 1500, submitDelayMs: 800 }
-        : {
-            waitForReadyMs: 15000,
-            submitDelayMs: 3000,
-            runtimeReadyPredicate: (cmd) => cmd !== "bash" && cmd !== "sh" && cmd !== "zsh" && cmd.length > 0,
-          }),
-    });
-    if (!submitted.ok) {
-      throw new Error(`initial_prompt_not_delivered: ${submitted.error ?? "unknown"}`);
+  // Shell-first three-step spawn:
+  //  1) ensureTmuxSession  → pane PID is `bash -l` (the operator's shell).
+  //  2) launchAgentInSession → send-keys the agent's argv into the shell,
+  //     waits for the runtime binary to become pane foreground (positive
+  //     predicate matching runtime.command, NOT "not a shell" — transient
+  //     subprocesses like direnv during rc-load can't satisfy it).
+  //  3) submitPrompt (only when an initial prompt is provided) → paste +
+  //     Enter into the runtime's TUI input.
+  //
+  // For the `shell` runtime, step 2 is a no-op — the shell IS the runtime
+  // and is already foreground; calling launchAgentInSession with "bash"
+  // would re-launch bash inside the existing bash. Skip it.
+  const isShellRuntime = ["bash", "sh", "zsh", "fish"].includes(runtime.command);
+  let tmux: Awaited<ReturnType<typeof ensureTmuxSession>>;
+  let runtimeLaunchStartedMs: number | null = null;
+  try {
+    tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path });
+    if (!isShellRuntime) {
+      runtimeLaunchStartedMs = Date.now();
+      await launchAgentInSession(sessionName, runtime.command, runtimeArgs);
     }
+    if (promptForKeys) {
+      // Treat the initial prompt as load-bearing: if submitPrompt couldn't
+      // verify delivery, the agent will sit on a blank prompt forever, which
+      // is exactly the failure mode launch_agent's callers can't recover from.
+      // Surface it as an explicit error instead of a phantom success.
+      //
+      // Tune the cold-start budget by runtime kind. Interactive TUIs (Claude
+      // Code with MCP servers connecting, Codex) routinely take 8–15 s before
+      // they're ready to accept input. Shell runtimes paint a prompt in
+      // milliseconds and `read` is ready instantly; using the TUI budget there
+      // makes every test session sit waiting for a 1 s silence threshold that
+      // doesn't apply.
+      const runtimeBinaryTruncated = runtime.command.slice(0, COMM_TRUNCATION);
+      const submitted = await submitPrompt(sessionName, promptForKeys, {
+        ...(isShellRuntime
+          ? { waitForReadyMs: 1500, submitDelayMs: 800 }
+          : {
+              waitForReadyMs: 15000,
+              submitDelayMs: 3000,
+              // POSITIVE predicate: match the runtime's binary name (truncated
+              // to `comm`'s 15-char limit) so transient subprocesses claude
+              // spawns mid-startup (`git`, `rg`, etc.) cannot satisfy the wait.
+              runtimeReadyPredicate: (cmd) => cmd === runtimeBinaryTruncated,
+            }),
+      });
+      if (!submitted.ok) {
+        throw new Error(`initial_prompt_not_delivered: ${submitted.error ?? "unknown"}`);
+      }
+    }
+  } catch (error) {
+    killTmuxSession(sessionName);
+    throw error;
   }
   const session: AgentSession = {
     id: createId("sess"),
@@ -140,6 +170,11 @@ export async function createAgentSession(
     transport: "disconnected",
     tmuxSessionName: tmux.tmuxSessionName,
     tmuxSessionId: tmux.tmuxSessionId,
+    // Restore paths pass the source row's tabId here so the new session lands
+    // in the same tab slot. Cold-start spawns generate a fresh time-encoded
+    // id — the cockpit sorts tabs by tabId, so first-spawn ordering is
+    // identical to ordering by createdAt.
+    tabId: input.tabId ?? createId("tab"),
     runtimeSessionId,
     createdAt: now,
     updatedAt: now,
@@ -147,15 +182,21 @@ export async function createAgentSession(
   store.insertSession(session);
   // Codex (and similarly runtimes without `sessionIdArg`) auto-generates its
   // UUID at spawn — we can't pin it via a CLI flag, so kick off a best-effort
-  // background poll of ~/.codex/sessions/ to find the rollout this spawn
-  // produced, then write its session_meta.id back onto the row. Fire-and-
-  // forget: the user's create call returns immediately; the UUID lands in
-  // the DB within a few seconds and any subsequent restore picks it up.
+  // background poll of the live Codex process / ~/.codex/sessions/ to find
+  // the rollout this spawn produced, then write its session_meta.id back
+  // onto the row. Fire-and-forget: the user's create call returns
+  // immediately; the status monitor can repair the row later if this misses.
   if (!runtimeSessionId && input.runtimeId === "codex") {
-    const spawnTimeMs = Date.now();
+    const paneRootPid = panePidProcess(sessionName)?.pid;
+    const spawnTimeMs = runtimeLaunchStartedMs ?? Date.now();
     void (async () => {
       try {
-        const found = await discoverCodexSessionId({ workspacePath: workspace.path, spawnTimeMs });
+        const found = await discoverCodexSessionId({
+          workspacePath: workspace.path,
+          spawnTimeMs,
+          timeoutMs: 120_000,
+          ...(paneRootPid ? { rootPid: paneRootPid } : {}),
+        });
         if (found) store.setSessionRuntimeSessionId(session.id, found);
       } catch {
         // Discovery is best-effort — codex still works, just isn't resumable

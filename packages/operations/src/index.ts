@@ -21,6 +21,13 @@ export { ScheduledAgentRunner, parseCronExpression, cronMatches, nextCronRun, de
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
+export {
+  createDiagnosticsLogger,
+  noopDiagnosticsLogger,
+  type DiagnosticEvent,
+  type DiagnosticsLogger,
+  type DiagnosticsLoggerOptions,
+} from "./diagnostics.js";
 export { parseUsageLimitResetFromReason, deriveAccountUsageLimit } from "./usage-limit.js";
 export type { AccountRateLimitInfo } from "./usage-limit.js";
 export { DEFAULT_AUTO_RESUME_INTERVAL_MS, startAutoResumeLoop } from "./auto-resume.js";
@@ -66,6 +73,9 @@ export type RunAutoTransitionsDep = (
 ) => Promise<void>;
 
 export class OperationService {
+  // Daemon registers onSessionStopped to release the ttyd whenever stopAgentSession runs (REST, MCP, restore route).
+  private terminalHooks: { onSessionStopped?: (sessionId: string) => void } = {};
+
   constructor(
     private readonly store: SqliteStore,
     private readonly config?: {
@@ -80,6 +90,9 @@ export class OperationService {
     },
     private readonly runAutoTransitionsDep: RunAutoTransitionsDep | null = null,
   ) {}
+
+  // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+  setTerminalHooks(hooks: { onSessionStopped?: (sessionId: string) => void }) { this.terminalHooks = hooks; }
 
   registerRepo(input: { rootPath: string; name?: string | undefined; worktreeParent?: string | undefined }) {
     const now = nowIso();
@@ -102,7 +115,6 @@ export class OperationService {
     };
     this.store.insertRepo(repo);
     this.activity("repo.registered", "user", `Registered ${repo.name}`, repo.id, null, null);
-    // Non-removable root workspace exposes the repo's main checkout to agents/terminals (cf. Superset).
     const rootWorkspace: Workspace = {
       id: createId("ws"),
       repoId: repo.id,
@@ -347,6 +359,7 @@ export class OperationService {
     const session = this.store.listSessions().find((candidate) => candidate.id === input.sessionId);
     if (!session) return { stopped: false, reason: "session_not_found" as const };
     if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
+    this.terminalHooks.onSessionStopped?.(session.id);
     this.store.deleteSession(session.id);
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     this.activity(
@@ -424,6 +437,7 @@ export class OperationService {
     runWorkspaceHooks: (...args) => this.runWorkspaceHooks(...args),
     runNotificationHooks: (...args) => this.runNotificationHooks(...args),
     runAutoTransitions: this.runAutoTransitionsDep,
+    onSessionStopped: (sessionId) => this.terminalHooks.onSessionStopped?.(sessionId),
   });
 
   async removeRepo(input: { repoId: string; force?: boolean; cleanupWorktrees?: boolean }) {

@@ -231,4 +231,69 @@ describe("runAutoRecoveryTick (integration via in-memory store)", () => {
     await runAutoRecoveryTick(deps, new Date("2026-05-25T12:00:00.000Z"));
     expect(spawnCount).toBe(0);
   });
+
+  it("does not fetch CI for workspaces without a PR", async () => {
+    const store = makeStore();
+    seedRepoAndWorkspace(store, "ws_no_pr");
+    let ciCalls = 0;
+    const deps = makeDeps(store, async () => ({ id: "x" }));
+    deps.fetchVersionControl = async () => ({ ...FAILING_VC, pullRequest: null });
+    deps.fetchCi = async () => {
+      ciCalls += 1;
+      return FAILING_CI;
+    };
+
+    await runAutoRecoveryTick(deps, new Date("2026-05-25T12:00:00.000Z"));
+
+    expect(ciCalls).toBe(0);
+  });
+
+  it("shouldRun=false short-circuits the tick (no provider calls, no spawn)", async () => {
+    const store = makeStore();
+    seedRepoAndWorkspace(store, "ws_gated");
+    let spawnCount = 0;
+    let providerCalls = 0;
+    const deps = makeDeps(store, async () => {
+      spawnCount += 1;
+      return { id: "x" };
+    });
+    deps.fetchVersionControl = async () => {
+      providerCalls += 1;
+      return FAILING_VC; // never reached when shouldRun=false; assertion on providerCalls.
+    };
+    deps.shouldRun = () => false;
+    await runAutoRecoveryTick(deps, new Date("2026-05-25T12:00:00.000Z"));
+    expect(spawnCount).toBe(0);
+    expect(providerCalls).toBe(0);
+  });
+
+  it("shouldRun=true runs the tick normally", async () => {
+    const store = makeStore();
+    seedRepoAndWorkspace(store, "ws_gated_open");
+    let providerCalls = 0;
+    const deps = makeDeps(store, async () => ({ id: "x" }));
+    const originalFetch = deps.fetchVersionControl;
+    deps.fetchVersionControl = async (path: string) => {
+      providerCalls += 1;
+      return originalFetch(path);
+    };
+    deps.shouldRun = () => true;
+    await runAutoRecoveryTick(deps, new Date("2026-05-25T12:00:00.000Z"));
+    expect(providerCalls).toBeGreaterThan(0);
+  });
+
+  it("omitting shouldRun preserves prior behavior (tick runs every call)", async () => {
+    const store = makeStore();
+    seedRepoAndWorkspace(store, "ws_no_gate");
+    let providerCalls = 0;
+    const deps = makeDeps(store, async () => ({ id: "x" }));
+    const originalFetch = deps.fetchVersionControl;
+    deps.fetchVersionControl = async (path: string) => {
+      providerCalls += 1;
+      return originalFetch(path);
+    };
+    // deps.shouldRun deliberately not set.
+    await runAutoRecoveryTick(deps, new Date("2026-05-25T12:00:00.000Z"));
+    expect(providerCalls).toBeGreaterThan(0);
+  });
 });

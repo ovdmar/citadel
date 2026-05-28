@@ -1,12 +1,4 @@
-import type {
-  AgentSession,
-  Namespace,
-  Operation,
-  PullRequestSummary,
-  Repo,
-  Workspace,
-  WorkspaceCockpitSummary,
-} from "@citadel/contracts";
+import type { AgentSession, Namespace, Operation, PullRequestSummary, Repo, Workspace } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
@@ -30,6 +22,7 @@ import {
   buildGroupTree,
   collectGroupPaths,
 } from "./navigator-groups.js";
+import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { WorkspaceCard } from "./workspace-card.js";
 
 const GROUP_STORAGE = "citadel.navigator-group";
@@ -44,7 +37,6 @@ export function Navigator(props: {
   workspaces: Workspace[];
   sessions: AgentSession[];
   operations: Operation[];
-  activeSummary: WorkspaceCockpitSummary | undefined;
   prByWorkspaceId: Map<string, PullRequestSummary | null>;
   activeWorkspaceId: string;
   runtimes: import("@citadel/contracts").AgentRuntime[];
@@ -178,11 +170,7 @@ export function Navigator(props: {
         key={workspace.id}
         workspace={workspace}
         sessions={sessions}
-        pullRequest={
-          workspace.id === props.activeSummary?.workspaceId
-            ? (props.activeSummary.versionControl.pullRequest ?? null)
-            : (props.prByWorkspaceId.get(workspace.id) ?? null)
-        }
+        pullRequest={props.prByWorkspaceId.get(workspace.id) ?? null}
         namespace={workspace.namespaceId ? (namespacesById.get(workspace.namespaceId) ?? null) : null}
         namespaces={props.namespaces}
         active={workspace.id === props.activeWorkspaceId}
@@ -190,15 +178,7 @@ export function Navigator(props: {
         onSelect={() => props.onPickWorkspace(workspace)}
       />
     ),
-    [
-      props.activeSummary,
-      props.prByWorkspaceId,
-      props.activeWorkspaceId,
-      props.onPickWorkspace,
-      props.namespaces,
-      namespacesById,
-      grouping,
-    ],
+    [props.prByWorkspaceId, props.activeWorkspaceId, props.onPickWorkspace, props.namespaces, namespacesById, grouping],
   );
 
   const flatEntries = useMemo<WorkspaceEntry[]>(
@@ -228,13 +208,7 @@ export function Navigator(props: {
               <PanelLeftClose size={14} />
             </button>
           </div>
-          <Link
-            to="/scratchpad"
-            className={path === "/scratchpad" ? "active" : ""}
-            title="Scratchpad — markdown notes orchestrator agents can read via MCP"
-          >
-            <NotebookPen size={13} /> Scratchpad
-          </Link>
+          <ScratchpadNavLink />
           <Link
             to="/scheduled-agents"
             className={path === "/scheduled-agents" ? "active" : ""}
@@ -425,5 +399,26 @@ function GroupNodeView(props: GroupNodeViewProps) {
         </div>
       )}
     </div>
+  );
+}
+
+function ScratchpadNavLink() {
+  const { open, toggle } = useScratchpadDrawer();
+  const isMac =
+    typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  const hint = isMac ? "Shift+Cmd+S" : "Shift+Ctrl+S";
+  return (
+    <button
+      type="button"
+      className={`nav-link-button${open ? " active" : ""}`}
+      onClick={toggle}
+      title={`Scratchpad — markdown notes orchestrator agents can read via MCP (${hint})`}
+      aria-pressed={open}
+    >
+      <NotebookPen size={13} /> Scratchpad
+      <kbd className="nav-kbd-hint" aria-hidden>
+        {hint}
+      </kbd>
+    </button>
   );
 }

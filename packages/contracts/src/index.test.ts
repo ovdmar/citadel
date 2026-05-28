@@ -145,6 +145,47 @@ describe("contract schemas", () => {
         checkedAt: timestamp,
       }).remotes,
     ).toEqual(["origin"]);
+    // cooldownUntil is optional — omitting it parses cleanly (older daemons).
+    expect(
+      VersionControlSummarySchema.parse({
+        providerId: "github-gh",
+        status: "healthy",
+        reason: null,
+        defaultBranch: "main",
+        currentBranch: "main",
+        remotes: ["origin"],
+        pullRequest: null,
+        checkedAt: timestamp,
+      }).cooldownUntil,
+    ).toBeUndefined();
+    // cooldownUntil accepts an ISO timestamp when the daemon's gh cooldown is active.
+    expect(
+      VersionControlSummarySchema.parse({
+        providerId: "github-gh",
+        status: "degraded",
+        reason: "gh rate-limited",
+        defaultBranch: "main",
+        currentBranch: "main",
+        remotes: ["origin"],
+        pullRequest: null,
+        checkedAt: timestamp,
+        cooldownUntil: "2026-05-26T20:30:00.000Z",
+      }).cooldownUntil,
+    ).toBe("2026-05-26T20:30:00.000Z");
+    // cooldownUntil accepts null (explicit "no cooldown").
+    expect(
+      VersionControlSummarySchema.parse({
+        providerId: "github-gh",
+        status: "healthy",
+        reason: null,
+        defaultBranch: "main",
+        currentBranch: "main",
+        remotes: ["origin"],
+        pullRequest: null,
+        checkedAt: timestamp,
+        cooldownUntil: null,
+      }).cooldownUntil,
+    ).toBeNull();
     expect(
       CiProviderSummarySchema.parse({
         providerId: "github-gh",

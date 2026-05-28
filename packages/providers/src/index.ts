@@ -9,6 +9,7 @@ import type {
   CiRunSummary,
   PrReviewerState,
   ProviderHealth,
+  PullRequestSummary,
   RuntimeUsageCategory,
   RuntimeUsageSummary,
   VersionControlSummary,
@@ -16,10 +17,42 @@ import type {
 import { PrMergeStateStatusSchema } from "@citadel/contracts";
 import type { ParentPr, PrCommit, PrMergeResponse, PrMergeStrategy } from "@citadel/contracts/pr-routes";
 import { runtimeUsageFetchers } from "@citadel/runtimes";
+import {
+  GhRateLimitedError,
+  getGhCooldown,
+  getGhCooldownReason,
+  getGhCooldownUntil,
+  isRateLimitError,
+  setGhCooldown,
+} from "./gh-cooldown.js";
+export { pLimit } from "./p-limit.js";
+
+// Re-export the cooldown surface so existing consumers (apps/daemon,
+// gh-quota-wiring, tests) keep their import paths. setGhCooldown is
+// exported for tests / the future "retry now" button; production code
+// only sets cooldown through gh() catching a rate-limit error.
+export {
+  clearGhCooldown,
+  DEFAULT_GH_COOLDOWN_MS,
+  GhRateLimitedError,
+  getGhCooldown,
+  isRateLimitError,
+  setGhCooldown,
+} from "./gh-cooldown.js";
 
 const execFileAsync = promisify(execFile);
 
 export type ProviderKind = ProviderHealth["kind"];
+export type RepoCacheLookup = (key: string, load: () => Promise<string>, ttlMs: number) => Promise<string>;
+export type CollectGitHubVersionControlSummaryDeps = {
+  repoCacheLookup?: RepoCacheLookup;
+  resolveNameWithOwner?: () => string | null;
+  lookupCachedPr?: (nameWithOwner: string, prNumber: number) => PullRequestSummary | null;
+  lookupCachedPrByBranch?: (nameWithOwner: string, headRefName: string) => PullRequestSummary | null;
+};
+
+export const GH_REPO_MERGE_STRATEGIES_CACHE_TTL_MS = 30 * 60_000;
+export const GH_PR_LIST_CACHE_TTL_MS = 5 * 60_000;
 
 export async function commandHealth(input: {
   id: string;
@@ -67,7 +100,7 @@ export type ProviderConfigInput = {
   jira: { enabled: boolean; command?: string | undefined; projectKey?: string | undefined };
 };
 
-export async function collectProviderHealth(config: ProviderConfigInput) {
+export async function collectProviderHealth(config: ProviderConfigInput, opts: { skipGithubReason?: string } = {}) {
   const jiraCommand = config.jira.command ?? "jtk";
   const jiraHealthArgs = config.jira.projectKey
     ? [
@@ -80,15 +113,25 @@ export async function collectProviderHealth(config: ProviderConfigInput) {
         "--no-color",
       ]
     : ["--help"];
+  const checkedAt = new Date().toISOString();
   return Promise.all([
-    commandHealth({
-      id: "github-gh",
-      displayName: "GitHub CLI",
-      kind: "version-control",
-      command: config.github.command ?? "gh",
-      args: ["auth", "status"],
-      enabled: config.github.enabled,
-    }),
+    opts.skipGithubReason
+      ? Promise.resolve({
+          id: "github-gh",
+          displayName: "GitHub CLI",
+          kind: "version-control" as const,
+          status: "unavailable" as const,
+          reason: opts.skipGithubReason,
+          checkedAt,
+        })
+      : commandHealth({
+          id: "github-gh",
+          displayName: "GitHub CLI",
+          kind: "version-control",
+          command: config.github.command ?? "gh",
+          args: ["auth", "status"],
+          enabled: config.github.enabled,
+        }),
     commandHealth({
       id: "jira-jtk",
       displayName: "Jira CLI",
@@ -100,14 +143,17 @@ export async function collectProviderHealth(config: ProviderConfigInput) {
   ]);
 }
 
-export async function collectGitHubVersionControlSummary(rootPath: string): Promise<VersionControlSummary> {
+export async function collectGitHubVersionControlSummary(
+  rootPath: string,
+  deps: CollectGitHubVersionControlSummaryDeps = {},
+): Promise<VersionControlSummary> {
   const checkedAt = new Date().toISOString();
   try {
     if (!fs.existsSync(path.join(rootPath, ".git"))) throw new Error(`Not a git repository: ${rootPath}`);
     const defaultBranch = await discoverDefaultBranch(rootPath);
     const currentBranch = await gitOptional(rootPath, ["branch", "--show-current"]);
     const remotes = await gitOptional(rootPath, ["remote"]).then((value) => value.split("\n").filter(Boolean));
-    const pullRequest = await currentPullRequest(rootPath);
+    const pullRequest = await currentPullRequest(rootPath, remotes, deps);
     return {
       providerId: "github-gh",
       status: "healthy",
@@ -346,14 +392,35 @@ type GhReview = {
 };
 type GhReviewRequest = { login?: string | null; name?: string | null };
 
-async function currentPullRequest(rootPath: string) {
+async function currentPullRequest(
+  rootPath: string,
+  remotes: string[] = [],
+  deps: CollectGitHubVersionControlSummaryDeps = {},
+) {
+  // No upstream means there is no PR to look up — short-circuit so a local-
+  // only repo (or a worktree that hasn't pushed yet) reads as "no PR" instead
+  // of degrading the whole VC provider. Avoids spending a gh subprocess on a
+  // call we know would fail with a non-distinguishable error.
+  if (remotes.length === 0) return null;
+  let raw: string;
   try {
-    const raw = await gh(rootPath, [
+    raw = await gh(rootPath, [
       "pr",
       "view",
       "--json",
       "number,title,url,state,isDraft,reviewDecision,statusCheckRollup,additions,deletions,reviews,reviewRequests,commits,baseRefName,headRefName,headRepository,mergeable,mergeStateStatus,headRefOid",
     ]);
+  } catch (error) {
+    // Distinguish "no PR exists for this branch" (authoritative null) from
+    // transient gh failures (rate limit, network, auth wobble). gh prints
+    // "no pull requests found for branch ..." in the first case; everything
+    // else is propagated so collectGitHubVersionControlSummary marks the
+    // VC summary as `degraded` and the client preserves the last-known PR
+    // instead of dropping it from the navbar.
+    if (isGhNoPullRequestError(error)) return null;
+    throw error;
+  }
+  try {
     const parsed = JSON.parse(raw) as {
       number: number;
       title: string;
@@ -378,9 +445,9 @@ async function currentPullRequest(rootPath: string) {
     // independently and degrade to safe defaults, so don't block the PR view
     // on either.
     const [allowedMergeStrategies, parentPr] = await Promise.all([
-      fetchAllowedMergeStrategies(rootPath),
+      fetchAllowedMergeStrategies(rootPath, deps),
       parsed.baseRefName && parsed.headRepository?.nameWithOwner
-        ? fetchParentPr(rootPath, parsed.baseRefName, parsed.headRepository.nameWithOwner)
+        ? fetchParentPr(rootPath, parsed.baseRefName, parsed.headRepository.nameWithOwner, deps)
         : Promise.resolve(null),
     ]);
     return {
@@ -406,8 +473,27 @@ async function currentPullRequest(rootPath: string) {
       headSha: parsed.headRefOid ?? null,
     };
   } catch {
-    return null;
+    // JSON parse / shape failure: not a "no PR" signal — treat as transient
+    // so the VC summary degrades and the client preserves cached data.
+    throw new Error("gh pr view returned unparseable output");
   }
+}
+
+// gh prints "no pull requests found for branch ..." (or "no open pull
+// requests found ...") when the branch genuinely has no PR. Match loosely on
+// the error's stderr/message so we don't get tripped up by minor wording
+// changes across gh versions.
+export function isGhNoPullRequestError(error: unknown): boolean {
+  if (!error) return false;
+  const candidates: string[] = [];
+  if (typeof error === "string") candidates.push(error);
+  else if (typeof error === "object") {
+    const obj = error as { message?: unknown; stderr?: unknown; stdout?: unknown };
+    if (typeof obj.message === "string") candidates.push(obj.message);
+    if (typeof obj.stderr === "string") candidates.push(obj.stderr);
+    if (typeof obj.stdout === "string") candidates.push(obj.stdout);
+  }
+  return candidates.some((text) => /no (open )?pull requests? (found|matching)/i.test(text));
 }
 
 function normalizeMergeable(raw: string | undefined): "mergeable" | "conflicting" | "unknown" {
@@ -418,14 +504,18 @@ function normalizeMergeable(raw: string | undefined): "mergeable" | "conflicting
   return "unknown";
 }
 
-async function fetchAllowedMergeStrategies(rootPath: string): Promise<Array<"squash" | "merge" | "rebase">> {
+async function fetchAllowedMergeStrategies(
+  rootPath: string,
+  deps: CollectGitHubVersionControlSummaryDeps,
+): Promise<Array<"squash" | "merge" | "rebase">> {
   try {
-    const raw = await gh(rootPath, [
-      "repo",
-      "view",
-      "--json",
-      "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed",
-    ]);
+    const raw = await ghRepoCached(
+      rootPath,
+      ["repo", "view", "--json", "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed"],
+      "gh-repo-merge-strategies",
+      GH_REPO_MERGE_STRATEGIES_CACHE_TTL_MS,
+      deps,
+    );
     const parsed = JSON.parse(raw) as {
       mergeCommitAllowed?: boolean;
       squashMergeAllowed?: boolean;
@@ -441,18 +531,22 @@ async function fetchAllowedMergeStrategies(rootPath: string): Promise<Array<"squ
   }
 }
 
-async function fetchParentPr(rootPath: string, baseRefName: string, headRepository: string): Promise<ParentPr | null> {
+async function fetchParentPr(
+  rootPath: string,
+  baseRefName: string,
+  headRepository: string,
+  deps: CollectGitHubVersionControlSummaryDeps,
+): Promise<ParentPr | null> {
   try {
-    const raw = await gh(rootPath, [
-      "pr",
-      "list",
-      "--state",
-      "all",
-      "--limit",
-      "50",
-      "--json",
-      "number,url,headRefName,headRepository,state",
-    ]);
+    const cachedParent = deps.lookupCachedPrByBranch?.(headRepository, baseRefName);
+    if (cachedParent) return parentPrFromSummary(cachedParent);
+    const raw = await ghRepoCached(
+      rootPath,
+      ["pr", "list", "--state", "all", "--limit", "50", "--json", "number,url,headRefName,headRepository,state"],
+      "gh-pr-list",
+      GH_PR_LIST_CACHE_TTL_MS,
+      deps,
+    );
     const candidates = JSON.parse(raw) as Array<{
       number: number;
       url: string;
@@ -460,10 +554,36 @@ async function fetchParentPr(rootPath: string, baseRefName: string, headReposito
       headRepository?: string | { nameWithOwner?: string } | null;
       state: string;
     }>;
-    return detectParentPr({ baseRefName, headRepository }, candidates);
+    const detected = detectParentPr({ baseRefName, headRepository }, candidates);
+    if (!detected) return null;
+    const cached = deps.lookupCachedPr?.(headRepository, detected.number);
+    if (!cached) return detected;
+    return parentPrFromSummary(cached, detected.headRefName);
   } catch {
     return null;
   }
+}
+
+function parentPrFromSummary(summary: PullRequestSummary, fallbackHeadRefName = ""): ParentPr {
+  return {
+    number: summary.number,
+    url: summary.url,
+    headRefName: summary.headRefName ?? fallbackHeadRefName,
+    state: summary.state,
+  };
+}
+
+async function ghRepoCached(
+  rootPath: string,
+  args: string[],
+  keyPrefix: string,
+  ttlMs: number,
+  deps: CollectGitHubVersionControlSummaryDeps,
+): Promise<string> {
+  const load = () => gh(rootPath, args);
+  const nameWithOwner = deps.resolveNameWithOwner?.() ?? null;
+  if (!nameWithOwner || !deps.repoCacheLookup) return load();
+  return deps.repoCacheLookup(`${keyPrefix}:${nameWithOwner}`, load, ttlMs);
 }
 
 export function aggregateReviewers(reviews: GhReview[], reviewRequests: GhReviewRequest[]) {
@@ -545,50 +665,34 @@ export function setGithubCommand(command: string | undefined) {
   githubCommandOverride = command?.length ? command : "gh";
 }
 
+// Global gh rate-limit circuit breaker. The cooldown state lives in
+// ./gh-cooldown.ts (extracted to keep this file under the 800-line gate);
+// every gh-touching code path in this module funnels through gh() below, so
+// the gate is uniform.
 async function gh(rootPath: string, args: string[]) {
-  const result = await execFileAsync(githubCommandOverride, args, {
-    cwd: rootPath,
-    timeout: 12000,
-    maxBuffer: 1024 * 1024,
-  });
-  return result.stdout.trim();
+  const until = getGhCooldownUntil();
+  if (until > Date.now()) {
+    throw new GhRateLimitedError(until, getGhCooldownReason() ?? "rate limit");
+  }
+  try {
+    const result = await execFileAsync(githubCommandOverride, args, {
+      cwd: rootPath,
+      timeout: 12000,
+      maxBuffer: 1024 * 1024,
+    });
+    return result.stdout.trim();
+  } catch (error) {
+    const reason = isRateLimitError(error);
+    if (reason) {
+      const newUntil = setGhCooldown(reason);
+      throw new GhRateLimitedError(newUntil, reason);
+    }
+    throw error;
+  }
 }
 
 // PR display helpers — used by the daemon's PR routes for the always-on
 // cross-workspace poll, force-refresh, merge button, and stacked-PR detection.
-
-// Hand-rolled concurrency limiter. Kept here (not as a dependency) to avoid
-// touching pnpm-lock.yaml for ~10 lines of logic.
-export function pLimit(concurrency: number) {
-  if (concurrency < 1) throw new Error("pLimit concurrency must be >= 1");
-  const queue: Array<() => void> = [];
-  let active = 0;
-  const next = () => {
-    if (active >= concurrency) return;
-    const job = queue.shift();
-    if (job) {
-      active += 1;
-      job();
-    }
-  };
-  return <T>(task: () => Promise<T>): Promise<T> =>
-    new Promise<T>((resolve, reject) => {
-      queue.push(() => {
-        task()
-          .then((value) => {
-            active -= 1;
-            resolve(value);
-            next();
-          })
-          .catch((error) => {
-            active -= 1;
-            reject(error);
-            next();
-          });
-      });
-      next();
-    });
-}
 
 type RawCommit = {
   oid?: string;
@@ -609,33 +713,6 @@ export function normalizePrCommit(raw: RawCommit): PrCommit {
     message: headline,
     checks: [],
   };
-}
-
-// Pure: caller (daemon) provides the cache wrapper. Returns the per-commit
-// check rollup from the GitHub API; tolerates failure with an empty array so
-// one bad commit doesn't poison the PR summary.
-export async function fetchCommitChecks(rootPath: string, nameWithOwner: string, sha: string): Promise<CheckSummary[]> {
-  try {
-    const raw = await gh(rootPath, [
-      "api",
-      "-H",
-      "Accept: application/vnd.github+json",
-      `/repos/${nameWithOwner}/commits/${sha}/check-runs`,
-    ]);
-    const parsed = JSON.parse(raw) as { check_runs?: Array<Record<string, unknown>> };
-    return (parsed.check_runs ?? []).map((entry) =>
-      normalizeCheck({
-        name: entry.name,
-        status: entry.status,
-        conclusion: entry.conclusion,
-        detailsUrl: entry.details_url ?? entry.html_url,
-        startedAt: entry.started_at,
-        completedAt: entry.completed_at,
-      }),
-    );
-  } catch {
-    return [];
-  }
 }
 
 type ParentPrCandidate = {
@@ -703,11 +780,17 @@ const ghAvailableCache = new Map<string, { expiresAt: number; available: boolean
 export async function isGhAvailable(rootPath: string): Promise<boolean> {
   const cached = ghAvailableCache.get(rootPath);
   if (cached && cached.expiresAt > Date.now()) return cached.available;
+  // During gh cooldown, don't spawn `gh auth status` — we already know any gh
+  // call will throw. Preserve the previous cached answer (assume gh was wired
+  // up before we hit the rate limit) so the merge button doesn't disappear
+  // mid-cooldown. If we never had a cached answer, fall back to false.
+  if (getGhCooldown()) return cached?.available ?? false;
   let available = false;
   try {
     await gh(rootPath, ["auth", "status"]);
     available = true;
-  } catch {
+  } catch (error) {
+    if (error instanceof GhRateLimitedError) return cached?.available ?? false;
     available = false;
   }
   ghAvailableCache.set(rootPath, { expiresAt: Date.now() + 60_000, available });

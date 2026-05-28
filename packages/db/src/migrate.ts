@@ -227,4 +227,80 @@ export function runMigrations(
     INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
       (8, 'agent-sessions-auto-resume-backoff', datetime('now'));
   `);
+  // Per-workspace PR snapshot. Survives daemon restart so the gh-scheduler can
+  // hydrate cadence state (especially merged → never-poll) without burning a
+  // boot-time gh call per workspace. All columns nullable; existing rows read
+  // NULL → scheduler treats as "never fetched, eligible now". Versioned via
+  // schema_migrations so downstream tooling/tests can assert on the row.
+  ensureColumn("workspaces", "pr_number", "INTEGER");
+  ensureColumn("workspaces", "pr_state", "TEXT"); // 'open' | 'closed' | 'merged'
+  ensureColumn("workspaces", "pr_last_fetch_at", "TEXT");
+  ensureColumn("workspaces", "pr_last_checks_green_at", "TEXT");
+  ensureColumn("workspaces", "pr_last_head_sha", "TEXT");
+  ensureColumn("workspaces", "pr_last_head_sha_changed_at", "TEXT");
+  ensureColumn("workspaces", "pr_last_merge_state_status", "TEXT");
+  db.exec(`
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (9, 'workspaces-pr-snapshot', datetime('now'));
+  `);
+
+  // status_reason_at: ISO timestamp of when status_reason was last written.
+  // Drives the 30-min auto-clear of `idle_after_unexpected_exit` (shell-first
+  // pane lifecycle) independent of last_status_at — the latter is reset by
+  // every benign sub-status flip from runtime adapters and is therefore not
+  // a reliable clock for the auto-clear. Additive nullable column; existing
+  // rows get NULL.
+  ensureColumn("agent_sessions", "status_reason_at", "TEXT");
+  db.exec(`
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (10, 'agent-sessions-status-reason-at', datetime('now'));
+  `);
+
+  // tab_id: stable per-tab identifier. New sessions get a fresh time-encoded
+  // id; restored sessions inherit their source row's tab_id so the cockpit's
+  // tab strip puts the restored conversation back in its original slot
+  // instead of appending it to the end of the row. Backfill existing rows
+  // with their own primary id — that keeps current ordering identical since
+  // both id and tab_id are time-encoded with the same generator. Wrapped in
+  // a transaction so a crash mid-migration leaves rows untouched.
+  ensureColumn("agent_sessions", "tab_id", "TEXT");
+  db.exec(`
+    BEGIN;
+    UPDATE agent_sessions SET tab_id = id WHERE tab_id IS NULL OR tab_id = '';
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (11, 'agent-sessions-tab-id', datetime('now'));
+    COMMIT;
+  `);
+
+  // One-shot dedup for accumulated restore artifacts: prior to the source-
+  // row cleanup landing in restore-routes / boot-restore, every successful
+  // restore left the original row in the DB. Repeated restarts produced
+  // 7-8 rows per (workspace, runtime_session_id), and the cockpit's tab
+  // strip rendered one tab per row. Keep only the most recently created
+  // row in each group; the older ones are dead pointers (their tmux died
+  // when the previous tmux server was killed, the only reason they look
+  // "running" is the cockpit's terminal-attach respawned an empty pane
+  // under the same name). The orphan-reaper will pick up those zombie
+  // tmux sessions on its next sweep. Idempotent and safe to run on an
+  // already-deduped DB.
+  // Self-join: delete any row that has a strictly newer sibling with the
+  // same (workspace_id, runtime_session_id). Single-row groups produce no
+  // join matches → untouched. Multi-row groups collapse to the latest by
+  // created_at. Works on every SQLite version (no window-function dep).
+  db.exec(`
+    BEGIN;
+    DELETE FROM agent_sessions
+    WHERE rowid IN (
+      SELECT a.rowid
+      FROM agent_sessions a
+      JOIN agent_sessions b
+        ON a.workspace_id = b.workspace_id
+       AND a.runtime_session_id = b.runtime_session_id
+       AND b.created_at > a.created_at
+      WHERE a.runtime_session_id IS NOT NULL
+    );
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (12, 'agent-sessions-dedup-restore-cruft', datetime('now'));
+    COMMIT;
+  `);
 }
