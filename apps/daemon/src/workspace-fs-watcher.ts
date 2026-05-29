@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Workspace } from "@citadel/contracts";
 import type { ProviderCache } from "./app-helpers.js";
+import { globalPrCacheKeyForWorkspace } from "./global-pr-cache.js";
 
 const IGNORED_TOP_LEVEL = new Set([
   "node_modules",
@@ -30,6 +31,8 @@ const DEFAULT_POKE_DEBOUNCE_MS = 2_000;
 
 type WorkspaceFsWatcherDeps = {
   listWorkspaces: () => Workspace[];
+  resolveRepoFullName?: (repoId: string) => string | null;
+  getWorkspacePrSnapshot?: (workspaceId: string) => { prNumber: number | null } | null;
   providerCache: ProviderCache;
   emit: (type: string, payload: unknown) => void;
   onSettled?: ((workspaceId: string) => void) | undefined;
@@ -59,11 +62,13 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
   const watchers = new Map<string, fs.FSWatcher[]>();
   const debounces = new Map<string, ReturnType<typeof setTimeout>>();
   const pokeDebounces = new Map<string, ReturnType<typeof setTimeout>>();
+  const pendingHeadBusts = new Set<string>();
   const failed = new Set<string>();
   const pokeDebounceMs = deps.pokeDebounceMs ?? DEFAULT_POKE_DEBOUNCE_MS;
 
   const onChange = (workspaceId: string) => (rel: string) => {
     if (!rel || isIgnored(rel)) return;
+    if (isGitHeadRef(rel)) pendingHeadBusts.add(workspaceId);
     const existing = debounces.get(workspaceId);
     if (existing) clearTimeout(existing);
     debounces.set(
@@ -71,6 +76,7 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
       setTimeout(() => {
         debounces.delete(workspaceId);
         bustWorkspaceCaches(deps.providerCache, workspaceId);
+        if (pendingHeadBusts.delete(workspaceId)) bustWorkspaceGlobalPrCache(deps, workspaceId);
         deps.emit("workspace.fsChanged", { workspaceId });
         // Schedule a poke 2s after the LAST bust — gives the edit storm time
         // to settle so we don't poke the refresh job per 350ms-burst tick.
@@ -138,6 +144,7 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
     const p = pokeDebounces.get(id);
     if (p) clearTimeout(p);
     pokeDebounces.delete(id);
+    pendingHeadBusts.delete(id);
     failed.delete(id);
   };
 
@@ -176,6 +183,7 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
     debounces.clear();
     for (const d of pokeDebounces.values()) clearTimeout(d);
     pokeDebounces.clear();
+    pendingHeadBusts.clear();
     failed.clear();
   };
 
@@ -183,12 +191,29 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
 }
 
 function bustWorkspaceCaches(providerCache: ProviderCache, workspaceId: string) {
-  bustCacheByPrefixes(providerCache, [
-    `git:${workspaceId}`,
-    `vc:${workspaceId}`,
-    `ci:${workspaceId}`,
-    `apps:${workspaceId}`,
-  ]);
+  // Only invalidate caches whose freshness actually depends on the local
+  // working tree. `vc:` (PR) and `ci:` (workflow runs) are remote state — they
+  // don't change because an agent wrote a file. Busting them on every fs blip
+  // forces a fresh `gh pr view` on the next batch poll, which under load
+  // pushes gh into rate limits and surfaces as PR icons disappearing from the
+  // navbar. The 10s / 30s polls already keep this data fresh enough.
+  bustCacheByPrefixes(providerCache, [`git:${workspaceId}`, `apps:${workspaceId}`]);
+}
+
+function bustWorkspaceGlobalPrCache(deps: WorkspaceFsWatcherDeps, workspaceId: string): void {
+  if (!deps.resolveRepoFullName || !deps.getWorkspacePrSnapshot) return;
+  const workspace = deps.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+  if (!workspace) return;
+  const key = globalPrCacheKeyForWorkspace(workspace, {
+    resolveRepoFullName: deps.resolveRepoFullName,
+    getSnapshot: deps.getWorkspacePrSnapshot,
+  });
+  if (key) deps.providerCache.delete(key);
+}
+
+function isGitHeadRef(rel: string): boolean {
+  const parts = rel.split(path.sep);
+  return rel === path.join(".git", "HEAD") || (parts[0] === ".git" && parts[1] === "refs" && parts[2] === "heads");
 }
 
 function isIgnored(rel: string): boolean {

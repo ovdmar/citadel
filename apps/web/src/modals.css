@@ -153,6 +153,87 @@
   border-top: 1px solid var(--line);
 }
 
+/* Notice modal — small dismissible advisory popup used for boot-restore and
+ * GitHub-cooldown notices. Reuses .modal-backdrop (blurred backdrop) and
+ * .modal-frame (centered dialog); these rules shrink the frame and style
+ * the inline close + Dismiss action. */
+
+.cit-notice-modal {
+  width: min(440px, calc(100vw - 28px));
+  max-height: none;
+  grid-template-rows: auto auto;
+}
+
+.cit-notice-modal__close {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cit-notice-modal__close:hover {
+  color: CanvasText;
+  background: color-mix(in srgb, var(--color-action) 12%, transparent);
+}
+
+.cit-notice-modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: CanvasText;
+}
+
+.cit-notice-modal__body p {
+  margin: 0;
+}
+
+.cit-notice-modal__hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.cit-notice-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.cit-notice-modal__primary {
+  padding: 6px 14px;
+  font-size: 12px;
+  background: var(--color-action);
+  color: var(--topbar-bg, white);
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.cit-notice-modal__primary:hover {
+  filter: brightness(1.05);
+}
+
+.cit-notice-modal__secondary {
+  padding: 6px 12px;
+  font-size: 12px;
+  background: transparent;
+  color: CanvasText;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.cit-notice-modal__secondary:hover {
+  background: color-mix(in srgb, var(--color-action) 12%, transparent);
+}
+
 .tab-strip {
   display: inline-flex;
   gap: 2px;

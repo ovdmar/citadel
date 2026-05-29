@@ -26,7 +26,10 @@ const FILE_MODE = 0o600;
 export type ProviderCacheEntry = {
   expiresAt: number;
   value: unknown;
-  cachedAt: number;
+  // Production cache writers stamp cachedAt. Optional keeps older unit-test
+  // fakes and main-branch helper maps structurally assignable while flush()
+  // persists only entries with a real timestamp.
+  cachedAt?: number;
 };
 
 type PersistedShape = {
@@ -160,13 +163,14 @@ export class PersistentProviderCache extends Map<string, ProviderCacheEntry> {
     const liveIds = new Set(this.listLiveIds());
     const now = Date.now();
     const fresh = entries.filter(([key, entry]) => {
+      if (typeof entry.cachedAt !== "number") return false;
       if (now - entry.cachedAt > MAX_AGE_MS) return false;
       const entityId = extractEntityId(key);
       if (entityId !== null && !liveIds.has(entityId)) return false;
       return true;
     });
     // Most-recently-cached wins on truncation.
-    fresh.sort((a, b) => b[1].cachedAt - a[1].cachedAt);
+    fresh.sort((a, b) => (b[1].cachedAt ?? 0) - (a[1].cachedAt ?? 0));
     const kept = fresh.slice(0, MAX_ENTRIES);
     for (const [key, entry] of kept) {
       // super.set bypasses our flush-scheduling subclass logic — we don't
@@ -201,7 +205,9 @@ export class PersistentProviderCache extends Map<string, ProviderCacheEntry> {
     const snapshot: PersistedShape = {
       version: SCHEMA_VERSION,
       savedAt: new Date().toISOString(),
-      entries: Array.from(this.entries()),
+      entries: Array.from(this.entries()).filter(
+        (item): item is [string, ProviderCacheEntry & { cachedAt: number }] => typeof item[1].cachedAt === "number",
+      ),
     };
     const payload = JSON.stringify(snapshot);
     const next = this.flushChain.then(async () => {

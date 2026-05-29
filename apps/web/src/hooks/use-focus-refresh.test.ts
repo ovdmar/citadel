@@ -33,7 +33,7 @@ describe("installFocusRefresh", () => {
     cleanup();
   });
 
-  it("invalidates both queries when data is older than threshold and focus fires", () => {
+  it("invalidates cockpit and workspace PR queries when data is older than threshold and focus fires", () => {
     const client = new QueryClient();
     const now = 1_000_000;
     seedCockpitState(client, now - 60_000); // 60s old, threshold 30s
@@ -48,6 +48,7 @@ describe("installFocusRefresh", () => {
     const keys = invalidate.mock.calls.map((c) => JSON.stringify((c[0] as { queryKey: unknown[] }).queryKey));
     expect(keys).toContain(JSON.stringify(["workspace-cockpit", wsId]));
     expect(keys).toContain(JSON.stringify(["workspaces-pr-state"]));
+    expect(keys).toContain(JSON.stringify(["workspaces-pr-batch"]));
     cleanup();
   });
 

@@ -1,5 +1,13 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { Link, Outlet, RouterProvider, createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
+import {
+  Link,
+  Outlet,
+  RouterProvider,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  useLocation,
+} from "@tanstack/react-router";
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
@@ -13,10 +21,13 @@ import { RepoSettingsView } from "./routes/repo-settings.js";
 import { ScheduledAgentsView } from "./routes/scheduled-agents.js";
 import { ScratchpadView } from "./routes/scratchpad.js";
 import { SettingsView } from "./routes/settings.js";
+import { getScratchpadDrawerOpen, setScratchpadDrawerOpen, toggleScratchpadDrawer } from "./scratchpad-drawer-store.js";
+import { ScratchpadPanel } from "./scratchpad-panel.js";
 import "./styles.css";
 import "./chrome.css";
 import "./stage-terminal.css";
 import "./cockpit-extras.css";
+import "./pr-card-actions.css";
 import "./inspector-stats.css";
 import "./inspector-checks.css";
 import "./inspector-deploy.css";
@@ -33,6 +44,7 @@ import "./scheduled-agents.css";
 import "./scheduled-agents-shell.css";
 import "./runtime-usage.css";
 import "./scratchpad.css";
+import "./scratchpad-drawer.css";
 import "./responsive.css";
 
 // Seed data-theme on <html> BEFORE React renders so any component that
@@ -50,65 +62,141 @@ const rootRoute = createRootRoute({
   component: () => <Shell />,
 });
 
-const indexRoute = createRoute({
+// Pathless layout route whose component renders the Cockpit unconditionally
+// plus an overlay slot for any child route. Every non-index route mounts as
+// a child here, so the Cockpit (and the TerminalPane iframes inside it) is
+// kept alive across navigations to Settings, Scratchpad, etc. Without this,
+// every route transition unmounted Cockpit → ttyd iframes were destroyed →
+// returning forced a fresh ttyd handshake (the user's "reloads first" gripe).
+const cockpitLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
+  id: "cockpit-layout",
+  component: CockpitLayout,
+});
+
+const indexRoute = createRoute({
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/",
-  component: Cockpit,
+  // No body: Cockpit is rendered by the parent layout. The empty Outlet here
+  // is what lets RouteOverlay decide "we're on /, don't render the overlay."
+  component: () => null,
 });
 
 const settingsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/settings",
   component: SettingsView,
 });
 
 const repoSettingsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/repos/$repoId",
   component: RepoSettingsView,
 });
 
 const operationsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/operations",
   component: OperationsView,
 });
 
 const onboardingRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/onboarding",
   component: OnboardingView,
 });
 
 const dashboardRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/dashboard",
   component: DashboardView,
 });
 
 const historyRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/history",
   component: HistoryView,
 });
 
 const scratchpadRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/scratchpad",
   component: ScratchpadView,
 });
 
 const scheduledAgentsRoute = createRoute({
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => cockpitLayoutRoute,
   path: "/scheduled-agents",
   component: ScheduledAgentsView,
 });
 
 function Shell() {
+  // Initialize the drawer from the `?scratchpad=1` query param on cold mount,
+  // so deep-link refreshes (e.g. /settings?scratchpad=1) restore the drawer
+  // exactly as it was. Subsequent toggles update the URL via syncDrawerToUrl
+  // below; navigation does not unmount the panel.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("scratchpad") === "1") setScratchpadDrawerOpen(true);
+  }, []);
+
+  // Shell-level keydown: cmd/ctrl+shift+s toggles the drawer from every route.
+  // Cockpit-specific shortcuts (cmd+k, c, ctrl+n) stay in Cockpit so they're
+  // not triggered on other routes.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        toggleScratchpadDrawer();
+        syncDrawerToUrl(getScratchpadDrawerOpen());
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <div className="app-root">
       <Outlet />
+      <ScratchpadPanel />
     </div>
+  );
+}
+
+// Mirror the drawer's open/closed state into the `?scratchpad=1` query param
+// using replaceState — no history entry, so closing the drawer doesn't require
+// multiple back presses. Keeps the URL bar consistent with the drawer state for
+// share / reload / restore-on-cold-boot.
+function syncDrawerToUrl(open: boolean) {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  const has = url.searchParams.get("scratchpad") === "1";
+  if (open && !has) {
+    url.searchParams.set("scratchpad", "1");
+    window.history.replaceState(null, "", url.toString());
+  } else if (!open && has) {
+    url.searchParams.delete("scratchpad");
+    window.history.replaceState(null, "", url.toString());
+  }
+}
+
+function CockpitLayout() {
+  const location = useLocation();
+  // The Outlet is ALWAYS rendered (in a stable DOM position) so TanStack
+  // Router never sees its mount point appear/disappear across route changes
+  // — child route components mount/unmount around it, but the outer wrapper
+  // is constant. The overlay is hidden by CSS when on the index route so the
+  // cockpit is fully visible and clickable; on any other route the overlay
+  // turns opaque and covers the cockpit, but the cockpit (including every
+  // TerminalPane iframe) stays mounted underneath.
+  const isIndex = location.pathname === "/" || location.pathname === "";
+  return (
+    <>
+      <Cockpit />
+      <div className="route-overlay" data-hidden={isIndex ? "" : undefined} aria-hidden={isIndex}>
+        <Outlet />
+      </div>
+    </>
   );
 }
 
@@ -139,15 +227,17 @@ if (typeof window !== "undefined") {
 
 const router = createRouter({
   routeTree: rootRoute.addChildren([
-    indexRoute,
-    settingsRoute,
-    repoSettingsRoute,
-    operationsRoute,
-    onboardingRoute,
-    dashboardRoute,
-    historyRoute,
-    scratchpadRoute,
-    scheduledAgentsRoute,
+    cockpitLayoutRoute.addChildren([
+      indexRoute,
+      settingsRoute,
+      repoSettingsRoute,
+      operationsRoute,
+      onboardingRoute,
+      dashboardRoute,
+      historyRoute,
+      scratchpadRoute,
+      scheduledAgentsRoute,
+    ]),
   ]),
   defaultNotFoundComponent: NotFoundView,
 });

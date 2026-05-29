@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
 
 export type ResolvedTheme = "light" | "dark";
+export type ThemePreference = ResolvedTheme | "system";
+
+export function applyThemePreference(theme: ThemePreference): void {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  window.localStorage.setItem("citadel.theme", theme);
+  if (theme === "system") {
+    delete document.documentElement.dataset.theme;
+  } else {
+    document.documentElement.dataset.theme = theme;
+  }
+}
 
 /**
  * Resolves Citadel's effective theme by reading `data-theme` on <html>

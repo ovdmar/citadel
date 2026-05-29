@@ -29,6 +29,7 @@ export function installFocusRefresh(opts: FocusRefreshOptions): () => void {
     if (clock() - dataUpdatedAt <= thresholdMs) return;
     void queryClient.invalidateQueries({ queryKey: ["workspace-cockpit", workspaceId] });
     void queryClient.invalidateQueries({ queryKey: ["workspaces-pr-state"] });
+    void queryClient.invalidateQueries({ queryKey: ["workspaces-pr-batch"] });
   };
   const onVisibilityChange = () => {
     if (typeof document !== "undefined" && document.visibilityState === "visible") onFocus();

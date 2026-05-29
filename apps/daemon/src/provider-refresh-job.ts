@@ -92,6 +92,7 @@ export function startProviderRefreshJob(deps: ProviderRefreshDeps): ProviderRefr
   function isStale(cacheKey: string, ttlMs: number): boolean {
     const entry = deps.cache.get(cacheKey);
     if (!entry) return true;
+    if (typeof entry.cachedAt !== "number") return true;
     return now() - entry.cachedAt >= ttlMs;
   }
 

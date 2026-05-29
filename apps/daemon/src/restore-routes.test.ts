@@ -7,6 +7,7 @@ import type { OperationService } from "@citadel/operations";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeServer, listen, postJson } from "./app-test-helpers.js";
 import { createDaemonApp } from "./app.js";
+import { collectRestoreCandidates } from "./restore-routes.js";
 
 const dirs: string[] = [];
 
@@ -182,9 +183,12 @@ describe("restore routes — absorb empty Claude pane", () => {
       });
       expect(result.restoredFrom).toBe("sess_dead");
       expect(result.absorbed).toEqual(["sess_empty"]);
-      // sess_empty deleted; sess_dead still around (the restored session is new).
+      // Both rows gone: sess_empty via the absorb pass (no-user-prompt sibling),
+      // sess_dead because /api/restore/run now stops the source row to prevent
+      // duplicate-tab surfacing. Only the newly-created session remains.
       const remaining = fixture.store.listSessions("ws_1").map((s) => s.id);
       expect(remaining).not.toContain("sess_empty");
+      expect(remaining).not.toContain("sess_dead");
     } finally {
       await closeServer(server);
       fs.rmSync(transcriptFile, { force: true });
@@ -249,6 +253,138 @@ describe("restore routes — absorb empty Claude pane", () => {
     } finally {
       await closeServer(server);
       fs.rmSync(transcriptFile, { force: true });
+    }
+  });
+});
+
+// Codex auto-generates its UUID at spawn; the post-spawn 5s poll can lose the
+// race on a busy host (issue we hit in the wild — see /home/jonsnow/.codex/
+// sessions rollouts that were never registered in the DB). collectRestoreCandidates
+// lazy-backfills the UUID by re-scanning the rollout tree, so the row eventually
+// becomes restore-eligible instead of staying silently invisible.
+describe("restore routes — source row cleanup", () => {
+  it("deletes the source row after a successful /api/restore/run", async () => {
+    const fixture = makeFixture();
+    const ts = new Date().toISOString();
+    fixture.store.insertSession({
+      id: "sess_source",
+      workspaceId: "ws_1",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
+      status: "unknown",
+      statusReason: "tmux_missing",
+      lastStatusAt: ts,
+      lastOutputAt: ts,
+      endedAt: ts,
+      exitCode: 0,
+      transport: "disconnected",
+      tmuxSessionName: "citadel_ws_1_source",
+      tmuxSessionId: null,
+      runtimeSessionId: "uuid-cleanup",
+      createdAt: ts,
+      updatedAt: ts,
+    });
+    const { server } = await createDaemonApp({ ...fixture, operations: fakeOps(fixture) });
+    const baseUrl = await listen(server);
+    try {
+      const result = await postJson<{ restoredFrom: string }>(`${baseUrl}/api/restore/run`, {
+        workspaceId: "ws_1",
+        runtimeSessionId: "uuid-cleanup",
+      });
+      expect(result.restoredFrom).toBe("sess_source");
+      const remaining = fixture.store.listSessions("ws_1").map((s) => s.id);
+      expect(remaining).not.toContain("sess_source");
+    } finally {
+      await closeServer(server);
+    }
+  });
+});
+
+describe("collectRestoreCandidates — codex UUID backfill", () => {
+  it("recovers a codex session whose runtime_session_id was never persisted", () => {
+    const fixture = makeFixture();
+    const originalHome = process.env.HOME;
+    process.env.HOME = fixture.homeOverride;
+    try {
+      const sessionId = "019e6921-1a68-7902-865a-45d7a2abc77a";
+      const createdAt = "2026-05-27T11:10:36.008Z";
+      const rolloutTimestamp = "2026-05-27T11:10:37.672Z";
+      const rolloutDir = path.join(fixture.homeOverride, ".codex", "sessions", "2026", "05", "27");
+      fs.mkdirSync(rolloutDir, { recursive: true });
+      const rolloutFile = path.join(rolloutDir, `rollout-2026-05-27T11-10-37-${sessionId}.jsonl`);
+      const meta = {
+        timestamp: rolloutTimestamp,
+        type: "session_meta",
+        payload: { id: sessionId, timestamp: rolloutTimestamp, cwd: fixture.workspacePath },
+      };
+      fs.writeFileSync(rolloutFile, `${JSON.stringify(meta)}\n`);
+
+      fixture.store.insertSession({
+        id: "sess_codex_orphan",
+        workspaceId: "ws_1",
+        runtimeId: "codex",
+        displayName: "Codex",
+        status: "unknown",
+        statusReason: "tmux_missing",
+        lastStatusAt: createdAt,
+        lastOutputAt: createdAt,
+        endedAt: null,
+        exitCode: null,
+        transport: "disconnected",
+        tmuxSessionName: "citadel_ws_1_codex",
+        tmuxSessionId: null,
+        runtimeSessionId: null,
+        createdAt,
+        updatedAt: createdAt,
+      });
+
+      const candidates = collectRestoreCandidates(fixture.store);
+      const codex = candidates.find((c) => c.sourceSessionId === "sess_codex_orphan");
+      expect(codex).toBeDefined();
+      expect(codex?.runtimeSessionId).toBe(sessionId);
+
+      // The row should have been updated in place — a second call short-circuits
+      // because runtimeSessionId is now persisted.
+      const reread = fixture.store.listSessions("ws_1").find((s) => s.id === "sess_codex_orphan");
+      expect(reread?.runtimeSessionId).toBe(sessionId);
+    } finally {
+      if (originalHome === undefined) Reflect.deleteProperty(process.env, "HOME");
+      else process.env.HOME = originalHome;
+    }
+  });
+
+  it("leaves codex rows without a matching rollout uncandidated (no throw)", () => {
+    const fixture = makeFixture();
+    const originalHome = process.env.HOME;
+    process.env.HOME = fixture.homeOverride;
+    try {
+      // No rollout file written — backfill should return null and the row is
+      // silently dropped (matches the existing 'unknown UUID' handling).
+      const ts = new Date().toISOString();
+      fixture.store.insertSession({
+        id: "sess_codex_nofile",
+        workspaceId: "ws_1",
+        runtimeId: "codex",
+        displayName: "Codex",
+        status: "stopped",
+        statusReason: null,
+        lastStatusAt: ts,
+        lastOutputAt: ts,
+        endedAt: ts,
+        exitCode: 0,
+        transport: "disconnected",
+        tmuxSessionName: "citadel_ws_1_codex2",
+        tmuxSessionId: null,
+        runtimeSessionId: null,
+        createdAt: ts,
+        updatedAt: ts,
+      });
+
+      const candidates = collectRestoreCandidates(fixture.store);
+      expect(candidates.find((c) => c.sourceSessionId === "sess_codex_nofile")).toBeUndefined();
+    } finally {
+      if (originalHome === undefined) Reflect.deleteProperty(process.env, "HOME");
+      else process.env.HOME = originalHome;
     }
   });
 });

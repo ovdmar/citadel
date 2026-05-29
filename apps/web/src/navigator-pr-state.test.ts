@@ -14,6 +14,13 @@ function makePr(number: number, state = "OPEN"): PullRequestSummary {
     additions: null,
     deletions: null,
     reviewers: [],
+    commits: [],
+    headRefName: null,
+    parentPr: null,
+    mergeable: "unknown",
+    allowedMergeStrategies: [],
+    mergeStateStatus: null,
+    headSha: null,
   };
 }
 
