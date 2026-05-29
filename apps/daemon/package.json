@@ -15,6 +15,7 @@
     "@citadel/contracts": "workspace:*",
     "@citadel/core": "workspace:*",
     "@citadel/db": "workspace:*",
+    "@citadel/hooks": "workspace:*",
     "@citadel/mcp": "workspace:*",
     "@citadel/operations": "workspace:*",
     "@citadel/providers": "workspace:*",

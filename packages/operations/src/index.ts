@@ -2,8 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import type { CreateAgentSessionInput, CreateNamespaceInput, CreateWorkspaceInput, HookAction, HookOutput, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
-import { isAcceptingInputStatus } from "@citadel/contracts";
+import type { ActivityEvent, CreateAgentSessionInput, CreateNamespaceInput, CreateWorkspaceInput, HookAction, HookOutput, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
@@ -12,6 +11,7 @@ import * as agentMessages from "./agent-messages.js";
 import { createAgentSession as createAgentSessionImpl } from "./create-agent-session.js";
 import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 import * as namespaceOps from "./namespaces.js";
+import { removeRepo as removeRepoImpl } from "./repo-removal.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
 export type { LaunchAgentResult } from "./launch-agent.js";
 export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
@@ -19,13 +19,20 @@ export type { AgentHistoryResult, AgentHistoryErrorResult } from "./agent-histor
 export * from "./status.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export { ScheduledAgentRunner, parseCronExpression, cronMatches, nextCronRun, describeCron } from "./scheduled-agents.js";
-export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
+export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
-export { runRateLimitSchedulerTick } from "./rate-limit-scheduler.js";
-export type { SchedulerDeps, SchedulerTickResult } from "./rate-limit-scheduler.js";
-export { resumeRateLimitedSession } from "./rate-limit-resumer.js";
-export type { RateLimitResumerDeps, ResumeOutcome } from "./rate-limit-resumer.js";
+export {
+  createDiagnosticsLogger,
+  noopDiagnosticsLogger,
+  type DiagnosticEvent,
+  type DiagnosticsLogger,
+  type DiagnosticsLoggerOptions,
+} from "./diagnostics.js";
+export { parseUsageLimitResetFromReason, deriveAccountUsageLimit } from "./usage-limit.js";
+export type { AccountRateLimitInfo } from "./usage-limit.js";
+export { DEFAULT_AUTO_RESUME_INTERVAL_MS, startAutoResumeLoop } from "./auto-resume.js";
+export type { AutoResumeDeps, AutoResumeLoopHandle } from "./auto-resume.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import { type DeployOpsDeps, listDeployedApps as listDeployedAppsImpl, redeployApp as redeployAppImpl } from "./deploy.js";
 import {
@@ -54,6 +61,9 @@ import {
 } from "./workspace-apps.js";
 
 export class OperationService {
+  // Daemon registers onSessionStopped to release the ttyd whenever stopAgentSession runs (REST, MCP, restore route).
+  private terminalHooks: { onSessionStopped?: (sessionId: string) => void } = {};
+
   constructor(
     private readonly store: SqliteStore,
     private readonly config?: {
@@ -67,6 +77,9 @@ export class OperationService {
       commandPolicy: CitadelConfig["commandPolicy"];
     },
   ) {}
+
+  // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+  setTerminalHooks(hooks: { onSessionStopped?: (sessionId: string) => void }) { this.terminalHooks = hooks; }
 
   registerRepo(input: { rootPath: string; name?: string | undefined; worktreeParent?: string | undefined }) {
     const now = nowIso();
@@ -89,7 +102,6 @@ export class OperationService {
     };
     this.store.insertRepo(repo);
     this.activity("repo.registered", "user", `Registered ${repo.name}`, repo.id, null, null);
-    // Non-removable root workspace exposes the repo's main checkout to agents/terminals (cf. Superset).
     const rootWorkspace: Workspace = {
       id: createId("ws"),
       repoId: repo.id,
@@ -267,12 +279,12 @@ export class OperationService {
       sessionIdArg?: string | null;
       resumeArg?: string | null;
     },
+    options: { activitySource?: ActivityEvent["source"] } = {},
   ) => {
     if (input.namespaceId) {
-      const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
-      if (workspace && input.namespaceId !== workspace.namespaceId) {
-        this.assignWorkspaceToNamespace({ workspaceId: workspace.id, namespaceId: input.namespaceId });
-      }
+      const ws = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+      if (ws && input.namespaceId !== ws.namespaceId)
+        this.assignWorkspaceToNamespace({ workspaceId: ws.id, namespaceId: input.namespaceId });
     }
     return createAgentSessionImpl(
       {
@@ -283,6 +295,7 @@ export class OperationService {
       },
       input,
       runtime,
+      options,
     );
   };
 
@@ -311,7 +324,8 @@ export class OperationService {
 
   readAgentTranscript = (i: { sessionId: string; lines?: number; maxChars?: number }) =>
     agentMessages.readAgentTranscript(this.store, i);
-  sendAgentMessage = (i: { sessionId: string; message: string }) => agentMessages.sendAgentMessage(this.store, i);
+  sendAgentMessage = (i: Parameters<typeof agentMessages.sendAgentMessage>[1]) =>
+    agentMessages.sendAgentMessage(this.store, i);
   readAgentHistory = (i: { sessionId: string; limit?: number; maxChars?: number }) =>
     agentHistory.readAgentHistory(this.store, i);
   getSessionPromptSummary = (sessionId: string) => agentHistory.getSessionPromptSummary(this.store, sessionId);
@@ -320,6 +334,7 @@ export class OperationService {
     const session = this.store.listSessions().find((candidate) => candidate.id === input.sessionId);
     if (!session) return { stopped: false, reason: "session_not_found" as const };
     if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
+    this.terminalHooks.onSessionStopped?.(session.id);
     this.store.deleteSession(session.id);
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     this.activity(
@@ -391,8 +406,7 @@ export class OperationService {
     const repo = this.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
     if (!repo) throw new Error(`Workspace repo is missing: ${workspace.repoId}`);
     if (workspace.kind === "root") {
-      // The root workspace tracks the repo's main checkout; it can only be
-      // removed by removing the repository itself.
+      // Root workspace can only be dropped via repo removal.
       const operation = this.operation(
         "workspace.remove",
         "failed",
@@ -440,6 +454,12 @@ export class OperationService {
     const ownedSessions = this.store.listSessions(workspace.id);
     for (const session of ownedSessions) {
       if (session.tmuxSessionName && !input.archiveOnly) killTmuxSession(session.tmuxSessionName);
+      // Always release the ttyd alongside — applies to both archive and full
+      // remove. Otherwise the ttyd process keeps running detached, holding a
+      // port + a tmux client slot, and a future iframe attempt for the
+      // (now-archived) session can't re-attach cleanly. The hook is a no-op
+      // when no manager is wired (tests).
+      this.terminalHooks.onSessionStopped?.(session.id);
     }
     if (ownedSessions.length && !input.archiveOnly) {
       this.logOp(operation.id, "info", `Killed ${ownedSessions.length} tmux session(s) attached to workspace`);
@@ -513,124 +533,15 @@ export class OperationService {
     return { operationId: operation.id, removed: !input.archiveOnly, archived: Boolean(input.archiveOnly), dirty };
   }
 
-  async removeRepo(input: { repoId: string; force?: boolean; cleanupWorktrees?: boolean }) {
-    const repo = this.store.listRepos().find((candidate) => candidate.id === input.repoId);
-    if (!repo) throw new Error(`Unknown repo: ${input.repoId}`);
-    const workspaces = this.store.listWorkspaces(repo.id);
-    const sessions = this.store
-      .listSessions()
-      .filter((session) => workspaces.some((workspace) => workspace.id === session.workspaceId));
-    const activeSessions = sessions.filter((session) => isAcceptingInputStatus(session.status));
-    const runningOperations = this.store
-      .listOperations()
-      .filter((operation) => operation.repoId === repo.id && ["queued", "running"].includes(operation.status));
-    const operation = this.operation(
-      "repo.remove",
-      "running",
-      repo.id,
-      null,
-      10,
-      input.cleanupWorktrees ? "Checking repository cleanup impact" : "Archiving repository metadata",
+  removeRepo(input: { repoId: string; force?: boolean; cleanupWorktrees?: boolean }) {
+    return removeRepoImpl(
+      {
+        store: this.store,
+        activity: (...args) => this.activity(...args),
+        operation: (...args) => this.operation(...args),
+      },
+      input,
     );
-
-    if (!input.force && (activeSessions.length || runningOperations.length)) {
-      this.store.upsertOperation({
-        ...operation,
-        status: "failed",
-        progress: 100,
-        error: `Repository has ${activeSessions.length} active sessions and ${runningOperations.length} running operations. Confirm removal to continue.`,
-        updatedAt: nowIso(),
-      });
-      this.activity(
-        "repo.remove.blocked",
-        "system",
-        `Removal blocked for ${repo.name}; active sessions or operations exist`,
-        repo.id,
-        null,
-        operation.id,
-      );
-      return {
-        operationId: operation.id,
-        removed: false,
-        archivedWorkspaces: 0,
-        cleanupWorktrees: Boolean(input.cleanupWorktrees),
-        activeSessions: activeSessions.length,
-        runningOperations: runningOperations.length,
-      };
-    }
-
-    for (const session of sessions) {
-      if (session.tmuxSessionName && input.cleanupWorktrees) killTmuxSession(session.tmuxSessionName);
-    }
-
-    let cleanedWorktrees = 0;
-    if (input.cleanupWorktrees) {
-      for (const workspace of workspaces) {
-        if (!fs.existsSync(workspace.path)) continue;
-        try {
-          tryRunGit(repo.rootPath, ["worktree", "remove", "--force", workspace.path]);
-          cleanedWorktrees += 1;
-        } catch (error) {
-          if (!input.force) {
-            const message = error instanceof Error ? error.message : "repo_cleanup_failed";
-            this.store.upsertOperation({
-              ...operation,
-              status: "failed",
-              progress: 100,
-              error: message,
-              updatedAt: nowIso(),
-            });
-            this.activity(
-              "repo.remove.blocked",
-              "system",
-              `Cleanup failed while removing ${repo.name}: ${message}`,
-              repo.id,
-              null,
-              operation.id,
-            );
-            return {
-              operationId: operation.id,
-              removed: false,
-              archivedWorkspaces: 0,
-              cleanupWorktrees: true,
-              cleanedWorktrees,
-              activeSessions: activeSessions.length,
-              runningOperations: runningOperations.length,
-            };
-          }
-        }
-      }
-    }
-
-    this.store.archiveRepo(repo.id);
-    this.store.upsertOperation({
-      ...operation,
-      status: "succeeded",
-      progress: 100,
-      message: input.cleanupWorktrees
-        ? `Repository removed and ${cleanedWorktrees} worktrees cleaned up`
-        : "Repository removed from Citadel tracking; worktrees preserved",
-      updatedAt: nowIso(),
-    });
-    this.activity(
-      "repo.removed",
-      "user",
-      input.cleanupWorktrees
-        ? `Removed ${repo.name} and cleaned ${cleanedWorktrees} worktrees`
-        : `Removed ${repo.name} from tracking and preserved worktrees`,
-      repo.id,
-      null,
-      operation.id,
-    );
-    return {
-      operationId: operation.id,
-      removed: true,
-      archivedWorkspaces: workspaces.length,
-      cleanupWorktrees: Boolean(input.cleanupWorktrees),
-      cleanedWorktrees,
-      activeSessions: activeSessions.length,
-      runningOperations: runningOperations.length,
-    };
   }
 
   discoverWorkspaceApps(input: { repo: Repo; workspace: Workspace; providerContext?: unknown }) {
@@ -643,9 +554,7 @@ export class OperationService {
 
   listDeployedApps = (input: { workspaceId: string }) =>
     listDeployedAppsImpl(this.deployOpsDeps(), this.resolveRepoWorkspace(input.workspaceId));
-
-  // Per-workspace inflight guard so a double-click in the cockpit or a
-  // human+MCP overlap doesn't run two redeploys against the same port.
+  // Per-workspace inflight guard prevents concurrent redeploys (double-click, human+MCP overlap).
   private redeployInflight = new Map<string, ReturnType<typeof redeployAppImpl>>();
   redeployApp = (input: { workspaceId: string; appName?: string | undefined }) => {
     const existing = this.redeployInflight.get(input.workspaceId);
@@ -737,7 +646,7 @@ export class OperationService {
 
   private activity(
     type: string,
-    source: "user" | "system" | "hook",
+    source: ActivityEvent["source"],
     message: string,
     repoId: string | null,
     workspaceId: string | null,

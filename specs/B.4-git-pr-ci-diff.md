@@ -27,6 +27,12 @@
 [ ] 7. Workspace cards render the PR icon with lifecycle color: grey when no PR exists, yellow when the PR exists and checks are pending, green when checks pass, red when any check fails.
 [ ] 8. The PR icon on a workspace card links directly to the provider PR URL.
 [ ] 9. Workspace cards render a separate approval icon to the right of the PR icon: grey when no reviewer is requested, yellow when reviewers are pending, red when changes are requested or comments are unresolved, green check when at least one approval exists.
+[x] 10. Workspace cards always render a PR row, even when no PR exists — an explicit thin placeholder makes the lifecycle slot visible without requiring workspace selection.
+[x] 11. The PR row exposes a copy-branch affordance for the head branch, and uses GitHub's `base ← head` direction.
+[x] 12. Stacked PRs are detected by comparing each PR's base ref to other open and recently-merged PRs in the same head repository. When a parent is detected, the workspace card and inspector show an `↑ #<parent-number>` chip linking to that PR; merged parents are rendered with a distinct tone.
+[x] 13. The inspector PR card surfaces a single action button at its bottom-right. It renders Merge when the PR is open and the GitHub CLI is healthy — respecting the repository's allowed merge strategies (squash/merge/rebase) and never deleting the head branch by default — and switches to Fix conflicts when `mergeable === "conflicting"` or `mergeStateStatus === "DIRTY"`. Merge and Fix conflicts are mutually exclusive (a conflicting PR cannot be merged); merged or closed PRs render no action.
+[~] 14. GitHub's `mergeable` and `mergeStateStatus` fields are surfaced through `PullRequestSummary`. `mergeable !== "CONFLICTING"` is required for the `ready-to-merge` readiness state; `mergeStateStatus` informs the workspace-card tone only. These fields are refreshed when (a) the PR's own `headSha` changes, (b) the repo's default-branch SHA moves (detected by the per-repo merge-to-main watcher), or (c) the operator clicks force-refresh — never on every poll.
+[~] 15. When `mergeable === "CONFLICTING"`, the workspace enters the dedicated `pr-conflicts` readiness state, distinct from the local working-tree `conflicts` state and from `checks-failing`. The workspace-card tone also flips to `conflicting` when `mergeStateStatus === "DIRTY"`, but the readiness state itself remains scoped to `mergeable === "CONFLICTING"`.
 
 ## Checks And CI
 
@@ -36,6 +42,23 @@
 [ ] 4. Pending checks show elapsed time and pending count.
 [ ] 5. Green checks contribute to ready-for-review or ready-to-merge readiness.
 [ ] 6. Stale check data is visible.
+[x] 7. The inspector renders all PR commits (not just local recent commits) with a "Show more" expander when the list exceeds 5; each commit shows a per-commit check-roll-up dot (passing/pending/failing).
+[x] 8. The inspector exposes a manual force-refresh control for PR and check state, and a live-ticking "Last fetched X ago" timestamp drawn from `versionControl.checkedAt`.
+
+## Background Refresh
+
+[x] 1. PR state for every workspace with a remote and an open PR is refreshed in the background on a per-PR adaptive cadence decided by the daemon: 60s default while checks are pending/failing, 10min metadata-only refresh once checks are green, no automatic refresh for merged, closed, or conflicting PRs until a new local PR commit is detected. The cockpit asks at a 60s batch rhythm and refetches the active workspace on focus / SSE invalidation; the daemon serves cache or fetches based on the per-PR schedule and a shared global PR cache.
+[x] 2. Background polling pauses when the cockpit tab is hidden (`document.visibilityState === 'hidden'`) and resumes on focus. It also pauses entirely when no cockpit tab is connected at all (no SSE viewers) after a 2-minute grace window so brief tab-reloads don't trip it.
+[x] 3. Workspaces with no remote, repository-root workspaces, workspaces with no PR, and PRs in merged/closed/conflicting states are skipped to avoid useless gh invocations. Workspaces in active gh-cooldown are not skipped — they are queued and served from snapshot/cache.
+[x] 4. PRs tracked by multiple workspaces share a single cached `PullRequestSummary` keyed by `owner/repo#number`; both the active-workspace fetch and stacked-PR detection consult daemon-owned caches before spawning GitHub CLI work.
+
+## GitHub Rate Limiting
+
+[x] 1. When any gh subprocess returns a rate-limit error ("API rate limit exceeded", "secondary rate limit", "abuse rate limit"), the daemon enters a 15-minute global cooldown. Every subsequent gh call short-circuits without spawning a subprocess.
+[x] 2. Cooldown state surfaces to the FE through `versionControl.cooldownUntil` (ISO timestamp). The pr-routes response builder decorates every outgoing `versionControl` payload with this field during cooldown — regardless of whether the payload came from a fresh fetch, a scheduler-skip cache fallback, or a stale snapshot.
+[x] 3. The cockpit renders a single top-of-page pill "GitHub rate-limited — retrying at HH:MM" when any workspace carries a non-null `cooldownUntil` in the sticky cache. Last-known PR data stays visible underneath.
+[x] 4. Force-refresh (`pr-refresh` endpoint) during cooldown returns 200 + the cached snapshot decorated with `cooldownUntil`, not 503 — the FE banner explains the situation; no special-case error toast.
+[x] 5. Worktree deploys started by `make deploy` disable automated GitHub polling by default; only the long-term install enables it. A worktree can opt in with `CITADEL_ENABLE_WORKTREE_GH_AUTOMATION=1 make deploy`.
 
 ## Diff
 

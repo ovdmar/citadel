@@ -66,6 +66,18 @@ describe("injectKeyShim", () => {
     // listeners).
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain('document.addEventListener("keydown"');
     expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain('window.addEventListener("keydown"');
+    // Client lifecycle telemetry distinguishes iframe navigation from raw
+    // WebSocket disconnects in diagnostics.
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain("terminal-client-event");
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('recordTerminalClientEvent("ws.close"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).toMatch(/window\.addEventListener\(\s*"pagehide"/);
+  });
+
+  it("does not self-refresh terminal pages for theme changes", () => {
+    expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain("citadel.theme");
+    expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain('window.addEventListener("storage"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain("/terminal?theme=");
+    expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain("window.location.reload()");
   });
 });
 

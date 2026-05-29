@@ -1,0 +1,30 @@
+• Citadel already has a repo-specific extension for implement-task, so the deterministic wiring should probably preserve that extension contract rather than flatten
+  it into hardcoded generic rules. I'm reading those local rules and the repo scripts next.
+
+• Explored
+  └ Read profile.yml, implement-task.md, package.json, Makefile
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The local extension makes the workflow explicit: plan intake, branch gate, task skeleton, TDD units, targeted checks, self-review, push. I'm checking Citadel's
+  product architecture now to place those as app-level state transitions rather than just a prompt recipe.
+
+• Explored
+  └ Read README.md, citadel-v2-architecture.md, agent-prompt-history.md, user-journeys.md, create-agent-session.ts, create-background-agent-session.ts, index.ts
+    Search plan|task|implement|agent session|workflow|step in packages
+    Read index.ts, launch-agent.ts
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• At this point the likely shape is clear: Citadel already has operations, sessions, activity, workspaces, and MCP. The missing primitive is a first-class
+  "implementation run" state machine with checkpoints that can launch/prompt agents and observe repo/session state deterministically.
+
+• Explored
+  └ Read app.ts, daemon-mcp-tool.ts, index.ts, migrate.ts, app-state.ts
+
+◦ Working (2m 36s • esc to interrupt)
+
+
+› Use /skills to list available skills
+
+  gpt-5.5 xhigh · ~/Workspace/citadel

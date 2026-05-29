@@ -95,22 +95,6 @@ export async function submitPrompt(
   }
 }
 
-// Send a single Enter keystroke to the backing tmux session. Used by the
-// rate-limit resumer to "wake" a session whose runtime is paused on a
-// reset banner ("Press Enter to retry" or equivalent). Strictly a thin
-// wrapper over `tmux send-keys` — no paste buffer, no verification.
-//
-// Callers MUST gate this on a fresh pane re-confirm (banner still visible,
-// no operator input in the bottom line) to avoid clobbering operator state.
-export function pressEnter(sessionName: string): { ok: boolean; error?: string } {
-  try {
-    execFileSync("tmux", ["send-keys", "-t", sessionName, "Enter"]);
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : "press_enter_failed" };
-  }
-}
-
 // Last meaningful slice of the prompt we'll try to spot in the input region
 // after pasting. We avoid matching on whitespace-only or extremely short
 // snippets to keep false positives down. Returns null when verification
@@ -160,8 +144,11 @@ function pasteVisible(sessionName: string, snippet: string): boolean {
   }
   const normalized = collapseWhitespace(captured);
   if (normalized.includes(snippet)) return true;
+  return hasCollapsedPasteMarker(normalized);
+}
+
+export function hasCollapsedPasteMarker(normalized: string): boolean {
   // Claude Code: `[Pasted text #1 +101 lines]` (or "#1 paste again to expand").
-  // We match loosely on "Pasted" + "#" + a digit because the exact suffix
-  // varies with paste size and Claude version.
-  return /\[Pasted [^\]]*#\d+/u.test(normalized);
+  // Codex: `[Pasted Content 3298 chars]`.
+  return /\[Pasted [^\]]*#\d+/u.test(normalized) || /\[Pasted Content \d+ chars\]/u.test(normalized);
 }
