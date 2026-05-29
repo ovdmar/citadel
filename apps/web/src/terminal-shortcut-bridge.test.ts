@@ -15,7 +15,7 @@ describe("parseTerminalShortcutMessage", () => {
       },
     });
 
-    expect(parseTerminalShortcutMessage(event)).toBe("command-palette");
+    expect(parseTerminalShortcutMessage(event)).toEqual({ action: "command-palette", sessionId: "sess_1" });
   });
 
   it("rejects wrong origins, sources, and actions", () => {
@@ -40,6 +40,14 @@ describe("parseTerminalShortcutMessage", () => {
         new MessageEvent("message", {
           origin: window.location.origin,
           data: { source: "citadel-terminal", type: "citadel.terminal-shortcut", action: "unknown" },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      parseTerminalShortcutMessage(
+        new MessageEvent("message", {
+          origin: window.location.origin,
+          data: { source: "citadel-terminal", type: "citadel.terminal-shortcut", action: "command-palette" },
         }),
       ),
     ).toBeNull();

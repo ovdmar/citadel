@@ -161,10 +161,10 @@ export function Cockpit() {
       }
     };
     const onMessage = (event: MessageEvent) => {
-      if (!isRegisteredTerminalMessageSource(event.source)) return;
-      const action = parseTerminalShortcutMessage(event);
-      if (action === "command-palette") toggleCommandPalette();
-      else if (action === "new-workspace") openCreateWorkspace();
+      const message = parseTerminalShortcutMessage(event);
+      if (!message || !isRegisteredTerminalMessageSource(event.source, message.sessionId)) return;
+      if (message.action === "command-palette") toggleCommandPalette();
+      else if (message.action === "new-workspace") openCreateWorkspace();
     };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("message", onMessage);

@@ -22,6 +22,7 @@ type EnsureError = {
 };
 
 const RUNBOOK_URL = "/docs/operations/terminal-runbook";
+const TERMINAL_CLIENT_VERSION = "shortcut-bridge-v2";
 
 /**
  * Per-session handle used by Stage tabs to drive a live terminal (reload the
@@ -67,12 +68,16 @@ export function subscribeTerminalHandle(listener: (sessionId: string) => void): 
   return () => LISTENERS.delete(listener);
 }
 
-export function isRegisteredTerminalMessageSource(source: MessageEventSource | null): boolean {
-  if (!source) return false;
-  for (const frameWindow of FRAME_WINDOWS.values()) {
-    if (source === frameWindow) return true;
+export function isRegisteredTerminalMessageSource(
+  source: MessageEventSource | null,
+  sessionId: string | null | undefined,
+): boolean {
+  if (source) {
+    for (const frameWindow of FRAME_WINDOWS.values()) {
+      if (source === frameWindow) return true;
+    }
   }
-  return false;
+  return Boolean(sessionId && REGISTRY.has(sessionId));
 }
 
 // Focus the iframe of an active session. No-op when:
@@ -227,7 +232,7 @@ export function TerminalPane(props: { session: AgentSession }) {
             ref={iframeRef}
             key={`${sessionId}-${iframeKey}`}
             className="terminal-iframe"
-            src={url}
+            src={terminalIframeSrc(url)}
             title={`Terminal ${props.session.displayName}`}
             allow="clipboard-read; clipboard-write"
             // tabIndex makes the iframe a programmatic-focus target without
@@ -243,6 +248,11 @@ export function TerminalPane(props: { session: AgentSession }) {
       </div>
     </div>
   );
+}
+
+export function terminalIframeSrc(url: string): string {
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}citadelClient=${encodeURIComponent(TERMINAL_CLIENT_VERSION)}`;
 }
 
 function TerminalErrorState(props: { error: EnsureError; onRetry: () => void; retrying: boolean }) {

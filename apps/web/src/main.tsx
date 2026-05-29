@@ -160,8 +160,9 @@ function Shell() {
       }
     };
     const onMessage = (event: MessageEvent) => {
-      if (!isRegisteredTerminalMessageSource(event.source)) return;
-      if (parseTerminalShortcutMessage(event) === "scratchpad-toggle") toggleScratchpad();
+      const message = parseTerminalShortcutMessage(event);
+      if (!message || !isRegisteredTerminalMessageSource(event.source, message.sessionId)) return;
+      if (message.action === "scratchpad-toggle") toggleScratchpad();
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("message", onMessage);
