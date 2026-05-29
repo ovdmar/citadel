@@ -21,43 +21,22 @@ export { ScheduledAgentRunner, parseCronExpression, cronMatches, nextCronRun, de
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
-export {
-  createDiagnosticsLogger,
-  noopDiagnosticsLogger,
-  type DiagnosticEvent,
-  type DiagnosticsLogger,
-  type DiagnosticsLoggerOptions,
-} from "./diagnostics.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+export { createDiagnosticsLogger, noopDiagnosticsLogger, type DiagnosticEvent, type DiagnosticsLogger, type DiagnosticsLoggerOptions } from "./diagnostics.js";
 export { parseUsageLimitResetFromReason, deriveAccountUsageLimit } from "./usage-limit.js";
 export type { AccountRateLimitInfo } from "./usage-limit.js";
 export { DEFAULT_AUTO_RESUME_INTERVAL_MS, startAutoResumeLoop } from "./auto-resume.js";
 export type { AutoResumeDeps, AutoResumeLoopHandle } from "./auto-resume.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import { type DeployOpsDeps, listDeployedApps as listDeployedAppsImpl, redeployApp as redeployAppImpl } from "./deploy.js";
-import {
-  BranchInUseByWorktreeError,
-  RemoteRefMissingError,
-  WorkspaceNameTakenError,
-  addWorktree,
-  cancelOperationInStore,
-  classifyWorktreeError,
-  cleanupWorktree,
-  discoverDefaultBranch,
-  isUniqueWorkspaceNameViolation,
-  listHookDiagnostics,
-  reconcileStore,
-  tryRunGit,
-  workspaceIsDirty,
-} from "./helpers.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+import { BranchInUseByWorktreeError, RemoteRefMissingError, WorkspaceNameTakenError, addWorktree, cancelOperationInStore, classifyWorktreeError, cleanupWorktree, discoverDefaultBranch, isUniqueWorkspaceNameViolation, listHookDiagnostics, reconcileStore, tryRunGit, workspaceIsDirty } from "./helpers.js";
 
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export { BranchInUseByWorktreeError, RemoteRefMissingError, WorkspaceInUseError, WorkspaceNameTakenError } from "./helpers.js";
 import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
-import {
-  type WorkspaceAppsDeps,
-  discoverWorkspaceApps as discoverWorkspaceAppsImpl,
-  runWorkspaceAction as runWorkspaceActionImpl,
-} from "./workspace-apps.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+import { type WorkspaceAppsDeps, discoverWorkspaceApps as discoverWorkspaceAppsImpl, runWorkspaceAction as runWorkspaceActionImpl } from "./workspace-apps.js";
 
 export class OperationService {
   // Daemon registers onSessionStopped to release the ttyd whenever stopAgentSession runs (REST, MCP, restore route).

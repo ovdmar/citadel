@@ -12,8 +12,8 @@ import {
   History,
   Moon,
   Server,
-  Stethoscope,
   Sparkles,
+  Stethoscope,
   Sun,
   Workflow,
 } from "lucide-react";
