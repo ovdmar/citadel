@@ -22,6 +22,10 @@ const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playw
 export default defineConfig({
   testDir: "e2e",
   timeout: 30_000,
+  // The suite intentionally talks to one sandbox daemon and one shared data
+  // dir. Running projects in parallel races scratchpad/config state and makes
+  // `pnpm e2e` depend on host CPU count.
+  workers: 1,
   expect: { timeout: 10_000 },
   use: {
     baseURL: webBase,
@@ -67,11 +71,11 @@ export default defineConfig({
         // E2E writes screenshot artifacts under docs/campaigns. Run the
         // built daemon, not tsx watch/source mode, so CI cannot restart the
         // API server between tests and surface transient ECONNRESETs.
-        'sh -c \'rm -f "$CITADEL_PLAYWRIGHT_DAEMON_LOG"; (pnpm --filter @citadel/daemon build && pnpm --filter @citadel/daemon start) >"$CITADEL_PLAYWRIGHT_DAEMON_LOG" 2>&1; code=$?; echo "[playwright-daemon] exited $code at $(date -u +%FT%TZ)" >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG"; exit $code\'',
+        'sh -c \'rm -f "$CITADEL_PLAYWRIGHT_DAEMON_LOG"; rm -rf "${CITADEL_DATA_DIR:?}"; (pnpm --filter @citadel/daemon... build && pnpm --filter @citadel/daemon start) >"$CITADEL_PLAYWRIGHT_DAEMON_LOG" 2>&1; code=$?; echo "[playwright-daemon] exited $code at $(date -u +%FT%TZ)" >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG"; exit $code\'',
       ].join(" "),
       url: `${daemonBase}/api/health`,
       reuseExistingServer: false,
-      timeout: 30_000,
+      timeout: 120_000,
     },
     {
       command: `CITADEL_DAEMON_URL=${daemonBase} CITADEL_WEB_PORT=${webPort} pnpm --filter @citadel/web dev`,
