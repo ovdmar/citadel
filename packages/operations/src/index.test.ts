@@ -743,6 +743,10 @@ describe("OperationService", () => {
     ).rejects.toThrow(/Unknown repo/);
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
+
+  // The new tests for funny-name auto-generation and dirtySummary attach
+  // live in `workspace-lifecycle.test.ts` to keep this file under the
+  // 800-line cap enforced by `scripts/checks/file-size.ts`.
 });
 
 function createGitFixture() {

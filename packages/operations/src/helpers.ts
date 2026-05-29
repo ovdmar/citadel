@@ -204,6 +204,84 @@ export function workspaceHasUnpushedCommits(workspacePath: string) {
   }
 }
 
+// Cap output payload sizes so dirty summaries don't unbounded grow in
+// pathological cases (e.g. a worktree with thousands of untracked files).
+const DIRTY_SUMMARY_FILE_CAP = 50;
+const DIRTY_SUMMARY_COMMIT_CAP = 20;
+
+export type WorkspaceDirtySummary = {
+  files: Array<{ status: string; path: string }>;
+  unpushedCommits: Array<{ sha: string; subject: string }>;
+};
+
+// Companion to workspaceIsDirty: returns the actual change summary so the
+// cockpit can show which files / commits are blocking the drop. We re-run
+// the underlying git invocations (status + log) rather than threading the
+// raw output through workspaceIsDirty so this helper can be called
+// independently from any code path that needs to surface the detail.
+export function workspaceDirtySummary(workspacePath: string): WorkspaceDirtySummary {
+  if (!fs.existsSync(workspacePath)) return { files: [], unpushedCommits: [] };
+
+  const files: WorkspaceDirtySummary["files"] = [];
+  try {
+    const statusOutput = execFileSync("git", ["status", "--porcelain=v1"], {
+      cwd: workspacePath,
+      encoding: "utf8",
+      maxBuffer: 512 * 1024,
+    });
+    for (const line of statusOutput.split("\n")) {
+      if (!line) continue;
+      // Porcelain v1 format: 2-char status code, single space, then path.
+      // Renames are `R  src -> dst`; we keep the right-hand side for display.
+      const status = line.slice(0, 2);
+      const rest = line.slice(3);
+      const file = rest.includes(" -> ") ? (rest.split(" -> ")[1] ?? rest) : rest;
+      files.push({ status, path: file });
+      if (files.length >= DIRTY_SUMMARY_FILE_CAP) break;
+    }
+  } catch {
+    // Not a git repo or git unavailable — return empty rather than throwing,
+    // so callers can render a defensive fallback message.
+  }
+
+  const unpushedCommits: WorkspaceDirtySummary["unpushedCommits"] = [];
+  try {
+    // Try the upstream-aware path first. If `@{u}` resolves, list commits
+    // between upstream and HEAD; otherwise fall through to the rev-list
+    // fallback that excludes anything reachable from a remote.
+    let logOutput = "";
+    try {
+      execFileSync("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], {
+        cwd: workspacePath,
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+      logOutput = execFileSync(
+        "git",
+        ["log", "--pretty=format:%H%x00%s", `--max-count=${DIRTY_SUMMARY_COMMIT_CAP}`, "@{u}..HEAD"],
+        { cwd: workspacePath, encoding: "utf8", maxBuffer: 512 * 1024 },
+      );
+    } catch {
+      logOutput = execFileSync(
+        "git",
+        ["log", "--pretty=format:%H%x00%s", `--max-count=${DIRTY_SUMMARY_COMMIT_CAP}`, "HEAD", "--not", "--remotes"],
+        { cwd: workspacePath, encoding: "utf8", maxBuffer: 512 * 1024 },
+      );
+    }
+    for (const line of logOutput.split("\n")) {
+      if (!line) continue;
+      const [sha, ...subjectParts] = line.split(" ");
+      if (!sha) continue;
+      unpushedCommits.push({ sha, subject: subjectParts.join(" ") });
+      if (unpushedCommits.length >= DIRTY_SUMMARY_COMMIT_CAP) break;
+    }
+  } catch {
+    // Same as above — return whatever we've collected so far.
+  }
+
+  return { files, unpushedCommits };
+}
+
 export function withActionHookIds(output: HookOutput, hookId: string): HookOutput {
   return {
     ...output,

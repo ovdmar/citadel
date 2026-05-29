@@ -4,7 +4,13 @@ import type { AgentSession } from "@citadel/contracts";
 import { act, createElement } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TerminalPane, isTtydHttpErrorPageVisible, isTtydReconnectPromptVisible } from "./terminal-pane.js";
+import {
+  TerminalPane,
+  focusActiveTerminal,
+  getTerminalHandle,
+  isTtydHttpErrorPageVisible,
+  isTtydReconnectPromptVisible,
+} from "./terminal-pane.js";
 import { type ResolvedTheme, applyThemePreference } from "./use-resolved-theme.js";
 
 const apiMocks = vi.hoisted(() => {
@@ -56,6 +62,18 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => {
     for (const root of roots.splice(0)) root.unmount();
+  });
+});
+
+describe("focusActiveTerminal", () => {
+  it("is a no-op when sessionId is null", () => {
+    expect(() => focusActiveTerminal(null)).not.toThrow();
+    expect(() => focusActiveTerminal(undefined)).not.toThrow();
+  });
+
+  it("is a no-op when no handle is registered for the sessionId", () => {
+    expect(getTerminalHandle("unknown-session")).toBeUndefined();
+    expect(() => focusActiveTerminal("unknown-session")).not.toThrow();
   });
 });
 

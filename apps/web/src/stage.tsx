@@ -3,6 +3,13 @@ import { useMutation } from "@tanstack/react-query";
 import { ExternalLink, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
+import {
+  applySessionOrder,
+  loadSessionOrder,
+  pruneSessionOrder,
+  saveSessionOrder,
+  spliceSessionOrder,
+} from "./stage-session-order.js";
 import { TerminalPane, getTerminalHandle, subscribeTerminalHandle } from "./terminal-pane.js";
 
 type StageTab = {
@@ -15,6 +22,7 @@ type StageTab = {
 // the same number so the UI never lets the user create a session that
 // would inevitably fail to bind a terminal port.
 const WORKSPACE_AGENT_CAP = 20;
+const SESSION_REORDER_MIME = "application/x-citadel-agent-session-reorder";
 
 function compareStageSessions(a: AgentSession, b: AgentSession) {
   const aKey = a.tabId ?? a.id;
@@ -54,8 +62,18 @@ export function Stage(props: {
   // the new row inherits the source row's tabId, so the restored tab appears
   // in the same slot the original lived in — sorting by createdAt instead would
   // jump the restored session to the end of the strip.
-  const sortedSessions = [...props.sessions].sort(compareStageSessions);
+  const defaultSortedSessions = [...props.sessions].sort(compareStageSessions);
+  const [sessionOrder, setSessionOrder] = useState<Record<string, string[]>>(() => loadSessionOrder());
+  useEffect(() => saveSessionOrder(sessionOrder), [sessionOrder]);
+  useEffect(() => {
+    const live = new Set(
+      props.allSessions?.map((session) => session.id) ?? props.sessions.map((session) => session.id),
+    );
+    setSessionOrder((prev) => pruneSessionOrder(prev, live));
+  }, [props.allSessions, props.sessions]);
+  const sortedSessions = applySessionOrder(defaultSortedSessions, sessionOrder[props.workspace.id]);
   const tabs: StageTab[] = sortedSessions.map((session) => ({ session, label: session.displayName }));
+  const visibleTabIds = tabs.map((tab) => tab.session.id);
   const allSessions = props.allSessions ?? props.sessions;
 
   // If the caller just selected a session that hasn't shown up in props.sessions
@@ -133,6 +151,7 @@ export function Stage(props: {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [tabDropIndicator, setTabDropIndicator] = useState<{ id: string; side: "before" | "after" } | null>(null);
   const addMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -182,10 +201,18 @@ export function Stage(props: {
 
   const startError = startSession.error instanceof Error ? startSession.error.message : null;
   const atSessionCap = props.sessions.length >= WORKSPACE_AGENT_CAP;
-  const addDisabled = startSession.isPending || atSessionCap;
+  // Per spec B.2 §Center Stage Sessions #10: starting a session needs a
+  // ready worktree, so the "+" button is gated off while the workspace is
+  // still being provisioned. AC3 (async create) will surface this state
+  // visibly on the card; today the lifecycle is briefly "creating" only
+  // during the synchronous setup window.
+  const lifecycleCreating = props.workspace.lifecycle === "creating";
+  const addDisabled = startSession.isPending || atSessionCap || lifecycleCreating;
   const addTitle = atSessionCap
     ? `Workspace is at the ${WORKSPACE_AGENT_CAP}-session cap. Close a session to start another.`
-    : "Add session";
+    : lifecycleCreating
+      ? "Workspace is still being set up."
+      : "Add session";
   return (
     <>
       <div className="stage-tabbar">
@@ -193,8 +220,48 @@ export function Stage(props: {
           {tabs.map((tab, index) => {
             const isActive = tab.session.id === activeSession?.session.id;
             const isRunning = tab.session.status === "running";
+            const dropSide = tabDropIndicator?.id === tab.session.id ? tabDropIndicator.side : null;
             return (
-              <div key={tab.session.id} className={`stage-tab ${isActive ? "active" : ""}`}>
+              <div
+                key={tab.session.id}
+                className={`stage-tab ${isActive ? "active" : ""} ${
+                  dropSide === "before" ? "is-drop-before" : dropSide === "after" ? "is-drop-after" : ""
+                }`}
+                draggable={editingId !== tab.session.id}
+                onDragStart={(event) => {
+                  event.dataTransfer.setData(SESSION_REORDER_MIME, tab.session.id);
+                  event.dataTransfer.effectAllowed = "move";
+                }}
+                onDragOver={(event) => {
+                  if (!event.dataTransfer.types.includes(SESSION_REORDER_MIME)) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const midpoint = rect.left + rect.width / 2;
+                  setTabDropIndicator({ id: tab.session.id, side: event.clientX < midpoint ? "before" : "after" });
+                }}
+                onDragLeave={() => setTabDropIndicator(null)}
+                onDrop={(event) => {
+                  if (!event.dataTransfer.types.includes(SESSION_REORDER_MIME)) return;
+                  event.preventDefault();
+                  const draggedId = event.dataTransfer.getData(SESSION_REORDER_MIME);
+                  if (!draggedId || draggedId === tab.session.id) {
+                    setTabDropIndicator(null);
+                    return;
+                  }
+                  const targetIndex = visibleTabIds.indexOf(tab.session.id);
+                  if (targetIndex === -1) {
+                    setTabDropIndicator(null);
+                    return;
+                  }
+                  const insertIndex = tabDropIndicator?.side === "after" ? targetIndex + 1 : targetIndex;
+                  setSessionOrder((prev) => ({
+                    ...prev,
+                    [props.workspace.id]: spliceSessionOrder(visibleTabIds, draggedId, insertIndex),
+                  }));
+                  setTabDropIndicator(null);
+                }}
+              >
                 <button
                   type="button"
                   onClick={() => props.onActiveSession(tab.session.id)}
@@ -274,6 +341,16 @@ export function Stage(props: {
                     aria-label="Stop session"
                     onClick={(event) => {
                       event.stopPropagation();
+                      // Pre-pick the next active tab BEFORE mutating so the
+                      // 4s `keepPending` grace never opens a blank window on
+                      // close. Prefer the LEFT sibling; fall back to the
+                      // right sibling. If this is the only tab, leave the
+                      // active pointer alone (Stage falls back to "no
+                      // session yet" empty state).
+                      if (tab.session.id === activeSession?.session.id && tabs.length > 1) {
+                        const next = tabs[index - 1] ?? tabs[index + 1];
+                        if (next) props.onActiveSession(next.session.id);
+                      }
                       stopSession.mutate(tab.session.id);
                     }}
                     title="Stop session"

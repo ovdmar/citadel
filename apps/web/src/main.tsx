@@ -11,6 +11,7 @@ import {
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
+import { OptimisticRemoveProvider } from "./app-state.js";
 import { Cockpit } from "./cockpit.js";
 import { bootstrapLastRoute, clearLastRoute, saveLastRoute } from "./lib/last-route.js";
 import { DashboardView } from "./routes/dashboard.js";
@@ -23,6 +24,7 @@ import { ScratchpadView } from "./routes/scratchpad.js";
 import { SettingsView } from "./routes/settings.js";
 import { getScratchpadDrawerOpen, setScratchpadDrawerOpen, toggleScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { ScratchpadPanel } from "./scratchpad-panel.js";
+import { ToastProvider } from "./toast.js";
 import { installUiDiagnostics } from "./ui-diagnostics.js";
 import { applyThemePreference, readThemePreference } from "./use-resolved-theme.js";
 import "./styles.css";
@@ -157,10 +159,14 @@ function Shell() {
   }, []);
 
   return (
-    <div className="app-root">
-      <Outlet />
-      <ScratchpadPanel />
-    </div>
+    <OptimisticRemoveProvider>
+      <ToastProvider>
+        <div className="app-root">
+          <Outlet />
+          <ScratchpadPanel />
+        </div>
+      </ToastProvider>
+    </OptimisticRemoveProvider>
   );
 }
 

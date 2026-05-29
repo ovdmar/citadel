@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-route
 import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
-import { useEventRefresh, useStateQuery } from "./app-state.js";
+import { useEventRefresh, useFilteredStateQuery } from "./app-state.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import {
   invalidateActiveWorkspaceFromBatch,
@@ -19,6 +19,7 @@ import { Inspector } from "./inspector.js";
 import { Navigator } from "./navigator.js";
 import { RestoreBanner } from "./restore-banner.js";
 import { Stage } from "./stage.js";
+import { focusActiveTerminal } from "./terminal-pane.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
 import { applyThemePreference, useResolvedTheme } from "./use-resolved-theme.js";
@@ -27,11 +28,23 @@ import { prToneFor } from "./workspace-card.js";
 const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";
 const STORAGE_LAST_REPO = "citadel.last-repo";
 const STORAGE_SESSION_BY_WORKSPACE = "citadel.session-by-workspace";
+const TERMINAL_FOCUS_DELAYS_MS = [0, 50, 160, 400];
 
 type MobileView = "navigator" | "stage" | "inspector";
 
+function focusTerminalSoon(sessionId: string) {
+  for (const delay of TERMINAL_FOCUS_DELAYS_MS) {
+    window.setTimeout(() => focusActiveTerminal(sessionId), delay);
+  }
+}
+
 export function Cockpit() {
-  const state = useStateQuery();
+  // Use the filtered variant so workspaces in the optimistic-remove
+  // blacklist (AC4) are subtracted from `data.workspaces` for every
+  // consumer of `state.data` below — including the active-workspace
+  // selector at L52, which must never pick a blacklisted workspace as
+  // the fallback active row.
+  const state = useFilteredStateQuery();
   useEventRefresh();
   const data = state.data;
   const queryClient = useQueryClient();
@@ -151,6 +164,20 @@ export function Cockpit() {
   const focusWorkspace = (workspace: Workspace) => {
     setActiveWorkspaceId(workspace.id);
     setMobileView("stage");
+    // Focus the workspace's currently-active session's terminal iframe so
+    // the user lands one click away from typing into xterm. Cross-origin
+    // limitation: xterm keyboard capture still needs a click inside the
+    // pane. Scheduled in a microtask so React's commit (mounting the new
+    // active terminal) completes before we try to focus.
+    const targetSessionId =
+      activeSessionByWorkspace[workspace.id] ?? allSessions.find((session) => session.workspaceId === workspace.id)?.id;
+    if (targetSessionId) {
+      focusTerminalSoon(targetSessionId);
+    }
+  };
+  const focusWorkspaceId = (workspaceId: string) => {
+    setActiveWorkspaceId(workspaceId);
+    setMobileView("stage");
   };
 
   const repoNames = useMemo(() => {
@@ -253,6 +280,7 @@ export function Cockpit() {
               onCloseCreateWorkspace={() => setCreateWorkspaceOpen(false)}
               onCollapse={layout.toggleLeft}
               onPickWorkspace={focusWorkspace}
+              onPickWorkspaceId={focusWorkspaceId}
             />
           </aside>
         )}
@@ -273,9 +301,10 @@ export function Cockpit() {
               allSessions={allSessions}
               runtimes={data?.runtimes ?? []}
               activeSessionId={activeSessionId}
-              onActiveSession={(sessionId) =>
-                setActiveSessionByWorkspace((current) => ({ ...current, [activeWorkspace.id]: sessionId }))
-              }
+              onActiveSession={(sessionId) => {
+                setActiveSessionByWorkspace((current) => ({ ...current, [activeWorkspace.id]: sessionId }));
+                focusTerminalSoon(sessionId);
+              }}
             />
           ) : (
             <EmptyStage hasRepos={Boolean(data?.repos.length)} />

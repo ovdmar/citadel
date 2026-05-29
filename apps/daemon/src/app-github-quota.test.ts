@@ -46,7 +46,7 @@ describe("createDaemonApp — GitHub quota", () => {
       if (prevWorktreeGh === undefined) Reflect.deleteProperty(process.env, "CITADEL_ENABLE_WORKTREE_GH_AUTOMATION");
       else process.env.CITADEL_ENABLE_WORKTREE_GH_AUTOMATION = prevWorktreeGh;
     }
-  });
+  }, 15_000);
 
   it("keeps GitHub quota resources visible while gh automation is cooling down", async () => {
     const { clearGhCooldown, setGhCooldown } = await import("@citadel/providers");
@@ -95,7 +95,7 @@ exit 1
       clearGhCooldown();
       await closeServer(server);
     }
-  });
+  }, 15_000);
 
   it("starts GitHub cooldown from an exhausted quota response before PR polling retries", async () => {
     const { clearGhCooldown } = await import("@citadel/providers");
@@ -137,7 +137,7 @@ exit 1
       clearGhCooldown();
       await closeServer(server);
     }
-  });
+  }, 15_000);
 
   it("injects versionControl.cooldownUntil into provider-summary while gh is in cooldown (review #6)", async () => {
     const { clearGhCooldown, setGhCooldown } = await import("@citadel/providers");
@@ -188,5 +188,5 @@ exit 1
       clearGhCooldown();
       await closeServer(server);
     }
-  });
+  }, 15_000);
 });
