@@ -23,6 +23,7 @@ type StageTab = {
 // would inevitably fail to bind a terminal port.
 const WORKSPACE_AGENT_CAP = 20;
 const SESSION_REORDER_MIME = "application/x-citadel-agent-session-reorder";
+export const TERMINAL_PANE_RETAIN_LIMIT = 5;
 
 function compareStageSessions(a: AgentSession, b: AgentSession) {
   const aKey = a.tabId ?? a.id;
@@ -41,11 +42,46 @@ export function stableVisitedSessions(allSessions: AgentSession[], visitedIds: S
   return result;
 }
 
+export function retainRecentTerminalIds(
+  visitedIds: Set<string>,
+  activeId: string | null | undefined,
+  liveIds: Set<string>,
+  limit = TERMINAL_PANE_RETAIN_LIMIT,
+): Set<string> {
+  const safeLimit = Math.max(1, Math.trunc(limit));
+  const ordered: string[] = [];
+  for (const id of visitedIds) {
+    if (!liveIds.has(id) || id === activeId) continue;
+    ordered.push(id);
+  }
+  if (activeId && liveIds.has(activeId)) ordered.push(activeId);
+  return new Set(ordered.slice(-safeLimit));
+}
+
 export function stableWorkspaceSessionIdsKey(sessions: AgentSession[]): string {
   return [...sessions]
     .sort(compareStageSessions)
     .map((session) => session.id)
     .join("\0");
+}
+
+function sameOrderedIds(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  const aIds = [...a];
+  const bIds = [...b];
+  for (let i = 0; i < aIds.length; i += 1) {
+    if (aIds[i] !== bIds[i]) return false;
+  }
+  return true;
+}
+
+function releaseTerminalViewer(sessionId: string): void {
+  void fetch(`/api/agent-sessions/${encodeURIComponent(sessionId)}/terminal`, {
+    method: "DELETE",
+    keepalive: true,
+  }).catch(() => {
+    // Best-effort: eviction should never block switching tabs.
+  });
 }
 
 export function Stage(props: {
@@ -104,36 +140,31 @@ export function Stage(props: {
     }
   }, [activeSession, keepPending, props]);
 
-  // Keep TerminalPane instances alive across workspace/session switches once
-  // the user has actually opened them. The set grows when a session becomes
-  // active and shrinks when the underlying session goes away. Without this,
-  // every workspace switch unmounts the previously-visible iframe — ttyd
-  // tears down the WebSocket and re-handshakes on remount, which the user
-  // perceives as a grey flash on the main stage.
+  // Keep a bounded LRU of TerminalPane instances alive across workspace/session
+  // switches once the user has opened them. This preserves fast returns for the
+  // most recent terminals without letting hidden iframes keep every ttyd/tmux
+  // viewer attached forever.
   const [visitedIds, setVisitedIds] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     if (props.activeSessionId) initial.add(props.activeSessionId);
     return initial;
   });
+  const retainedIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!activeSession) return;
-    const id = activeSession.session.id;
+    const activeId = activeSession?.session.id ?? null;
     setVisitedIds((prev) => {
-      if (prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
-  }, [activeSession]);
-  useEffect(() => {
-    setVisitedIds((prev) => {
-      if (prev.size === 0) return prev;
       const live = new Set(allSessions.map((session) => session.id));
-      const next = new Set<string>();
-      for (const id of prev) if (live.has(id)) next.add(id);
-      return next.size === prev.size ? prev : next;
+      const next = retainRecentTerminalIds(prev, activeId, live);
+      return sameOrderedIds(prev, next) ? prev : next;
     });
-  }, [allSessions]);
+  }, [activeSession?.session.id, allSessions]);
+  useEffect(() => {
+    const previous = retainedIdsRef.current;
+    retainedIdsRef.current = visitedIds;
+    for (const id of previous) {
+      if (!visitedIds.has(id)) releaseTerminalViewer(id);
+    }
+  }, [visitedIds]);
   const visitedPanes = stableVisitedSessions(allSessions, visitedIds);
   const workspaceSessionIdsKey = stableWorkspaceSessionIdsKey(props.sessions);
 
