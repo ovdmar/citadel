@@ -115,6 +115,30 @@ export const UsageProviderConfigSchema = z.object({
     .refine((value) => value === undefined || path.isAbsolute(value), "Usage provider cwd must be an absolute path"),
 });
 
+export const DEFAULT_FIX_CI_AUTOMATION = {
+  enabled: true,
+  runtimeId: "claude-code",
+  fallbackRuntimeId: "codex",
+  idleThresholdMs: 5 * 60 * 1000,
+  debounceMs: 30 * 60 * 1000,
+  intervalMs: 60 * 1000,
+} as const;
+
+export const FixCiAutomationConfigSchema = z.object({
+  enabled: z.boolean().default(DEFAULT_FIX_CI_AUTOMATION.enabled),
+  runtimeId: z.string().min(1).default(DEFAULT_FIX_CI_AUTOMATION.runtimeId),
+  fallbackRuntimeId: z.string().min(1).nullable().default(DEFAULT_FIX_CI_AUTOMATION.fallbackRuntimeId),
+  idleThresholdMs: z.number().int().min(0).default(DEFAULT_FIX_CI_AUTOMATION.idleThresholdMs),
+  debounceMs: z.number().int().min(0).default(DEFAULT_FIX_CI_AUTOMATION.debounceMs),
+  intervalMs: z.number().int().min(1000).default(DEFAULT_FIX_CI_AUTOMATION.intervalMs),
+});
+
+export const AutomationConfigSchema = z
+  .object({
+    fixCi: FixCiAutomationConfigSchema.default(DEFAULT_FIX_CI_AUTOMATION),
+  })
+  .default({ fixCi: DEFAULT_FIX_CI_AUTOMATION });
+
 // HookConfigSchema describes a hook configured in citadel's global JSON
 // config. File-based hooks (`.citadel/hooks/<event>/<name>.{sh,agent}`) own
 // the `file:` id prefix — config-defined ids cannot collide with discovered
@@ -174,6 +198,7 @@ export const CitadelConfigSchema = z
       }),
     runtimes: z.array(RuntimeConfigSchema).default(() => BUILTIN_RUNTIMES.map((r) => ({ ...r, args: [...r.args] }))),
     usageProviders: z.array(UsageProviderConfigSchema).default([]),
+    automations: AutomationConfigSchema,
     hooks: z.array(HookConfigSchema).default([]),
     repoDefaults: z
       .object({
@@ -243,6 +268,8 @@ export const CitadelConfigSchema = z
 export type CitadelConfig = z.infer<typeof CitadelConfigSchema>;
 export type RuntimeConfig = z.infer<typeof RuntimeConfigSchema>;
 export type UsageProviderConfig = z.infer<typeof UsageProviderConfigSchema>;
+export type AutomationConfig = z.infer<typeof AutomationConfigSchema>;
+export type FixCiAutomationConfig = z.infer<typeof FixCiAutomationConfigSchema>;
 export type HookConfig = z.infer<typeof HookConfigSchema>;
 
 export function defaultDataDir() {

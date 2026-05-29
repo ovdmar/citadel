@@ -22,6 +22,9 @@ import { fileURLToPath } from "node:url";
 //                             Mac Terminal.app); falls back to a DOM Range
 //                             scoped to .xterm-screen so the selection is
 //                             terminal-scoped instead of iframe-chrome-scoped
+//   - Cmd/Ctrl+K           -> forward Citadel command-palette shortcut to parent
+//   - Cmd/Ctrl+Shift+S     -> forward Citadel scratchpad shortcut to parent
+//   - Ctrl+N               -> forward Citadel new-workspace shortcut to parent
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 export const TERMINAL_KEY_SHIM_SOURCE = fs.readFileSync(resolve(__dirname, "terminal-key-shim.client.js"), "utf8");

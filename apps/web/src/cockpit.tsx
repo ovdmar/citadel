@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-route
 import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
-import { useEventRefresh, useStateQuery } from "./app-state.js";
+import { useEventRefresh, useFilteredStateQuery } from "./app-state.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import {
   invalidateActiveWorkspaceFromBatch,
@@ -19,19 +19,33 @@ import { Inspector } from "./inspector.js";
 import { Navigator } from "./navigator.js";
 import { RestoreBanner } from "./restore-banner.js";
 import { Stage } from "./stage.js";
+import { focusActiveTerminal, isRegisteredTerminalMessageSource } from "./terminal-pane.js";
+import { parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
-import { useResolvedTheme } from "./use-resolved-theme.js";
+import { applyThemePreference, useResolvedTheme } from "./use-resolved-theme.js";
 import { prToneFor } from "./workspace-card.js";
 
 const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";
 const STORAGE_LAST_REPO = "citadel.last-repo";
 const STORAGE_SESSION_BY_WORKSPACE = "citadel.session-by-workspace";
+const TERMINAL_FOCUS_DELAYS_MS = [0, 50, 160, 400];
 
 type MobileView = "navigator" | "stage" | "inspector";
 
+function focusTerminalSoon(sessionId: string) {
+  for (const delay of TERMINAL_FOCUS_DELAYS_MS) {
+    window.setTimeout(() => focusActiveTerminal(sessionId), delay);
+  }
+}
+
 export function Cockpit() {
-  const state = useStateQuery();
+  // Use the filtered variant so workspaces in the optimistic-remove
+  // blacklist (AC4) are subtracted from `data.workspaces` for every
+  // consumer of `state.data` below — including the active-workspace
+  // selector at L52, which must never pick a blacklisted workspace as
+  // the fallback active row.
+  const state = useFilteredStateQuery();
   useEventRefresh();
   const data = state.data;
   const queryClient = useQueryClient();
@@ -103,6 +117,8 @@ export function Cockpit() {
     : (activeWorkspaceSessions[0] ?? null);
 
   useEffect(() => {
+    const toggleCommandPalette = () => setCommandOpen((open) => !open);
+    const openCreateWorkspace = () => setCreateWorkspaceOpen(true);
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const inEditable =
@@ -112,7 +128,7 @@ export function Cockpit() {
         target?.tagName === "SELECT";
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setCommandOpen((open) => !open);
+        toggleCommandPalette();
       } else if (
         // Ctrl+N opens the new-workspace modal. This works on macOS, where
         // Ctrl+N is unbound by browsers. On Windows/Linux every major browser
@@ -127,7 +143,7 @@ export function Cockpit() {
         event.key.toLowerCase() === "n"
       ) {
         event.preventDefault();
-        setCreateWorkspaceOpen(true);
+        openCreateWorkspace();
       } else if (
         // GitHub-style: plain `c` ("create") also opens the new-workspace
         // modal. Skipped while editing so it doesn't hijack typing.
@@ -144,12 +160,36 @@ export function Cockpit() {
         setCommandOpen(false);
       }
     };
+    const onMessage = (event: MessageEvent) => {
+      const message = parseTerminalShortcutMessage(event);
+      if (!message || !isRegisteredTerminalMessageSource(event.source, message.sessionId)) return;
+      if (message.action === "command-palette") toggleCommandPalette();
+      else if (message.action === "new-workspace") openCreateWorkspace();
+    };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("message", onMessage);
+    };
   }, []);
 
   const focusWorkspace = (workspace: Workspace) => {
     setActiveWorkspaceId(workspace.id);
+    setMobileView("stage");
+    // Focus the workspace's currently-active session's terminal iframe so
+    // the user lands one click away from typing into xterm. Cross-origin
+    // limitation: xterm keyboard capture still needs a click inside the
+    // pane. Scheduled in a microtask so React's commit (mounting the new
+    // active terminal) completes before we try to focus.
+    const targetSessionId =
+      activeSessionByWorkspace[workspace.id] ?? allSessions.find((session) => session.workspaceId === workspace.id)?.id;
+    if (targetSessionId) {
+      focusTerminalSoon(targetSessionId);
+    }
+  };
+  const focusWorkspaceId = (workspaceId: string) => {
+    setActiveWorkspaceId(workspaceId);
     setMobileView("stage");
   };
 
@@ -253,6 +293,7 @@ export function Cockpit() {
               onCloseCreateWorkspace={() => setCreateWorkspaceOpen(false)}
               onCollapse={layout.toggleLeft}
               onPickWorkspace={focusWorkspace}
+              onPickWorkspaceId={focusWorkspaceId}
             />
           </aside>
         )}
@@ -273,9 +314,10 @@ export function Cockpit() {
               allSessions={allSessions}
               runtimes={data?.runtimes ?? []}
               activeSessionId={activeSessionId}
-              onActiveSession={(sessionId) =>
-                setActiveSessionByWorkspace((current) => ({ ...current, [activeWorkspace.id]: sessionId }))
-              }
+              onActiveSession={(sessionId) => {
+                setActiveSessionByWorkspace((current) => ({ ...current, [activeWorkspace.id]: sessionId }));
+                focusTerminalSoon(sessionId);
+              }}
             />
           ) : (
             <EmptyStage hasRepos={Boolean(data?.repos.length)} />
@@ -462,12 +504,7 @@ function ThemeToggle() {
   const isDark = resolved === "dark";
   const toggle = () => {
     const next = isDark ? "light" : "dark";
-    document.documentElement.dataset.theme = next;
-    try {
-      localStorage.setItem("citadel.theme", next);
-    } catch {
-      // localStorage is best-effort
-    }
+    applyThemePreference(next);
   };
   return (
     <button

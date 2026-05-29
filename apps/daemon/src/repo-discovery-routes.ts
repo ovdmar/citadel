@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import type { CitadelConfig } from "@citadel/config";
 import type express from "express";
-import { asyncRoute } from "./app-helpers.js";
+
+type AsyncRoute = (
+  handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>,
+) => express.RequestHandler;
 
 function expandTilde(input: string): string {
   if (input === "~") return os.homedir();
@@ -11,9 +14,12 @@ function expandTilde(input: string): string {
   return input;
 }
 
-export function registerRepoDiscoveryRoutes(input: { app: express.Express; config: CitadelConfig }) {
-  const { app, config } = input;
-
+export function registerRepoDiscoveryRoutes(input: {
+  app: express.Express;
+  config: CitadelConfig;
+  asyncRoute: AsyncRoute;
+}) {
+  const { app, config, asyncRoute } = input;
   app.post(
     "/api/repos/inspect",
     asyncRoute(async (req, res) => {

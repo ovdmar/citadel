@@ -2,6 +2,7 @@ import type { AgentRuntime, ProviderHealth, Repo } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
+  AlarmClock,
   ArrowLeft,
   Bug,
   Cable,
@@ -20,17 +21,20 @@ import { useEffect, useState } from "react";
 import { api, queryClient } from "../api.js";
 import { useStateQuery } from "../app-state.js";
 import { mcpUrlFromOrigin } from "../lib/mcp-url.js";
+import { AutomationsPanel } from "../settings-automations.js";
 import { CitadelActionsPanel } from "../settings-citadel-actions.js";
 import { DebugPanel } from "../settings-debug.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { RestoreModal, RestorePanelBody } from "../settings-restore.js";
 import { AgentsPanel } from "../settings-runtimes.js";
+import { applyThemePreference, useResolvedTheme } from "../use-resolved-theme.js";
 
 type SectionId =
   | "overview"
   | "providers"
   | "agents"
+  | "automations"
   | "repositories"
   | "restore"
   | "actions"
@@ -58,6 +62,12 @@ const SECTIONS: Section[] = [
     label: "Agent runtimes",
     description: "CLIs Citadel can launch in a workspace.",
     icon: Server,
+  },
+  {
+    id: "automations",
+    label: "Automations",
+    description: "Rules that start agents on their own.",
+    icon: AlarmClock,
   },
   {
     id: "repositories",
@@ -190,6 +200,19 @@ export function SettingsView() {
               <AgentsPanel runtimes={data?.runtimes ?? []} />
             </>
           ) : null}
+          {section === "automations" ? (
+            <>
+              <PageHead
+                title="Automations"
+                sub="Rules that start agents on their own."
+                help="Fix-CI automation uses the primary agent when healthy, then the configured fallback. Scheduled agents keep their own cron/one-shot definitions."
+              />
+              <AutomationsPanel
+                runtimes={data?.runtimes ?? []}
+                scheduledAgentsCount={data?.scheduledAgents.length ?? 0}
+              />
+            </>
+          ) : null}
           {section === "repositories" ? (
             <>
               <PageHead
@@ -266,19 +289,9 @@ function PageHead(props: { title: string; sub?: string; help?: string }) {
 }
 
 function ThemeToggle() {
-  const [theme, setTheme] = useState(() => localStorage.getItem("citadel.theme") || "system");
-  useEffect(() => {
-    localStorage.setItem("citadel.theme", theme);
-    if (theme === "system") {
-      delete document.documentElement.dataset.theme;
-    } else {
-      document.documentElement.dataset.theme = theme;
-    }
-  }, [theme]);
-
-  // Light <-> Dark cycle (system stays accessible via the existing CockpitTools menu).
-  const isDark = theme === "dark";
-  const toggle = () => setTheme(isDark ? "light" : "dark");
+  const resolved = useResolvedTheme();
+  const isDark = resolved === "dark";
+  const toggle = () => applyThemePreference(isDark ? "light" : "dark");
   return (
     <button
       type="button"

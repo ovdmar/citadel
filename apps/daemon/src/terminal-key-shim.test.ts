@@ -61,11 +61,28 @@ describe("injectKeyShim", () => {
     // Cmd+A terminal-scoped select-all
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain("selectAllInTerminal");
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain(".xterm-screen");
+    // Citadel-level shortcuts bridge out of the iframe to the parent app.
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain("citadel.terminal-shortcut");
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"command-palette"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"scratchpad-toggle"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"new-workspace"');
     // Single listener registration — only document, not window (avoids
     // duplicate sends since stopImmediatePropagation only stops same-target
     // listeners).
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain('document.addEventListener("keydown"');
     expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain('window.addEventListener("keydown"');
+    // Client lifecycle telemetry distinguishes iframe navigation from raw
+    // WebSocket disconnects in diagnostics.
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain("terminal-client-event");
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('recordTerminalClientEvent("ws.close"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).toMatch(/window\.addEventListener\(\s*"pagehide"/);
+  });
+
+  it("does not self-refresh terminal pages for theme changes", () => {
+    expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain("citadel.theme");
+    expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain('window.addEventListener("storage"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain("/terminal?theme=");
+    expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain("window.location.reload()");
   });
 });
 
@@ -119,6 +136,7 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     windowKeydownListeners: number;
     documentKeydownListeners: number;
     sent: Uint8Array[];
+    parentMessages: Array<{ message: unknown; targetOrigin: string }>;
     activate: () => void;
   };
 
@@ -219,6 +237,7 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
   ): ShimHarness {
     const listeners: ShimHarness["listeners"] = [];
     const sent: Uint8Array[] = [];
+    const parentMessages: ShimHarness["parentMessages"] = [];
     const clipboardWrites = extras.clipboardWrites ?? [];
     let windowKeydownListeners = 0;
     let documentKeydownListeners = 0;
@@ -248,6 +267,15 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
             : undefined,
         KeyboardEvent: FakeSyntheticEvent as unknown as typeof KeyboardEvent,
         term: extras.term,
+        parent: {
+          postMessage: (message: unknown, targetOrigin: string) => {
+            parentMessages.push({ message, targetOrigin });
+          },
+        },
+        location: {
+          origin: "http://localhost",
+          pathname: "/terminals/sess_test/",
+        },
       } as ShimHarness["runtime"]["window"],
       document: {
         addEventListener: ((type: string, handler: (event: FakeKeyboardEvent) => void) => {
@@ -304,6 +332,7 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
         return documentKeydownListeners;
       },
       sent,
+      parentMessages,
       activate: () => {
         const PatchedWS = runtime.window.WebSocket;
         const ws = new PatchedWS("ws://localhost/terminals/x/ws");
@@ -387,6 +416,47 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     const event = dispatch(harness, makeEvent({ key: "Enter", shiftKey: true, isComposing: true }));
     expect(event.defaultPrevented).toBe(false);
     expect(harness.sent).toEqual([]);
+  });
+
+  it("posts Cmd+K to the parent app instead of sending it to the PTY", () => {
+    const harness = setup("MacIntel");
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "k", metaKey: true }));
+    expect(event.defaultPrevented).toBe(true);
+    expect(harness.sent).toEqual([]);
+    expect(harness.parentMessages).toEqual([
+      {
+        targetOrigin: "http://localhost",
+        message: {
+          source: "citadel-terminal",
+          type: "citadel.terminal-shortcut",
+          action: "command-palette",
+          sessionId: "sess_test",
+        },
+      },
+    ]);
+  });
+
+  it("posts Shift+Cmd+S to the parent app for the scratchpad drawer", () => {
+    const harness = setup("MacIntel");
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "s", metaKey: true, shiftKey: true }));
+    expect(event.defaultPrevented).toBe(true);
+    expect(harness.sent).toEqual([]);
+    expect(harness.parentMessages.map((entry) => (entry.message as { action?: string }).action)).toEqual([
+      "scratchpad-toggle",
+    ]);
+  });
+
+  it("posts Ctrl+N to the parent app for new workspace", () => {
+    const harness = setup("MacIntel");
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "n", ctrlKey: true }));
+    expect(event.defaultPrevented).toBe(true);
+    expect(harness.sent).toEqual([]);
+    expect(harness.parentMessages.map((entry) => (entry.message as { action?: string }).action)).toEqual([
+      "new-workspace",
+    ]);
   });
 
   it("Cmd+C copies the DOM selection through navigator.clipboard exactly once", () => {

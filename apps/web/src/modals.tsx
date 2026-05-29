@@ -1,9 +1,10 @@
-import type { AgentRuntime, Namespace, Repo } from "@citadel/contracts";
+import type { AgentRuntime, Namespace, Repo, Workspace } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, Search, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
+import { useToast } from "./toast.js";
 
 export type GroupKey = "repo" | "status" | "namespace" | "none";
 
@@ -21,16 +22,30 @@ type GroupByMenuProps = {
   value: GroupKey;
   onChange: (next: GroupKey) => void;
   onClose: () => void;
+  // When provided, the click-outside check uses this container instead of
+  // the menu's inner ref. The wrapping container in the navigator includes
+  // BOTH the menu and its trigger button, so clicking the trigger doesn't
+  // fire onClose just before the trigger's own onClick toggles state back
+  // on (the bug the user reported as "doesn't close when clicking outside").
+  containerRef?: { current: HTMLElement | null };
 };
 
 export function GroupByMenu(props: GroupByMenuProps) {
   const ref = useRef<HTMLDivElement | null>(null);
+  // Re-read on every event from the ref objects, not from the props closure,
+  // so the listener installs once. Capturing props in the effect deps caused
+  // the effect to re-run every render (props is a fresh object identity).
+  const onCloseRef = useRef(props.onClose);
+  onCloseRef.current = props.onClose;
+  const containerRefProp = props.containerRef;
   useEffect(() => {
     const onDocClick = (event: MouseEvent) => {
-      if (ref.current && !ref.current.contains(event.target as Node)) props.onClose();
+      const target = event.target as Node;
+      const container = containerRefProp?.current ?? ref.current;
+      if (container && !container.contains(target)) onCloseRef.current();
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") props.onClose();
+      if (event.key === "Escape") onCloseRef.current();
     };
     document.addEventListener("mousedown", onDocClick);
     document.addEventListener("keydown", onKey);
@@ -38,7 +53,7 @@ export function GroupByMenu(props: GroupByMenuProps) {
       document.removeEventListener("mousedown", onDocClick);
       document.removeEventListener("keydown", onKey);
     };
-  }, [props]);
+  }, [containerRefProp]);
   return (
     <div ref={ref} className="cit-gb-menu" role="menu" aria-label="Group workspaces">
       <div className="cit-gb-menu-head">Group workspaces by</div>
@@ -291,6 +306,8 @@ const JIRA_KEY_FROM_URL = /\/browse\/([A-Z][A-Z0-9]+-\d+)/i;
 const JIRA_KEY_BARE = /^[A-Z][A-Z0-9]+-\d+$/;
 const GITHUB_PR_URL = /^https?:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/i;
 const SLACK_URL = /^https?:\/\/[a-z0-9.-]*slack\.com\//i;
+const WORKSPACE_READY_POLL_MS = 1000;
+const WORKSPACE_READY_MAX_ATTEMPTS = 180;
 
 // Parse the freeform "link" field — Jira issue, GitHub PR, or Slack thread —
 // into the structured fields the workspace API expects. Returning a `source`
@@ -322,12 +339,26 @@ function defaultBranchPreview(linked: LinkedContext, name: string): string {
   return slug || "workspace";
 }
 
-function defaultNamePreview(linked: LinkedContext): string {
+// Hint shown in the modal's name input placeholder. For scratch workspaces
+// the daemon generates a memorable funny-name (e.g. funny-cat) when none
+// is provided, so the placeholder telegraphs that. For issue-linked
+// workspaces the placeholder shows the derived name (issue key lowercased).
+function defaultNameHint(linked: LinkedContext): string {
   if (linked.source === "issue" && linked.issueKey) return linked.issueKey.toLowerCase();
-  return "workspace";
+  return "e.g. funny-cat (auto)";
+}
+
+// Effective name to send to the daemon when the user leaves the field
+// blank. Empty string lets the daemon generate. Issue-linked workspaces
+// still derive from the issue key client-side to keep branch preview
+// accurate.
+function defaultNameForSubmit(linked: LinkedContext): string {
+  if (linked.source === "issue" && linked.issueKey) return linked.issueKey.toLowerCase();
+  return "";
 }
 
 export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
+  const toast = useToast();
   const initialRepo = props.repos.find((repo) => repo.id === props.lastRepoId)?.id ?? props.repos[0]?.id ?? "";
   const [repoId, setRepoId] = useState(initialRepo);
   const [prompt, setPrompt] = useState("");
@@ -335,7 +366,6 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   const [name, setName] = useState("");
   const [branch, setBranch] = useState("");
   const [namespaceId, setNamespaceId] = useState("");
-  const [error, setError] = useState("");
 
   const launchableRuntimes = useMemo(
     () => props.runtimes.filter((runtime) => runtime.id !== "shell" && runtime.health === "healthy"),
@@ -351,8 +381,15 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   }, [defaultRuntimeId, runtimeId]);
 
   const linked = useMemo(() => parseLinkedContext(linkInput), [linkInput]);
-  const namePreview = defaultNamePreview(linked);
-  const branchPreview = defaultBranchPreview(linked, name || namePreview);
+  const namePreview = defaultNameHint(linked);
+  // Branch preview: when the user has neither typed a name nor attached
+  // an issue, the daemon will generate the name (and the branch name
+  // follows from it), so we can't honestly preview either. Show
+  // `<auto>` in that case rather than fabricating "workspace" — which
+  // the user never typed and the daemon won't use.
+  const trimmedName = name.trim();
+  const submitName = defaultNameForSubmit(linked);
+  const branchPreview = trimmedName || submitName ? defaultBranchPreview(linked, trimmedName || submitName) : "<auto>";
 
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {
@@ -361,10 +398,13 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
 
   const create = useMutation({
     mutationFn: async () => {
-      const effectiveName = name.trim() || namePreview;
+      const trimmed = name.trim();
       const payload: Record<string, unknown> = {
         repoId,
-        name: effectiveName,
+        // Empty string signals "daemon should generate a funny-name". The
+        // issue-linked path still sends the issue-key-lowercased default
+        // for backwards-compatible branch-name derivation.
+        name: trimmed || defaultNameForSubmit(linked),
         source: linked.source,
       };
       if (linked.issueKey) payload.issueKey = linked.issueKey;
@@ -379,15 +419,12 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
         body: JSON.stringify(payload),
       });
       if (runtimeId) {
-        const sessionPayload: Record<string, unknown> = {
-          workspaceId: result.workspaceId,
-          runtimeId,
-        };
-        if (prompt.trim()) sessionPayload.prompt = prompt.trim();
-        await api("/api/agent-sessions", {
-          method: "POST",
-          body: JSON.stringify(sessionPayload),
-        }).catch(() => {});
+        void launchAgentWhenWorkspaceReady(result.workspaceId, runtimeId, prompt.trim()).catch((error) => {
+          toast.push({
+            tone: "error",
+            message: `Agent launch failed: ${error instanceof Error ? error.message : "unknown error"}`,
+          });
+        });
       }
       return result;
     },
@@ -395,7 +432,12 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
       queryClient.invalidateQueries({ queryKey: ["state"] });
       props.onCreated(result.workspaceId);
     },
-    onError: (err) => setError(err instanceof Error ? err.message : "create_failed"),
+    onError: (err) => {
+      toast.push({
+        tone: "error",
+        message: `Workspace creation failed: ${err instanceof Error ? err.message : "create_failed"}`,
+      });
+    },
   });
 
   const linkBadge =
@@ -491,22 +533,44 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
             No healthy agents configured. The workspace will be created without launching one.
           </div>
         ) : null}
-        {error ? (
-          <div className="empty compact" style={{ color: "var(--color-danger)" }}>
-            {error}
-          </div>
-        ) : null}
       </div>
       <div className="modal-footer">
         <Button type="button" variant="secondary" onClick={props.onClose}>
           Cancel
         </Button>
-        <Button type="button" disabled={!repoId || create.isPending} onClick={() => create.mutate()}>
+        <Button
+          type="button"
+          disabled={!repoId || create.isPending}
+          onClick={() => {
+            create.mutate();
+            props.onClose();
+          }}
+        >
           {create.isPending ? "Creating…" : runtimeId ? "Create & launch agent" : "Create workspace"}
         </Button>
       </div>
     </Modal>
   );
+}
+
+async function launchAgentWhenWorkspaceReady(workspaceId: string, runtimeId: string, prompt: string) {
+  for (let attempt = 0; attempt < WORKSPACE_READY_MAX_ATTEMPTS; attempt += 1) {
+    const state = await api<{ workspaces: Array<Pick<Workspace, "id" | "lifecycle">> }>("/api/workspaces");
+    const workspace = state.workspaces.find((entry) => entry.id === workspaceId);
+    if (workspace?.lifecycle === "ready") {
+      const sessionPayload: Record<string, unknown> = { workspaceId, runtimeId };
+      if (prompt) sessionPayload.prompt = prompt;
+      await api("/api/agent-sessions", {
+        method: "POST",
+        body: JSON.stringify(sessionPayload),
+      });
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      return;
+    }
+    if (workspace?.lifecycle === "failed") throw new Error("workspace_setup_failed");
+    await new Promise((resolve) => window.setTimeout(resolve, WORKSPACE_READY_POLL_MS));
+  }
+  throw new Error("workspace_setup_timeout");
 }
 
 export function Modal(props: { title: string; onClose: () => void; children: ReactNode }) {

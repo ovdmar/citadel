@@ -481,7 +481,8 @@ export const CreateRepoInputSchema = z.object({
 
 export const CreateWorkspaceInputSchema = z.object({
   repoId: IdSchema,
-  name: z.string().min(1),
+  // Empty `name` → daemon generates a funny-name (e.g. funny-cat).
+  name: z.string().default(""),
   source: WorkspaceSourceSchema.default("scratch"),
   issueKey: z.string().min(2).optional(),
   issueTitle: z.string().min(1).optional(),
@@ -624,6 +625,7 @@ export type DeployedAppsSummary = z.infer<typeof DeployedAppsSummarySchema>;
 export type ActivityEvent = z.infer<typeof ActivityEventSchema>;
 export type AppEvent = z.infer<typeof AppEventSchema>;
 export type CreateRepoInput = z.infer<typeof CreateRepoInputSchema>;
+export type { WorkspaceDirtySummary } from "./workspace-dirty.js";
 export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
 export type CreateAgentSessionInput = z.infer<typeof CreateAgentSessionInputSchema>;
 export type LaunchAgentInput = z.infer<typeof LaunchAgentInputSchema>;

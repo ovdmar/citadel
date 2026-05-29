@@ -142,6 +142,14 @@ function emitDiscoveryDiagnostics(
   }
 }
 
+function parseOptionalHookOutput(stdout: string): HookOutput | null {
+  try {
+    return parseHookOutput(stdout);
+  } catch {
+    return null;
+  }
+}
+
 export async function runWorkspaceHooks(input: {
   config: RunnerConfig | undefined;
   activity: ActivityFn;
@@ -239,7 +247,7 @@ async function runOne(
       input.repo.id,
       input.workspace.id,
       input.operationId,
-      parseHookOutput(result.stdout),
+      parseOptionalHookOutput(result.stdout),
     );
     return;
   }
@@ -262,7 +270,7 @@ async function runOne(
         input.repo.id,
         input.workspace.id,
         input.operationId,
-        parseHookOutput(result.stdout),
+        parseOptionalHookOutput(result.stdout),
       );
     } catch (error) {
       input.activity(
@@ -327,7 +335,7 @@ async function runOneNotification(
       input.repo.id,
       input.workspace.id,
       input.operationId,
-      parseHookOutput(result.stdout),
+      parseOptionalHookOutput(result.stdout),
     );
     return;
   }
@@ -344,7 +352,7 @@ async function runOneNotification(
       input.repo.id,
       input.workspace.id,
       input.operationId,
-      parseHookOutput(result.stdout),
+      parseOptionalHookOutput(result.stdout),
     );
     return;
   }

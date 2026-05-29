@@ -205,6 +205,19 @@ describe("claudeCodeStatusAdapter", () => {
       ).toBeNull();
     });
 
+    it("elapsed timer advancement is a first-pass running signal without the mode-line marker", () => {
+      const paneAt10s = "output\n· Pondering… (10s · ↓ 281 tokens)\nfooter without known chrome";
+      const paneAt12s = "output\n· Pondering… (12s · ↓ 312 tokens)\nfooter without known chrome";
+      expect(claudeCodeStatusAdapter.observe(state, ctx(paneAt10s))).toBeNull();
+      expect(claudeCodeStatusAdapter.observe(state, ctx(paneAt12s))).toMatchObject({ observed: "running" });
+    });
+
+    it("old active timer text does not override an idle mode line unless the timer advances", () => {
+      const pane = "· Pondering… (10s · ↓ 281 tokens)\n  ⏵⏵ auto mode on (shift+tab to cycle)";
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("idle");
+      expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("idle");
+    });
+
     it("matches local-agent suffix without esc to interrupt (subagent waiting)", () => {
       const pane = "agent output\n  ⏵⏵ auto mode on · 2 local agent · ↓ to manage";
       expect(claudeCodeStatusAdapter.observe(state, ctx(pane))).toBe("running");
