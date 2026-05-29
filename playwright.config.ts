@@ -12,6 +12,8 @@ const webPort = process.env.CITADEL_PLAYWRIGHT_WEB_PORT || "15174";
 const ttydPortBase = process.env.CITADEL_PLAYWRIGHT_TTYD_PORT_BASE || "24000";
 const ttydPortMax = process.env.CITADEL_PLAYWRIGHT_TTYD_PORT_MAX || "24999";
 const daemonLog = process.env.CITADEL_PLAYWRIGHT_DAEMON_LOG || "/tmp/citadel-playwright-daemon.log";
+const dataDir =
+  process.env.CITADEL_DATA_DIR || process.env.CITADEL_PLAYWRIGHT_DATA_DIR || "/tmp/citadel-playwright-data";
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
 const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}`).replace(
@@ -47,7 +49,7 @@ export default defineConfig({
       // boot orphan-reaper can mistake production tmux panes for sandbox
       // orphans and kill the user's live terminals.
       command: [
-        "CITADEL_DATA_DIR=/tmp/citadel-playwright-data",
+        `CITADEL_DATA_DIR=${dataDir}`,
         `CITADEL_PORT=${daemonPort}`,
         `CITADEL_TMUX_SOCKET=${tmuxSocket}`,
         "CITADEL_OWN_TMUX_SOCKET=1",
@@ -67,7 +69,7 @@ export default defineConfig({
         // E2E writes screenshot artifacts under docs/campaigns. Run the
         // built daemon, not tsx watch/source mode, so CI cannot restart the
         // API server between tests and surface transient ECONNRESETs.
-        'sh -c \'rm -f "$CITADEL_PLAYWRIGHT_DAEMON_LOG"; (pnpm --filter @citadel/daemon build && pnpm --filter @citadel/daemon start) >"$CITADEL_PLAYWRIGHT_DAEMON_LOG" 2>&1; code=$?; echo "[playwright-daemon] exited $code at $(date -u +%FT%TZ)" >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG"; exit $code\'',
+        'sh -c \'rm -f "$CITADEL_PLAYWRIGHT_DAEMON_LOG"; case "$CITADEL_DATA_DIR" in /tmp/citadel-playwright-*|/tmp/citadel-test-*) rm -rf "$CITADEL_DATA_DIR" ;; *) echo "Refusing to clean non-Playwright data dir: $CITADEL_DATA_DIR" >&2; exit 2 ;; esac; (pnpm --filter @citadel/daemon build && pnpm --filter @citadel/daemon start) >"$CITADEL_PLAYWRIGHT_DAEMON_LOG" 2>&1; code=$?; echo "[playwright-daemon] exited $code at $(date -u +%FT%TZ)" >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG"; exit $code\'',
       ].join(" "),
       url: `${daemonBase}/api/health`,
       reuseExistingServer: false,
