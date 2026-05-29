@@ -1,6 +1,6 @@
 import type { AgentSession } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
-import { stableVisitedSessions, stableWorkspaceSessionIdsKey } from "./stage.js";
+import { retainRecentTerminalIds, stableVisitedSessions, stableWorkspaceSessionIdsKey } from "./stage.js";
 
 describe("Stage terminal pane ordering", () => {
   it("keeps visited terminal panes in visit order when state polling reorders sessions", () => {
@@ -17,6 +17,26 @@ describe("Stage terminal pane ordering", () => {
     const second = sessionFixture({ id: "sess_b", tabId: "tab_b", updatedAt: "2026-05-28T20:00:05.000Z" });
 
     expect(stableWorkspaceSessionIdsKey([second, first])).toBe(stableWorkspaceSessionIdsKey([first, second]));
+  });
+
+  it("retains only the five most recently visited terminal panes", () => {
+    const visited = new Set(["sess_a", "sess_b", "sess_c", "sess_d", "sess_e", "sess_f"]);
+    const live = new Set(visited);
+
+    expect([...retainRecentTerminalIds(visited, "sess_b", live)]).toEqual([
+      "sess_c",
+      "sess_d",
+      "sess_e",
+      "sess_f",
+      "sess_b",
+    ]);
+  });
+
+  it("drops sessions that no longer exist before applying the LRU cap", () => {
+    const visited = new Set(["sess_a", "sess_b", "sess_c", "sess_d", "sess_e", "sess_f"]);
+    const live = new Set(["sess_b", "sess_d", "sess_e", "sess_f"]);
+
+    expect([...retainRecentTerminalIds(visited, "sess_b", live)]).toEqual(["sess_d", "sess_e", "sess_f", "sess_b"]);
   });
 });
 

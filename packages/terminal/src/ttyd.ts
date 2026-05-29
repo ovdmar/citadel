@@ -1,19 +1,16 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import net from "node:net";
 import { tmuxPrefix } from "./index.js";
-import { TtydUnavailableError } from "./ttyd-errors.js";
 import {
-  binaryExists,
-  discoverExistingTtydsFromProc,
   killStaleTtydInRange,
-  reserveFreePort,
-  tmuxSessionAlive,
+  listListeningPortsInRange,
+  listeningPidForPort,
+  processAlive,
   trimSlashes,
-  waitForOwnedPort,
-} from "./ttyd-system.js";
-
-export { TtydUnavailableError } from "./ttyd-errors.js";
-
-export type TtydTheme = "light" | "dark";
+} from "./ttyd-process.js";
+import { type TtydTheme, ttydThemeArgs } from "./ttyd-theme.js";
+export type { TtydTheme } from "./ttyd-theme.js";
+export { discoverExistingTtyds } from "./ttyd-process.js";
 
 export type TtydEntry = {
   key: string;
@@ -83,6 +80,16 @@ const DEFAULTS = {
 };
 
 const TTYD_PING_INTERVAL_SECONDS = 45;
+
+export class TtydUnavailableError extends Error {
+  readonly code: "ttyd_missing" | "no_free_port" | "ttyd_start_timeout" | "tmux_session_missing" | "spawn_failed";
+
+  constructor(code: TtydUnavailableError["code"], message: string) {
+    super(message);
+    this.code = code;
+    this.name = "TtydUnavailableError";
+  }
+}
 
 // `child` is null when the entry was *adopted* at boot from a ttyd left
 // behind by a previous daemon incarnation — we have the PID but no live
@@ -613,87 +620,6 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
   return Object.assign(manager, { publicPathFor });
 }
 
-/**
- * Build the `-t` ttyd client-option flags that paint xterm to match the
- * cockpit theme. Palette is derived from the meshes-studio design system
- * (warm beige + navy for light, deep navy + soft white for dark) so the
- * terminal blends with the rest of the UI.
- */
-function ttydThemeArgs(theme: TtydTheme): string[] {
-  const palette = theme === "light" ? LIGHT_XTERM_THEME : DARK_XTERM_THEME;
-  return [
-    "-t",
-    `theme=${JSON.stringify(palette)}`,
-    "-t",
-    "fontFamily=ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-    // Auto-reconnect 3s after the websocket drops (laptop sleep, network
-    // blip). Without this, ttyd's xterm shows "Press any key to reconnect"
-    // and waits for a manual key press.
-    "-t",
-    "reconnect=3",
-  ];
-}
-
-// Palette matches the cockpit's warm-cream redesign so the terminal pane
-// reads as part of the surface, not a stark white island. Background tracks
-// --c-elev (the stage card colour); foreground tracks --c-fg-1. Ansi colour
-// hues are unchanged from the previous palette — only their saturation has
-// been pushed up so each colour reads clearly on the cream/dark surfaces
-// without losing the warm-leaning character of the cockpit.
-// `white` (ansi 7) and `brightWhite` (ansi 15) are deliberately remapped to
-// dark values on the light theme: a program that explicitly prints white text
-// would otherwise be invisible on the cream surface. Everything else is the
-// same hue as before, just dropped in lightness so it reads cleanly on a
-// light background — pulling the bright variants down at the same time so
-// the "bright" tier stays distinguishable from base without going pastel.
-const LIGHT_XTERM_THEME = {
-  background: "#f5f1e8",
-  foreground: "#1a1814",
-  cursor: "#14171f",
-  cursorAccent: "#f5f1e8",
-  selectionBackground: "rgba(20, 23, 31, 0.18)",
-  black: "#1a1814",
-  red: "#9a1d12",
-  green: "#36680c",
-  yellow: "#825507",
-  blue: "#194d8e",
-  magenta: "#5f2a7a",
-  cyan: "#0a5d6e",
-  white: "#1a1814",
-  brightBlack: "#4a463e",
-  brightRed: "#b8281c",
-  brightGreen: "#4a8a14",
-  brightYellow: "#a06b0a",
-  brightBlue: "#2864ad",
-  brightMagenta: "#7d3a98",
-  brightCyan: "#0f7d92",
-  brightWhite: "#0c0a06",
-};
-
-const DARK_XTERM_THEME = {
-  background: "#1a1814",
-  foreground: "#e8e3d3",
-  cursor: "#f0ebdd",
-  cursorAccent: "#1a1814",
-  selectionBackground: "rgba(240, 235, 221, 0.18)",
-  black: "#1a1814",
-  red: "#ec7468",
-  green: "#a3d364",
-  yellow: "#e8b552",
-  blue: "#7eb5e4",
-  magenta: "#c896d4",
-  cyan: "#7dbedc",
-  white: "#e8e3d3",
-  brightBlack: "#948d7b",
-  brightRed: "#ff8d80",
-  brightGreen: "#bbe683",
-  brightYellow: "#f5c66a",
-  brightBlue: "#a2cef0",
-  brightMagenta: "#dcb1e4",
-  brightCyan: "#9ad0e8",
-  brightWhite: "#fffaef",
-};
-
 function buildAttachCommand(tmuxSession: string, options: { enableMouse: boolean }) {
   const safe = tmuxSession.replace(/"/g, '\\"');
   // Inline socket flag so the shell ttyd execs into talks to the same tmux
@@ -716,29 +642,68 @@ function buildAttachCommand(tmuxSession: string, options: { enableMouse: boolean
   return lines.join("; ");
 }
 
-/**
- * Scan the host for ttyd processes left behind by a previous daemon
- * incarnation that we can re-attach to instead of killing-and-respawning.
- * Filters by the `-b /<basePathPrefix>/<key>` argv shape (so non-Citadel
- * ttyds are skipped) and, when supplied, the caller's ttyd port range. The
- * range filter is a safety boundary: a sandbox daemon with a fixture DB must
- * not scan host-wide ttyds and SIGTERM production terminals whose keys are
- * absent from the sandbox DB.
- *
- * Linux-only — relies on `/proc/<pid>/cmdline`. On other platforms returns
- * an empty list (caller falls back to spawning fresh ttyds).
- */
-export function discoverExistingTtyds(
-  opts: {
-    basePathPrefix?: string;
-    portBase?: number;
-    portMax?: number;
-  } = {},
-): TtydEntry[] {
-  return discoverExistingTtydsFromProc({
-    ...opts,
-    basePathPrefix: opts.basePathPrefix ?? DEFAULTS.basePathPrefix,
-    lightThemeBackground: LIGHT_XTERM_THEME.background,
-    darkThemeBackground: DARK_XTERM_THEME.background,
+function tmuxSessionAlive(name: string) {
+  try {
+    execFileSync("tmux", [...tmuxPrefix(), "has-session", "-t", name], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function binaryExists(absolutePath: string) {
+  try {
+    execFileSync(absolutePath, ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function portOpen(port: number) {
+  return new Promise<boolean>((resolve) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port });
+    let settled = false;
+    const finish = (alive: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(alive);
+    };
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    // 500ms — closed local ports return ECONNREFUSED immediately and open
+    // ports connect in <1ms, so this timeout only fires when the kernel is
+    // overloaded (spawn storms). The earlier 150ms ceiling produced false
+    // negatives during `make deploy` that surfaced as ttyd_start_timeout.
+    socket.setTimeout(500, () => finish(false));
   });
+}
+
+async function reserveFreePort(base: number, max: number, reserved: Set<number>) {
+  const occupied = listListeningPortsInRange(base, max);
+  for (let port = base; port <= max; port += 1) {
+    if (reserved.has(port)) continue;
+    if (occupied.has(port)) continue;
+    if (await portOpen(port)) continue;
+    reserved.add(port);
+    return port;
+  }
+  throw new TtydUnavailableError("no_free_port", `no free port between ${base} and ${max}`);
+}
+
+async function waitForOwnedPort(port: number, pid: number, timeoutMs: number) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const owner = listeningPidForPort(port);
+    if (owner === pid) return true;
+    // If lsof is unavailable in a test/dev environment, fall back to the old
+    // readiness probe. In production, a known-but-wrong owner must not satisfy
+    // readiness; that is how a ttyd launched for session A can accidentally
+    // serve session B's iframe as a white 404 page.
+    if (owner === undefined && (await portOpen(port))) return true;
+    if (pid > 0 && !processAlive(pid)) return false;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
 }

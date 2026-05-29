@@ -156,6 +156,8 @@ export async function discoverCodexSessionId(opts: {
     if (opts.rootPid && processExists(opts.rootPid)) {
       const found = discoverCodexSessionIdFromProcess({
         rootPid: opts.rootPid,
+        workspacePath: opts.workspacePath,
+        sessionStartedAt,
         ...(opts.home ? { home: opts.home } : {}),
       });
       if (found) return found;
@@ -182,12 +184,17 @@ export function extractCodexResumeSessionIdFromArgv(argv: string[]): string | nu
   return candidate && UUID_REGEX.test(candidate) ? candidate : null;
 }
 
-export function discoverCodexSessionIdFromProcess(opts: { rootPid: number; home?: string }): string | null {
+export function discoverCodexSessionIdFromProcess(opts: {
+  rootPid: number;
+  home?: string;
+  workspacePath?: string;
+  sessionStartedAt?: string;
+}): string | null {
   const pids = listProcessTree(opts.rootPid);
   for (const pid of pids) {
-    const rollout = findOpenCodexRolloutForPid(pid, opts.home);
-    if (rollout) {
+    for (const rollout of findOpenCodexRolloutsForPid(pid, opts.home)) {
       const { meta } = parseCodexRollout(rollout);
+      if (!codexMetaMatchesSession(meta, opts)) continue;
       if (meta.id) return meta.id;
     }
   }
@@ -245,24 +252,38 @@ function readProcessArgv(pid: number): string[] {
   }
 }
 
-function findOpenCodexRolloutForPid(pid: number, home?: string): string | null {
+function codexMetaMatchesSession(
+  meta: CodexMeta,
+  opts: { workspacePath?: string; sessionStartedAt?: string },
+): boolean {
+  if (opts.workspacePath && meta.cwd !== opts.workspacePath) return false;
+  if (!opts.sessionStartedAt) return true;
+  const startMs = Date.parse(opts.sessionStartedAt);
+  if (!Number.isFinite(startMs)) return true;
+  const metaMs = meta.timestamp ? Date.parse(meta.timestamp) : Number.NaN;
+  if (!Number.isFinite(metaMs)) return false;
+  return metaMs >= startMs - 60_000;
+}
+
+function findOpenCodexRolloutsForPid(pid: number, home?: string): string[] {
   const root = codexSessionsRoot(home ?? os.homedir());
   const fdDir = `/proc/${pid}/fd`;
   let entries: string[];
   try {
     entries = fs.readdirSync(fdDir);
   } catch {
-    return null;
+    return [];
   }
+  const rollouts: string[] = [];
   for (const entry of entries) {
     try {
       const target = fs.realpathSync(path.join(fdDir, entry));
       if (!target.startsWith(`${root}${path.sep}`)) continue;
       if (!target.endsWith(".jsonl")) continue;
-      return target;
+      rollouts.push(target);
     } catch {}
   }
-  return null;
+  return rollouts;
 }
 
 export function findCodexRolloutForSession(input: GetUserPromptsInput): string | null {

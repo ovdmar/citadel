@@ -55,6 +55,14 @@ function configuredHooks(deps: WorkspaceAppsDeps, event: HookConfig["event"], ho
   return hookIds.length ? hooks.filter((hook) => hookIds.includes(hook.id)) : hooks;
 }
 
+function parseOptionalHookOutput(stdout: string): HookOutput | null {
+  try {
+    return parseHookOutput(stdout);
+  } catch {
+    return null;
+  }
+}
+
 export async function discoverWorkspaceApps(
   deps: WorkspaceAppsDeps,
   input: { repo: Repo; workspace: Workspace; providerContext?: unknown },
@@ -182,7 +190,7 @@ export async function runWorkspaceAction(
         input.repo.id,
         input.workspace.id,
         operation.id,
-        parseHookOutput(result.stdout),
+        parseOptionalHookOutput(result.stdout),
       );
     }
     deps.store.upsertOperation({

@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import type http from "node:http";
 import type https from "node:https";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CitadelConfig } from "@citadel/config";
@@ -64,6 +63,7 @@ import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { registerPrDiffRoute } from "./pr-diff-route.js";
 import { registerPrRoutes } from "./pr-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
+import { registerRepoDiscoveryRoutes } from "./repo-discovery-routes.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScaffoldHookRoutes } from "./scaffold-hook-routes.js";
@@ -100,12 +100,6 @@ type ProviderCollectors = {
   collectJiraIssueSummary: typeof collectJiraIssueSummary;
   transitionJiraIssue: typeof transitionJiraIssue;
 };
-
-function expandTilde(input: string): string {
-  if (input === "~") return os.homedir();
-  if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2));
-  return input;
-}
 
 export function createDaemonApp(input: {
   config: CitadelConfig;
@@ -245,6 +239,8 @@ export function createDaemonApp(input: {
     res.json({ config, configPath });
   });
 
+  registerDiagnosticsRoutes({ app, store, ttyd, diagnostics, config });
+
   app.put("/api/config", (req, res) => {
     const nextConfig = mergeConfigPatch(config, req.body);
     const saved = saveConfig(nextConfig, configPath);
@@ -273,87 +269,7 @@ export function createDaemonApp(input: {
     res.status(201).json({ repo });
   });
 
-  app.post(
-    "/api/repos/inspect",
-    asyncRoute(async (req, res) => {
-      const inputPath = typeof req.body?.rootPath === "string" ? req.body.rootPath : "";
-      if (!inputPath) return res.status(400).json({ error: "root_path_required" });
-      const resolved = path.resolve(expandTilde(inputPath));
-      const exists = fs.existsSync(resolved);
-      const isGit = exists && fs.existsSync(path.join(resolved, ".git"));
-      let defaultBranch: string | null = null;
-      let remotes: string[] = [];
-      if (isGit) {
-        try {
-          const { execFile: execFileCb } = await import("node:child_process");
-          const { promisify } = await import("node:util");
-          const exec = promisify(execFileCb);
-          const headRef = await exec("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
-            cwd: resolved,
-            timeout: 6000,
-          }).catch(() => ({ stdout: "" }));
-          defaultBranch = (headRef.stdout || "").trim().replace("refs/remotes/origin/", "").trim() || "main";
-          const remoteList = await exec("git", ["remote"], { cwd: resolved, timeout: 6000 }).catch(() => ({
-            stdout: "",
-          }));
-          remotes = remoteList.stdout
-            .split("\n")
-            .map((line) => line.trim())
-            .filter(Boolean);
-        } catch {
-          defaultBranch = "main";
-        }
-      }
-      res.json({
-        rootPath: resolved,
-        exists,
-        isGit,
-        defaultBranch,
-        remotes,
-        suggestedWorktreeParent: path.join(path.dirname(resolved), `${path.basename(resolved)}-worktrees`),
-        providerCandidates: [
-          { id: "github-gh", displayName: "GitHub CLI", enabled: config.providers.github.enabled },
-          { id: "jira-jtk", displayName: "Jira CLI", enabled: config.providers.jira.enabled },
-        ],
-      });
-    }),
-  );
-
-  app.get("/api/fs/complete", (req, res) => {
-    const raw = typeof req.query.prefix === "string" ? req.query.prefix : "";
-    const seed = raw || "~/";
-    const trailingSlash = seed.endsWith("/");
-    const expanded = expandTilde(seed);
-    const baseDir = trailingSlash ? path.resolve(expanded || os.homedir()) : path.resolve(path.dirname(expanded));
-    const filter = trailingSlash ? "" : path.basename(expanded);
-    let entries: Array<{ name: string; path: string; isGit: boolean }> = [];
-    try {
-      const filterLower = filter.toLowerCase();
-      const showHidden = filter.startsWith(".");
-      const dirents = fs.readdirSync(baseDir, { withFileTypes: true });
-      for (const dirent of dirents) {
-        if (!dirent.isDirectory() && !dirent.isSymbolicLink()) continue;
-        if (!showHidden && dirent.name.startsWith(".")) continue;
-        if (filterLower && !dirent.name.toLowerCase().startsWith(filterLower)) continue;
-        const full = path.join(baseDir, dirent.name);
-        if (dirent.isSymbolicLink()) {
-          try {
-            if (!fs.statSync(full).isDirectory()) continue;
-          } catch {
-            continue;
-          }
-        }
-        const isGit = fs.existsSync(path.join(full, ".git"));
-        entries.push({ name: dirent.name, path: full, isGit });
-        if (entries.length >= 100) break;
-      }
-      entries.sort((a, b) => a.name.localeCompare(b.name));
-      entries = entries.slice(0, 50);
-    } catch {
-      entries = [];
-    }
-    res.json({ baseDir, filter, entries });
-  });
+  registerRepoDiscoveryRoutes({ app, config, asyncRoute });
 
   app.get("/api/repos", (_req, res) => {
     res.json({ repos: store.listRepos() });
@@ -554,14 +470,16 @@ export function createDaemonApp(input: {
     "/api/workspaces",
     asyncRoute(async (req, res) => {
       const input = CreateWorkspaceInputSchema.parse(req.body);
-      const result = await operations.createWorkspace(input);
+      const result = await operations.createWorkspace(input, {
+        deferProvisioning: true,
+        onWorkspaceUpdated: (payload) => emit("workspace.updated", payload),
+      });
       emit("workspace.updated", result);
       res.status(202).json(result);
     }),
   );
 
   registerRuntimeUsageRoutes({ app, config, asyncRoute, providerCache, cachedProvider });
-  registerDiagnosticsRoutes({ app, store, ttyd, diagnostics, config });
   registerDoctorRoutes({ app, config, store, asyncRoute, collectProviderHealth: cachedProviderHealth });
   registerScaffoldHookRoutes({ app, config, store, operations, asyncRoute });
   registerPrRoutes({
@@ -665,13 +583,15 @@ export function createDaemonApp(input: {
   registerCitadelActionRoutes({ app, config, emit });
   backfillScratchpadOnStartup(config);
 
-  fsWatchers = createWorkspaceFsWatchers({
-    listWorkspaces: () => store.listWorkspaces(),
-    providerCache,
-    emit,
-  });
-  fsWatchers.reconcile();
-  server.on("close", () => fsWatchers?.close());
+  if (process.env.CITADEL_DISABLE_FS_WATCHERS !== "1") {
+    fsWatchers = createWorkspaceFsWatchers({
+      listWorkspaces: () => store.listWorkspaces(),
+      providerCache,
+      emit,
+    });
+    fsWatchers.reconcile();
+    server.on("close", () => fsWatchers?.close());
+  }
 
   registerWorkspaceDiffRoutes({ app, store, asyncRoute });
 

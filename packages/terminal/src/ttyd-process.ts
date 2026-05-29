@@ -1,73 +1,11 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import net from "node:net";
-import { tmuxPrefix } from "./index.js";
-import { TtydUnavailableError } from "./ttyd-errors.js";
-import type { TtydEntry, TtydTheme } from "./ttyd.js";
+import { ttydThemeFromJson } from "./ttyd-theme.js";
+import type { TtydEntry } from "./ttyd.js";
 
-export function trimSlashes(value: string) {
-  return value.replace(/^\/+|\/+$/g, "");
-}
+const DEFAULT_BASE_PATH_PREFIX = "/terminals";
 
-export function tmuxSessionAlive(name: string) {
-  try {
-    execFileSync("tmux", [...tmuxPrefix(), "has-session", "-t", name], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function binaryExists(absolutePath: string) {
-  try {
-    execFileSync(absolutePath, ["--version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function portOpen(port: number) {
-  return new Promise<boolean>((resolve) => {
-    const socket = net.createConnection({ host: "127.0.0.1", port });
-    let settled = false;
-    const finish = (alive: boolean) => {
-      if (settled) return;
-      settled = true;
-      socket.destroy();
-      resolve(alive);
-    };
-    socket.once("connect", () => finish(true));
-    socket.once("error", () => finish(false));
-    socket.setTimeout(500, () => finish(false));
-  });
-}
-
-export async function reserveFreePort(base: number, max: number, reserved: Set<number>) {
-  const occupied = listListeningPortsInRange(base, max);
-  for (let port = base; port <= max; port += 1) {
-    if (reserved.has(port)) continue;
-    if (occupied.has(port)) continue;
-    if (await portOpen(port)) continue;
-    reserved.add(port);
-    return port;
-  }
-  throw new TtydUnavailableError("no_free_port", `no free port between ${base} and ${max}`);
-}
-
-export async function waitForOwnedPort(port: number, pid: number, timeoutMs: number) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const owner = listeningPidForPort(port);
-    if (owner === pid) return true;
-    if (owner === undefined && (await portOpen(port))) return true;
-    if (pid > 0 && !processAlive(pid)) return false;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  return false;
-}
-
-function processAlive(pid: number): boolean {
+export function processAlive(pid: number): boolean {
   if (!pid || pid <= 0) return false;
   try {
     process.kill(pid, 0);
@@ -77,7 +15,7 @@ function processAlive(pid: number): boolean {
   }
 }
 
-function listeningPidForPort(port: number): number | null | undefined {
+export function listeningPidForPort(port: number): number | null | undefined {
   try {
     const output = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"], {
       encoding: "utf8",
@@ -92,7 +30,7 @@ function listeningPidForPort(port: number): number | null | undefined {
   }
 }
 
-function listListeningPortsInRange(portBase: number, portMax: number): Set<number> {
+export function listListeningPortsInRange(portBase: number, portMax: number): Set<number> {
   const ports = new Set<number>();
   let lsofOutput = "";
   try {
@@ -149,30 +87,41 @@ export function killStaleTtydInRange(portBase: number, portMax: number) {
   return pids.size;
 }
 
-export function discoverExistingTtydsFromProc(opts: {
-  basePathPrefix?: string;
-  portBase?: number;
-  portMax?: number;
-  lightThemeBackground: string;
-  darkThemeBackground: string;
-}): TtydEntry[] {
-  const basePathPrefix = trimSlashes(opts.basePathPrefix ?? "terminals");
+export function trimSlashes(value: string) {
+  return value.replace(/^\/+|\/+$/g, "");
+}
+
+/**
+ * Scan the host for ttyd processes left behind by a previous daemon
+ * incarnation that we can re-attach to instead of killing-and-respawning.
+ * Filters by the `-b /<basePathPrefix>/<key>` argv shape (so non-Citadel
+ * ttyds are skipped) and, when supplied, the caller's ttyd port range. The
+ * range filter is a safety boundary: a sandbox daemon with a fixture DB must
+ * not scan host-wide ttyds and SIGTERM production terminals whose keys are
+ * absent from the sandbox DB.
+ *
+ * Linux-only — relies on `/proc/<pid>/cmdline`. On other platforms returns
+ * an empty list (caller falls back to spawning fresh ttyds).
+ */
+export function discoverExistingTtyds(
+  opts: {
+    basePathPrefix?: string;
+    portBase?: number;
+    portMax?: number;
+  } = {},
+): TtydEntry[] {
+  const basePathPrefix = trimSlashes(opts.basePathPrefix ?? DEFAULT_BASE_PATH_PREFIX);
   const portBase = opts.portBase ?? 0;
   const portMax = opts.portMax ?? Number.MAX_SAFE_INTEGER;
   const found: TtydEntry[] = [];
   for (const [pid, port] of listListeningTtydsInRange(portBase, portMax)) {
-    const entry = readTtydEntryFromProc(pid, port, basePathPrefix, opts);
+    const entry = readTtydEntryFromProc(pid, port, basePathPrefix);
     if (entry) found.push(entry);
   }
   return found;
 }
 
-function readTtydEntryFromProc(
-  pid: number,
-  port: number,
-  basePathPrefix: string,
-  themes: { lightThemeBackground: string; darkThemeBackground: string },
-): TtydEntry | null {
+function readTtydEntryFromProc(pid: number, port: number, basePathPrefix: string): TtydEntry | null {
   let raw: string;
   try {
     raw = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
@@ -187,6 +136,9 @@ function readTtydEntryFromProc(
     const value = args[i + 1] ?? "";
     if (flag === "-b") basePath = value;
     if (flag === "-t" && value.startsWith("theme=")) themeJson = value.slice("theme=".length);
+    // ttyd parses client options in-place and can replace the "=" in
+    // `theme=<json>` with NUL, so adopted processes may present as
+    // `-t`, `theme`, `<json>` in /proc/<pid>/cmdline.
     if (flag === "-t" && value === "theme") themeJson = args[i + 2] ?? null;
   }
   if (!basePath) return null;
@@ -194,22 +146,23 @@ function readTtydEntryFromProc(
   if (!basePath.startsWith(prefix)) return null;
   const key = decodeURIComponent(basePath.slice(prefix.length));
   if (!key) return null;
+  // The shell command is the last argv after the shell binary and `-lc`.
+  // It looks like `...; exec tmux ... attach -t "<session>"`.
   const attachCommand = args[args.length - 1] ?? "";
   const sessionMatch = /attach\s+-t\s+"((?:\\.|[^"\\])+)"/.exec(attachCommand);
   const sessionRaw = sessionMatch?.[1];
   if (!sessionRaw) return null;
   const tmuxSession = sessionRaw.replace(/\\(.)/g, "$1");
-  let theme: TtydTheme = "dark";
-  if (themeJson) {
-    if (themeJson.includes(`"${themes.lightThemeBackground}"`)) theme = "light";
-    else if (themeJson.includes(`"${themes.darkThemeBackground}"`)) theme = "dark";
-  }
+  const theme = ttydThemeFromJson(themeJson);
   let startedAt = new Date().toISOString();
   try {
     const stat = fs.statSync(`/proc/${pid}`);
     startedAt = stat.ctime.toISOString();
   } catch {
-    // ignore
+    // ignore — falls back to "now", harmless for callers.
   }
+  // tabId isn't recoverable from /proc — the ttyd command line doesn't carry
+  // it. The adopt() caller resolves it from the DB via the optional
+  // `resolveTabId` callback.
   return { key, port, pid, basePath, tmuxSession, worktreePath: null, startedAt, theme, tabId: null };
 }
