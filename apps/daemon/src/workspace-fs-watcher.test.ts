@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Workspace } from "@citadel/contracts";
 import { afterEach, describe, expect, it } from "vitest";
+import { globalPrCacheKey } from "./global-pr-cache.js";
 import { createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
 
 const dirs: string[] = [];
@@ -107,6 +108,30 @@ describe("workspace fs watcher", () => {
       fs.writeFileSync(path.join(ws.path, ".git", "index"), "fake-index\n");
       await awaitEvent(() => events.length > 0);
       expect(events[0]?.type).toBe("workspace.fsChanged");
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it("busts the workspace global PR cache entry when HEAD moves", async () => {
+    const ws = tmpWorkspace();
+    fs.mkdirSync(path.join(ws.path, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(ws.path, ".git", "HEAD"), "ref: refs/heads/main\n");
+    const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
+    providerCache.set(globalPrCacheKey("owner/repo", 42), { expiresAt: Date.now() + 60_000, value: "cached-pr" });
+    const events: Array<{ type: string }> = [];
+    const watcher = createWorkspaceFsWatchers({
+      listWorkspaces: () => [ws],
+      resolveRepoFullName: () => "owner/repo",
+      getWorkspacePrSnapshot: () => ({ prNumber: 42 }),
+      providerCache,
+      emit: (type) => events.push({ type }),
+    });
+    watcher.reconcile();
+    try {
+      fs.writeFileSync(path.join(ws.path, ".git", "HEAD"), "ref: refs/heads/feature\n");
+      await awaitEvent(() => events.some((e) => e.type === "workspace.fsChanged"));
+      expect(providerCache.has(globalPrCacheKey("owner/repo", 42))).toBe(false);
     } finally {
       watcher.close();
     }

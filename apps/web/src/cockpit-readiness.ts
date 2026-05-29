@@ -40,7 +40,8 @@ export function readinessForWorkspace(
 }
 
 export function readinessSection(state: string) {
-  if (["blocked", "checks-failing", "conflicts", "action-failed", "waiting-provider"].includes(state)) return "blocked";
+  if (["blocked", "checks-failing", "conflicts", "pr-conflicts", "action-failed", "waiting-provider"].includes(state))
+    return "blocked";
   if (["needs-review", "ready-to-merge"].includes(state)) return "needs-review";
   if (["dirty"].includes(state)) return "dirty";
   if (state === "working") return "working";

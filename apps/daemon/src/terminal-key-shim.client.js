@@ -9,6 +9,9 @@
   const isMac = /Mac|iPhone|iPad/i.test(navigator.platform || "") || /Macintosh/i.test(navigator.userAgent || "");
   let activeWs = null;
   const textEncoder = new TextEncoder();
+  const loadedAt = Date.now();
+  let terminalClientEventCount = 0;
+  let lastTerminalClientEventAt = 0;
 
   // Wrap WebSocket so we can capture the ttyd input channel. The constructor
   // explicitly `return ws` — per JS semantics, when a constructor returns an
@@ -20,8 +23,16 @@
     const ws = protocols === undefined ? new OriginalWebSocket(url) : new OriginalWebSocket(url, protocols);
     if (typeof url === "string" && /\/ws(\?|$)/.test(url)) {
       activeWs = ws;
-      ws.addEventListener("close", () => {
+      ws.addEventListener("close", (event) => {
+        recordTerminalClientEvent("ws.close", {
+          code: event?.code,
+          reason: event?.reason,
+          wasClean: event?.wasClean,
+        });
         if (activeWs === ws) activeWs = null;
+      });
+      ws.addEventListener("error", () => {
+        recordTerminalClientEvent("ws.error", {});
       });
       // ttyd's WebSocket frames look like: 1-byte command + payload. Output
       // frames start with '0' (0x30) and the payload is the raw PTY byte
@@ -329,6 +340,17 @@
   function onKeydown(event) {
     if (event.isComposing) return;
     const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
+    // Shell-first lifecycle signal: Ctrl+C inside the embedded terminal is
+    // the dominant operator-initiated agent stop. Fire-and-forget a POST to
+    // the user-action endpoint so the daemon's status-monitor knows the
+    // subsequent `running → idle` transition was operator-initiated (and
+    // doesn't mis-label it as `idle_after_unexpected_exit`). Do NOT
+    // consume(event) — the 0x03 byte must continue propagating to xterm so
+    // it reaches the PTY exactly as today.
+    if (key === "c" && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey) {
+      recordUserAction("ctrl_c");
+      // fall through — no consume(); xterm handles the 0x03.
+    }
     if (key === "enter" && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
       if (sendInput("\n")) consume(event);
       return;
@@ -371,6 +393,92 @@
   // both `window` and `document` would double-fire each shortcut, because
   // stopImmediatePropagation only stops same-target same-phase listeners.
   document.addEventListener("keydown", onKeydown, true);
+
+  try {
+    window.addEventListener(
+      "pagehide",
+      (event) => {
+        recordTerminalClientEvent("pagehide", { persisted: event?.persisted });
+      },
+      { capture: true },
+    );
+  } catch (_err) {
+    // Browsers without pagehide support still report WebSocket close events.
+  }
+
+  // Derive the sessionId from the iframe's URL path. ttyd is mounted at
+  // `/terminals/<sessionId>/` (see packages/terminal/src/ttyd.ts:147 — basePath
+  // is `${basePathPrefix}/<sessionId>`). Cached at module init since the URL
+  // never changes for a given iframe's lifetime. Defensive against test
+  // runtimes that don't provide window.location (the shim is eval'd inside a
+  // jsdom-lite Function() in apps/daemon/src/terminal-key-shim.test.ts).
+  const SESSION_ID = (() => {
+    try {
+      const pathname = window.location?.pathname || "";
+      const match = /^\/terminals\/([^/]+)/.exec(pathname);
+      return match ? decodeURIComponent(match[1]) : null;
+    } catch (_err) {
+      return null;
+    }
+  })();
+
+  // Fire-and-forget POST to the user-action endpoint. The daemon writes the
+  // session's entry in `recentUserAction` so the next status-monitor tick
+  // sees the operator action and clears `statusReason` instead of labelling
+  // the resulting `running → idle` as `idle_after_unexpected_exit`. Errors
+  // are silently swallowed — the worst case is a single mis-labelled
+  // session that auto-clears in 30 min.
+  function recordUserAction(reason) {
+    if (!SESSION_ID) return;
+    try {
+      fetch(`/api/agent-sessions/${encodeURIComponent(SESSION_ID)}/user-action`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch (_err) {
+      // Network constructed-call errors are swallowed; the user's keystroke
+      // already propagated to ttyd.
+    }
+  }
+
+  // Browser-side lifecycle breadcrumbs for the daemon diagnostics log. The
+  // server sees only TCP close/end; this records the close code plus whether
+  // the iframe itself is being hidden/navigated.
+  function recordTerminalClientEvent(event, data) {
+    if (!SESSION_ID) return;
+    const now = Date.now();
+    if (terminalClientEventCount >= 100) return;
+    if (terminalClientEventCount >= 20 && now - lastTerminalClientEventAt < 5000) return;
+    terminalClientEventCount += 1;
+    lastTerminalClientEventAt = now;
+    const payload = {
+      event,
+      ...data,
+      ageMs: now - loadedAt,
+      visibility: document.visibilityState || "unknown",
+      path: window.location?.pathname || "",
+    };
+    const url = `/api/agent-sessions/${encodeURIComponent(SESSION_ID)}/terminal-client-event`;
+    try {
+      const body = JSON.stringify(payload);
+      if (navigator.sendBeacon && typeof Blob !== "undefined") {
+        const sent = navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
+        if (sent) return;
+      }
+      if (typeof fetch === "function") {
+        fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+          keepalive: true,
+        }).catch(() => {});
+      }
+    } catch (_err) {
+      // Diagnostics must never affect terminal input or reconnect behavior.
+    }
+  }
 
   // OSC 52 bridge: when tmux runs with `set-clipboard on` (we enable that in
   // buildAttachCommand), every copy-mode/mouse selection inside tmux is

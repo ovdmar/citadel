@@ -1,4 +1,4 @@
-import type { BackgroundAgentSession } from "@citadel/contracts";
+import type { ActivityEvent, BackgroundAgentSession } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { ensureTmuxSessionRaw, killTmuxSession, pipeBackgroundSessionToLog, submitPrompt } from "@citadel/terminal";
@@ -9,7 +9,7 @@ export type CreateBackgroundAgentSessionDeps = {
   store: SqliteStore;
   activity: (
     type: string,
-    source: "user" | "system" | "hook",
+    source: ActivityEvent["source"],
     message: string,
     repoId: string | null,
     workspaceId: string | null,

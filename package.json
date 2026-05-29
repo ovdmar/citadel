@@ -26,9 +26,11 @@
     "check:arch": "tsx scripts/checks/architecture-boundaries.ts",
     "check:size": "tsx scripts/checks/file-size.ts",
     "check:deps": "tsx scripts/checks/dependency-policy.ts",
-    "smoke": "tsx scripts/dev/smoke.ts"
+    "smoke": "tsx scripts/dev/smoke.ts",
+    "seed": "tsx scripts/dev/seed.ts"
   },
   "dependencies": {
+    "@citadel/db": "workspace:*",
     "@tanstack/react-query": "^5.90.10",
     "@tanstack/react-router": "^1.132.0",
     "@xterm/addon-fit": "^0.10.0",

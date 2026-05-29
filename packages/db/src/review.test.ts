@@ -267,18 +267,18 @@ describe("review_suggestion_runs", () => {
 });
 
 describe("schema_migrations", () => {
-  it("includes the review-system row at version 8", () => {
+  it("includes the review-system row at version 13", () => {
     const f = makeStore();
     const rows = f.store.query<{ version: number; name: string }>(
-      "SELECT version, name FROM schema_migrations WHERE version = 8",
+      "SELECT version, name FROM schema_migrations WHERE version = 13",
     );
-    expect(rows).toEqual([{ version: 8, name: "review-system" }]);
+    expect(rows).toEqual([{ version: 13, name: "review-system" }]);
   });
 
   it("is idempotent — re-running migrate is a no-op", () => {
     const f = makeStore();
     f.store.migrate();
     const rows = f.store.query<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version");
-    expect(rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(rows.map((r) => r.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
   });
 });

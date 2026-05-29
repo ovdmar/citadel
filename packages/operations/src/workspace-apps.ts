@@ -1,5 +1,6 @@
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 import type {
+  ActivityEvent,
   HookAction,
   HookDiagnostic,
   HookOutput,
@@ -32,7 +33,7 @@ export type WorkspaceAppsDeps = {
   config: WorkspaceAppsConfig | undefined;
   activity: (
     type: string,
-    source: "user" | "system" | "hook",
+    source: ActivityEvent["source"],
     message: string,
     repoId: string | null,
     workspaceId: string | null,

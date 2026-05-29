@@ -1,27 +1,14 @@
 import { Monitor, Moon, Sun } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { type ThemePreference, applyThemePreference, readThemePreference } from "./use-resolved-theme.js";
 
 export function ThemeControls() {
-  const [theme, setTheme] = useState(() => localStorage.getItem("citadel.theme") || "system");
-  useEffect(() => {
-    localStorage.setItem("citadel.theme", theme);
-    if (theme === "system") {
-      delete document.documentElement.dataset.theme;
-    } else {
-      document.documentElement.dataset.theme = theme;
-    }
-  }, [theme]);
+  const [theme, setTheme] = useState<ThemePreference>(() => readThemePreference());
 
-  const pick = (next: string) => {
-    if (next === theme) return;
+  const pick = (next: ThemePreference) => {
+    if (next === theme && next === readThemePreference()) return;
+    applyThemePreference(next);
     setTheme(next);
-    // ttyd embeds the xterm palette at spawn time, so running terminals
-    // keep their current colors until they're respawned. Offer a reload
-    // so the user gets a consistent palette across the whole cockpit.
-    const reload = window.confirm(
-      "Theme updated. Open terminals will keep their current palette until you reload — reload now?",
-    );
-    if (reload) window.location.reload();
   };
 
   return (
