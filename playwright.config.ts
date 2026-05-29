@@ -12,12 +12,17 @@ const webPort = process.env.CITADEL_PLAYWRIGHT_WEB_PORT || "15174";
 const ttydPortBase = process.env.CITADEL_PLAYWRIGHT_TTYD_PORT_BASE || "24000";
 const ttydPortMax = process.env.CITADEL_PLAYWRIGHT_TTYD_PORT_MAX || "24999";
 const daemonLog = process.env.CITADEL_PLAYWRIGHT_DAEMON_LOG || "/tmp/citadel-playwright-daemon.log";
+const dataDir =
+  process.env.CITADEL_PLAYWRIGHT_DATA_DIR ||
+  (process.env.CITADEL_TEST_ISOLATED === "1" ? process.env.CITADEL_DATA_DIR : undefined) ||
+  "/tmp/citadel-playwright-data";
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
 const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}`).replace(
   /[^A-Za-z0-9_.-]/g,
   "-",
 );
+process.env.CITADEL_PLAYWRIGHT_SANDBOX_PREFIX ??= dataDir;
 
 export default defineConfig({
   testDir: "e2e",
@@ -47,7 +52,7 @@ export default defineConfig({
       // boot orphan-reaper can mistake production tmux panes for sandbox
       // orphans and kill the user's live terminals.
       command: [
-        "CITADEL_DATA_DIR=/tmp/citadel-playwright-data",
+        `CITADEL_DATA_DIR=${shellEnvValue(dataDir)}`,
         `CITADEL_PORT=${daemonPort}`,
         `CITADEL_TMUX_SOCKET=${tmuxSocket}`,
         "CITADEL_OWN_TMUX_SOCKET=1",
@@ -81,3 +86,7 @@ export default defineConfig({
     },
   ],
 });
+
+function shellEnvValue(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
