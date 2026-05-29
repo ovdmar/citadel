@@ -70,7 +70,7 @@ import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { backfillScratchpadOnStartup } from "./scratchpad.js";
-import { writeSseEvent } from "./sse-broadcast.js";
+import { attachSseClientErrorHandler, writeSseEvent } from "./sse-broadcast.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
 import { wireTerminalRoutes } from "./terminal-routes-helpers.js";
@@ -718,6 +718,7 @@ export function createDaemonApp(input: {
       Connection: "keep-alive",
     });
     sseClients.add(res);
+    attachSseClientErrorHandler(res, detachSseClient, diagnostics);
     ghQuota.onViewerAttached();
     res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
     req.on("close", () => {
