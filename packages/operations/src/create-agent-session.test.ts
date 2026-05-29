@@ -24,11 +24,10 @@ describe("createAgentSession session-id wiring", () => {
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "sid-create", source: "scratch" });
 
-    // `true` ignores any args, so `true --session-id <uuid>` exits cleanly.
-    // The tmux session still gets created — that's what we assert against.
+    const scriptPath = writeLongRunningNodeScript(fixture.dir, "sid-create-runtime.js");
     const session = await service.createAgentSession(
       { workspaceId: created.workspaceId, runtimeId: "claude-code" },
-      { command: "sleep", args: ["10"], displayName: "Test", sessionIdArg: "--session-id" },
+      { command: "node", args: [scriptPath], displayName: "Test", sessionIdArg: "--session-id" },
     );
     try {
       expect(session.runtimeSessionId).toMatch(UUID_V4);
@@ -48,11 +47,12 @@ describe("createAgentSession session-id wiring", () => {
     const created = await service.createWorkspace({ repoId: repo.id, name: "sid-resume", source: "scratch" });
 
     const existing = randomUUID();
+    const scriptPath = writeLongRunningNodeScript(fixture.dir, "sid-resume-runtime.js");
     const session = await service.createAgentSession(
       { workspaceId: created.workspaceId, runtimeId: "claude-code", resumeRuntimeSessionId: existing },
       {
-        command: "sleep",
-        args: ["10"],
+        command: "node",
+        args: [scriptPath],
         displayName: "Test",
         sessionIdArg: "--session-id",
         resumeArg: "--resume",
@@ -116,6 +116,48 @@ describe("createAgentSession session-id wiring", () => {
       service.stopAgentSession({ sessionId: session.id });
     }
   }, 15_000);
+
+  it("retries Codex startup when its state database is temporarily locked", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = makeService(store);
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "codex-db-lock", source: "scratch" });
+    const attemptsPath = path.join(fixture.dir, "attempts.txt");
+    const readyPath = path.join(fixture.dir, "ready.txt");
+    const scriptPath = path.join(fixture.dir, "fake-codex-lock.js");
+    fs.writeFileSync(
+      scriptPath,
+      [
+        "const fs = require('node:fs');",
+        `const attemptsPath = ${JSON.stringify(attemptsPath)};`,
+        `const readyPath = ${JSON.stringify(readyPath)};`,
+        "let attempts = 0;",
+        "try { attempts = Number(fs.readFileSync(attemptsPath, 'utf8')) || 0; } catch {}",
+        "attempts += 1;",
+        "fs.writeFileSync(attemptsPath, String(attempts));",
+        "if (attempts === 1) {",
+        "  console.error('failed to initialize state runtime at /home/test/.codex: error returned from database: (code: 5) database is locked');",
+        "  process.exit(1);",
+        "}",
+        "fs.writeFileSync(readyPath, 'ready');",
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+    );
+
+    const session = await service.createAgentSession(
+      { workspaceId: created.workspaceId, runtimeId: "codex" },
+      { command: "node", args: [scriptPath], displayName: "Fake Codex", sessionIdArg: "--session-id" },
+    );
+    try {
+      expect(fs.readFileSync(attemptsPath, "utf8")).toBe("2");
+      expect(fs.readFileSync(readyPath, "utf8")).toBe("ready");
+      expect(session.runtimeSessionId).toMatch(UUID_V4);
+    } finally {
+      service.stopAgentSession({ sessionId: session.id });
+    }
+  }, 20_000);
 });
 
 function makeService(store: SqliteStore) {
@@ -142,6 +184,12 @@ function createGitFixture() {
   run("git", ["push", "-u", "origin", "main"], repoPath);
   run("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], repoPath);
   return { dir, repoPath };
+}
+
+function writeLongRunningNodeScript(dir: string, name: string) {
+  const scriptPath = path.join(dir, name);
+  fs.writeFileSync(scriptPath, "setInterval(() => {}, 1000);\n");
+  return scriptPath;
 }
 
 function run(command: string, args: string[], cwd: string) {
