@@ -1,5 +1,11 @@
 export type ScratchpadSnapshot = { content: string; updatedAt: string };
 
+// Boundary type for surfaces where MCP clients need to discover the on-disk
+// notes file path (HTTP `GET /api/scratchpad`, MCP `read_scratchpad` daemon
+// dispatch). Kept as a separate type so internal helpers continue to return
+// the narrower `ScratchpadSnapshot` shape without fixture churn.
+export type ReadScratchpadResult = ScratchpadSnapshot & { path: string };
+
 export type ScratchpadHistorySource =
   | "ui"
   | "mcp:write_scratchpad"

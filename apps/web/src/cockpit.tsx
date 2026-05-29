@@ -7,8 +7,15 @@ import { api } from "./api.js";
 import { useEventRefresh, useStateQuery } from "./app-state.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { resolveShortcutAction } from "./cockpit-shortcut-actions.js";
-import { useWorkspaceCockpitSummary } from "./cockpit-tools.js";
+import {
+  invalidateActiveWorkspaceFromBatch,
+  prMapFromSummaries,
+  useAllWorkspacesPrSummary,
+  useStickyWorkspaceSummaries,
+  useWorkspaceCockpitSummary,
+} from "./cockpit-tools.js";
 import { CommandPalette } from "./command-palette.js";
+import { GhCooldownBanner } from "./gh-cooldown-banner.js";
 import { Inspector } from "./inspector.js";
 import {
   expandGroupPath,
@@ -36,6 +43,7 @@ export function Cockpit() {
   const state = useStateQuery();
   useEventRefresh();
   const data = state.data;
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const search = (useSearch({ strict: false }) ?? {}) as { workspace?: string };
   const location = useLocation();
@@ -69,7 +77,28 @@ export function Cockpit() {
     if (activeWorkspace && activeWorkspace.repoId !== lastRepoId) setLastRepoId(activeWorkspace.repoId);
   }, [activeWorkspace, activeWorkspaceId, lastRepoId, setActiveWorkspaceId, setLastRepoId]);
 
-  const cockpitSummary = useWorkspaceCockpitSummary(activeWorkspace);
+  // Order matters: the batch poll + sticky cache must run before the single-
+  // workspace fetch so we can hand the cached summary to React Query as
+  // `placeholderData`. That makes the inspector render the last-known PR
+  // state instantly on workspace switch (otherwise the 10s `gh pr view`
+  // round-trip leaves the PR section blank for several seconds).
+  const batchPrSummary = useAllWorkspacesPrSummary(data?.workspaces ?? []);
+  const stickySummaries = useStickyWorkspaceSummaries(data?.workspaces ?? [], batchPrSummary.data);
+  const placeholderSummary = activeWorkspace ? stickySummaries.get(activeWorkspace.id) : undefined;
+  const cockpitSummary = useWorkspaceCockpitSummary(activeWorkspace, placeholderSummary);
+  useEffect(() => {
+    invalidateActiveWorkspaceFromBatch(queryClient, activeWorkspace?.id, batchPrSummary.dataUpdatedAt);
+  }, [activeWorkspace?.id, batchPrSummary.dataUpdatedAt, queryClient]);
+  // Feed the active workspace result back into the sticky cache by recomputing
+  // the PR map from both sources. The active query is preferred for the
+  // selected workspace; the batch covers everyone else.
+  const prByWorkspaceId = useMemo(() => {
+    const map = prMapFromSummaries(stickySummaries);
+    if (cockpitSummary.data) {
+      map.set(cockpitSummary.data.workspaceId, cockpitSummary.data.versionControl.pullRequest ?? null);
+    }
+    return map;
+  }, [stickySummaries, cockpitSummary.data]);
   const selectedRepo = activeWorkspace
     ? (data?.repos.find((repo) => repo.id === activeWorkspace.repoId) ?? null)
     : (data?.repos[0] ?? null);
@@ -118,7 +147,6 @@ export function Cockpit() {
     return data?.workspaces.map((workspace) => workspace.id) ?? [];
   }, [navTree, data?.workspaces]);
 
-  const queryClient = useQueryClient();
   const [shortcutError, setShortcutError] = useState<string | null>(null);
   const spawnSession = useMutation({
     mutationFn: (input: { workspaceId: string; runtimeId: string; displayName: string }) =>
@@ -264,10 +292,14 @@ export function Cockpit() {
       const sessions = data?.sessions.filter((session) => session.workspaceId === workspace.id) ?? [];
       const operations = data?.operations.filter((operation) => operation.workspaceId === workspace.id) ?? [];
       const attention = readinessForWorkspace(workspace, { sessions, operations });
+      // Active workspace gets the richer single-workspace summary (10s poll);
+      // every other workspace gets its PR from the 30s batch poll. Falls back
+      // to the batch map for the active workspace too while the inspector
+      // summary is still loading.
       const pr =
         workspace.id === cockpitSummary.data?.workspaceId
           ? (cockpitSummary.data.versionControl.pullRequest ?? null)
-          : null;
+          : (prByWorkspaceId.get(workspace.id) ?? null);
       const entry: { readiness?: string; prTone?: string; prNumber?: number | null; attention?: string } = {
         readiness: attention.label,
         attention: attention.tone,
@@ -277,7 +309,7 @@ export function Cockpit() {
       map[workspace.id] = entry;
     }
     return map;
-  }, [data?.workspaces, data?.sessions, data?.operations, cockpitSummary.data]);
+  }, [data?.workspaces, data?.sessions, data?.operations, cockpitSummary.data, prByWorkspaceId]);
 
   if (state.isLoading && !data)
     return (
@@ -294,6 +326,7 @@ export function Cockpit() {
         repo={selectedRepo}
         runtimes={data?.runtimes ?? []}
       />
+      <GhCooldownBanner summaries={stickySummaries} />
       <RestoreBanner bootRestore={data?.bootRestore ?? null} />
       {shortcutError ? (
         <div className="cockpit-shortcut-error" role="alert" aria-live="polite">
@@ -341,7 +374,7 @@ export function Cockpit() {
               workspaces={data?.workspaces ?? []}
               sessions={data?.sessions ?? []}
               operations={data?.operations ?? []}
-              activeSummary={cockpitSummary.data}
+              prByWorkspaceId={prByWorkspaceId}
               activeWorkspaceId={activeWorkspace?.id ?? ""}
               runtimes={data?.runtimes ?? []}
               namespaces={data?.namespaces ?? []}

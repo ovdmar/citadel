@@ -1,4 +1,6 @@
-// Settings → Restore lost sessions.
+// Restore lost sessions. Surfaced as a modal (cockpit-global) so the user
+// can reach it from the boot banner OR Settings → Restore without the
+// surrounding settings chrome stealing focus.
 //
 // Reads candidates from /api/restore/candidates (every workspace whose
 // most-recent agent_sessions row carries a runtime_session_id but no live
@@ -12,6 +14,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { api } from "./api.js";
+import { Modal } from "./modals.js";
 
 type RestoreCandidate = {
   workspaceId: string;
@@ -25,7 +28,10 @@ type RestoreCandidate = {
 
 type CandidatesResponse = { candidates: RestoreCandidate[] };
 
-export function RestorePanel() {
+// Bare panel body (the candidate list + action buttons). Used by both the
+// modal and the legacy Settings tab — the modal wraps it in <Modal>, the
+// settings tab embeds it directly under a section header.
+export function RestorePanelBody() {
   const queryClient = useQueryClient();
   const candidatesQuery = useQuery({
     queryKey: ["restore-candidates"],
@@ -66,37 +72,27 @@ export function RestorePanel() {
   const loading = candidatesQuery.isLoading;
 
   return (
-    <div className="set-card set-section">
-      <div className="set-section-head">
-        <span className="set-section-eyebrow">Restore lost sessions</span>
-        <span className="set-section-count">{total}</span>
-      </div>
-      <div className="set-section-sub">
+    <div className="restore-panel">
+      <p className="restore-panel__lead">
         Workspaces whose conversation Citadel can resume — the agent died (daemon restart, crash, or you stopped it) but
         the runtime's transcript is intact and its session UUID is registered. Restoring spawns a fresh tmux pane and
         runs the runtime with its resume flag, continuing from the last message.
-      </div>
+      </p>
 
       {error ? (
-        <div className="set-attn set-attn--bad" style={{ marginTop: 10 }}>
-          <span className="set-attn-dot" />
-          <div className="set-attn-text">
-            <div className="set-attn-title">Restore failed</div>
-            <div className="set-attn-detail">{error}</div>
-          </div>
+        <div className="restore-panel__error">
+          <strong>Restore failed:</strong> {error}
         </div>
       ) : null}
 
       {loading ? (
-        <div className="set-sum-empty" style={{ marginTop: 12 }}>
-          Scanning…
-        </div>
+        <div className="restore-panel__empty">Scanning…</div>
       ) : total === 0 ? (
-        <div className="set-sum-empty" style={{ marginTop: 12 }}>
+        <div className="restore-panel__empty">
           Nothing to restore — every workspace with a registered session is already live.
         </div>
       ) : (
-        <div className="set-attn-list" style={{ marginTop: 8 }}>
+        <ul className="restore-panel__list">
           {candidates.map((candidate) => (
             <RestoreRow
               key={candidate.sourceSessionId}
@@ -111,10 +107,27 @@ export function RestorePanel() {
               }
             />
           ))}
-        </div>
+        </ul>
       )}
     </div>
   );
+}
+
+// Modal wrapper — backdrop-blur overlay, dismiss on Esc/click-outside.
+// Open this from the boot-time RestoreBanner and from Settings → Restore.
+export function RestoreModal(props: { onClose: () => void }) {
+  return (
+    <Modal title="Restore lost sessions" onClose={props.onClose}>
+      <RestorePanelBody />
+    </Modal>
+  );
+}
+
+// Back-compat shim: keeps the Settings → Restore tab rendering inline. New
+// code should prefer RestoreModal; this exists so the old route doesn't
+// stop working if the user lands directly on it.
+export function RestorePanel() {
+  return <RestorePanelBody />;
 }
 
 function RestoreRow(props: {
@@ -126,20 +139,24 @@ function RestoreRow(props: {
   const { candidate } = props;
   const ago = relativeTime(candidate.lastActivityAt);
   return (
-    <div className="set-attn set-attn--warn">
-      <span className="set-attn-dot" />
-      <div className="set-attn-text">
-        <div className="set-attn-title">{candidate.workspaceName}</div>
-        <div className="set-attn-detail">
-          <span className="set-mono">{candidate.runtimeId}</span> · last active {ago} ·{" "}
-          <span className="set-mono">{candidate.runtimeSessionId.slice(0, 8)}</span>
+    <li className="restore-panel__row">
+      <div className="restore-panel__row-text">
+        <div className="restore-panel__row-title">{candidate.workspaceName}</div>
+        <div className="restore-panel__row-detail">
+          <span className="restore-panel__mono">{candidate.runtimeId}</span> · last active {ago} ·{" "}
+          <span className="restore-panel__mono">{candidate.runtimeSessionId.slice(0, 8)}</span>
         </div>
       </div>
-      <button type="button" className="set-btn" onClick={props.onRestore} disabled={props.disabled || props.busy}>
+      <button
+        type="button"
+        className="restore-panel__btn"
+        onClick={props.onRestore}
+        disabled={props.disabled || props.busy}
+      >
         <RotateCcw size={12} style={{ marginRight: 6, verticalAlign: "-2px" }} />
         {props.busy ? "Restoring…" : "Restore"}
       </button>
-    </div>
+    </li>
   );
 }
 

@@ -24,7 +24,18 @@ export function Stage(props: {
   activeSessionId: string | undefined;
   onActiveSession: (id: string) => void;
 }) {
-  const sortedSessions = [...props.sessions].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // Sort by tabId (time-encoded by createId on the daemon side), with createdAt
+  // as a stable tie-breaker for legacy rows whose tab_id pre-dates migration 11.
+  // The point of tabId: when a session is restored via `claude --resume <uuid>`
+  // the new row inherits the source row's tabId, so the restored tab appears
+  // in the same slot the original lived in — sorting by createdAt instead would
+  // jump the restored session to the end of the strip.
+  const sortedSessions = [...props.sessions].sort((a, b) => {
+    const aKey = a.tabId ?? a.id;
+    const bKey = b.tabId ?? b.id;
+    const cmp = aKey.localeCompare(bKey);
+    return cmp !== 0 ? cmp : a.createdAt.localeCompare(b.createdAt);
+  });
   const tabs: StageTab[] = sortedSessions.map((session) => ({ session, label: session.displayName }));
   const allSessions = props.allSessions ?? props.sessions;
 

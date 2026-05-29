@@ -32,11 +32,12 @@ import { fileURLToPath } from "node:url";
 //                                  scoped to .xterm-screen so the selection is
 //                                  terminal-scoped instead of iframe-chrome-scoped
 //
-//   3. OSC 52 bridge. tmux is configured per-attach with `set-clipboard on`
-//      (see `buildAttachCommand` in `packages/terminal/src/ttyd.ts`), and tmux
-//      emits OSC 52 escapes for copy-mode selections. The shim sniffs the
-//      ttyd WebSocket stream for `ESC ] 52 ; <id> ; <base64> BEL` and writes
-//      the decoded text via `navigator.clipboard.writeText`.
+//   3. OSC 52 bridge. For sessions where tmux owns mouse scrollback,
+//      `buildAttachCommand` in `packages/terminal/src/ttyd.ts` enables
+//      `set-clipboard on`, and tmux emits OSC 52 escapes for copy-mode
+//      selections. The shim sniffs the ttyd WebSocket stream for
+//      `ESC ] 52 ; <id> ; <base64> BEL` and writes the decoded text via
+//      `navigator.clipboard.writeText`.
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 export const TERMINAL_KEY_SHIM_SOURCE = fs.readFileSync(resolve(__dirname, "terminal-key-shim.client.js"), "utf8");

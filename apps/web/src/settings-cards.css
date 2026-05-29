@@ -481,6 +481,16 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.set-int-quota-line {
+  padding: 8px 14px;
+  border-top: 0.5px solid var(--c-line-1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-fg-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .set-int-status-action {
   appearance: none;
   background: transparent;

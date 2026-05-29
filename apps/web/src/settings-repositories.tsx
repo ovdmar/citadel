@@ -1,7 +1,7 @@
 import type { AgentSession, Operation, Repo, Workspace } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ExternalLink, FolderGit2, FolderPlus, Search, Settings as SettingsIcon, Trash2 } from "lucide-react";
+import { ExternalLink, Folder, FolderGit2, FolderPlus, Search, Settings as SettingsIcon, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import type { StateResponse } from "./app-state.js";
@@ -116,7 +116,7 @@ function RepoCard(props: {
   const activeSessions = props.sessions.filter(
     (session) =>
       workspaceIds.has(session.workspaceId) &&
-      ["starting", "running", "waiting_for_input", "rate_limited"].includes(session.status),
+      ["starting", "running", "waiting_for_input", "rate_limited", "usage_limited"].includes(session.status),
   ).length;
   const runningOperations = props.operations.filter(
     (operation) => operation.repoId === props.repo.id && ["queued", "running"].includes(operation.status),
@@ -188,6 +188,126 @@ function RepoCard(props: {
   );
 }
 
+type PathCompletionEntry = { name: string; path: string; isGit: boolean };
+type PathCompletionResponse = { baseDir: string; filter: string; entries: PathCompletionEntry[] };
+
+function PathAutocomplete(props: {
+  value: string;
+  onChange: (next: string) => void;
+  inputRef?: React.RefObject<HTMLInputElement | null>;
+  placeholder?: string;
+}) {
+  const [entries, setEntries] = useState<PathCompletionEntry[]>([]);
+  const [open, setOpen] = useState(false);
+  const [focused, setFocused] = useState(-1);
+  const inputRef = props.inputRef;
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const handle = setTimeout(() => {
+      const prefix = props.value;
+      api<PathCompletionResponse>(`/api/fs/complete?prefix=${encodeURIComponent(prefix)}`)
+        .then((data) => {
+          if (cancelled) return;
+          setEntries(data.entries);
+          setFocused(-1);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setEntries([]);
+        });
+    }, 120);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+  }, [props.value]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocMouseDown = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocMouseDown);
+    return () => document.removeEventListener("mousedown", onDocMouseDown);
+  }, [open]);
+
+  const acceptEntry = (entry: PathCompletionEntry) => {
+    props.onChange(`${entry.path}/`);
+    setFocused(-1);
+    setOpen(true);
+    inputRef?.current?.focus();
+  };
+
+  return (
+    <div className="set-path-autocomplete" ref={containerRef}>
+      <input
+        ref={inputRef}
+        className="set-input is-mono"
+        placeholder={props.placeholder}
+        value={props.value}
+        autoComplete="off"
+        spellCheck={false}
+        onFocus={() => setOpen(true)}
+        onChange={(event) => {
+          props.onChange(event.target.value);
+          setOpen(true);
+        }}
+        onKeyDown={(event) => {
+          if (!entries.length) return;
+          if (event.key === "ArrowDown") {
+            event.preventDefault();
+            setOpen(true);
+            setFocused((current) => Math.min(current + 1, entries.length - 1));
+          } else if (event.key === "ArrowUp") {
+            event.preventDefault();
+            setFocused((current) => Math.max(current - 1, -1));
+          } else if (event.key === "Tab" && open) {
+            const target = focused >= 0 ? entries[focused] : entries[0];
+            if (target) {
+              event.preventDefault();
+              acceptEntry(target);
+            }
+          } else if (event.key === "Enter" && open && focused >= 0) {
+            const target = entries[focused];
+            if (target) {
+              event.preventDefault();
+              acceptEntry(target);
+            }
+          } else if (event.key === "Escape" && open) {
+            event.preventDefault();
+            event.stopPropagation();
+            setOpen(false);
+          }
+        }}
+      />
+      {open && entries.length ? (
+        <div className="set-path-suggestions">
+          {entries.map((entry, index) => (
+            <button
+              key={entry.path}
+              type="button"
+              tabIndex={-1}
+              aria-selected={focused === index}
+              className={`set-path-suggestion ${focused === index ? "is-focused" : ""}`}
+              onMouseEnter={() => setFocused(index)}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                acceptEntry(entry);
+              }}
+            >
+              {entry.isGit ? <FolderGit2 size={13} /> : <Folder size={13} />}
+              <span className="set-path-suggestion-name">{entry.name}</span>
+              {entry.isGit ? <span className="set-path-suggestion-tag">git</span> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function AddRepoModal(props: { onClose: () => void }) {
   useOverlayPresent();
   const [rootPath, setRootPath] = useState("");
@@ -196,6 +316,12 @@ function AddRepoModal(props: { onClose: () => void }) {
   const inspect = useMutation({
     mutationFn: () =>
       api<RepoInspectResult>("/api/repos/inspect", { method: "POST", body: JSON.stringify({ rootPath }) }),
+    onSuccess: (data) => {
+      // Snap input to the resolved path so the inspected-state comparison below
+      // is always exact (otherwise trailing slashes, ~/, or relative paths leave
+      // the form stuck on the "Inspect" label and the Register button never fires).
+      if (data.rootPath !== rootPath) setRootPath(data.rootPath);
+    },
   });
   const register = useMutation({
     mutationFn: () =>
@@ -248,19 +374,18 @@ function AddRepoModal(props: { onClose: () => void }) {
 
         <form onSubmit={submit}>
           <div className="set-modal-body">
-            <label className="set-modal-field">
+            <div className="set-modal-field">
               <span className="set-field-label">Path</span>
-              <input
-                ref={pathRef}
-                className="set-input is-mono"
-                placeholder="/home/me/project"
+              <PathAutocomplete
+                inputRef={pathRef}
                 value={rootPath}
-                onChange={(event) => {
-                  setRootPath(event.target.value);
+                placeholder="~/projects/my-repo"
+                onChange={(next) => {
+                  setRootPath(next);
                   inspect.reset();
                 }}
               />
-            </label>
+            </div>
             <label className="set-modal-field">
               <span className="set-field-label">
                 Display name <span className="set-field-opt">(optional)</span>

@@ -370,4 +370,53 @@ describe("scratchpad block routes + MCP block tools", () => {
       await closeServer(server);
     }
   });
+
+  it("GET /api/scratchpad/blocks/search returns ranked fuzzy matches", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      await postJson(`${baseUrl}/api/scratchpad/blocks`, { text: "refine scratchpad MCP" });
+      await postJson(`${baseUrl}/api/scratchpad/blocks`, { text: "tmux paste agent launcher" });
+      await postJson(`${baseUrl}/api/scratchpad/blocks`, { text: "fuzzy search across cockpit" });
+      const search = await getJson<{
+        matches: Array<{ block: { id: string; text: string }; score: number; matches: unknown[] }>;
+      }>(`${baseUrl}/api/scratchpad/blocks/search?q=fuzzy`);
+      expect(search.matches.length).toBeGreaterThan(0);
+      expect(search.matches[0]?.block.text).toContain("fuzzy");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("GET /api/scratchpad/blocks/search returns 400 on empty q", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const response = await fetch(`${baseUrl}/api/scratchpad/blocks/search?q=`);
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as { error?: string };
+      expect(body.error).toBe("query_required");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("GET /api/scratchpad/blocks/search clamps limit", async () => {
+    const fixture = createFixture();
+    const { server } = createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      for (let i = 0; i < 55; i++) {
+        await postJson(`${baseUrl}/api/scratchpad/blocks`, { text: `note ${i} scratchpad item` });
+      }
+      const search = await getJson<{ matches: unknown[] }>(
+        `${baseUrl}/api/scratchpad/blocks/search?q=scratchpad&limit=9999`,
+      );
+      expect(search.matches.length).toBeLessThanOrEqual(50);
+    } finally {
+      await closeServer(server);
+    }
+  }, 60_000);
 });

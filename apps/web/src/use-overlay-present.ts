@@ -34,11 +34,12 @@ export function decrementOverlayCount(): void {
 // anywhere. React 19 StrictMode double-invokes effects in development — the
 // effect-and-cleanup pair are symmetric, so the count returns to its prior
 // value after the dev-only second invocation.
-export function useOverlayPresent(): void {
+export function useOverlayPresent(active = true): void {
   useEffect(() => {
+    if (!active) return;
     incrementOverlayCount();
     return () => {
       decrementOverlayCount();
     };
-  }, []);
+  }, [active]);
 }

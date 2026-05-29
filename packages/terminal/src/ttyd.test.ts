@@ -3,7 +3,7 @@ import { buildAttachCommand } from "./ttyd.js";
 
 describe("buildAttachCommand", () => {
   const session = "citadel_ws_abc12345";
-  const cmd = buildAttachCommand(session);
+  const cmd = buildAttachCommand(session, { enableMouse: true });
 
   it("includes the existing extended-keys + terminal-features lines (pre-existing decisions, unchanged)", () => {
     expect(cmd).toContain("set-option -s extended-keys on");
@@ -24,10 +24,8 @@ describe("buildAttachCommand", () => {
   });
 
   it("does NOT use the server-global `-g` flag for mouse / history-limit / set-clipboard", () => {
-    // Server-global would pollute the operator's tmux sessions outside Citadel
-    // when Citadel runs on the default tmux socket (CITADEL_TMUX_SOCKET unset).
-    // Even with a dedicated socket, session-scoped `-t` keeps options aligned
-    // with the lifecycle of the session itself. Regression check.
+    // Server-global would affect every pane on the shared citadel tmux server.
+    // Session-scoped `-t` keeps mouse handling aligned with the tab lifecycle.
     expect(cmd).not.toMatch(/set-option\s+-g\s+mouse/);
     expect(cmd).not.toMatch(/set-option\s+-g\s+history-limit/);
     expect(cmd).not.toMatch(/set-option\s+-g\s+set-clipboard/);
@@ -52,9 +50,17 @@ describe("buildAttachCommand", () => {
   });
 
   it("escapes embedded double quotes in the session name", () => {
-    const escaped = buildAttachCommand('a"b');
+    const escaped = buildAttachCommand('a"b', { enableMouse: true });
     expect(escaped).toContain('-t "a\\"b"');
     expect(escaped).toMatch(/set-option -t "a\\"b" mouse on/);
+  });
+
+  it("omits tmux mouse/copy-mode options when mouse handling is disabled for a runtime", () => {
+    const disabled = buildAttachCommand(session, { enableMouse: false });
+    expect(disabled).not.toContain("mouse on");
+    expect(disabled).not.toContain("history-limit 50000");
+    expect(disabled).not.toContain("set-clipboard on");
+    expect(disabled).toMatch(/exec .*?tmux( -L \S+)? attach -t "[^"]+"$/);
   });
 
   it("always pairs `mouse on` with `set-clipboard on` (so drag-to-copy in plain panes still reaches the clipboard)", () => {
