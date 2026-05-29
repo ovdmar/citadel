@@ -295,6 +295,10 @@ describe("tmux terminal gateway helpers", () => {
       const ws = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/sess_test`);
       await waitForOpen(ws);
 
+      const invalidMessageError = waitForWebSocketOutput(ws, "invalid_message", "error");
+      ws.send("{not-json");
+      await invalidMessageError;
+
       const streamedOutput = waitForWebSocketOutput(ws, "websocket-smoke", "outputChunk");
       ws.send(JSON.stringify({ type: "input", data: "printf websocket-smoke" }));
       ws.send(JSON.stringify({ type: "input", data: "\r" }));

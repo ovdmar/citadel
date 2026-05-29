@@ -43,17 +43,35 @@ export function attachTerminalWebSocket(server: http.Server, resolveSession: Res
             },
           );
           ws.on("message", (raw) => {
-            const message = JSON.parse(raw.toString()) as { type: string; data?: string; cols?: number; rows?: number };
+            let message: { type: string; data?: string; cols?: number; rows?: number };
+            try {
+              message = JSON.parse(raw.toString()) as { type: string; data?: string; cols?: number; rows?: number };
+            } catch {
+              if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "error", data: "invalid_message" }));
+              return;
+            }
             let shouldCatchUp = false;
             if (message.type === "input" && typeof message.data === "string") {
               control.writeInput(message.data);
               shouldCatchUp = true;
             }
             if (message.type === "paste" && typeof message.data === "string") {
-              pasteText(tmuxSession, message.data);
+              try {
+                pasteText(tmuxSession, message.data);
+              } catch (error) {
+                if (ws.readyState === ws.OPEN) {
+                  ws.send(
+                    JSON.stringify({
+                      type: "error",
+                      data: error instanceof Error ? error.message : "tmux_paste_failed",
+                    }),
+                  );
+                }
+                return;
+              }
               shouldCatchUp = true;
             }
-            if (message.type === "resize" && message.cols && message.rows) {
+            if (message.type === "resize" && typeof message.cols === "number" && typeof message.rows === "number") {
               control.resize(message.cols, message.rows);
               shouldCatchUp = true;
             }
@@ -80,6 +98,16 @@ export function attachTmuxControlStream(
   let buffered = "";
   let exited = false;
   child.stdout.setEncoding("utf8");
+  child.stdin.on("error", () => {
+    if (exited) return;
+    exited = true;
+    onExit?.("stdin_error");
+  });
+  child.stdout.on("error", () => {
+    if (exited) return;
+    exited = true;
+    onExit?.("stdout_error");
+  });
   child.stdout.on("data", (chunk) => {
     buffered += chunk;
     const lines = buffered.split("\n");
@@ -88,6 +116,11 @@ export function attachTmuxControlStream(
       const data = parseTmuxControlOutput(line);
       if (data) onOutput(data);
     }
+  });
+  child.on("error", (error) => {
+    if (exited) return;
+    exited = true;
+    onExit?.(error.message);
   });
   child.on("exit", (code, signal) => {
     if (exited) return;
@@ -150,7 +183,13 @@ export function decodeTmuxControlValue(value: string) {
 function writeControlCommand(child: ReturnType<typeof spawn>, command: string): void {
   const stdin = child.stdin;
   if (!stdin?.writable || child.exitCode !== null) return;
-  stdin.write(`${command}\n`);
+  try {
+    stdin.write(`${command}\n`);
+  } catch {
+    // The tmux control client may have exited between the writable check and
+    // the write. Treat that as a stale client; the WebSocket will reconnect to
+    // the durable tmux session if the browser keeps the pane mounted.
+  }
 }
 
 function chunkLiteral(value: string): string[] {
