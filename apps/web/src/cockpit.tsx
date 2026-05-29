@@ -19,7 +19,8 @@ import { Inspector } from "./inspector.js";
 import { Navigator } from "./navigator.js";
 import { RestoreBanner } from "./restore-banner.js";
 import { Stage } from "./stage.js";
-import { focusActiveTerminal } from "./terminal-pane.js";
+import { focusActiveTerminal, isRegisteredTerminalMessageSource } from "./terminal-pane.js";
+import { parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
 import { applyThemePreference, useResolvedTheme } from "./use-resolved-theme.js";
@@ -116,6 +117,8 @@ export function Cockpit() {
     : (activeWorkspaceSessions[0] ?? null);
 
   useEffect(() => {
+    const toggleCommandPalette = () => setCommandOpen((open) => !open);
+    const openCreateWorkspace = () => setCreateWorkspaceOpen(true);
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const inEditable =
@@ -125,7 +128,7 @@ export function Cockpit() {
         target?.tagName === "SELECT";
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setCommandOpen((open) => !open);
+        toggleCommandPalette();
       } else if (
         // Ctrl+N opens the new-workspace modal. This works on macOS, where
         // Ctrl+N is unbound by browsers. On Windows/Linux every major browser
@@ -140,7 +143,7 @@ export function Cockpit() {
         event.key.toLowerCase() === "n"
       ) {
         event.preventDefault();
-        setCreateWorkspaceOpen(true);
+        openCreateWorkspace();
       } else if (
         // GitHub-style: plain `c` ("create") also opens the new-workspace
         // modal. Skipped while editing so it doesn't hijack typing.
@@ -157,8 +160,18 @@ export function Cockpit() {
         setCommandOpen(false);
       }
     };
+    const onMessage = (event: MessageEvent) => {
+      if (!isRegisteredTerminalMessageSource(event.source)) return;
+      const action = parseTerminalShortcutMessage(event);
+      if (action === "command-palette") toggleCommandPalette();
+      else if (action === "new-workspace") openCreateWorkspace();
+    };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("message", onMessage);
+    };
   }, []);
 
   const focusWorkspace = (workspace: Workspace) => {

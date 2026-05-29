@@ -43,11 +43,18 @@ export type TerminalHandle = {
 };
 
 const REGISTRY = new Map<string, TerminalHandle>();
+const FRAME_WINDOWS = new Map<string, Window>();
 const LISTENERS = new Set<(id: string) => void>();
 
-function publish(id: string, handle: TerminalHandle | null) {
-  if (handle) REGISTRY.set(id, handle);
-  else REGISTRY.delete(id);
+function publish(id: string, handle: TerminalHandle | null, frameWindow: Window | null = null) {
+  if (handle) {
+    REGISTRY.set(id, handle);
+    if (frameWindow) FRAME_WINDOWS.set(id, frameWindow);
+    else FRAME_WINDOWS.delete(id);
+  } else {
+    REGISTRY.delete(id);
+    FRAME_WINDOWS.delete(id);
+  }
   for (const listener of LISTENERS) listener(id);
 }
 
@@ -58,6 +65,14 @@ export function getTerminalHandle(sessionId: string): TerminalHandle | undefined
 export function subscribeTerminalHandle(listener: (sessionId: string) => void): () => void {
   LISTENERS.add(listener);
   return () => LISTENERS.delete(listener);
+}
+
+export function isRegisteredTerminalMessageSource(source: MessageEventSource | null): boolean {
+  if (!source) return false;
+  for (const frameWindow of FRAME_WINDOWS.values()) {
+    if (source === frameWindow) return true;
+  }
+  return false;
 }
 
 // Focus the iframe of an active session. No-op when:
@@ -199,10 +214,11 @@ export function TerminalPane(props: { session: AgentSession }) {
   // tab actions can drive state owned by TerminalPane.
   // The status bar used to render these affordances inside the pane; that was
   // removed in favour of the tab actions, but the state still lives here.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: iframeKey remounts the iframe, which changes contentWindow even when URL/callbacks are stable.
   useEffect(() => {
-    publish(sessionId, { url, reload, focusIframe, recoverIfDisconnected });
+    publish(sessionId, { url, reload, focusIframe, recoverIfDisconnected }, iframeRef.current?.contentWindow ?? null);
     return () => publish(sessionId, null);
-  }, [sessionId, url, reload, focusIframe, recoverIfDisconnected]);
+  }, [sessionId, url, reload, focusIframe, recoverIfDisconnected, iframeKey]);
   return (
     <div className="terminal-shell">
       <div className="terminal-surface terminal-surface-iframe">

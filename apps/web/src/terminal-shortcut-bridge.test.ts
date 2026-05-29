@@ -1,0 +1,47 @@
+// @vitest-environment happy-dom
+
+import { describe, expect, it } from "vitest";
+import { parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
+
+describe("parseTerminalShortcutMessage", () => {
+  it("accepts known terminal shortcut messages from the current origin", () => {
+    const event = new MessageEvent("message", {
+      origin: window.location.origin,
+      data: {
+        source: "citadel-terminal",
+        type: "citadel.terminal-shortcut",
+        action: "command-palette",
+        sessionId: "sess_1",
+      },
+    });
+
+    expect(parseTerminalShortcutMessage(event)).toBe("command-palette");
+  });
+
+  it("rejects wrong origins, sources, and actions", () => {
+    expect(
+      parseTerminalShortcutMessage(
+        new MessageEvent("message", {
+          origin: "https://example.com",
+          data: { source: "citadel-terminal", type: "citadel.terminal-shortcut", action: "command-palette" },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      parseTerminalShortcutMessage(
+        new MessageEvent("message", {
+          origin: window.location.origin,
+          data: { source: "other", type: "citadel.terminal-shortcut", action: "command-palette" },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      parseTerminalShortcutMessage(
+        new MessageEvent("message", {
+          origin: window.location.origin,
+          data: { source: "citadel-terminal", type: "citadel.terminal-shortcut", action: "unknown" },
+        }),
+      ),
+    ).toBeNull();
+  });
+});
