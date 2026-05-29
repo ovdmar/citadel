@@ -21,7 +21,7 @@ import { RestoreBanner } from "./restore-banner.js";
 import { Stage } from "./stage.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
-import { useResolvedTheme } from "./use-resolved-theme.js";
+import { applyThemePreference, useResolvedTheme } from "./use-resolved-theme.js";
 import { prToneFor } from "./workspace-card.js";
 
 const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";
@@ -462,12 +462,7 @@ function ThemeToggle() {
   const isDark = resolved === "dark";
   const toggle = () => {
     const next = isDark ? "light" : "dark";
-    document.documentElement.dataset.theme = next;
-    try {
-      localStorage.setItem("citadel.theme", next);
-    } catch {
-      // localStorage is best-effort
-    }
+    applyThemePreference(next);
   };
   return (
     <button

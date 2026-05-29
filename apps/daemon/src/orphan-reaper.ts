@@ -51,6 +51,7 @@ export async function reapOrphans(deps: {
   store: SqliteStore;
   ttyd: TtydManager;
   diagnostics?: { log(category: string, event: string, data?: Record<string, unknown>): void };
+  reapTmuxSessions?: boolean;
 }): Promise<OrphanReaperSummary> {
   const summary: OrphanReaperSummary = { tmuxReaped: [], ttydReleased: [] };
 
@@ -65,8 +66,10 @@ export async function reapOrphans(deps: {
   // null = tmux server unreachable → nothing to reap. The DB-membership
   // criterion isn't a tmux probe so it doesn't need retry — only the
   // ttyd-side existence check below does.
-  const liveTmuxNames = listAllTmuxSessions();
-  if (liveTmuxNames !== null) {
+  const liveTmuxNames = deps.reapTmuxSessions === false ? new Set<string>() : listAllTmuxSessions();
+  if (deps.reapTmuxSessions === false) {
+    deps.diagnostics?.log("reaper", "tmux.skipped", { reason: "unsafe-shared-socket" });
+  } else if (liveTmuxNames !== null) {
     for (const name of liveTmuxNames) {
       if (referencedTmuxNames.has(name)) continue;
       try {
@@ -98,7 +101,7 @@ export async function reapOrphans(deps: {
         port: entry.port,
         reason: "tmux-session-gone (3-strike)",
       });
-      deps.ttyd.release(entry.key);
+      deps.ttyd.release(entry.key, "orphan-reaper-tmux-session-gone");
       summary.ttydReleased.push(entry.key);
     }
   }

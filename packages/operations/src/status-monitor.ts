@@ -1,5 +1,12 @@
 import type { AgentSession } from "@citadel/contracts";
-import type { ObservationContext, RuntimeStatusAdapter, SessionAdapterState } from "@citadel/runtimes";
+import type {
+  ActiveElapsedTimerProbe,
+  ObservationContext,
+  PaneObservationResult,
+  RuntimeStatusAdapter,
+  SessionAdapterState,
+} from "@citadel/runtimes";
+import { REASON_ELAPSED_TIMER, observeActiveElapsedTimer } from "@citadel/runtimes";
 import {
   IDLE_AFTER_UNEXPECTED_EXIT_AUTO_CLEAR_MS,
   REASON_IDLE_AFTER_UNEXPECTED_EXIT,
@@ -39,6 +46,8 @@ export interface MonitorSessionState {
 // of these, the status flips to `idle`.
 const SHELL_BINARIES = new Set(["bash", "sh", "zsh", "fish", "dash"]);
 const RUNNING_TO_IDLE_DEBOUNCE_TICKS = 2;
+const CODEX_OPTIMISTIC_SEND_IDLE_SUPPRESS_MS = 10_000;
+const CODEX_REASON_STABLE_TIMEOUT = "pane:codex:stable_timeout";
 // At 2s/tick this gives ~6 seconds of "every probe is missing" before we
 // concede the session is gone. Anything below that is dominated by transient
 // tmux load — the journal already shows `[status-monitor] panes failed`
@@ -84,6 +93,12 @@ export interface MonitorTickDeps {
   // Map runtimeId → binary name expected as the pane's foreground when the
   // agent is running. Null when the runtime is unknown.
   runtimeBinaryFor: (runtimeId: string) => string | null;
+  // Optional runtime-native session id repair. Codex cannot be launched with
+  // a caller-chosen id, so the daemon discovers it after spawn. If that first
+  // discovery misses, the monitor can repair live rows from exact process
+  // evidence (for example the Codex process's open rollout file).
+  recoverRuntimeSessionId?: (session: AgentSession, pane: { command: string; pid: number } | null) => string | null;
+  setRuntimeSessionId?: (sessionId: string, runtimeSessionId: string) => void;
   // Map of sessionId → Date.now() timestamp of the most recent operator-
   // initiated termination (Restart endpoint or xterm Ctrl+C POST). When a
   // running → idle transition fires within RECENT_USER_ACTION_MS of an
@@ -116,6 +131,21 @@ function makeMonitorState(): MonitorSessionState {
     consecutiveShellTicks: 0,
     consecutiveMissingTicks: 0,
   };
+}
+
+function shouldSuppressCodexOptimisticIdle(
+  session: AgentSession,
+  observation: PaneObservationResult,
+  nowMs: number,
+): boolean {
+  if (session.runtimeId !== "codex") return false;
+  if (session.statusReason !== "optimistic_send") return false;
+  if (typeof observation === "string") return false;
+  if (observation.observed !== "idle" || observation.reason !== CODEX_REASON_STABLE_TIMEOUT) return false;
+
+  const lastStatusMs = session.lastStatusAt ? new Date(session.lastStatusAt).valueOf() : Number.NaN;
+  if (!Number.isFinite(lastStatusMs)) return false;
+  return nowMs - lastStatusMs <= CODEX_OPTIMISTIC_SEND_IDLE_SUPPRESS_MS;
 }
 
 // Walks non-terminal sessions and applies one round of status detection.
@@ -209,16 +239,33 @@ export async function runStatusMonitorTick(
     } else {
       monitorState.consecutiveMissingTicks += 1;
       tmuxAlive = monitorState.consecutiveMissingTicks < TMUX_MISSING_DEBOUNCE_TICKS;
-      deps.diagnostics?.log("monitor", tmuxAlive ? "missing-counter.bump" : "tmux-missing.fired", {
-        sessionId: session.id,
-        tmuxSession: session.tmuxSessionName,
-        count: monitorState.consecutiveMissingTicks,
-        threshold: TMUX_MISSING_DEBOUNCE_TICKS,
-        source: opts.source,
-        currentStatus: session.status,
-      });
+      const alreadyRecordedMissing =
+        session.status === "unknown" &&
+        (session.statusReason === "tmux_missing" || session.statusReason === "daemon_restart_indeterminate");
+      const crossedMissingThreshold = monitorState.consecutiveMissingTicks === TMUX_MISSING_DEBOUNCE_TICKS;
+      const shouldLogMissingProbe = tmuxAlive
+        ? !alreadyRecordedMissing
+        : !alreadyRecordedMissing && crossedMissingThreshold;
+      if (shouldLogMissingProbe) {
+        deps.diagnostics?.log("monitor", tmuxAlive ? "missing-counter.bump" : "tmux-missing.fired", {
+          sessionId: session.id,
+          tmuxSession: session.tmuxSessionName,
+          count: monitorState.consecutiveMissingTicks,
+          threshold: TMUX_MISSING_DEBOUNCE_TICKS,
+          source: opts.source,
+          currentStatus: session.status,
+          currentStatusReason: session.statusReason,
+        });
+      }
     }
-    const runtimeBinary = deps.runtimeBinaryFor(session.runtimeId);
+    if (!session.runtimeSessionId && tmuxAlive && deps.recoverRuntimeSessionId && deps.setRuntimeSessionId) {
+      const runtimeSessionId = deps.recoverRuntimeSessionId(session, pane);
+      if (runtimeSessionId) {
+        deps.setRuntimeSessionId(session.id, runtimeSessionId);
+        sessionsTouched += 1;
+        deps.emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
+      }
+    }
 
     // Activity-change tracking. Done BEFORE adapter invocation so the
     // context the adapter sees reflects this tick's bookkeeping.
@@ -233,6 +280,17 @@ export async function runStatusMonitorTick(
       } else {
         monitorState.ticksSinceActivityChange += 1;
       }
+    }
+    let paneCaptureForObservation: string | null = null;
+    let activeElapsedTimer: ActiveElapsedTimerProbe | null = null;
+    const capturePaneForObservation = () => {
+      if (paneCaptureForObservation === null) {
+        paneCaptureForObservation = session.tmuxSessionName ? deps.paneCapture(session.tmuxSessionName) : "";
+      }
+      return paneCaptureForObservation;
+    };
+    if (tmuxAlive && pane && session.runtimeId !== "shell") {
+      activeElapsedTimer = observeActiveElapsedTimer(adapterState, capturePaneForObservation());
     }
 
     // First-pass lifecycle signals (deterministic). At most one applies.
@@ -265,14 +323,19 @@ export async function runStatusMonitorTick(
       });
       monitorState.consecutiveShellTicks = 0;
     } else if (pane && SHELL_BINARIES.has(pane.command) && session.runtimeId !== "shell") {
-      // Agent runtime, pane foreground is a shell binary → agent stopped
-      // running. Two-tick debounce: claude routinely shells out to git/rg
-      // briefly; a single tick of "shell" doesn't constitute "agent exited".
-      monitorState.consecutiveShellTicks += 1;
-      if (monitorState.consecutiveShellTicks >= RUNNING_TO_IDLE_DEBOUNCE_TICKS) {
-        const userActionTs = deps.recentUserAction.get(session.id);
-        const recentUserAction = userActionTs !== undefined && nowMs - userActionTs <= RECENT_USER_ACTION_MS;
-        signals.push({ type: "pane_idle", recentUserAction, observedAt: deps.now() });
+      if (activeElapsedTimer?.advanced) {
+        monitorState.consecutiveShellTicks = 0;
+        signals.push({ type: "pane_observation", observed: "running", reason: REASON_ELAPSED_TIMER });
+      } else {
+        // Agent runtime, pane foreground is a shell binary → agent stopped
+        // running. Two-tick debounce: claude routinely shells out to git/rg
+        // briefly; a single tick of "shell" doesn't constitute "agent exited".
+        monitorState.consecutiveShellTicks += 1;
+        if (monitorState.consecutiveShellTicks >= RUNNING_TO_IDLE_DEBOUNCE_TICKS) {
+          const userActionTs = deps.recentUserAction.get(session.id);
+          const recentUserAction = userActionTs !== undefined && nowMs - userActionTs <= RECENT_USER_ACTION_MS;
+          signals.push({ type: "pane_idle", recentUserAction, observedAt: deps.now() });
+        }
       }
     } else {
       // Agent foreground (or shell runtime with any tmux-alive). Reset the
@@ -304,11 +367,18 @@ export async function runStatusMonitorTick(
     if (liveBranch && tmuxAlive) {
       const observation = adapter.observe(
         adapterState,
-        buildContext(deps, session, monitorState, opts, activityChanged),
+        buildContext(deps, session, monitorState, opts, activityChanged, paneCaptureForObservation, activeElapsedTimer),
       );
       monitorState.hasObservedSinceBoot = true;
       if (observation !== null) {
-        if (typeof observation === "string") {
+        if (shouldSuppressCodexOptimisticIdle(session, observation, nowMs)) {
+          deps.diagnostics?.log("monitor", "codex.optimistic-idle-suppressed", {
+            sessionId: session.id,
+            tmuxSession: session.tmuxSessionName,
+            reason: typeof observation === "string" ? null : observation.reason,
+            lastStatusAt: session.lastStatusAt,
+          });
+        } else if (typeof observation === "string") {
           signals.push({ type: "pane_observation", observed: observation });
         } else {
           signals.push({ type: "pane_observation", observed: observation.observed, reason: observation.reason });
@@ -383,14 +453,17 @@ function buildContext(
   monitorState: MonitorSessionState,
   opts: MonitorTickOptions,
   activityChanged: boolean,
+  paneCapture: string | null,
+  activeElapsedTimer: ActiveElapsedTimerProbe | null,
 ): ObservationContext {
   return {
-    paneCapture: session.tmuxSessionName ? deps.paneCapture(session.tmuxSessionName) : "",
+    paneCapture: paneCapture ?? (session.tmuxSessionName ? deps.paneCapture(session.tmuxSessionName) : ""),
     tmuxActivityChangedSinceLastTick: activityChanged,
     ticksSinceActivityChange: monitorState.ticksSinceActivityChange,
     source: opts.source,
     hasObservedSinceBoot: monitorState.hasObservedSinceBoot,
     now: () => new Date(deps.now()),
+    ...(activeElapsedTimer ? { activeElapsedTimer } : {}),
   };
 }
 

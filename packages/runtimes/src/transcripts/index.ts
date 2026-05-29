@@ -15,6 +15,8 @@ export {
   codexAdapter,
   codexSessionsRoot,
   discoverCodexSessionId,
+  discoverCodexSessionIdFromProcess,
+  extractCodexResumeSessionIdFromArgv,
   findCodexRolloutForSession,
   parseCodexRollout,
 } from "./codex.js";

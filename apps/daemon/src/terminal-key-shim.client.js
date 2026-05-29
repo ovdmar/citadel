@@ -9,6 +9,9 @@
   const isMac = /Mac|iPhone|iPad/i.test(navigator.platform || "") || /Macintosh/i.test(navigator.userAgent || "");
   let activeWs = null;
   const textEncoder = new TextEncoder();
+  const loadedAt = Date.now();
+  let terminalClientEventCount = 0;
+  let lastTerminalClientEventAt = 0;
 
   // Wrap WebSocket so we can capture the ttyd input channel. The constructor
   // explicitly `return ws` — per JS semantics, when a constructor returns an
@@ -20,8 +23,16 @@
     const ws = protocols === undefined ? new OriginalWebSocket(url) : new OriginalWebSocket(url, protocols);
     if (typeof url === "string" && /\/ws(\?|$)/.test(url)) {
       activeWs = ws;
-      ws.addEventListener("close", () => {
+      ws.addEventListener("close", (event) => {
+        recordTerminalClientEvent("ws.close", {
+          code: event?.code,
+          reason: event?.reason,
+          wasClean: event?.wasClean,
+        });
         if (activeWs === ws) activeWs = null;
+      });
+      ws.addEventListener("error", () => {
+        recordTerminalClientEvent("ws.error", {});
       });
       // ttyd's WebSocket frames look like: 1-byte command + payload. Output
       // frames start with '0' (0x30) and the payload is the raw PTY byte
@@ -383,6 +394,18 @@
   // stopImmediatePropagation only stops same-target same-phase listeners.
   document.addEventListener("keydown", onKeydown, true);
 
+  try {
+    window.addEventListener(
+      "pagehide",
+      (event) => {
+        recordTerminalClientEvent("pagehide", { persisted: event?.persisted });
+      },
+      { capture: true },
+    );
+  } catch (_err) {
+    // Browsers without pagehide support still report WebSocket close events.
+  }
+
   // Derive the sessionId from the iframe's URL path. ttyd is mounted at
   // `/terminals/<sessionId>/` (see packages/terminal/src/ttyd.ts:147 — basePath
   // is `${basePathPrefix}/<sessionId>`). Cached at module init since the URL
@@ -417,6 +440,43 @@
     } catch (_err) {
       // Network constructed-call errors are swallowed; the user's keystroke
       // already propagated to ttyd.
+    }
+  }
+
+  // Browser-side lifecycle breadcrumbs for the daemon diagnostics log. The
+  // server sees only TCP close/end; this records the close code plus whether
+  // the iframe itself is being hidden/navigated.
+  function recordTerminalClientEvent(event, data) {
+    if (!SESSION_ID) return;
+    const now = Date.now();
+    if (terminalClientEventCount >= 100) return;
+    if (terminalClientEventCount >= 20 && now - lastTerminalClientEventAt < 5000) return;
+    terminalClientEventCount += 1;
+    lastTerminalClientEventAt = now;
+    const payload = {
+      event,
+      ...data,
+      ageMs: now - loadedAt,
+      visibility: document.visibilityState || "unknown",
+      path: window.location?.pathname || "",
+    };
+    const url = `/api/agent-sessions/${encodeURIComponent(SESSION_ID)}/terminal-client-event`;
+    try {
+      const body = JSON.stringify(payload);
+      if (navigator.sendBeacon && typeof Blob !== "undefined") {
+        const sent = navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
+        if (sent) return;
+      }
+      if (typeof fetch === "function") {
+        fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+          keepalive: true,
+        }).catch(() => {});
+      }
+    } catch (_err) {
+      // Diagnostics must never affect terminal input or reconnect behavior.
     }
   }
 
