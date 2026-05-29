@@ -70,6 +70,7 @@ import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { backfillScratchpadOnStartup } from "./scratchpad.js";
+import { writeSseEvent } from "./sse-broadcast.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
 import { wireTerminalRoutes } from "./terminal-routes-helpers.js";
@@ -139,6 +140,9 @@ export function createDaemonApp(input: {
 
   const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
   const ghQuota: GhQuotaWiringWithDetach = wireGhQuota({ sseClients, store, resolveRepoFullName });
+  const detachSseClient = (client: express.Response) => {
+    if (sseClients.delete(client)) ghQuota.onViewerDetached();
+  };
   const ghAutomationEnabled = automatedGhEnabled();
   server.on("close", () => ghQuota.stop());
   const gatedVcDeps = {
@@ -163,7 +167,7 @@ export function createDaemonApp(input: {
       source: "daemon",
       payload,
     };
-    for (const client of sseClients) client.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
+    writeSseEvent(sseClients, type, event, detachSseClient, diagnostics);
     if (fsWatchers && (type === "workspace.updated" || type === "state.reconciled" || type === "repo.updated")) {
       fsWatchers.reconcile();
     }
@@ -714,14 +718,10 @@ export function createDaemonApp(input: {
       Connection: "keep-alive",
     });
     sseClients.add(res);
-    // Fire AFTER the add so hasViewers() in the wiring sees the new state.
-    // 0→1 transition triggers scheduler.invalidateNotDue() so the next FE
-    // poll fetches fresh instead of waiting for the cadence window.
     ghQuota.onViewerAttached();
     res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
     req.on("close", () => {
-      sseClients.delete(res);
-      ghQuota.onViewerDetached(); // stamps lastDetachAt iff this was the last viewer
+      detachSseClient(res);
     });
   });
 
