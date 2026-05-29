@@ -1,8 +1,8 @@
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, Clock, Moon, Sun } from "lucide-react";
-import { useEffect, useState } from "react";
 import { useEventRefresh, useStateQuery } from "../app-state.js";
 import { ScheduledAgentsPanel } from "../settings-scheduled-agents.js";
+import { applyThemePreference, useResolvedTheme } from "../use-resolved-theme.js";
 
 export function ScheduledAgentsView() {
   const state = useStateQuery();
@@ -61,21 +61,13 @@ export function ScheduledAgentsView() {
 }
 
 function ThemeToggle() {
-  const [theme, setTheme] = useState(() => localStorage.getItem("citadel.theme") || "system");
-  useEffect(() => {
-    localStorage.setItem("citadel.theme", theme);
-    if (theme === "system") {
-      delete document.documentElement.dataset.theme;
-    } else {
-      document.documentElement.dataset.theme = theme;
-    }
-  }, [theme]);
-  const isDark = theme === "dark";
+  const resolved = useResolvedTheme();
+  const isDark = resolved === "dark";
   return (
     <button
       type="button"
       className="set-icon-btn"
-      onClick={() => setTheme(isDark ? "light" : "dark")}
+      onClick={() => applyThemePreference(isDark ? "light" : "dark")}
       title={isDark ? "Switch to light mode" : "Switch to dark mode"}
       aria-label="Toggle theme"
     >

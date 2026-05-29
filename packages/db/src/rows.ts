@@ -5,7 +5,6 @@ import type {
   HookOutput,
   Operation,
   OperationLogEntry,
-  RateLimitResumption,
   Repo,
   ScheduledAgent,
   ScheduledAgentRun,
@@ -78,6 +77,7 @@ export function sessionFromRow(row: Record<string, unknown>): AgentSession {
     displayName: asString(row, "display_name"),
     status: asString(row, "status") as AgentSession["status"],
     statusReason: row.status_reason ? asString(row, "status_reason") : null,
+    statusReasonAt: row.status_reason_at ? asString(row, "status_reason_at") : null,
     // `||` (not `??`) is deliberate: asString() returns "" for null DB columns,
     // and we want the updated_at fallback to fire on the empty-string case.
     lastStatusAt: asString(row, "last_status_at") || asString(row, "updated_at"),
@@ -87,7 +87,19 @@ export function sessionFromRow(row: Record<string, unknown>): AgentSession {
     transport: asString(row, "transport") as AgentSession["transport"],
     tmuxSessionName: row.tmux_session_name ? asString(row, "tmux_session_name") : null,
     tmuxSessionId: row.tmux_session_id ? asString(row, "tmux_session_id") : null,
+    // Fall back to the row id when tab_id is unset (older rows from before
+    // migration 11, or in-memory fixtures that skip the migration). Treats
+    // every legacy row as its own tab — matches pre-migration ordering.
+    tabId: row.tab_id ? asString(row, "tab_id") : asString(row, "id"),
     runtimeSessionId: row.runtime_session_id ? asString(row, "runtime_session_id") : null,
+    rateLimitResumeAttempts:
+      row.rate_limit_resume_attempts === null || row.rate_limit_resume_attempts === undefined
+        ? 0
+        : Number(row.rate_limit_resume_attempts),
+    nextResumeAt: row.next_resume_at ? asString(row, "next_resume_at") : null,
+    lastResumeFromRateLimitAt: row.last_resume_from_rate_limit_at
+      ? asString(row, "last_resume_from_rate_limit_at")
+      : null,
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
   };
@@ -174,16 +186,6 @@ export function backgroundSessionFromRow(row: Record<string, unknown>): Backgrou
     status: asString(row, "status") as BackgroundAgentSession["status"],
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
-  };
-}
-
-export function rateLimitResumptionFromRow(row: Record<string, unknown>): RateLimitResumption {
-  return {
-    id: asString(row, "id"),
-    scheduledAt: asString(row, "scheduled_at"),
-    status: asString(row, "status") as RateLimitResumption["status"],
-    createdAt: asString(row, "created_at"),
-    executedAt: row.executed_at ? asString(row, "executed_at") : null,
   };
 }
 

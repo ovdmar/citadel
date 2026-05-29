@@ -1,9 +1,8 @@
 // Per-runtime status detection — pane-based, fixture-driven.
 //
-// Each adapter inspects the pane capture on every monitor tick and returns a
-// PaneObservation discriminated union (or null when the adapter has no
-// opinion this tick). The reducer (@citadel/operations) applies the
-// observation with stickiness rules.
+// Each adapter inspects the pane capture on every monitor tick and returns one
+// of: "running" | "idle" | "waiting_for_input" | "rate_limited" | "usage_limited" | null. The
+// reducer (@citadel/operations) applies the observation with stickiness rules.
 //
 // Lifecycle signals (tmux_missing, exited_clean/failed) come from the monitor's
 // own deterministic checks (tmux session existence, bash wrapper sentinel
@@ -15,25 +14,16 @@
 
 import { claudeCodeStatusAdapter } from "./claude-code.js";
 import { codexStatusAdapter } from "./codex.js";
+import type { ActiveElapsedTimerProbe } from "./elapsed-timer.js";
 
-// Discriminated union so rate_limited can carry the parsed reset time
-// alongside its kind. The simple kinds carry no extra data. Server-side
-// transient rate-limits return resetAt=null (no known reset window); the
-// auto-resume scheduler only fires for sessions with a known reset.
-export type PaneObservation =
-  | { kind: "running" }
-  | { kind: "idle" }
-  | { kind: "waiting_for_input" }
-  | { kind: "rate_limited"; resetAt: string | null };
+export type PaneObservation = "running" | "idle" | "waiting_for_input" | "rate_limited" | "usage_limited";
 
-// Short constructor helpers — keep call sites concise.
-export const observeRunning = (): PaneObservation => ({ kind: "running" });
-export const observeIdle = (): PaneObservation => ({ kind: "idle" });
-export const observeWaitingForInput = (): PaneObservation => ({ kind: "waiting_for_input" });
-export const observeRateLimited = (resetAt: string | null): PaneObservation => ({
-  kind: "rate_limited",
-  resetAt,
-});
+// What an adapter returns. Shorthand: just the observation (reason will be
+// auto-derived). Full form: observation plus a custom reason string that the
+// reducer threads onto statusReason (used by usage_limited to carry the
+// parsed reset timestamp so auto-resume can read it without re-parsing the
+// pane).
+export type PaneObservationResult = PaneObservation | { observed: PaneObservation; reason: string };
 
 export interface ObservationContext {
   // Most recent visible-pane capture (no scrollback). Adapter regexes are
@@ -51,6 +41,14 @@ export interface ObservationContext {
   // Whether the monitor has observed at least one prior tick since boot
   // for this session. Used by codex idle suppression on cold start.
   hasObservedSinceBoot: boolean;
+  // Wall-clock now. Injected so adapters that parse relative times (e.g.
+  // claude-code's `resets HH:MMam (UTC)` usage-limit banner) stay
+  // deterministic under test. Wiring supplies `new Date()` per tick.
+  now?: () => Date;
+  // Runtime-agnostic first-pass probe. The status monitor may precompute it
+  // before lifecycle checks so an advancing visible timer can beat weaker
+  // foreground-process heuristics.
+  activeElapsedTimer?: ActiveElapsedTimerProbe;
 }
 
 export interface SessionAdapterState {
@@ -64,22 +62,13 @@ export interface RuntimeStatusAdapter {
   createSessionState(): SessionAdapterState;
   // Inspect the pane (and tmux activity, via ctx) and decide status.
   // Returns null when the adapter has no opinion this tick.
-  observe(state: SessionAdapterState, ctx: ObservationContext): PaneObservation | null;
-  // Stateless secondary method — does the pane currently show a rate-limit
-  // banner? Returns the parsed reset time (null if the banner is present but
-  // unparseable) or null overall when no banner is visible. Used by the
-  // rate-limit resumer to re-confirm pane state before sending Enter,
-  // independent of the adapter's stateful observe() call. The adapter's
-  // observe() implementation typically delegates to this method as its
-  // priority-1 check so the regex/parser logic lives in one place.
-  detectRateLimit(paneCapture: string): { resetAt: string | null } | null;
+  observe(state: SessionAdapterState, ctx: ObservationContext): PaneObservationResult | null;
 }
 
 const NOOP_ADAPTER: RuntimeStatusAdapter = {
   runtimeId: "shell",
   createSessionState: () => ({ ticksObserved: 0, lastPaneHash: null }),
   observe: () => null,
-  detectRateLimit: () => null,
 };
 
 // Adapter registry. Cursor-agent and any unknown runtime fall back to the
@@ -99,7 +88,15 @@ export function getStatusAdapter(runtimeId: string): RuntimeStatusAdapter {
 }
 
 export { claudeCodeStatusAdapter } from "./claude-code.js";
-export { codexStatusAdapter } from "./codex.js";
+export {
+  CODEX_REASON_CURRENT_TURN_DIVIDER,
+  CODEX_REASON_INTERRUPT,
+  CODEX_REASON_SANDBOX_APPROVAL,
+  CODEX_REASON_STABLE_TIMEOUT,
+  codexStatusAdapter,
+} from "./codex.js";
+export { REASON_ELAPSED_TIMER, observeActiveElapsedTimer } from "./elapsed-timer.js";
+export type { ActiveElapsedTimerProbe } from "./elapsed-timer.js";
 
 // Utility shared by adapters: bottom-most non-empty line of the visible pane,
 // trimmed of surrounding whitespace. All chrome regexes are anchored to this

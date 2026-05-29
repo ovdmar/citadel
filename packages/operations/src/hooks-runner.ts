@@ -1,11 +1,11 @@
 import type { CitadelConfig, HookConfig } from "@citadel/config";
-import type { HookOutput, Repo, Workspace } from "@citadel/contracts";
+import type { ActivityEvent, HookOutput, Repo, Workspace } from "@citadel/contracts";
 import { parseHookOutput, runCommandHook } from "@citadel/hooks";
 import { asObject } from "./helpers.js";
 
 type ActivityFn = (
   type: string,
-  source: "user" | "system" | "hook",
+  source: ActivityEvent["source"],
   message: string,
   repoId: string | null,
   workspaceId: string | null,
@@ -28,6 +28,14 @@ function commandHook(hook: HookConfig, workspacePath: string, config: RunnerConf
     timeoutMs: config?.commandPolicy.hookTimeoutMs ?? 120_000,
     blocking: hook.blocking,
   };
+}
+
+function parseOptionalHookOutput(stdout: string): HookOutput | null {
+  try {
+    return parseHookOutput(stdout);
+  } catch {
+    return null;
+  }
 }
 
 export async function runWorkspaceHooks(input: {
@@ -56,7 +64,7 @@ export async function runWorkspaceHooks(input: {
       input.repo.id,
       input.workspace.id,
       input.operationId,
-      parseHookOutput(result.stdout),
+      parseOptionalHookOutput(result.stdout),
     );
   }
 }
@@ -85,7 +93,7 @@ export async function runNotificationHooks(input: {
         input.repo.id,
         input.workspace.id,
         input.operationId,
-        parseHookOutput(result.stdout),
+        parseOptionalHookOutput(result.stdout),
       );
     } catch (error) {
       input.activity(

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type http from "node:http";
+import type { Socket } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import type { AgentSession } from "@citadel/contracts";
@@ -16,14 +17,92 @@ const TERMINAL_PROXY_PREFIX = "/terminals";
 
 type ResolvedSession = {
   sessionId: string;
+  tabId: string | null;
   tmuxSession: string;
   worktreePath: string | null;
+  runtimeId: string;
 };
+
+// Runtimes whose TUIs enable DEC mouse tracking and consume wheel events for
+// in-app navigation (prompt history, etc.). For these we ask tmux to grab the
+// wheel first and route it to copy-mode scrollback; otherwise the user can't
+// reach terminal scrollback with the mouse. Claude Code is intentionally
+// absent — it does not request mouse tracking, so its xterm-native wheel
+// scroll works fine and stays untouched.
+const MOUSE_GRABBING_RUNTIMES = new Set(["codex", "cursor-agent"]);
 
 type Theme = "light" | "dark";
 
+type DiagnosticsSink = {
+  log(category: string, event: string, data?: Record<string, unknown>): void;
+};
+
 function parseTheme(value: unknown): Theme | undefined {
   return value === "light" || value === "dark" ? value : undefined;
+}
+
+type TerminalWsMeta = Record<string, unknown>;
+
+function headerValue(headers: http.IncomingHttpHeaders, name: string): string | null {
+  const value = headers[name.toLowerCase()];
+  if (Array.isArray(value)) return value.join(",");
+  return typeof value === "string" ? value : null;
+}
+
+function sessionIdFromTerminalPath(urlPath: string): string {
+  const match = /^\/terminals\/([^/]+)/.exec(urlPath);
+  return match ? decodeURIComponent(match[1] ?? "") : "?";
+}
+
+function socketAddress(socket: Duplex) {
+  const netSocket = socket as Partial<Socket>;
+  return {
+    remoteAddress: netSocket.remoteAddress ?? null,
+    remotePort: typeof netSocket.remotePort === "number" ? netSocket.remotePort : null,
+    localAddress: netSocket.localAddress ?? null,
+    localPort: typeof netSocket.localPort === "number" ? netSocket.localPort : null,
+  };
+}
+
+function requestWsMeta(sessionId: string, request: http.IncomingMessage, socket: Duplex): TerminalWsMeta {
+  return {
+    sessionId,
+    path: clippedString(request.url, "", 240),
+    host: clippedString(headerValue(request.headers, "host"), "", 140),
+    origin: clippedString(headerValue(request.headers, "origin"), "", 180),
+    forwardedFor: clippedString(headerValue(request.headers, "x-forwarded-for"), "", 180),
+    forwardedHost: clippedString(headerValue(request.headers, "x-forwarded-host"), "", 140),
+    forwardedProto: clippedString(headerValue(request.headers, "x-forwarded-proto"), "", 40),
+    userAgent: clippedString(headerValue(request.headers, "user-agent"), "", 240),
+    ...socketAddress(socket),
+  };
+}
+
+function proxyTargetLabel(target: unknown): string {
+  if (typeof target === "string") return target;
+  if (!target || typeof target !== "object") return "";
+  const candidate = target as {
+    href?: unknown;
+    protocol?: unknown;
+    host?: unknown;
+    hostname?: unknown;
+    port?: unknown;
+  };
+  if (typeof candidate.href === "string") return candidate.href;
+  const protocol = typeof candidate.protocol === "string" ? candidate.protocol : "http:";
+  const host = typeof candidate.host === "string" ? candidate.host : null;
+  if (host) return `${protocol}//${host}`;
+  const hostname = typeof candidate.hostname === "string" ? candidate.hostname : null;
+  const port = typeof candidate.port === "string" || typeof candidate.port === "number" ? String(candidate.port) : "";
+  return hostname ? `${protocol}//${hostname}${port ? `:${port}` : ""}` : "";
+}
+
+function errorData(error: unknown): Record<string, unknown> {
+  const err = error as NodeJS.ErrnoException;
+  return {
+    message: error instanceof Error ? clippedString(error.message, "", 240) : clippedString(String(error), "", 240),
+    code: typeof err.code === "string" ? err.code : null,
+  };
 }
 
 export function registerTerminalRoutes(input: {
@@ -36,6 +115,14 @@ export function registerTerminalRoutes(input: {
   emit?: (type: string, payload: unknown) => void;
   /** Recreate the tmux session a terminal needs. Returns the live tmux name/id. */
   respawnTmux?: (session: AgentSession) => Promise<{ tmuxSessionName: string; tmuxSessionId: string } | null>;
+  /** Relaunch the agent inside an existing pane (shell-first Restart endpoint). */
+  restartAgent?: (session: AgentSession) => Promise<void>;
+  /** In-memory map of recent operator-initiated terminations. Written by the
+   * Restart endpoint and the user-action endpoint. The status-monitor reads
+   * it on each tick to label `running → idle` transitions correctly. */
+  recentUserAction?: Map<string, number>;
+  /** Structured diagnostics logger for browser-side terminal lifecycle events. */
+  diagnostics?: DiagnosticsSink;
 }) {
   const { app, server, store, ttyd } = input;
   const proxy = httpProxy.createProxyServer({
@@ -100,9 +187,41 @@ export function registerTerminalRoutes(input: {
   // user's theme selection across the revive path that runs on first
   // reconnect after restart.
   const themePreferences = new ThemePrefStore(input.dataDir);
+  // Always persist terminal WebSocket lifecycle breadcrumbs. The debug flag
+  // only mirrors them to journald; diagnostics.jsonl stays useful after a
+  // long-running session without needing to restart with extra env.
+  const debugWs = process.env.CITADEL_DEBUG_TERMINAL_WS === "1";
+  const proxySocketMeta = new WeakMap<Duplex, TerminalWsMeta>();
+  const logWs = (event: string, data: TerminalWsMeta = {}) => {
+    input.diagnostics?.log("terminal-ws", event, data);
+    if (!debugWs) return;
+    const stamp = new Date().toISOString();
+    console.log(`[ws] ${stamp} ${event}`, data);
+  };
+  const instrumentSocket = (label: string, sessionId: string, socket: Duplex, meta: TerminalWsMeta = {}) => {
+    socket.once("close", (hadError: boolean) =>
+      logWs(`${label}.close`, { sessionId, ...meta, ...socketAddress(socket), hadError }),
+    );
+    socket.once("end", () => logWs(`${label}.end`, { sessionId, ...meta, ...socketAddress(socket) }));
+    socket.once("error", (err: Error) =>
+      logWs(`${label}.error`, { sessionId, ...meta, ...socketAddress(socket), ...errorData(err) }),
+    );
+  };
 
-  proxy.on("error", (error, _req, target) => {
+  proxy.on("error", (error, req, target) => {
     const message = error instanceof Error ? error.message : "terminal_proxy_failed";
+    if (req?.url?.startsWith(TERMINAL_PROXY_PREFIX)) {
+      const socket = target && "remoteAddress" in target ? (target as Duplex) : req.socket;
+      logWs("proxy.error", {
+        sessionId: sessionIdFromTerminalPath(req.url),
+        path: req.url,
+        ...socketAddress(socket),
+        ...errorData(error),
+      });
+    } else if (debugWs) {
+      const stamp = new Date().toISOString();
+      console.log(`[ws] ${stamp} proxy-error`, { url: req?.url, message });
+    }
     if (target && "headersSent" in target && typeof (target as express.Response).status === "function") {
       const response = target as express.Response;
       if (!response.headersSent) response.status(502).type("text/plain").send(message);
@@ -117,14 +236,43 @@ export function registerTerminalRoutes(input: {
     }
   });
 
+  proxy.on("proxyReqWs", (proxyReq, req, socket, options) => {
+    if (!req.url?.startsWith(TERMINAL_PROXY_PREFIX)) return;
+    const sessionId = sessionIdFromTerminalPath(req.url);
+    const baseMeta = {
+      ...requestWsMeta(sessionId, req, socket),
+      target: proxyTargetLabel(options.target),
+    };
+    logWs("upstream.request", baseMeta);
+    proxyReq.once("upgrade", (proxyRes: http.IncomingMessage, proxySocket: Duplex) => {
+      const upstreamMeta = {
+        ...baseMeta,
+        statusCode: proxyRes.statusCode ?? null,
+      };
+      proxySocketMeta.set(proxySocket, upstreamMeta);
+      logWs("upstream.open", { ...upstreamMeta, ...socketAddress(proxySocket) });
+      instrumentSocket("upstream", sessionId, proxySocket, upstreamMeta);
+    });
+    proxyReq.once("error", (err: Error) => {
+      logWs("upstream.request.error", { ...baseMeta, ...errorData(err) });
+    });
+  });
+
+  proxy.on("close", (_proxyRes, proxySocket) => {
+    const meta = proxySocketMeta.get(proxySocket as Duplex) ?? {};
+    logWs("proxy.close", { ...meta, ...socketAddress(proxySocket as Duplex) });
+  });
+
   const resolveSession = (sessionId: string): ResolvedSession | null => {
     const session = store.listSessions().find((candidate) => candidate.id === sessionId);
     if (!session?.tmuxSessionName) return null;
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     return {
       sessionId: session.id,
+      tabId: session.tabId ?? null,
       tmuxSession: session.tmuxSessionName,
       worktreePath: workspace?.path ?? null,
+      runtimeId: session.runtimeId,
     };
   };
 
@@ -140,29 +288,50 @@ export function registerTerminalRoutes(input: {
   // Self-heal: if the ttyd entry for a known session is missing (daemon restart,
   // orphan kill, etc.) re-spawn it on demand so a stale iframe URL recovers
   // instead of dead-ending on terminal_not_found.
-  const reviveProxyTarget = async (urlPath: string) => {
+  //
+  // Single-flighted per sessionId: the cockpit iframe boots both a HEAD
+  // /terminals/<sid>/ HTTP request (for ttyd's HTML page) and a WebSocket
+  // upgrade on /terminals/<sid>/ws within a few milliseconds. Without the
+  // gate, BOTH branches enter the empty-manager fast path and each ends up
+  // calling ttyd.ensure() → two ttyds attach to the same tmux session, one
+  // ends up in the manager map, the other becomes a zombie. Re-using the
+  // same in-flight promise here is what pins the invariant of one ttyd per
+  // tab even before the ttyd-side per-tab lock has anything to deduplicate.
+  const reviveInflight = new Map<string, Promise<{ entry: TtydEntry; target: string; sessionId: string } | null>>();
+  const reviveProxyTarget = (urlPath: string) => {
     const match = /^\/terminals\/([^/]+)(\/.*)?$/.exec(urlPath);
-    if (!match) return null;
+    if (!match) return Promise.resolve(null);
     const sessionId = decodeURIComponent(match[1] ?? "");
-    const session = resolveSession(sessionId);
-    if (!session) return null;
-    try {
-      const entry = await ensureWithHeal(session, themePreferences.get(sessionId));
-      input.emit?.("terminal.ready", { sessionId: session.sessionId, port: entry.port });
-      return { entry, target: `http://127.0.0.1:${entry.port}`, sessionId };
-    } catch {
-      return null;
-    }
+    const existing = reviveInflight.get(sessionId);
+    if (existing) return existing;
+    const flight = (async () => {
+      const session = resolveSession(sessionId);
+      if (!session) return null;
+      try {
+        const entry = await ensureWithHeal(session, themePreferences.get(sessionId));
+        input.emit?.("terminal.ready", { sessionId: session.sessionId, port: entry.port });
+        return { entry, target: `http://127.0.0.1:${entry.port}`, sessionId };
+      } catch {
+        return null;
+      }
+    })().finally(() => {
+      reviveInflight.delete(sessionId);
+    });
+    reviveInflight.set(sessionId, flight);
+    return flight;
   };
 
   // Try ensure(); if tmux disappeared (system reboot, manual kill), call the
   // injected respawnTmux hook to bring the underlying tmux session back, then
   // retry. Returns null if no self-heal was possible.
   const ensureWithHeal = async (session: ResolvedSession, theme?: Theme, force?: boolean): Promise<TtydEntry> => {
+    const enableTmuxMouse = MOUSE_GRABBING_RUNTIMES.has(session.runtimeId);
     const base = {
       key: session.sessionId,
+      tabId: session.tabId,
       tmuxSession: session.tmuxSession,
       worktreePath: session.worktreePath,
+      enableTmuxMouse,
     };
     const ensureArgs = {
       ...base,
@@ -180,8 +349,10 @@ export function registerTerminalRoutes(input: {
       if (!respawn) throw error;
       const healArgs = {
         key: session.sessionId,
+        tabId: session.tabId,
         tmuxSession: respawn.tmuxSessionName,
         worktreePath: session.worktreePath,
+        enableTmuxMouse,
         ...(theme ? { theme } : {}),
         ...(force ? { force: true } : {}),
       };
@@ -214,8 +385,64 @@ export function registerTerminalRoutes(input: {
 
   app.delete("/api/agent-sessions/:sessionId/terminal", (req, res) => {
     const sessionId = String(req.params.sessionId ?? "");
-    ttyd.release(sessionId);
+    ttyd.release(sessionId, "terminal-route-delete");
     res.status(202).json({ released: true });
+  });
+
+  // Restart endpoint — relaunches the agent inside an existing pane.
+  // Records recentUserAction BEFORE the mutation so the next status-monitor
+  // tick sees the operator action and clears statusReason (rather than
+  // labelling the resulting transition as `idle_after_unexpected_exit`).
+  // Defensive check: if the agent is ALREADY running (pane foreground IS
+  // the runtime binary, stale UI or race), return 409 instead of typing
+  // `env … claude …` into the live TUI as a chat message.
+  app.post("/api/agent-sessions/:sessionId/restart", async (req, res) => {
+    const sessionId = String(req.params.sessionId ?? "");
+    const dbSession = store.listSessions().find((candidate) => candidate.id === sessionId);
+    if (!dbSession) return res.status(404).json({ error: "session_not_found" });
+    if (!input.restartAgent) return res.status(503).json({ error: "restart_not_wired" });
+    input.recentUserAction?.set(sessionId, Date.now());
+    try {
+      await input.restartAgent(dbSession);
+      input.emit?.("agent.updated", { workspaceId: dbSession.workspaceId, sessionId });
+      return res.status(202).json({ ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "restart_failed";
+      // 409 for the defensive "agent_already_running" check; 500 for anything else.
+      if (message === "agent_already_running") {
+        return res.status(409).json({ error: "agent_already_running" });
+      }
+      return res.status(500).json({ error: "restart_failed", detail: message });
+    }
+  });
+
+  // User-action endpoint — the terminal-key-shim (injected into ttyd's
+  // iframe page) hits this with `{reason: 'ctrl_c'}` whenever the operator
+  // types Ctrl+C inside the embedded terminal, in parallel with letting the
+  // keystroke propagate to ttyd. Fire-and-forget: caller doesn't block on
+  // the response. No rate-limit needed — the write is in-memory Map.set,
+  // no DB or I/O.
+  app.post("/api/agent-sessions/:sessionId/user-action", (req, res) => {
+    const sessionId = String(req.params.sessionId ?? "");
+    input.recentUserAction?.set(sessionId, Date.now());
+    res.status(204).end();
+  });
+
+  app.post("/api/agent-sessions/:sessionId/terminal-client-event", (req, res) => {
+    const sessionId = String(req.params.sessionId ?? "");
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const event = clippedString(body.event, "unknown", 80);
+    input.diagnostics?.log("terminal-client", event, {
+      sessionId,
+      code: typeof body.code === "number" ? body.code : null,
+      reason: typeof body.reason === "string" ? body.reason.slice(0, 200) : null,
+      wasClean: typeof body.wasClean === "boolean" ? body.wasClean : null,
+      persisted: typeof body.persisted === "boolean" ? body.persisted : null,
+      visibility: clippedString(body.visibility, "unknown", 40),
+      ageMs: typeof body.ageMs === "number" && Number.isFinite(body.ageMs) ? Math.max(0, Math.round(body.ageMs)) : null,
+      path: clippedString(body.path, "", 240),
+    });
+    res.status(204).end();
   });
 
   app.get("/api/terminals", (_req, res) => {
@@ -252,7 +479,7 @@ export function registerTerminalRoutes(input: {
       if (res.headersSent) return;
       const code = (error as NodeJS.ErrnoException | undefined)?.code;
       if (code === "ECONNREFUSED" || code === "ECONNRESET") {
-        ttyd.release(resolved.sessionId);
+        ttyd.release(resolved.sessionId, "terminal-http-proxy-stale-entry");
         const revived = await reviveProxyTarget(req.url);
         if (revived) {
           proxy.web(req, res, { target: revived.target }, (err2?: Error) => {
@@ -280,6 +507,10 @@ export function registerTerminalRoutes(input: {
   const upgradeHandler = (request: http.IncomingMessage, socket: Duplex, head: Buffer) => {
     const urlPath = request.url || "";
     if (!urlPath.startsWith(TERMINAL_PROXY_PREFIX)) return;
+    const sessionId = sessionIdFromTerminalPath(urlPath);
+    const meta = requestWsMeta(sessionId, request, socket);
+    logWs("upgrade", meta);
+    instrumentSocket("client", sessionId, socket, meta);
     const resolved = resolveProxyTarget(urlPath);
     if (!resolved) {
       // Hold the socket open while we try to revive ttyd. Browsers retry on
@@ -287,13 +518,16 @@ export function registerTerminalRoutes(input: {
       reviveProxyTarget(urlPath)
         .then((revived) => {
           if (!revived) {
+            logWs("revive.failed", meta);
             socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
             socket.destroy();
             return;
           }
+          logWs("revived", { ...meta, target: revived.target, ttydPort: revived.entry.port });
           proxy.ws(request, socket, head, { target: revived.target });
         })
-        .catch(() => {
+        .catch((err: Error) => {
+          logWs("revive.error", { ...meta, ...errorData(err) });
           try {
             socket.destroy();
           } catch {
@@ -308,6 +542,10 @@ export function registerTerminalRoutes(input: {
 
   server.on("close", () => {
     server.off("upgrade", upgradeHandler);
+    // Intentionally do NOT signal ttyd children — they were spawned detached
+    // so they outlive this daemon process and get re-adopted at next boot
+    // (see discoverExistingTtyds() in apps/daemon/src/app.ts). shutdown()
+    // just clears the in-memory map.
     ttyd.shutdown();
     proxy.close();
   });
@@ -375,4 +613,9 @@ function terminalDto(entry: TtydEntry, url: string) {
     startedAt: entry.startedAt,
     theme: entry.theme,
   };
+}
+
+function clippedString(value: unknown, fallback: string, max: number): string {
+  if (typeof value !== "string") return fallback;
+  return value.length > max ? value.slice(0, max) : value;
 }

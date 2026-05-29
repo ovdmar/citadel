@@ -102,75 +102,6 @@ describe("agent-status migration", () => {
     expect(row?.lastStatusAt).toBe("2026-05-20T14:30:00.000Z");
   });
 
-  it("creates rate_limit_resumptions table and lands schema_migrations version 8", () => {
-    const dbPath = makeTempPath();
-    const store = new SqliteStore(dbPath);
-    store.migrate();
-    const db = (store as unknown as { database: DatabaseSync }).database;
-    const tableRow = db
-      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='rate_limit_resumptions'")
-      .get();
-    expect(tableRow).toBeTruthy();
-    const versionRow = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as { v: number };
-    expect(versionRow.v).toBe(8);
-    // Migration is idempotent: re-running picks up no new state.
-    const store2 = new SqliteStore(dbPath);
-    store2.migrate();
-    const versionRow2 = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as { v: number };
-    expect(versionRow2.v).toBe(8);
-  });
-
-  it("rate_limit_resumptions partial unique index allows only one pending row", () => {
-    const dbPath = makeTempPath();
-    const store = new SqliteStore(dbPath);
-    store.migrate();
-    const now = "2026-05-26T10:00:00.000Z";
-    store.insertRateLimitResumption({
-      id: "rlr_1",
-      scheduledAt: "2026-05-26T11:00:00.000Z",
-      status: "pending",
-      createdAt: now,
-      executedAt: null,
-    });
-    // Second insert with a different id still in 'pending' returns the existing row.
-    const idempotent = store.insertRateLimitResumption({
-      id: "rlr_2",
-      scheduledAt: "2026-05-26T12:00:00.000Z",
-      status: "pending",
-      createdAt: now,
-      executedAt: null,
-    });
-    expect(idempotent.id).toBe("rlr_1");
-    expect(store.findPendingRateLimitResumption()?.id).toBe("rlr_1");
-    // Marking executed releases the singleton slot — a new pending row can land.
-    store.markRateLimitResumptionExecuted("rlr_1", "2026-05-26T11:01:00.000Z");
-    const fresh = store.insertRateLimitResumption({
-      id: "rlr_3",
-      scheduledAt: "2026-05-26T13:00:00.000Z",
-      status: "pending",
-      createdAt: "2026-05-26T12:00:00.000Z",
-      executedAt: null,
-    });
-    expect(fresh.id).toBe("rlr_3");
-    expect(store.findPendingRateLimitResumption()?.id).toBe("rlr_3");
-  });
-
-  it("listDueRateLimitResumptions returns rows whose scheduled_at <= now", () => {
-    const dbPath = makeTempPath();
-    const store = new SqliteStore(dbPath);
-    store.migrate();
-    store.insertRateLimitResumption({
-      id: "rlr_due",
-      scheduledAt: "2026-05-26T11:00:00.000Z",
-      status: "pending",
-      createdAt: "2026-05-26T10:00:00.000Z",
-      executedAt: null,
-    });
-    expect(store.listDueRateLimitResumptions("2026-05-26T10:59:59.000Z")).toHaveLength(0);
-    expect(store.listDueRateLimitResumptions("2026-05-26T11:00:00.000Z")).toHaveLength(1);
-    expect(store.listDueRateLimitResumptions("2026-05-26T12:00:00.000Z")).toHaveLength(1);
-  });
-
   it("is idempotent — repeated boots don't re-stamp already-migrated rows", () => {
     const dbPath = makeTempPath();
     seedLegacySession(dbPath, { id: "sess_w2", legacyStatus: "waiting" });
@@ -190,5 +121,221 @@ describe("agent-status migration", () => {
     // longer matches either. State is stable.
     expect(secondPass?.status).toBe("running");
     expect(secondPass?.statusReason).toBe("migrated_from_waiting");
+  });
+});
+
+describe("auto-resume migration (version 8)", () => {
+  it("adds rate_limit_resume_attempts (NOT NULL DEFAULT 0), next_resume_at, and last_resume_from_rate_limit_at columns", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    const cols = db.prepare("PRAGMA table_info(agent_sessions)").all() as Array<{
+      name: string;
+      type: string;
+      notnull: number;
+      dflt_value: string | null;
+    }>;
+    const attempts = cols.find((c) => c.name === "rate_limit_resume_attempts");
+    expect(attempts).toBeDefined();
+    expect(attempts?.type.toUpperCase()).toBe("INTEGER");
+    expect(attempts?.notnull).toBe(1);
+    expect(attempts?.dflt_value).toBe("0");
+    expect(cols.find((c) => c.name === "next_resume_at")?.type.toUpperCase()).toBe("TEXT");
+    expect(cols.find((c) => c.name === "last_resume_from_rate_limit_at")?.type.toUpperCase()).toBe("TEXT");
+  });
+
+  it("records schema_migrations version 8 row", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    const row = db.prepare("SELECT name FROM schema_migrations WHERE version = 8").get() as
+      | { name: string }
+      | undefined;
+    expect(row?.name).toBe("agent-sessions-auto-resume-backoff");
+  });
+
+  it("backfills legacy rows with rate_limit_resume_attempts=0 and NULL timestamps", () => {
+    const dbPath = makeTempPath();
+    seedLegacySession(dbPath, { id: "sess_legacy", legacyStatus: "idle" });
+    // Re-open through SqliteStore — migration runs the ALTER TABLE ADD COLUMN
+    // statements which apply DEFAULT 0 to the existing row.
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const row = store.listSessions().find((s) => s.id === "sess_legacy");
+    expect(row).toBeDefined();
+    expect(row?.rateLimitResumeAttempts).toBe(0);
+    expect(row?.nextResumeAt).toBeNull();
+    expect(row?.lastResumeFromRateLimitAt).toBeNull();
+  });
+});
+
+describe("updateSessionRateLimitResume", () => {
+  function freshStore(id: string) {
+    const dbPath = makeTempPath();
+    seedLegacySession(dbPath, { id, legacyStatus: "idle" });
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    return store;
+  }
+
+  it("writes individual fields without touching the others", () => {
+    const store = freshStore("sess_a");
+    store.updateSessionRateLimitResume("sess_a", { rateLimitResumeAttempts: 5 });
+    let row = store.listSessions().find((s) => s.id === "sess_a");
+    expect(row?.rateLimitResumeAttempts).toBe(5);
+    expect(row?.nextResumeAt).toBeNull();
+    expect(row?.lastResumeFromRateLimitAt).toBeNull();
+    store.updateSessionRateLimitResume("sess_a", { nextResumeAt: "2026-05-25T13:00:00.000Z" });
+    row = store.listSessions().find((s) => s.id === "sess_a");
+    expect(row?.rateLimitResumeAttempts).toBe(5); // unchanged
+    expect(row?.nextResumeAt).toBe("2026-05-25T13:00:00.000Z");
+  });
+
+  it("treats null as 'write NULL' (not 'skip')", () => {
+    const store = freshStore("sess_b");
+    store.updateSessionRateLimitResume("sess_b", {
+      rateLimitResumeAttempts: 3,
+      nextResumeAt: "2026-05-25T13:00:00.000Z",
+      lastResumeFromRateLimitAt: "2026-05-25T12:00:00.000Z",
+    });
+    store.updateSessionRateLimitResume("sess_b", { nextResumeAt: null });
+    const row = store.listSessions().find((s) => s.id === "sess_b");
+    expect(row?.nextResumeAt).toBeNull();
+    expect(row?.rateLimitResumeAttempts).toBe(3); // unchanged
+    expect(row?.lastResumeFromRateLimitAt).toBe("2026-05-25T12:00:00.000Z");
+  });
+
+  it("empty patch is a no-op (no UPDATE executed)", () => {
+    const store = freshStore("sess_c");
+    const before = store.listSessions().find((s) => s.id === "sess_c");
+    store.updateSessionRateLimitResume("sess_c", {});
+    const after = store.listSessions().find((s) => s.id === "sess_c");
+    expect(after?.updatedAt).toBe(before?.updatedAt); // updated_at not touched
+  });
+});
+
+describe("workspaces-pr-snapshot migration (v9)", () => {
+  it("adds 7 nullable pr_* columns to workspaces", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    type PragmaRow = { name: string; type: string; notnull: number; dflt_value: string | null };
+    const cols = db.prepare("PRAGMA table_info(workspaces)").all() as PragmaRow[];
+    const expected: Array<[string, string]> = [
+      ["pr_number", "INTEGER"],
+      ["pr_state", "TEXT"],
+      ["pr_last_fetch_at", "TEXT"],
+      ["pr_last_checks_green_at", "TEXT"],
+      ["pr_last_head_sha", "TEXT"],
+      ["pr_last_head_sha_changed_at", "TEXT"],
+      ["pr_last_merge_state_status", "TEXT"],
+    ];
+    for (const [name, type] of expected) {
+      const col = cols.find((c) => c.name === name);
+      expect(col, `column ${name} missing`).toBeDefined();
+      expect(col?.type.toUpperCase()).toBe(type);
+      expect(col?.notnull, `column ${name} should be nullable`).toBe(0);
+    }
+  });
+
+  it("records schema_migrations version 9 row with name 'workspaces-pr-snapshot'", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    const row = db.prepare("SELECT name FROM schema_migrations WHERE version = 9").get() as
+      | { name: string }
+      | undefined;
+    expect(row?.name).toBe("workspaces-pr-snapshot");
+  });
+
+  it("existing workspace rows survive the v9 migration with NULL snapshot columns", () => {
+    const dbPath = makeTempPath();
+    // Seed a workspace via the legacy helper (uses ws_test).
+    seedLegacySession(dbPath, { id: "sess_legacy_v9", legacyStatus: "idle" });
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const snapshot = store.getWorkspacePrSnapshot("ws_test");
+    expect(snapshot).toEqual({
+      prNumber: null,
+      prState: null,
+      lastFetchAt: null,
+      lastChecksGreenAt: null,
+      lastHeadSha: null,
+      lastHeadShaChangedAt: null,
+      lastMergeStateStatus: null,
+    });
+  });
+});
+
+describe("updateWorkspacePrSnapshot / getWorkspacePrSnapshot", () => {
+  function freshStore(): SqliteStore {
+    const dbPath = makeTempPath();
+    seedLegacySession(dbPath, { id: "sess_snap", legacyStatus: "idle" });
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    return store;
+  }
+
+  it("round-trips all 7 fields", () => {
+    const store = freshStore();
+    store.updateWorkspacePrSnapshot("ws_test", {
+      prNumber: 42,
+      prState: "open",
+      lastFetchAt: "2026-05-26T20:00:00.000Z",
+      lastChecksGreenAt: "2026-05-26T19:50:00.000Z",
+      lastHeadSha: "abc1234",
+      lastHeadShaChangedAt: "2026-05-26T19:00:00.000Z",
+      lastMergeStateStatus: "CLEAN",
+    });
+    const snapshot = store.getWorkspacePrSnapshot("ws_test");
+    expect(snapshot).toEqual({
+      prNumber: 42,
+      prState: "open",
+      lastFetchAt: "2026-05-26T20:00:00.000Z",
+      lastChecksGreenAt: "2026-05-26T19:50:00.000Z",
+      lastHeadSha: "abc1234",
+      lastHeadShaChangedAt: "2026-05-26T19:00:00.000Z",
+      lastMergeStateStatus: "CLEAN",
+    });
+  });
+
+  it("partial patch only touches named fields", () => {
+    const store = freshStore();
+    store.updateWorkspacePrSnapshot("ws_test", { prNumber: 7, prState: "open", lastHeadSha: "deadbee" });
+    store.updateWorkspacePrSnapshot("ws_test", { prState: "merged" });
+    const snapshot = store.getWorkspacePrSnapshot("ws_test");
+    expect(snapshot?.prNumber).toBe(7);
+    expect(snapshot?.prState).toBe("merged");
+    expect(snapshot?.lastHeadSha).toBe("deadbee"); // untouched
+  });
+
+  it("explicit null clears a field (vs omission preserves)", () => {
+    const store = freshStore();
+    store.updateWorkspacePrSnapshot("ws_test", { lastChecksGreenAt: "2026-05-26T19:50:00.000Z" });
+    store.updateWorkspacePrSnapshot("ws_test", { lastChecksGreenAt: null });
+    expect(store.getWorkspacePrSnapshot("ws_test")?.lastChecksGreenAt).toBeNull();
+  });
+
+  it("getWorkspacePrSnapshot returns null for unknown workspace id", () => {
+    const store = freshStore();
+    expect(store.getWorkspacePrSnapshot("ws_does_not_exist")).toBeNull();
+  });
+
+  it("getWorkspacePrSnapshot rejects unexpected pr_state values via normalization", () => {
+    const store = freshStore();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    db.exec("UPDATE workspaces SET pr_state = 'gobbledygook' WHERE id = 'ws_test'");
+    expect(store.getWorkspacePrSnapshot("ws_test")?.prState).toBeNull();
+  });
+
+  it("empty patch is a no-op", () => {
+    const store = freshStore();
+    store.updateWorkspacePrSnapshot("ws_test", { prNumber: 1 });
+    store.updateWorkspacePrSnapshot("ws_test", {});
+    expect(store.getWorkspacePrSnapshot("ws_test")?.prNumber).toBe(1);
   });
 });

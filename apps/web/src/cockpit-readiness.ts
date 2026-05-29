@@ -1,5 +1,4 @@
 import type { AgentSession, Operation, Workspace } from "@citadel/contracts";
-import { isInteractiveStatus } from "@citadel/contracts";
 import { sessionNeedsAttention } from "@citadel/core";
 
 export type WorkspaceAttention = {
@@ -24,7 +23,7 @@ export function readinessForWorkspace(
   const failedOperation = input.operations.some((operation) => operation.status === "failed");
   const runningOperation = input.operations.some((operation) => ["queued", "running"].includes(operation.status));
   const activeAgentSession = input.sessions.some(
-    (session) => session.runtimeId !== "shell" && isInteractiveStatus(session.status),
+    (session) => session.runtimeId !== "shell" && ["starting", "running"].includes(session.status),
   );
   const failedSession = input.sessions.some(sessionNeedsAttention);
   if (workspace.lifecycle === "failed" || failedOperation || failedSession) {
@@ -41,7 +40,8 @@ export function readinessForWorkspace(
 }
 
 export function readinessSection(state: string) {
-  if (["blocked", "checks-failing", "conflicts", "action-failed", "waiting-provider"].includes(state)) return "blocked";
+  if (["blocked", "checks-failing", "conflicts", "pr-conflicts", "action-failed", "waiting-provider"].includes(state))
+    return "blocked";
   if (["needs-review", "ready-to-merge"].includes(state)) return "needs-review";
   if (["dirty"].includes(state)) return "dirty";
   if (state === "working") return "working";

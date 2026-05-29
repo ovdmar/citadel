@@ -1,5 +1,4 @@
-import type { AgentSessionStatus, WorkspaceReadiness } from "@citadel/contracts";
-import { isInteractiveStatus } from "@citadel/contracts";
+import type { WorkspaceReadiness } from "@citadel/contracts";
 import { sessionNeedsAttention } from "@citadel/core";
 
 export function deriveReadiness(input: {
@@ -15,6 +14,8 @@ export function deriveReadiness(input: {
       draft: boolean;
       reviewDecision: string | null;
       checks: Array<{ status: string; conclusion: string | null }>;
+      mergeable?: string | null;
+      mergeStateStatus?: string | null;
     } | null;
     checkedAt: string;
   };
@@ -38,18 +39,20 @@ export function deriveReadiness(input: {
     input.versionControl.status !== "healthy" || input.ci.status !== "healthy" || input.apps.status !== "healthy";
   const runningOperation = input.operations.some((operation) => ["queued", "running"].includes(operation.status));
   const activeAgentSession = input.sessions.some(
-    (session) => session.runtimeId !== "shell" && isInteractiveStatus(session.status as AgentSessionStatus),
+    (session) => session.runtimeId !== "shell" && ["starting", "running"].includes(session.status),
   );
   // Loose-typed (this signature accepts plain strings); cast to the canonical
   // shape for the shared predicate. Any non-canonical status will return false.
   const failedSession = input.sessions.some((session) =>
     sessionNeedsAttention({ status: session.status as never, statusReason: session.statusReason ?? null }),
   );
+  const prConflicting = input.versionControl.pullRequest?.mergeable === "conflicting";
   const reasons = [
     input.workspace.lifecycle === "failed" ? "Workspace lifecycle failed" : null,
     failedSession ? "A terminal or agent session needs attention" : null,
     failedOperation ? failedOperation.error || `${failedOperation.type} failed` : null,
     input.git.conflicted ? `${input.git.conflicted} conflicted files` : null,
+    prConflicting ? "PR branch has merge conflicts with the base branch" : null,
     failingCheck ? "One or more PR checks are failing" : null,
     pendingCheck ? "PR checks are still running" : null,
     degraded ? "Provider, hook, or app data is degraded" : null,
@@ -77,6 +80,16 @@ export function deriveReadiness(input: {
       degraded,
     );
   }
+  if (prConflicting) {
+    return readiness(
+      "pr-conflicts",
+      "danger",
+      "Resolve PR conflicts against main before merging",
+      reasons,
+      checkedAt,
+      degraded,
+    );
+  }
   if (failingCheck)
     return readiness(
       "checks-failing",
@@ -97,7 +110,11 @@ export function deriveReadiness(input: {
     );
   if (!input.git.clean)
     return readiness("dirty", "warning", "Review the diff and prepare the PR", reasons, checkedAt, false);
-  if (input.versionControl.pullRequest?.reviewDecision === "APPROVED" && !pendingCheck) {
+  if (
+    input.versionControl.pullRequest?.reviewDecision === "APPROVED" &&
+    !pendingCheck &&
+    input.versionControl.pullRequest.mergeable !== "conflicting"
+  ) {
     return readiness(
       "ready-to-merge",
       "success",

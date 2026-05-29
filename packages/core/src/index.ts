@@ -1,4 +1,3 @@
-import { isInteractiveStatus } from "@citadel/contracts";
 import type { AgentSession, CreateWorkspaceInput, ProviderHealth, Repo, Workspace } from "@citadel/contracts";
 
 export function nowIso() {
@@ -15,39 +14,28 @@ const ATTENTION_UNKNOWN_REASONS: ReadonlySet<string> = new Set([
   "migrated_from_orphaned",
 ]);
 
-// True iff the session needs the operator's attention — failed, or unknown
-// with positive evidence the agent went away (tmux gone, sentinel mismatched).
-// rate_limited is INTENTIONALLY excluded — it has its own pulse tone
-// (cit-pulse-info, blue) in the workspace card, separate from the red
-// attention tone reserved for hard failures.
+// `status: "idle"` reasons that indicate the agent crashed or exited
+// without operator intervention — surfaces a red attention pulse so the
+// "your agent died" signal isn't lost (per shell-first-panes spec B.3 #8).
+// Pairs with the 30-min auto-clear in the status-monitor.
+const ATTENTION_IDLE_REASONS: ReadonlySet<string> = new Set(["idle_after_unexpected_exit"]);
+
+// True iff the session needs the operator's attention — either it failed,
+// or it's unknown because we have positive evidence the agent went away
+// (tmux gone, sentinel mismatched), or it crashed mid-session
+// (idle_after_unexpected_exit). Used by readiness derivations and the
+// workspace-card status dot. Single source of truth for the predicate.
 export function sessionNeedsAttention(session: Pick<AgentSession, "status" | "statusReason">): boolean {
   if (session.status === "failed") return true;
-  if (session.status !== "unknown") return false;
   const reason = session.statusReason;
-  return reason !== null && reason !== undefined && ATTENTION_UNKNOWN_REASONS.has(reason);
+  if (session.status === "unknown") {
+    return reason !== null && reason !== undefined && ATTENTION_UNKNOWN_REASONS.has(reason);
+  }
+  if (session.status === "idle") {
+    return reason !== null && reason !== undefined && ATTENTION_IDLE_REASONS.has(reason);
+  }
+  return false;
 }
-
-// Parse the statusReason carried by a rate_limited session.
-// Returns { resetAt } when the reason is a recognized shape, otherwise null.
-// Accepted shapes:
-//   "rate_limited:<ISO>"            → { resetAt: <ISO> }
-//   "rate_limited:unknown_reset"    → { resetAt: null }
-export function parseRateLimitReason(reason: string): { resetAt: string | null } | null {
-  const prefix = "rate_limited:";
-  if (!reason.startsWith(prefix)) return null;
-  const rest = reason.slice(prefix.length);
-  if (rest === "unknown_reset") return { resetAt: null };
-  // Validate the rest is a parseable ISO timestamp. Date.parse returns NaN
-  // for invalid strings; we don't accept "rate_limited:nonsense".
-  const parsed = Date.parse(rest);
-  if (Number.isNaN(parsed)) return null;
-  return { resetAt: rest };
-}
-
-// Marker re-export so consumers that prefer the core surface for status
-// helpers can stay on @citadel/core. The implementation lives in contracts
-// (where the enum lives) so the helper stays exhaustive.
-export { isInteractiveStatus };
 
 export function createId(prefix: string) {
   const random = Math.random().toString(36).slice(2, 10);
@@ -94,7 +82,7 @@ export function summarizeWorkspaceState(input: {
   sessions: AgentSession[];
   providerHealth: ProviderHealth[];
 }) {
-  const activeSession = input.sessions.some((session) => isInteractiveStatus(session.status));
+  const activeSession = input.sessions.some((session) => session.status === "running");
   const failedSession = input.sessions.some(sessionNeedsAttention);
   const degradedProvider = input.providerHealth.some((provider) => provider.status !== "healthy");
   const suggestedSection = input.workspace.pinned
@@ -112,3 +100,12 @@ export function summarizeWorkspaceState(input: {
   ].filter((reason): reason is string => Boolean(reason));
   return { suggestedSection, reasons };
 }
+
+export { FUNNY_ADJECTIVES, FUNNY_ANIMALS, generateFunnyName } from "./funny-name.js";
+export {
+  type FuzzyBlockMatch,
+  type FuzzyMatchIndex,
+  SEARCH_LIMITS,
+  buildFuzzyIndex,
+  fuzzySearchBlocks,
+} from "./scratchpad-search.js";
