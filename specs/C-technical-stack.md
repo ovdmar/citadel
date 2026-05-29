@@ -42,6 +42,7 @@
 [~] 3. The daemon uses SSE for app-state/events.
 [~] 4. The daemon proxies interactive terminal I/O. Browser terminals are served by per-session `ttyd` processes (bound to `127.0.0.1`, dynamic loopback ports in a configurable range), routed through the daemon at `/terminals/:sessionId/*` for both HTTP assets and WebSocket upgrades, using `http-proxy`. A diagnostic xterm/WebSocket gateway (`/terminal/:sessionId`) remains available for tooling but is not the default renderer.
 [~] 5. The daemon uses Zod-backed contracts for shared request/response/event schemas.
+[~] 5a. The daemon requires a v1 local access token by default. A per-daemon token is loaded from `CITADEL_AUTH_TOKEN` or generated under `<dataDir>/auth-token`; successful sign-in sets an HttpOnly SameSite cookie for the cockpit, while automation can use `Authorization: Bearer` or `X-Citadel-Auth-Token`. The gate applies to REST, SSE, MCP HTTP endpoints, ttyd proxy HTTP/WS traffic, and the diagnostic terminal WebSocket. Static cockpit assets and `/api/auth/*` stay reachable so an unauthenticated browser can load the sign-in form.
 [ ] 6. Long-running or side-effectful work is represented as operations.
 [ ] 7. Terminal transport remains separate from app-state transport.
 [ ] 8. Provider, hook, runtime, operation, terminal, and MCP boundaries remain package-level concepts.

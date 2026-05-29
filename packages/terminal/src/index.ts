@@ -559,11 +559,20 @@ export function killTmuxSession(sessionName: string) {
   }
 }
 
-export function attachTerminalWebSocket(server: http.Server, resolveSession: (id: string) => string | null) {
+export function attachTerminalWebSocket(
+  server: http.Server,
+  resolveSession: (id: string) => string | null,
+  options: { authorizeUpgrade?: (request: http.IncomingMessage) => boolean } = {},
+) {
   const wss = new WebSocketServer({ noServer: true });
   server.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url || "", "http://127.0.0.1");
     if (!url.pathname.startsWith("/terminal/")) return;
+    if (options.authorizeUpgrade && !options.authorizeUpgrade(request)) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     const sessionId = decodeURIComponent(url.pathname.replace("/terminal/", ""));
     const tmuxSession = resolveSession(sessionId);
     if (!tmuxSession) {

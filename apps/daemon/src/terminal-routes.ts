@@ -8,6 +8,7 @@ import type { SqliteStore } from "@citadel/db";
 import { type TtydEntry, type TtydManager, TtydUnavailableError } from "@citadel/terminal";
 import type express from "express";
 import httpProxyImport from "http-proxy";
+import { unauthorizedUpgrade } from "./auth.js";
 import { injectKeyShim, shouldInjectShim } from "./terminal-key-shim.js";
 
 type HttpProxyModule = typeof httpProxyImport;
@@ -123,6 +124,8 @@ export function registerTerminalRoutes(input: {
   recentUserAction?: Map<string, number>;
   /** Structured diagnostics logger for browser-side terminal lifecycle events. */
   diagnostics?: DiagnosticsSink;
+  /** Returns false when the caller is not allowed to open terminal WebSockets. */
+  authorizeUpgrade?: (request: http.IncomingMessage) => boolean;
 }) {
   const { app, server, store, ttyd } = input;
   const proxy = httpProxy.createProxyServer({
@@ -507,6 +510,11 @@ export function registerTerminalRoutes(input: {
   const upgradeHandler = (request: http.IncomingMessage, socket: Duplex, head: Buffer) => {
     const urlPath = request.url || "";
     if (!urlPath.startsWith(TERMINAL_PROXY_PREFIX)) return;
+    if (input.authorizeUpgrade && !input.authorizeUpgrade(request)) {
+      unauthorizedUpgrade(socket);
+      socket.destroy();
+      return;
+    }
     const sessionId = sessionIdFromTerminalPath(urlPath);
     const meta = requestWsMeta(sessionId, request, socket);
     logWs("upgrade", meta);

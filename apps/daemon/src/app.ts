@@ -39,6 +39,7 @@ import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
+import { type DaemonAuth, createDaemonAuth } from "./auth.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
@@ -85,6 +86,7 @@ export type DaemonApp = {
   emit: (type: string, payload: unknown) => void;
   ttyd: ReturnType<typeof createTtydManager>;
   diagnostics: DiagnosticsLogger;
+  auth: Pick<DaemonAuth, "enabled" | "tokenPath">;
 };
 
 type ProviderCollectors = {
@@ -116,6 +118,7 @@ export function createDaemonApp(input: {
   store: SqliteStore;
   operations?: OperationService;
   providers?: Partial<ProviderCollectors>;
+  auth?: { enabled?: boolean; token?: string };
 }): DaemonApp {
   const { config, configPath, store } = input;
   setGithubCommand(config.providers.github.command);
@@ -131,6 +134,11 @@ export function createDaemonApp(input: {
   };
   const app = express();
   const server = http.createServer(app);
+  const auth = createDaemonAuth({
+    dataDir: config.dataDir,
+    ...(input.auth?.enabled !== undefined || process.env.VITEST ? { enabled: input.auth?.enabled ?? false } : {}),
+    ...(input.auth?.token ? { token: input.auth.token } : {}),
+  });
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
   // Always-on structured diagnostics. Writes JSONL to <dataDir>/diagnostics.jsonl
@@ -168,6 +176,8 @@ export function createDaemonApp(input: {
 
   app.use(cors());
   app.use(express.json({ limit: "2mb" }));
+  auth.registerRoutes(app);
+  app.use(auth.middleware);
 
   let fsWatchers: { reconcile: () => void; close: () => void } | null = null;
   const emit = (type: string, payload: unknown) => {
@@ -231,6 +241,7 @@ export function createDaemonApp(input: {
     emit,
     config,
     diagnostics,
+    authorizeUpgrade: auth.authorizeUpgrade,
   });
 
   const cachedProviderHealth = () =>
@@ -876,10 +887,14 @@ export function createDaemonApp(input: {
   });
 
   // Diagnostic xterm.js gateway. The cockpit uses ttyd via /terminals/* instead; this stays for tooling.
-  attachTerminalWebSocket(server, (sessionId) => {
-    const session = store.listSessions().find((candidate) => candidate.id === sessionId);
-    return session?.tmuxSessionName ?? null;
-  });
+  attachTerminalWebSocket(
+    server,
+    (sessionId) => {
+      const session = store.listSessions().find((candidate) => candidate.id === sessionId);
+      return session?.tmuxSessionName ?? null;
+    },
+    { authorizeUpgrade: auth.authorizeUpgrade },
+  );
 
   // Reap orphan tmux sessions / ghost worktrees on a slow interval.
   if (process.env.CITADEL_DISABLE_REAPER !== "1") {
@@ -919,7 +934,7 @@ export function createDaemonApp(input: {
   const terminalReaper = startTerminalReaper();
   server.on("close", () => terminalReaper.stop());
 
-  return { app, server, emit, ttyd, diagnostics };
+  return { app, server, emit, ttyd, diagnostics, auth: { enabled: auth.enabled, tokenPath: auth.tokenPath } };
 
   function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderValue(providerCache, key, load, ttlMs);

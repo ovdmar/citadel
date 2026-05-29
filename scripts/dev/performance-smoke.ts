@@ -98,6 +98,7 @@ async function ensureLocalServices() {
         cwd: process.cwd(),
         env: {
           ...process.env,
+          CITADEL_AUTH_DISABLED: "1",
           CITADEL_DATA_DIR: managedDataDir,
           CITADEL_CONFIG: path.join(managedDataDir, "citadel.config.json"),
         },

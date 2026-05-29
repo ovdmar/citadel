@@ -20,7 +20,7 @@ import { promisify } from "node:util";
 import type { CitadelConfig } from "@citadel/config";
 import type { SqliteStore } from "@citadel/db";
 import type { DiagnosticEvent, DiagnosticsLogger } from "@citadel/operations";
-import { listAllTmuxSessions, type TtydManager } from "@citadel/terminal";
+import { type TtydManager, listAllTmuxSessions } from "@citadel/terminal";
 
 const execFileAsync = promisify(execFile);
 

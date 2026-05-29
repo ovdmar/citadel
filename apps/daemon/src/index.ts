@@ -107,6 +107,13 @@ server.on("error", (error: NodeJS.ErrnoException) => {
 server.listen(config.port, config.bindHost, () => {
   console.log(`Citadel daemon listening on http://${config.bindHost}:${config.port}`);
   console.log(`  data dir: ${config.dataDir}`);
+  if (daemon.auth.enabled) {
+    console.log(
+      `  auth: enabled (${daemon.auth.tokenPath ? `token file ${daemon.auth.tokenPath}` : "CITADEL_AUTH_TOKEN"})`,
+    );
+  } else {
+    console.log("  auth: disabled");
+  }
   if (isWorktreeDaemon && worktreeRoot) {
     console.log(`  worktree: ${worktreeRoot}`);
     saveDevState(worktreeRoot, {

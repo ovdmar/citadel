@@ -4,6 +4,7 @@ import type { McpToolCall } from "@citadel/mcp";
 import { mcpStatus, mcpToolDefinitions, serializeWorkspaceResource } from "@citadel/mcp";
 import { collectProviderHealth } from "@citadel/providers";
 import type express from "express";
+import { ZodError } from "zod";
 import { rpcError, rpcJsonContent, rpcResourceContent, rpcResult } from "./rpc.js";
 
 export type McpRouteContext = {
@@ -120,6 +121,12 @@ export function registerMcpRoutes(
         }
       } catch (error) {
         if (isNotification) return res.status(202).end();
+        if (error instanceof ZodError) {
+          return res.status(400).json({
+            error: "validation_failed",
+            issues: error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message })),
+          });
+        }
         return res.json(rpcError(request.id, -32000, errorMessage(error)));
       }
     }),

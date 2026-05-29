@@ -7,8 +7,10 @@ Citadel stores static local configuration in `~/.local/share/citadel/citadel.con
 - `bindHost`: defaults to `127.0.0.1`.
 - `port`: defaults to `4337`.
 - `mcp.enabled`: defaults to `true` for trusted local/internal deployments.
+- `CITADEL_AUTH_TOKEN`: optional explicit local access token. When unset, the daemon generates `<dataDir>/auth-token` with mode `0600`.
+- `CITADEL_AUTH_DISABLED=1`: disables the local auth gate for owned test harnesses only.
 
-Do not bind Citadel or MCP endpoints to a public interface without adding an explicit authorization layer and network controls.
+Citadel requires the local access token by default. The cockpit exchanges it for an HttpOnly SameSite cookie; automation can send it with `Authorization: Bearer <token>` or `X-Citadel-Auth-Token: <token>`. Do not bind Citadel or MCP endpoints to a public interface without additional network controls.
 
 ## Providers
 

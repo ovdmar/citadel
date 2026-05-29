@@ -42,7 +42,7 @@ export default defineConfig({
       // names; if the test process inherits CITADEL_TMUX_SOCKET=citadel, the
       // boot orphan-reaper can mistake production tmux panes for sandbox
       // orphans and kill the user's live terminals.
-      command: `CITADEL_DATA_DIR=/tmp/citadel-playwright-data CITADEL_PORT=${daemonPort} CITADEL_TMUX_SOCKET=${tmuxSocket} CITADEL_OWN_TMUX_SOCKET=1 CITADEL_TTYD_PORT_BASE=${ttydPortBase} CITADEL_TTYD_PORT_MAX=${ttydPortMax} pnpm --filter @citadel/daemon dev`,
+      command: `CITADEL_AUTH_DISABLED=1 CITADEL_DATA_DIR=/tmp/citadel-playwright-data CITADEL_PORT=${daemonPort} CITADEL_TMUX_SOCKET=${tmuxSocket} CITADEL_OWN_TMUX_SOCKET=1 CITADEL_TTYD_PORT_BASE=${ttydPortBase} CITADEL_TTYD_PORT_MAX=${ttydPortMax} pnpm --filter @citadel/daemon dev`,
       url: `${daemonBase}/api/health`,
       reuseExistingServer: false,
       timeout: 30_000,

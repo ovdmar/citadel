@@ -62,10 +62,10 @@ export function DebugPanel() {
   return (
     <div className="restore-panel">
       <p className="restore-panel__lead">
-        Citadel writes a structured event log to{" "}
-        <code>{snapshot?.logFile.path ?? ".citadel/diagnostics.jsonl"}</code> covering tmux/ttyd lifecycle, status-monitor
-        decisions, and boot-restore. Download the bundle below and share it when reporting "my sessions died" — it
-        includes the JSONL trail, a state snapshot, and the last 30 minutes of <code>citadel.service</code> journal.
+        Citadel writes a structured event log to <code>{snapshot?.logFile.path ?? ".citadel/diagnostics.jsonl"}</code>{" "}
+        covering tmux/ttyd lifecycle, status-monitor decisions, and boot-restore. Download the bundle below and share it
+        when reporting "my sessions died" — it includes the JSONL trail, a state snapshot, and the last 30 minutes of{" "}
+        <code>citadel.service</code> journal.
       </p>
 
       <div className="debug-panel__actions">

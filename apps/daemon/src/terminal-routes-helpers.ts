@@ -49,6 +49,7 @@ export function wireTerminalRoutes(input: {
   emit: (type: string, payload: unknown) => void;
   config: CitadelConfig;
   diagnostics?: DiagnosticsSink;
+  authorizeUpgrade?: (request: http.IncomingMessage) => boolean;
 }): { recentUserAction: Map<string, number> } {
   const recentUserAction = new Map<string, number>();
   registerTerminalRoutes({
@@ -59,6 +60,7 @@ export function wireTerminalRoutes(input: {
     dataDir: input.dataDir,
     emit: input.emit,
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
+    ...(input.authorizeUpgrade ? { authorizeUpgrade: input.authorizeUpgrade } : {}),
     recentUserAction,
     respawnTmux: buildRespawnTmux(input.store, input.config),
     restartAgent: buildRestartAgent(input.store, input.config),

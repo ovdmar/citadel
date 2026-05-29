@@ -11,6 +11,7 @@ import {
 import { useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
+import { AuthGate } from "./auth-gate.js";
 import { Cockpit } from "./cockpit.js";
 import { bootstrapLastRoute, clearLastRoute, saveLastRoute } from "./lib/last-route.js";
 import { DashboardView } from "./routes/dashboard.js";
@@ -26,6 +27,7 @@ import { ScratchpadPanel } from "./scratchpad-panel.js";
 import { installUiDiagnostics } from "./ui-diagnostics.js";
 import { applyThemePreference, readThemePreference } from "./use-resolved-theme.js";
 import "./styles.css";
+import "./auth.css";
 import "./chrome.css";
 import "./stage-terminal.css";
 import "./cockpit-extras.css";
@@ -262,6 +264,8 @@ declare module "@tanstack/react-router" {
 
 createRoot(document.getElementById("root") as HTMLElement).render(
   <QueryClientProvider client={queryClient}>
-    <RouterProvider router={router} />
+    <AuthGate>
+      <RouterProvider router={router} />
+    </AuthGate>
   </QueryClientProvider>,
 );
