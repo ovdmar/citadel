@@ -1,3 +1,5 @@
 logs/
 data/
 dev.json
+mock-repo/
+mock-worktrees/

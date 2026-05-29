@@ -1,4 +1,4 @@
-import type { ProviderHealth } from "@citadel/contracts";
+import type { GitHubQuotaSummary, ProviderHealth } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, Save, X } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -64,6 +64,12 @@ export function ProvidersPanel(props: { providerHealth: ProviderHealth[] }) {
   const configQuery = useQuery({
     queryKey: ["config"],
     queryFn: () => api<ConfigResponse>("/api/config"),
+  });
+  const githubQuota = useQuery({
+    queryKey: ["github-quota"],
+    queryFn: () => api<{ quota: GitHubQuotaSummary }>("/api/integrations/github/quota"),
+    refetchInterval: 60_000,
+    staleTime: 60_000,
   });
 
   const [githubCommand, setGithubCommand] = useState("gh");
@@ -150,6 +156,7 @@ export function ProvidersPanel(props: { providerHealth: ProviderHealth[] }) {
           activeCommand={githubCommand}
           onMethodChange={setGithubCommand}
           health={githubHealth}
+          quota={githubQuota.data?.quota}
           fields={[{ label: "Command", value: githubCommand, onChange: setGithubCommand }]}
         />
       </div>
@@ -182,6 +189,7 @@ function ProviderCard(props: {
   activeCommand: string;
   onMethodChange: (next: string) => void;
   health: ProviderHealth | undefined;
+  quota?: GitHubQuotaSummary | undefined;
   fields: FieldSpec[];
 }) {
   const Logo = props.brand === "jira" ? BrandJira : BrandGitHub;
@@ -257,8 +265,27 @@ function ProviderCard(props: {
         </span>
         <span className="set-int-status-text">{healthDetail}</span>
       </div>
+      {props.brand === "github" ? <div className="set-int-quota-line">{formatGitHubQuota(props.quota)}</div> : null}
     </div>
   );
+}
+
+function formatGitHubQuota(quota: GitHubQuotaSummary | undefined): string {
+  if (!quota) return "Quota loading";
+  if (!quota.automationEnabled) return quota.reason ?? "Automated GitHub polling disabled";
+  const resource = quota.resources.reduce<GitHubQuotaSummary["resources"][number] | null>(
+    (best, entry) => (!best || entry.percentUsed > best.percentUsed ? entry : best),
+    null,
+  );
+  if (quota.cooldownUntil) {
+    const until = new Date(quota.cooldownUntil).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    return `Rate limited${resource ? ` · ${resource.percentUsed}% used` : ""} until ${until}`;
+  }
+  if (!resource) return quota.reason ?? "Quota unavailable";
+  const reset = resource.resetAt
+    ? ` · resets ${new Date(resource.resetAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`
+    : "";
+  return `${resource.name} quota ${resource.percentUsed}% used · ${resource.remaining}/${resource.limit} left${reset}`;
 }
 
 function formatRelativeChecked(iso: string | undefined): string {
