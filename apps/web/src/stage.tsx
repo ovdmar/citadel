@@ -1,5 +1,4 @@
 import type { AgentRuntime, AgentSession, Workspace } from "@citadel/contracts";
-import { sessionNeedsAttention } from "@citadel/core";
 import { useMutation } from "@tanstack/react-query";
 import { ExternalLink, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -11,20 +10,35 @@ type StageTab = {
   label: string;
 };
 
-// Per-session tone class for the session-tab pulse. Mirrors the priority used
-// in deriveWorkspaceAgentTone: attention (rate_limited / failed / unknown-with-
-// tmux-gone reason) > running (starting/running) > idle.
-export function agentTonePulseClass(session: AgentSession): string {
-  if (sessionNeedsAttention(session)) return "cit-pulse-bad";
-  if (session.status === "starting" || session.status === "running") return "cit-pulse-run";
-  return "cit-pulse-idle";
-}
-
 // Each daemon allocates 20 ttyd ports (one per active terminal) — see the
 // per-daemon ttyd slice in apps/daemon/src/app.ts. We cap per workspace at
 // the same number so the UI never lets the user create a session that
 // would inevitably fail to bind a terminal port.
 const WORKSPACE_AGENT_CAP = 20;
+
+function compareStageSessions(a: AgentSession, b: AgentSession) {
+  const aKey = a.tabId ?? a.id;
+  const bKey = b.tabId ?? b.id;
+  const cmp = aKey.localeCompare(bKey);
+  return cmp !== 0 ? cmp : a.createdAt.localeCompare(b.createdAt);
+}
+
+export function stableVisitedSessions(allSessions: AgentSession[], visitedIds: Set<string>): AgentSession[] {
+  const byId = new Map(allSessions.map((session) => [session.id, session]));
+  const result: AgentSession[] = [];
+  for (const id of visitedIds) {
+    const session = byId.get(id);
+    if (session) result.push(session);
+  }
+  return result;
+}
+
+export function stableWorkspaceSessionIdsKey(sessions: AgentSession[]): string {
+  return [...sessions]
+    .sort(compareStageSessions)
+    .map((session) => session.id)
+    .join("\0");
+}
 
 export function Stage(props: {
   workspace: Workspace;
@@ -34,7 +48,13 @@ export function Stage(props: {
   activeSessionId: string | undefined;
   onActiveSession: (id: string) => void;
 }) {
-  const sortedSessions = [...props.sessions].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // Sort by tabId (time-encoded by createId on the daemon side), with createdAt
+  // as a stable tie-breaker for legacy rows whose tab_id pre-dates migration 11.
+  // The point of tabId: when a session is restored via `claude --resume <uuid>`
+  // the new row inherits the source row's tabId, so the restored tab appears
+  // in the same slot the original lived in — sorting by createdAt instead would
+  // jump the restored session to the end of the strip.
+  const sortedSessions = [...props.sessions].sort(compareStageSessions);
   const tabs: StageTab[] = sortedSessions.map((session) => ({ session, label: session.displayName }));
   const allSessions = props.allSessions ?? props.sessions;
 
@@ -96,7 +116,19 @@ export function Stage(props: {
       return next.size === prev.size ? prev : next;
     });
   }, [allSessions]);
-  const visitedPanes = allSessions.filter((session) => visitedIds.has(session.id));
+  const visitedPanes = stableVisitedSessions(allSessions, visitedIds);
+  const workspaceSessionIdsKey = stableWorkspaceSessionIdsKey(props.sessions);
+
+  useEffect(() => {
+    if (!workspaceSessionIdsKey) return;
+    const sessionIds = workspaceSessionIdsKey.split("\0").filter(Boolean);
+    const timer = window.setTimeout(() => {
+      for (const sessionId of sessionIds) {
+        getTerminalHandle(sessionId)?.recoverIfDisconnected();
+      }
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [workspaceSessionIdsKey]);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -160,7 +192,7 @@ export function Stage(props: {
         <div className="stage-tabs">
           {tabs.map((tab, index) => {
             const isActive = tab.session.id === activeSession?.session.id;
-            const pulseClass = agentTonePulseClass(tab.session);
+            const isRunning = tab.session.status === "running";
             return (
               <div key={tab.session.id} className={`stage-tab ${isActive ? "active" : ""}`}>
                 <button
@@ -181,7 +213,7 @@ export function Stage(props: {
                       </kbd>
                     ) : null}
                     <span className="stage-tab-icon" aria-hidden>
-                      <span className={`cit-pulse cit-pulse-sm ${pulseClass}`} />
+                      <span className={`cit-pulse cit-pulse-sm ${isRunning ? "cit-pulse-run" : "cit-pulse-idle"}`} />
                     </span>
                     {editingId === tab.session.id ? (
                       <input

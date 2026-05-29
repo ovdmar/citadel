@@ -2,6 +2,13 @@ Activate the /implement-task skill first.
 
 # Plan: Rate-limit handling
 
+## Takeover note
+
+This plan was produced before `origin/main` absorbed a newer shell-first
+rate-limit implementation. During takeover, the branch was merged forward and
+the obsolete duplicate one-shot scheduler/resumer code was dropped in favor of
+main's current `rate_limited` / `usage_limited` auto-resume design.
+
 ## Acceptance Criteria
 
 - [ ] AC1: A new canonical agent-session status `rate_limited` exists in the contract enum, persists in the DB, round-trips through HTTP/MCP (including all MCP tool description strings that enumerate the status set), and is rendered by the cockpit (workspace-card status dot uses the `attention` tone for it).

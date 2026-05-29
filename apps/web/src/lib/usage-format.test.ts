@@ -61,6 +61,10 @@ describe("parseResetTime", () => {
     expect(parseResetTime("10:00", NOW_UTC)).toBeInstanceOf(Date);
   });
 
+  it("parses ISO reset timestamps from GitHub quota", () => {
+    expect(parseResetTime("2026-05-25T10:05:00.000Z", NOW_UTC)?.toISOString()).toBe("2026-05-25T10:05:00.000Z");
+  });
+
   it("returns null when the input is junk", () => {
     expect(parseResetTime("never", NOW_UTC)).toBeNull();
     expect(parseResetTime("", NOW_UTC)).toBeNull();
@@ -77,6 +81,7 @@ describe("formatTimeUntilReset", () => {
 
   it("formats hour-scale durations as 'Xh Ym'", () => {
     expect(formatTimeUntilReset("11:30am (UTC)", NOW_UTC)).toBe("2h 30m");
+    expect(formatTimeUntilReset("2026-05-25T10:05:00.000Z", NOW_UTC)).toBe("1h 5m");
   });
 
   it("formats sub-hour durations as 'Xm'", () => {

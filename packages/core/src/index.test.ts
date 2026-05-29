@@ -1,11 +1,41 @@
 import { describe, expect, it } from "vitest";
+import { sessionNeedsAttention } from "./index.js";
+
+describe("sessionNeedsAttention (shell-first attention predicate)", () => {
+  it("returns true for status='idle' with statusReason='idle_after_unexpected_exit' (crashed agent signal)", () => {
+    expect(sessionNeedsAttention({ status: "idle", statusReason: "idle_after_unexpected_exit" })).toBe(true);
+  });
+
+  it("returns false for status='idle' with statusReason=null (user-initiated Ctrl+C / Restart cleared the label)", () => {
+    expect(sessionNeedsAttention({ status: "idle", statusReason: null })).toBe(false);
+  });
+
+  it("preserves the existing unknown-with-tmux_missing path (still attention-worthy)", () => {
+    expect(sessionNeedsAttention({ status: "unknown", statusReason: "tmux_missing" })).toBe(true);
+    expect(sessionNeedsAttention({ status: "unknown", statusReason: "sentinel_missing_tmux_alive" })).toBe(true);
+    expect(sessionNeedsAttention({ status: "unknown", statusReason: "migrated_from_orphaned" })).toBe(true);
+  });
+
+  it("preserves the existing daemon_restart_indeterminate path (NOT attention-worthy)", () => {
+    expect(sessionNeedsAttention({ status: "unknown", statusReason: "daemon_restart_indeterminate" })).toBe(false);
+  });
+
+  it("preserves the existing status='failed' (always attention)", () => {
+    expect(sessionNeedsAttention({ status: "failed", statusReason: null })).toBe(true);
+  });
+
+  it("returns false for normal living statuses (running / waiting_for_input / rate_limited / usage_limited)", () => {
+    for (const status of ["running", "waiting_for_input", "rate_limited", "usage_limited"] as const) {
+      expect(sessionNeedsAttention({ status, statusReason: null })).toBe(false);
+    }
+  });
+});
+
 import {
   assertUniqueRepoPath,
   assertUniqueWorkspaceName,
   createId,
-  parseRateLimitReason,
   repoDisplayName,
-  sessionNeedsAttention,
   slugify,
   summarizeWorkspaceState,
   workspaceBranchName,
@@ -161,36 +191,6 @@ describe("workspace state summary", () => {
         ],
       }).reasons,
     ).toContain("Provider data is degraded or unavailable");
-  });
-});
-
-describe("rate-limit status helpers", () => {
-  it("parseRateLimitReason accepts the two canonical shapes and rejects everything else", () => {
-    expect(parseRateLimitReason("rate_limited:2026-05-26T10:00:00.000Z")).toEqual({
-      resetAt: "2026-05-26T10:00:00.000Z",
-    });
-    expect(parseRateLimitReason("rate_limited:unknown_reset")).toEqual({ resetAt: null });
-    // Reject non-rate-limited prefixes.
-    expect(parseRateLimitReason("pane:active:running")).toBeNull();
-    expect(parseRateLimitReason("rate-limited:2026-05-26T10:00:00.000Z")).toBeNull();
-    // Reject malformed ISO payload.
-    expect(parseRateLimitReason("rate_limited:nonsense")).toBeNull();
-    // Empty payload is malformed.
-    expect(parseRateLimitReason("rate_limited:")).toBeNull();
-  });
-
-  it("sessionNeedsAttention is true for failed and tmux-gone unknown, false for rate_limited (own tone)", () => {
-    const base = {
-      statusReason: null,
-    };
-    // rate_limited has its own cit-pulse-info tone in the workspace card,
-    // separate from the red attention tone reserved for hard failures.
-    expect(sessionNeedsAttention({ ...base, status: "rate_limited" })).toBe(false);
-    expect(sessionNeedsAttention({ ...base, status: "failed" })).toBe(true);
-    expect(sessionNeedsAttention({ status: "unknown", statusReason: "tmux_missing" })).toBe(true);
-    expect(sessionNeedsAttention({ status: "unknown", statusReason: "daemon_restart_indeterminate" })).toBe(false);
-    expect(sessionNeedsAttention({ ...base, status: "idle" })).toBe(false);
-    expect(sessionNeedsAttention({ ...base, status: "running" })).toBe(false);
   });
 });
 
