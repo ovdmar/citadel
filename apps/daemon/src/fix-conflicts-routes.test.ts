@@ -1,6 +1,8 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   closeServer,
   createFixture as createFixtureBase,
@@ -11,8 +13,52 @@ import {
 import { createDaemonApp } from "./app.js";
 
 const dirs: string[] = [];
+const previousTmuxSocket = process.env.CITADEL_TMUX_SOCKET;
+const testTmuxSocket = `citadel-fix-conflicts-test-${process.pid}`;
+const nodeHoldAgentArgs = ["--no-warnings", "-e", "setInterval(() => {}, 1000)", "--"];
+const nodeEchoAgentArgs = [
+  "--no-warnings",
+  "-e",
+  "process.stdin.setRawMode?.(true); process.stdin.resume(); process.stdin.on('data', (chunk) => process.stdout.write(chunk)); setInterval(() => {}, 1000);",
+];
+
+function killTestTmuxServer() {
+  try {
+    execFileSync("tmux", ["-L", testTmuxSocket, "kill-server"], { stdio: "ignore" });
+  } catch {
+    // No test tmux server exists.
+  }
+}
+
+function removeTestPipeLogs() {
+  const dir = path.join(os.tmpdir(), "citadel-pty");
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!/^citadel_ws_(fc|nopromptarg)_[^.]+\.log$/u.test(name)) continue;
+    fs.rmSync(path.join(dir, name), { force: true });
+  }
+}
+
+beforeAll(() => {
+  process.env.CITADEL_TMUX_SOCKET = testTmuxSocket;
+});
+
 afterEach(() => {
+  killTestTmuxServer();
+  removeTestPipeLogs();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+afterAll(() => {
+  killTestTmuxServer();
+  removeTestPipeLogs();
+  if (previousTmuxSocket === undefined) Reflect.deleteProperty(process.env, "CITADEL_TMUX_SOCKET");
+  else process.env.CITADEL_TMUX_SOCKET = previousTmuxSocket;
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
@@ -27,13 +73,19 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
     const fixture = createFixture();
     // Non-shell runtime required: the route refuses to paste the multi-line
     // fix-conflicts prompt into a bash pane (which would execute it line by
-    // line as shell commands). Stub a no-op claude-code runtime alongside
-    // shell so the route picks it for the spawn. promptArg embeds the
-    // prompt as a CLI flag, so createAgentSession skips the submitPrompt
-    // key-paste path (15s ready-wait) and the test stays fast.
+    // line as shell commands). Stub a no-op node runtime alongside shell so
+    // the route picks it for the spawn. The "--" makes the synthetic promptArg
+    // a script argument instead of a node option, so the fake agent stays
+    // alive until test cleanup.
     fixture.config.runtimes = [
       { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
-      { id: "claude-code", displayName: "Claude Code", command: "sleep", args: ["30"], promptArg: "--prompt" },
+      {
+        id: "claude-code",
+        displayName: "Claude Code",
+        command: "node",
+        args: nodeHoldAgentArgs,
+        promptArg: "--prompt",
+      },
     ];
     const git = createGitRepo(fixture.config.dataDir);
     const now = new Date().toISOString();
@@ -122,11 +174,10 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
     const fixture = createFixture();
     fixture.config.runtimes = [
       { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
-      // Mirror the real built-in: no promptArg. Use a quick-running command
-      // so createAgentSession's submitPrompt waits a bounded time before
-      // returning — the route still returns 202 from the selection path,
-      // which is all this test exercises.
-      { id: "claude-code", displayName: "Claude Code", command: "sleep", args: ["30"] },
+      // Mirror the real built-in: no promptArg. The raw-mode node process is
+      // a non-shell stdin consumer that echoes bytes as they arrive, so
+      // submitPrompt can verify the multiline paste without bash executing it.
+      { id: "claude-code", displayName: "Claude Code", command: "node", args: nodeEchoAgentArgs },
     ];
     const git = createGitRepo(fixture.config.dataDir);
     const now = new Date().toISOString();
@@ -177,15 +228,10 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
         body: JSON.stringify({}),
       });
       // The selection logic must accept the non-shell claude-code runtime.
-      // The eventual outcome may be 202 (selection + spawn succeeded, with
-      // a best-effort submitPrompt) or 500 (submitPrompt timed out because
-      // `sleep` never paints a TUI prompt). Either way it must NOT be the
-      // old 404 runtime_not_found that this fix is regression-testing.
-      expect(response.status).not.toBe(404);
-      if (response.status === 404) {
-        const body = (await response.json()) as { error: string };
-        expect(body.error).not.toBe("runtime_not_found");
-      }
+      expect(response.status).toBe(202);
+      const body = (await response.json()) as { session: { workspaceId: string; displayName: string } };
+      expect(body.session.workspaceId).toBe("ws_nopromptarg");
+      expect(body.session.displayName).toBe("Fix conflicts");
     } finally {
       await closeServer(server);
     }

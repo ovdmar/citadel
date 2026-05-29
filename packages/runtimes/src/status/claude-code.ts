@@ -1,3 +1,4 @@
+import { REASON_ELAPSED_TIMER, observeActiveElapsedTimer } from "./elapsed-timer.js";
 import type { ObservationContext, PaneObservationResult, RuntimeStatusAdapter, SessionAdapterState } from "./index.js";
 
 // Claude Code v2.1.x detection (verified 2026-05-25 against v2.1.133).
@@ -170,6 +171,14 @@ export const claudeCodeStatusAdapter: RuntimeStatusAdapter = {
 
   observe(state: SessionAdapterState, ctx: ObservationContext): PaneObservationResult | null {
     state.ticksObserved += 1;
+
+    // Priority 0: advancing elapsed timers are a generic "the TUI is doing
+    // work" signal across agent runtimes. This is intentionally only a
+    // positive running signal; stale timer text still falls through to the
+    // Claude-specific mode-line checks below.
+    if ((ctx.activeElapsedTimer ?? observeActiveElapsedTimer(state, ctx.paneCapture)).advanced) {
+      return { observed: "running", reason: REASON_ELAPSED_TIMER };
+    }
 
     // Priority 1: prompt footer (AskUserQuestion picker or free-text confirm)
     // — replaces the normal mode line.

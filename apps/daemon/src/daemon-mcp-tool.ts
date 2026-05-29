@@ -139,7 +139,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
   if (call.name === "stop_agent_session") {
     const sessionId = typeof call.arguments?.sessionId === "string" ? (call.arguments.sessionId as string) : "";
     const result = operations.stopAgentSession({ sessionId });
-    ttyd.release(sessionId);
+    ttyd.release(sessionId, "mcp-stop-agent-session");
     emit("agent.updated", { sessionId });
     return result;
   }

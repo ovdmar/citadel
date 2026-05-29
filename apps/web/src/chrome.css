@@ -318,6 +318,14 @@
   color: oklch(78% 0.13 65);
 }
 
+.cit-usage-pill.is-bad {
+  color: oklch(50% 0.18 25);
+}
+
+:root[data-theme="dark"] .cit-usage-pill.is-bad {
+  color: oklch(72% 0.16 25);
+}
+
 .cit-usage-pill-mark {
   display: inline-flex;
   align-items: center;
@@ -325,8 +333,18 @@
   color: var(--c-fg-4, var(--c-fg-3));
 }
 
+.cit-usage-pill.is-bad .cit-usage-pill-mark,
+.cit-usage-pill.is-warn .cit-usage-pill-mark {
+  color: currentColor;
+}
+
 .cit-usage-pill:hover .cit-usage-pill-mark {
   color: var(--c-fg-2, var(--c-fg-1));
+}
+
+.cit-usage-pill.is-bad:hover .cit-usage-pill-mark,
+.cit-usage-pill.is-warn:hover .cit-usage-pill-mark {
+  color: currentColor;
 }
 
 .cit-usage-pill-value {

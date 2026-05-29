@@ -30,6 +30,14 @@ function commandHook(hook: HookConfig, workspacePath: string, config: RunnerConf
   };
 }
 
+function parseOptionalHookOutput(stdout: string): HookOutput | null {
+  try {
+    return parseHookOutput(stdout);
+  } catch {
+    return null;
+  }
+}
+
 export async function runWorkspaceHooks(input: {
   config: RunnerConfig | undefined;
   activity: ActivityFn;
@@ -56,7 +64,7 @@ export async function runWorkspaceHooks(input: {
       input.repo.id,
       input.workspace.id,
       input.operationId,
-      parseHookOutput(result.stdout),
+      parseOptionalHookOutput(result.stdout),
     );
   }
 }
@@ -85,7 +93,7 @@ export async function runNotificationHooks(input: {
         input.repo.id,
         input.workspace.id,
         input.operationId,
-        parseHookOutput(result.stdout),
+        parseOptionalHookOutput(result.stdout),
       );
     } catch (error) {
       input.activity(

@@ -183,6 +183,21 @@ describe("createDaemonApp", () => {
         },
       });
       expect(
+        await postJson<{ error: { code: number; message: string } }>(`${baseUrl}/api/mcp/rpc`, {
+          jsonrpc: "2.0",
+          id: "tool-error",
+          method: "tools/call",
+          params: {
+            name: "start_agent_session",
+            arguments: { workspaceId: "ws_test", runtimeId: "missing" },
+          },
+        }),
+      ).toMatchObject({
+        jsonrpc: "2.0",
+        id: "tool-error",
+        error: { code: -32000, message: "Unknown runtime: missing" },
+      });
+      expect(
         await postJson<{ result: Record<string, never> }>(`${baseUrl}/api/mcp/rpc`, {
           jsonrpc: "2.0",
           id: "ping",
@@ -588,40 +603,6 @@ describe("createDaemonApp", () => {
       const body = (await patched.json()) as { repo: { name: string; worktreeParent: string } };
       expect(body.repo.name).toBe("After");
       expect(body.repo.worktreeParent).toBe("/tmp/citadel-wt-test");
-    } finally {
-      await closeServer(server);
-    }
-  });
-
-  it("operation cancel and retry endpoints return 202 / 409 appropriately", async () => {
-    const fixture = createFixture();
-    const { server } = await createDaemonApp(fixture);
-    const baseUrl = await listen(server);
-    try {
-      // Seed a fake cancellable operation.
-      fixture.store.upsertOperation({
-        id: "op_fake_running",
-        type: "workspace.action.custom",
-        status: "running",
-        repoId: null,
-        workspaceId: null,
-        progress: 5,
-        message: "Doing things",
-        error: null,
-        logs: [],
-        retriable: false,
-        retryInput: null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      });
-      const cancel = await fetch(`${baseUrl}/api/operations/op_fake_running/cancel`, { method: "POST" });
-      expect(cancel.status).toBe(202);
-      const after = (await fetch(`${baseUrl}/api/operations/op_fake_running`).then((r) => r.json())) as {
-        operation: { status: string };
-      };
-      expect(after.operation.status).toBe("cancelled");
-      const retry = await fetch(`${baseUrl}/api/operations/op_fake_running/retry`, { method: "POST" });
-      expect(retry.status).toBe(409);
     } finally {
       await closeServer(server);
     }

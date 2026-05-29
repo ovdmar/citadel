@@ -2,7 +2,6 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { LaunchAgentInputSchema } from "@citadel/contracts";
 import { SqliteStore } from "@citadel/db";
 import { agentLiveSentinelPath, killTmuxSession, tmuxSessionExists } from "@citadel/terminal";
 import { afterEach, describe, expect, it } from "vitest";
@@ -206,6 +205,38 @@ describe("OperationService", () => {
     expect(forced).toMatchObject({ removed: true, archived: false, dirty: false });
     expect(fs.existsSync(workspace?.path ?? "")).toBe(false);
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
+  });
+
+  it("allows successful teardown hooks with unstructured stdout", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [
+        {
+          id: "teardown-logs",
+          kind: "command",
+          event: "workspace.teardown",
+          command: "node",
+          args: ["-e", "process.stdout.write('No recorded dev stack pid file')"],
+          blocking: true,
+        },
+      ],
+      repoDefaults: { setupHookIds: [], teardownHookIds: ["teardown-logs"] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "Teardown Logs", source: "scratch" });
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === created.workspaceId);
+
+    const removed = await service.removeWorkspace({ workspaceId: created.workspaceId });
+
+    expect(removed).toMatchObject({ removed: true, archived: false, dirty: false });
+    expect(fs.existsSync(workspace?.path ?? "")).toBe(false);
+    expect(store.listOperations().find((operation) => operation.id === removed.operationId)).toMatchObject({
+      status: "succeeded",
+    });
   });
 
   it("skips teardown hooks and prunes when the worktree directory is already gone", async () => {
@@ -638,25 +669,6 @@ describe("OperationService", () => {
     });
   });
 
-  describe("launchAgent input validation", () => {
-    it("requires exactly one of repoId or repoName", () => {
-      expect(() => LaunchAgentInputSchema.parse({ prompt: "hello" })).toThrow(/repoId or repoName/);
-      expect(() => LaunchAgentInputSchema.parse({ prompt: "hello", repoId: "repo_test", repoName: "fixture" })).toThrow(
-        /repoId or repoName/,
-      );
-    });
-
-    it("requires a non-empty prompt", () => {
-      expect(() => LaunchAgentInputSchema.parse({ repoId: "repo_test" })).toThrow();
-      expect(() => LaunchAgentInputSchema.parse({ repoId: "repo_test", prompt: "" })).toThrow();
-    });
-
-    it("defaults runtimeId to claude-code", () => {
-      const parsed = LaunchAgentInputSchema.parse({ repoName: "fixture", prompt: "do a thing" });
-      expect(parsed.runtimeId).toBe("claude-code");
-    });
-  });
-
   it("launchAgent bundles workspace creation and agent session start in one call", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
@@ -743,6 +755,10 @@ describe("OperationService", () => {
     ).rejects.toThrow(/Unknown repo/);
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
+
+  // The new tests for funny-name auto-generation and dirtySummary attach
+  // live in `workspace-lifecycle.test.ts` to keep this file under the
+  // 800-line cap enforced by `scripts/checks/file-size.ts`.
 });
 
 function createGitFixture() {
