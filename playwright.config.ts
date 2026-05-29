@@ -11,6 +11,7 @@ const daemonPort = process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012";
 const webPort = process.env.CITADEL_PLAYWRIGHT_WEB_PORT || "15174";
 const ttydPortBase = process.env.CITADEL_PLAYWRIGHT_TTYD_PORT_BASE || "24000";
 const ttydPortMax = process.env.CITADEL_PLAYWRIGHT_TTYD_PORT_MAX || "24999";
+const daemonLog = process.env.CITADEL_PLAYWRIGHT_DAEMON_LOG || "/tmp/citadel-playwright-daemon.log";
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
 const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}`).replace(
@@ -60,10 +61,13 @@ export default defineConfig({
         "CITADEL_DISABLE_AUTO_RESUME=1",
         "CITADEL_DISABLE_FS_WATCHERS=1",
         "CITADEL_DISABLE_TERMINAL_REAPER=1",
+        "CITADEL_GH_SCHEDULER_DISABLED=1",
+        "CITADEL_MAIN_WATCHER_DISABLED=1",
+        `CITADEL_PLAYWRIGHT_DAEMON_LOG=${daemonLog}`,
         // E2E writes screenshot artifacts under docs/campaigns. Run the
         // built daemon, not tsx watch/source mode, so CI cannot restart the
         // API server between tests and surface transient ECONNRESETs.
-        "sh -c 'pnpm --filter @citadel/daemon build >/dev/null && pnpm --filter @citadel/daemon start'",
+        'sh -c \'rm -f "$CITADEL_PLAYWRIGHT_DAEMON_LOG"; (pnpm --filter @citadel/daemon build && pnpm --filter @citadel/daemon start) >"$CITADEL_PLAYWRIGHT_DAEMON_LOG" 2>&1; code=$?; echo "[playwright-daemon] exited $code at $(date -u +%FT%TZ)" >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG"; exit $code\'',
       ].join(" "),
       url: `${daemonBase}/api/health`,
       reuseExistingServer: false,
