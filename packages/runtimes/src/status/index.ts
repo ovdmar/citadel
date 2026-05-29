@@ -1,8 +1,8 @@
 // Per-runtime status detection — pane-based, fixture-driven.
 //
 // Each adapter inspects the pane capture on every monitor tick and returns one
-// of: "running" | "idle" | "waiting_for_input" | null. The reducer
-// (@citadel/operations) applies the observation with stickiness rules.
+// of: "running" | "idle" | "waiting_for_input" | "rate_limited" | "usage_limited" | null. The
+// reducer (@citadel/operations) applies the observation with stickiness rules.
 //
 // Lifecycle signals (tmux_missing, exited_clean/failed) come from the monitor's
 // own deterministic checks (tmux session existence, bash wrapper sentinel
@@ -15,7 +15,14 @@
 import { claudeCodeStatusAdapter } from "./claude-code.js";
 import { codexStatusAdapter } from "./codex.js";
 
-export type PaneObservation = "running" | "idle" | "waiting_for_input";
+export type PaneObservation = "running" | "idle" | "waiting_for_input" | "rate_limited" | "usage_limited";
+
+// What an adapter returns. Shorthand: just the observation (reason will be
+// auto-derived). Full form: observation plus a custom reason string that the
+// reducer threads onto statusReason (used by usage_limited to carry the
+// parsed reset timestamp so auto-resume can read it without re-parsing the
+// pane).
+export type PaneObservationResult = PaneObservation | { observed: PaneObservation; reason: string };
 
 export interface ObservationContext {
   // Most recent visible-pane capture (no scrollback). Adapter regexes are
@@ -33,6 +40,10 @@ export interface ObservationContext {
   // Whether the monitor has observed at least one prior tick since boot
   // for this session. Used by codex idle suppression on cold start.
   hasObservedSinceBoot: boolean;
+  // Wall-clock now. Injected so adapters that parse relative times (e.g.
+  // claude-code's `resets HH:MMam (UTC)` usage-limit banner) stay
+  // deterministic under test. Wiring supplies `new Date()` per tick.
+  now?: () => Date;
 }
 
 export interface SessionAdapterState {
@@ -46,7 +57,7 @@ export interface RuntimeStatusAdapter {
   createSessionState(): SessionAdapterState;
   // Inspect the pane (and tmux activity, via ctx) and decide status.
   // Returns null when the adapter has no opinion this tick.
-  observe(state: SessionAdapterState, ctx: ObservationContext): PaneObservation | null;
+  observe(state: SessionAdapterState, ctx: ObservationContext): PaneObservationResult | null;
 }
 
 const NOOP_ADAPTER: RuntimeStatusAdapter = {

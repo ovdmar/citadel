@@ -36,6 +36,7 @@
 [ ] 7. Action safety level and confirmation requirements are explicit.
 [ ] 8. Running actions show progress and disable conflicting actions.
 [ ] 9. Completed actions record activity on the workspace.
+[~] 10. The optional `.citadel/hooks/fixconflicts` hook produces the prompt body for the Fix-conflicts action: when executable, its stdout (capped at 32 KB) is used; otherwise a hardcoded default (referencing the repo's non-fast-forward push policy) is used. The action launches a new agent session against the workspace with the resolved prompt.
 
 ## Deploy Workflow
 

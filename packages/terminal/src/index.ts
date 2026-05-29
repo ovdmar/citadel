@@ -6,39 +6,85 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { WebSocketServer } from "ws";
 
-export { createTtydManager, DARK_XTERM_THEME, LIGHT_XTERM_THEME, TtydUnavailableError } from "./ttyd.js";
+export {
+  createTtydManager,
+  discoverExistingTtyds,
+  TtydUnavailableError,
+} from "./ttyd.js";
 export type { TtydEntry, TtydManager, TtydManagerConfig, TtydTheme } from "./ttyd.js";
+export { DARK_XTERM_THEME, LIGHT_XTERM_THEME } from "./xterm-theme.js";
 export { submitPrompt } from "./submit-prompt.js";
 
 import { tokenizeTerminalInput } from "./input-tokens.js";
 export { keyForControlCharacter, keyForEscapeSequence, tokenizeTerminalInput } from "./input-tokens.js";
 export type { InputToken } from "./input-tokens.js";
 
+import { captureTmuxSnapshot, waitForTerminalIdle } from "./capture.js";
+
 const execFileAsync = promisify(execFile);
 
+// Prepended to every tmux invocation. When `CITADEL_TMUX_SOCKET` is set
+// (citadel.service does this), tmux talks to its own dedicated server via
+// `tmux -L <socket>` instead of the user's default socket. The server lives
+// in citadel-tmux.service's cgroup, not citadel.service's — so daemon
+// restarts/upgrades leave the agent sessions untouched. Empty in tests and
+// on hosts where the socket isn't configured, preserving legacy behavior.
+export function tmuxPrefix(): string[] {
+  const sock = process.env.CITADEL_TMUX_SOCKET;
+  return sock ? ["-L", sock] : [];
+}
+
+/**
+ * Shell-first session request. The pane's PID is `bash -l` — the agent (if
+ * any) is launched as a child of the shell via `launchAgentInSession` after
+ * `ensureTmuxSession` returns. The legacy wrapper that exec'd the agent as
+ * the pane process is gone; with it go the /tmp sentinel files, the EXIT
+ * trap, and the post-exit fallback shell.
+ *
+ * For the background-hook path that must run a command that exits cleanly
+ * (no shell phase, pane terminates with the command), use
+ * `ensureTmuxSessionRaw` instead.
+ */
 export type TerminalSessionRequest = {
   sessionName: string;
   cwd: string;
-  command: string;
-  args: string[];
 };
 
 export async function ensureTmuxSession(input: TerminalSessionRequest) {
   const exists = tmuxSessionExists(input.sessionName);
   const freshlyCreated = !exists;
   if (!exists) {
-    // Pre-create the live sentinel so reconciliation between tmux launch and
-    // the wrapper's own `touch` cannot race into a spurious "stopped".
-    try {
-      fs.writeFileSync(agentLiveSentinelPath(input.sessionName), "");
-    } catch {
-      // best-effort: status detection degrades gracefully if tmpdir is read-only
-    }
-    const command = terminalCommand(input.sessionName, input.command, input.args);
-    await execFileAsync("tmux", ["new-session", "-d", "-s", input.sessionName, "-c", input.cwd, command], {
-      timeout: 10000,
-      maxBuffer: 128 * 1024,
-    });
+    // Shell-first: the pane PID is `bash -l`. The agent, if there is one, is
+    // launched into this shell via send-keys (see launchAgentInSession). The
+    // -e flags propagate the colour-env tokens the legacy wrapper used to set
+    // via `env -u NO_COLOR ...` — same tokens, just exported into the shell
+    // (and from there, into any child process the shell launches).
+    await execFileAsync(
+      "tmux",
+      [
+        ...tmuxPrefix(),
+        "new-session",
+        "-d",
+        "-s",
+        input.sessionName,
+        "-c",
+        input.cwd,
+        "-e",
+        "TERM=xterm-256color",
+        "-e",
+        "COLORTERM=truecolor",
+        "-e",
+        "FORCE_COLOR=1",
+        "-e",
+        "CLICOLOR_FORCE=1",
+        "bash",
+        "-l",
+      ],
+      {
+        timeout: 10000,
+        maxBuffer: 128 * 1024,
+      },
+    );
     // Capture every byte tmux ever writes to this pane to a side log. Used by
     // submitPrompt for delivery verification (capture-pane only shows the
     // visible scrollback; the log keeps even bytes that scrolled off) and by
@@ -51,65 +97,32 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
     }
   }
   ensureTmuxExtendedKeys();
-  const id = execFileSync("tmux", ["display-message", "-p", "-t", input.sessionName, "#{session_id}"], {
-    encoding: "utf8",
-  }).trim();
-  // After freshly spawning the wrapper there is a brief window where the outer
-  // `bash -c` is still running the script and the inner interactive shell
-  // hasn't yet taken over the PTY foreground. Keystrokes (and crucially,
-  // Ctrl+C) delivered during that window can reach the wrong process. Wait
-  // for the pane to settle so callers can rely on "ensureTmuxSession returned
-  // → keys are safe to send."
+  const id = execFileSync(
+    "tmux",
+    [...tmuxPrefix(), "display-message", "-p", "-t", input.sessionName, "#{session_id}"],
+    {
+      encoding: "utf8",
+    },
+  ).trim();
+  // Wait for the shell prompt to settle so callers can immediately
+  // `launchAgentInSession` or `submitPrompt` without losing keystrokes to
+  // bash's startup window.
   if (freshlyCreated) await waitForTerminalIdle(input.sessionName, { timeoutMs: 1500, idleMs: 200 });
   return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
 }
 
-// Side-channel byte log of everything a pane emits. Lives under tmpdir so it
-// gets cleaned up on reboot. `pipe-pane -o` toggles: passing the command once
-// opens the pipe, calling again with no command closes it. We don't bother
-// closing on session teardown — when the tmux session goes away tmux severs
-// the pipe automatically.
-const PIPE_PANE_LOG_DIR = path.join(os.tmpdir(), "citadel-pty");
-
-export function pipePaneLogPath(sessionName: string) {
-  return path.join(PIPE_PANE_LOG_DIR, `${sessionName}.log`);
-}
-
-function attachPipePaneLog(sessionName: string) {
-  fs.mkdirSync(PIPE_PANE_LOG_DIR, { recursive: true });
-  const logPath = pipePaneLogPath(sessionName);
-  // Truncate any stale log from a previous incarnation of this session name.
-  try {
-    fs.writeFileSync(logPath, "");
-  } catch {
-    /* tmpdir is read-only — pipe-pane will recreate on first write */
-  }
-  // Default direction is "-O" (pane → command). Omitting -o means we always
-  // replace any existing pipe rather than no-op, so re-attach is idempotent.
-  const shellCmd = `cat >> ${shellQuote(logPath)}`;
-  execFileSync("tmux", ["pipe-pane", "-t", sessionName, shellCmd], { stdio: "ignore" });
-}
-
-// Return the tail of the pipe-pane log (or empty string if unavailable). Used
-// by verification paths that need to inspect bytes that may have scrolled out
-// of the visible pane.
-export function readPipePaneTail(sessionName: string, maxBytes = 16 * 1024): string {
-  const logPath = pipePaneLogPath(sessionName);
-  try {
-    const stat = fs.statSync(logPath);
-    const offset = Math.max(0, stat.size - maxBytes);
-    const fd = fs.openSync(logPath, "r");
-    try {
-      const buf = Buffer.alloc(stat.size - offset);
-      fs.readSync(fd, buf, 0, buf.length, offset);
-      return buf.toString("utf8");
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return "";
-  }
-}
+import { attachPipePaneLog } from "./pipe-pane-log.js";
+export { pipePaneLogPath, readPipePaneTail, sweepPtyLogs } from "./pipe-pane-log.js";
+export {
+  COMM_TRUNCATION,
+  DEFAULT_SENTINEL_MARKER_PATH,
+  DEFAULT_SENTINEL_MAX_AGE_MS,
+  DEFAULT_SENTINEL_SAFEGUARD,
+  launchAgentInSession,
+  panePidProcess,
+  sweepLegacyAgentSentinels,
+} from "./pane-lifecycle.js";
+export type { PanePidProcess, SweepLegacySentinelsResult } from "./pane-lifecycle.js";
 
 // Path of the "agent still running" sentinel file for a given tmux session.
 // The wrapper script touches this before exec'ing the agent and removes it
@@ -144,38 +157,6 @@ export function readAgentExitCode(sessionName: string): number | null {
   }
 }
 
-// Wrap the agent so the tmux pane survives its exit: Ctrl+C in Claude Code
-// would otherwise kill PID 1 of the pane. After exit we drop into a fresh
-// interactive login shell at the workspace cwd. A tmpdir sentinel marks
-// "agent live" so the reconciler can flip session status without killing the
-// pane. Outer shell is non-login (`bash -c`) so we don't silently source
-// ~/.bash_profile per agent; the post-exit fallback IS a login shell and
-// respects $SHELL so zsh/fish users aren't forced into bash.
-function terminalCommand(sessionName: string, command: string, args: string[]) {
-  const argv = [command, ...args].map(shellQuote).join(" ");
-  const envPrefix = "env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor FORCE_COLOR=1 CLICOLOR_FORCE=1";
-  const liveSentinel = shellQuote(agentLiveSentinelPath(sessionName));
-  const exitSentinel = shellQuote(agentExitSentinelPath(sessionName));
-  const exitHint = "[citadel] Agent exited. Run any command, or restart the agent (e.g. `claude resume <sessionId>`).";
-  // The trap fires on bash signal-death (the bash shell receives SIGTERM/SIGINT
-  // mid-`<agent>`); the explicit lines after `<agent>` cover the happy-path
-  // (natural agent exit) before `exec` replaces this bash with the fallback
-  // shell. The explicit lines run normally; the trap also runs on signal but
-  // `exec` skips the trap on the happy path. `$?` at trap time reflects the
-  // killed agent's exit status (typically 130/SIGINT or 143/SIGTERM).
-  const script = [
-    `touch ${liveSentinel}`,
-    `trap 'rc=$?; echo $rc > ${exitSentinel}; rm -f ${liveSentinel}' EXIT`,
-    `${envPrefix} ${argv}`,
-    "rc=$?",
-    `echo $rc > ${exitSentinel}`,
-    `rm -f ${liveSentinel}`,
-    `printf '\\n%s\\n' ${shellQuote(exitHint)}`,
-    'exec "${SHELL:-/bin/bash}" -l',
-  ].join("; ");
-  return `bash -c ${shellQuote(script)}`;
-}
-
 export function shellQuote(value: string) {
   if (/^[A-Za-z0-9_/:=.,+@%-]+$/.test(value)) return value;
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -190,20 +171,35 @@ export function shellQuote(value: string) {
 export const LOG_TRUNCATION_BYTES = 16 * 1024 * 1024;
 
 /**
- * Like ensureTmuxSession but bypasses the agent-wrapper script — runs
- * `command args` directly under tmux. When the command exits, the pane
- * terminates. Used by background scheduled-agent runs where:
- *  - There is no human to "fall back" to a shell for.
- *  - We do NOT want the wrapper's "[citadel] Agent exited" line + fallback
- *    shell PS1 to stream into the per-run log file via pipe-pane.
- *  - We DO want the reconciler to see `tmuxSessionExists === false` on the
- *    next tick after the agent exits so the run row closes promptly.
+ * Background-run session. Runs `command args` as the pane process directly
+ * — when the command exits, the pane terminates. This is distinct from
+ * `ensureTmuxSession`'s shell-first model because background scheduled-agent
+ * runs:
+ *  - Have no human to "fall back" to a shell for.
+ *  - Do NOT want a shell prompt streamed into the per-run pipe-pane log file.
+ *  - DO want the reconciler to see `tmuxSessionExists === false` on the next
+ *    tick after the command exits so the run row closes promptly.
+ *
+ * Background runs continue to produce a /tmp/citadel-agent-<name>.live
+ * sentinel pre-creation guard because they don't go through the shell-first
+ * code path; the reconciler tolerates legacy sentinels for raw sessions.
  */
-export async function ensureTmuxSessionRaw(input: TerminalSessionRequest) {
+export type RawTerminalSessionRequest = {
+  sessionName: string;
+  cwd: string;
+  command: string;
+  args: string[];
+};
+
+export async function ensureTmuxSessionRaw(input: RawTerminalSessionRequest) {
   if (tmuxSessionExists(input.sessionName)) {
-    const id = execFileSync("tmux", ["display-message", "-p", "-t", input.sessionName, "#{session_id}"], {
-      encoding: "utf8",
-    }).trim();
+    const id = execFileSync(
+      "tmux",
+      [...tmuxPrefix(), "display-message", "-p", "-t", input.sessionName, "#{session_id}"],
+      {
+        encoding: "utf8",
+      },
+    ).trim();
     return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
   }
   try {
@@ -213,16 +209,24 @@ export async function ensureTmuxSessionRaw(input: TerminalSessionRequest) {
   }
   // tmux new-session takes a single `shell-command` string and hands it to
   // /bin/sh -c. Build it ourselves with shellQuote so an arg with spaces is
-  // preserved correctly. Compare to ensureTmuxSession which wraps in `bash -c`.
+  // preserved correctly.
   const shellCommand = [input.command, ...input.args].map(shellQuote).join(" ");
-  await execFileAsync("tmux", ["new-session", "-d", "-s", input.sessionName, "-c", input.cwd, shellCommand], {
-    timeout: 10000,
-    maxBuffer: 128 * 1024,
-  });
+  await execFileAsync(
+    "tmux",
+    [...tmuxPrefix(), "new-session", "-d", "-s", input.sessionName, "-c", input.cwd, shellCommand],
+    {
+      timeout: 10000,
+      maxBuffer: 128 * 1024,
+    },
+  );
   ensureTmuxExtendedKeys();
-  const id = execFileSync("tmux", ["display-message", "-p", "-t", input.sessionName, "#{session_id}"], {
-    encoding: "utf8",
-  }).trim();
+  const id = execFileSync(
+    "tmux",
+    [...tmuxPrefix(), "display-message", "-p", "-t", input.sessionName, "#{session_id}"],
+    {
+      encoding: "utf8",
+    },
+  ).trim();
   return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
 }
 
@@ -235,12 +239,12 @@ export async function ensureTmuxSessionRaw(input: TerminalSessionRequest) {
 export function pipeBackgroundSessionToLog(sessionName: string, logFilePath: string) {
   const quoted = shellQuote(logFilePath);
   const command = `head -c ${LOG_TRUNCATION_BYTES} >> ${quoted}`;
-  execFileSync("tmux", ["pipe-pane", "-O", "-t", sessionName, command]);
+  execFileSync("tmux", [...tmuxPrefix(), "pipe-pane", "-O", "-t", sessionName, command]);
 }
 
 /** Stop the pipe-pane stream on a session (no command = stop streaming). */
 export function stopBackgroundSessionPipe(sessionName: string) {
-  execFileSync("tmux", ["pipe-pane", "-t", sessionName]);
+  execFileSync("tmux", [...tmuxPrefix(), "pipe-pane", "-t", sessionName]);
 }
 
 /**
@@ -251,7 +255,7 @@ export function stopBackgroundSessionPipe(sessionName: string) {
  */
 export function tmuxPaneDead(sessionName: string): boolean {
   try {
-    const output = execFileSync("tmux", ["list-panes", "-t", sessionName, "-F", "#{pane_dead}"], {
+    const output = execFileSync("tmux", [...tmuxPrefix(), "list-panes", "-t", sessionName, "-F", "#{pane_dead}"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
@@ -267,299 +271,248 @@ export function tmuxPaneDead(sessionName: string): boolean {
 
 export function tmuxSessionExists(sessionName: string) {
   try {
-    execFileSync("tmux", ["has-session", "-t", sessionName], { stdio: "ignore" });
+    execFileSync("tmux", [...tmuxPrefix(), "has-session", "-t", sessionName], { stdio: "ignore" });
     return true;
   } catch {
     return false;
   }
 }
 
+// Snapshot of every session currently on the citadel tmux socket. Returns a
+// Set when the tmux server is reachable (possibly empty if it has zero
+// sessions), or `null` when the server itself isn't reachable — the caller
+// can distinguish "server up with no sessions" from "server down / not yet
+// started," which matters for the fresh-boot reconciler: in tests and in
+// pre-tmux-service environments we don't want to mass-flip live DB rows
+// just because we couldn't talk to a server. Used by:
+//   - boot-restore's reconciler (flip DB rows whose tmux is missing)
+//   - orphan reaper (find tmux sessions no DB row knows about)
+export function listAllTmuxSessions(): Set<string> | null {
+  try {
+    const output = execFileSync("tmux", [...tmuxPrefix(), "list-sessions", "-F", "#{session_name}"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return new Set(
+      output
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0),
+    );
+  } catch (error) {
+    // `list-sessions` on a reachable server with zero sessions exits 1 with
+    // stderr "no server running on …" — distinguish that from the
+    // server-is-up-with-sessions case using has-session as a probe. A bare
+    // `has-session` (no `-t`) returns 0 when the server is up and has at
+    // least one session, 1 when up with zero sessions, and non-zero with
+    // stderr "no server running" when the socket is unbound.
+    try {
+      execFileSync("tmux", [...tmuxPrefix(), "has-session"], { stdio: ["ignore", "ignore", "pipe"] });
+      // Server up with sessions — list-sessions shouldn't have failed; fall through.
+      return new Set();
+    } catch (probeError) {
+      const stderr =
+        probeError && typeof probeError === "object" && "stderr" in probeError
+          ? String((probeError as { stderr: unknown }).stderr ?? "")
+          : "";
+      // "no server running" → unreachable. Any other failure (e.g. has-session
+      // saying "no sessions") still means the server IS up, just empty.
+      if (stderr.includes("no server running")) return null;
+      // Fall back to the original execFileSync error's stderr.
+      const origStderr =
+        error && typeof error === "object" && "stderr" in error
+          ? String((error as { stderr: unknown }).stderr ?? "")
+          : "";
+      if (origStderr.includes("no server running")) return null;
+      return new Set();
+    }
+  }
+}
+
+// Inspect who actually owns `/tmp/tmux-<uid>/<socket>` vs. who systemd thinks
+// should own it. Three kinds:
+//   - "absent": no socket / no server bound to the socket.
+//   - "supervised": socket owner PID == citadel-tmux.service's MainPID.
+//   - "orphan": socket owner is a tmux process NOT under citadel-tmux.service
+//     (e.g. auto-spawned by a stray `tmux -L citadel new-session` call from
+//     the daemon or a user shell). The unit can't bind a second server to the
+//     same socket name, so `systemctl start citadel-tmux.service` fails until
+//     the orphan exits. The daemon surfaces this state in /api/health so the
+//     cockpit can show a degraded banner with a "Run make tmux-service to
+//     reconcile" hint — that command is the only safe way to graceful-restart
+//     into a supervised tmux server, and it's destructive (every live agent
+//     pane dies and is `claude --resume`d back).
+export type TmuxServerOwnership =
+  | { kind: "absent" }
+  | { kind: "supervised"; pid: number }
+  | { kind: "orphan"; pid: number; supervisedPid: number | null }
+  | { kind: "worktree-self"; pid: number; socket: string };
+
+export function getTmuxServerOwnership(): TmuxServerOwnership {
+  const sock = process.env.CITADEL_TMUX_SOCKET;
+  // Without a configured socket the daemon has no opinion (legacy/test mode).
+  // Report absent so callers don't gate on a state that doesn't apply.
+  if (!sock) return { kind: "absent" };
+  const socketPath = path.join(`/tmp/tmux-${process.getuid?.() ?? ""}`, sock);
+  if (!fs.existsSync(socketPath)) return { kind: "absent" };
+  // `fuser` is in psmisc on every distro we ship to and answers in O(ms).
+  // Output format: "<path>: <pid>". A single owner is the normal case (tmux's
+  // server holds the listening fd); multiple owners are abnormal but we just
+  // take the first since they're all under the same tmux server.
+  let ownerPid: number | null = null;
+  try {
+    const out = execFileSync("fuser", [socketPath], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    const match = out.match(/(\d+)/);
+    if (match?.[1]) ownerPid = Number(match[1]);
+  } catch {
+    return { kind: "absent" };
+  }
+  if (!ownerPid) return { kind: "absent" };
+  // `systemctl --user show -p MainPID --value citadel-tmux.service` returns
+  // the supervised PID, or "0" when the unit is inactive. Failing the call
+  // (no systemd, not a user session) just means we can't make the supervised
+  // determination — treat the owner as orphan with supervisedPid=null and
+  // let the caller decide.
+  let supervisedPid: number | null = null;
+  try {
+    const out = execFileSync("systemctl", ["--user", "show", "-p", "MainPID", "--value", "citadel-tmux.service"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const parsed = Number(out.trim());
+    supervisedPid = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  } catch {
+    supervisedPid = null;
+  }
+  if (supervisedPid !== null && supervisedPid === ownerPid) return { kind: "supervised", pid: ownerPid };
+  return { kind: "orphan", pid: ownerPid, supervisedPid };
+}
+
+// Make sure citadel-tmux.service is running before we issue tmux commands the
+// daemon needs to spawn through it. The contract:
+//   - "supervised": no-op, return ok.
+//   - "absent": start the unit and re-probe; return ok if it's now supervised.
+//   - "orphan": refuse to take action (starting the unit will fail anyway and
+//     SIGKILLing the orphan would lose every live pane). Return the ownership
+//     so the caller can degrade the daemon's state.
+// Idempotent and safe to call from many places. The systemctl start is
+// allowed even with RefuseManualStop=true — that directive only blocks stop
+// and restart.
+// Worktree daemons own a tmux server on a per-checkout socket (set via
+// CITADEL_TMUX_SOCKET=citadel-w-<hash> by `make deploy`). The server is
+// spawned detached so it survives `tsx watch` HMR restarts of the daemon —
+// agent panes keep their tmux home across reloads. Idempotent: re-running
+// after the server is up is a no-op.
+//
+// Why per-worktree (not the systemd-managed `citadel` socket): every daemon's
+// orphan-reaper SIGKILLs tmux sessions not in its own DB. A worktree daemon
+// sharing the prod socket would see prod's sessions as orphans and reap them
+// — the bug that took out 162 live panes on 2026-05-27.
+//
+// NOT for the prod daemon. That path goes through ensureCitadelTmuxRunning,
+// which probes systemd ownership (citadel-tmux.service); worktrees aren't
+// systemd-supervised and the unit isn't aware of them.
+export async function ensureWorktreeTmuxRunning(socket: string): Promise<TmuxServerOwnership> {
+  if (!socket) throw new Error("ensureWorktreeTmuxRunning requires a non-empty socket name");
+  const socketPath = path.join(`/tmp/tmux-${process.getuid?.() ?? ""}`, socket);
+  const probePid = (): number | null => {
+    if (!fs.existsSync(socketPath)) return null;
+    try {
+      execFileSync("tmux", ["-L", socket, "list-sessions"], {
+        stdio: ["ignore", "ignore", "ignore"],
+        timeout: 2000,
+      });
+    } catch {
+      return null;
+    }
+    try {
+      const out = execFileSync("fuser", [socketPath], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+      const match = out.match(/(\d+)/);
+      return match?.[1] ? Number(match[1]) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  let pid = probePid();
+  if (pid) return { kind: "worktree-self", pid, socket };
+
+  // `-D` runs the server in foreground with exit-empty=off (stays alive with
+  // zero sessions). `detached: true` puts the child in its own process group
+  // so `make stop` (which kills the daemon's pgid) doesn't take the tmux
+  // server down — agent panes survive daemon restarts.
+  const subproc = spawn("tmux", ["-L", socket, "-D"], { detached: true, stdio: "ignore" });
+  subproc.unref();
+
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    pid = probePid();
+    if (pid) return { kind: "worktree-self", pid, socket };
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`Worktree tmux server on socket "${socket}" failed to bind within 3s`);
+}
+
+export async function ensureCitadelTmuxRunning(): Promise<TmuxServerOwnership> {
+  const initial = getTmuxServerOwnership();
+  if (initial.kind === "supervised" || initial.kind === "orphan") return initial;
+  // absent — try to start the unit. Best-effort: the install/uninstall script
+  // is the source of truth for the unit definition; we just nudge it active.
+  try {
+    execFileSync("systemctl", ["--user", "start", "citadel-tmux.service"], {
+      stdio: ["ignore", "ignore", "pipe"],
+      timeout: 5000,
+    });
+  } catch {
+    // Fall through to re-probe; the caller decides what to do with absent.
+  }
+  // Poll for readiness. tmux can take ~200ms to bind its socket after the
+  // process starts. Cap the wait so we don't hold up daemon boot indefinitely.
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    const current = getTmuxServerOwnership();
+    if (current.kind !== "absent") return current;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  return getTmuxServerOwnership();
+}
+
 export function ensureTmuxExtendedKeys() {
-  execFileSync("tmux", ["set-option", "-s", "extended-keys", "on"], { stdio: "ignore" });
-  const features = execFileSync("tmux", ["show-options", "-s", "-g", "terminal-features"], {
+  execFileSync("tmux", [...tmuxPrefix(), "set-option", "-s", "extended-keys", "on"], { stdio: "ignore" });
+  const features = execFileSync("tmux", [...tmuxPrefix(), "show-options", "-s", "-g", "terminal-features"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (!/xterm\*[^\n]*\bextkeys\b/.test(features)) {
-    execFileSync("tmux", ["set-option", "-as", "terminal-features", ",xterm*:extkeys"], { stdio: "ignore" });
-  }
-}
-
-export function captureTmux(sessionName: string, lines = 200) {
-  try {
-    return execFileSync("tmux", ["capture-pane", "-p", "-S", `-${lines}`, "-t", sessionName], {
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-    });
-  } catch (error) {
-    return error instanceof Error ? error.message : "tmux capture failed";
-  }
-}
-
-export type TerminalTranscript = {
-  ok: true;
-  sessionName: string;
-  lines: number;
-  charCount: number;
-  text: string;
-};
-
-export type TerminalTranscriptError = {
-  ok: false;
-  error: string;
-};
-
-// Bounded transcript capture for non-interactive callers (MCP, scripts).
-// `lines` is the maximum scrollback depth pulled from tmux; the returned text is
-// additionally truncated to `maxChars` to avoid streaming a megabyte of output
-// when an agent has scrolled for a long time.
-export function captureTranscript(
-  sessionName: string,
-  options: { lines?: number; maxChars?: number } = {},
-): TerminalTranscript | TerminalTranscriptError {
-  const requestedLines = Math.min(2000, Math.max(1, options.lines ?? 200));
-  const maxChars = Math.min(200_000, Math.max(256, options.maxChars ?? 16_000));
-  if (!tmuxSessionExists(sessionName)) {
-    return { ok: false, error: "tmux_session_missing" };
-  }
-  let raw: string;
-  try {
-    raw = execFileSync("tmux", ["capture-pane", "-p", "-J", "-S", `-${requestedLines}`, "-t", sessionName], {
-      encoding: "utf8",
-      maxBuffer: 4 * 1024 * 1024,
-    });
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : "tmux_capture_failed" };
-  }
-  const trimmed = raw.replace(/\s+$/, "");
-  const text = trimmed.length > maxChars ? trimmed.slice(-maxChars) : trimmed;
-  return {
-    ok: true,
-    sessionName,
-    lines: text.length === 0 ? 0 : text.split("\n").length,
-    charCount: text.length,
-    text,
-  };
-}
-
-export function captureTmuxVisibleScreen(sessionName: string, lines = 200) {
-  try {
-    return execFileSync("tmux", ["capture-pane", "-a", "-p", "-S", `-${lines}`, "-t", sessionName], {
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  } catch {
-    return captureTmux(sessionName, lines);
-  }
-}
-
-export function captureTmuxSnapshot(sessionName: string) {
-  let text = "";
-  try {
-    text = execFileSync("tmux", ["capture-pane", "-p", "-e", "-t", sessionName], {
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    text = text.replace(/\n+$/, "");
-  } catch (error) {
-    return { ok: false as const, error: error instanceof Error ? error.message : "tmux capture failed" };
-  }
-  let cursorRow = 0;
-  let cursorCol = 0;
-  try {
-    const raw = execFileSync("tmux", ["display-message", "-p", "-t", sessionName, "#{cursor_y},#{cursor_x}"], {
-      encoding: "utf8",
-    }).trim();
-    const [yStr, xStr] = raw.split(",");
-    const y = Number.parseInt(yStr ?? "", 10);
-    const x = Number.parseInt(xStr ?? "", 10);
-    if (Number.isFinite(y)) cursorRow = y as number;
-    if (Number.isFinite(x)) cursorCol = x as number;
-  } catch {
-    // best-effort: leave cursor at 0,0 if tmux didn't answer
-  }
-  // Clear viewport + scrollback, paint the captured pane, then restore the cursor cell so the
-  // user sees the same layout tmux's pane currently has.
-  const clear = "\x1b[H\x1b[2J\x1b[3J";
-  const placeCursor = `\x1b[${cursorRow + 1};${cursorCol + 1}H`;
-  return { ok: true as const, data: `${clear}${text}\n${placeCursor}` };
-}
-
-// Poll the pane's foreground process name (`#{pane_current_command}`) until
-// the predicate matches or the deadline expires. tmux exposes the real
-// foreground PID's comm string, so this is the cheapest reliable answer to
-// "is the runtime actually running yet?" — much more meaningful than the
-// pane-paint heuristic. Used before any input injection to avoid sending keys
-// while the outer wrapper `bash -c` is still doing setup work.
-//
-// Returns the last command name observed (so callers can log it on timeout).
-export async function waitForPaneCommand(
-  sessionName: string,
-  predicate: (cmd: string) => boolean,
-  options: { timeoutMs?: number; pollMs?: number } = {},
-): Promise<string> {
-  const timeoutMs = options.timeoutMs ?? 8000;
-  const pollMs = options.pollMs ?? 80;
-  const deadline = Date.now() + timeoutMs;
-  let last = "";
-  while (Date.now() < deadline) {
-    try {
-      last = execFileSync("tmux", ["display-message", "-p", "-t", sessionName, "#{pane_current_command}"], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      }).trim();
-    } catch {
-      last = "";
-    }
-    if (predicate(last)) return last;
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
-  }
-  return last;
-}
-
-// Sentinel file written by tmux's alert-silence-pane hook. Living under
-// tmpdir keeps it cheap to fs.stat in tight loops; the hook itself only
-// fires once per silence threshold crossing so we never spawn run-shell on
-// the hot path.
-const SILENCE_SENTINEL_DIR = path.join(os.tmpdir(), "citadel-silence");
-
-function silenceSentinelPath(sessionName: string) {
-  return path.join(SILENCE_SENTINEL_DIR, `${sessionName}.flag`);
-}
-
-// Arm tmux's monitor-silence hook so it touches a sentinel file whenever the
-// pane has been silent for `seconds`. Caller is responsible for clearing the
-// sentinel before arming and for calling `disarmSilenceHook` once done.
-//
-// tmux's silence threshold is integer seconds (minimum 1), so this gives us
-// coarse-but-reliable "is the runtime quiet" signal. Fine-grained idle waits
-// (post-paste settle, etc.) still fall back to capture-pane polling.
-function armSilenceHook(sessionName: string, seconds: number) {
-  try {
-    fs.mkdirSync(SILENCE_SENTINEL_DIR, { recursive: true });
-  } catch {
-    /* read-only tmpdir — the polling fallback will still kick in */
-  }
-  const sentinel = silenceSentinelPath(sessionName);
-  try {
-    fs.unlinkSync(sentinel);
-  } catch {
-    /* ignore */
-  }
-  try {
-    execFileSync("tmux", ["set-option", "-p", "-t", sessionName, "monitor-silence", String(seconds)], {
+    execFileSync("tmux", [...tmuxPrefix(), "set-option", "-as", "terminal-features", ",xterm*:extkeys"], {
       stdio: "ignore",
     });
-    // -b: run the touch in the background so tmux doesn't block its event loop on it.
-    execFileSync(
-      "tmux",
-      [
-        "set-hook",
-        "-p",
-        "-t",
-        sessionName,
-        "alert-silence-pane",
-        `run-shell -b ${shellQuote(`touch ${shellQuote(sentinel)}`)}`,
-      ],
-      { stdio: "ignore" },
-    );
-  } catch {
-    /* hook set failed — caller's polling fallback handles it */
   }
+  // Cap per-pane scrollback. The previous default (2000) was already low in
+  // line-count, but unset history-limit is what compounds: long-running tmux
+  // servers in citadel-tmux.service accumulate tmux client structs (one per
+  // ttyd browser connection / WS reconnect), and the per-client screen state
+  // grows with the per-pane scrollback ceiling. 5000 keeps headroom for
+  // operator inspection while bounding worst-case server memory.
+  execFileSync("tmux", [...tmuxPrefix(), "set-option", "-g", "history-limit", "5000"], { stdio: "ignore" });
 }
 
-function disarmSilenceHook(sessionName: string) {
-  try {
-    execFileSync("tmux", ["set-option", "-p", "-u", "-t", sessionName, "monitor-silence"], { stdio: "ignore" });
-  } catch {
-    /* ignore */
-  }
-  try {
-    execFileSync("tmux", ["set-hook", "-p", "-u", "-t", sessionName, "alert-silence-pane"], { stdio: "ignore" });
-  } catch {
-    /* ignore */
-  }
-}
-
-// Wait for the tmux pane to "settle" before injecting input. Interactive TUIs
-// like Claude Code repaint repeatedly during startup; if we send keys while the
-// splash screen is still drawing the input either gets eaten or interleaved
-// with the prompt placeholder.
-//
-// Two parallel signals race; whichever fires first wins:
-//   1. tmux's own monitor-silence hook touches a sentinel file after N seconds
-//      of silence (event-driven, no busy polling tmux for screen diffs).
-//   2. capture-pane diffing — kept as a fallback for the sub-second case where
-//      the silence-hook threshold (whole seconds) is coarser than the idleMs
-//      the caller actually wants.
-//
-// Best-effort — never throws.
-export async function waitForTerminalIdle(
-  sessionName: string,
-  options: { timeoutMs?: number; idleMs?: number; pollMs?: number; useSilenceHook?: boolean } = {},
-): Promise<void> {
-  const timeoutMs = options.timeoutMs ?? 1500;
-  const idleMs = options.idleMs ?? 250;
-  const pollMs = options.pollMs ?? 80;
-  const useSilenceHook = options.useSilenceHook ?? idleMs >= 1000;
-  const deadline = Date.now() + Math.max(idleMs + pollMs, timeoutMs);
-
-  // Arm the tmux silence hook in parallel with capture-pane polling — whichever
-  // signal fires first wins. The hook lets tmux's own event loop tell us when
-  // the runtime has been quiet, which is far cheaper than capture-pane diffing
-  // and immune to mid-paint false-positive lulls. We only arm it when idleMs
-  // is at least 1s (tmux's minimum silence threshold); below that the polling
-  // diff is the better tool.
-  const silenceSeconds = useSilenceHook ? Math.max(1, Math.round(idleMs / 1000)) : 0;
-  if (silenceSeconds > 0) armSilenceHook(sessionName, silenceSeconds);
-  const sentinel = silenceSentinelPath(sessionName);
-  try {
-    let last = safeCapture(sessionName);
-    let stableSince = Date.now();
-    while (Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, pollMs));
-      if (silenceSeconds > 0 && safeStatExists(sentinel)) return;
-      const current = safeCapture(sessionName);
-      if (current === last) {
-        if (Date.now() - stableSince >= idleMs) return;
-        continue;
-      }
-      last = current;
-      stableSince = Date.now();
-    }
-  } finally {
-    if (silenceSeconds > 0) disarmSilenceHook(sessionName);
-  }
-}
-
-function safeStatExists(filePath: string): boolean {
-  try {
-    return fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function safeCapture(sessionName: string): string {
-  try {
-    return execFileSync("tmux", ["capture-pane", "-p", "-t", sessionName], {
-      encoding: "utf8",
-      maxBuffer: 256 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  } catch {
-    return "";
-  }
-}
+export {
+  captureTmux,
+  captureTmuxSnapshot,
+  captureTmuxVisibleScreen,
+  captureTranscript,
+  waitForPaneCommand,
+  waitForTerminalIdle,
+} from "./capture.js";
+export type { TerminalTranscript, TerminalTranscriptError } from "./capture.js";
 
 export function sendKeys(sessionName: string, data: string) {
   for (const token of tokenizeTerminalInput(data)) {
     if (token.literal) {
-      execFileSync("tmux", ["send-keys", "-l", "-t", sessionName, token.value]);
+      execFileSync("tmux", [...tmuxPrefix(), "send-keys", "-l", "-t", sessionName, token.value]);
     } else {
-      execFileSync("tmux", ["send-keys", "-t", sessionName, token.value]);
+      execFileSync("tmux", [...tmuxPrefix(), "send-keys", "-t", sessionName, token.value]);
     }
   }
 }
@@ -573,22 +526,31 @@ export function sendKeys(sessionName: string, data: string) {
 // (tests, generic shell sessions) keep working byte-for-byte.
 export function pasteText(sessionName: string, data: string, options: { bracketed?: boolean } = {}) {
   const bufferName = `citadel_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  execFileSync("tmux", ["load-buffer", "-b", bufferName, "-"], { input: data });
+  execFileSync("tmux", [...tmuxPrefix(), "load-buffer", "-b", bufferName, "-"], { input: data });
   const args = options.bracketed
     ? ["paste-buffer", "-p", "-d", "-b", bufferName, "-t", sessionName]
     : ["paste-buffer", "-d", "-b", bufferName, "-t", sessionName];
-  execFileSync("tmux", args);
+  execFileSync("tmux", [...tmuxPrefix(), ...args]);
 }
 
 export function resizePane(sessionName: string, cols: number, rows: number) {
   const safeCols = Math.min(400, Math.max(20, Math.trunc(cols)));
   const safeRows = Math.min(120, Math.max(5, Math.trunc(rows)));
-  execFileSync("tmux", ["resize-pane", "-t", sessionName, "-x", String(safeCols), "-y", String(safeRows)]);
+  execFileSync("tmux", [
+    ...tmuxPrefix(),
+    "resize-pane",
+    "-t",
+    sessionName,
+    "-x",
+    String(safeCols),
+    "-y",
+    String(safeRows),
+  ]);
 }
 
 export function killTmuxSession(sessionName: string) {
   if (tmuxSessionExists(sessionName)) {
-    execFileSync("tmux", ["kill-session", "-t", sessionName]);
+    execFileSync("tmux", [...tmuxPrefix(), "kill-session", "-t", sessionName]);
   }
   try {
     fs.rmSync(agentLiveSentinelPath(sessionName), { force: true });
@@ -663,7 +625,7 @@ export function attachTmuxControlStream(
   onOutput: (data: string) => void,
   onExit?: (reason: string) => void,
 ) {
-  const child = spawn("tmux", ["-C", "attach-session", "-t", sessionName], {
+  const child = spawn("tmux", [...tmuxPrefix(), "-C", "attach-session", "-t", sessionName], {
     stdio: ["pipe", "pipe", "ignore"],
   });
   let buffered = "";

@@ -10,6 +10,7 @@
     { "path": "../../packages/contracts" },
     { "path": "../../packages/core" },
     { "path": "../../packages/db" },
+    { "path": "../../packages/hooks" },
     { "path": "../../packages/mcp" },
     { "path": "../../packages/operations" },
     { "path": "../../packages/providers" },

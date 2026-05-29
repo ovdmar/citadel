@@ -128,6 +128,7 @@ function makeFakeTtyd(spawnCalls: SpawnCall[]): TtydManager {
         worktreePath: args.worktreePath ?? null,
         startedAt: new Date().toISOString(),
         theme: args.theme,
+        tabId: args.tabId ?? null,
       };
       return Promise.resolve(entry);
     },

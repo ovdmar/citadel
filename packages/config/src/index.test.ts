@@ -2,7 +2,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { defaultConfigPath, detectWorktree, loadConfig, mergeConfigPatch, saveConfig } from "./index.js";
+import {
+  defaultConfigPath,
+  defaultNotesPath,
+  detectWorktree,
+  effectiveNotesPath,
+  loadConfig,
+  mergeConfigPatch,
+  saveConfig,
+} from "./index.js";
 
 const dirs: string[] = [];
 
@@ -21,6 +29,7 @@ describe("loadConfig", () => {
     expect(config.version).toBe(1);
     expect(config.mcp.enabled).toBe(true);
     expect(config.runtimes.map((runtime) => runtime.id)).toContain("shell");
+    expect(config.runtimes.find((runtime) => runtime.id === "codex")?.args).toEqual(["--yolo"]);
     expect(config.usageProviders).toEqual([]);
     expect(fs.existsSync(configPath)).toBe(true);
   });
@@ -235,6 +244,50 @@ describe("loadConfig", () => {
     }
   });
 
+  it("backfills missing runtime fields from built-in defaults so stale on-disk configs keep resume support", () => {
+    // Regression: a config file written before `resumeArg`/`sessionIdArg`/
+    // `supportsResume` were added to RuntimeConfigSchema would persist a
+    // claude-code entry without them. On reload, the top-level `runtimes`
+    // array fully replaced the schema's default array, so the built-in
+    // resume fields were lost — and the restore route then rejected every
+    // claude session with `runtime_does_not_support_resume`. We backfill
+    // missing fields per-id from built-ins; user overrides still win.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-config-"));
+    dirs.push(dir);
+    const configPath = path.join(dir, "citadel.config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        dataDir: dir,
+        databasePath: path.join(dir, "citadel.sqlite"),
+        runtimes: [
+          // Pre-schema-evolution shape: no resumeArg, no supportsResume, etc.
+          { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] },
+          // User override that should be preserved over the built-in.
+          { id: "shell", displayName: "Custom Shell", command: "zsh", args: [] },
+          // Unknown id — left untouched (it's a user-defined custom runtime).
+          { id: "custom", displayName: "Custom", command: "/usr/bin/custom", args: [] },
+        ],
+      }),
+    );
+
+    const config = loadConfig(configPath);
+    const claude = config.runtimes.find((r) => r.id === "claude-code");
+    expect(claude?.resumeArg).toBe("--resume");
+    expect(claude?.sessionIdArg).toBe("--session-id");
+    expect(claude?.supportsResume).toBe(true);
+    expect(claude?.supportsModelSelection).toBe(true);
+
+    const shell = config.runtimes.find((r) => r.id === "shell");
+    expect(shell?.displayName).toBe("Custom Shell");
+    expect(shell?.command).toBe("zsh");
+    expect(shell?.supportsPrompt).toBe(true); // backfilled
+
+    const custom = config.runtimes.find((r) => r.id === "custom");
+    expect(custom?.resumeArg).toBeUndefined();
+  });
+
   it("in prod mode (no CITADEL_WORKTREE), honors dataDir/databasePath persisted in the config file", () => {
     // Prod regression: the systemd-supervised daemon at the main install must
     // be able to persist a customized `databasePath` in
@@ -271,5 +324,223 @@ describe("loadConfig", () => {
       if (prevData !== undefined) process.env.CITADEL_DATA_DIR = prevData;
       if (prevWorktree !== undefined) process.env.CITADEL_WORKTREE = prevWorktree;
     }
+  });
+});
+
+describe("scratchpad.path config field", () => {
+  it("accepts an absolute scratchpad.path and round-trips through save/load", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-scratchpath-"));
+    dirs.push(dir);
+    const configPath = path.join(dir, "citadel.config.json");
+    const notesPath = path.join(dir, "custom-notes.md");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        dataDir: dir,
+        databasePath: path.join(dir, "citadel.sqlite"),
+        scratchpad: { path: notesPath },
+      }),
+    );
+
+    const loaded = loadConfig(configPath);
+    expect(loaded.scratchpad.path).toBe(notesPath);
+
+    saveConfig(loaded, configPath);
+    const reloaded = loadConfig(configPath);
+    expect(reloaded.scratchpad.path).toBe(notesPath);
+  });
+
+  it("tilde-expands ~/X to <homedir>/X before storage", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-tilde-"));
+    dirs.push(dir);
+    const configPath = path.join(dir, "citadel.config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        dataDir: dir,
+        databasePath: path.join(dir, "citadel.sqlite"),
+        scratchpad: { path: "~/some-notes-test-file.md" },
+      }),
+    );
+
+    const loaded = loadConfig(configPath);
+    expect(loaded.scratchpad.path).toBe(path.join(os.homedir(), "some-notes-test-file.md"));
+    // No literal `~` survives.
+    expect(loaded.scratchpad.path?.startsWith("~")).toBe(false);
+  });
+
+  it("rejects a relative scratchpad.path with a zod error naming the field and hinting at ~/", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-relreject-"));
+    dirs.push(dir);
+    const configPath = path.join(dir, "citadel.config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        dataDir: dir,
+        databasePath: path.join(dir, "citadel.sqlite"),
+        scratchpad: { path: "relative/notes.md" },
+      }),
+    );
+
+    let caught: unknown = null;
+    try {
+      loadConfig(configPath);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).not.toBeNull();
+    const message = String((caught as Error).message ?? caught);
+    expect(message).toMatch(/absolute/i);
+    expect(message).toMatch(/~\//);
+    // The zod error path must reference scratchpad.path so future schema renames
+    // don't silently break the user-facing wiring.
+    expect(message).toMatch(/scratchpad/);
+    expect(message).toMatch(/path/);
+  });
+
+  it("defaults scratchpad.path to undefined so the effective path falls back to dataDir/scratchpad.md", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-spdefault-"));
+    dirs.push(dir);
+    const configPath = path.join(dir, "citadel.config.json");
+    const loaded = loadConfig(configPath);
+    expect(loaded.scratchpad).toBeDefined();
+    expect(loaded.scratchpad.path).toBeUndefined();
+    expect(effectiveNotesPath(loaded)).toBe(path.join(loaded.dataDir, "scratchpad.md"));
+  });
+
+  it("in worktree mode (CITADEL_WORKTREE=1), strips scratchpad.path from raw config in memory but leaves the file on disk untouched", () => {
+    const prevData = process.env.CITADEL_DATA_DIR;
+    const prevWorktree = process.env.CITADEL_WORKTREE;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-wt-strip-"));
+    dirs.push(root);
+    const worktreeDataDir = path.join(root, "wt-data");
+    process.env.CITADEL_DATA_DIR = worktreeDataDir;
+    process.env.CITADEL_WORKTREE = "1";
+    const configPath = path.join(root, "leaked.config.json");
+    const leakedNotes = path.join(root, "prod-notes.md");
+    const rawContent = JSON.stringify({
+      version: 1,
+      dataDir: "/home/prod/.local/share/citadel",
+      databasePath: "/home/prod/.local/share/citadel/citadel.sqlite",
+      scratchpad: { path: leakedNotes },
+    });
+    fs.writeFileSync(configPath, rawContent);
+    try {
+      const loaded = loadConfig(configPath);
+      expect(loaded.dataDir).toBe(worktreeDataDir);
+      expect(loaded.scratchpad.path).toBeUndefined();
+      // The strip is in-memory only — the file on disk still contains the
+      // leaked value (no surprise file mutations in a loader).
+      const onDisk = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      expect(onDisk.scratchpad?.path).toBe(leakedNotes);
+    } finally {
+      // biome-ignore lint/performance/noDelete: must actually unset.
+      if (prevData === undefined) delete process.env.CITADEL_DATA_DIR;
+      else process.env.CITADEL_DATA_DIR = prevData;
+      // biome-ignore lint/performance/noDelete: must actually unset.
+      if (prevWorktree === undefined) delete process.env.CITADEL_WORKTREE;
+      else process.env.CITADEL_WORKTREE = prevWorktree;
+    }
+  });
+
+  it("in prod mode (no CITADEL_WORKTREE), honors a persisted scratchpad.path", () => {
+    const prevData = process.env.CITADEL_DATA_DIR;
+    const prevWorktree = process.env.CITADEL_WORKTREE;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-prod-sp-"));
+    dirs.push(root);
+    // biome-ignore lint/performance/noDelete: must actually clear.
+    delete process.env.CITADEL_DATA_DIR;
+    // biome-ignore lint/performance/noDelete: must actually clear.
+    delete process.env.CITADEL_WORKTREE;
+    const customNotes = path.join(root, "my-notes.md");
+    const configPath = path.join(root, "prod.config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        dataDir: path.join(root, "data"),
+        databasePath: path.join(root, "data", "citadel.sqlite"),
+        scratchpad: { path: customNotes },
+      }),
+    );
+    try {
+      const loaded = loadConfig(configPath);
+      expect(loaded.scratchpad.path).toBe(customNotes);
+      expect(effectiveNotesPath(loaded)).toBe(customNotes);
+    } finally {
+      if (prevData !== undefined) process.env.CITADEL_DATA_DIR = prevData;
+      if (prevWorktree !== undefined) process.env.CITADEL_WORKTREE = prevWorktree;
+    }
+  });
+
+  it("preserves other scratchpad.* fields under worktree strip (only `path` is dropped)", () => {
+    // Forward-compat guard: when the schema grows (e.g. scratchpad.history.*),
+    // the strip-on-load defense MUST drop only `path` — accidentally flat-stripping
+    // the whole `scratchpad` key would silently lose future settings.
+    const prevData = process.env.CITADEL_DATA_DIR;
+    const prevWorktree = process.env.CITADEL_WORKTREE;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-wt-siblings-"));
+    dirs.push(root);
+    process.env.CITADEL_DATA_DIR = path.join(root, "wt-data");
+    process.env.CITADEL_WORKTREE = "1";
+    const configPath = path.join(root, "leaked-with-siblings.config.json");
+    // Write a raw object that includes both `path` and an unknown sibling. Zod
+    // strips unknown keys today, so the loaded `scratchpad` will be `{}` either
+    // way — but the load-time strip must not throw and must not surface `path`.
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        scratchpad: { path: "/should/be/stripped.md", futureFlag: true },
+      }),
+    );
+    try {
+      const loaded = loadConfig(configPath);
+      expect(loaded.scratchpad.path).toBeUndefined();
+      // On-disk leaked value untouched (strip is in-memory only).
+      const onDisk = JSON.parse(fs.readFileSync(configPath, "utf8"));
+      expect(onDisk.scratchpad).toEqual({ path: "/should/be/stripped.md", futureFlag: true });
+    } finally {
+      // biome-ignore lint/performance/noDelete: must actually unset.
+      if (prevData === undefined) delete process.env.CITADEL_DATA_DIR;
+      else process.env.CITADEL_DATA_DIR = prevData;
+      // biome-ignore lint/performance/noDelete: must actually unset.
+      if (prevWorktree === undefined) delete process.env.CITADEL_WORKTREE;
+      else process.env.CITADEL_WORKTREE = prevWorktree;
+    }
+  });
+
+  it("rejects bare `~` (no slash) as relative — only `~/X` is tilde-expanded", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-bare-tilde-"));
+    dirs.push(dir);
+    const configPath = path.join(dir, "citadel.config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        dataDir: dir,
+        databasePath: path.join(dir, "citadel.sqlite"),
+        scratchpad: { path: "~" },
+      }),
+    );
+    expect(() => loadConfig(configPath)).toThrow(/absolute/i);
+  });
+
+  it("effectiveNotesPath returns the override when set, else <dataDir>/scratchpad.md", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-effpath-"));
+    dirs.push(dir);
+    const configWithoutOverride = {
+      dataDir: dir,
+      scratchpad: { path: undefined as string | undefined },
+    };
+    expect(effectiveNotesPath(configWithoutOverride)).toBe(path.join(dir, "scratchpad.md"));
+    expect(defaultNotesPath(dir)).toBe(path.join(dir, "scratchpad.md"));
+
+    const override = path.join(dir, "elsewhere", "notes.md");
+    const configWithOverride = { dataDir: dir, scratchpad: { path: override } };
+    expect(effectiveNotesPath(configWithOverride)).toBe(override);
   });
 });

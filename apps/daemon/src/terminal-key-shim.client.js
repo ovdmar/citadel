@@ -329,6 +329,17 @@
   function onKeydown(event) {
     if (event.isComposing) return;
     const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
+    // Shell-first lifecycle signal: Ctrl+C inside the embedded terminal is
+    // the dominant operator-initiated agent stop. Fire-and-forget a POST to
+    // the user-action endpoint so the daemon's status-monitor knows the
+    // subsequent `running → idle` transition was operator-initiated (and
+    // doesn't mis-label it as `idle_after_unexpected_exit`). Do NOT
+    // consume(event) — the 0x03 byte must continue propagating to xterm so
+    // it reaches the PTY exactly as today.
+    if (key === "c" && event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey) {
+      recordUserAction("ctrl_c");
+      // fall through — no consume(); xterm handles the 0x03.
+    }
     if (key === "enter" && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
       if (sendInput("\n")) consume(event);
       return;
@@ -371,6 +382,43 @@
   // both `window` and `document` would double-fire each shortcut, because
   // stopImmediatePropagation only stops same-target same-phase listeners.
   document.addEventListener("keydown", onKeydown, true);
+
+  // Derive the sessionId from the iframe's URL path. ttyd is mounted at
+  // `/terminals/<sessionId>/` (see packages/terminal/src/ttyd.ts:147 — basePath
+  // is `${basePathPrefix}/<sessionId>`). Cached at module init since the URL
+  // never changes for a given iframe's lifetime. Defensive against test
+  // runtimes that don't provide window.location (the shim is eval'd inside a
+  // jsdom-lite Function() in apps/daemon/src/terminal-key-shim.test.ts).
+  const SESSION_ID = (() => {
+    try {
+      const pathname = window.location?.pathname || "";
+      const match = /^\/terminals\/([^/]+)/.exec(pathname);
+      return match ? decodeURIComponent(match[1]) : null;
+    } catch (_err) {
+      return null;
+    }
+  })();
+
+  // Fire-and-forget POST to the user-action endpoint. The daemon writes the
+  // session's entry in `recentUserAction` so the next status-monitor tick
+  // sees the operator action and clears `statusReason` instead of labelling
+  // the resulting `running → idle` as `idle_after_unexpected_exit`. Errors
+  // are silently swallowed — the worst case is a single mis-labelled
+  // session that auto-clears in 30 min.
+  function recordUserAction(reason) {
+    if (!SESSION_ID) return;
+    try {
+      fetch(`/api/agent-sessions/${encodeURIComponent(SESSION_ID)}/user-action`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason }),
+        keepalive: true,
+      }).catch(() => {});
+    } catch (_err) {
+      // Network constructed-call errors are swallowed; the user's keystroke
+      // already propagated to ttyd.
+    }
+  }
 
   // OSC 52 bridge: when tmux runs with `set-clipboard on` (we enable that in
   // buildAttachCommand), every copy-mode/mouse selection inside tmux is
