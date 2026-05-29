@@ -22,9 +22,9 @@ const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playw
 export default defineConfig({
   testDir: "e2e",
   timeout: 30_000,
-  // The suite intentionally talks to one sandbox daemon and one shared data
-  // dir. Running projects in parallel races scratchpad/config state and makes
-  // `pnpm e2e` depend on host CPU count.
+  // Each Playwright invocation talks to one sandbox daemon and one shared data
+  // dir. The package e2e script runs viewport projects as separate invocations
+  // so the owned daemon is restarted between viewport suites.
   workers: 1,
   expect: { timeout: 10_000 },
   use: {
