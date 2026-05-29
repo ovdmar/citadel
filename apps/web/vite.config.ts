@@ -26,7 +26,7 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
       },
-      // Legacy xterm/WebSocket diagnostic gateway (no longer the default renderer).
+      // Primary xterm/WebSocket terminal gateway.
       "/terminal": {
         target: (process.env.CITADEL_DAEMON_URL || "http://127.0.0.1:4010").replace(/^http/, "ws"),
         ws: true,

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { type APIRequestContext, expect, test } from "@playwright/test";
+import WebSocket, { type RawData } from "ws";
 
 // These tests target the current ADE cockpit shell. They were rewritten in the
 // 2026-05-22 feedback round when the older spec drifted from the redesigned UI
@@ -253,19 +254,46 @@ test("desktop reconcile endpoint cleans orphan repos", async ({ request }, testI
   }
 });
 
-test("desktop terminal endpoint returns a ttyd proxy URL for a fresh session", async ({ request }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "terminal smoke runs once against the shared local daemon");
+test("desktop primary terminal WebSocket streams a fresh shell session", async ({ request }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "primary terminal smoke runs once against the shared local daemon");
   const fixture = createGitFixture();
   let workspaceId: string | null = null;
   try {
     const repo = await registerRepo(request, fixture);
     workspaceId = (await createWorkspace(request, repo.id, `e2e-${Date.now().toString(36)}`)).workspaceId;
     await waitForWorkspace(request, workspaceId, "ready");
-    const session = await startSession(request, workspaceId, "E2E Shell");
+    const session = await startSession(request, workspaceId, "Primary WS Shell");
+    const marker = `primary-ws-${Date.now().toString(36)}`;
+    const ws = await openTerminalSocket(session.id);
+    try {
+      const output = waitForTerminalOutput(ws, marker);
+      ws.send(JSON.stringify({ type: "input", data: `printf '${marker}\\n'\r` }));
+      await output;
+    } finally {
+      ws.close();
+    }
+  } finally {
+    if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
+    fs.rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
 
-    // Citadel hands the ttyd-backed terminal URL out via this endpoint. If ttyd
-    // is unavailable (e.g. binary missing on the CI runner) we accept 503 and
-    // skip the rest — the smoke still proves the daemon wiring is intact.
+test("desktop fallback terminal endpoint returns a ttyd proxy URL for a fresh session", async ({
+  request,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "fallback terminal smoke runs once against the shared local daemon");
+  const fixture = createGitFixture();
+  let workspaceId: string | null = null;
+  try {
+    const repo = await registerRepo(request, fixture);
+    workspaceId = (await createWorkspace(request, repo.id, `e2e-${Date.now().toString(36)}`)).workspaceId;
+    await waitForWorkspace(request, workspaceId, "ready");
+    const session = await startSession(request, workspaceId, "Fallback ttyd Shell");
+
+    // Citadel still exposes ttyd as an explicit fallback/standalone terminal.
+    // If ttyd is unavailable (e.g. binary missing on the CI runner) we accept
+    // 503 and skip the rest — the smoke still proves the daemon wiring is
+    // intact.
     const response = await request.post(`${API_BASE}/api/agent-sessions/${session.id}/terminal`);
     if (response.status() === 503) {
       test.info().annotations.push({ type: "skip-reason", description: "ttyd unavailable on runner" });
@@ -280,6 +308,75 @@ test("desktop terminal endpoint returns a ttyd proxy URL for a fresh session", a
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
+
+async function openTerminalSocket(sessionId: string) {
+  const ws = new WebSocket(`${API_BASE.replace(/^http/, "ws")}/terminal/${encodeURIComponent(sessionId)}`);
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timed out opening terminal WebSocket for ${sessionId}`)), 5000);
+    ws.once("open", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    ws.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+  return ws;
+}
+
+function waitForTerminalOutput(ws: WebSocket, expected: string) {
+  return new Promise<void>((resolve, reject) => {
+    let buffered = "";
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out waiting for terminal output ${expected}`));
+    }, 10_000);
+    const onMessage = (raw: RawData) => {
+      const message = parseTerminalSocketMessage(raw);
+      if (!message) return;
+      if ((message.type === "output" || message.type === "outputChunk") && typeof message.data === "string") {
+        buffered += message.data;
+        if (buffered.includes(expected)) {
+          cleanup();
+          resolve();
+        }
+      } else if (message.type === "error" || message.type === "exit") {
+        cleanup();
+        reject(new Error(`Terminal bridge returned ${message.type}: ${message.data ?? ""}`));
+      }
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error("Terminal WebSocket closed before expected output arrived"));
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      ws.off("message", onMessage);
+      ws.off("close", onClose);
+      ws.off("error", onError);
+    };
+    ws.on("message", onMessage);
+    ws.once("close", onClose);
+    ws.once("error", onError);
+  });
+}
+
+function parseTerminalSocketMessage(raw: RawData): { type: string; data?: string } | null {
+  try {
+    const parsed = JSON.parse(raw.toString()) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    const message = parsed as { type?: unknown; data?: unknown };
+    if (typeof message.type !== "string") return null;
+    return { type: message.type, data: typeof message.data === "string" ? message.data : undefined };
+  } catch {
+    return null;
+  }
+}
 
 async function waitForWorkspace(request: APIRequestContext, workspaceId: string, lifecycle: string) {
   for (let attempt = 0; attempt < 40; attempt += 1) {

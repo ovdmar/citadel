@@ -27,12 +27,8 @@ import {
   transitionJiraIssue,
 } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
-import {
-  attachTerminalWebSocket,
-  createTtydManager,
-  discoverExistingTtyds,
-  ensureTmuxSession,
-} from "@citadel/terminal";
+import { attachTerminalWebSocket, tmuxSessionExists } from "@citadel/terminal";
+import { createTtydManager, discoverExistingTtyds } from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
@@ -72,7 +68,7 @@ import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { backfillScratchpadOnStartup } from "./scratchpad.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
-import { wireTerminalRoutes } from "./terminal-routes-helpers.js";
+import { buildRespawnTmux, wireTerminalRoutes } from "./terminal-routes-helpers.js";
 import { resolveTtydPortRange } from "./ttyd-slot.js";
 import { fetchVersionControlGated } from "./vc-fetch-gated.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
@@ -217,6 +213,7 @@ export function createDaemonApp(input: {
     config,
     diagnostics,
   });
+  const respawnTmuxForWebSocket = buildRespawnTmux(store, config);
 
   const cachedProviderHealth = () =>
     cachedProvider(
@@ -745,10 +742,15 @@ export function createDaemonApp(input: {
     res.status(400).json({ error: message });
   });
 
-  // Diagnostic xterm.js gateway. The cockpit uses ttyd via /terminals/* instead; this stays for tooling.
-  attachTerminalWebSocket(server, (sessionId) => {
+  // Primary xterm.js gateway. ttyd remains available at /terminals/* as fallback.
+  attachTerminalWebSocket(server, async (sessionId) => {
     const session = store.listSessions().find((candidate) => candidate.id === sessionId);
-    return session?.tmuxSessionName ?? null;
+    if (!session) return null;
+    if (session.tmuxSessionName && tmuxSessionExists(session.tmuxSessionName)) return session.tmuxSessionName;
+    const respawn = await respawnTmuxForWebSocket(session);
+    if (!respawn) return null;
+    emit("terminal.ready", { sessionId: session.id, tmuxSession: respawn.tmuxSessionName, renderer: "xterm" });
+    return respawn.tmuxSessionName;
   });
 
   // Reap orphan tmux sessions / ghost worktrees on a slow interval.

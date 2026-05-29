@@ -1,6 +1,6 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import net from "node:net";
-import { tmuxPrefix } from "./index.js";
+import { tmuxPrefix } from "./tmux.js";
 import {
   killStaleTtydInRange,
   listListeningPortsInRange,

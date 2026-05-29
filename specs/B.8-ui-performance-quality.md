@@ -40,12 +40,12 @@
 
 ## Performance
 
-[ ] 1. Citadel feels instant with 10-12 active workspaces across 2-3 repositories.
-[ ] 2. Workspace switching remains responsive with long terminal buffers.
+[~] 1. Citadel feels instant with 10-12 active workspaces across 2-3 repositories and remains usable at large operator loads (target: 50 workspaces with 3-5 agent sessions each) without pre-spawning one terminal renderer process per session.
+[~] 2. Workspace switching remains responsive with long terminal buffers. The cockpit's default terminal path reuses a browser xterm.js pane over a daemon WebSocket and bounded tmux snapshot instead of forcing ttyd iframe/process startup on every cache miss.
 [ ] 3. Provider summaries load independently from the main workspace shell.
 [ ] 4. Slow provider commands appear as stale/degraded states.
 [ ] 5. Terminal scrollback is bounded or virtualized. The tmux server enforces a global `history-limit` (default 5000 lines per pane) so a forgotten session can't grow per-pane scrollback without bound.
-[ ] 6. Normal navigation transfers only the terminal data needed for the active view.
+[~] 6. Normal navigation transfers only the terminal data needed for the active view: a bounded snapshot on connect/reconnect plus incremental chunks while the pane is mounted.
 [ ] 7. Main happy paths have performance smoke coverage.
 
 ## Release Quality

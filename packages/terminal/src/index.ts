@@ -1,33 +1,31 @@
 import { execFile, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
-import type http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { WebSocketServer } from "ws";
 
 export { createTtydManager, discoverExistingTtyds, TtydUnavailableError } from "./ttyd.js";
 export type { TtydEntry, TtydManager, TtydManagerConfig, TtydTheme } from "./ttyd.js";
 export { submitPrompt } from "./submit-prompt.js";
+export { tmuxPrefix } from "./tmux.js";
+import { tmuxPrefix } from "./tmux.js";
 
 import { tokenizeTerminalInput } from "./input-tokens.js";
 export { keyForControlCharacter, keyForEscapeSequence, tokenizeTerminalInput } from "./input-tokens.js";
 export type { InputToken } from "./input-tokens.js";
 
 import { captureTmuxSnapshot, waitForTerminalIdle } from "./capture.js";
+export {
+  attachTerminalWebSocket,
+  attachTmuxControlStream,
+  decodeTmuxControlValue,
+  parseTmuxControlOutput,
+  tmuxControlInputCommands,
+  tmuxControlQuote,
+  tmuxControlResizeCommand,
+} from "./tmux-control-bridge.js";
 
 const execFileAsync = promisify(execFile);
-
-// Prepended to every tmux invocation. When `CITADEL_TMUX_SOCKET` is set
-// (citadel.service does this), tmux talks to its own dedicated server via
-// `tmux -L <socket>` instead of the user's default socket. The server lives
-// in citadel-tmux.service's cgroup, not citadel.service's — so daemon
-// restarts/upgrades leave the agent sessions untouched. Empty in tests and
-// on hosts where the socket isn't configured, preserving legacy behavior.
-export function tmuxPrefix(): string[] {
-  const sock = process.env.CITADEL_TMUX_SOCKET;
-  return sock ? ["-L", sock] : [];
-}
 
 /**
  * Shell-first session request. The pane's PID is `bash -l` — the agent (if
@@ -557,108 +555,4 @@ export function killTmuxSession(sessionName: string) {
   } catch {
     // best-effort
   }
-}
-
-export function attachTerminalWebSocket(server: http.Server, resolveSession: (id: string) => string | null) {
-  const wss = new WebSocketServer({ noServer: true });
-  server.on("upgrade", (request, socket, head) => {
-    const url = new URL(request.url || "", "http://127.0.0.1");
-    if (!url.pathname.startsWith("/terminal/")) return;
-    const sessionId = decodeURIComponent(url.pathname.replace("/terminal/", ""));
-    const tmuxSession = resolveSession(sessionId);
-    if (!tmuxSession) {
-      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      const sendSnapshot = () => {
-        if (ws.readyState !== ws.OPEN) return;
-        const snapshot = captureTmuxSnapshot(tmuxSession);
-        if (snapshot.ok) {
-          ws.send(JSON.stringify({ type: "output", data: snapshot.data }));
-        } else {
-          ws.send(JSON.stringify({ type: "error", data: snapshot.error }));
-        }
-      };
-      sendSnapshot();
-      const control = attachTmuxControlStream(
-        tmuxSession,
-        (data) => {
-          if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "outputChunk", data }));
-        },
-        (reason) => {
-          if (ws.readyState === ws.OPEN) {
-            ws.send(JSON.stringify({ type: "exit", data: reason }));
-          }
-        },
-      );
-      ws.on("message", (raw) => {
-        const message = JSON.parse(raw.toString()) as { type: string; data?: string; cols?: number; rows?: number };
-        let shouldCatchUp = false;
-        if (message.type === "input" && typeof message.data === "string") {
-          sendKeys(tmuxSession, message.data);
-          shouldCatchUp = true;
-        }
-        if (message.type === "paste" && typeof message.data === "string") {
-          pasteText(tmuxSession, message.data);
-          shouldCatchUp = true;
-        }
-        if (message.type === "resize" && message.cols && message.rows) {
-          resizePane(tmuxSession, message.cols, message.rows);
-          shouldCatchUp = true;
-        }
-        if (shouldCatchUp) setTimeout(sendSnapshot, 50).unref();
-      });
-      ws.on("close", () => control.close());
-    });
-  });
-}
-
-export function attachTmuxControlStream(
-  sessionName: string,
-  onOutput: (data: string) => void,
-  onExit?: (reason: string) => void,
-) {
-  const child = spawn("tmux", [...tmuxPrefix(), "-C", "attach-session", "-t", sessionName], {
-    stdio: ["pipe", "pipe", "ignore"],
-  });
-  let buffered = "";
-  let exited = false;
-  child.stdout.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => {
-    buffered += chunk;
-    const lines = buffered.split("\n");
-    buffered = lines.pop() ?? "";
-    for (const line of lines) {
-      const data = parseTmuxControlOutput(line);
-      if (data) onOutput(data);
-    }
-  });
-  child.on("exit", (code, signal) => {
-    if (exited) return;
-    exited = true;
-    onExit?.(signal ? `signal:${signal}` : `exit:${code ?? "?"}`);
-  });
-  return {
-    close: () => {
-      exited = true;
-      child.stdout.destroy();
-      child.stdin.destroy();
-      child.kill("SIGTERM");
-      setTimeout(() => {
-        if (!child.killed || child.exitCode === null) child.kill("SIGKILL");
-      }, 250).unref();
-    },
-  };
-}
-
-export function parseTmuxControlOutput(line: string) {
-  const match = /^%output\s+\S+\s+(.*)$/.exec(line);
-  if (!match) return null;
-  return decodeTmuxControlValue(match[1] ?? "");
-}
-
-export function decodeTmuxControlValue(value: string) {
-  return value.replace(/\\([0-7]{3})/g, (_match, octal: string) => String.fromCharCode(Number.parseInt(octal, 8)));
 }

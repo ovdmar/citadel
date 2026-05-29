@@ -88,15 +88,18 @@ curl -sS -X POST http://127.0.0.1:4337/api/agent-sessions/<sessionId>/messages \
 
 This surface is for trusted local/internal deployments. Do not bind it to a public interface without adding an explicit authorization layer and network controls.
 
-## Terminal Runbook (ttyd)
+## Terminal Runbook
 
-Interactive terminals in the cockpit are rendered by per-session `ttyd` processes that the daemon spawns, supervises, and reverse-proxies.
+Interactive terminals in the cockpit use Citadel's xterm.js WebSocket renderer by default. The browser connects to `/terminal/<sessionId>`, the daemon attaches a lightweight tmux control-mode client to the durable tmux session, and the cockpit receives a bounded snapshot followed by live output chunks.
 
-**Required tools:** `tmux`, `ttyd`. The daemon resolves `ttyd` via `TTYD_BIN` (default `/home/linuxbrew/.linuxbrew/bin/ttyd`).
+`ttyd` remains available as a fallback/standalone renderer at `/terminals/<sessionId>/`. It is spawned lazily only when the fallback URL or terminal ensure endpoint is used.
+
+**Required tools:** `tmux` for the primary renderer; `ttyd` for fallback/standalone terminals. The daemon resolves ttyd via `TTYD_BIN` (default `/home/linuxbrew/.linuxbrew/bin/ttyd`).
 
 **How it works:**
-- The cockpit calls `POST /api/agent-sessions/:sessionId/terminal` to ensure a ttyd is running for that session. The daemon allocates a free TCP port in `CITADEL_TTYD_PORT_BASE..CITADEL_TTYD_PORT_MAX`; when unset, each daemon gets a deterministic 200-port slot starting at `7721 + 200 * ((daemonPort - 4010) mod 11)` (11 disjoint slices in `7721..9920`). It binds ttyd to `127.0.0.1:<port>` with `-b /terminals/<sessionId>` so it knows its proxied base path, and runs `bash -lc 'tmux attach -t <session>'` inside.
-- The daemon proxies all HTTP and WebSocket traffic at `/terminals/:sessionId/*` to the matching ttyd. The cockpit renders `<iframe src="/terminals/:sessionId/">`.
+- The cockpit opens `ws(s)://<host>/terminal/<sessionId>` for the primary renderer. No ttyd process or iframe is created for normal workspace switching.
+- The fallback endpoint `POST /api/agent-sessions/:sessionId/terminal` ensures a ttyd is running for that session. The daemon allocates a free TCP port in `CITADEL_TTYD_PORT_BASE..CITADEL_TTYD_PORT_MAX`; when unset, each daemon gets a deterministic port slot. It binds ttyd to `127.0.0.1:<port>` with `-b /terminals/<sessionId>` so it knows its proxied base path, and runs `bash -lc 'tmux attach -t <session>'` inside.
+- The daemon proxies all fallback HTTP and WebSocket traffic at `/terminals/:sessionId/*` to the matching ttyd.
 - On daemon startup, any orphaned `ttyd` listening inside the configured port range is reaped (via `lsof -nP -iTCP -sTCP:LISTEN`).
 - Stopping a Citadel session (`DELETE /api/agent-sessions/:id`) releases its ttyd. `DELETE /api/agent-sessions/:id/terminal` releases the ttyd without stopping the tmux session.
 
@@ -121,6 +124,6 @@ curl -sS -X DELETE http://127.0.0.1:4010/api/agent-sessions/<sessionId>/terminal
 - `spawn_failed` — Node could not spawn ttyd. Check permissions and shell binary.
 - `session_not_found` — Citadel does not know that session id. Refresh the cockpit.
 
-**Diagnostic xterm gateway:** `/terminal/:sessionId` still exposes the legacy xterm/WebSocket bridge for tooling and tests. It is not used by the cockpit and is not the default renderer.
+**Primary xterm gateway:** `/terminal/:sessionId` is the cockpit renderer and is also used by tooling/tests. It avoids the per-session ttyd process cost while keeping tmux as the durable session owner.
 
-**Trade-offs accepted:** one external ttyd process per active terminal, dynamic loopback ports, and a proxy hop, in exchange for unmodified terminal fidelity (alt-screen TUIs like Claude Code, full colour, cursor, shortcut passthrough, paste).
+**Trade-offs accepted:** Citadel owns a small tmux-control bridge using xterm.js rather than delegating every cockpit pane to ttyd. This removes per-session ttyd RSS and iframe startup from normal navigation. ttyd is retained as a compatibility fallback when needed.

@@ -24,6 +24,8 @@ import {
   shellQuote,
   stopBackgroundSessionPipe,
   submitPrompt,
+  tmuxControlInputCommands,
+  tmuxControlResizeCommand,
   tmuxSessionExists,
 } from "./index.js";
 import { hasCollapsedPasteMarker } from "./submit-prompt.js";
@@ -46,6 +48,18 @@ describe("tmux terminal gateway helpers", () => {
   it("decodes tmux control-mode output chunks", () => {
     expect(parseTmuxControlOutput("%output %1 hello\\015\\012")).toBe("hello\r\n");
     expect(parseTmuxControlOutput("%session-changed $1 shell")).toBeNull();
+  });
+
+  it("builds tmux control-mode input commands without per-key shellouts", () => {
+    expect(tmuxControlInputCommands("sess one", 'abc "quoted" \\ path $i')).toEqual([
+      'send-keys -l -t "sess one" "abc \\"quoted\\" \\\\ path \\$i"',
+    ]);
+    expect(tmuxControlInputCommands("sess one", "\u0001\u001b[A\r")).toEqual([
+      'send-keys -t "sess one" "C-a"',
+      'send-keys -t "sess one" "Up"',
+      'send-keys -t "sess one" "Enter"',
+    ]);
+    expect(tmuxControlResizeCommand("sess one", 1000, 1)).toBe('resize-pane -t "sess one" -x 400 -y 5');
   });
 
   it("creates durable sessions, sends input, captures output, resizes, and cleans up", async () => {

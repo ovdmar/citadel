@@ -160,6 +160,12 @@ importers:
       '@tanstack/react-router':
         specifier: ^1.132.0
         version: 1.170.1(react-dom@19.2.6(react@19.2.6))(react@19.2.6)
+      '@xterm/addon-fit':
+        specifier: ^0.10.0
+        version: 0.10.0(@xterm/xterm@5.5.0)
+      '@xterm/xterm':
+        specifier: ^5.5.0
+        version: 5.5.0
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1

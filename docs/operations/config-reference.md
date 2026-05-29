@@ -164,28 +164,30 @@ Tools include read-only state inspection (including `read_agent_output`, which r
 
 For interactive runtimes like Claude Code, an initial `prompt` passed to `start_agent_session` and every `send_agent_message` are delivered into the tmux pane via paste-buffer + Enter, so the prompt is actually submitted to the agent and not just left in the input box. Citadel ships `claude-code` without `promptArg` for this reason — `-p` is Claude Code's non-interactive print mode, which exits after responding and is not what an interactive Citadel session needs.
 
-## Terminal Renderer (ttyd)
+## Terminal Renderer
 
-Shell-backed sessions are tmux sessions. The cockpit's interactive renderer is `ttyd`, run as a per-session child process and reverse-proxied through the daemon at `/terminals/:sessionId/*`.
+Shell-backed sessions are tmux sessions. The cockpit's default interactive renderer is an in-process xterm.js pane connected to the daemon WebSocket at `/terminal/:sessionId`. The daemon bridges that socket to the matching tmux session through tmux control mode, so normal workspace and agent switching does not spawn one renderer process per session.
+
+`ttyd` remains available as an explicit fallback/standalone renderer at `/terminals/:sessionId/*`. Opening the standalone terminal action lazily starts ttyd for that session; normal cockpit navigation does not.
 
 Environment variables:
 
 - `TTYD_BIN` — absolute path to the ttyd binary (default `/home/linuxbrew/.linuxbrew/bin/ttyd`).
 - `CITADEL_SHELL_BIN` — shell used to wrap `tmux attach` (default `$SHELL` then `/bin/bash`).
-- `CITADEL_TTYD_PORT_BASE`, `CITADEL_TTYD_PORT_MAX` — inclusive port range used for ttyd allocation. When unset, the daemon picks a per-instance 200-port slot starting at `7721 + 200 * ((daemonPort - 4010) mod 11)`, giving 11 disjoint slices in `7721..9920`. All ports are bound to `127.0.0.1`.
+- `CITADEL_TTYD_PORT_BASE`, `CITADEL_TTYD_PORT_MAX` — inclusive port range used for fallback ttyd allocation. When unset, the daemon picks a per-instance port slot from the default ttyd range. All ports are bound to `127.0.0.1`.
 
 Lifecycle:
 
-- A ttyd process is spawned the first time the cockpit hits `POST /api/agent-sessions/:sessionId/terminal`. ttyd is launched with `-W --check-origin=false -i 127.0.0.1 -b /terminals/<sessionId>` and runs `bash -lc 'tmux attach -t <session>'`.
+- A fallback ttyd process is spawned the first time a client hits `POST /api/agent-sessions/:sessionId/terminal` or opens `/terminals/:sessionId/`. ttyd is launched with `-W --check-origin=false -i 127.0.0.1 -b /terminals/<sessionId>` and runs `bash -lc 'tmux attach -t <session>'`.
 - Stopping a session releases its ttyd. `DELETE /api/agent-sessions/:id/terminal` releases without stopping tmux.
 - On daemon startup, stale `ttyd` processes that listen inside the configured port range are reaped.
 
-## Diagnostic Terminal Gateway
+## WebSocket Terminal Gateway
 
-A separate xterm/WebSocket gateway is still exposed at `/terminal/:sessionId` for tooling and tests:
+The primary xterm/WebSocket gateway is exposed at `/terminal/:sessionId`:
 
 - reconnect sends a bounded visible-screen snapshot,
 - live output streams from tmux control mode as incremental chunks,
 - input, paste, and resize are relayed to tmux.
 
-This gateway is *not* the cockpit's default renderer. Use it for scripted tests or remote debugging only.
+This gateway is the cockpit's default renderer and is also used for scripted tests or remote debugging.
