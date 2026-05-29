@@ -21,6 +21,8 @@ type CodexMeta = { id?: string; cwd?: string; timestamp?: string };
 
 type ParseResult = { meta: CodexMeta; prompts: RuntimeUserPrompt[] };
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export function parseCodexRollout(filePath: string): ParseResult {
   let raw: string;
   try {
@@ -129,17 +131,19 @@ function listCandidateRollouts(root: string, startMs: number): string[] {
  *
  * Codex auto-generates the UUID at spawn — no `--session-id` flag exists
  * (issue openai/codex#3492, closed not-planned), and the interactive TUI
- * doesn't expose it on stdout. Filesystem polling is the only reliable
- * channel for the TUI flow Citadel uses.
+ * doesn't expose it on stdout. When we have the pane's shell PID, we inspect
+ * the live Codex process's open rollout file first; otherwise we fall back to
+ * matching the filesystem rollout by cwd + launch time.
  *
  * `timeoutMs` is conservative (5 s default): on a cold codex startup the
- * rollout file appears within ~1 s; on a busy host it can take longer.
+ * rollout file often appears within ~1 s; on a busy host it can take longer.
  * Best-effort — returns null on timeout so the caller can decide whether
  * to retry, log, or just live without registration for this session.
  */
 export async function discoverCodexSessionId(opts: {
   workspacePath: string;
   spawnTimeMs: number;
+  rootPid?: number;
   timeoutMs?: number;
   pollMs?: number;
   home?: string;
@@ -149,16 +153,114 @@ export async function discoverCodexSessionId(opts: {
   const deadline = Date.now() + timeoutMs;
   const sessionStartedAt = new Date(opts.spawnTimeMs).toISOString();
   while (Date.now() < deadline) {
-    const file = findCodexRolloutForSession({
-      workspacePath: opts.workspacePath,
-      sessionStartedAt,
-      ...(opts.home ? { home: opts.home } : {}),
-    });
-    if (file) {
-      const { meta } = parseCodexRollout(file);
-      if (meta.id) return meta.id;
+    if (opts.rootPid && processExists(opts.rootPid)) {
+      const found = discoverCodexSessionIdFromProcess({
+        rootPid: opts.rootPid,
+        ...(opts.home ? { home: opts.home } : {}),
+      });
+      if (found) return found;
+    } else {
+      const file = findCodexRolloutForSession({
+        workspacePath: opts.workspacePath,
+        sessionStartedAt,
+        ...(opts.home ? { home: opts.home } : {}),
+      });
+      if (file) {
+        const { meta } = parseCodexRollout(file);
+        if (meta.id) return meta.id;
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  return null;
+}
+
+export function extractCodexResumeSessionIdFromArgv(argv: string[]): string | null {
+  const resumeIndex = argv.findIndex((arg) => arg === "resume");
+  if (resumeIndex < 0) return null;
+  const candidate = argv[resumeIndex + 1];
+  return candidate && UUID_REGEX.test(candidate) ? candidate : null;
+}
+
+export function discoverCodexSessionIdFromProcess(opts: { rootPid: number; home?: string }): string | null {
+  const pids = listProcessTree(opts.rootPid);
+  for (const pid of pids) {
+    const rollout = findOpenCodexRolloutForPid(pid, opts.home);
+    if (rollout) {
+      const { meta } = parseCodexRollout(rollout);
+      if (meta.id) return meta.id;
+    }
+  }
+  for (const pid of pids) {
+    const id = extractCodexResumeSessionIdFromArgv(readProcessArgv(pid));
+    if (id) return id;
+  }
+  return null;
+}
+
+function listProcessTree(rootPid: number): number[] {
+  if (!Number.isInteger(rootPid) || rootPid <= 0) return [];
+  const out: number[] = [];
+  const seen = new Set<number>();
+  const visit = (pid: number) => {
+    if (seen.has(pid)) return;
+    seen.add(pid);
+    out.push(pid);
+    for (const child of readProcessChildren(pid)) visit(child);
+  };
+  visit(rootPid);
+  return out;
+}
+
+function readProcessChildren(pid: number): number[] {
+  try {
+    const raw = fs.readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8").trim();
+    if (!raw) return [];
+    return raw
+      .split(/\s+/)
+      .map((value) => Number.parseInt(value, 10))
+      .filter((value) => Number.isInteger(value) && value > 0);
+  } catch {
+    return [];
+  }
+}
+
+function processExists(pid: number): boolean {
+  try {
+    return fs.existsSync(`/proc/${pid}`);
+  } catch {
+    return false;
+  }
+}
+
+function readProcessArgv(pid: number): string[] {
+  try {
+    const raw = fs.readFileSync(`/proc/${pid}/cmdline`);
+    return raw
+      .toString("utf8")
+      .split("\0")
+      .filter((arg) => arg.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+function findOpenCodexRolloutForPid(pid: number, home?: string): string | null {
+  const root = codexSessionsRoot(home ?? os.homedir());
+  const fdDir = `/proc/${pid}/fd`;
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(fdDir);
+  } catch {
+    return null;
+  }
+  for (const entry of entries) {
+    try {
+      const target = fs.realpathSync(path.join(fdDir, entry));
+      if (!target.startsWith(`${root}${path.sep}`)) continue;
+      if (!target.endsWith(".jsonl")) continue;
+      return target;
+    } catch {}
   }
   return null;
 }

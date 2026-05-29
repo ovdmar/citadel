@@ -26,6 +26,7 @@ import {
   submitPrompt,
   tmuxSessionExists,
 } from "./index.js";
+import { hasCollapsedPasteMarker } from "./submit-prompt.js";
 
 const sessions: string[] = [];
 const dirs: string[] = [];
@@ -36,6 +37,12 @@ afterEach(() => {
 });
 
 describe("tmux terminal gateway helpers", () => {
+  it("recognizes collapsed paste markers from Claude Code and Codex", () => {
+    expect(hasCollapsedPasteMarker("[Pasted text #1 +101 lines]")).toBe(true);
+    expect(hasCollapsedPasteMarker("[Pasted Content 3298 chars]")).toBe(true);
+    expect(hasCollapsedPasteMarker("Pasted Content 3298 chars")).toBe(false);
+  });
+
   it("decodes tmux control-mode output chunks", () => {
     expect(parseTmuxControlOutput("%output %1 hello\\015\\012")).toBe("hello\r\n");
     expect(parseTmuxControlOutput("%session-changed $1 shell")).toBeNull();

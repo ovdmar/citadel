@@ -44,6 +44,7 @@ import { getBootRestoreSummary } from "./boot-restore.js";
 import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { buildDiagnosticsSnapshot, streamDiagnosticsBundle } from "./diagnostics-bundle.js";
+import { registerDiagnosticsClientRoute } from "./diagnostics-client-route.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import {
   AUTOMATED_GH_DISABLED_REASON,
@@ -134,7 +135,7 @@ export function createDaemonApp(input: {
   const ttyd = createTtydManager({ ...resolveTtydPortRange(config.port), diagnostics });
   // Release the ttyd on every stopAgentSession path; guarded for test stubs.
   if (typeof operations.setTerminalHooks === "function") {
-    operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId) });
+    operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId, "session-stopped-hook") });
   }
 
   const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
@@ -169,11 +170,14 @@ export function createDaemonApp(input: {
     }
   };
 
-  // Adopt detached ttyds left behind by daemon restarts; skipped in tests so
-  // vitest daemons cannot attach to live cockpit terminals.
+  // Adopt detached ttyds left behind by daemon restarts. Discovery is scoped
+  // to this daemon's port slot so sandbox daemons cannot reap prod ttyds.
+  // Skipped in tests so vitest daemons cannot attach to live cockpit terminals.
   if (!process.env.VITEST) {
     const survivors = discoverExistingTtyds({
       basePathPrefix: ttyd.config.basePathPrefix,
+      portBase: ttyd.config.portBase,
+      portMax: ttyd.config.portMax,
     });
     const sessionTabIds = new Map<string, string>();
     for (const session of store.listSessions()) {
@@ -190,7 +194,16 @@ export function createDaemonApp(input: {
       });
     }
   }
-  const { recentUserAction } = wireTerminalRoutes({ app, server, store, ttyd, dataDir: config.dataDir, emit, config });
+  const { recentUserAction } = wireTerminalRoutes({
+    app,
+    server,
+    store,
+    ttyd,
+    dataDir: config.dataDir,
+    emit,
+    config,
+    diagnostics,
+  });
 
   const cachedProviderHealth = () =>
     cachedProvider(
@@ -248,15 +261,11 @@ export function createDaemonApp(input: {
     res.json({ config, configPath });
   });
 
-  // Diagnostics surface. /snapshot returns the in-memory ring + a small
-  // structured snapshot of "what the daemon thinks the world looks like"
-  // (sessions/workspaces/ttyd inventory/live tmux session names). /bundle
-  // streams a tar.gz that includes the JSONL file(s) on disk plus that same
-  // snapshot — what the user emails over when reporting "all my sessions
-  // died".
+  // Diagnostics surface: JSON snapshot, client events, and downloadable bundle.
   app.get("/api/diagnostics/snapshot", (_req, res) => {
     res.json(buildDiagnosticsSnapshot({ store, ttyd, diagnostics, config }));
   });
+  registerDiagnosticsClientRoute({ app, diagnostics });
   app.get("/api/diagnostics/bundle.tar.gz", async (_req, res) => {
     try {
       await streamDiagnosticsBundle(res, { store, ttyd, diagnostics, config });
@@ -776,7 +785,7 @@ export function createDaemonApp(input: {
     cachedProvider,
   });
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
-  const autoResume = startDaemonAutoResumeLoop(store, operations);
+  const autoResume = startDaemonAutoResumeLoop(store, operations, config);
   if (autoResume) server.on("close", () => autoResume.stop());
   const terminalReaper = startTerminalReaper();
   server.on("close", () => terminalReaper.stop());

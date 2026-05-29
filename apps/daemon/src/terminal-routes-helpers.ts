@@ -9,6 +9,10 @@ import { type TtydManager, ensureTmuxSession, launchAgentInSession, panePidProce
 import type express from "express";
 import { registerTerminalRoutes } from "./terminal-routes.js";
 
+type DiagnosticsSink = {
+  log(category: string, event: string, data?: Record<string, unknown>): void;
+};
+
 const SHELL_COMMANDS = ["bash", "sh", "zsh", "fish"] as const;
 function isShellCommand(command: string): boolean {
   return (SHELL_COMMANDS as readonly string[]).includes(command);
@@ -44,6 +48,7 @@ export function wireTerminalRoutes(input: {
   dataDir: string;
   emit: (type: string, payload: unknown) => void;
   config: CitadelConfig;
+  diagnostics?: DiagnosticsSink;
 }): { recentUserAction: Map<string, number> } {
   const recentUserAction = new Map<string, number>();
   registerTerminalRoutes({
@@ -53,6 +58,7 @@ export function wireTerminalRoutes(input: {
     ttyd: input.ttyd,
     dataDir: input.dataDir,
     emit: input.emit,
+    ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     recentUserAction,
     respawnTmux: buildRespawnTmux(input.store, input.config),
     restartAgent: buildRestartAgent(input.store, input.config),

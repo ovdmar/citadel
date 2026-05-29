@@ -43,8 +43,8 @@ export type TtydManager = {
     enableTmuxMouse?: boolean;
   }): Promise<TtydEntry>;
   lookup(key: string): TtydEntry | null;
-  release(key: string): void;
-  releaseTab(tabId: string): number;
+  release(key: string, reason?: string): void;
+  releaseTab(tabId: string, reason?: string): number;
   list(): TtydEntry[];
   cleanupStale(): { killed: number; portRange: [number, number] };
   adopt(
