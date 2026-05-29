@@ -124,7 +124,7 @@ export function registerMcpRoutes(
         if (error instanceof ZodError) {
           return res.status(400).json({
             error: "validation_failed",
-            issues: error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message })),
+            issues: error.issues.map((issue) => ({ ...issue, path: issue.path.join(".") })),
           });
         }
         return res.json(rpcError(request.id, -32000, errorMessage(error)));

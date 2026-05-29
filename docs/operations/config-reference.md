@@ -74,6 +74,27 @@ Expected stdout fields:
 
 If no usage provider is configured for a runtime, Citadel returns an explicit `unavailable` usage summary rather than guessing.
 
+## Automations
+
+The fix-CI automation is configurable from Settings -> Automations and persists under `automations.fixCi`:
+
+```json
+{
+  "automations": {
+    "fixCi": {
+      "enabled": true,
+      "runtimeId": "claude-code",
+      "fallbackRuntimeId": "codex",
+      "idleThresholdMs": 300000,
+      "debounceMs": 1800000,
+      "intervalMs": 60000
+    }
+  }
+}
+```
+
+When PR checks are failing and the workspace is idle, Citadel launches the primary runtime only if its health is `healthy`; otherwise it tries the configured fallback. Set `fallbackRuntimeId` to `null` to skip auto-repair when the primary runtime is unavailable.
+
 ## Hooks
 
 Command hooks run with JSON input on stdin, bounded stdout/stderr capture, and a timeout from `commandPolicy.hookTimeoutMs`.
