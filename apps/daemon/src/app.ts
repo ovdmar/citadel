@@ -109,6 +109,12 @@ export function createDaemonApp(input: {
   };
   const app = express();
   const server = http.createServer(app);
+  // Node's 5s default keep-alive timeout is short enough for Playwright's
+  // APIRequestContext to race a reused idle socket on slower CI runs, surfacing
+  // as ECONNRESET even though the daemon is healthy. Keep browser/API
+  // connections alive for a normal interaction gap instead.
+  server.keepAliveTimeout = 120_000;
+  server.headersTimeout = 125_000;
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
   // Always-on structured diagnostics. Writes JSONL to <dataDir>/diagnostics.jsonl
