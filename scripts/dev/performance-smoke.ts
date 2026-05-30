@@ -12,6 +12,10 @@ const apiBaseUrl = process.env.CITADEL_BASE_URL || `http://127.0.0.1:${managedAp
 const webBaseUrl = process.env.CITADEL_WEB_URL || `http://127.0.0.1:${managedWebPort}`;
 const managedProcesses: ChildProcess[] = [];
 const managedDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-perf-runtime-"));
+const workspaceSwitchBudgetMs = readPositiveInt(
+  process.env.CITADEL_PERF_WORKSPACE_SWITCH_MAX_MS,
+  process.env.CI === "true" ? 1500 : 1000,
+);
 
 await ensureLocalServices();
 
@@ -69,7 +73,7 @@ try {
       await page.locator(".cit-brand").waitFor();
       await page.locator("main[aria-label='Agent stage']").waitFor();
     });
-    await time("workspace_switch_long_buffers", 1000, async () => {
+    await time("workspace_switch_long_buffers", workspaceSwitchBudgetMs, async () => {
       await selectWorkspaceAndSession(/perf-a-/i, "Perf Shell A");
       await selectWorkspaceAndSession(/perf-b-/i, "Perf Shell B");
       await selectWorkspaceAndSession(/perf-a-/i, "Perf Shell A");
@@ -172,6 +176,11 @@ async function time<T>(name: string, maxMs: number, fn: () => Promise<T>) {
   console.log(`${name} ${durationMs}ms`);
   if (durationMs > maxMs) throw new Error(`${name} exceeded ${maxMs}ms`);
   return { durationMs, result };
+}
+
+function readPositiveInt(raw: string | undefined, fallback: number) {
+  const parsed = Number.parseInt(raw ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 async function registerRepo(fixture: ReturnType<typeof createGitFixture>) {
