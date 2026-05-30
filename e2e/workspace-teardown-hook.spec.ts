@@ -10,7 +10,7 @@ import { type APIRequestContext, expect, test } from "@playwright/test";
 // and asserts the sentinel appears BEFORE the worktree directory is pruned.
 
 const API_BASE =
-  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "4012"}`;
+  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012"}`;
 
 test("file-based teardown hook runs before worktree prune", async ({ request }) => {
   const fixture = createGitFixture();

@@ -10,7 +10,7 @@ import { type APIRequestContext, expect, test } from "@playwright/test";
 // to /operations?id=<op> and asserts the matching row is highlighted.
 
 const API_BASE =
-  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "4012"}`;
+  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012"}`;
 
 test("operations route highlights the row matching ?id=", async ({ page, request }) => {
   const fixture = createGitFixture();
