@@ -120,7 +120,7 @@
   gap: 2px;
 }
 
-.nav-section button {
+.nav-section-icons > button {
   display: inline-grid;
   place-items: center;
   width: 22px;
@@ -132,7 +132,7 @@
   cursor: pointer;
 }
 
-.nav-section button:hover {
+.nav-section-icons > button:hover {
   background: var(--c-line-1);
   color: var(--c-fg-1);
 }
