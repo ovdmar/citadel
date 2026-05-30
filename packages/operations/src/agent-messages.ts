@@ -108,7 +108,12 @@ export async function sendAgentMessage(
   // status-monitor tick to confirm via real pane observation whether the
   // rate-limit banner cleared, so backoff state isn't reset prematurely.
   const optimistic = input.optimistic ?? true;
-  const result = await submitPrompt(session.tmuxSessionName, input.message);
+  const result = await submitPrompt(session.tmuxSessionName, input.message, {
+    // Plain terminal sessions can be sitting in programs that do not echo
+    // input reliably. The shell/program itself is the runtime, so send the
+    // message without requiring a visual pre-submit echo.
+    skipVerification: session.runtimeId === "shell",
+  });
   if (result.ok) {
     // We don't record the message here — the runtime's own transcript
     // (claude-code .jsonl, codex rollout, …) captures it whether it arrived
