@@ -476,14 +476,13 @@
   background: var(--c-elev);
 }
 
-.terminal-surface .xterm,
-.terminal-surface .xterm-viewport,
-.terminal-surface .xterm-screen {
+.terminal-surface .xterm {
   height: 100% !important;
 }
 
 .terminal-surface .xterm-viewport {
   background: transparent !important;
+  scrollbar-width: thin;
 }
 
 .terminal-xterm-host {

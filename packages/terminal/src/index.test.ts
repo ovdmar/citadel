@@ -99,11 +99,17 @@ describe("tmux terminal gateway helpers", () => {
     ensureTmuxExtendedKeys();
 
     const extendedKeys = execTmux(["show-options", "-s", "-g", "extended-keys"]);
+    const extendedKeysFormat = maybeExecTmux(["show-options", "-s", "-g", "extended-keys-format"]);
     const terminalFeatures = execTmux(["show-options", "-s", "-g", "terminal-features"]);
     const historyLimit = execTmux(["show-options", "-g", "history-limit"]);
+    const mouse = execTmux(["show-options", "-g", "mouse"]);
+    const clipboard = execTmux(["show-options", "-g", "set-clipboard"]);
     expect(extendedKeys).toContain("extended-keys on");
+    if (extendedKeysFormat) expect(extendedKeysFormat).toContain("extended-keys-format csi-u");
     expect(terminalFeatures).toMatch(/xterm\*.*extkeys/);
     expect(historyLimit).toContain("history-limit 5000");
+    expect(mouse).toContain("mouse on");
+    expect(clipboard).toContain("set-clipboard on");
   });
 
   it("submitPrompt pastes the prompt and presses Enter so the runtime actually executes it", async () => {
@@ -580,4 +586,12 @@ function waitForWebSocketOutput(ws: WebSocket, expected: string, type?: string) 
 
 function execTmux(args: string[]) {
   return execFileSync("tmux", args, { encoding: "utf8" });
+}
+
+function maybeExecTmux(args: string[]) {
+  try {
+    return execTmux(args);
+  } catch {
+    return null;
+  }
 }

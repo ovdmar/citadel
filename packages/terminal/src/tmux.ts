@@ -17,6 +17,7 @@ export function ensureTmuxExtendedKeys() {
   const socketKey = tmuxSocketCacheKey();
   if (configuredTmuxSockets.has(socketKey)) return;
   execFileSync("tmux", [...tmuxPrefix(), "set-option", "-s", "extended-keys", "on"], { stdio: "ignore" });
+  trySetTmuxOption(["set-option", "-s", "extended-keys-format", "csi-u"]);
   const features = execFileSync("tmux", [...tmuxPrefix(), "show-options", "-s", "-g", "terminal-features"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
@@ -29,7 +30,17 @@ export function ensureTmuxExtendedKeys() {
   // Keep enough scrollback for operator inspection while bounding worst-case
   // per-client/server memory in long-running tmux servers.
   execFileSync("tmux", [...tmuxPrefix(), "set-option", "-g", "history-limit", "5000"], { stdio: "ignore" });
+  execFileSync("tmux", [...tmuxPrefix(), "set-option", "-g", "mouse", "on"], { stdio: "ignore" });
+  execFileSync("tmux", [...tmuxPrefix(), "set-option", "-g", "set-clipboard", "on"], { stdio: "ignore" });
   configuredTmuxSockets.add(socketKey);
+}
+
+function trySetTmuxOption(args: string[]): void {
+  try {
+    execFileSync("tmux", [...tmuxPrefix(), ...args], { stdio: "ignore" });
+  } catch {
+    /* unsupported by older tmux */
+  }
 }
 
 function tmuxSocketCacheKey(): string {

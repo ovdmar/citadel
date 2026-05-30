@@ -18,6 +18,7 @@ export type TerminalSocketMessage = {
 
 const RUNBOOK_URL = "/docs/operations/terminal-runbook";
 const XTERM_FONT = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+const SHIFT_ENTER_SEQUENCE = "\u001b[13;2u";
 
 /**
  * Per-session handle used by Stage tabs to drive a live terminal WebSocket.
@@ -300,7 +301,7 @@ function handleTerminalKeyEvent(event: KeyboardEvent, terminal: Terminal, sessio
     return false;
   }
   if (key === "enter" && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
-    sendTerminalInput(ws, "\n");
+    sendTerminalInput(ws, SHIFT_ENTER_SEQUENCE);
     return false;
   }
   if (isMacPlatform()) {

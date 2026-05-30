@@ -208,7 +208,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(commandPalette).toBe(false);
     expect(multiline).toBe(false);
     expect(decodeBinarySent(ws.sent)).toContain("\u0003");
-    expect(decodeBinarySent(ws.sent)).toContain("\n");
+    expect(decodeBinarySent(ws.sent)).toContain("\u001b[13;2u");
     expect(window.fetch).toHaveBeenCalledWith(
       "/api/agent-sessions/sess_1/user-action",
       expect.objectContaining({ body: JSON.stringify({ reason: "ctrl_c" }) }),
