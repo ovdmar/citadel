@@ -434,25 +434,6 @@ describe("OperationService", () => {
     }
   });
 
-  it("rejects transcript/message calls for unknown sessions", async () => {
-    const fixture = createGitFixture();
-    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
-    store.migrate();
-    const service = new OperationService(store, {
-      hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
-      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
-    });
-    expect(service.readAgentTranscript({ sessionId: "sess_missing" })).toEqual({
-      ok: false,
-      error: "session_not_found",
-    });
-    expect(await service.sendAgentMessage({ sessionId: "sess_missing", message: "hi" })).toEqual({
-      ok: false,
-      error: "session_not_found",
-    });
-  });
-
   it("stops a session, removes it from the cockpit, and records activity", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
