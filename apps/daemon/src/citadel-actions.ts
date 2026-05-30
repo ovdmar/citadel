@@ -1,4 +1,4 @@
-// Citadel Actions — configurable prompt presets stored at
+// Citadel Actions — configurable prompt + preferred-runtime presets stored at
 // `<dataDir>/citadel-actions.json`. Surfaced in Settings; consumed by the
 // scratchpad's Refine button and the `refine_scratchpad` MCP tool.
 //
@@ -13,6 +13,7 @@ import path from "node:path";
 import type { CitadelAction } from "@citadel/contracts";
 
 const FILENAME = "citadel-actions.json";
+export const DEFAULT_CITADEL_ACTION_RUNTIME_ID = "claude-code";
 const BUILT_IN_REFINE_PROMPT = `You are working on a Citadel scratchpad — a markdown file split into UUID-fenced blocks.
 Use the citadel MCP server's read_scratchpad / list_blocks tools to read the current state.
 
@@ -32,10 +33,12 @@ export const BUILT_IN_REFINE_SCRATCHPAD = Object.freeze({
   description: "Dedupe, group, and tidy the scratchpad. Skips blocks marked in-progress.",
   icon: "Wand2",
   promptTemplate: BUILT_IN_REFINE_PROMPT,
+  runtimeId: DEFAULT_CITADEL_ACTION_RUNTIME_ID,
   builtIn: true,
 } as const);
 
 export type StoredCitadelActions = { actions: CitadelAction[] };
+type RawCitadelAction = Partial<CitadelAction> & { id: string };
 
 export class StaleUpdatedAtError extends Error {
   constructor() {
@@ -104,10 +107,36 @@ function seedBuiltIns(): CitadelAction[] {
       description: BUILT_IN_REFINE_SCRATCHPAD.description,
       icon: BUILT_IN_REFINE_SCRATCHPAD.icon,
       promptTemplate: BUILT_IN_REFINE_SCRATCHPAD.promptTemplate,
+      runtimeId: BUILT_IN_REFINE_SCRATCHPAD.runtimeId,
       builtIn: true,
       updatedAt: nowIso(),
     },
   ];
+}
+
+function normalizeAction(action: RawCitadelAction): { action: CitadelAction; mutated: boolean } {
+  const fallback = action.id === BUILT_IN_REFINE_SCRATCHPAD.id ? BUILT_IN_REFINE_SCRATCHPAD : null;
+  const normalized: CitadelAction = {
+    id: action.id,
+    name: action.name ?? fallback?.name ?? "Untitled action",
+    description: action.description ?? fallback?.description ?? "",
+    icon: action.icon ?? fallback?.icon ?? "",
+    promptTemplate: action.promptTemplate ?? fallback?.promptTemplate ?? "",
+    runtimeId: action.runtimeId ?? fallback?.runtimeId ?? DEFAULT_CITADEL_ACTION_RUNTIME_ID,
+    builtIn: action.builtIn ?? action.id === BUILT_IN_REFINE_SCRATCHPAD.id,
+    updatedAt: action.updatedAt ?? nowIso(),
+  };
+  return { action: normalized, mutated: JSON.stringify(normalized) !== JSON.stringify(action) };
+}
+
+function normalizeStore(store: StoredCitadelActions): { store: StoredCitadelActions; mutated: boolean } {
+  let mutated = false;
+  const actions = store.actions.map((action) => {
+    const normalized = normalizeAction(action);
+    if (normalized.mutated) mutated = true;
+    return normalized.action;
+  });
+  return { store: { actions }, mutated };
 }
 
 function readRaw(dataDir: string): StoredCitadelActions {
@@ -134,8 +163,9 @@ function writeRaw(dataDir: string, store: StoredCitadelActions): void {
 
 export async function listCitadelActions(dataDir: string): Promise<CitadelAction[]> {
   return withMutex(dataDir, () => {
-    const store = readRaw(dataDir);
-    let mutated = false;
+    const normalized = normalizeStore(readRaw(dataDir));
+    const store = normalized.store;
+    let { mutated } = normalized;
     // Seed built-ins on first read or if they were somehow removed.
     if (!store.actions.some((a) => a.id === BUILT_IN_REFINE_SCRATCHPAD.id)) {
       store.actions.unshift(...seedBuiltIns());
@@ -148,16 +178,17 @@ export async function listCitadelActions(dataDir: string): Promise<CitadelAction
 
 export async function createCitadelAction(
   dataDir: string,
-  input: { name: string; description?: string; icon?: string; promptTemplate: string },
+  input: { name: string; description?: string; icon?: string; promptTemplate: string; runtimeId?: string },
 ): Promise<CitadelAction> {
   return withMutex(dataDir, () => {
-    const store = readRaw(dataDir);
+    const store = normalizeStore(readRaw(dataDir)).store;
     const action: CitadelAction = {
       id: newId(),
       name: input.name,
       description: input.description ?? "",
       icon: input.icon ?? "",
       promptTemplate: input.promptTemplate,
+      runtimeId: input.runtimeId ?? DEFAULT_CITADEL_ACTION_RUNTIME_ID,
       builtIn: false,
       updatedAt: nowIso(),
     };
@@ -175,11 +206,13 @@ export async function updateCitadelAction(
     description?: string | undefined;
     icon?: string | undefined;
     promptTemplate?: string | undefined;
+    runtimeId?: string | undefined;
     updatedAt: string;
   },
 ): Promise<CitadelAction> {
   return withMutex(dataDir, () => {
-    const store = readRaw(dataDir);
+    const normalized = normalizeStore(readRaw(dataDir));
+    const store = normalized.store;
     const existing = store.actions.find((a) => a.id === id);
     if (!existing) throw new CitadelActionNotFoundError(id);
     if (existing.updatedAt !== input.updatedAt) throw new StaleUpdatedAtError();
@@ -189,6 +222,7 @@ export async function updateCitadelAction(
       description: input.description ?? existing.description,
       icon: input.icon ?? existing.icon,
       promptTemplate: input.promptTemplate ?? existing.promptTemplate,
+      runtimeId: input.runtimeId ?? existing.runtimeId,
       updatedAt: nowIso(),
     };
     store.actions = store.actions.map((a) => (a.id === id ? next : a));
@@ -199,7 +233,8 @@ export async function updateCitadelAction(
 
 export async function deleteCitadelAction(dataDir: string, id: string): Promise<void> {
   return withMutex(dataDir, () => {
-    const store = readRaw(dataDir);
+    const normalized = normalizeStore(readRaw(dataDir));
+    const store = normalized.store;
     const existing = store.actions.find((a) => a.id === id);
     if (!existing) throw new CitadelActionNotFoundError(id);
     if (existing.builtIn) throw new CannotDeleteBuiltInError();
@@ -210,7 +245,8 @@ export async function deleteCitadelAction(dataDir: string, id: string): Promise<
 
 export async function resetCitadelAction(dataDir: string, id: string): Promise<CitadelAction> {
   return withMutex(dataDir, () => {
-    const store = readRaw(dataDir);
+    const normalized = normalizeStore(readRaw(dataDir));
+    const store = normalized.store;
     const existing = store.actions.find((a) => a.id === id);
     if (!existing) throw new CitadelActionNotFoundError(id);
     if (id === BUILT_IN_REFINE_SCRATCHPAD.id) {
@@ -220,6 +256,7 @@ export async function resetCitadelAction(dataDir: string, id: string): Promise<C
         description: BUILT_IN_REFINE_SCRATCHPAD.description,
         icon: BUILT_IN_REFINE_SCRATCHPAD.icon,
         promptTemplate: BUILT_IN_REFINE_SCRATCHPAD.promptTemplate,
+        runtimeId: BUILT_IN_REFINE_SCRATCHPAD.runtimeId,
         builtIn: true,
         updatedAt: nowIso(),
       };
@@ -228,6 +265,7 @@ export async function resetCitadelAction(dataDir: string, id: string): Promise<C
       return seeded;
     }
     // Custom actions don't have a "factory default" — reset is a no-op.
+    if (normalized.mutated) writeRaw(dataDir, store);
     return existing;
   });
 }

@@ -25,10 +25,11 @@ export type AgentExitHint = { runtimeId: string; runtimeSessionId?: string | nul
 
 const CLAUDE_EXIT_MESSAGE_PREFIX = "[citadel] Agent exited. Run any command, or restart the agent";
 const CLAUDE_INTERACTIVE_EXIT_MESSAGE = `${CLAUDE_EXIT_MESSAGE_PREFIX} (e.g. \`claude resume\` to pick a session interactively).`;
+const GENERIC_EXIT_MESSAGE = "[citadel] Agent exited. Run any command, or restart the agent from Citadel.";
 
 export function agentExitHintCommand(hint: AgentExitHint): string {
   if (hint.runtimeId !== "claude-code") {
-    return `printf '\\n%s\\n' ${shellQuote(CLAUDE_INTERACTIVE_EXIT_MESSAGE)}`;
+    return `printf '\\n%s\\n' ${shellQuote(GENERIC_EXIT_MESSAGE)}`;
   }
   if (hint.runtimeSessionId) {
     return `printf '\\n%s\\n' ${shellQuote(`${CLAUDE_EXIT_MESSAGE_PREFIX} (e.g. \`claude resume ${hint.runtimeSessionId}\`).`)}`;
@@ -92,7 +93,12 @@ export async function launchAgentInSession(
   execFileSync("tmux", [...tmuxPrefix(), "send-keys", "-t", sessionName, cmd, "Enter"], { stdio: "ignore" });
   // Positive predicate against the comm-truncated runtime binary.
   const target = runtimeBinary.slice(0, COMM_TRUNCATION);
-  await waitForPaneCommand(sessionName, (cur) => cur === target, { timeoutMs: options.timeoutMs ?? 5000 });
+  const observed = await waitForPaneCommand(sessionName, (cur) => cur === target, {
+    timeoutMs: options.timeoutMs ?? 5000,
+  });
+  if (observed !== target) {
+    throw new Error(`runtime_not_ready: expected ${target}, observed ${observed || "none"}`);
+  }
 }
 
 // One-time sweep of leftover /tmp/citadel-agent-*.{live,exit} files from the

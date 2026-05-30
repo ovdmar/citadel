@@ -139,7 +139,7 @@ The cockpit's scratchpad opens as a **right-anchored overlay drawer** rendered a
 
 ### Citadel Actions
 
-[ ] 15. A "Citadel Actions" section in Settings exposes configurable action presets (name, description, icon, prompt template) stored at `<dataDir>/citadel-actions.json` and serialized through a daemon-side mutex with `updatedAt` stale-write protection. A built-in `refine-scratchpad` action seeds on first read; built-ins can be edited or reset to default but not deleted.
+[ ] 15. A "Citadel Actions" section in Settings exposes configurable action presets (name, description, icon, preferred agent runtime, prompt template) stored at `<dataDir>/citadel-actions.json` and serialized through a daemon-side mutex with `updatedAt` stale-write protection. A built-in `refine-scratchpad` action seeds on first read; built-ins can be edited or reset to default but not deleted.
 [ ] 16. A "Refine" button in the drawer header opens a modal pre-filled with the `refine-scratchpad` action's prompt template, the target repo (cockpit-active by default with override dropdown), and a "Save as default" option. Confirm launches an agent workspace named `refine-scratchpad-<timestamp>`. If the prompt does not mention `in-progress` (case-insensitive), the daemon returns a soft warning that the modal renders inline.
 
 ### Deep link
