@@ -15,16 +15,17 @@ const daemonLog = process.env.CITADEL_PLAYWRIGHT_DAEMON_LOG || "/tmp/citadel-pla
 const daemonDataDir = process.env.CITADEL_PLAYWRIGHT_DATA_DIR || `/tmp/citadel-playwright-data-${process.pid}`;
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
-const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}`).replace(
-  /[^A-Za-z0-9_.-]/g,
-  "-",
-);
+const tmuxSocket = (
+  process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}-${process.pid}`
+).replace(/[^A-Za-z0-9_.-]/g, "-");
 
 export default defineConfig({
   testDir: "e2e",
   // The suite mutates daemon-global config, scratchpad files, repos, and tmux
   // sessions. Keep it serial even on high-core local machines; GitHub Actions
   // happened to run one worker, while local parallelism exposed state races.
+  // `pnpm e2e` also runs viewport projects as separate Playwright invocations
+  // so each project gets its own daemon, data dir, and tmux socket.
   workers: 1,
   timeout: 45_000,
   expect: { timeout: 10_000 },
