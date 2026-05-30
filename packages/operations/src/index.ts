@@ -193,7 +193,7 @@ export class OperationService {
   stopAgentSession(input: { sessionId: string }) {
     const session = this.store.listSessions().find((candidate) => candidate.id === input.sessionId);
     if (!session) return { stopped: false, reason: "session_not_found" as const };
-    if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
+    if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
     this.store.deleteSession(session.id);
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     this.activity(
@@ -314,7 +314,8 @@ export class OperationService {
     }
 
     for (const session of sessions) {
-      if (session.tmuxSessionName && input.cleanupWorktrees) killTmuxSession(session.tmuxSessionName);
+      if (session.tmuxSessionName && input.cleanupWorktrees)
+        killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
     }
 
     let cleanedWorktrees = 0;

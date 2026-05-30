@@ -119,6 +119,9 @@ export const AgentSessionSchema = z.object({
   transport: TransportStatusSchema,
   tmuxSessionName: z.string().nullable(),
   tmuxSessionId: z.string().nullable(),
+  // Tmux socket name that owns this pane. Null/omitted means the legacy daemon
+  // socket from CITADEL_TMUX_SOCKET.
+  tmuxSocketName: z.string().nullable().optional(),
   // Stable per-tab identifier that survives across restore-spawn-restore
   // cycles. Generated fresh on first session create in a workspace; inherited
   // by every subsequent row that resumes the same conversation (the restored

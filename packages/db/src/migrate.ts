@@ -303,4 +303,12 @@ export function runMigrations(
       (12, 'agent-sessions-dedup-restore-cruft', datetime('now'));
     COMMIT;
   `);
+
+  // tmux_socket_name shards agent panes across tmux servers. Older rows are
+  // NULL and continue to resolve through CITADEL_TMUX_SOCKET until restored.
+  ensureColumn("agent_sessions", "tmux_socket_name", "TEXT");
+  db.exec(`
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (13, 'agent-sessions-tmux-socket-name', datetime('now'));
+  `);
 }

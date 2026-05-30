@@ -109,7 +109,8 @@ export async function removeWorkspaceImpl(
 
   const ownedSessions = deps.store.listSessions(workspace.id);
   for (const session of ownedSessions) {
-    if (session.tmuxSessionName && !input.archiveOnly) killTmuxSession(session.tmuxSessionName);
+    if (session.tmuxSessionName && !input.archiveOnly)
+      killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
   }
   if (ownedSessions.length && !input.archiveOnly) {
     deps.logOp(operation.id, "info", `Killed ${ownedSessions.length} tmux session(s) attached to workspace`);

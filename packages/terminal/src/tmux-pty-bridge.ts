@@ -3,7 +3,10 @@ import { type IPty, spawn } from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
 import { ensureTmuxExtendedKeys, tmuxPrefix } from "./tmux.js";
 
-type ResolveTerminalSession = (id: string) => string | null | Promise<string | null>;
+export type TerminalPtyTarget = { sessionName: string; socketName?: string | null };
+type ResolveTerminalSession = (
+  id: string,
+) => TerminalPtyTarget | string | null | Promise<TerminalPtyTarget | string | null>;
 
 type TerminalSocketMessage = {
   type?: string;
@@ -51,8 +54,9 @@ export function attachTerminalWebSocket(server: http.Server, resolveSession: Res
     if (!url.pathname.startsWith("/terminal/")) return;
     const sessionId = decodeURIComponent(url.pathname.replace("/terminal/", ""));
     void Promise.resolve(resolveSession(sessionId))
-      .then((tmuxSession) => {
-        if (!tmuxSession) {
+      .then((resolved) => {
+        const tmuxTarget = normalizeTarget(resolved);
+        if (!tmuxTarget) {
           socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
           socket.destroy();
           return;
@@ -60,7 +64,7 @@ export function attachTerminalWebSocket(server: http.Server, resolveSession: Res
         wss.handleUpgrade(request, socket, head, (ws) => {
           let pty: IPty;
           try {
-            pty = attachTmuxPty(tmuxSession);
+            pty = attachTmuxPty(tmuxTarget.sessionName, DEFAULT_COLS, DEFAULT_ROWS, tmuxTarget.socketName);
           } catch (error) {
             sendControl(ws, {
               type: "error",
@@ -116,10 +120,15 @@ export function attachTerminalWebSocket(server: http.Server, resolveSession: Res
   });
 }
 
-export function attachTmuxPty(sessionName: string, cols = DEFAULT_COLS, rows = DEFAULT_ROWS): IPty {
-  ensureTmuxExtendedKeys();
+export function attachTmuxPty(
+  sessionName: string,
+  cols = DEFAULT_COLS,
+  rows = DEFAULT_ROWS,
+  socketName?: string | null,
+): IPty {
+  ensureTmuxExtendedKeys(socketName);
   const size = clampSize(cols, rows);
-  return spawn("tmux", [...tmuxPrefix(), "attach-session", "-t", sessionName], {
+  return spawn("tmux", [...tmuxPrefix(socketName), "attach-session", "-t", sessionName], {
     name: "xterm-256color",
     cols: size.cols,
     rows: size.rows,
@@ -132,6 +141,11 @@ export function attachTmuxPty(sessionName: string, cols = DEFAULT_COLS, rows = D
       CLICOLOR_FORCE: "1",
     },
   });
+}
+
+function normalizeTarget(target: TerminalPtyTarget | string | null): TerminalPtyTarget | null {
+  if (!target) return null;
+  return typeof target === "string" ? { sessionName: target } : target;
 }
 
 export function parseTerminalSocketMessage(raw: string): TerminalSocketMessage | null {

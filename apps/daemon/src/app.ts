@@ -709,11 +709,13 @@ export function createDaemonApp(input: {
   attachTerminalWebSocket(server, async (sessionId) => {
     const session = store.listSessions().find((candidate) => candidate.id === sessionId);
     if (!session) return null;
-    if (session.tmuxSessionName && tmuxSessionExists(session.tmuxSessionName)) return session.tmuxSessionName;
+    if (session.tmuxSessionName && tmuxSessionExists(session.tmuxSessionName, session.tmuxSocketName ?? null)) {
+      return { sessionName: session.tmuxSessionName, socketName: session.tmuxSocketName ?? null };
+    }
     const respawn = await respawnTmuxForWebSocket(session);
     if (!respawn) return null;
     emit("terminal.ready", { sessionId: session.id, tmuxSession: respawn.tmuxSessionName, renderer: "xterm-pty" });
-    return respawn.tmuxSessionName;
+    return { sessionName: respawn.tmuxSessionName, socketName: respawn.tmuxSocketName ?? null };
   });
 
   // Reap orphan tmux sessions / ghost worktrees on a slow interval.
@@ -751,7 +753,13 @@ export function createDaemonApp(input: {
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
   const autoResume = startDaemonAutoResumeLoop(store, operations, config);
   if (autoResume) server.on("close", () => autoResume.stop());
-  const terminalReaper = startTerminalReaper();
+  const terminalReaper = startTerminalReaper({
+    listSocketNames: () => {
+      const sockets = new Set<string | null>([null]);
+      for (const session of store.listSessions()) sockets.add(session.tmuxSocketName ?? null);
+      return sockets;
+    },
+  });
   server.on("close", () => terminalReaper.stop());
 
   return { app, server, emit, diagnostics };

@@ -30,10 +30,19 @@ import {
 import { hasCollapsedPasteMarker } from "./submit-prompt.js";
 
 const sessions: string[] = [];
+const socketSessions: Array<{ sessionName: string; socketName: string }> = [];
 const dirs: string[] = [];
 
 afterEach(() => {
   for (const session of sessions.splice(0)) killTmuxSession(session);
+  for (const { sessionName, socketName } of socketSessions.splice(0)) {
+    killTmuxSession(sessionName, socketName);
+    try {
+      execFileSync("tmux", ["-L", socketName, "kill-server"], { stdio: "ignore" });
+    } catch {
+      /* server already gone */
+    }
+  }
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -84,6 +93,27 @@ describe("tmux terminal gateway helpers", () => {
 
     killTmuxSession(sessionName);
     expect(tmuxSessionExists(sessionName)).toBe(false);
+  });
+
+  it("keeps same-named sessions isolated across tmux sockets", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
+    dirs.push(cwd);
+    const suffix = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const sessionName = `citadel_socket_${suffix}`;
+    const socketA = `citadel_test_a_${suffix}`;
+    const socketB = `citadel_test_b_${suffix}`;
+    socketSessions.push({ sessionName, socketName: socketA });
+
+    const session = await ensureTmuxSession({ sessionName, cwd, socketName: socketA });
+
+    expect(session.tmuxSocketName).toBe(socketA);
+    expect(tmuxSessionExists(sessionName, socketA)).toBe(true);
+    expect(tmuxSessionExists(sessionName, socketB)).toBe(false);
+
+    sendKeys(sessionName, "printf socket-a", socketA);
+    sendKeys(sessionName, "\r", socketA);
+    await waitForCapture(sessionName, "socket-a", socketA);
+    expect(captureTmux(sessionName, 20, socketA)).toContain("socket-a");
   });
 
   it("enables tmux extended keys for modified terminal shortcuts", async () => {
@@ -449,18 +479,18 @@ async function waitFor(predicate: () => boolean, timeoutMs: number) {
   throw new Error("waitFor timed out");
 }
 
-async function waitForCapture(sessionName: string, expected: string) {
+async function waitForCapture(sessionName: string, expected: string, socketName?: string | null) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
-    const output = captureTmux(sessionName, 200);
+    const output = captureTmux(sessionName, 200, socketName);
     if (output.includes(expected)) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`Timed out waiting for ${expected}`);
 }
 
-async function waitForVisibleScreen(sessionName: string, expected: string) {
+async function waitForVisibleScreen(sessionName: string, expected: string, socketName?: string | null) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
-    const output = captureTmuxVisibleScreen(sessionName, 200);
+    const output = captureTmuxVisibleScreen(sessionName, 200, socketName);
     if (output.includes(expected)) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }

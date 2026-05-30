@@ -50,6 +50,7 @@ export type DiagnosticsSnapshot = {
     status: string;
     statusReason: string | null;
     tmuxSessionName: string | null;
+    tmuxSocketName: string | null;
     lastStatusAt: string | null;
     runtimeId: string;
   }>;
@@ -75,8 +76,19 @@ export function buildDiagnosticsSnapshot(deps: DiagnosticsSnapshotDeps): Diagnos
       tmuxSocket: process.env.CITADEL_TMUX_SOCKET ?? null,
     },
     tmuxLiveSessions: (() => {
-      const set = listAllTmuxSessions();
-      return set === null ? null : Array.from(set).sort();
+      const sessions = deps.store.listSessions();
+      const sockets = new Set<string | null>(sessions.map((session) => session.tmuxSocketName ?? null));
+      const live = new Set<string>();
+      let legacyUnavailable = false;
+      for (const socketName of sockets.size > 0 ? sockets : new Set<string | null>([null])) {
+        const set = listAllTmuxSessions(socketName);
+        if (set === null) {
+          if (socketName === null) legacyUnavailable = true;
+          continue;
+        }
+        for (const name of set) live.add(socketName ? `${socketName}:${name}` : name);
+      }
+      return live.size === 0 && legacyUnavailable && sockets.size <= 1 ? null : Array.from(live).sort();
     })(),
     sessions: deps.store.listSessions().map((s) => ({
       id: s.id,
@@ -85,6 +97,7 @@ export function buildDiagnosticsSnapshot(deps: DiagnosticsSnapshotDeps): Diagnos
       status: s.status,
       statusReason: s.statusReason ?? null,
       tmuxSessionName: s.tmuxSessionName ?? null,
+      tmuxSocketName: s.tmuxSocketName ?? null,
       lastStatusAt: s.lastStatusAt ?? null,
       runtimeId: s.runtimeId,
     })),

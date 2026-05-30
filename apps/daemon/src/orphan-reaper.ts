@@ -31,32 +31,45 @@ export async function reapOrphans(deps: {
   // Every tmux session referenced by any DB row, regardless of status —
   // status=terminated rows still have the original tmuxSessionName recorded.
   const referencedTmuxNames = new Set<string>();
+  const referencedSockets = new Set<string | null>();
   for (const session of deps.store.listSessions()) {
-    if (session.tmuxSessionName) referencedTmuxNames.add(session.tmuxSessionName);
+    if (session.tmuxSessionName) {
+      referencedTmuxNames.add(session.tmuxSessionName);
+      referencedSockets.add(session.tmuxSocketName ?? null);
+    }
   }
 
   // Tmux side: kill sessions on the socket that no DB row knows about.
   // null = tmux server unreachable → nothing to reap. The DB-membership
   // criterion isn't a tmux probe so it doesn't need retry.
-  const liveTmuxNames = deps.reapTmuxSessions === false ? new Set<string>() : listAllTmuxSessions();
   if (deps.reapTmuxSessions === false) {
     deps.diagnostics?.log("reaper", "tmux.skipped", { reason: "unsafe-shared-socket" });
-  } else if (liveTmuxNames !== null) {
-    for (const name of liveTmuxNames) {
-      if (referencedTmuxNames.has(name)) continue;
-      try {
-        killTmuxSession(name);
-        summary.tmuxReaped.push(name);
-        deps.diagnostics?.log("reaper", "tmux.killed", { tmuxSession: name, reason: "no-db-row" });
-      } catch (err) {
-        deps.diagnostics?.log("reaper", "tmux.kill-failed", {
-          tmuxSession: name,
-          error: err instanceof Error ? err.message : String(err),
+  } else {
+    const sockets = referencedSockets.size > 0 ? referencedSockets : new Set<string | null>([null]);
+    for (const socketName of sockets) {
+      const liveTmuxNames = listAllTmuxSessions(socketName);
+      if (liveTmuxNames === null) {
+        deps.diagnostics?.log("reaper", "tmux.unreachable", {
+          socketName,
+          reason: "list-sessions returned null",
         });
+        continue;
+      }
+      for (const name of liveTmuxNames) {
+        if (referencedTmuxNames.has(name)) continue;
+        try {
+          killTmuxSession(name, socketName);
+          summary.tmuxReaped.push(name);
+          deps.diagnostics?.log("reaper", "tmux.killed", { tmuxSession: name, socketName, reason: "no-db-row" });
+        } catch (err) {
+          deps.diagnostics?.log("reaper", "tmux.kill-failed", {
+            tmuxSession: name,
+            socketName,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
     }
-  } else {
-    deps.diagnostics?.log("reaper", "tmux.unreachable", { reason: "list-sessions returned null" });
   }
   return summary;
 }

@@ -55,13 +55,23 @@ export function buildStatusMonitorDeps(
   // terminal WebSockets; sync capture storms in this process cause terminal
   // input lag and reconnects.
   const captureCache = new Map<string, { activityMs: number; content: string }>();
+  const sessionSocketByName = new Map<string, string | null>();
   // Shared snapshot of session_activity from the most recent tick. Updated
   // by `tmuxActivities()` (which the status monitor calls first each tick),
   // read by `paneCapture()` to know whether its cache is fresh.
   let lastActivitiesSnapshot: Map<string, number> = new Map();
+  const sessionSocket = (name: string) => sessionSocketByName.get(name) ?? null;
+  const activeSockets = () => new Set(sessionSocketByName.values());
   return {
     now: () => new Date().toISOString(),
-    listSessions: () => store.listSessions(),
+    listSessions: () => {
+      const sessions = store.listSessions();
+      sessionSocketByName.clear();
+      for (const session of sessions) {
+        if (session.tmuxSessionName) sessionSocketByName.set(session.tmuxSessionName, session.tmuxSocketName ?? null);
+      }
+      return sessions;
+    },
     listWorkspaceIds: () => new Set(store.listWorkspaces().map((ws) => ws.id)),
     updateSession: (id, update) => {
       store.updateSessionStatus(id, {
@@ -78,7 +88,7 @@ export function buildStatusMonitorDeps(
     emit: (event, payload) => emit(event, payload),
     panePidProcess: (name) => {
       try {
-        return panePidProcess(name);
+        return panePidProcess(name, sessionSocket(name));
       } catch (err) {
         logMonitorFailureOnce("panePidProcess", err);
         return null;
@@ -93,7 +103,7 @@ export function buildStatusMonitorDeps(
     // to stop from wiping every session every couple minutes.
     hasTmuxSession: (name) => {
       try {
-        return tmuxSessionExists(name);
+        return tmuxSessionExists(name, sessionSocket(name));
       } catch (err) {
         logMonitorFailureOnce("hasTmuxSession", err);
         return false;
@@ -125,20 +135,26 @@ export function buildStatusMonitorDeps(
     // logs without flooding stderr at 2 Hz.
     tmuxActivities: () => {
       try {
-        const out = execFileSync(
-          "tmux",
-          [...tmuxPrefix(), "list-sessions", "-F", "#{session_name} #{session_activity}"],
-          {
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "ignore"],
-          },
-        );
         const map = new Map<string, number>();
-        for (const line of out.split("\n")) {
-          const [name, secs] = line.trim().split(/\s+/);
-          if (name && secs) {
-            const n = Number(secs);
-            if (Number.isFinite(n)) map.set(name, n * 1000);
+        for (const socketName of activeSockets()) {
+          try {
+            const out = execFileSync(
+              "tmux",
+              [...tmuxPrefix(socketName), "list-sessions", "-F", "#{session_name} #{session_activity}"],
+              {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "ignore"],
+              },
+            );
+            for (const line of out.split("\n")) {
+              const [name, secs] = line.trim().split(/\s+/);
+              if (name && secs) {
+                const n = Number(secs);
+                if (Number.isFinite(n)) map.set(name, n * 1000);
+              }
+            }
+          } catch (err) {
+            logMonitorFailureOnce(`tmuxActivities:${socketName ?? "default"}`, err);
           }
         }
         lastActivitiesSnapshot = map;
@@ -156,25 +172,37 @@ export function buildStatusMonitorDeps(
     // (same semantic as panePidProcess returning null).
     panes: () => {
       try {
-        const out = execFileSync(
-          "tmux",
-          [...tmuxPrefix(), "list-panes", "-a", "-F", "#{session_name}\t#{pane_current_command}\t#{pane_pid}"],
-          {
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "ignore"],
-          },
-        );
         const map = new Map<string, { command: string; pid: number }>();
-        for (const line of out.split("\n")) {
-          if (!line) continue;
-          const [name, command, pidStr] = line.split("\t");
-          if (!name || !command || !pidStr) continue;
-          const pid = Number.parseInt(pidStr, 10);
-          if (!Number.isFinite(pid) || pid <= 0) continue;
-          // First pane in the session wins. Multi-pane sessions aren't
-          // something citadel creates, but if a user splits one, we
-          // arbitrarily pick the first row tmux returns.
-          if (!map.has(name)) map.set(name, { command, pid });
+        for (const socketName of activeSockets()) {
+          try {
+            const out = execFileSync(
+              "tmux",
+              [
+                ...tmuxPrefix(socketName),
+                "list-panes",
+                "-a",
+                "-F",
+                "#{session_name}\t#{pane_current_command}\t#{pane_pid}",
+              ],
+              {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "ignore"],
+              },
+            );
+            for (const line of out.split("\n")) {
+              if (!line) continue;
+              const [name, command, pidStr] = line.split("\t");
+              if (!name || !command || !pidStr) continue;
+              const pid = Number.parseInt(pidStr, 10);
+              if (!Number.isFinite(pid) || pid <= 0) continue;
+              // First pane in the session wins. Multi-pane sessions aren't
+              // something citadel creates, but if a user splits one, we
+              // arbitrarily pick the first row tmux returns.
+              if (!map.has(name)) map.set(name, { command, pid });
+            }
+          } catch (err) {
+            logMonitorFailureOnce(`panes:${socketName ?? "default"}`, err);
+          }
         }
         return map;
       } catch (err) {
@@ -190,7 +218,7 @@ export function buildStatusMonitorDeps(
       const cached = captureCache.get(name);
       if (cached && cached.activityMs === activityMs) return cached.content;
       try {
-        const content = captureTmux(name, 50);
+        const content = captureTmux(name, 50, sessionSocket(name));
         captureCache.set(name, { activityMs, content });
         return content;
       } catch (err) {

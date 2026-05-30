@@ -216,6 +216,35 @@ describe("updateSessionRateLimitResume", () => {
   });
 });
 
+describe("tmux socket migration (version 13)", () => {
+  it("adds nullable tmux_socket_name to agent_sessions", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    const cols = db.prepare("PRAGMA table_info(agent_sessions)").all() as Array<{
+      name: string;
+      type: string;
+      notnull: number;
+    }>;
+    const column = cols.find((c) => c.name === "tmux_socket_name");
+    expect(column).toBeDefined();
+    expect(column?.type.toUpperCase()).toBe("TEXT");
+    expect(column?.notnull).toBe(0);
+  });
+
+  it("records schema_migrations version 13 row", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    const row = db.prepare("SELECT name FROM schema_migrations WHERE version = 13").get() as
+      | { name: string }
+      | undefined;
+    expect(row?.name).toBe("agent-sessions-tmux-socket-name");
+  });
+});
+
 describe("workspaces-pr-snapshot migration (v9)", () => {
   it("adds 7 nullable pr_* columns to workspaces", () => {
     const dbPath = makeTempPath();

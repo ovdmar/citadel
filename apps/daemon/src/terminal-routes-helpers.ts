@@ -19,27 +19,43 @@ function resolveSessionContext(
   store: SqliteStore,
   config: CitadelConfig,
   session: AgentSession,
-): { workspacePath: string; sessionName: string; runtime: CitadelConfig["runtimes"][number] } | null {
+): {
+  workspacePath: string;
+  sessionName: string;
+  socketName: string | null;
+  runtime: CitadelConfig["runtimes"][number];
+} | null {
   const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
   const runtime = config.runtimes.find((candidate) => candidate.id === session.runtimeId);
   if (!workspace || !runtime) return null;
-  return { workspacePath: workspace.path, sessionName: sessionTmuxName(session, workspace.id), runtime };
+  return {
+    workspacePath: workspace.path,
+    sessionName: sessionTmuxName(session, workspace.id),
+    socketName: session.tmuxSocketName ?? null,
+    runtime,
+  };
 }
 
 export function buildRespawnTmux(
   store: SqliteStore,
   config: CitadelConfig,
-): (session: AgentSession) => Promise<{ tmuxSessionName: string; tmuxSessionId: string } | null> {
+): (
+  session: AgentSession,
+) => Promise<{ tmuxSessionName: string; tmuxSessionId: string; tmuxSocketName?: string | null } | null> {
   return async (session) => {
     const ctx = resolveSessionContext(store, config, session);
     if (!ctx) return null;
-    const tmux = await ensureTmuxSession({ sessionName: ctx.sessionName, cwd: ctx.workspacePath });
+    const tmux = await ensureTmuxSession({
+      sessionName: ctx.sessionName,
+      cwd: ctx.workspacePath,
+      socketName: ctx.socketName,
+    });
     if (!isShellCommand(ctx.runtime.command)) {
       const argv = [...ctx.runtime.args];
       if (session.runtimeSessionId && ctx.runtime.resumeArg) {
         argv.push(ctx.runtime.resumeArg, session.runtimeSessionId);
       }
-      await launchAgentInSession(ctx.sessionName, ctx.runtime.command, argv);
+      await launchAgentInSession(ctx.sessionName, ctx.runtime.command, argv, { socketName: ctx.socketName });
     }
     return tmux;
   };

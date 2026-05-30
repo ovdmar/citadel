@@ -5,7 +5,8 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 export { submitPrompt } from "./submit-prompt.js";
-export { ensureTmuxExtendedKeys, tmuxPrefix } from "./tmux.js";
+export { ensureTmuxExtendedKeys, tmuxPrefix, tmuxSocketNameForWorkspace } from "./tmux.js";
+export type { TmuxSocketName } from "./tmux.js";
 import { ensureTmuxExtendedKeys, tmuxPrefix } from "./tmux.js";
 
 import { tokenizeTerminalInput } from "./input-tokens.js";
@@ -36,10 +37,11 @@ const execFileAsync = promisify(execFile);
 export type TerminalSessionRequest = {
   sessionName: string;
   cwd: string;
+  socketName?: string | null;
 };
 
 export async function ensureTmuxSession(input: TerminalSessionRequest) {
-  const exists = tmuxSessionExists(input.sessionName);
+  const exists = tmuxSessionExists(input.sessionName, input.socketName);
   const freshlyCreated = !exists;
   if (!exists) {
     // Shell-first: the pane PID is `bash -l`. The agent, if there is one, is
@@ -50,7 +52,7 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
     await execFileAsync(
       "tmux",
       [
-        ...tmuxPrefix(),
+        ...tmuxPrefix(input.socketName),
         "new-session",
         "-d",
         "-s",
@@ -79,15 +81,15 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
     // humans for debugging. Best-effort — if the tmpdir isn't writable we
     // just lose the diagnostic, the rest of the flow is unaffected.
     try {
-      attachPipePaneLog(input.sessionName);
+      attachPipePaneLog(input.sessionName, input.socketName);
     } catch {
       /* noop */
     }
   }
-  ensureTmuxExtendedKeys();
+  ensureTmuxExtendedKeys(input.socketName);
   const id = execFileSync(
     "tmux",
-    [...tmuxPrefix(), "display-message", "-p", "-t", input.sessionName, "#{session_id}"],
+    [...tmuxPrefix(input.socketName), "display-message", "-p", "-t", input.sessionName, "#{session_id}"],
     {
       encoding: "utf8",
     },
@@ -95,8 +97,13 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
   // Wait for the shell prompt to settle so callers can immediately
   // `launchAgentInSession` or `submitPrompt` without losing keystrokes to
   // bash's startup window.
-  if (freshlyCreated) await waitForTerminalIdle(input.sessionName, { timeoutMs: 1500, idleMs: 200 });
-  return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
+  if (freshlyCreated)
+    await waitForTerminalIdle(input.sessionName, {
+      timeoutMs: 1500,
+      idleMs: 200,
+      socketName: input.socketName ?? null,
+    });
+  return { tmuxSessionName: input.sessionName, tmuxSessionId: id, tmuxSocketName: input.socketName ?? null };
 }
 
 import { attachPipePaneLog } from "./pipe-pane-log.js";
@@ -177,18 +184,19 @@ export type RawTerminalSessionRequest = {
   cwd: string;
   command: string;
   args: string[];
+  socketName?: string | null;
 };
 
 export async function ensureTmuxSessionRaw(input: RawTerminalSessionRequest) {
-  if (tmuxSessionExists(input.sessionName)) {
+  if (tmuxSessionExists(input.sessionName, input.socketName)) {
     const id = execFileSync(
       "tmux",
-      [...tmuxPrefix(), "display-message", "-p", "-t", input.sessionName, "#{session_id}"],
+      [...tmuxPrefix(input.socketName), "display-message", "-p", "-t", input.sessionName, "#{session_id}"],
       {
         encoding: "utf8",
       },
     ).trim();
-    return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
+    return { tmuxSessionName: input.sessionName, tmuxSessionId: id, tmuxSocketName: input.socketName ?? null };
   }
   try {
     fs.writeFileSync(agentLiveSentinelPath(input.sessionName), "");
@@ -201,21 +209,21 @@ export async function ensureTmuxSessionRaw(input: RawTerminalSessionRequest) {
   const shellCommand = [input.command, ...input.args].map(shellQuote).join(" ");
   await execFileAsync(
     "tmux",
-    [...tmuxPrefix(), "new-session", "-d", "-s", input.sessionName, "-c", input.cwd, shellCommand],
+    [...tmuxPrefix(input.socketName), "new-session", "-d", "-s", input.sessionName, "-c", input.cwd, shellCommand],
     {
       timeout: 10000,
       maxBuffer: 128 * 1024,
     },
   );
-  ensureTmuxExtendedKeys();
+  ensureTmuxExtendedKeys(input.socketName);
   const id = execFileSync(
     "tmux",
-    [...tmuxPrefix(), "display-message", "-p", "-t", input.sessionName, "#{session_id}"],
+    [...tmuxPrefix(input.socketName), "display-message", "-p", "-t", input.sessionName, "#{session_id}"],
     {
       encoding: "utf8",
     },
   ).trim();
-  return { tmuxSessionName: input.sessionName, tmuxSessionId: id };
+  return { tmuxSessionName: input.sessionName, tmuxSessionId: id, tmuxSocketName: input.socketName ?? null };
 }
 
 /**
@@ -224,15 +232,15 @@ export async function ensureTmuxSessionRaw(input: RawTerminalSessionRequest) {
  * disk. `logFilePath` is shellQuoted; we never hand pipe-pane an unquoted
  * user-controlled path.
  */
-export function pipeBackgroundSessionToLog(sessionName: string, logFilePath: string) {
+export function pipeBackgroundSessionToLog(sessionName: string, logFilePath: string, socketName?: string | null) {
   const quoted = shellQuote(logFilePath);
   const command = `head -c ${LOG_TRUNCATION_BYTES} >> ${quoted}`;
-  execFileSync("tmux", [...tmuxPrefix(), "pipe-pane", "-O", "-t", sessionName, command]);
+  execFileSync("tmux", [...tmuxPrefix(socketName), "pipe-pane", "-O", "-t", sessionName, command]);
 }
 
 /** Stop the pipe-pane stream on a session (no command = stop streaming). */
-export function stopBackgroundSessionPipe(sessionName: string) {
-  execFileSync("tmux", [...tmuxPrefix(), "pipe-pane", "-t", sessionName]);
+export function stopBackgroundSessionPipe(sessionName: string, socketName?: string | null) {
+  execFileSync("tmux", [...tmuxPrefix(socketName), "pipe-pane", "-t", sessionName]);
 }
 
 /**
@@ -241,12 +249,16 @@ export function stopBackgroundSessionPipe(sessionName: string) {
  * sessions where we never injected the wrapper's `isAgentLive` sentinel —
  * the reconciler relies on this signal to close the matching run row.
  */
-export function tmuxPaneDead(sessionName: string): boolean {
+export function tmuxPaneDead(sessionName: string, socketName?: string | null): boolean {
   try {
-    const output = execFileSync("tmux", [...tmuxPrefix(), "list-panes", "-t", sessionName, "-F", "#{pane_dead}"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
+    const output = execFileSync(
+      "tmux",
+      [...tmuxPrefix(socketName), "list-panes", "-t", sessionName, "-F", "#{pane_dead}"],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    ).trim();
     // First pane's value — for our single-pane background sessions this is
     // the only one we care about.
     const first = output.split(/\s+/)[0] ?? "0";
@@ -257,9 +269,9 @@ export function tmuxPaneDead(sessionName: string): boolean {
   }
 }
 
-export function tmuxSessionExists(sessionName: string) {
+export function tmuxSessionExists(sessionName: string, socketName?: string | null) {
   try {
-    execFileSync("tmux", [...tmuxPrefix(), "has-session", "-t", sessionName], { stdio: "ignore" });
+    execFileSync("tmux", [...tmuxPrefix(socketName), "has-session", "-t", sessionName], { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -275,9 +287,9 @@ export function tmuxSessionExists(sessionName: string) {
 // just because we couldn't talk to a server. Used by:
 //   - boot-restore's reconciler (flip DB rows whose tmux is missing)
 //   - orphan reaper (find tmux sessions no DB row knows about)
-export function listAllTmuxSessions(): Set<string> | null {
+export function listAllTmuxSessions(socketName?: string | null): Set<string> | null {
   try {
-    const output = execFileSync("tmux", [...tmuxPrefix(), "list-sessions", "-F", "#{session_name}"], {
+    const output = execFileSync("tmux", [...tmuxPrefix(socketName), "list-sessions", "-F", "#{session_name}"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     });
@@ -295,7 +307,7 @@ export function listAllTmuxSessions(): Set<string> | null {
     // least one session, 1 when up with zero sessions, and non-zero with
     // stderr "no server running" when the socket is unbound.
     try {
-      execFileSync("tmux", [...tmuxPrefix(), "has-session"], { stdio: ["ignore", "ignore", "pipe"] });
+      execFileSync("tmux", [...tmuxPrefix(socketName), "has-session"], { stdio: ["ignore", "ignore", "pipe"] });
       // Server up with sessions — list-sessions shouldn't have failed; fall through.
       return new Set();
     } catch (probeError) {
@@ -475,12 +487,12 @@ export {
 } from "./capture.js";
 export type { TerminalTranscript, TerminalTranscriptError } from "./capture.js";
 
-export function sendKeys(sessionName: string, data: string) {
+export function sendKeys(sessionName: string, data: string, socketName?: string | null) {
   for (const token of tokenizeTerminalInput(data)) {
     if (token.literal) {
-      execFileSync("tmux", [...tmuxPrefix(), "send-keys", "-l", "-t", sessionName, token.value]);
+      execFileSync("tmux", [...tmuxPrefix(socketName), "send-keys", "-l", "-t", sessionName, token.value]);
     } else {
-      execFileSync("tmux", [...tmuxPrefix(), "send-keys", "-t", sessionName, token.value]);
+      execFileSync("tmux", [...tmuxPrefix(socketName), "send-keys", "-t", sessionName, token.value]);
     }
   }
 }
@@ -492,20 +504,24 @@ export function sendKeys(sessionName: string, data: string) {
 // long their initial paint takes — no idle-window race, no LF-inside-paste
 // getting misread as Enter. Default stays off so plain-shell paste paths
 // (tests, generic shell sessions) keep working byte-for-byte.
-export function pasteText(sessionName: string, data: string, options: { bracketed?: boolean } = {}) {
+export function pasteText(
+  sessionName: string,
+  data: string,
+  options: { bracketed?: boolean; socketName?: string | null } = {},
+) {
   const bufferName = `citadel_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
-  execFileSync("tmux", [...tmuxPrefix(), "load-buffer", "-b", bufferName, "-"], { input: data });
+  execFileSync("tmux", [...tmuxPrefix(options.socketName), "load-buffer", "-b", bufferName, "-"], { input: data });
   const args = options.bracketed
     ? ["paste-buffer", "-p", "-d", "-b", bufferName, "-t", sessionName]
     : ["paste-buffer", "-d", "-b", bufferName, "-t", sessionName];
-  execFileSync("tmux", [...tmuxPrefix(), ...args]);
+  execFileSync("tmux", [...tmuxPrefix(options.socketName), ...args]);
 }
 
-export function resizePane(sessionName: string, cols: number, rows: number) {
+export function resizePane(sessionName: string, cols: number, rows: number, socketName?: string | null) {
   const safeCols = Math.min(400, Math.max(20, Math.trunc(cols)));
   const safeRows = Math.min(120, Math.max(5, Math.trunc(rows)));
   execFileSync("tmux", [
-    ...tmuxPrefix(),
+    ...tmuxPrefix(socketName),
     "resize-pane",
     "-t",
     sessionName,
@@ -516,9 +532,9 @@ export function resizePane(sessionName: string, cols: number, rows: number) {
   ]);
 }
 
-export function killTmuxSession(sessionName: string) {
-  if (tmuxSessionExists(sessionName)) {
-    execFileSync("tmux", [...tmuxPrefix(), "kill-session", "-t", sessionName]);
+export function killTmuxSession(sessionName: string, socketName?: string | null) {
+  if (tmuxSessionExists(sessionName, socketName)) {
+    execFileSync("tmux", [...tmuxPrefix(socketName), "kill-session", "-t", sessionName]);
   }
   try {
     fs.rmSync(agentLiveSentinelPath(sessionName), { force: true });
