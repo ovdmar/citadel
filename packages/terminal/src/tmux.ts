@@ -1,4 +1,7 @@
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 const configuredTmuxSockets = new Set<string>();
 
@@ -11,7 +14,7 @@ export function tmuxPrefix(): string[] {
 }
 
 export function ensureTmuxExtendedKeys() {
-  const socketKey = process.env.CITADEL_TMUX_SOCKET || "default";
+  const socketKey = tmuxSocketCacheKey();
   if (configuredTmuxSockets.has(socketKey)) return;
   execFileSync("tmux", [...tmuxPrefix(), "set-option", "-s", "extended-keys", "on"], { stdio: "ignore" });
   const features = execFileSync("tmux", [...tmuxPrefix(), "show-options", "-s", "-g", "terminal-features"], {
@@ -27,4 +30,16 @@ export function ensureTmuxExtendedKeys() {
   // per-client/server memory in long-running tmux servers.
   execFileSync("tmux", [...tmuxPrefix(), "set-option", "-g", "history-limit", "5000"], { stdio: "ignore" });
   configuredTmuxSockets.add(socketKey);
+}
+
+function tmuxSocketCacheKey(): string {
+  const label = process.env.CITADEL_TMUX_SOCKET || "default";
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  const socketPath = path.join(process.env.TMUX_TMPDIR || os.tmpdir(), `tmux-${uid}`, label);
+  try {
+    const stat = fs.statSync(socketPath);
+    return `${socketPath}:${stat.dev}:${stat.ino}:${Math.trunc(stat.ctimeMs)}`;
+  } catch {
+    return `${socketPath}:missing`;
+  }
 }

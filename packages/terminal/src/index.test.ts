@@ -358,13 +358,14 @@ describe("tmux terminal gateway helpers", () => {
       const wsB = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/b`);
       await Promise.all([waitForOpen(wsA), waitForOpen(wsB)]);
 
+      const outputA = waitForWebSocketOutput(wsA, "long-a-120");
+      const outputB = waitForWebSocketOutput(wsB, "session-b-only");
       sendWsInput(wsA, "printf 'session-a-only\\n'; for i in $(seq 1 120); do echo long-a-$i; done");
       sendWsInput(wsA, "\r");
       sendWsInput(wsB, "printf session-b-only");
       sendWsInput(wsB, "\r");
 
-      await waitForWebSocketOutput(wsA, "long-a-120");
-      await waitForWebSocketOutput(wsB, "session-b-only");
+      await Promise.all([outputA, outputB]);
       expect(captureTmux(sessionB, 40)).not.toContain("session-a-only");
       expect(captureTmux(sessionA, 1000)).toContain("long-a-120");
 
