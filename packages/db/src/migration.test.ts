@@ -243,6 +243,53 @@ describe("tmux socket migration (version 13)", () => {
       | undefined;
     expect(row?.name).toBe("agent-sessions-tmux-socket-name");
   });
+
+  it("backfills legacy rows to their workspace tmux socket on the next migration pass", () => {
+    const previous = process.env.CITADEL_TMUX_SOCKET;
+    process.env.CITADEL_TMUX_SOCKET = "citadel-test";
+    try {
+      const dbPath = makeTempPath();
+      seedLegacySession(dbPath, { id: "sess_backfill", legacyStatus: "idle" });
+
+      const store = new SqliteStore(dbPath);
+      store.migrate();
+
+      const row = store.listSessions().find((s) => s.id === "sess_backfill");
+      expect(row?.tmuxSocketName).toBe("citadel-test-ws-ws_test");
+      const db = (store as unknown as { database: DatabaseSync }).database;
+      const migration = db.prepare("SELECT name FROM schema_migrations WHERE version = 14").get() as
+        | { name: string }
+        | undefined;
+      expect(migration?.name).toBe("agent-sessions-backfill-workspace-tmux-sockets");
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, "CITADEL_TMUX_SOCKET");
+      else process.env.CITADEL_TMUX_SOCKET = previous;
+    }
+  });
+
+  it("does not overwrite rows that already have an explicit tmux socket", () => {
+    const previous = process.env.CITADEL_TMUX_SOCKET;
+    process.env.CITADEL_TMUX_SOCKET = "citadel-new";
+    try {
+      const dbPath = makeTempPath();
+      seedLegacySession(dbPath, { id: "sess_socket_keep", legacyStatus: "idle" });
+      const seeded = new SqliteStore(dbPath);
+      seeded.migrate();
+      const db = (seeded as unknown as { database: DatabaseSync }).database;
+      db.prepare("UPDATE agent_sessions SET tmux_socket_name = ? WHERE id = ?").run(
+        "manual-socket",
+        "sess_socket_keep",
+      );
+
+      const migrated = new SqliteStore(dbPath);
+      migrated.migrate();
+      const row = migrated.listSessions().find((s) => s.id === "sess_socket_keep");
+      expect(row?.tmuxSocketName).toBe("manual-socket");
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, "CITADEL_TMUX_SOCKET");
+      else process.env.CITADEL_TMUX_SOCKET = previous;
+    }
+  });
 });
 
 describe("workspaces-pr-snapshot migration (v9)", () => {

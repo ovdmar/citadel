@@ -1,3 +1,5 @@
+import process from "node:process";
+
 // All SQLite schema creation + additive migrations. Extracted from
 // SqliteStore so that index.ts stays under the 800-line file-size gate.
 //
@@ -7,7 +9,52 @@
 
 type SqliteDatabase = {
   exec(sql: string): void;
+  prepare(sql: string): {
+    all(...params: unknown[]): unknown[];
+    run(...params: unknown[]): { changes: number };
+  };
 };
+
+function tmuxSocketBase(): string {
+  const configured = process.env.CITADEL_TMUX_SOCKET?.trim();
+  return configured && configured.length > 0 ? configured : "citadel";
+}
+
+function tmuxSocketNameForWorkspaceId(workspaceId: string): string {
+  const safeWorkspaceId = workspaceId.replace(/[^A-Za-z0-9_.-]/g, "_");
+  return `${tmuxSocketBase()}-ws-${safeWorkspaceId}`;
+}
+
+function backfillWorkspaceTmuxSocketNames(db: SqliteDatabase): void {
+  const rows = db
+    .prepare(`
+      SELECT s.id AS session_id, s.workspace_id AS workspace_id
+      FROM agent_sessions s
+      JOIN workspaces w ON w.id = s.workspace_id
+      WHERE s.tmux_socket_name IS NULL OR s.tmux_socket_name = ''
+    `)
+    .all() as Array<{ session_id: string; workspace_id: string }>;
+
+  db.exec("BEGIN");
+  try {
+    const update = db.prepare(`
+      UPDATE agent_sessions
+      SET tmux_socket_name = ?
+      WHERE id = ? AND (tmux_socket_name IS NULL OR tmux_socket_name = '')
+    `);
+    for (const row of rows) {
+      update.run(tmuxSocketNameForWorkspaceId(row.workspace_id), row.session_id);
+    }
+    db.exec(`
+      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+        (14, 'agent-sessions-backfill-workspace-tmux-sockets', datetime('now'));
+    `);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
 
 export function runMigrations(
   db: SqliteDatabase,
@@ -304,11 +351,14 @@ export function runMigrations(
     COMMIT;
   `);
 
-  // tmux_socket_name shards agent panes across tmux servers. Older rows are
-  // NULL and continue to resolve through CITADEL_TMUX_SOCKET until restored.
+  // tmux_socket_name shards agent panes across tmux servers. v13 added the
+  // column; v14 backfills legacy rows onto the same workspace-specific socket
+  // formula used for new session spawns. Current live panes may still be bound
+  // to the old shared socket until the operator relaunches/restores them.
   ensureColumn("agent_sessions", "tmux_socket_name", "TEXT");
   db.exec(`
     INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
       (13, 'agent-sessions-tmux-socket-name', datetime('now'));
   `);
+  backfillWorkspaceTmuxSocketNames(db);
 }

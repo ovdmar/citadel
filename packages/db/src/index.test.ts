@@ -48,6 +48,7 @@ describe("SqliteStore", () => {
       { version: 11 },
       { version: 12 },
       { version: 13 },
+      { version: 14 },
     ]);
   });
 
