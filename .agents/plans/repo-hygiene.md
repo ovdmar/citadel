@@ -59,6 +59,7 @@ The `.vite/` pattern intentionally matches Vite cache directories named `.vite` 
 - Confirm `git check-ignore -q .claude/scheduled_tasks.lock` fails before the edit.
 - Add `.vite/` to `.gitignore`.
 - Add `.claude/scheduled_tasks.lock` to `.gitignore`.
+- If `.claude/scheduled_tasks.lock` is already tracked, remove it from the git index while preserving the local working-tree file.
 - Confirm `git check-ignore -q .vite/` passes after the edit.
 - Confirm `git check-ignore -q .claude/scheduled_tasks.lock` passes after the edit.
 - Confirm `git check-ignore -v .vite/ .claude/scheduled_tasks.lock` reports `.gitignore` as the matching source for both patterns.
@@ -93,6 +94,7 @@ No schema changes.
 ### Failure modes / edge cases / regression risks
 
 - Pattern omitted or misspelled: `.vite/` or `.claude/scheduled_tasks.lock` continues showing up as untracked workspace noise. The two `git check-ignore -q` assertions catch this.
+- Lock file remains tracked: git continues treating `.claude/scheduled_tasks.lock` as source-controlled, so the ignore rule will not suppress local changes. Removing the file from the index while preserving the local file catches and fixes this.
 - Pattern is too broad: a useful `.claude/` file could be hidden from git. Exact lock-file matching avoids this.
 - Pattern is placed in a confusing location: future maintainers may miss local tooling artifacts. Placing it with generated/local outputs keeps the file coherent.
 - Path is ignored by a global excludes file rather than this repo: the `git check-ignore -v` source check catches this.
@@ -113,6 +115,7 @@ TDD order:
 - Run `git check-ignore -q .vite/` before editing and confirm it fails.
 - Run `git check-ignore -q .claude/scheduled_tasks.lock` before editing and confirm it fails.
 - Edit `.gitignore`.
+- If the lock file is tracked, run `git rm --cached .claude/scheduled_tasks.lock` and keep the local file in place.
 - Run `git check-ignore -q .vite/` after editing and confirm it passes.
 - Run `git check-ignore -q .claude/scheduled_tasks.lock` after editing and confirm it passes.
 - Run `git check-ignore -v .vite/ .claude/scheduled_tasks.lock` after editing and confirm both matches come from `.gitignore`.
