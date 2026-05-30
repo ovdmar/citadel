@@ -26,6 +26,7 @@ export function discoverDefaultBranch(rootPath: string) {
     const remoteHead = execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
       cwd: rootPath,
       encoding: "utf8",
+      stdio: "pipe",
     })
       .trim()
       .replace("refs/remotes/origin/", "");

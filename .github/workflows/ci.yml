@@ -34,7 +34,10 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
 
       - name: End-to-end
-        run: pnpm e2e
+        run: |
+          pnpm e2e:isolated --project=desktop --workers=1
+          pnpm e2e:isolated --project=tablet --workers=1
+          pnpm e2e:isolated --project=mobile --workers=1
 
       - name: Startup and performance smoke
         env:

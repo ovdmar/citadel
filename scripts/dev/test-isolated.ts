@@ -38,11 +38,16 @@ if (mode === "e2e") {
   env.CITADEL_PLAYWRIGHT_DAEMON_PORT = env.CITADEL_PLAYWRIGHT_DAEMON_PORT ?? randomPort(14020, 14199);
   env.CITADEL_PLAYWRIGHT_WEB_PORT = env.CITADEL_PLAYWRIGHT_WEB_PORT ?? randomPort(15180, 15399);
   env.CITADEL_PLAYWRIGHT_TMUX_SOCKET =
-    env.CITADEL_PLAYWRIGHT_TMUX_SOCKET ?? `citadel-playwright-${env.CITADEL_PLAYWRIGHT_DAEMON_PORT}`;
+    env.CITADEL_PLAYWRIGHT_TMUX_SOCKET ?? `citadel-playwright-${path.basename(baseTmp)}`;
+  cleanupTmuxSocket(env.CITADEL_PLAYWRIGHT_TMUX_SOCKET, "before");
 }
 
 console.log(`[test-isolated] mode=${mode} CITADEL_DATA_DIR=${dataDir}`);
 const result = spawnSync(chosen.cmd, chosen.args, { stdio: "inherit", env });
+
+if (mode === "e2e" && env.CITADEL_PLAYWRIGHT_TMUX_SOCKET) {
+  cleanupTmuxSocket(env.CITADEL_PLAYWRIGHT_TMUX_SOCKET, "after");
+}
 
 if (cleanup) {
   try {
@@ -58,4 +63,11 @@ process.exit(result.status ?? 1);
 
 function randomPort(min: number, max: number) {
   return String(Math.floor(min + Math.random() * (max - min)));
+}
+
+function cleanupTmuxSocket(socket: string, phase: "before" | "after") {
+  const result = spawnSync("tmux", ["-L", socket, "kill-server"], { stdio: "ignore" });
+  if (result.error && (result.error as NodeJS.ErrnoException).code !== "ENOENT") {
+    console.warn(`[test-isolated] tmux cleanup failed ${phase} run for ${socket}:`, result.error);
+  }
 }
