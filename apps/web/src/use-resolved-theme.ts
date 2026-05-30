@@ -1,6 +1,35 @@
 import { useEffect, useState } from "react";
 
 export type ResolvedTheme = "light" | "dark";
+export type ThemePreference = ResolvedTheme | "system";
+
+const THEME_STORAGE_KEY = "citadel.theme";
+const THEME_CHANGE_EVENT = "citadel-theme-preference-change";
+
+export function readThemePreference(): ThemePreference {
+  if (typeof window === "undefined") return "system";
+  try {
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    return stored === "light" || stored === "dark" || stored === "system" ? stored : "system";
+  } catch {
+    return "system";
+  }
+}
+
+export function applyThemePreference(preference: ThemePreference): void {
+  if (typeof document === "undefined" || typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, preference);
+  } catch {
+    // localStorage is best-effort; data-theme is the live source of truth.
+  }
+  if (preference === "system") {
+    delete document.documentElement.dataset.theme;
+  } else {
+    document.documentElement.dataset.theme = preference;
+  }
+  window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
+}
 
 /**
  * Resolves Citadel's effective theme by reading `data-theme` on <html>
@@ -14,7 +43,8 @@ export function useResolvedTheme(): ResolvedTheme {
     const unsubscribe = subscribeResolvedTheme(setTheme);
     // Re-read once on mount in case data-theme was set between the
     // initial useState read and this effect (e.g. ThemeControls's own
-    // useEffect ran in between).
+    // click handler ran in between). MutationObserver only fires on future
+    // mutations, so this catches a same-tick preference write.
     setTheme(readResolvedTheme());
     return unsubscribe;
   }, []);
@@ -54,12 +84,22 @@ export function subscribeResolvedTheme(callback: (theme: ResolvedTheme) => void)
   const observer = new MutationObserver(emit);
   observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 
-  const media = window.matchMedia("(prefers-color-scheme: dark)");
-  media.addEventListener("change", emit);
+  const media = typeof window.matchMedia === "function" ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+  media?.addEventListener?.("change", emit);
+
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== null && event.key !== THEME_STORAGE_KEY) return;
+    applyThemePreference(readThemePreference());
+    emit();
+  };
+  window.addEventListener?.(THEME_CHANGE_EVENT, emit);
+  window.addEventListener?.("storage", onStorage);
 
   return () => {
     observer.disconnect();
-    media.removeEventListener("change", emit);
+    media?.removeEventListener?.("change", emit);
+    window.removeEventListener?.(THEME_CHANGE_EVENT, emit);
+    window.removeEventListener?.("storage", onStorage);
   };
 }
 

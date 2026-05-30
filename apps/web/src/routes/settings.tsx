@@ -2,6 +2,7 @@ import type { AgentRuntime, ProviderHealth, Repo } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
+  AlarmClock,
   ArrowLeft,
   Bug,
   Cable,
@@ -18,6 +19,7 @@ import { useEffect, useState } from "react";
 import { api, queryClient } from "../api.js";
 import { useStateQuery } from "../app-state.js";
 import { mcpUrlFromOrigin } from "../lib/mcp-url.js";
+import { AutomationsPanel } from "../settings-automations.js";
 import { CitadelActionsPanel } from "../settings-citadel-actions.js";
 import { DebugPanel } from "../settings-debug.js";
 import { ProvidersPanel } from "../settings-providers.js";
@@ -30,6 +32,7 @@ type SectionId =
   | "overview"
   | "providers"
   | "agents"
+  | "automations"
   | "repositories"
   | "restore"
   | "actions"
@@ -57,6 +60,12 @@ const SECTIONS: Section[] = [
     label: "Agent runtimes",
     description: "CLIs Citadel can launch in a workspace.",
     icon: Server,
+  },
+  {
+    id: "automations",
+    label: "Automations",
+    description: "Rules that start agents on their own.",
+    icon: AlarmClock,
   },
   {
     id: "repositories",
@@ -187,6 +196,19 @@ export function SettingsView() {
                 help="Built-in runtimes are first-class presets Citadel knows by name (and tests via PATH/auth). Custom runtimes are any extra command you want to expose to workspaces — they live in the same list."
               />
               <AgentsPanel runtimes={data?.runtimes ?? []} />
+            </>
+          ) : null}
+          {section === "automations" ? (
+            <>
+              <PageHead
+                title="Automations"
+                sub="Rules that start agents on their own."
+                help="Fix-CI automation uses the primary agent when healthy, then the configured fallback. Scheduled agents keep their own cron/one-shot definitions."
+              />
+              <AutomationsPanel
+                runtimes={data?.runtimes ?? []}
+                scheduledAgentsCount={data?.scheduledAgents.length ?? 0}
+              />
             </>
           ) : null}
           {section === "repositories" ? (

@@ -63,6 +63,7 @@
 [ ] 10. The agent state icon shows a spinner while an *agent* session (any runtime except the plain `shell` terminal) is starting or actively running, and a static icon when only plain terminals or no sessions are running.
 [ ] 11. The navigator exposes a group-by overlay with checkboxes for `Repository` and `Status`. Both are reorderable to control grouping order. Default: both on, Repository first.
 [ ] 12. Group-by preferences persist locally.
+[ ] 13. Workspace rows are manually reorderable within their group via drag-and-drop. The order is persisted locally (per-browser localStorage, no server sync). Explicit user order overrides the default sort. Reorder is intra-group only — cross-group drops are no-ops in v1.
 
 ## Create Workspace
 
@@ -81,6 +82,8 @@
 [ ] 13. The `From branch` tab lists recent local and remote branches with an inline branch search.
 [ ] 14. The modal supports an optional initial agent task that auto-launches a chosen runtime when the workspace is created.
 [ ] 15. When the workspace is created from this modal and a default agent runtime exists for the repo, Citadel opens that agent in the center column immediately.
+[ ] 16. The create modal closes immediately on submit. The workspace appears in the navigator with `lifecycle = "creating"` and an inline setup-progress affordance showing the current stage (`fetching` · `adding worktree` · `running setup hooks` · `ready`). The user can switch away while the workspace boots; provisioning continues in the background. Failures surface inline on the workspace card with a retry action and never leave the workspace stuck in `creating` state.
+[ ] 17. When no name is provided at creation, Citadel generates a memorable two-token name (adjective + animal, e.g. `funny-cat`). Generated names follow the normal rename flow and are not distinguished from user-chosen names in the UI. Names must be unique within the active workspace set; the daemon retries on collision and falls back to a 4-char suffix.
 
 ## Archive And Remove Workspace
 
@@ -94,6 +97,8 @@
 [ ] 8. The history view distinguishes fully-removed workspaces from archived workspaces whose worktree is still present on disk.
 [ ] 9. The history view records the PR snapshot at archive time (state, additions/deletions, link) so it remains visible even after the PR provider stops returning it.
 [ ] 10. The history view offers an unarchive control when the worktree is still present and the workspace can be safely returned to active lifecycle.
+[ ] 11. Remove workspace removes the row from the navigator optimistically on confirmation; teardown continues in the background. The row only re-renders if backend cleanup fails (or on a page reload before the DELETE response). On failure, the drop dialog re-opens for the resurrected workspace seeded with the error message — even if the user has navigated to a different workspace in the meantime.
+[ ] 12. When removal is blocked by a dirty worktree, the dialog surfaces the actual change summary: a list of uncommitted file paths with their git porcelain status code, and a list of unpushed commits with short SHA + subject. Lists are capped at 50 files and 20 commits.
 
 ---
 

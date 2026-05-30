@@ -1,4 +1,4 @@
-import type { TtydTheme } from "./ttyd.js";
+export type TtydTheme = "light" | "dark";
 
 /**
  * Build the `-t` ttyd client-option flags that paint xterm to match the
@@ -19,6 +19,11 @@ export function ttydThemeArgs(theme: TtydTheme): string[] {
     "-t",
     "reconnect=3",
   ];
+}
+
+export function ttydThemeFromJson(themeJson: string | null): TtydTheme {
+  if (themeJson?.includes(`"${LIGHT_XTERM_THEME.background}"`)) return "light";
+  return "dark";
 }
 
 // Palette matches the cockpit's warm-cream redesign so the terminal pane

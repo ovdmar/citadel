@@ -2,82 +2,27 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CitadelConfig } from "@citadel/config";
-import { mergeConfigPatch, saveConfig } from "@citadel/config";
-import type { SqliteStore } from "@citadel/db";
-import type { DiagnosticsLogger } from "@citadel/operations";
-import { setGithubCommand, setJiraCommand } from "@citadel/providers";
-import type { TtydManager } from "@citadel/terminal";
 import type express from "express";
-import type { ProviderCache, asyncRoute } from "./app-helpers.js";
-import { buildDiagnosticsSnapshot, streamDiagnosticsBundle } from "./diagnostics-bundle.js";
 
-type RegisterAppUtilityRoutesInput = {
+type AsyncRoute = (
+  handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>,
+) => express.RequestHandler;
+
+function expandTilde(input: string): string {
+  if (input === "~") return os.homedir();
+  if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2));
+  return input;
+}
+
+export function registerRepoDiscoveryRoutes(input: {
   app: express.Express;
-  asyncRoute: typeof asyncRoute;
   config: CitadelConfig;
-  configPath: string;
-  store: SqliteStore;
-  ttyd: TtydManager;
-  diagnostics: DiagnosticsLogger;
-  providerCache: ProviderCache;
-  emit: (type: string, payload: unknown) => void;
-};
-
-export function registerAppUtilityRoutes(input: RegisterAppUtilityRoutesInput) {
-  const { app, config, configPath, diagnostics, emit, providerCache, store, ttyd } = input;
-
-  app.get("/api/config", (_req, res) => {
-    res.json({ config, configPath });
-  });
-
-  // Diagnostics surface. /snapshot returns the in-memory ring + a small
-  // structured snapshot of "what the daemon thinks the world looks like"
-  // (sessions/workspaces/ttyd inventory/live tmux session names). /bundle
-  // streams a tar.gz that includes the JSONL file(s) on disk plus that same
-  // snapshot — what the user emails over when reporting "all my sessions died".
-  app.get("/api/diagnostics/snapshot", (_req, res) => {
-    res.json(buildDiagnosticsSnapshot({ store, ttyd, diagnostics, config }));
-  });
-  app.get("/api/diagnostics/bundle.tar.gz", async (_req, res) => {
-    try {
-      await streamDiagnosticsBundle(res, { store, ttyd, diagnostics, config });
-    } catch (error) {
-      if (!res.headersSent) {
-        res.status(500).json({ error: error instanceof Error ? error.message : "diagnostics_bundle_failed" });
-      } else {
-        try {
-          res.end();
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-  });
-
-  app.put("/api/config", (req, res) => {
-    const nextConfig = mergeConfigPatch(config, req.body);
-    const saved = saveConfig(nextConfig, configPath);
-    Object.assign(config, saved);
-    setGithubCommand(saved.providers.github.command);
-    setJiraCommand(saved.providers.jira.command);
-    providerCache.clear();
-    store.addActivity({
-      id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
-      type: "settings.updated",
-      source: "user",
-      repoId: null,
-      workspaceId: null,
-      operationId: null,
-      message: "Updated local config",
-      createdAt: new Date().toISOString(),
-    });
-    emit("config.updated", { configPath });
-    res.json({ config, configPath });
-  });
-
+  asyncRoute: AsyncRoute;
+}) {
+  const { app, config, asyncRoute } = input;
   app.post(
     "/api/repos/inspect",
-    input.asyncRoute(async (req, res) => {
+    asyncRoute(async (req, res) => {
       const inputPath = typeof req.body?.rootPath === "string" ? req.body.rootPath : "";
       if (!inputPath) return res.status(400).json({ error: "root_path_required" });
       const resolved = path.resolve(expandTilde(inputPath));
@@ -156,10 +101,4 @@ export function registerAppUtilityRoutes(input: RegisterAppUtilityRoutesInput) {
     }
     res.json({ baseDir, filter, entries });
   });
-}
-
-function expandTilde(input: string): string {
-  if (input === "~") return os.homedir();
-  if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2));
-  return input;
 }

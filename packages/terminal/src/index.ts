@@ -12,7 +12,7 @@ export {
   TtydUnavailableError,
 } from "./ttyd.js";
 export type { TtydEntry, TtydManager, TtydManagerConfig, TtydTheme } from "./ttyd.js";
-export { DARK_XTERM_THEME, LIGHT_XTERM_THEME } from "./xterm-theme.js";
+export { DARK_XTERM_THEME, LIGHT_XTERM_THEME } from "./ttyd-theme.js";
 export { submitPrompt } from "./submit-prompt.js";
 
 import { tokenizeTerminalInput } from "./input-tokens.js";

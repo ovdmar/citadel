@@ -3,6 +3,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CitadelConfig } from "@citadel/config";
+import { mergeConfigPatch, saveConfig } from "@citadel/config";
 import {
   type AppEvent,
   CreateRepoInputSchema,
@@ -26,23 +27,18 @@ import {
   transitionJiraIssue,
 } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
-import {
-  attachTerminalWebSocket,
-  createTtydManager,
-  discoverExistingTtyds,
-  ensureTmuxSession,
-} from "@citadel/terminal";
+import { attachTerminalWebSocket, createTtydManager, discoverExistingTtyds } from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
-import { registerAppUtilityRoutes } from "./app-utility-routes.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
 import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
+import { registerDiagnosticsRoutes } from "./diagnostics-routes.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import {
   AUTOMATED_GH_DISABLED_REASON,
@@ -63,6 +59,7 @@ import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { registerPrDiffRoute } from "./pr-diff-route.js";
 import { registerPrRoutes } from "./pr-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
+import { registerRepoDiscoveryRoutes } from "./repo-discovery-routes.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
@@ -132,7 +129,7 @@ export function createDaemonApp(input: {
   const ttyd = createTtydManager({ ...resolveTtydPortRange(config.port), diagnostics });
   // Release the ttyd on every stopAgentSession path; guarded for test stubs.
   if (typeof operations.setTerminalHooks === "function") {
-    operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId) });
+    operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId, "session-stopped-hook") });
   }
 
   const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
@@ -176,11 +173,10 @@ export function createDaemonApp(input: {
   // WebSocket auto-reconnect (xterm `reconnect=3`) lands on the *same* ttyd
   // it was talking to before the restart.
   //
-  // Discovery is host-wide (NOT scoped to this daemon's port slot) so we can
-  // also reap ttyds that pre-date the current port-slot scheme (the 7xxx
-  // generation from before ttyd-slot.ts shipped on 2026-05-27). adopt()
-  // routes by DB membership via the resolveTabId callback: known sessionIds
-  // get adopted, unknown ones get SIGTERMed.
+  // Discovery is scoped to this daemon's port slot before adopt() routes by
+  // DB membership. That port filter is a hard safety boundary: sandbox
+  // daemons can carry prod-looking DB rows, but they must not see or SIGTERM
+  // the installed daemon's ttyds.
   //
   // Skipped under vitest: tests that boot a daemon would otherwise re-attach
   // to the live cockpit's ttyds and the next test that calls release() would
@@ -188,6 +184,8 @@ export function createDaemonApp(input: {
   if (!process.env.VITEST) {
     const survivors = discoverExistingTtyds({
       basePathPrefix: ttyd.config.basePathPrefix,
+      portBase: ttyd.config.portBase,
+      portMax: ttyd.config.portMax,
     });
     const sessionTabIds = new Map<string, string>();
     for (const session of store.listSessions()) {
@@ -204,7 +202,16 @@ export function createDaemonApp(input: {
       });
     }
   }
-  const { recentUserAction } = wireTerminalRoutes({ app, server, store, ttyd, dataDir: config.dataDir, emit, config });
+  const { recentUserAction } = wireTerminalRoutes({
+    app,
+    server,
+    store,
+    ttyd,
+    dataDir: config.dataDir,
+    emit,
+    config,
+    diagnostics,
+  });
 
   const cachedProviderHealth = () =>
     cachedProvider(
@@ -258,16 +265,31 @@ export function createDaemonApp(input: {
     }),
   );
 
-  registerAppUtilityRoutes({
-    app,
-    asyncRoute,
-    config,
-    configPath,
-    store,
-    ttyd,
-    diagnostics,
-    providerCache,
-    emit,
+  app.get("/api/config", (_req, res) => {
+    res.json({ config, configPath });
+  });
+
+  registerDiagnosticsRoutes({ app, store, ttyd, diagnostics, config });
+
+  app.put("/api/config", (req, res) => {
+    const nextConfig = mergeConfigPatch(config, req.body);
+    const saved = saveConfig(nextConfig, configPath);
+    Object.assign(config, saved);
+    setGithubCommand(saved.providers.github.command);
+    setJiraCommand(saved.providers.jira.command);
+    providerCache.clear();
+    store.addActivity({
+      id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+      type: "settings.updated",
+      source: "user",
+      repoId: null,
+      workspaceId: null,
+      operationId: null,
+      message: "Updated local config",
+      createdAt: new Date().toISOString(),
+    });
+    emit("config.updated", { configPath });
+    res.json({ config, configPath });
   });
 
   app.post("/api/repos", (req, res) => {
@@ -276,6 +298,8 @@ export function createDaemonApp(input: {
     emit("repo.updated", { repoId: repo.id, repo });
     res.status(201).json({ repo });
   });
+
+  registerRepoDiscoveryRoutes({ app, config, asyncRoute });
 
   app.get("/api/repos", (_req, res) => {
     res.json({ repos: store.listRepos() });
@@ -476,7 +500,10 @@ export function createDaemonApp(input: {
     "/api/workspaces",
     asyncRoute(async (req, res) => {
       const input = CreateWorkspaceInputSchema.parse(req.body);
-      const result = await operations.createWorkspace(input);
+      const result = await operations.createWorkspace(input, {
+        deferProvisioning: true,
+        onWorkspaceUpdated: (payload) => emit("workspace.updated", payload),
+      });
       emit("workspace.updated", result);
       res.status(202).json(result);
     }),
@@ -662,13 +689,15 @@ export function createDaemonApp(input: {
   registerCitadelActionRoutes({ app, config, emit });
   backfillScratchpadOnStartup(config);
 
-  fsWatchers = createWorkspaceFsWatchers({
-    listWorkspaces: () => store.listWorkspaces(),
-    providerCache,
-    emit,
-  });
-  fsWatchers.reconcile();
-  server.on("close", () => fsWatchers?.close());
+  if (process.env.CITADEL_DISABLE_FS_WATCHERS !== "1") {
+    fsWatchers = createWorkspaceFsWatchers({
+      listWorkspaces: () => store.listWorkspaces(),
+      providerCache,
+      emit,
+    });
+    fsWatchers.reconcile();
+    server.on("close", () => fsWatchers?.close());
+  }
 
   registerWorkspaceDiffRoutes({ app, store, asyncRoute });
 
@@ -750,7 +779,7 @@ export function createDaemonApp(input: {
     cachedProvider,
   });
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
-  const autoResume = startDaemonAutoResumeLoop(store, operations);
+  const autoResume = startDaemonAutoResumeLoop(store, operations, config);
   if (autoResume) server.on("close", () => autoResume.stop());
   const terminalReaper = startTerminalReaper();
   server.on("close", () => terminalReaper.stop());

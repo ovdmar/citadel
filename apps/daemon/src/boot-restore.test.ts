@@ -94,6 +94,32 @@ function insertStoppedSession(
   });
 }
 
+function insertLiveSession(
+  store: SqliteStore,
+  args: { id: string; uuid: string; ageMs: number; runtimeId?: string; tabId?: string },
+) {
+  const ts = new Date(Date.now() - args.ageMs).toISOString();
+  store.insertSession({
+    id: args.id,
+    workspaceId: "ws_1",
+    runtimeId: args.runtimeId ?? "claude-code",
+    displayName: "Claude Code",
+    status: "running",
+    statusReason: "launched",
+    lastStatusAt: ts,
+    lastOutputAt: ts,
+    endedAt: null,
+    exitCode: null,
+    transport: "disconnected",
+    tmuxSessionName: `citadel_ws_1_${args.id.slice(-8)}`,
+    tmuxSessionId: "$1",
+    runtimeSessionId: args.uuid,
+    tabId: args.tabId,
+    createdAt: ts,
+    updatedAt: ts,
+  });
+}
+
 function fakeOps(
   spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }>,
   stopped: string[] = [],
@@ -125,11 +151,11 @@ function fakeOps(
 }
 
 describe("runBootRestore", () => {
-  it("resumes every recent candidate sequentially, skips ones older than 24h", async () => {
+  it("resumes every recent fresh-boot candidate sequentially, skips ones older than 24h", async () => {
     const { config, store } = fixture();
-    insertStoppedSession(store, { id: "sess_recent_1", uuid: "uuid-aaaa", ageMs: 5 * 60_000 });
-    insertStoppedSession(store, { id: "sess_recent_2", uuid: "uuid-bbbb", ageMs: 60 * 60_000 });
-    insertStoppedSession(store, { id: "sess_old", uuid: "uuid-cccc", ageMs: 48 * 60 * 60_000 });
+    insertLiveSession(store, { id: "sess_recent_1", uuid: "uuid-aaaa", ageMs: 5 * 60_000 });
+    insertLiveSession(store, { id: "sess_recent_2", uuid: "uuid-bbbb", ageMs: 60 * 60_000 });
+    insertLiveSession(store, { id: "sess_old", uuid: "uuid-cccc", ageMs: 48 * 60 * 60_000 });
 
     const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }> = [];
     const summary = await runBootRestore({
@@ -137,9 +163,8 @@ describe("runBootRestore", () => {
       operations: fakeOps(spawned),
       config,
       emit: () => {},
-      // Suppress fresh-boot reconciliation: tests fabricate DB rows whose
-      // tmuxSessionName intentionally does not exist on the host tmux.
-      listTmuxSessions: () => null,
+      // Server reachable but empty: models a machine reboot / tmux loss.
+      listTmuxSessions: () => new Set<string>(),
       tmuxReadinessTimeoutMs: 0,
     });
 
@@ -148,6 +173,27 @@ describe("runBootRestore", () => {
     expect(summary.finishedAt).not.toBeNull();
     expect(spawned.map((s) => s.resumeRuntimeSessionId).sort()).toEqual(["uuid-aaaa", "uuid-bbbb"]);
     expect(summary.entries.every((e) => e.sessionId !== null && e.error === null)).toBe(true);
+  });
+
+  it("leaves pre-existing restore candidates for manual restore on routine daemon restart", async () => {
+    const { config, store } = fixture();
+    insertStoppedSession(store, { id: "sess_existing", uuid: "uuid-existing", ageMs: 5 * 60_000 });
+
+    const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }> = [];
+    const summary = await runBootRestore({
+      store,
+      operations: fakeOps(spawned),
+      config,
+      emit: () => {},
+      listTmuxSessions: () => new Set<string>(),
+      tmuxReadinessTimeoutMs: 0,
+    });
+
+    expect(summary.entries).toHaveLength(0);
+    expect(summary.skippedOlder).toBe(0);
+    expect(summary.finishedAt).not.toBeNull();
+    expect(spawned).toHaveLength(0);
+    expect(store.listSessions("ws_1").map((s) => s.id)).toContain("sess_existing");
   });
 
   it("returns an empty summary when there are no candidates at all", async () => {
@@ -174,17 +220,15 @@ describe("runBootRestore", () => {
     // Wipe runtimes so the lookup fails for our claude-code candidate;
     // the loop should mark it failed and continue.
     config.runtimes = [];
-    insertStoppedSession(store, { id: "sess_a", uuid: "uuid-aaaa", ageMs: 5 * 60_000 });
-    insertStoppedSession(store, { id: "sess_b", uuid: "uuid-bbbb", ageMs: 5 * 60_000 });
+    insertLiveSession(store, { id: "sess_a", uuid: "uuid-aaaa", ageMs: 5 * 60_000 });
+    insertLiveSession(store, { id: "sess_b", uuid: "uuid-bbbb", ageMs: 5 * 60_000 });
     const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }> = [];
     const summary = await runBootRestore({
       store,
       operations: fakeOps(spawned),
       config,
       emit: () => {},
-      // Suppress fresh-boot reconciliation: tests fabricate DB rows whose
-      // tmuxSessionName intentionally does not exist on the host tmux.
-      listTmuxSessions: () => null,
+      listTmuxSessions: () => new Set<string>(),
       tmuxReadinessTimeoutMs: 0,
     });
     expect(summary.entries).toHaveLength(2);
@@ -194,7 +238,7 @@ describe("runBootRestore", () => {
 
   it("stops the source row after a successful restore so it doesn't surface as a duplicate tab", async () => {
     const { config, store } = fixture();
-    insertStoppedSession(store, { id: "sess_to_restore", uuid: "uuid-cleanup", ageMs: 5 * 60_000 });
+    insertLiveSession(store, { id: "sess_to_restore", uuid: "uuid-cleanup", ageMs: 5 * 60_000 });
     const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }> = [];
     const stopped: string[] = [];
     await runBootRestore({
@@ -202,7 +246,7 @@ describe("runBootRestore", () => {
       operations: fakeOps(spawned, stopped, store),
       config,
       emit: () => {},
-      listTmuxSessions: () => null,
+      listTmuxSessions: () => new Set<string>(),
       tmuxReadinessTimeoutMs: 0,
     });
     expect(spawned).toHaveLength(1);
@@ -216,28 +260,14 @@ describe("runBootRestore", () => {
 
   it("propagates the source row's tabId so the restored session reuses its tab slot", async () => {
     const { config, store } = fixture();
-    // Insert a stopped row WITH an explicit tab_id. Boot-restore should pass
+    // Insert a live row WITH an explicit tab_id. Boot-restore should pass
     // that tabId into createAgentSession so the cockpit places the restored
     // session in the same tab the original lived in.
-    const ts = new Date(Date.now() - 5 * 60_000).toISOString();
-    store.insertSession({
+    insertLiveSession(store, {
       id: "sess_recent_tab",
-      workspaceId: "ws_1",
-      runtimeId: "claude-code",
-      displayName: "Claude Code",
-      status: "stopped",
-      statusReason: "exit_code_0",
-      lastStatusAt: ts,
-      lastOutputAt: ts,
-      endedAt: ts,
-      exitCode: 0,
-      transport: "disconnected",
-      tmuxSessionName: "citadel_ws_1_tab",
-      tmuxSessionId: null,
+      uuid: "uuid-tabprop",
+      ageMs: 5 * 60_000,
       tabId: "tab_explicit_42",
-      runtimeSessionId: "uuid-tabprop",
-      createdAt: ts,
-      updatedAt: ts,
     });
     const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }> = [];
     await runBootRestore({
@@ -245,7 +275,7 @@ describe("runBootRestore", () => {
       operations: fakeOps(spawned),
       config,
       emit: () => {},
-      listTmuxSessions: () => null,
+      listTmuxSessions: () => new Set<string>(),
       tmuxReadinessTimeoutMs: 0,
     });
     expect(spawned).toHaveLength(1);

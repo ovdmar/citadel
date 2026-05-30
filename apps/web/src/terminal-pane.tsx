@@ -22,6 +22,7 @@ type EnsureError = {
 };
 
 const RUNBOOK_URL = "/docs/operations/terminal-runbook";
+const TERMINAL_CLIENT_VERSION = "shortcut-bridge-v2";
 
 /**
  * Per-session handle used by Stage tabs to drive a live terminal (reload the
@@ -46,14 +47,27 @@ export type TerminalHandle = {
    * ensure). Null until the first ensure resolves. Read by the orchestrator
    * to skip no-op respawns. */
   lastKnownTheme: ResolvedTheme | null;
+  // Focus the iframe element programmatically. The ttyd payload is
+  // cross-origin (separate port) so this only focuses the iframe itself —
+  // xterm keyboard capture still requires one click inside the terminal
+  // area. See spec B.2 §Center Stage Sessions / select-focuses-terminal.
+  focusIframe: () => void;
+  recoverIfDisconnected: () => boolean;
 };
 
 const REGISTRY = new Map<string, TerminalHandle>();
+const FRAME_WINDOWS = new Map<string, Window>();
 const LISTENERS = new Set<(id: string) => void>();
 
-function publish(id: string, handle: TerminalHandle | null) {
-  if (handle) REGISTRY.set(id, handle);
-  else REGISTRY.delete(id);
+function publish(id: string, handle: TerminalHandle | null, frameWindow: Window | null = null) {
+  if (handle) {
+    REGISTRY.set(id, handle);
+    if (frameWindow) FRAME_WINDOWS.set(id, frameWindow);
+    else FRAME_WINDOWS.delete(id);
+  } else {
+    REGISTRY.delete(id);
+    FRAME_WINDOWS.delete(id);
+  }
   for (const listener of LISTENERS) listener(id);
 }
 
@@ -68,6 +82,36 @@ export function listTerminalHandles(): Array<[string, TerminalHandle]> {
 export function subscribeTerminalHandle(listener: (sessionId: string) => void): () => void {
   LISTENERS.add(listener);
   return () => LISTENERS.delete(listener);
+}
+
+export function isRegisteredTerminalMessageSource(
+  source: MessageEventSource | null,
+  sessionId: string | null | undefined,
+): boolean {
+  if (source) {
+    for (const frameWindow of FRAME_WINDOWS.values()) {
+      if (source === frameWindow) return true;
+    }
+  }
+  return Boolean(sessionId && REGISTRY.has(sessionId));
+}
+
+// Focus the iframe of an active session. No-op when:
+//   - sessionId is null/undefined (workspace has no active session)
+//   - no handle is registered (session not yet mounted)
+//   - document.activeElement is a text input or contenteditable (don't steal
+//     focus while the user is typing — e.g. inline workspace-title rename).
+// The cross-origin ttyd iframe may not always allow the parent to drive xterm
+// keyboard focus, but focusing both the frame element and WindowProxy gives
+// Chrome/ttyd the best chance of making workspace selection ready for typing.
+export function focusActiveTerminal(sessionId: string | null | undefined): void {
+  if (!sessionId) return;
+  const handle = REGISTRY.get(sessionId);
+  if (!handle) return;
+  const active = typeof document !== "undefined" ? document.activeElement : null;
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
+  if (active instanceof HTMLElement && active.isContentEditable) return;
+  handle.focusIframe();
 }
 
 export function TerminalPane(props: { session: AgentSession }) {
@@ -90,6 +134,8 @@ export function TerminalPane(props: { session: AgentSession }) {
   // re-theme orchestrator can skip no-op respawns. Updated only AFTER a
   // successful ensure() resolves with the requested theme.
   const lastKnownThemeRef = useRef<ResolvedTheme | null>(null);
+  const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const httpErrorRecoveryRef = useRef(false);
 
   const ensure = useCallback(
     async (options: { bumpFrame?: boolean; force?: boolean; theme?: ResolvedTheme } = {}) => {
@@ -107,6 +153,7 @@ export function TerminalPane(props: { session: AgentSession }) {
         setUrl(response.terminal.url);
         setError(null);
         lastKnownThemeRef.current = requestedTheme;
+        httpErrorRecoveryRef.current = false;
         if (options.bumpFrame) setIframeKey((value) => value + 1);
       } catch (raw) {
         if (requestSeqRef.current !== seq) return;
@@ -130,7 +177,8 @@ export function TerminalPane(props: { session: AgentSession }) {
       return;
     }
     if (retryOnceRef.current) return;
-    if (!["tmux_session_missing", "terminal_unavailable", "spawn_failed"].includes(error.code)) return;
+    if (!["tmux_session_missing", "terminal_unavailable", "spawn_failed", "ttyd_start_timeout"].includes(error.code))
+      return;
     retryOnceRef.current = true;
     const timer = window.setTimeout(() => {
       void ensure({ bumpFrame: true });
@@ -166,29 +214,68 @@ export function TerminalPane(props: { session: AgentSession }) {
     [ensure],
   );
 
-  // Publish the live URL + reload callback + lastKnownTheme so the stage tab
-  // and the live re-theme orchestrator can drive them. The status bar used
-  // to render these affordances inside the pane; that was removed in favour
-  // of the tab actions, but the state still lives here.
-  // `theme` is intentionally tracked so the publish() call re-fires when the
-  // resolved theme changes — it pulls the latest lastKnownThemeRef.current
-  // (which isn't itself reactive) into the published handle. Without `theme`,
-  // the orchestrator's skip check sees a stale lastKnownTheme.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: see comment above
+  // Focus the iframe element first, then ask the nested browsing context to
+  // focus itself. The try/catch keeps cross-origin focus restrictions from
+  // breaking workspace selection; preventScroll keeps the cockpit layout
+  // stable when selecting a workspace far down the nav.
+  const focusIframe = useCallback(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    iframe.focus({ preventScroll: true });
+    try {
+      iframe.contentWindow?.focus();
+    } catch {
+      // Cross-origin focus restrictions are browser-dependent.
+    }
+  }, []);
+
+  const recoverIfTerminalHttpError = useCallback(() => {
+    if (!isTtydHttpErrorPageVisible(iframeRef.current)) {
+      httpErrorRecoveryRef.current = false;
+      return false;
+    }
+    if (httpErrorRecoveryRef.current) return true;
+    httpErrorRecoveryRef.current = true;
+    recordTerminalClientEvent(sessionId, "iframe.http-error");
+    void ensure({ bumpFrame: true, force: true });
+    return true;
+  }, [ensure, sessionId]);
+
+  const recoverIfDisconnected = useCallback(() => {
+    if (!isTtydReconnectPromptVisible(iframeRef.current)) return false;
+    reload();
+    return true;
+  }, [reload]);
+
+  // Publish the live URL + reload/focus/recover callbacks so nav selection,
+  // tab actions, shortcut filtering, and the live re-theme orchestrator can
+  // drive state owned by TerminalPane.
+  // `theme` is intentionally tracked so publish() re-fires when the resolved
+  // theme changes and exposes the latest lastKnownThemeRef.current snapshot.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: iframeKey remounts the iframe, which changes contentWindow even when URL/callbacks are stable.
   useEffect(() => {
-    publish(sessionId, { url, reload, lastKnownTheme: lastKnownThemeRef.current });
+    publish(
+      sessionId,
+      { url, reload, lastKnownTheme: lastKnownThemeRef.current, focusIframe, recoverIfDisconnected },
+      iframeRef.current?.contentWindow ?? null,
+    );
     return () => publish(sessionId, null);
-  }, [sessionId, url, reload, theme]);
+  }, [sessionId, url, reload, focusIframe, recoverIfDisconnected, iframeKey, theme]);
   return (
     <div className="terminal-shell">
       <div className="terminal-surface terminal-surface-iframe">
         {url ? (
           <iframe
+            ref={iframeRef}
             key={`${sessionId}-${iframeKey}`}
             className="terminal-iframe"
-            src={url}
+            src={terminalIframeSrc(url)}
             title={`Terminal ${props.session.displayName}`}
             allow="clipboard-read; clipboard-write"
+            // tabIndex makes the iframe a programmatic-focus target without
+            // adding it to the natural tab order.
+            tabIndex={-1}
+            onLoad={recoverIfTerminalHttpError}
           />
         ) : error ? (
           <TerminalErrorState error={error} onRetry={retry} retrying={pending} />
@@ -198,6 +285,11 @@ export function TerminalPane(props: { session: AgentSession }) {
       </div>
     </div>
   );
+}
+
+export function terminalIframeSrc(url: string): string {
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}citadelClient=${encodeURIComponent(TERMINAL_CLIENT_VERSION)}`;
 }
 
 function TerminalErrorState(props: { error: EnsureError; onRetry: () => void; retrying: boolean }) {
@@ -248,4 +340,71 @@ function guidanceFor(code: string) {
     default:
       return "Open the terminal runbook below for diagnostic steps.";
   }
+}
+
+export function isTtydReconnectPromptVisible(iframe: HTMLIFrameElement | null): boolean {
+  try {
+    const doc = iframe?.contentDocument;
+    const view = iframe?.contentWindow;
+    if (!doc || !view) return false;
+
+    const ttydOverlayCandidates = Array.from(doc.querySelectorAll(".xterm > div"));
+    for (const element of ttydOverlayCandidates) {
+      if (isHiddenElement(element, view)) continue;
+      if (isReconnectPromptText(element.textContent ?? "")) return true;
+    }
+
+    for (const button of Array.from(doc.querySelectorAll("button"))) {
+      if (isHiddenElement(button, view)) continue;
+      if (/\breconnect\b/i.test(normalizeText(button.textContent ?? ""))) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+export function isTtydHttpErrorPageVisible(iframe: HTMLIFrameElement | null): boolean {
+  try {
+    const doc = iframe?.contentDocument;
+    if (!doc?.body) return false;
+    if (doc.querySelector(".xterm")) return false;
+    const text = normalizeText(doc.body.textContent ?? "").toLowerCase();
+    const title = normalizeText(doc.title).toLowerCase();
+    if (!text && !title) return false;
+    return (
+      text === "terminal_not_found" || text === "404 page not found" || text.startsWith("404") || title.includes("404")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isHiddenElement(element: Element, view: Window): boolean {
+  const style = view.getComputedStyle(element);
+  if (style.display === "none" || style.visibility === "hidden") return true;
+  const opacity = Number.parseFloat(style.opacity || "1");
+  return Number.isFinite(opacity) && opacity <= 0.05;
+}
+
+function isReconnectPromptText(value: string): boolean {
+  const text = normalizeText(value);
+  return /^press (?:⏎|enter|return) to reconnect$/i.test(text);
+}
+
+function normalizeText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function recordTerminalClientEvent(sessionId: string, event: string) {
+  fetch(`/api/agent-sessions/${encodeURIComponent(sessionId)}/terminal-client-event`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      event,
+      path: window.location.pathname,
+      visibility: document.visibilityState,
+    }),
+    keepalive: true,
+  }).catch(() => undefined);
 }

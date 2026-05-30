@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type http from "node:http";
+import type { Socket } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
 import type { AgentSession } from "@citadel/contracts";
@@ -32,6 +33,10 @@ const MOUSE_GRABBING_RUNTIMES = new Set(["codex", "cursor-agent"]);
 
 type Theme = "light" | "dark";
 
+type DiagnosticsSink = {
+  log(category: string, event: string, data?: Record<string, unknown>): void;
+};
+
 export function parseTheme(value: unknown): Theme | undefined {
   if (value === "light" || value === "dark") return value;
   if (value === undefined || value === null || value === "") return undefined;
@@ -40,6 +45,70 @@ export function parseTheme(value: unknown): Theme | undefined {
   // than silently falling through to the boundary "dark" default.
   console.warn(`[terminal] unrecognized theme value: ${JSON.stringify(value)}`);
   return undefined;
+}
+
+type TerminalWsMeta = Record<string, unknown>;
+
+function headerValue(headers: http.IncomingHttpHeaders, name: string): string | null {
+  const value = headers[name.toLowerCase()];
+  if (Array.isArray(value)) return value.join(",");
+  return typeof value === "string" ? value : null;
+}
+
+function sessionIdFromTerminalPath(urlPath: string): string {
+  const match = /^\/terminals\/([^/]+)/.exec(urlPath);
+  return match ? decodeURIComponent(match[1] ?? "") : "?";
+}
+
+function socketAddress(socket: Duplex) {
+  const netSocket = socket as Partial<Socket>;
+  return {
+    remoteAddress: netSocket.remoteAddress ?? null,
+    remotePort: typeof netSocket.remotePort === "number" ? netSocket.remotePort : null,
+    localAddress: netSocket.localAddress ?? null,
+    localPort: typeof netSocket.localPort === "number" ? netSocket.localPort : null,
+  };
+}
+
+function requestWsMeta(sessionId: string, request: http.IncomingMessage, socket: Duplex): TerminalWsMeta {
+  return {
+    sessionId,
+    path: clippedString(request.url, "", 240),
+    host: clippedString(headerValue(request.headers, "host"), "", 140),
+    origin: clippedString(headerValue(request.headers, "origin"), "", 180),
+    forwardedFor: clippedString(headerValue(request.headers, "x-forwarded-for"), "", 180),
+    forwardedHost: clippedString(headerValue(request.headers, "x-forwarded-host"), "", 140),
+    forwardedProto: clippedString(headerValue(request.headers, "x-forwarded-proto"), "", 40),
+    userAgent: clippedString(headerValue(request.headers, "user-agent"), "", 240),
+    ...socketAddress(socket),
+  };
+}
+
+function proxyTargetLabel(target: unknown): string {
+  if (typeof target === "string") return target;
+  if (!target || typeof target !== "object") return "";
+  const candidate = target as {
+    href?: unknown;
+    protocol?: unknown;
+    host?: unknown;
+    hostname?: unknown;
+    port?: unknown;
+  };
+  if (typeof candidate.href === "string") return candidate.href;
+  const protocol = typeof candidate.protocol === "string" ? candidate.protocol : "http:";
+  const host = typeof candidate.host === "string" ? candidate.host : null;
+  if (host) return `${protocol}//${host}`;
+  const hostname = typeof candidate.hostname === "string" ? candidate.hostname : null;
+  const port = typeof candidate.port === "string" || typeof candidate.port === "number" ? String(candidate.port) : "";
+  return hostname ? `${protocol}//${hostname}${port ? `:${port}` : ""}` : "";
+}
+
+function errorData(error: unknown): Record<string, unknown> {
+  const err = error as NodeJS.ErrnoException;
+  return {
+    message: error instanceof Error ? clippedString(error.message, "", 240) : clippedString(String(error), "", 240),
+    code: typeof err.code === "string" ? err.code : null,
+  };
 }
 
 export function registerTerminalRoutes(input: {
@@ -58,6 +127,8 @@ export function registerTerminalRoutes(input: {
    * Restart endpoint and the user-action endpoint. The status-monitor reads
    * it on each tick to label `running → idle` transitions correctly. */
   recentUserAction?: Map<string, number>;
+  /** Structured diagnostics logger for browser-side terminal lifecycle events. */
+  diagnostics?: DiagnosticsSink;
 }) {
   const { app, server, store, ttyd } = input;
   const proxy = httpProxy.createProxyServer({
@@ -122,10 +193,38 @@ export function registerTerminalRoutes(input: {
   // user's theme selection across the revive path that runs on first
   // reconnect after restart.
   const themePreferences = new ThemePrefStore(input.dataDir);
+  // Always persist terminal WebSocket lifecycle breadcrumbs. The debug flag
+  // only mirrors them to journald; diagnostics.jsonl stays useful after a
+  // long-running session without needing to restart with extra env.
+  const debugWs = process.env.CITADEL_DEBUG_TERMINAL_WS === "1";
+  const proxySocketMeta = new WeakMap<Duplex, TerminalWsMeta>();
+  const logWs = (event: string, data: TerminalWsMeta = {}) => {
+    input.diagnostics?.log("terminal-ws", event, data);
+    if (!debugWs) return;
+    const stamp = new Date().toISOString();
+    console.log(`[ws] ${stamp} ${event}`, data);
+  };
+  const instrumentSocket = (label: string, sessionId: string, socket: Duplex, meta: TerminalWsMeta = {}) => {
+    socket.once("close", (hadError: boolean) =>
+      logWs(`${label}.close`, { sessionId, ...meta, ...socketAddress(socket), hadError }),
+    );
+    socket.once("end", () => logWs(`${label}.end`, { sessionId, ...meta, ...socketAddress(socket) }));
+    socket.once("error", (err: Error) =>
+      logWs(`${label}.error`, { sessionId, ...meta, ...socketAddress(socket), ...errorData(err) }),
+    );
+  };
 
   proxy.on("error", (error, req, target) => {
     const message = error instanceof Error ? error.message : "terminal_proxy_failed";
-    if (process.env.CITADEL_DEBUG_TERMINAL_WS === "1") {
+    if (req?.url?.startsWith(TERMINAL_PROXY_PREFIX)) {
+      const socket = target && "remoteAddress" in target ? (target as Duplex) : req.socket;
+      logWs("proxy.error", {
+        sessionId: sessionIdFromTerminalPath(req.url),
+        path: req.url,
+        ...socketAddress(socket),
+        ...errorData(error),
+      });
+    } else if (debugWs) {
       const stamp = new Date().toISOString();
       console.log(`[ws] ${stamp} proxy-error`, { url: req?.url, message });
     }
@@ -143,21 +242,32 @@ export function registerTerminalRoutes(input: {
     }
   });
 
-  if (process.env.CITADEL_DEBUG_TERMINAL_WS === "1") {
-    const stamp = () => new Date().toISOString();
-    proxy.on("open", (proxySocket: Duplex) => {
-      console.log(`[ws] ${stamp()} upstream-open`);
-      proxySocket.once("close", (hadError: boolean) => {
-        console.log(`[ws] ${stamp()} upstream-close`, { hadError });
-      });
-      proxySocket.once("end", () => {
-        console.log(`[ws] ${stamp()} upstream-end`);
-      });
+  proxy.on("proxyReqWs", (proxyReq, req, socket, options) => {
+    if (!req.url?.startsWith(TERMINAL_PROXY_PREFIX)) return;
+    const sessionId = sessionIdFromTerminalPath(req.url);
+    const baseMeta = {
+      ...requestWsMeta(sessionId, req, socket),
+      target: proxyTargetLabel(options.target),
+    };
+    logWs("upstream.request", baseMeta);
+    proxyReq.once("upgrade", (proxyRes: http.IncomingMessage, proxySocket: Duplex) => {
+      const upstreamMeta = {
+        ...baseMeta,
+        statusCode: proxyRes.statusCode ?? null,
+      };
+      proxySocketMeta.set(proxySocket, upstreamMeta);
+      logWs("upstream.open", { ...upstreamMeta, ...socketAddress(proxySocket) });
+      instrumentSocket("upstream", sessionId, proxySocket, upstreamMeta);
     });
-    proxy.on("close", (_req, _socket, _head) => {
-      console.log(`[ws] ${stamp()} proxy-ws-close`);
+    proxyReq.once("error", (err: Error) => {
+      logWs("upstream.request.error", { ...baseMeta, ...errorData(err) });
     });
-  }
+  });
+
+  proxy.on("close", (_proxyRes, proxySocket) => {
+    const meta = proxySocketMeta.get(proxySocket as Duplex) ?? {};
+    logWs("proxy.close", { ...meta, ...socketAddress(proxySocket as Duplex) });
+  });
 
   const resolveSession = (sessionId: string): ResolvedSession | null => {
     const session = store.listSessions().find((candidate) => candidate.id === sessionId);
@@ -298,7 +408,7 @@ export function registerTerminalRoutes(input: {
 
   app.delete("/api/agent-sessions/:sessionId/terminal", (req, res) => {
     const sessionId = String(req.params.sessionId ?? "");
-    ttyd.release(sessionId);
+    ttyd.release(sessionId, "terminal-route-delete");
     res.status(202).json({ released: true });
   });
 
@@ -341,6 +451,23 @@ export function registerTerminalRoutes(input: {
     res.status(204).end();
   });
 
+  app.post("/api/agent-sessions/:sessionId/terminal-client-event", (req, res) => {
+    const sessionId = String(req.params.sessionId ?? "");
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const event = clippedString(body.event, "unknown", 80);
+    input.diagnostics?.log("terminal-client", event, {
+      sessionId,
+      code: typeof body.code === "number" ? body.code : null,
+      reason: typeof body.reason === "string" ? body.reason.slice(0, 200) : null,
+      wasClean: typeof body.wasClean === "boolean" ? body.wasClean : null,
+      persisted: typeof body.persisted === "boolean" ? body.persisted : null,
+      visibility: clippedString(body.visibility, "unknown", 40),
+      ageMs: typeof body.ageMs === "number" && Number.isFinite(body.ageMs) ? Math.max(0, Math.round(body.ageMs)) : null,
+      path: clippedString(body.path, "", 240),
+    });
+    res.status(204).end();
+  });
+
   app.get("/api/terminals", (_req, res) => {
     res.json({
       terminals: ttyd
@@ -375,7 +502,7 @@ export function registerTerminalRoutes(input: {
       if (res.headersSent) return;
       const code = (error as NodeJS.ErrnoException | undefined)?.code;
       if (code === "ECONNREFUSED" || code === "ECONNRESET") {
-        ttyd.release(resolved.sessionId);
+        ttyd.release(resolved.sessionId, "terminal-http-proxy-stale-entry");
         const revived = await reviveProxyTarget(req.url);
         if (revived) {
           proxy.web(req, res, { target: revived.target }, (err2?: Error) => {
@@ -400,31 +527,13 @@ export function registerTerminalRoutes(input: {
   // lands here. Mirror the HTTP path's self-heal so a stale iframe that opens
   // a ws after the daemon restarted / ttyd was reaped picks up a freshly
   // spawned instance instead of hard-failing with terminal_not_found.
-  // Lifecycle logging for terminal WS upgrades. Active only when
-  // CITADEL_DEBUG_TERMINAL_WS=1 — captures which side closed (client vs
-  // upstream ttyd), with reason, so "random terminal reload" reports can
-  // be traced to a real cause (proxy timeout, ttyd ping miss, browser
-  // navigation, etc).
-  const debugWs = process.env.CITADEL_DEBUG_TERMINAL_WS === "1";
-  const logWs = (...args: unknown[]) => {
-    if (!debugWs) return;
-    const stamp = new Date().toISOString();
-    console.log(`[ws] ${stamp}`, ...args);
-  };
-  const instrumentSocket = (label: string, sessionId: string, socket: Duplex) => {
-    if (!debugWs) return;
-    socket.once("close", (hadError: boolean) => logWs(label, sessionId, "close", { hadError }));
-    socket.once("end", () => logWs(label, sessionId, "end"));
-    socket.once("error", (err: Error) => logWs(label, sessionId, "error", err.message));
-  };
-
   const upgradeHandler = (request: http.IncomingMessage, socket: Duplex, head: Buffer) => {
     const urlPath = request.url || "";
     if (!urlPath.startsWith(TERMINAL_PROXY_PREFIX)) return;
-    const sessionMatch = /^\/terminals\/([^/]+)/.exec(urlPath);
-    const sessionId = sessionMatch ? decodeURIComponent(sessionMatch[1] ?? "") : "?";
-    logWs("upgrade", sessionId, { path: urlPath });
-    instrumentSocket("client", sessionId, socket);
+    const sessionId = sessionIdFromTerminalPath(urlPath);
+    const meta = requestWsMeta(sessionId, request, socket);
+    logWs("upgrade", meta);
+    instrumentSocket("client", sessionId, socket, meta);
     const resolved = resolveProxyTarget(urlPath);
     if (!resolved) {
       // Hold the socket open while we try to revive ttyd. Browsers retry on
@@ -432,16 +541,16 @@ export function registerTerminalRoutes(input: {
       reviveProxyTarget(urlPath)
         .then((revived) => {
           if (!revived) {
-            logWs("revive-failed", sessionId);
+            logWs("revive.failed", meta);
             socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
             socket.destroy();
             return;
           }
-          logWs("revived", sessionId, { target: revived.target });
+          logWs("revived", { ...meta, target: revived.target, ttydPort: revived.entry.port });
           proxy.ws(request, socket, head, { target: revived.target });
         })
         .catch((err: Error) => {
-          logWs("revive-error", sessionId, err.message);
+          logWs("revive.error", { ...meta, ...errorData(err) });
           try {
             socket.destroy();
           } catch {
@@ -527,4 +636,9 @@ function terminalDto(entry: TtydEntry, url: string) {
     startedAt: entry.startedAt,
     theme: entry.theme,
   };
+}
+
+function clippedString(value: unknown, fallback: string, max: number): string {
+  if (typeof value !== "string") return fallback;
+  return value.length > max ? value.slice(0, max) : value;
 }

@@ -1,7 +1,8 @@
 import { Monitor, Moon, Sun } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { type ThemePreference, applyThemePreference, readThemePreference } from "./use-resolved-theme.js";
 
-export type ThemeSetting = "light" | "dark" | "system";
+export type ThemeSetting = ThemePreference;
 
 const STORAGE_KEY = "citadel.theme";
 const CYCLE: readonly ThemeSetting[] = ["light", "dark", "system"];
@@ -29,14 +30,6 @@ function describe(theme: ThemeSetting): string {
   }
 }
 
-function applyToDocument(theme: ThemeSetting): void {
-  if (theme === "system") {
-    delete document.documentElement.dataset.theme;
-  } else {
-    document.documentElement.dataset.theme = theme;
-  }
-}
-
 /**
  * Single cycling button: Light → Dark → System → Light.
  *
@@ -50,20 +43,18 @@ function applyToDocument(theme: ThemeSetting): void {
  * reload and does NOT call `window.location.reload()`.
  */
 export function ThemeControls() {
-  const [theme, setTheme] = useState<ThemeSetting>(() =>
-    typeof window === "undefined" ? "system" : normalize(localStorage.getItem(STORAGE_KEY)),
-  );
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, theme);
-    applyToDocument(theme);
-  }, [theme]);
-
+  const [theme, setTheme] = useState<ThemeSetting>(() => normalize(readThemePreference()));
   const next = nextInCycle(theme);
   const label = `Theme: ${describe(theme)}. Click for ${describe(next)}.`;
 
+  const pick = () => {
+    if (next === theme && next === readThemePreference()) return;
+    applyThemePreference(next);
+    setTheme(next);
+  };
+
   return (
-    <button type="button" className="set-icon-btn" onClick={() => setTheme(next)} aria-label={label} title={label}>
+    <button type="button" className="set-icon-btn" onClick={pick} aria-label={label} title={label}>
       <ThemeIcon theme={theme} />
     </button>
   );
