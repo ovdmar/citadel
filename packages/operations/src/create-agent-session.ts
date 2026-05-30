@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ensureCodexGoalsFeatureArgs } from "@citadel/config";
 import type { ActivityEvent, AgentSession, CreateAgentSessionInput, Repo, Workspace } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
@@ -66,7 +67,7 @@ export async function createAgentSession(
   // Prefer runtime-native initial-prompt argv when available. Codex accepts
   // the prompt as a positional argument; Claude Code's interactive mode does
   // not, so for runtimes without argv support we paste once the TUI is ready.
-  const runtimeArgs = [...runtime.args];
+  const runtimeArgs = ensureCodexGoalsFeatureArgs(input.runtimeId, runtime.args);
   let promptForKeys: string | null = null;
   if (input.prompt?.length) {
     if (runtime.promptArg) runtimeArgs.push(runtime.promptArg, input.prompt);

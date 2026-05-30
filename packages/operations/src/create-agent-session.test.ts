@@ -95,15 +95,17 @@ describe("createAgentSession session-id wiring", () => {
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "codex-prompt", source: "scratch" });
     const argvPath = path.join(fixture.dir, "codex-argv.json");
+    const scriptPath = path.join(fixture.dir, "fake-codex-argv.js");
     const script = [
       "const fs = require('node:fs');",
-      `fs.writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(1)));`,
+      `fs.writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));`,
       "setTimeout(() => {}, 10000);",
     ].join(" ");
+    fs.writeFileSync(scriptPath, script);
 
     const session = await service.createAgentSession(
       { workspaceId: created.workspaceId, runtimeId: "codex", prompt: "hello codex" },
-      { command: "node", args: ["-e", script], displayName: "Fake Codex", sessionIdArg: "--session-id" },
+      { command: "node", args: [scriptPath], displayName: "Fake Codex", sessionIdArg: "--session-id" },
     );
     try {
       const deadline = Date.now() + 3000;
@@ -111,6 +113,9 @@ describe("createAgentSession session-id wiring", () => {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
       const argv = JSON.parse(fs.readFileSync(argvPath, "utf8")) as string[];
+      const goalsFlagIndex = argv.indexOf("--enable");
+      expect(goalsFlagIndex).toBeGreaterThanOrEqual(0);
+      expect(argv[goalsFlagIndex + 1]).toBe("goals");
       expect(argv).toContain("hello codex");
     } finally {
       service.stopAgentSession({ sessionId: session.id });

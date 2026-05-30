@@ -2,7 +2,7 @@
 // Extracted so app.ts stays under the 800-line file-size cap.
 
 import type http from "node:http";
-import type { CitadelConfig } from "@citadel/config";
+import { type CitadelConfig, ensureCodexGoalsFeatureArgs } from "@citadel/config";
 import type { AgentSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type TtydManager, ensureTmuxSession, launchAgentInSession, panePidProcess } from "@citadel/terminal";
@@ -75,7 +75,7 @@ export function buildRespawnTmux(
     if (!ctx) return null;
     const tmux = await ensureTmuxSession({ sessionName: ctx.sessionName, cwd: ctx.workspacePath });
     if (!isShellCommand(ctx.runtime.command)) {
-      const argv = [...ctx.runtime.args];
+      const argv = ensureCodexGoalsFeatureArgs(session.runtimeId, ctx.runtime.args);
       if (session.runtimeSessionId && ctx.runtime.resumeArg) {
         argv.push(ctx.runtime.resumeArg, session.runtimeSessionId);
       }
@@ -101,7 +101,7 @@ export function buildRestartAgent(store: SqliteStore, config: CitadelConfig): (s
     }
     await ensureTmuxSession({ sessionName: ctx.sessionName, cwd: ctx.workspacePath });
     if (!isShellCommand(ctx.runtime.command)) {
-      const argv = [...ctx.runtime.args];
+      const argv = ensureCodexGoalsFeatureArgs(session.runtimeId, ctx.runtime.args);
       if (session.runtimeSessionId && ctx.runtime.resumeArg) {
         argv.push(ctx.runtime.resumeArg, session.runtimeSessionId);
       }
