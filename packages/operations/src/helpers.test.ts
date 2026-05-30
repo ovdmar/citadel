@@ -1,8 +1,10 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SqliteStore } from "@citadel/db";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { workspaceDirtySummary } from "./helpers.js";
 
 // Mock @citadel/terminal so reconcileStore's tmux-side calls are observable
 // without spawning real tmux processes. Vitest hoists the factory; refs live
@@ -176,4 +178,103 @@ function seedBackground(store: SqliteStore, agentId: string, bgId: string, tmuxN
     backgroundSessionId: bgId,
     logFilePath: logPath,
   });
+}
+
+describe("workspaceDirtySummary", () => {
+  it("returns empty arrays for a clean worktree", () => {
+    const repo = createGitRepo();
+    const summary = workspaceDirtySummary(repo.path);
+    expect(summary.files).toEqual([]);
+    expect(summary.unpushedCommits).toEqual([]);
+  });
+
+  it("lists modified file paths with porcelain status codes", () => {
+    const repo = createGitRepo();
+    // Touch an existing tracked file (M) and add a new untracked file (??).
+    fs.writeFileSync(path.join(repo.path, "README.md"), "# changed\n");
+    fs.writeFileSync(path.join(repo.path, "new.txt"), "untracked\n");
+    const summary = workspaceDirtySummary(repo.path);
+    const paths = summary.files.map((f) => f.path).sort();
+    expect(paths).toContain("README.md");
+    expect(paths).toContain("new.txt");
+    // Porcelain status codes are 2-char strings like ` M` or `??`.
+    for (const file of summary.files) {
+      expect(file.status).toMatch(/^.{2}$/);
+    }
+  });
+
+  it("lists unpushed commit shas and subjects when ahead of upstream", () => {
+    const repo = createGitRepo();
+    fs.writeFileSync(path.join(repo.path, "feature.txt"), "feature\n");
+    git(repo.path, "add", "feature.txt");
+    git(repo.path, "commit", "-m", "Add feature.txt");
+    fs.writeFileSync(path.join(repo.path, "more.txt"), "more\n");
+    git(repo.path, "add", "more.txt");
+    git(repo.path, "commit", "-m", "Add more.txt");
+    const summary = workspaceDirtySummary(repo.path);
+    // After commits, working tree is clean but unpushed commits exist.
+    expect(summary.files).toEqual([]);
+    expect(summary.unpushedCommits.length).toBe(2);
+    const subjects = summary.unpushedCommits.map((c) => c.subject);
+    expect(subjects).toContain("Add feature.txt");
+    expect(subjects).toContain("Add more.txt");
+    for (const commit of summary.unpushedCommits) {
+      expect(commit.sha).toMatch(/^[0-9a-f]+$/);
+    }
+  });
+
+  it("uses the rev-list fallback when there is no upstream", () => {
+    const repo = createGitRepo({ withUpstream: false });
+    fs.writeFileSync(path.join(repo.path, "feature.txt"), "x\n");
+    git(repo.path, "add", "feature.txt");
+    git(repo.path, "commit", "-m", "Local-only commit");
+    const summary = workspaceDirtySummary(repo.path);
+    // No remote → every commit is "unreachable from remotes" → reported.
+    expect(summary.unpushedCommits.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("caps files at 50 and commits at 20", () => {
+    const repo = createGitRepo();
+    // 60 untracked files → expect cap at 50.
+    for (let i = 0; i < 60; i++) {
+      fs.writeFileSync(path.join(repo.path, `dirty-${i}.txt`), "x\n");
+    }
+    const summary = workspaceDirtySummary(repo.path);
+    expect(summary.files.length).toBe(50);
+  });
+
+  it("returns empty for a non-existent path", () => {
+    const summary = workspaceDirtySummary("/tmp/citadel-nonexistent-worktree-xyz");
+    expect(summary.files).toEqual([]);
+    expect(summary.unpushedCommits).toEqual([]);
+  });
+});
+
+function createGitRepo(options: { withUpstream?: boolean } = {}): { path: string } {
+  const withUpstream = options.withUpstream ?? true;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-dirty-summary-"));
+  dirs.push(dir);
+  const repoPath = path.join(dir, "repo");
+  if (withUpstream) {
+    const remotePath = path.join(dir, "remote.git");
+    execFileSync("git", ["init", "--bare", remotePath], { stdio: "pipe" });
+    execFileSync("git", ["clone", remotePath, repoPath], { stdio: "pipe" });
+  } else {
+    fs.mkdirSync(repoPath);
+    execFileSync("git", ["init"], { cwd: repoPath, stdio: "pipe" });
+  }
+  execFileSync("git", ["config", "user.email", "test@example.test"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "Citadel Test"], { cwd: repoPath, stdio: "pipe" });
+  fs.writeFileSync(path.join(repoPath, "README.md"), "# initial\n");
+  execFileSync("git", ["add", "README.md"], { cwd: repoPath, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: repoPath, stdio: "pipe" });
+  if (withUpstream) {
+    execFileSync("git", ["branch", "-M", "main"], { cwd: repoPath, stdio: "pipe" });
+    execFileSync("git", ["push", "-u", "origin", "main"], { cwd: repoPath, stdio: "pipe" });
+  }
+  return { path: repoPath };
+}
+
+function git(cwd: string, ...args: string[]): void {
+  execFileSync("git", args, { cwd, stdio: "pipe" });
 }

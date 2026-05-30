@@ -31,6 +31,14 @@ describe("loadConfig", () => {
     expect(config.runtimes.map((runtime) => runtime.id)).toContain("shell");
     expect(config.runtimes.find((runtime) => runtime.id === "codex")?.args).toEqual(["--yolo"]);
     expect(config.usageProviders).toEqual([]);
+    expect(config.automations.fixCi).toMatchObject({
+      enabled: true,
+      runtimeId: "claude-code",
+      fallbackRuntimeId: "codex",
+      idleThresholdMs: 300_000,
+      debounceMs: 1_800_000,
+      intervalMs: 60_000,
+    });
     expect(fs.existsSync(configPath)).toBe(true);
   });
 
@@ -192,6 +200,7 @@ describe("loadConfig", () => {
       mcp: { enabled: false },
       providers: { github: { enabled: true }, jira: { enabled: false } },
       usageProviders: [{ id: "usage-shell", runtimeId: "shell", command: "node", args: ["usage.js"] }],
+      automations: { fixCi: { enabled: true, runtimeId: "codex", fallbackRuntimeId: "cursor-agent" } },
       hooks: [{ id: "setup", event: "workspace.setup", command: "node", args: ["setup.js"], blocking: false }],
       repoDefaults: { setupHookIds: ["setup"], teardownHookIds: [] },
     });
@@ -201,6 +210,12 @@ describe("loadConfig", () => {
     expect(reloaded.mcp.enabled).toBe(false);
     expect(reloaded.providers.jira.enabled).toBe(false);
     expect(reloaded.usageProviders[0]).toMatchObject({ id: "usage-shell", runtimeId: "shell" });
+    expect(reloaded.automations.fixCi).toMatchObject({
+      enabled: true,
+      runtimeId: "codex",
+      fallbackRuntimeId: "cursor-agent",
+      idleThresholdMs: 300_000,
+    });
     expect(reloaded.hooks[0]).toMatchObject({ id: "setup", blocking: false });
     expect(reloaded.repoDefaults.setupHookIds).toEqual(["setup"]);
   });

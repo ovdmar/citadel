@@ -238,7 +238,7 @@ describe("namespace routes + MCP integration", () => {
       expect(recreate.namespace.color).toBe("#445566");
 
       // assign_workspace_to_namespace via JSON-RPC without namespaceId returns
-      // a protocol-level error envelope; JSON-RPC errors still use HTTP 200.
+      // a protocol-level error envelope and invalid params use HTTP 400.
       const missingArgResponse = await fetch(`${baseUrl}/api/mcp/rpc`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -249,11 +249,17 @@ describe("namespace routes + MCP integration", () => {
           params: { name: "assign_workspace_to_namespace", arguments: { workspaceId: workspaceCreate.workspaceId } },
         }),
       });
-      expect(missingArgResponse.status).toBe(200);
+      expect(missingArgResponse.status).toBe(400);
       const missingArgBody = (await missingArgResponse.json()) as {
-        error?: { message?: string };
+        error?: string;
+        issues?: Array<{ path?: string; message?: string }>;
       };
-      expect(missingArgBody.error?.message).toContain("namespaceId");
+      expect(missingArgBody.error).toBe("validation_failed");
+      expect(
+        missingArgBody.issues?.some(
+          (issue) => issue.path?.includes("namespaceId") || issue.message?.includes("namespaceId"),
+        ),
+      ).toBe(true);
     } finally {
       await closeServer(server);
     }

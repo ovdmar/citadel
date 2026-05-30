@@ -212,6 +212,38 @@ describe("OperationService", () => {
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
 
+  it("allows successful teardown hooks with unstructured stdout", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [
+        {
+          id: "teardown-logs",
+          kind: "command",
+          event: "workspace.teardown",
+          command: "node",
+          args: ["-e", "process.stdout.write('No recorded dev stack pid file')"],
+          blocking: true,
+        },
+      ],
+      repoDefaults: { setupHookIds: [], teardownHookIds: ["teardown-logs"] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "Teardown Logs", source: "scratch" });
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === created.workspaceId);
+
+    const removed = await service.removeWorkspace({ workspaceId: created.workspaceId });
+
+    expect(removed).toMatchObject({ removed: true, archived: false, dirty: false });
+    expect(fs.existsSync(workspace?.path ?? "")).toBe(false);
+    expect(store.listOperations().find((operation) => operation.id === removed.operationId)).toMatchObject({
+      status: "succeeded",
+    });
+  });
+
   it("skips teardown hooks and prunes when the worktree directory is already gone", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
@@ -404,25 +436,6 @@ describe("OperationService", () => {
     } finally {
       service.stopAgentSession({ sessionId: session.id });
     }
-  });
-
-  it("rejects transcript/message calls for unknown sessions", async () => {
-    const fixture = createGitFixture();
-    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
-    store.migrate();
-    const service = new OperationService(store, {
-      hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
-      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
-    });
-    expect(service.readAgentTranscript({ sessionId: "sess_missing" })).toEqual({
-      ok: false,
-      error: "session_not_found",
-    });
-    expect(await service.sendAgentMessage({ sessionId: "sess_missing", message: "hi" })).toEqual({
-      ok: false,
-      error: "session_not_found",
-    });
   });
 
   it("stops a session, removes it from the cockpit, and records activity", async () => {
@@ -747,6 +760,10 @@ describe("OperationService", () => {
     ).rejects.toThrow(/Unknown repo/);
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
+
+  // The new tests for funny-name auto-generation and dirtySummary attach
+  // live in `workspace-lifecycle.test.ts` to keep this file under the
+  // 800-line cap enforced by `scripts/checks/file-size.ts`.
 });
 function createGitFixture() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-ops-"));

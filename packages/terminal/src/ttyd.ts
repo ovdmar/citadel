@@ -1,22 +1,16 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
+import net from "node:net";
+import { tmuxPrefix } from "./index.js";
 import {
-  DEFAULTS,
-  TTYD_PING_INTERVAL_SECONDS,
-  TtydUnavailableError,
-  binaryExists,
-  buildAttachCommand,
-  discoverExistingTtyds,
   killStaleTtydInRange,
-  reserveFreePort,
-  tmuxSessionAlive,
+  listListeningPortsInRange,
+  listeningPidForPort,
+  processAlive,
   trimSlashes,
-  ttydThemeArgs,
-  waitForOwnedPort,
-} from "./ttyd-helpers.js";
-
-export { TtydUnavailableError, discoverExistingTtyds } from "./ttyd-helpers.js";
-
-export type TtydTheme = "light" | "dark";
+} from "./ttyd-process.js";
+import { type TtydTheme, ttydThemeArgs } from "./ttyd-theme.js";
+export type { TtydTheme } from "./ttyd-theme.js";
+export { discoverExistingTtyds } from "./ttyd-process.js";
 
 export type TtydEntry = {
   key: string;
@@ -65,6 +59,36 @@ export type TtydManagerConfig = {
    * "where did my ttyd go". Defaults to a no-op. */
   diagnostics?: TtydDiagnosticsSink;
 };
+
+const DEFAULTS = {
+  ttydBin: process.env.TTYD_BIN || "/home/linuxbrew/.linuxbrew/bin/ttyd",
+  shellBin: process.env.CITADEL_SHELL_BIN || process.env.SHELL || "/bin/bash",
+  // Default range is 11000-11999 (1000 ports) — empirically high enough that
+  // we never bump into the cap with realistic agent-session counts, and far
+  // from common low-port ranges (services, dev servers, etc.). Multi-daemon
+  // co-existence carves this out via apps/daemon/src/ttyd-slot.ts which
+  // assigns each daemon a disjoint 1000-port slice (slot k → 11000+k*1000).
+  portBase: Number.parseInt(process.env.CITADEL_TTYD_PORT_BASE ?? "", 10) || 11000,
+  portMax: Number.parseInt(process.env.CITADEL_TTYD_PORT_MAX ?? "", 10) || 11999,
+  basePathPrefix: "/terminals",
+  // 10s readiness budget: under spawn storms (multiple ttyds respawning at
+  // once after `make deploy`) ttyd can take several seconds to bind, and a
+  // tight 4s window produced spurious "Terminal unavailable" errors. The
+  // happy path resolves in <100ms; the extra ceiling only matters when the
+  // kernel is busy scheduling the new process.
+  readyTimeoutMs: 10000,
+};
+
+const TTYD_PING_INTERVAL_SECONDS = 45;
+
+export class TtydUnavailableError extends Error {
+  readonly code: "ttyd_missing" | "no_free_port" | "ttyd_start_timeout" | "tmux_session_missing" | "spawn_failed";
+  constructor(code: TtydUnavailableError["code"], message: string) {
+    super(message);
+    this.code = code;
+    this.name = "TtydUnavailableError";
+  }
+}
 
 // `child` is null when the entry was *adopted* at boot from a ttyd left
 // behind by a previous daemon incarnation — we have the PID but no live
@@ -593,4 +617,92 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     config: { ...config, publicPath: () => publicPathFor("") },
   };
   return Object.assign(manager, { publicPathFor });
+}
+
+function buildAttachCommand(tmuxSession: string, options: { enableMouse: boolean }) {
+  const safe = tmuxSession.replace(/"/g, '\\"');
+  // Inline socket flag so the shell ttyd execs into talks to the same tmux
+  // server citadel uses everywhere else (citadel-tmux.service). Without this,
+  // `tmux attach` would hit the user's default socket and silently miss the
+  // session.
+  const tmux = ["tmux", ...tmuxPrefix()].map((arg) => arg.replace(/"/g, '\\"')).join(" ");
+  const lines = [
+    `${tmux} set-option -s extended-keys on >/dev/null 2>&1 || true`,
+    `${tmux} show-options -s -g terminal-features 2>/dev/null | grep -q 'xterm\\*.*extkeys' || ${tmux} set-option -as terminal-features ',xterm*:extkeys' >/dev/null 2>&1 || true`,
+  ];
+  if (options.enableMouse) {
+    // Scope mouse to this tmux session only (`-t <session>`) — runtimes that
+    // grab DEC mouse tracking (codex, cursor-agent) need tmux to intercept
+    // wheel events for scrollback, but runtimes that don't (claude-code) get
+    // smoother native xterm.js wheel scroll without tmux in the path.
+    lines.push(`${tmux} set-option -t "${safe}" mouse on >/dev/null 2>&1 || true`);
+  }
+  lines.push(`exec ${tmux} attach -t "${safe}"`);
+  return lines.join("; ");
+}
+
+function tmuxSessionAlive(name: string) {
+  try {
+    execFileSync("tmux", [...tmuxPrefix(), "has-session", "-t", name], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function binaryExists(absolutePath: string) {
+  try {
+    execFileSync(absolutePath, ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function portOpen(port: number) {
+  return new Promise<boolean>((resolve) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port });
+    let settled = false;
+    const finish = (alive: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(alive);
+    };
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    // 500ms — closed local ports return ECONNREFUSED immediately and open
+    // ports connect in <1ms, so this timeout only fires when the kernel is
+    // overloaded (spawn storms). The earlier 150ms ceiling produced false
+    // negatives during `make deploy` that surfaced as ttyd_start_timeout.
+    socket.setTimeout(500, () => finish(false));
+  });
+}
+
+async function reserveFreePort(base: number, max: number, reserved: Set<number>) {
+  const occupied = listListeningPortsInRange(base, max);
+  for (let port = base; port <= max; port += 1) {
+    if (reserved.has(port)) continue;
+    if (occupied.has(port)) continue;
+    if (await portOpen(port)) continue;
+    reserved.add(port);
+    return port;
+  }
+  throw new TtydUnavailableError("no_free_port", `no free port between ${base} and ${max}`);
+}
+
+async function waitForOwnedPort(port: number, pid: number, timeoutMs: number) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const owner = listeningPidForPort(port);
+    if (owner === pid) return true;
+    // If lsof is unavailable in a test/dev environment, fall back to the old
+    // readiness probe. In production, a known-but-wrong owner must not satisfy
+    // readiness; that is how a ttyd launched for session A can accidentally
+    // serve session B's iframe as a white 404 page.
+    if (owner === undefined && (await portOpen(port))) return true;
+    if (pid > 0 && !processAlive(pid)) return false;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
 }

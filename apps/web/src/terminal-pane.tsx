@@ -22,6 +22,7 @@ type EnsureError = {
 };
 
 const RUNBOOK_URL = "/docs/operations/terminal-runbook";
+const TERMINAL_CLIENT_VERSION = "shortcut-bridge-v2";
 
 /**
  * Per-session handle used by Stage tabs to drive a live terminal (reload the
@@ -34,15 +35,27 @@ const RUNBOOK_URL = "/docs/operations/terminal-runbook";
 export type TerminalHandle = {
   url: string | null;
   reload: () => void;
+  // Focus the iframe element programmatically. The ttyd payload is
+  // cross-origin (separate port) so this only focuses the iframe itself —
+  // xterm keyboard capture still requires one click inside the terminal
+  // area. See spec B.2 §Center Stage Sessions / select-focuses-terminal.
+  focusIframe: () => void;
   recoverIfDisconnected: () => boolean;
 };
 
 const REGISTRY = new Map<string, TerminalHandle>();
+const FRAME_WINDOWS = new Map<string, Window>();
 const LISTENERS = new Set<(id: string) => void>();
 
-function publish(id: string, handle: TerminalHandle | null) {
-  if (handle) REGISTRY.set(id, handle);
-  else REGISTRY.delete(id);
+function publish(id: string, handle: TerminalHandle | null, frameWindow: Window | null = null) {
+  if (handle) {
+    REGISTRY.set(id, handle);
+    if (frameWindow) FRAME_WINDOWS.set(id, frameWindow);
+    else FRAME_WINDOWS.delete(id);
+  } else {
+    REGISTRY.delete(id);
+    FRAME_WINDOWS.delete(id);
+  }
   for (const listener of LISTENERS) listener(id);
 }
 
@@ -53,6 +66,36 @@ export function getTerminalHandle(sessionId: string): TerminalHandle | undefined
 export function subscribeTerminalHandle(listener: (sessionId: string) => void): () => void {
   LISTENERS.add(listener);
   return () => LISTENERS.delete(listener);
+}
+
+export function isRegisteredTerminalMessageSource(
+  source: MessageEventSource | null,
+  sessionId: string | null | undefined,
+): boolean {
+  if (source) {
+    for (const frameWindow of FRAME_WINDOWS.values()) {
+      if (source === frameWindow) return true;
+    }
+  }
+  return Boolean(sessionId && REGISTRY.has(sessionId));
+}
+
+// Focus the iframe of an active session. No-op when:
+//   - sessionId is null/undefined (workspace has no active session)
+//   - no handle is registered (session not yet mounted)
+//   - document.activeElement is a text input or contenteditable (don't steal
+//     focus while the user is typing — e.g. inline workspace-title rename).
+// The cross-origin ttyd iframe may not always allow the parent to drive xterm
+// keyboard focus, but focusing both the frame element and WindowProxy gives
+// Chrome/ttyd the best chance of making workspace selection ready for typing.
+export function focusActiveTerminal(sessionId: string | null | undefined): void {
+  if (!sessionId) return;
+  const handle = REGISTRY.get(sessionId);
+  if (!handle) return;
+  const active = typeof document !== "undefined" ? document.activeElement : null;
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
+  if (active instanceof HTMLElement && active.isContentEditable) return;
+  handle.focusIframe();
 }
 
 export function TerminalPane(props: { session: AgentSession }) {
@@ -139,6 +182,21 @@ export function TerminalPane(props: { session: AgentSession }) {
     void ensure({ bumpFrame: true, force: true });
   }, [ensure]);
 
+  // Focus the iframe element first, then ask the nested browsing context to
+  // focus itself. The try/catch keeps cross-origin focus restrictions from
+  // breaking workspace selection; preventScroll keeps the cockpit layout
+  // stable when selecting a workspace far down the nav.
+  const focusIframe = useCallback(() => {
+    const iframe = iframeRef.current;
+    if (!iframe) return;
+    iframe.focus({ preventScroll: true });
+    try {
+      iframe.contentWindow?.focus();
+    } catch {
+      // Cross-origin focus restrictions are browser-dependent.
+    }
+  }, []);
+
   const recoverIfTerminalHttpError = useCallback(() => {
     if (!isTtydHttpErrorPageVisible(iframeRef.current)) {
       httpErrorRecoveryRef.current = false;
@@ -157,13 +215,15 @@ export function TerminalPane(props: { session: AgentSession }) {
     return true;
   }, [reload]);
 
-  // Publish the live URL + reload callback so the stage tab can drive them.
+  // Publish the live URL + reload/focus/recover callbacks so nav selection and
+  // tab actions can drive state owned by TerminalPane.
   // The status bar used to render these affordances inside the pane; that was
   // removed in favour of the tab actions, but the state still lives here.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: iframeKey remounts the iframe, which changes contentWindow even when URL/callbacks are stable.
   useEffect(() => {
-    publish(sessionId, { url, reload, recoverIfDisconnected });
+    publish(sessionId, { url, reload, focusIframe, recoverIfDisconnected }, iframeRef.current?.contentWindow ?? null);
     return () => publish(sessionId, null);
-  }, [sessionId, url, reload, recoverIfDisconnected]);
+  }, [sessionId, url, reload, focusIframe, recoverIfDisconnected, iframeKey]);
   return (
     <div className="terminal-shell">
       <div className="terminal-surface terminal-surface-iframe">
@@ -172,9 +232,12 @@ export function TerminalPane(props: { session: AgentSession }) {
             ref={iframeRef}
             key={`${sessionId}-${iframeKey}`}
             className="terminal-iframe"
-            src={url}
+            src={terminalIframeSrc(url)}
             title={`Terminal ${props.session.displayName}`}
             allow="clipboard-read; clipboard-write"
+            // tabIndex makes the iframe a programmatic-focus target without
+            // adding it to the natural tab order.
+            tabIndex={-1}
             onLoad={recoverIfTerminalHttpError}
           />
         ) : error ? (
@@ -185,6 +248,11 @@ export function TerminalPane(props: { session: AgentSession }) {
       </div>
     </div>
   );
+}
+
+export function terminalIframeSrc(url: string): string {
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}citadelClient=${encodeURIComponent(TERMINAL_CLIENT_VERSION)}`;
 }
 
 function TerminalErrorState(props: { error: EnsureError; onRetry: () => void; retrying: boolean }) {

@@ -32,9 +32,13 @@ if (!chosen) {
 }
 
 if (mode === "e2e") {
-  // Force a fresh daemon/web port pair so we never collide with a running dev daemon (4010/5175).
-  env.CITADEL_PLAYWRIGHT_DAEMON_PORT = env.CITADEL_PLAYWRIGHT_DAEMON_PORT ?? randomPort(4100, 4200);
-  env.CITADEL_PLAYWRIGHT_WEB_PORT = env.CITADEL_PLAYWRIGHT_WEB_PORT ?? randomPort(5200, 5300);
+  // Force a fresh daemon/web port pair outside the long-term daemon
+  // (4010), worktree daemon (4110-4209), and worktree Vite (5210-5309)
+  // ranges. Also isolate tmux so E2E never touches live agent panes.
+  env.CITADEL_PLAYWRIGHT_DAEMON_PORT = env.CITADEL_PLAYWRIGHT_DAEMON_PORT ?? randomPort(14020, 14199);
+  env.CITADEL_PLAYWRIGHT_WEB_PORT = env.CITADEL_PLAYWRIGHT_WEB_PORT ?? randomPort(15180, 15399);
+  env.CITADEL_PLAYWRIGHT_TMUX_SOCKET =
+    env.CITADEL_PLAYWRIGHT_TMUX_SOCKET ?? `citadel-playwright-${env.CITADEL_PLAYWRIGHT_DAEMON_PORT}`;
 }
 
 console.log(`[test-isolated] mode=${mode} CITADEL_DATA_DIR=${dataDir}`);

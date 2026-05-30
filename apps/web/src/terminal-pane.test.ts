@@ -4,7 +4,15 @@ import type { AgentSession } from "@citadel/contracts";
 import { act, createElement } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TerminalPane, isTtydHttpErrorPageVisible, isTtydReconnectPromptVisible } from "./terminal-pane.js";
+import {
+  TerminalPane,
+  focusActiveTerminal,
+  getTerminalHandle,
+  isRegisteredTerminalMessageSource,
+  isTtydHttpErrorPageVisible,
+  isTtydReconnectPromptVisible,
+  terminalIframeSrc,
+} from "./terminal-pane.js";
 import { type ResolvedTheme, applyThemePreference } from "./use-resolved-theme.js";
 
 const apiMocks = vi.hoisted(() => {
@@ -56,6 +64,34 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => {
     for (const root of roots.splice(0)) root.unmount();
+  });
+});
+
+describe("focusActiveTerminal", () => {
+  it("is a no-op when sessionId is null", () => {
+    expect(() => focusActiveTerminal(null)).not.toThrow();
+    expect(() => focusActiveTerminal(undefined)).not.toThrow();
+  });
+
+  it("is a no-op when no handle is registered for the sessionId", () => {
+    expect(getTerminalHandle("unknown-session")).toBeUndefined();
+    expect(() => focusActiveTerminal("unknown-session")).not.toThrow();
+  });
+
+  it("accepts terminal bridge messages by registered session id when the frame source identity is unavailable", async () => {
+    const rootElement = document.createElement("div");
+    document.body.appendChild(rootElement);
+    const root = createRoot(rootElement);
+    roots.push(root);
+
+    await act(async () => {
+      root.render(createElement(TerminalPane, { session: sessionFixture() }));
+      await settle();
+    });
+
+    expect(getTerminalHandle("sess_1")).toBeDefined();
+    expect(isRegisteredTerminalMessageSource(null, "sess_1")).toBe(true);
+    expect(isRegisteredTerminalMessageSource(null, "unknown-session")).toBe(false);
   });
 });
 
@@ -132,6 +168,13 @@ describe("TerminalPane theme handling", () => {
     });
 
     expect(apiMocks.api).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("terminalIframeSrc", () => {
+  it("adds a client-version cache buster without discarding existing query params", () => {
+    expect(terminalIframeSrc("/terminals/sess_1/")).toBe("/terminals/sess_1/?citadelClient=shortcut-bridge-v2");
+    expect(terminalIframeSrc("/terminals/sess_1/?x=1")).toBe("/terminals/sess_1/?x=1&citadelClient=shortcut-bridge-v2");
   });
 });
 

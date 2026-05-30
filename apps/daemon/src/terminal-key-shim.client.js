@@ -195,6 +195,25 @@
     if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
   }
 
+  function postAppShortcut(action) {
+    const parent = window.parent;
+    if (!parent || parent === window || typeof parent.postMessage !== "function") return false;
+    try {
+      parent.postMessage(
+        {
+          source: "citadel-terminal",
+          type: "citadel.terminal-shortcut",
+          action,
+          sessionId: SESSION_ID,
+        },
+        window.location?.origin || "*",
+      );
+      return true;
+    } catch (_err) {
+      return false;
+    }
+  }
+
   // Read the clipboard and inject it into the PTY wrapped in bracketed-paste
   // escapes (\x1b[200~ ... \x1b[201~). Every modern shell (bash >=4.4, zsh,
   // fish) and TUI (Claude Code, Codex, vim, etc.) understands bracketed
@@ -340,6 +359,21 @@
   function onKeydown(event) {
     if (event.isComposing) return;
     const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
+    // Citadel-level shortcuts should work even while xterm has focus. Claim
+    // only the explicit app bindings here; terminal editing/control keys keep
+    // their current PTY behavior.
+    if (key === "k" && (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey) {
+      if (postAppShortcut("command-palette")) consume(event);
+      return;
+    }
+    if (key === "s" && (event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey) {
+      if (postAppShortcut("scratchpad-toggle")) consume(event);
+      return;
+    }
+    if (key === "n" && event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+      if (postAppShortcut("new-workspace")) consume(event);
+      return;
+    }
     // Shell-first lifecycle signal: Ctrl+C inside the embedded terminal is
     // the dominant operator-initiated agent stop. Fire-and-forget a POST to
     // the user-action endpoint so the daemon's status-monitor knows the

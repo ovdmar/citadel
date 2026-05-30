@@ -42,7 +42,7 @@ import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
 import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
-import { buildDiagnosticsSnapshot, streamDiagnosticsBundle } from "./diagnostics-bundle.js";
+import { registerDiagnosticsRoutes } from "./diagnostics-routes.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import {
   AUTOMATED_GH_DISABLED_REASON,
@@ -93,15 +93,6 @@ type ProviderCollectors = {
   collectJiraIssueSummary: typeof collectJiraIssueSummary;
   transitionJiraIssue: typeof transitionJiraIssue;
 };
-
-function clippedString(value: unknown, fallback: string, max: number): string {
-  if (typeof value !== "string") return fallback;
-  return value.length > max ? value.slice(0, max) : value;
-}
-
-function finiteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
 
 export function createDaemonApp(input: {
   config: CitadelConfig;
@@ -281,47 +272,7 @@ export function createDaemonApp(input: {
     res.json({ config, configPath });
   });
 
-  // Diagnostics surface. /snapshot returns the in-memory ring + a small
-  // structured snapshot of "what the daemon thinks the world looks like"
-  // (sessions/workspaces/ttyd inventory/live tmux session names). /bundle
-  // streams a tar.gz that includes the JSONL file(s) on disk plus that same
-  // snapshot — what the user emails over when reporting "all my sessions
-  // died".
-  app.get("/api/diagnostics/snapshot", (_req, res) => {
-    res.json(buildDiagnosticsSnapshot({ store, ttyd, diagnostics, config }));
-  });
-  app.post("/api/diagnostics/client-event", (req, res) => {
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    diagnostics.log("ui-client", clippedString(body.event, "unknown", 80), {
-      pageId: clippedString(body.pageId, "", 80),
-      path: clippedString(body.path, "", 240),
-      href: clippedString(body.href, "", 360),
-      visibility: clippedString(body.visibility, "unknown", 40),
-      navigationType: clippedString(body.navigationType, "", 40),
-      ageMs: finiteNumber(body.ageMs),
-      persisted: typeof body.persisted === "boolean" ? body.persisted : null,
-      online: typeof body.online === "boolean" ? body.online : null,
-      wasDiscarded: typeof body.wasDiscarded === "boolean" ? body.wasDiscarded : null,
-      swController: typeof body.swController === "boolean" ? body.swController : null,
-      userAgent: clippedString(req.header("user-agent"), "", 240),
-    });
-    res.status(204).end();
-  });
-  app.get("/api/diagnostics/bundle.tar.gz", async (_req, res) => {
-    try {
-      await streamDiagnosticsBundle(res, { store, ttyd, diagnostics, config });
-    } catch (error) {
-      if (!res.headersSent) {
-        res.status(500).json({ error: error instanceof Error ? error.message : "diagnostics_bundle_failed" });
-      } else {
-        try {
-          res.end();
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-  });
+  registerDiagnosticsRoutes({ app, store, ttyd, diagnostics, config });
 
   app.put("/api/config", (req, res) => {
     const nextConfig = mergeConfigPatch(config, req.body);
@@ -482,7 +433,10 @@ export function createDaemonApp(input: {
     "/api/workspaces",
     asyncRoute(async (req, res) => {
       const input = CreateWorkspaceInputSchema.parse(req.body);
-      const result = await operations.createWorkspace(input);
+      const result = await operations.createWorkspace(input, {
+        deferProvisioning: true,
+        onWorkspaceUpdated: (payload) => emit("workspace.updated", payload),
+      });
       emit("workspace.updated", result);
       res.status(202).json(result);
     }),
@@ -631,13 +585,15 @@ export function createDaemonApp(input: {
   registerCitadelActionRoutes({ app, config, emit });
   backfillScratchpadOnStartup(config);
 
-  fsWatchers = createWorkspaceFsWatchers({
-    listWorkspaces: () => store.listWorkspaces(),
-    providerCache,
-    emit,
-  });
-  fsWatchers.reconcile();
-  server.on("close", () => fsWatchers?.close());
+  if (process.env.CITADEL_DISABLE_FS_WATCHERS !== "1") {
+    fsWatchers = createWorkspaceFsWatchers({
+      listWorkspaces: () => store.listWorkspaces(),
+      providerCache,
+      emit,
+    });
+    fsWatchers.reconcile();
+    server.on("close", () => fsWatchers?.close());
+  }
 
   registerWorkspaceDiffRoutes({ app, store, asyncRoute });
 
