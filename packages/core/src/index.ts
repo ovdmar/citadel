@@ -101,6 +101,7 @@ export function summarizeWorkspaceState(input: {
   return { suggestedSection, reasons };
 }
 
+export { FUNNY_ADJECTIVES, FUNNY_ANIMALS, generateFunnyName } from "./funny-name.js";
 export {
   type FuzzyBlockMatch,
   type FuzzyMatchIndex,

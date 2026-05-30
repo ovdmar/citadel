@@ -1,0 +1,84 @@
+// @vitest-environment happy-dom
+
+import { describe, expect, it } from "vitest";
+import { parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
+
+describe("parseTerminalShortcutMessage", () => {
+  it("accepts known terminal shortcut messages from the current origin", () => {
+    const event = new MessageEvent("message", {
+      origin: window.location.origin,
+      data: {
+        source: "citadel-terminal",
+        type: "citadel.terminal-shortcut",
+        action: "command-palette",
+        sessionId: "sess_1",
+      },
+    });
+
+    expect(parseTerminalShortcutMessage(event)).toEqual({ action: "command-palette", sessionId: "sess_1" });
+  });
+
+  it("accepts canonical indexed shortcut messages from the current origin", () => {
+    const event = new MessageEvent("message", {
+      origin: window.location.origin,
+      data: {
+        source: "citadel-terminal",
+        type: "citadel.terminal-shortcut",
+        action: "nav-workspace",
+        sessionId: "sess_1",
+        index: 2,
+      },
+    });
+
+    expect(parseTerminalShortcutMessage(event)).toEqual({ action: "nav-workspace", sessionId: "sess_1", index: 2 });
+  });
+
+  it("rejects wrong origins, sources, and actions", () => {
+    expect(
+      parseTerminalShortcutMessage(
+        new MessageEvent("message", {
+          origin: "https://example.com",
+          data: { source: "citadel-terminal", type: "citadel.terminal-shortcut", action: "command-palette" },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      parseTerminalShortcutMessage(
+        new MessageEvent("message", {
+          origin: window.location.origin,
+          data: { source: "other", type: "citadel.terminal-shortcut", action: "command-palette" },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      parseTerminalShortcutMessage(
+        new MessageEvent("message", {
+          origin: window.location.origin,
+          data: { source: "citadel-terminal", type: "citadel.terminal-shortcut", action: "unknown" },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      parseTerminalShortcutMessage(
+        new MessageEvent("message", {
+          origin: window.location.origin,
+          data: { source: "citadel-terminal", type: "citadel.terminal-shortcut", action: "command-palette" },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      parseTerminalShortcutMessage(
+        new MessageEvent("message", {
+          origin: window.location.origin,
+          data: {
+            source: "citadel-terminal",
+            type: "citadel.terminal-shortcut",
+            action: "nav-workspace",
+            sessionId: "sess_1",
+            index: -1,
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
+});

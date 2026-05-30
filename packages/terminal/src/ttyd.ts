@@ -1,8 +1,16 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import net from "node:net";
 import { tmuxPrefix } from "./index.js";
-
-export type TtydTheme = "light" | "dark";
+import {
+  killStaleTtydInRange,
+  listListeningPortsInRange,
+  listeningPidForPort,
+  processAlive,
+  trimSlashes,
+} from "./ttyd-process.js";
+import { type TtydTheme, ttydThemeArgs } from "./ttyd-theme.js";
+export type { TtydTheme } from "./ttyd-theme.js";
+export { discoverExistingTtyds } from "./ttyd-process.js";
 
 export type TtydEntry = {
   key: string;
@@ -70,6 +78,8 @@ const DEFAULTS = {
   // kernel is busy scheduling the new process.
   readyTimeoutMs: 10000,
 };
+
+const TTYD_PING_INTERVAL_SECONDS = 45;
 
 export class TtydUnavailableError extends Error {
   readonly code: "ttyd_missing" | "no_free_port" | "ttyd_start_timeout" | "tmux_session_missing" | "spawn_failed";
@@ -145,11 +155,11 @@ export type TtydManager = {
     enableTmuxMouse?: boolean;
   }): Promise<TtydEntry>;
   lookup(key: string): TtydEntry | null;
-  release(key: string): void;
+  release(key: string, reason?: string): void;
   /** Release every entry whose tabId matches. Used by the workspace-remove
    * path so closing a workspace tears down its ttyds along with the tmux
    * sessions. */
-  releaseTab(tabId: string): number;
+  releaseTab(tabId: string, reason?: string): number;
   list(): TtydEntry[];
   cleanupStale(): { killed: number; portRange: [number, number] };
   /**
@@ -263,6 +273,19 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
   }): Promise<TtydEntry> {
     const desiredTheme: TtydTheme = args.theme ?? "dark";
     const tabId = args.tabId ?? null;
+    let targetTmuxAlive: boolean | null = null;
+
+    function assertTargetTmuxAlive(context: Record<string, unknown>): void {
+      targetTmuxAlive ??= tmuxSessionAlive(args.tmuxSession);
+      if (targetTmuxAlive) return;
+      diag.log("ttyd", "ensure.tmux-missing", {
+        key: args.key,
+        tabId,
+        tmuxSession: args.tmuxSession,
+        ...context,
+      });
+      throw new TtydUnavailableError("tmux_session_missing", `tmux session ${args.tmuxSession} not found`);
+    }
 
     // Tab-level dedup: if a different key already serves this tab, that's
     // a stale entry (typically the source row of a just-completed restore,
@@ -273,8 +296,15 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
       const incumbentKey = tabIndex.get(tabId);
       if (incumbentKey && incumbentKey !== args.key) {
         const incumbent = entries.get(incumbentKey);
-        if (incumbent) {
+        if (incumbent && isEntryAlive(incumbent)) {
+          assertTargetTmuxAlive({
+            phase: "tab-replace",
+            incumbentKey,
+            incumbentTmuxSession: incumbent.tmuxSession,
+          });
           signalEntry(incumbent, "SIGTERM");
+          deleteEntry(incumbentKey);
+        } else if (incumbent) {
           deleteEntry(incumbentKey);
         } else {
           tabIndex.delete(tabId);
@@ -299,9 +329,9 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     if (existing && isEntryAlive(existing)) {
       // If the existing ttyd is attached to the wrong tmux target (the
       // session was respawned under a new name during boot-restore), we
-      // can't switch its attach in-place — respawn. Same for explicit
-      // force=true (palette reload). Otherwise reuse and just refresh the
-      // tabId in case it became known after adoption.
+      // can't switch its attach in-place — respawn. Palette changes are only
+      // applied on explicit force=true reload; automatic theme drift must not
+      // tear down an active terminal connection.
       const tmuxMismatch = existing.tmuxSession !== args.tmuxSession;
       if (!args.force && !tmuxMismatch) {
         if (tabId && existing.tabId !== tabId) {
@@ -311,6 +341,12 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
         }
         return toEntry(existing);
       }
+      assertTargetTmuxAlive({
+        phase: "respawn",
+        port: existing.port,
+        reason: tmuxMismatch ? "tmux-mismatch" : "force",
+        oldTmuxSession: existing.tmuxSession,
+      });
       diag.log("ttyd", "respawn", {
         key: args.key,
         tabId,
@@ -318,14 +354,13 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
         reason: tmuxMismatch ? "tmux-mismatch" : "force",
         oldTmuxSession: existing.tmuxSession,
         newTmuxSession: args.tmuxSession,
+        oldTheme: existing.theme,
+        newTheme: desiredTheme,
       });
       signalEntry(existing, "SIGTERM");
       deleteEntry(args.key);
     }
-    if (!tmuxSessionAlive(args.tmuxSession)) {
-      diag.log("ttyd", "ensure.tmux-missing", { key: args.key, tabId, tmuxSession: args.tmuxSession });
-      throw new TtydUnavailableError("tmux_session_missing", `tmux session ${args.tmuxSession} not found`);
-    }
+    assertTargetTmuxAlive({ phase: "spawn" });
     if (!binaryExists(config.ttydBin)) {
       throw new TtydUnavailableError("ttyd_missing", `ttyd binary not found at ${config.ttydBin}`);
     }
@@ -347,7 +382,7 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
           "-b",
           basePath,
           "-P",
-          "10",
+          String(TTYD_PING_INTERVAL_SECONDS),
           ...themeOptions,
           config.shellBin,
           "-lc",
@@ -394,7 +429,7 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
       if (current && current.pid === record.pid) deleteEntry(args.key);
       diag.log("ttyd", "exit", { key: args.key, tabId, port, pid: record.pid, code, signal });
     });
-    const ready = await waitForPort(port, config.readyTimeoutMs);
+    const ready = await waitForOwnedPort(port, record.pid, config.readyTimeoutMs);
     if (!ready) {
       deleteEntry(args.key);
       reservedPorts.delete(port);
@@ -419,20 +454,21 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     return toEntry(entry);
   }
 
-  function release(key: string) {
+  function release(key: string, reason = "unspecified") {
     const entry = entries.get(key);
     if (!entry) return;
-    diag.log("ttyd", "release", { key, tabId: entry.tabId, port: entry.port, pid: entry.pid });
+    diag.log("ttyd", "release", { key, tabId: entry.tabId, port: entry.port, pid: entry.pid, reason });
     signalEntry(entry, "SIGTERM");
     deleteEntry(key);
   }
 
-  function releaseTab(tabId: string): number {
+  function releaseTab(tabId: string, reason = "tab-release") {
     const key = tabIndex.get(tabId);
     let released = 0;
     if (key) {
       const entry = entries.get(key);
       if (entry) {
+        diag.log("ttyd", "release", { key, tabId: entry.tabId, port: entry.port, pid: entry.pid, reason });
         signalEntry(entry, "SIGTERM");
         deleteEntry(key);
         released += 1;
@@ -445,6 +481,7 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     // with deleteEntry on a duplicate). Catch them here too.
     for (const [k, entry] of Array.from(entries)) {
       if (entry.tabId === tabId) {
+        diag.log("ttyd", "release", { key: k, tabId: entry.tabId, port: entry.port, pid: entry.pid, reason });
         signalEntry(entry, "SIGTERM");
         deleteEntry(k);
         released += 1;
@@ -582,87 +619,6 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
   return Object.assign(manager, { publicPathFor });
 }
 
-/**
- * Build the `-t` ttyd client-option flags that paint xterm to match the
- * cockpit theme. Palette is derived from the meshes-studio design system
- * (warm beige + navy for light, deep navy + soft white for dark) so the
- * terminal blends with the rest of the UI.
- */
-function ttydThemeArgs(theme: TtydTheme): string[] {
-  const palette = theme === "light" ? LIGHT_XTERM_THEME : DARK_XTERM_THEME;
-  return [
-    "-t",
-    `theme=${JSON.stringify(palette)}`,
-    "-t",
-    "fontFamily=ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-    // Auto-reconnect 3s after the websocket drops (laptop sleep, network
-    // blip). Without this, ttyd's xterm shows "Press any key to reconnect"
-    // and waits for a manual key press.
-    "-t",
-    "reconnect=3",
-  ];
-}
-
-// Palette matches the cockpit's warm-cream redesign so the terminal pane
-// reads as part of the surface, not a stark white island. Background tracks
-// --c-elev (the stage card colour); foreground tracks --c-fg-1. Ansi colour
-// hues are unchanged from the previous palette — only their saturation has
-// been pushed up so each colour reads clearly on the cream/dark surfaces
-// without losing the warm-leaning character of the cockpit.
-// `white` (ansi 7) and `brightWhite` (ansi 15) are deliberately remapped to
-// dark values on the light theme: a program that explicitly prints white text
-// would otherwise be invisible on the cream surface. Everything else is the
-// same hue as before, just dropped in lightness so it reads cleanly on a
-// light background — pulling the bright variants down at the same time so
-// the "bright" tier stays distinguishable from base without going pastel.
-const LIGHT_XTERM_THEME = {
-  background: "#f5f1e8",
-  foreground: "#1a1814",
-  cursor: "#14171f",
-  cursorAccent: "#f5f1e8",
-  selectionBackground: "rgba(20, 23, 31, 0.18)",
-  black: "#1a1814",
-  red: "#9a1d12",
-  green: "#36680c",
-  yellow: "#825507",
-  blue: "#194d8e",
-  magenta: "#5f2a7a",
-  cyan: "#0a5d6e",
-  white: "#1a1814",
-  brightBlack: "#4a463e",
-  brightRed: "#b8281c",
-  brightGreen: "#4a8a14",
-  brightYellow: "#a06b0a",
-  brightBlue: "#2864ad",
-  brightMagenta: "#7d3a98",
-  brightCyan: "#0f7d92",
-  brightWhite: "#0c0a06",
-};
-
-const DARK_XTERM_THEME = {
-  background: "#1a1814",
-  foreground: "#e8e3d3",
-  cursor: "#f0ebdd",
-  cursorAccent: "#1a1814",
-  selectionBackground: "rgba(240, 235, 221, 0.18)",
-  black: "#1a1814",
-  red: "#ec7468",
-  green: "#a3d364",
-  yellow: "#e8b552",
-  blue: "#7eb5e4",
-  magenta: "#c896d4",
-  cyan: "#7dbedc",
-  white: "#e8e3d3",
-  brightBlack: "#948d7b",
-  brightRed: "#ff8d80",
-  brightGreen: "#bbe683",
-  brightYellow: "#f5c66a",
-  brightBlue: "#a2cef0",
-  brightMagenta: "#dcb1e4",
-  brightCyan: "#9ad0e8",
-  brightWhite: "#fffaef",
-};
-
 // Build the shell command ttyd runs to attach to the named tmux session.
 // Mouse-related options are session-scoped (`-t "${safe}"`, no `-g`) so they
 // affect only the cockpit tab being attached, not every pane on the shared
@@ -730,8 +686,10 @@ function portOpen(port: number) {
 }
 
 async function reserveFreePort(base: number, max: number, reserved: Set<number>) {
+  const occupied = listListeningPortsInRange(base, max);
   for (let port = base; port <= max; port += 1) {
     if (reserved.has(port)) continue;
+    if (occupied.has(port)) continue;
     if (await portOpen(port)) continue;
     reserved.add(port);
     return port;
@@ -739,52 +697,18 @@ async function reserveFreePort(base: number, max: number, reserved: Set<number>)
   throw new TtydUnavailableError("no_free_port", `no free port between ${base} and ${max}`);
 }
 
-async function waitForPort(port: number, timeoutMs: number) {
+async function waitForOwnedPort(port: number, pid: number, timeoutMs: number) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (await portOpen(port)) return true;
+    const owner = listeningPidForPort(port);
+    if (owner === pid) return true;
+    // If lsof is unavailable in a test/dev environment, fall back to the old
+    // readiness probe. In production, a known-but-wrong owner must not satisfy
+    // readiness; that is how a ttyd launched for session A can accidentally
+    // serve session B's iframe as a white 404 page.
+    if (owner === undefined && (await portOpen(port))) return true;
+    if (pid > 0 && !processAlive(pid)) return false;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   return false;
-}
-
-function listListeningTtydsInRange(portBase: number, portMax: number): Map<number, number> {
-  const pidPort = new Map<number, number>();
-  let lsofOutput = "";
-  try {
-    lsofOutput = execFileSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  } catch {
-    return pidPort;
-  }
-  for (const line of lsofOutput.split("\n")) {
-    if (!line.includes("ttyd")) continue;
-    const parts = line.trim().split(/\s+/);
-    if (parts.length < 9) continue;
-    const pid = Number(parts[1]);
-    const name = parts[0];
-    const address = parts[8] ?? "";
-    const portMatch = /:(\d+)$/.exec(address);
-    const port = portMatch ? Number(portMatch[1]) : Number.NaN;
-    if (name === "ttyd" && Number.isFinite(pid) && port >= portBase && port <= portMax) pidPort.set(pid, port);
-  }
-  return pidPort;
-}
-
-function killStaleTtydInRange(portBase: number, portMax: number) {
-  const pids = new Set(listListeningTtydsInRange(portBase, portMax).keys());
-  for (const pid of pids) {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // ignore
-    }
-  }
-  return pids.size;
-}
-
-function trimSlashes(value: string) {
-  return value.replace(/^\/+|\/+$/g, "");
 }

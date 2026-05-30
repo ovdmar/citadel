@@ -43,9 +43,8 @@ import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
 import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
-import { buildDiagnosticsSnapshot, streamDiagnosticsBundle } from "./diagnostics-bundle.js";
+import { registerDiagnosticsRoutes } from "./diagnostics-routes.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
-import { registerFsRoutes } from "./fs-routes.js";
 import {
   AUTOMATED_GH_DISABLED_REASON,
   automatedGhEnabled,
@@ -65,6 +64,7 @@ import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { registerPrDiffRoute } from "./pr-diff-route.js";
 import { registerPrRoutes } from "./pr-routes.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
+import { registerRepoDiscoveryRoutes } from "./repo-discovery-routes.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
@@ -129,7 +129,7 @@ export function createDaemonApp(input: {
   });
   const ttyd = createTtydManager({ ...resolveTtydPortRange(config.port), diagnostics });
   if (typeof operations.setTerminalHooks === "function") {
-    operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId) });
+    operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId, "session-stopped-hook") });
   }
 
   const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
@@ -165,11 +165,27 @@ export function createDaemonApp(input: {
   };
 
   // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
-  // Adopt detached ttyds from the previous daemon incarnation; skip in tests so
-  // daemon fixtures never attach to a live cockpit's ttyds.
+  //
+  // Boot-time discover-and-adopt: ttyds are spawned detached and the systemd
+  // unit runs with KillMode=process, so they outlive daemon restarts. Scan
+  // the host for survivors from the previous incarnation and adopt them back
+  // into the manager — same key, same PID, no respawn. The browser's
+  // WebSocket auto-reconnect (xterm `reconnect=3`) lands on the *same* ttyd
+  // it was talking to before the restart.
+  //
+  // Discovery is scoped to this daemon's port slot before adopt() routes by
+  // DB membership. That port filter is a hard safety boundary: sandbox
+  // daemons can carry prod-looking DB rows, but they must not see or SIGTERM
+  // the installed daemon's ttyds.
+  //
+  // Skipped under vitest: tests that boot a daemon would otherwise re-attach
+  // to the live cockpit's ttyds and the next test that calls release() would
+  // kill them.
   if (!process.env.VITEST) {
     const survivors = discoverExistingTtyds({
       basePathPrefix: ttyd.config.basePathPrefix,
+      portBase: ttyd.config.portBase,
+      portMax: ttyd.config.portMax,
     });
     const sessionTabIds = new Map<string, string>();
     for (const session of store.listSessions()) {
@@ -186,7 +202,16 @@ export function createDaemonApp(input: {
       });
     }
   }
-  const { recentUserAction } = wireTerminalRoutes({ app, server, store, ttyd, dataDir: config.dataDir, emit, config });
+  const { recentUserAction } = wireTerminalRoutes({
+    app,
+    server,
+    store,
+    ttyd,
+    dataDir: config.dataDir,
+    emit,
+    config,
+    diagnostics,
+  });
 
   const cachedProviderHealth = () =>
     cachedProvider(
@@ -244,30 +269,7 @@ export function createDaemonApp(input: {
     res.json({ config, configPath });
   });
 
-  // Diagnostics surface. /snapshot returns the in-memory ring + a small
-  // structured snapshot of "what the daemon thinks the world looks like"
-  // (sessions/workspaces/ttyd inventory/live tmux session names). /bundle
-  // streams a tar.gz that includes the JSONL file(s) on disk plus that same
-  // snapshot — what the user emails over when reporting "all my sessions
-  // died".
-  app.get("/api/diagnostics/snapshot", (_req, res) => {
-    res.json(buildDiagnosticsSnapshot({ store, ttyd, diagnostics, config }));
-  });
-  app.get("/api/diagnostics/bundle.tar.gz", async (_req, res) => {
-    try {
-      await streamDiagnosticsBundle(res, { store, ttyd, diagnostics, config });
-    } catch (error) {
-      if (!res.headersSent) {
-        res.status(500).json({ error: error instanceof Error ? error.message : "diagnostics_bundle_failed" });
-      } else {
-        try {
-          res.end();
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-  });
+  registerDiagnosticsRoutes({ app, store, ttyd, diagnostics, config });
 
   app.put("/api/config", (req, res) => {
     const nextConfig = mergeConfigPatch(config, req.body);
@@ -297,7 +299,7 @@ export function createDaemonApp(input: {
     res.status(201).json({ repo });
   });
 
-  registerFsRoutes({ app, config, asyncRoute });
+  registerRepoDiscoveryRoutes({ app, config, asyncRoute });
 
   app.get("/api/repos", (_req, res) => {
     res.json({ repos: store.listRepos() });
@@ -498,7 +500,10 @@ export function createDaemonApp(input: {
     "/api/workspaces",
     asyncRoute(async (req, res) => {
       const input = CreateWorkspaceInputSchema.parse(req.body);
-      const result = await operations.createWorkspace(input);
+      const result = await operations.createWorkspace(input, {
+        deferProvisioning: true,
+        onWorkspaceUpdated: (payload) => emit("workspace.updated", payload),
+      });
       emit("workspace.updated", result);
       res.status(202).json(result);
     }),
@@ -684,13 +689,15 @@ export function createDaemonApp(input: {
   registerCitadelActionRoutes({ app, config, emit });
   backfillScratchpadOnStartup(config);
 
-  fsWatchers = createWorkspaceFsWatchers({
-    listWorkspaces: () => store.listWorkspaces(),
-    providerCache,
-    emit,
-  });
-  fsWatchers.reconcile();
-  server.on("close", () => fsWatchers?.close());
+  if (process.env.CITADEL_DISABLE_FS_WATCHERS !== "1") {
+    fsWatchers = createWorkspaceFsWatchers({
+      listWorkspaces: () => store.listWorkspaces(),
+      providerCache,
+      emit,
+    });
+    fsWatchers.reconcile();
+    server.on("close", () => fsWatchers?.close());
+  }
 
   registerWorkspaceDiffRoutes({ app, store, asyncRoute });
 
@@ -772,7 +779,7 @@ export function createDaemonApp(input: {
     cachedProvider,
   });
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
-  const autoResume = startDaemonAutoResumeLoop(store, operations);
+  const autoResume = startDaemonAutoResumeLoop(store, operations, config);
   if (autoResume) server.on("close", () => autoResume.stop());
   const terminalReaper = startTerminalReaper();
   server.on("close", () => terminalReaper.stop());

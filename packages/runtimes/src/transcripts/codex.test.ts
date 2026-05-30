@@ -1,12 +1,21 @@
+import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { codexAdapter, findCodexRolloutForSession, parseCodexRollout } from "./codex.js";
+import {
+  codexAdapter,
+  discoverCodexSessionIdFromProcess,
+  extractCodexResumeSessionIdFromArgv,
+  findCodexRolloutForSession,
+  parseCodexRollout,
+} from "./codex.js";
 
 const dirs: string[] = [];
+const children: ChildProcess[] = [];
 
 afterEach(() => {
+  for (const child of children.splice(0)) child.kill("SIGTERM");
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -129,3 +138,112 @@ describe("findCodexRolloutForSession + adapter", () => {
     ).toBeNull();
   });
 });
+
+describe("codex live-process session id discovery", () => {
+  it("extracts the resume UUID from argv", () => {
+    const uuid = "019e6fa5-b167-7f90-a4a3-6bee05a75453";
+    expect(extractCodexResumeSessionIdFromArgv(["codex", "resume", uuid, "--yolo"])).toBe(uuid);
+    expect(extractCodexResumeSessionIdFromArgv(["codex", "--yolo"])).toBeNull();
+  });
+
+  it("discovers the session id from a live process's open rollout file", async () => {
+    if (!fs.existsSync("/proc")) return;
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-codex-proc-home-"));
+    dirs.push(home);
+    const uuid = "019e6fb1-4632-7492-b175-cd9de9afb5bf";
+    const rolloutFile = path.join(
+      home,
+      ".codex",
+      "sessions",
+      "2026",
+      "05",
+      "28",
+      `rollout-2026-05-28T17-45-49-${uuid}.jsonl`,
+    );
+    writeRollout(rolloutFile, [
+      {
+        timestamp: "2026-05-28T17:45:49.362Z",
+        type: "session_meta",
+        payload: { id: uuid, cwd: "/tmp/ws", timestamp: "2026-05-28T17:45:49.362Z" },
+      },
+    ]);
+
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        "const fs = require('node:fs'); fs.openSync(process.argv[1], 'r'); setInterval(() => {}, 1000);",
+        rolloutFile,
+      ],
+      { stdio: "ignore" },
+    );
+    children.push(child);
+    expect(child.pid).toBeTypeOf("number");
+
+    const found = await waitFor(() =>
+      child.pid ? discoverCodexSessionIdFromProcess({ rootPid: child.pid, home, workspacePath: "/tmp/ws" }) : null,
+    );
+    expect(found).toBe(uuid);
+  });
+
+  it("rejects open rollout files from a different workspace", async () => {
+    if (!fs.existsSync("/proc")) return;
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-codex-proc-home-"));
+    dirs.push(home);
+    const uuid = "019e706d-9798-7161-b54a-e827a3b6ff64";
+    const rolloutFile = path.join(
+      home,
+      ".codex",
+      "sessions",
+      "2026",
+      "05",
+      "28",
+      `rollout-2026-05-28T21-11-30-${uuid}.jsonl`,
+    );
+    writeRollout(rolloutFile, [
+      {
+        timestamp: "2026-05-28T21:11:30.123Z",
+        type: "session_meta",
+        payload: { id: uuid, cwd: "/tmp/other-ws", timestamp: "2026-05-28T21:11:30.123Z" },
+      },
+    ]);
+
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        "const fs = require('node:fs'); fs.openSync(process.argv[1], 'r'); setInterval(() => {}, 1000);",
+        rolloutFile,
+      ],
+      { stdio: "ignore" },
+    );
+    children.push(child);
+    expect(child.pid).toBeTypeOf("number");
+
+    const found = await waitFor(
+      () =>
+        child.pid
+          ? discoverCodexSessionIdFromProcess({
+              rootPid: child.pid,
+              home,
+              workspacePath: "/tmp/target-ws",
+              sessionStartedAt: "2026-05-28T21:11:29.000Z",
+            })
+          : null,
+      500,
+    );
+    expect(found).toBeNull();
+  });
+});
+
+async function waitFor(read: () => string | null, timeoutMs = 2000): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = read();
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return null;
+}

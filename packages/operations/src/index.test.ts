@@ -208,6 +208,38 @@ describe("OperationService", () => {
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
 
+  it("allows successful teardown hooks with unstructured stdout", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [
+        {
+          id: "teardown-logs",
+          kind: "command",
+          event: "workspace.teardown",
+          command: "node",
+          args: ["-e", "process.stdout.write('No recorded dev stack pid file')"],
+          blocking: true,
+        },
+      ],
+      repoDefaults: { setupHookIds: [], teardownHookIds: ["teardown-logs"] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "Teardown Logs", source: "scratch" });
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === created.workspaceId);
+
+    const removed = await service.removeWorkspace({ workspaceId: created.workspaceId });
+
+    expect(removed).toMatchObject({ removed: true, archived: false, dirty: false });
+    expect(fs.existsSync(workspace?.path ?? "")).toBe(false);
+    expect(store.listOperations().find((operation) => operation.id === removed.operationId)).toMatchObject({
+      status: "succeeded",
+    });
+  });
+
   it("skips teardown hooks and prunes when the worktree directory is already gone", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
@@ -482,7 +514,6 @@ describe("OperationService", () => {
     const first = await service.createWorkspace({ repoId: repo.id, name: "reusable", source: "scratch" });
     const removed = await service.removeWorkspace({ workspaceId: first.workspaceId });
     expect(removed).toMatchObject({ removed: true, archived: false });
-    // Row must be hard-deleted (not archived) so the UNIQUE(repo_id, name) index lets us recreate.
     expect(store.listArchivedWorkspaces().find((w) => w.id === first.workspaceId)).toBeUndefined();
     expect(store.listWorkspaces().find((w) => w.id === first.workspaceId)).toBeUndefined();
     // Re-creating under the same name no longer trips the unique index. Pass a

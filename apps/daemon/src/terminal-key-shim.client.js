@@ -9,6 +9,9 @@
   const isMac = /Mac|iPhone|iPad/i.test(navigator.platform || "") || /Macintosh/i.test(navigator.userAgent || "");
   let activeWs = null;
   const textEncoder = new TextEncoder();
+  const loadedAt = Date.now();
+  let terminalClientEventCount = 0;
+  let lastTerminalClientEventAt = 0;
 
   // FORWARDABLE_CHORDS mirrors the canonical chord registry exported by
   // `@citadel/contracts` (packages/contracts/src/shortcuts.ts). The shim is
@@ -76,35 +79,6 @@
     }
   }
 
-  // Dispatch a synthetic KeyboardEvent on window.parent so the cockpit's
-  // window-level keydown listener (apps/web/src/cockpit.tsx) fires. Same-origin
-  // iframe (ttyd is served by the daemon proxy under the cockpit's host:port)
-  // so cross-frame dispatch is allowed. We log once on unexpected failure so
-  // a future origin split surfaces via devtools instead of silent breakage.
-  let parentDispatchWarned = false;
-  function dispatchToParent(event) {
-    try {
-      const ParentKeyboardEvent = window.parent?.KeyboardEvent;
-      if (!ParentKeyboardEvent) return;
-      const clone = new ParentKeyboardEvent("keydown", {
-        key: event.key,
-        code: event.code,
-        ctrlKey: event.ctrlKey,
-        metaKey: event.metaKey,
-        shiftKey: event.shiftKey,
-        altKey: event.altKey,
-        bubbles: true,
-        cancelable: true,
-      });
-      window.parent.dispatchEvent(clone);
-    } catch (err) {
-      if (!parentDispatchWarned && typeof console !== "undefined" && console.error) {
-        parentDispatchWarned = true;
-        console.error("[citadel-shim] cross-frame keydown dispatch failed:", err);
-      }
-    }
-  }
-
   // Wrap WebSocket so we can capture the ttyd input channel. The constructor
   // explicitly `return ws` — per JS semantics, when a constructor returns an
   // object via `new`, that object is what `new` evaluates to, so callers get
@@ -115,8 +89,16 @@
     const ws = protocols === undefined ? new OriginalWebSocket(url) : new OriginalWebSocket(url, protocols);
     if (typeof url === "string" && /\/ws(\?|$)/.test(url)) {
       activeWs = ws;
-      ws.addEventListener("close", () => {
+      ws.addEventListener("close", (event) => {
+        recordTerminalClientEvent("ws.close", {
+          code: event?.code,
+          reason: event?.reason,
+          wasClean: event?.wasClean,
+        });
         if (activeWs === ws) activeWs = null;
+      });
+      ws.addEventListener("error", () => {
+        recordTerminalClientEvent("ws.error", {});
       });
       // ttyd's WebSocket frames look like: 1-byte command + payload. Output
       // frames start with '0' (0x30) and the payload is the raw PTY byte
@@ -279,6 +261,26 @@
     if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
   }
 
+  function postAppShortcut(action, extras) {
+    const parent = window.parent;
+    if (!parent || parent === window || typeof parent.postMessage !== "function") return false;
+    try {
+      parent.postMessage(
+        {
+          source: "citadel-terminal",
+          type: "citadel.terminal-shortcut",
+          action,
+          sessionId: SESSION_ID,
+          ...(extras || {}),
+        },
+        window.location?.origin || "*",
+      );
+      return true;
+    } catch (_err) {
+      return false;
+    }
+  }
+
   // Read the clipboard and inject it into the PTY wrapped in bracketed-paste
   // escapes (\x1b[200~ ... \x1b[201~). Every modern shell (bash >=4.4, zsh,
   // fish) and TUI (Claude Code, Codex, vim, etc.) understands bracketed
@@ -432,18 +434,27 @@
     const forwardable = matchForwardable(event);
     if (forwardable) {
       if (forwardable.id === "close-overlay") {
-        if (readParentOverlayCount() > 0) {
-          dispatchToParent(event);
-        }
+        if (readParentOverlayCount() > 0) postAppShortcut(forwardable.id);
         // Always pass Escape through to xterm — do not consume.
         return;
       }
-      dispatchToParent(event);
-      consume(event);
+      if (postAppShortcut(forwardable.id, forwardable.index === undefined ? null : { index: forwardable.index })) {
+        consume(event);
+      }
       return;
     }
 
     const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
+    // Additional Citadel-level shortcuts that are intentionally outside the
+    // canonical registry (global shell drawer and new-workspace modal).
+    if (key === "s" && (event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey) {
+      if (postAppShortcut("scratchpad-toggle")) consume(event);
+      return;
+    }
+    if (key === "n" && event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+      if (postAppShortcut("new-workspace")) consume(event);
+      return;
+    }
     // Shell-first lifecycle signal: Ctrl+C inside the embedded terminal is
     // the dominant operator-initiated agent stop. Fire-and-forget a POST to
     // the user-action endpoint so the daemon's status-monitor knows the
@@ -498,6 +509,18 @@
   // stopImmediatePropagation only stops same-target same-phase listeners.
   document.addEventListener("keydown", onKeydown, true);
 
+  try {
+    window.addEventListener(
+      "pagehide",
+      (event) => {
+        recordTerminalClientEvent("pagehide", { persisted: event?.persisted });
+      },
+      { capture: true },
+    );
+  } catch (_err) {
+    // Browsers without pagehide support still report WebSocket close events.
+  }
+
   // Derive the sessionId from the iframe's URL path. ttyd is mounted at
   // `/terminals/<sessionId>/` (see packages/terminal/src/ttyd.ts:147 — basePath
   // is `${basePathPrefix}/<sessionId>`). Cached at module init since the URL
@@ -535,10 +558,46 @@
     }
   }
 
-  // OSC 52 bridge: when tmux runs with `set-clipboard on` (enabled by
-  // buildAttachCommand for sessions where tmux owns mouse scrollback), every
-  // copy-mode/mouse selection inside tmux is forwarded to the terminal as
-  // `ESC ] 52 ; c ; <base64> BEL`. xterm.js
+  // Browser-side lifecycle breadcrumbs for the daemon diagnostics log. The
+  // server sees only TCP close/end; this records the close code plus whether
+  // the iframe itself is being hidden/navigated.
+  function recordTerminalClientEvent(event, data) {
+    if (!SESSION_ID) return;
+    const now = Date.now();
+    if (terminalClientEventCount >= 100) return;
+    if (terminalClientEventCount >= 20 && now - lastTerminalClientEventAt < 5000) return;
+    terminalClientEventCount += 1;
+    lastTerminalClientEventAt = now;
+    const payload = {
+      event,
+      ...data,
+      ageMs: now - loadedAt,
+      visibility: document.visibilityState || "unknown",
+      path: window.location?.pathname || "",
+    };
+    const url = `/api/agent-sessions/${encodeURIComponent(SESSION_ID)}/terminal-client-event`;
+    try {
+      const body = JSON.stringify(payload);
+      if (navigator.sendBeacon && typeof Blob !== "undefined") {
+        const sent = navigator.sendBeacon(url, new Blob([body], { type: "application/json" }));
+        if (sent) return;
+      }
+      if (typeof fetch === "function") {
+        fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+          keepalive: true,
+        }).catch(() => {});
+      }
+    } catch (_err) {
+      // Diagnostics must never affect terminal input or reconnect behavior.
+    }
+  }
+
+  // OSC 52 bridge: when tmux runs with `set-clipboard on` (we enable that in
+  // buildAttachCommand), every copy-mode/mouse selection inside tmux is
+  // forwarded to the terminal as `ESC ] 52 ; c ; <base64> BEL`. xterm.js
   // does not write OSC 52 payloads to the system clipboard by default, so
   // we register our own OSC 52 handler that decodes the base64 and writes
   // via navigator.clipboard. This is what makes "select inside Claude Code

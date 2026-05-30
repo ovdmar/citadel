@@ -1,13 +1,12 @@
-import { execFile as execFileCb } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import type { CitadelConfig } from "@citadel/config";
 import type express from "express";
-import type { asyncRoute } from "./app-helpers.js";
 
-const execFile = promisify(execFileCb);
+type AsyncRoute = (
+  handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>,
+) => express.RequestHandler;
 
 function expandTilde(input: string): string {
   if (input === "~") return os.homedir();
@@ -15,16 +14,15 @@ function expandTilde(input: string): string {
   return input;
 }
 
-export function registerFsRoutes(args: {
+export function registerRepoDiscoveryRoutes(input: {
   app: express.Express;
   config: CitadelConfig;
-  asyncRoute: typeof asyncRoute;
+  asyncRoute: AsyncRoute;
 }) {
-  const { app, config } = args;
-
+  const { app, config, asyncRoute } = input;
   app.post(
     "/api/repos/inspect",
-    args.asyncRoute(async (req, res) => {
+    asyncRoute(async (req, res) => {
       const inputPath = typeof req.body?.rootPath === "string" ? req.body.rootPath : "";
       if (!inputPath) return res.status(400).json({ error: "root_path_required" });
       const resolved = path.resolve(expandTilde(inputPath));
@@ -34,12 +32,15 @@ export function registerFsRoutes(args: {
       let remotes: string[] = [];
       if (isGit) {
         try {
-          const headRef = await execFile("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
+          const { execFile: execFileCb } = await import("node:child_process");
+          const { promisify } = await import("node:util");
+          const exec = promisify(execFileCb);
+          const headRef = await exec("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
             cwd: resolved,
             timeout: 6000,
           }).catch(() => ({ stdout: "" }));
           defaultBranch = (headRef.stdout || "").trim().replace("refs/remotes/origin/", "").trim() || "main";
-          const remoteList = await execFile("git", ["remote"], { cwd: resolved, timeout: 6000 }).catch(() => ({
+          const remoteList = await exec("git", ["remote"], { cwd: resolved, timeout: 6000 }).catch(() => ({
             stdout: "",
           }));
           remotes = remoteList.stdout

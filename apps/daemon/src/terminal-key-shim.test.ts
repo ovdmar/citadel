@@ -61,11 +61,33 @@ describe("injectKeyShim", () => {
     // Cmd+A terminal-scoped select-all
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain("selectAllInTerminal");
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain(".xterm-screen");
+    // Citadel-level shortcuts bridge out of the iframe to the parent app.
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain("citadel.terminal-shortcut");
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"command-palette"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"nav-workspace"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"nav-session"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"spawn-terminal"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"spawn-agent"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"close-overlay"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"scratchpad-toggle"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('"new-workspace"');
     // Single listener registration — only document, not window (avoids
     // duplicate sends since stopImmediatePropagation only stops same-target
     // listeners).
     expect(TERMINAL_KEY_SHIM_SOURCE).toContain('document.addEventListener("keydown"');
     expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain('window.addEventListener("keydown"');
+    // Client lifecycle telemetry distinguishes iframe navigation from raw
+    // WebSocket disconnects in diagnostics.
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain("terminal-client-event");
+    expect(TERMINAL_KEY_SHIM_SOURCE).toContain('recordTerminalClientEvent("ws.close"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).toMatch(/window\.addEventListener\(\s*"pagehide"/);
+  });
+
+  it("does not self-refresh terminal pages for theme changes", () => {
+    expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain("citadel.theme");
+    expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain('window.addEventListener("storage"');
+    expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain("/terminal?theme=");
+    expect(TERMINAL_KEY_SHIM_SOURCE).not.toContain("window.location.reload()");
   });
 });
 
@@ -119,12 +141,7 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     windowKeydownListeners: number;
     documentKeydownListeners: number;
     sent: Uint8Array[];
-    parentDispatches: FakeSyntheticEvent[];
-    parentWindow: {
-      __citadelOverlayOpen: number;
-      KeyboardEvent: typeof KeyboardEvent;
-      dispatchEvent: (event: FakeSyntheticEvent) => boolean;
-    };
+    parentMessages: Array<{ message: unknown; targetOrigin: string }>;
     activate: () => void;
   };
 
@@ -224,29 +241,16 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
       selectionState?: SelectionState;
       rangeState?: RangeState;
       parentOverlayCount?: number;
-      parentDispatches?: FakeSyntheticEvent[];
     } = {},
   ): ShimHarness {
     const listeners: ShimHarness["listeners"] = [];
     const sent: Uint8Array[] = [];
+    const parentMessages: ShimHarness["parentMessages"] = [];
     const clipboardWrites = extras.clipboardWrites ?? [];
     let windowKeydownListeners = 0;
     let documentKeydownListeners = 0;
     const selectionState = extras.selectionState;
     const rangeState = extras.rangeState;
-    const parentDispatches = extras.parentDispatches ?? [];
-    // Synthetic window.parent — same-origin in production (ttyd is served by the
-    // daemon proxy under the cockpit's host:port). The shim reads
-    // window.parent.__citadelOverlayOpen and dispatches synthetic KeyboardEvents
-    // on window.parent. The harness captures the dispatches.
-    const parentWindow = {
-      __citadelOverlayOpen: extras.parentOverlayCount ?? 0,
-      KeyboardEvent: FakeSyntheticEvent as unknown as typeof KeyboardEvent,
-      dispatchEvent: (event: FakeSyntheticEvent) => {
-        parentDispatches.push(event);
-        return true;
-      },
-    };
     const runtime: ShimHarness["runtime"] = {
       window: {
         WebSocket: FakeWebSocket,
@@ -271,7 +275,16 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
             : undefined,
         KeyboardEvent: FakeSyntheticEvent as unknown as typeof KeyboardEvent,
         term: extras.term,
-        parent: parentWindow,
+        parent: {
+          __citadelOverlayOpen: extras.parentOverlayCount ?? 0,
+          postMessage: (message: unknown, targetOrigin: string) => {
+            parentMessages.push({ message, targetOrigin });
+          },
+        },
+        location: {
+          origin: "http://localhost",
+          pathname: "/terminals/sess_test/",
+        },
       } as ShimHarness["runtime"]["window"],
       document: {
         addEventListener: ((type: string, handler: (event: FakeKeyboardEvent) => void) => {
@@ -328,8 +341,7 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
         return documentKeydownListeners;
       },
       sent,
-      parentDispatches,
-      parentWindow,
+      parentMessages,
       activate: () => {
         const PatchedWS = runtime.window.WebSocket;
         const ws = new PatchedWS("ws://localhost/terminals/x/ws");
@@ -355,6 +367,18 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
   function dispatch(harness: ShimHarness, event: FakeKeyboardEvent) {
     for (const listener of harness.listeners) listener(event);
     return event;
+  }
+
+  type PostedTerminalShortcut = {
+    source?: string;
+    type?: string;
+    action?: string;
+    sessionId?: string;
+    index?: number;
+  };
+
+  function postedShortcuts(harness: ShimHarness): PostedTerminalShortcut[] {
+    return harness.parentMessages.map((entry) => entry.message as PostedTerminalShortcut);
   }
 
   it("registers exactly one keydown listener on document (not on window) so shortcuts fire once", () => {
@@ -413,6 +437,47 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
     const event = dispatch(harness, makeEvent({ key: "Enter", shiftKey: true, isComposing: true }));
     expect(event.defaultPrevented).toBe(false);
     expect(harness.sent).toEqual([]);
+  });
+
+  it("posts Cmd+K to the parent app instead of sending it to the PTY", () => {
+    const harness = setup("MacIntel");
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "k", metaKey: true }));
+    expect(event.defaultPrevented).toBe(true);
+    expect(harness.sent).toEqual([]);
+    expect(harness.parentMessages).toEqual([
+      {
+        targetOrigin: "http://localhost",
+        message: {
+          source: "citadel-terminal",
+          type: "citadel.terminal-shortcut",
+          action: "command-palette",
+          sessionId: "sess_test",
+        },
+      },
+    ]);
+  });
+
+  it("posts Shift+Cmd+S to the parent app for the scratchpad drawer", () => {
+    const harness = setup("MacIntel");
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "s", metaKey: true, shiftKey: true }));
+    expect(event.defaultPrevented).toBe(true);
+    expect(harness.sent).toEqual([]);
+    expect(harness.parentMessages.map((entry) => (entry.message as { action?: string }).action)).toEqual([
+      "scratchpad-toggle",
+    ]);
+  });
+
+  it("posts Ctrl+N to the parent app for new workspace", () => {
+    const harness = setup("MacIntel");
+    harness.activate();
+    const event = dispatch(harness, makeEvent({ key: "n", ctrlKey: true }));
+    expect(event.defaultPrevented).toBe(true);
+    expect(harness.sent).toEqual([]);
+    expect(harness.parentMessages.map((entry) => (entry.message as { action?: string }).action)).toEqual([
+      "new-workspace",
+    ]);
   });
 
   it("Cmd+C copies the DOM selection through navigator.clipboard exactly once", () => {
@@ -546,16 +611,19 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
   });
 
   describe("forwarding allow-list", () => {
-    it("forwards Cmd+K to window.parent and consumes the event for xterm", () => {
+    it("posts Cmd+K to window.parent and consumes the event for xterm", () => {
       const harness = setup("MacIntel");
       harness.activate();
       const event = dispatch(harness, makeEvent({ key: "k", metaKey: true }));
       expect(event.defaultPrevented).toBe(true);
-      expect(harness.parentDispatches).toHaveLength(1);
-      const dispatched = harness.parentDispatches[0] as FakeSyntheticEvent;
-      expect(dispatched.type).toBe("keydown");
-      expect(dispatched.init.key).toBe("k");
-      expect(dispatched.init.metaKey).toBe(true);
+      expect(postedShortcuts(harness)).toEqual([
+        {
+          source: "citadel-terminal",
+          type: "citadel.terminal-shortcut",
+          action: "command-palette",
+          sessionId: "sess_test",
+        },
+      ]);
     });
 
     it("forwards Ctrl+1..Ctrl+9 (workspace nav) and consumes for xterm", () => {
@@ -564,9 +632,20 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
         harness.activate();
         const event = dispatch(harness, makeEvent({ key: String(n), ctrlKey: true }));
         expect(event.defaultPrevented).toBe(true);
-        expect(harness.parentDispatches, `n=${n}`).toHaveLength(1);
-        expect((harness.parentDispatches[0] as FakeSyntheticEvent).init.key).toBe(String(n));
+        expect(postedShortcuts(harness), `n=${n}`).toEqual([
+          expect.objectContaining({ action: "nav-workspace", index: n - 1, sessionId: "sess_test" }),
+        ]);
       }
+    });
+
+    it("forwards Ctrl+0 as workspace slot 10 and consumes for xterm", () => {
+      const harness = setup("Linux x86_64");
+      harness.activate();
+      const event = dispatch(harness, makeEvent({ key: "0", ctrlKey: true }));
+      expect(event.defaultPrevented).toBe(true);
+      expect(postedShortcuts(harness)).toEqual([
+        expect.objectContaining({ action: "nav-workspace", index: 9, sessionId: "sess_test" }),
+      ]);
     });
 
     it("forwards Cmd+Shift+1..Cmd+Shift+9 (session nav) and consumes for xterm", () => {
@@ -575,17 +654,22 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
         harness.activate();
         const event = dispatch(harness, makeEvent({ key: String(n), metaKey: true, shiftKey: true }));
         expect(event.defaultPrevented).toBe(true);
-        expect(harness.parentDispatches, `n=${n}`).toHaveLength(1);
+        expect(postedShortcuts(harness), `n=${n}`).toEqual([
+          expect.objectContaining({ action: "nav-session", index: n - 1, sessionId: "sess_test" }),
+        ]);
       }
     });
 
     it("forwards Cmd+T and Cmd+E and consumes for xterm", () => {
-      for (const key of ["t", "e"]) {
+      for (const [key, action] of [
+        ["t", "spawn-terminal"],
+        ["e", "spawn-agent"],
+      ] as const) {
         const harness = setup("MacIntel");
         harness.activate();
         const event = dispatch(harness, makeEvent({ key, metaKey: true }));
         expect(event.defaultPrevented, key).toBe(true);
-        expect(harness.parentDispatches, key).toHaveLength(1);
+        expect(postedShortcuts(harness), key).toEqual([expect.objectContaining({ action, sessionId: "sess_test" })]);
       }
     });
 
@@ -594,7 +678,7 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
       harness.activate();
       const event = dispatch(harness, makeEvent({ key: "1", shiftKey: true }));
       expect(event.defaultPrevented).toBe(false);
-      expect(harness.parentDispatches).toHaveLength(0);
+      expect(harness.parentMessages).toHaveLength(0);
     });
 
     it("does NOT forward plain digits", () => {
@@ -604,7 +688,7 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
         const event = dispatch(harness, makeEvent({ key: n }));
         expect(event.defaultPrevented, n).toBe(false);
       }
-      expect(harness.parentDispatches).toHaveLength(0);
+      expect(harness.parentMessages).toHaveLength(0);
     });
 
     it("does NOT forward plain letters (typing 'k', 't', 'e' in xterm must keep working)", () => {
@@ -614,7 +698,7 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
         const event = dispatch(harness, makeEvent({ key: k }));
         expect(event.defaultPrevented, k).toBe(false);
       }
-      expect(harness.parentDispatches).toHaveLength(0);
+      expect(harness.parentMessages).toHaveLength(0);
     });
 
     it("does NOT forward Cmd+C / Cmd+V / Cmd+A — those are translation-block chords owned by the shim", () => {
@@ -624,7 +708,7 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
       // forwarded to the cockpit (would call the command palette? No — it
       // doesn't match any forwardable chord, and the translation should win).
       const eventC = dispatch(harness, makeEvent({ key: "c", metaKey: true }));
-      expect(harness.parentDispatches).toHaveLength(0);
+      expect(harness.parentMessages).toHaveLength(0);
       // Cmd+C is still consumed by the translation block (clipboard copy).
       expect(eventC.defaultPrevented).toBe(true);
     });
@@ -633,7 +717,7 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
       const harness = setup("MacIntel");
       harness.activate();
       const event = dispatch(harness, makeEvent({ key: "Enter", shiftKey: true }));
-      expect(harness.parentDispatches).toHaveLength(0);
+      expect(harness.parentMessages).toHaveLength(0);
       expect(event.defaultPrevented).toBe(true);
     });
 
@@ -641,7 +725,7 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
       const harness = setup("Linux x86_64");
       harness.activate();
       const event = dispatch(harness, makeEvent({ key: "a", ctrlKey: true }));
-      expect(harness.parentDispatches).toHaveLength(0);
+      expect(harness.parentMessages).toHaveLength(0);
       expect(event.defaultPrevented).toBe(true);
     });
 
@@ -649,14 +733,16 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
       const closed = setup("MacIntel", { parentOverlayCount: 0 });
       closed.activate();
       const closedEvent = dispatch(closed, makeEvent({ key: "Escape" }));
-      expect(closed.parentDispatches).toHaveLength(0);
+      expect(closed.parentMessages).toHaveLength(0);
       // xterm always sees Escape — never consume it
       expect(closedEvent.defaultPrevented).toBe(false);
 
       const open = setup("MacIntel", { parentOverlayCount: 1 });
       open.activate();
       const openEvent = dispatch(open, makeEvent({ key: "Escape" }));
-      expect(open.parentDispatches).toHaveLength(1);
+      expect(postedShortcuts(open)).toEqual([
+        expect.objectContaining({ action: "close-overlay", sessionId: "sess_test" }),
+      ]);
       // xterm STILL sees Escape — never consume it
       expect(openEvent.defaultPrevented).toBe(false);
     });
@@ -676,40 +762,22 @@ describe("TERMINAL_KEY_SHIM_SOURCE runtime behavior", () => {
       expect(debug?.matchForwardable({ key: "a", ctrlKey: true })).toBeNull();
     });
 
-    it("forwarded clone carries the same modifier flags as the original", () => {
+    it("posts only the shortcut intent, session, and index instead of cloning KeyboardEvents", () => {
       const harness = setup("MacIntel");
       harness.activate();
       dispatch(harness, makeEvent({ key: "5", metaKey: true, shiftKey: true }));
-      expect(harness.parentDispatches).toHaveLength(1);
-      const init = (harness.parentDispatches[0] as FakeSyntheticEvent).init;
-      expect(init.metaKey).toBe(true);
-      expect(init.shiftKey).toBe(true);
-      expect(init.ctrlKey).toBeFalsy();
+      expect(postedShortcuts(harness)).toEqual([
+        expect.objectContaining({ action: "nav-session", index: 4, sessionId: "sess_test" }),
+      ]);
     });
 
-    it("forwarded clone is a fresh KeyboardEvent constructed via window.parent.KeyboardEvent — target defaults to window.parent and isTrusted is false (synthetic)", () => {
-      // The cockpit's keydown listener reads `event.target` to decide whether
-      // to gate plain `c` on inEditable. For a forwarded synthetic event the
-      // target is the cockpit Window itself (no `tagName`), so the listener's
-      // `target?.tagName` short-circuits cleanly and `inEditable` is false.
-      // Verify the shim does NOT carry the original event's target across the
-      // boundary (which would be the iframe's xterm helper textarea — wrong).
+    it("does not copy the original KeyboardEvent target into the parent message", () => {
       const harness = setup("MacIntel");
       harness.activate();
-      // Original event has a "target" — the forwarded clone must not propagate it.
       const original = makeEvent({ key: "k", metaKey: true });
       (original as unknown as { target: object }).target = { tagName: "TEXTAREA" };
       dispatch(harness, original);
-      expect(harness.parentDispatches).toHaveLength(1);
-      const clone = harness.parentDispatches[0] as FakeSyntheticEvent;
-      // FakeSyntheticEvent only stores what was passed to the KeyboardEvent
-      // constructor's init dict — `target` is read-only on real KeyboardEvent
-      // and cannot be set via init, so it's never copied. Asserting absence:
-      expect((clone.init as Record<string, unknown>).target).toBeUndefined();
-      // The shim does NOT pass `isTrusted` (it's also read-only on real
-      // KeyboardEvent and always false for `new KeyboardEvent(...)`); the
-      // cockpit listener must never gate on isTrusted.
-      expect((clone.init as Record<string, unknown>).isTrusted).toBeUndefined();
+      expect((postedShortcuts(harness)[0] as Record<string, unknown>).target).toBeUndefined();
     });
   });
 });

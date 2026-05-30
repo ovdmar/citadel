@@ -1,3 +1,5 @@
+import type { CitadelConfig } from "@citadel/config";
+import type { AgentRuntime, AgentSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +10,7 @@ import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 let lastIntervalMs: number | null = null;
 let stopCalls = 0;
 let lastDepsCaptured: unknown = null;
+let runtimeHealthRows: AgentRuntime[] = [];
 
 vi.mock("@citadel/operations", async () => {
   const actual = await vi.importActual<typeof import("@citadel/operations")>("@citadel/operations");
@@ -25,8 +28,18 @@ vi.mock("@citadel/operations", async () => {
   };
 });
 
+vi.mock("@citadel/runtimes", () => ({
+  listRuntimeHealth: () => runtimeHealthRows,
+}));
+
 const fakeStore = { listSessions: () => [], updateSessionRateLimitResume: () => {} } as unknown as SqliteStore;
 const fakeOps = { sendAgentMessage: async () => ({ ok: true }) } as unknown as OperationService;
+const fakeConfig = {
+  runtimes: [
+    { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] },
+    { id: "codex", displayName: "Codex", command: "codex", args: [] },
+  ],
+} satisfies Pick<CitadelConfig, "runtimes">;
 
 const originalEnv = { ...process.env };
 
@@ -35,6 +48,7 @@ describe("startDaemonAutoResumeLoop env parsing", () => {
     lastIntervalMs = null;
     lastDepsCaptured = null;
     stopCalls = 0;
+    runtimeHealthRows = [runtimeHealth("claude-code", "healthy"), runtimeHealth("codex", "healthy")];
     // Wipe both knobs to a known baseline; reinstate after each test. We
     // genuinely need delete here — assigning undefined stores the literal
     // string "undefined" rather than removing the key, which would defeat
@@ -110,4 +124,79 @@ describe("startDaemonAutoResumeLoop env parsing", () => {
     });
     expect(captured).toEqual({ sessionId: "s", message: "m", source: "system", optimistic: false });
   });
+
+  it("wires runtime health so unhealthy runtimes cannot receive auto-resume nudges", () => {
+    runtimeHealthRows = [runtimeHealth("claude-code", "unavailable"), runtimeHealth("codex", "healthy")];
+    startDaemonAutoResumeLoop(fakeStore, fakeOps, fakeConfig);
+    const deps = lastDepsCaptured as {
+      isRuntimeHealthy: (runtimeId: string) => boolean;
+    };
+    expect(deps.isRuntimeHealthy("claude-code")).toBe(false);
+    expect(deps.isRuntimeHealthy("codex")).toBe(true);
+    expect(deps.isRuntimeHealthy("missing-runtime")).toBe(false);
+  });
+
+  it("ignores usage-limit banners from unhealthy runtimes when deriving the account-wide pause", () => {
+    const future = new Date(Date.now() + 60 * 60_000).toISOString();
+    const store = {
+      listSessions: () => [
+        session({ id: "bad", runtimeId: "claude-code", statusReason: `pane:usage_limited:reset=${future}` }),
+        session({ id: "good", runtimeId: "codex", status: "idle", statusReason: "pane:active:idle" }),
+      ],
+      updateSessionRateLimitResume: () => {},
+    } as unknown as SqliteStore;
+    runtimeHealthRows = [runtimeHealth("claude-code", "unavailable"), runtimeHealth("codex", "healthy")];
+    startDaemonAutoResumeLoop(store, fakeOps, fakeConfig);
+    const deps = lastDepsCaptured as {
+      isAccountRateLimited: () => unknown;
+    };
+    expect(deps.isAccountRateLimited()).toBeNull();
+  });
 });
+
+function runtimeHealth(id: string, health: AgentRuntime["health"]): AgentRuntime {
+  return {
+    id,
+    displayName: id,
+    command: id,
+    args: [],
+    health,
+    healthReason: health === "healthy" ? null : "synthetic unhealthy runtime",
+    capabilities: {
+      supportsPrompt: true,
+      supportsResume: true,
+      supportsModelSelection: false,
+      supportsTranscript: false,
+      supportsStatusDetection: true,
+      supportsNonInteractiveGoal: true,
+      supportsShell: true,
+      supportsUsage: false,
+      supportsTui: true,
+    },
+  };
+}
+
+function session(over: Partial<AgentSession>): AgentSession {
+  return {
+    id: "sess-1",
+    workspaceId: "ws-1",
+    runtimeId: "claude-code",
+    displayName: "Claude",
+    status: "usage_limited",
+    statusReason: "pane:usage_limited:reset=unknown",
+    lastStatusAt: "2026-05-25T11:00:00.000Z",
+    lastOutputAt: null,
+    endedAt: null,
+    exitCode: null,
+    transport: "connected",
+    tmuxSessionName: "tmux-sess-1",
+    tmuxSessionId: "$1",
+    runtimeSessionId: "uuid-1",
+    rateLimitResumeAttempts: 0,
+    nextResumeAt: null,
+    lastResumeFromRateLimitAt: null,
+    createdAt: "2026-05-25T10:00:00.000Z",
+    updatedAt: "2026-05-25T11:00:00.000Z",
+    ...over,
+  } satisfies AgentSession;
+}

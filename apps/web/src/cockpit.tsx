@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-route
 import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
-import { useEventRefresh, useStateQuery } from "./app-state.js";
+import { useEventRefresh, useFilteredStateQuery } from "./app-state.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { resolveShortcutAction } from "./cockpit-shortcut-actions.js";
 import {
@@ -26,21 +26,51 @@ import {
 import { buildGroupTree, flattenWorkspaceOrder, treeGroupingFor } from "./navigator-groups.js";
 import { Navigator } from "./navigator.js";
 import { RestoreBanner } from "./restore-banner.js";
-import { matchShortcut } from "./shortcuts.js";
+import { FORWARDABLE_CHORDS, type ShortcutMatch, matchShortcut } from "./shortcuts.js";
 import { Stage } from "./stage.js";
+import { focusActiveTerminal, isRegisteredTerminalMessageSource } from "./terminal-pane.js";
+import { type TerminalShortcutMessage, parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
-import { useResolvedTheme } from "./use-resolved-theme.js";
+import { applyThemePreference, useResolvedTheme } from "./use-resolved-theme.js";
 import { prToneFor } from "./workspace-card.js";
 
 const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";
 const STORAGE_LAST_REPO = "citadel.last-repo";
 const STORAGE_SESSION_BY_WORKSPACE = "citadel.session-by-workspace";
+const TERMINAL_FOCUS_DELAYS_MS = [0, 50, 160, 400];
 
 type MobileView = "navigator" | "stage" | "inspector";
 
+function focusTerminalSoon(sessionId: string) {
+  for (const delay of TERMINAL_FOCUS_DELAYS_MS) {
+    window.setTimeout(() => focusActiveTerminal(sessionId), delay);
+  }
+}
+
+function shortcutMatchFromTerminalMessage(message: TerminalShortcutMessage): ShortcutMatch | null {
+  if (message.action === "scratchpad-toggle" || message.action === "new-workspace") return null;
+  if ((message.action === "nav-workspace" || message.action === "nav-session") && message.index === undefined) {
+    return null;
+  }
+  const chord = FORWARDABLE_CHORDS.find((candidate) => {
+    if (candidate.id !== message.action) return false;
+    if (message.index !== undefined) return candidate.index === message.index;
+    return candidate.index === undefined;
+  });
+  if (!chord) return null;
+  const match: ShortcutMatch = { id: chord.id, chord };
+  if (message.index !== undefined) match.index = message.index;
+  return match;
+}
+
 export function Cockpit() {
-  const state = useStateQuery();
+  // Use the filtered variant so workspaces in the optimistic-remove
+  // blacklist (AC4) are subtracted from `data.workspaces` for every
+  // consumer of `state.data` below — including the active-workspace
+  // selector at L52, which must never pick a blacklisted workspace as
+  // the fallback active row.
+  const state = useFilteredStateQuery();
   useEventRefresh();
   const data = state.data;
   const queryClient = useQueryClient();
@@ -171,9 +201,6 @@ export function Cockpit() {
     return () => clearTimeout(timer);
   }, [shortcutError]);
 
-  // Refs let the single window listener always read current state/handlers
-  // without re-registering on every render (which would briefly miss events
-  // that arrived between removeEventListener and addEventListener).
   const handlerStateRef = useRef({
     flatWorkspaceIds,
     activeWorkspace,
@@ -190,6 +217,57 @@ export function Cockpit() {
   };
 
   useEffect(() => {
+    const openCreateWorkspace = () => setCreateWorkspaceOpen(true);
+    const applyShortcutMatch = (match: ShortcutMatch, preventDefault?: () => void) => {
+      const state = handlerStateRef.current;
+      const action = resolveShortcutAction(match, state);
+
+      switch (action.type) {
+        case "toggle-command-palette":
+          preventDefault?.();
+          setCommandOpen((open) => !open);
+          return;
+        case "close-command-palette":
+          setCommandOpen(false);
+          return;
+        case "nav-workspace":
+          preventDefault?.();
+          if (action.expandGroupPath) expandGroupPath(action.expandGroupPath);
+          setActiveWorkspaceId(action.workspaceId);
+          setMobileView("stage");
+          return;
+        case "nav-session":
+          preventDefault?.();
+          setActiveSessionByWorkspace((current) => ({
+            ...current,
+            [action.workspaceId]: action.sessionId,
+          }));
+          setMobileView("stage");
+          return;
+        case "spawn-terminal":
+          preventDefault?.();
+          spawnSession.mutate({
+            workspaceId: action.workspaceId,
+            runtimeId: "shell",
+            displayName: "Terminal",
+          });
+          return;
+        case "spawn-agent":
+          preventDefault?.();
+          spawnSession.mutate({
+            workspaceId: action.workspaceId,
+            runtimeId: action.runtimeId,
+            displayName: action.displayName,
+          });
+          return;
+        case "spawn-agent-no-runtime":
+          preventDefault?.();
+          setShortcutError("No agent runtime available — install Claude Code or another runtime in Settings.");
+          return;
+        case "noop":
+          return;
+      }
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const inEditable =
@@ -198,8 +276,11 @@ export function Cockpit() {
         target?.tagName === "TEXTAREA" ||
         target?.tagName === "SELECT";
 
-      // GitHub-style: plain `c` ("create") opens the new-workspace modal.
-      // Stays outside the canonical registry so it can be gated by inEditable.
+      if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "n") {
+        event.preventDefault();
+        openCreateWorkspace();
+        return;
+      }
       if (
         !inEditable &&
         !event.metaKey &&
@@ -209,73 +290,49 @@ export function Cockpit() {
         event.key.toLowerCase() === "c"
       ) {
         event.preventDefault();
-        setCreateWorkspaceOpen(true);
-        return;
-      }
-      // Ctrl+N opens the new-workspace modal on macOS; on Linux/Windows the
-      // browser steals Ctrl+N for "new browser window" and ignores
-      // preventDefault. Kept as the explicit shortcut for the modal on Mac.
-      if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "n") {
-        event.preventDefault();
-        setCreateWorkspaceOpen(true);
+        openCreateWorkspace();
         return;
       }
 
       const match = matchShortcut(event);
       if (!match) return;
-      const state = handlerStateRef.current;
-      const action = resolveShortcutAction(match, state);
-
-      switch (action.type) {
-        case "toggle-command-palette":
-          event.preventDefault();
-          setCommandOpen((open) => !open);
-          return;
-        case "close-command-palette":
-          setCommandOpen(false);
-          return;
-        case "nav-workspace":
-          event.preventDefault();
-          if (action.expandGroupPath) expandGroupPath(action.expandGroupPath);
-          setActiveWorkspaceId(action.workspaceId);
-          setMobileView("stage");
-          return;
-        case "nav-session":
-          event.preventDefault();
-          setActiveSessionByWorkspace((current) => ({
-            ...current,
-            [action.workspaceId]: action.sessionId,
-          }));
-          setMobileView("stage");
-          return;
-        case "spawn-terminal":
-          event.preventDefault();
-          spawnSession.mutate({
-            workspaceId: action.workspaceId,
-            runtimeId: "shell",
-            displayName: "Terminal",
-          });
-          return;
-        case "spawn-agent":
-          event.preventDefault();
-          spawnSession.mutate({
-            workspaceId: action.workspaceId,
-            runtimeId: action.runtimeId,
-            displayName: action.displayName,
-          });
-          return;
-        case "spawn-agent-no-runtime":
-          event.preventDefault();
-          setShortcutError("No agent runtime available — install Claude Code or another runtime in Settings.");
-          return;
+      applyShortcutMatch(match, () => event.preventDefault());
+    };
+    const onMessage = (event: MessageEvent) => {
+      const message = parseTerminalShortcutMessage(event);
+      if (!message || !isRegisteredTerminalMessageSource(event.source, message.sessionId)) return;
+      if (message.action === "new-workspace") {
+        openCreateWorkspace();
+        return;
       }
+      const match = shortcutMatchFromTerminalMessage(message);
+      if (!match) return;
+      applyShortcutMatch(match);
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("message", onMessage);
+    };
   }, [setActiveSessionByWorkspace, setActiveWorkspaceId, spawnSession]);
 
   const focusWorkspace = (workspace: Workspace) => {
     setActiveWorkspaceId(workspace.id);
+    setMobileView("stage");
+    // Focus the workspace's currently-active session's terminal iframe so
+    // the user lands one click away from typing into xterm. Cross-origin
+    // limitation: xterm keyboard capture still needs a click inside the
+    // pane. Scheduled in a microtask so React's commit (mounting the new
+    // active terminal) completes before we try to focus.
+    const targetSessionId =
+      activeSessionByWorkspace[workspace.id] ?? allSessions.find((session) => session.workspaceId === workspace.id)?.id;
+    if (targetSessionId) {
+      focusTerminalSoon(targetSessionId);
+    }
+  };
+  const focusWorkspaceId = (workspaceId: string) => {
+    setActiveWorkspaceId(workspaceId);
     setMobileView("stage");
   };
 
@@ -384,6 +441,7 @@ export function Cockpit() {
               onCloseCreateWorkspace={() => setCreateWorkspaceOpen(false)}
               onCollapse={layout.toggleLeft}
               onPickWorkspace={focusWorkspace}
+              onPickWorkspaceId={focusWorkspaceId}
             />
           </aside>
         )}
@@ -404,9 +462,10 @@ export function Cockpit() {
               allSessions={allSessions}
               runtimes={data?.runtimes ?? []}
               activeSessionId={activeSessionId}
-              onActiveSession={(sessionId) =>
-                setActiveSessionByWorkspace((current) => ({ ...current, [activeWorkspace.id]: sessionId }))
-              }
+              onActiveSession={(sessionId) => {
+                setActiveSessionByWorkspace((current) => ({ ...current, [activeWorkspace.id]: sessionId }));
+                focusTerminalSoon(sessionId);
+              }}
             />
           ) : (
             <EmptyStage hasRepos={Boolean(data?.repos.length)} />
@@ -593,12 +652,7 @@ function ThemeToggle() {
   const isDark = resolved === "dark";
   const toggle = () => {
     const next = isDark ? "light" : "dark";
-    document.documentElement.dataset.theme = next;
-    try {
-      localStorage.setItem("citadel.theme", next);
-    } catch {
-      // localStorage is best-effort
-    }
+    applyThemePreference(next);
   };
   return (
     <button

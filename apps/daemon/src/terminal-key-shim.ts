@@ -7,11 +7,11 @@ import { fileURLToPath } from "node:url";
 // the client file for the actual logic; documented behavior:
 //
 //   1. Forwarding block (runs first). Chords in `FORWARDABLE_CHORDS` — the
-//      mirror of @citadel/contracts's shortcut registry — are dispatched as
-//      synthetic KeyboardEvents on `window.parent` so the cockpit's global
-//      key handler fires even when xterm has focus. Escape is forwarded
-//      only when `window.parent.__citadelOverlayOpen > 0` and is always
-//      passed through to xterm as well (vim/Claude rely on Esc).
+//      mirror of @citadel/contracts's shortcut registry — are posted to the
+//      parent app via `citadel.terminal-shortcut` so cockpit handlers fire
+//      even when xterm has focus. Escape is posted only when
+//      `window.parent.__citadelOverlayOpen > 0` and is always passed through
+//      to xterm as well (vim/Claude rely on Esc).
 //
 //   2. Translation block (runs after the forwarding block, mutually
 //      exclusive with it):

@@ -12,7 +12,7 @@ import {
   Plus,
   Settings2,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { AddRepoModal, CreateWorkspaceModal, GroupByMenu, type GroupKey } from "./modals.js";
 import {
@@ -30,6 +30,7 @@ import {
   collectGroupPaths,
   treeGroupingFor,
 } from "./navigator-groups.js";
+import { applyLocalOrder, loadOrder, pruneOrder, saveOrder, spliceIntoOrder } from "./navigator-order.js";
 import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { WorkspaceCard } from "./workspace-card.js";
 
@@ -52,6 +53,7 @@ export function Navigator(props: {
   onCloseCreateWorkspace: () => void;
   onCollapse: () => void;
   onPickWorkspace: (workspace: Workspace) => void;
+  onPickWorkspaceId: (workspaceId: string) => void;
 }) {
   const location = useLocation();
   const path = location.pathname;
@@ -99,7 +101,30 @@ export function Navigator(props: {
   }, []);
 
   const [showGroupBy, setShowGroupBy] = useState(false);
+  const groupByContainerRef = useRef<HTMLDivElement | null>(null);
   const [showAddRepo, setShowAddRepo] = useState(false);
+
+  // Per-group user-defined ordering, persisted in localStorage. Keyed by
+  // group path so switching grouping (repo ↔ status ↔ namespace ↔ none)
+  // selects a different order bucket and doesn't bleed across modes.
+  const [navigatorOrder, setNavigatorOrder] = useState<Record<string, string[]>>(() => loadOrder());
+  useEffect(() => saveOrder(navigatorOrder), [navigatorOrder]);
+  // Prune stale workspace ids on mount + whenever the workspace list
+  // changes, so dropped/removed workspaces don't linger in the order map.
+  useEffect(() => {
+    const liveIds = new Set(props.workspaces.map((w) => w.id));
+    setNavigatorOrder((prev) => pruneOrder(prev, liveIds));
+  }, [props.workspaces]);
+
+  const reorderWorkspace = useCallback(
+    (groupPath: string, visibleIds: readonly string[], draggedId: string, targetIndex: number) => {
+      setNavigatorOrder((prev) => ({
+        ...prev,
+        [groupPath]: spliceIntoOrder(visibleIds, draggedId, targetIndex),
+      }));
+    },
+    [],
+  );
 
   // Intentionally exclude props.activeSummary from buildGroupTree: status sections
   // are derived from /api/state only, so the active workspace doesn't drift
@@ -164,20 +189,39 @@ export function Navigator(props: {
   );
 
   const renderWorkspace = useCallback(
-    ({ workspace, sessions }: WorkspaceEntry) => (
+    ({ workspace, sessions }: WorkspaceEntry, groupPath: string, visibleIds: readonly string[]) => (
       <WorkspaceCard
         key={workspace.id}
         workspace={workspace}
         sessions={sessions}
+        operation={
+          props.operations
+            .filter((operation) => operation.workspaceId === workspace.id && operation.type === "workspace.create")
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null
+        }
         pullRequest={props.prByWorkspaceId.get(workspace.id) ?? null}
         namespace={workspace.namespaceId ? (namespacesById.get(workspace.namespaceId) ?? null) : null}
         namespaces={props.namespaces}
         active={workspace.id === props.activeWorkspaceId}
-        draggable={grouping === "namespace"}
+        dropTarget={grouping === "namespace" ? "namespace" : null}
+        reorder={{
+          groupPath,
+          visibleIds,
+          onReorder: (draggedId, targetIndex) => reorderWorkspace(groupPath, visibleIds, draggedId, targetIndex),
+        }}
         onSelect={() => props.onPickWorkspace(workspace)}
       />
     ),
-    [props.prByWorkspaceId, props.activeWorkspaceId, props.onPickWorkspace, props.namespaces, namespacesById, grouping],
+    [
+      props.prByWorkspaceId,
+      props.operations,
+      props.activeWorkspaceId,
+      props.onPickWorkspace,
+      props.namespaces,
+      namespacesById,
+      grouping,
+      reorderWorkspace,
+    ],
   );
 
   const flatEntries = useMemo<WorkspaceEntry[]>(
@@ -224,7 +268,7 @@ export function Navigator(props: {
         <div className="nav-section">
           <strong>Workspaces</strong>
           <div className="nav-section-icons">
-            <div className="cit-gb">
+            <div className="cit-gb" ref={groupByContainerRef}>
               <button
                 type="button"
                 className={`cit-icon-btn cit-icon-btn--sm cit-gb-btn ${showGroupBy ? "is-open" : ""}`}
@@ -235,7 +279,12 @@ export function Navigator(props: {
                 <Settings2 size={12} />
               </button>
               {showGroupBy ? (
-                <GroupByMenu value={grouping} onChange={setGrouping} onClose={() => setShowGroupBy(false)} />
+                <GroupByMenu
+                  value={grouping}
+                  onChange={setGrouping}
+                  onClose={() => setShowGroupBy(false)}
+                  containerRef={groupByContainerRef}
+                />
               ) : null}
             </div>
             <button
@@ -257,23 +306,31 @@ export function Navigator(props: {
           </div>
         </div>
         <div className="nav-groups">
-          {grouping === "none" ? (
-            <div className="nav-group nav-group-flat">{flatEntries.map((entry) => renderWorkspace(entry))}</div>
-          ) : (
-            tree.map((node) => (
-              <GroupNodeView
-                key={node.id}
-                node={node}
-                depth={0}
-                collapsed={collapsed}
-                onToggle={toggleCollapsed}
-                renderWorkspace={renderWorkspace}
-                dropTargetPath={dropTargetPath}
-                onDropTargetChange={setDropTargetPath}
-                onDropOnNamespace={onDropOnNamespace}
-              />
-            ))
-          )}
+          {grouping === "none"
+            ? (() => {
+                const groupPath = "__flat";
+                const orderedFlat = applyLocalOrder(flatEntries, navigatorOrder[groupPath]);
+                const visibleIds = orderedFlat.map((entry) => entry.workspace.id);
+                return (
+                  <div className="nav-group nav-group-flat">
+                    {orderedFlat.map((entry) => renderWorkspace(entry, groupPath, visibleIds))}
+                  </div>
+                );
+              })()
+            : tree.map((node) => (
+                <GroupNodeView
+                  key={node.id}
+                  node={node}
+                  depth={0}
+                  collapsed={collapsed}
+                  onToggle={toggleCollapsed}
+                  renderWorkspace={renderWorkspace}
+                  navigatorOrder={navigatorOrder}
+                  dropTargetPath={dropTargetPath}
+                  onDropTargetChange={setDropTargetPath}
+                  onDropOnNamespace={onDropOnNamespace}
+                />
+              ))}
           {!props.workspaces.length ? (
             <div className="empty compact">
               {props.repos.length
@@ -311,6 +368,7 @@ export function Navigator(props: {
             props.onCloseCreateWorkspace();
             const created = props.workspaces.find((workspace) => workspace.id === workspaceId);
             if (created) props.onPickWorkspace(created);
+            else props.onPickWorkspaceId(workspaceId);
           }}
         />
       ) : null}
@@ -325,7 +383,10 @@ type GroupNodeViewProps = {
   depth: number;
   collapsed: Record<string, boolean>;
   onToggle: (path: string) => void;
-  renderWorkspace: (entry: WorkspaceEntry) => React.ReactNode;
+  renderWorkspace: (entry: WorkspaceEntry, groupPath: string, visibleIds: readonly string[]) => React.ReactNode;
+  // Per-group user-defined ordering map (keyed by node.path), consumed in
+  // the leaf branch via applyLocalOrder before rendering workspace cards.
+  navigatorOrder: Record<string, string[]>;
   // Namespace leaves accept workspace drops; non-namespace groupings simply
   // ignore these.
   dropTargetPath: string | null;
@@ -334,8 +395,17 @@ type GroupNodeViewProps = {
 };
 
 function GroupNodeView(props: GroupNodeViewProps) {
-  const { node, depth, collapsed, onToggle, renderWorkspace, dropTargetPath, onDropTargetChange, onDropOnNamespace } =
-    props;
+  const {
+    node,
+    depth,
+    collapsed,
+    onToggle,
+    renderWorkspace,
+    navigatorOrder,
+    dropTargetPath,
+    onDropTargetChange,
+    onDropOnNamespace,
+  } = props;
   const isCollapsed = collapsed[node.path] === true;
   // encodeURIComponent keeps DOM ids unique even when group labels contain spaces,
   // slashes, or other characters that would otherwise collapse to the same id.
@@ -385,13 +455,21 @@ function GroupNodeView(props: GroupNodeViewProps) {
                 collapsed={collapsed}
                 onToggle={onToggle}
                 renderWorkspace={renderWorkspace}
+                navigatorOrder={navigatorOrder}
                 dropTargetPath={dropTargetPath}
                 onDropTargetChange={onDropTargetChange}
                 onDropOnNamespace={onDropOnNamespace}
               />
             ))
           ) : node.workspaces.length ? (
-            node.workspaces.map((entry) => renderWorkspace(entry))
+            (() => {
+              // Apply the per-group user-defined order before rendering.
+              // The visibleIds list is recomputed here so card reorder
+              // callbacks have the current rendered sequence to splice into.
+              const ordered = applyLocalOrder(node.workspaces, navigatorOrder[node.path]);
+              const visibleIds = ordered.map((entry) => entry.workspace.id);
+              return ordered.map((entry) => renderWorkspace(entry, node.path, visibleIds));
+            })()
           ) : acceptsDrop ? (
             <div className="nav-group-empty">Drop a workspace here</div>
           ) : null}

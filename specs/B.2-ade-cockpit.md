@@ -19,7 +19,7 @@
 [ ] 1. The cockpit shell is a three-column layout: navigator (left), agent stage (center), inspector (right).
 [ ] 2. Both side columns are independently resizable via drag handles between columns.
 [ ] 3. Both side columns are independently collapsible.
-[ ] 4. The left collapse control sits on the same row as the `Dashboard` link inside the navigator's primary nav. The right collapse control lives in the top-left corner of the inspector.
+[ ] 4. The left collapse control sits on the same row as the `Dashboard` link inside the navigator's primary nav. The right collapse control lives in the top-left corner of the inspector. Both controls use the same chevron-style affordance (Lucide `PanelLeftClose` / `PanelRightClose`) for visual symmetry — never an `X` glyph.
 [ ] 5. When a side column is collapsed, the column disappears entirely but its expand affordance remains visible so it can be reopened.
 [ ] 6. The center column always takes the remaining horizontal space.
 [ ] 7. The application shell never page-scrolls. Each column owns its own scroll context.
@@ -58,6 +58,9 @@
 [ ] 5. When a workspace is created with an associated default agent, the cockpit opens that agent automatically in a new session tab.
 [ ] 6. The selected session occupies the rest of the column height.
 [x] 7. Terminal keyboard shortcuts pass through to the active terminal by default. A small, named allow-list of cockpit shortcuts (see §Keyboard Shortcuts) is forwarded to the parent cockpit when xterm has focus; everything else is delivered to xterm unchanged.
+[ ] 8. Selecting a workspace in the navigator focuses that workspace's currently-active session terminal iframe. Because ttyd runs on a different origin (a separate port), the iframe element receives focus but xterm keyboard capture still requires one click inside the terminal pane — this is a documented cross-origin limitation, not a silent failure. If the workspace has no active session, focusing the workspace is a no-op (no error).
+[ ] 9. Closing the active agent session tab immediately focuses the LEFT-sibling tab (falling back to the right sibling if none) — no blank-grace window. Closing the only remaining tab leaves the active-session pointer untouched.
+[ ] 10. The Stage's `+` add-session button is disabled while `workspace.lifecycle === "creating"` — starting a session requires a ready worktree.
 
 ## Inspector Tabs
 
