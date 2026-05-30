@@ -346,6 +346,53 @@ describe("tmux terminal gateway helpers", () => {
     }
   }, 15000);
 
+  it("sends WebSocket input control messages as literal pane input", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
+    dirs.push(cwd);
+    const sessionName = `citadel_ws_literal_${Date.now().toString(36)}`;
+    sessions.push(sessionName);
+    await ensureTmuxSession({ sessionName, cwd });
+    const readerPath = path.join(cwd, "read-byte.py");
+    fs.writeFileSync(
+      readerPath,
+      [
+        "import sys, tty, termios, select, time",
+        "fd=sys.stdin.fileno()",
+        "old=termios.tcgetattr(fd)",
+        "tty.setraw(fd)",
+        "print('READY', flush=True)",
+        "data=b''",
+        "end=time.time()+2",
+        "while time.time()<end:",
+        "    r,_,_=select.select([sys.stdin], [], [], 0.1)",
+        "    if r: data += sys.stdin.buffer.read(1)",
+        "print('BYTES:'+data.hex(), flush=True)",
+        "termios.tcsetattr(fd, termios.TCSADRAIN, old)",
+      ].join("\n"),
+    );
+    sendKeys(sessionName, `python3 ${shellQuote(readerPath)}`);
+    sendKeys(sessionName, "\r");
+    await waitForCapture(sessionName, "READY");
+
+    const server = http.createServer();
+    attachTerminalWebSocket(server, (id) => (id === "literal" ? sessionName : null));
+    await listen(server);
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP test server address");
+      const ws = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/literal`);
+      await waitForOpen(ws);
+
+      ws.send(JSON.stringify({ type: "input", data: "\n" }));
+
+      await waitForCapture(sessionName, "BYTES:0a");
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      await closeServer(server);
+    }
+  }, 15000);
+
   it("tears down attached PTY viewers before HTTP server close waits on upgraded sockets", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
     dirs.push(cwd);

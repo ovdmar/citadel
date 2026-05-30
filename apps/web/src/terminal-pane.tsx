@@ -18,7 +18,7 @@ export type TerminalSocketMessage = {
 
 const RUNBOOK_URL = "/docs/operations/terminal-runbook";
 const XTERM_FONT = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
-const SHIFT_ENTER_SEQUENCE = "\u001b[13;2u";
+const SHIFT_ENTER_LITERAL = "\n";
 
 /**
  * Per-session handle used by Stage tabs to drive a live terminal WebSocket.
@@ -301,7 +301,7 @@ function handleTerminalKeyEvent(event: KeyboardEvent, terminal: Terminal, sessio
     return false;
   }
   if (key === "enter" && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
-    sendTerminalInput(ws, SHIFT_ENTER_SEQUENCE);
+    sendTerminalControl(ws, { type: "input", data: SHIFT_ENTER_LITERAL });
     return false;
   }
   if (isMacPlatform()) {
@@ -335,6 +335,10 @@ function handleTerminalKeyEvent(event: KeyboardEvent, terminal: Terminal, sessio
 
 function sendTerminalInput(ws: WebSocket, data: string): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
+}
+
+function sendTerminalControl(ws: WebSocket, message: TerminalSocketMessage): void {
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
 }
 
 async function writeTerminalBinary(data: unknown, terminal: Terminal, decoder: TextDecoder): Promise<void> {

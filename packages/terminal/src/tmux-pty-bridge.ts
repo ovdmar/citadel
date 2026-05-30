@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import type http from "node:http";
 import { type IPty, spawn } from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
@@ -12,6 +13,7 @@ type TerminalSocketMessage = {
   type?: string;
   cols?: number;
   rows?: number;
+  data?: string;
 };
 
 const DEFAULT_COLS = 80;
@@ -99,6 +101,15 @@ export function attachTerminalWebSocket(server: http.Server, resolveSession: Res
             if (message.type === "resize" && typeof message.cols === "number" && typeof message.rows === "number") {
               const { cols, rows } = clampSize(message.cols, message.rows);
               pty.resize(cols, rows);
+            } else if (message.type === "input" && typeof message.data === "string") {
+              try {
+                sendTmuxLiteralInput(tmuxTarget.sessionName, message.data, tmuxTarget.socketName);
+              } catch (error) {
+                sendControl(ws, {
+                  type: "error",
+                  data: error instanceof Error ? error.message : "input_failed",
+                });
+              }
             }
           });
           ws.on("close", () => {
@@ -177,4 +188,11 @@ function closePty(pty: IPty): void {
   } catch {
     /* already closed */
   }
+}
+
+function sendTmuxLiteralInput(sessionName: string, data: string, socketName?: string | null): void {
+  if (data.length === 0) return;
+  execFileSync("tmux", [...tmuxPrefix(socketName), "send-keys", "-l", "-t", sessionName, data], {
+    stdio: "ignore",
+  });
 }
