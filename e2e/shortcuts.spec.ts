@@ -40,8 +40,7 @@ test.describe("cockpit keyboard shortcuts", () => {
     // Click into a non-editable area to be sure focus is on the cockpit shell.
     await page.locator(".cit-brand").click();
     await page.keyboard.press("c");
-    // The create-workspace modal renders a dialog with a heading containing "workspace".
-    await expect(page.getByRole("dialog").or(page.locator("[role='dialog']"))).toBeVisible({ timeout: 2000 });
+    await expect(page.getByRole("dialog", { name: "New workspace" })).toBeVisible({ timeout: 2000 });
     await page.keyboard.press("Escape");
   });
 });
