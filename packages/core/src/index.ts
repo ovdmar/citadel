@@ -19,17 +19,13 @@ export function nowIso() {
 // specs/B.3 item 14 for the canonical mapping.
 //
 //  - never-started: workspace has no non-shell agent sessions (workspace-only).
-//  - running:       agent is active or between turns; navigator "in motion".
+//  - running:       agent is actively starting or running.
 //  - done:          agent has finished cleanly (or via operator-initiated
 //                   Ctrl-C / SIGTERM) and the workspace's PR (if any) has no
 //                   failure-class checks.
-//  - rate-limited:  agent is blocked by a server-side rate limit; it's not
-//                   broken but also can't make progress until the limit
-//                   resets. Rendered blue to distinguish from outright
-//                   failures (red).
-//  - attention:     agent failed, is blocked on input, exited badly, or the
-//                   workspace's PR has at least one failing check.
-export type LifecycleTone = "never-started" | "running" | "done" | "rate-limited" | "attention";
+//  - attention:     agent failed, is blocked on input or limits, exited badly,
+//                   has conflicts, or the workspace's PR has failing checks.
+export type LifecycleTone = "never-started" | "running" | "done" | "attention";
 
 // Exit codes that signal a clean stop in operator terms. 0 is the obvious
 // happy path. null appears when the wrapper never wrote a .exit sentinel
@@ -39,8 +35,8 @@ export type LifecycleTone = "never-started" | "running" | "done" | "rate-limited
 const CLEAN_EXIT_CODES: ReadonlySet<number> = new Set([0, 130, 143]);
 
 // Check conclusions that escalate the workspace tone to attention. Mirrors
-// `prToneFor` at apps/web/src/workspace-card.tsx:443-459 so a failing PR
-// surfaces the same red dot in the navigator, stage tab strip, and card.
+// `prToneFor` in apps/web/src/workspace-card.tsx so a failing PR surfaces the
+// same red dot in the navigator, stage tab strip, and card.
 const FAILING_CHECK_CONCLUSIONS: ReadonlySet<string> = new Set([
   "failure",
   "cancelled",
@@ -56,10 +52,11 @@ export function deriveAgentLifecycleTone(
   switch (session.status) {
     case "starting":
     case "running":
-    case "idle":
       return "running";
+    case "idle":
+      return sessionNeedsAttention(session) ? "attention" : "done";
     case "rate_limited":
-      return "rate-limited";
+    case "usage_limited":
     case "waiting_for_input":
       return "attention";
     case "stopped": {
@@ -83,14 +80,18 @@ function hasFailingCheck(checks: readonly CheckSummary[]): boolean {
   return false;
 }
 
+function prNeedsAttention(pr: PullRequestSummary): boolean {
+  return pr.mergeable === "conflicting" || pr.mergeStateStatus === "DIRTY" || hasFailingCheck(pr.checks);
+}
+
 // Aggregate workspace tone. Order:
 //   1. Filter out shell (plain-terminal) sessions.
 //   2. No agents remaining → never-started.
 //   3. Take the priority max of per-agent tones under
-//      attention > rate-limited > running > done.
-//   4. Fold PR/CI: any failing check escalates to attention, even when the
-//      agent aggregate is `running`. Rationale: a failing CI is the more
-//      actionable operator signal even if a fix is being authored right now.
+//      attention > running > done.
+//   4. Fold PR/CI: any failing check or conflict escalates to attention, even
+//      when the agent aggregate is `running`. Rationale: a failing CI/conflict
+//      is the more actionable operator signal even if a fix is being authored.
 //      Locked by the matching test in this file — do not weaken without
 //      updating the spec and that test together.
 export function deriveWorkspaceLifecycleTone(input: {
@@ -106,10 +107,9 @@ export function deriveWorkspaceLifecycleTone(input: {
       aggregate = "attention";
       break;
     }
-    if (tone === "rate-limited") aggregate = "rate-limited";
-    else if (tone === "running" && aggregate !== "rate-limited") aggregate = "running";
+    if (tone === "running") aggregate = "running";
   }
-  if (input.pullRequest && hasFailingCheck(input.pullRequest.checks)) return "attention";
+  if (input.pullRequest && prNeedsAttention(input.pullRequest)) return "attention";
   return aggregate;
 }
 
@@ -123,15 +123,34 @@ const ATTENTION_UNKNOWN_REASONS: ReadonlySet<string> = new Set([
   "migrated_from_orphaned",
 ]);
 
+// `status: "idle"` reasons that indicate the agent crashed or exited
+// without operator intervention — surfaces a red attention pulse so the
+// "your agent died" signal isn't lost (per shell-first-panes spec B.3 #8).
+// Pairs with the 30-min auto-clear in the status-monitor.
+const ATTENTION_IDLE_REASONS: ReadonlySet<string> = new Set(["idle_after_unexpected_exit"]);
+
 // True iff the session needs the operator's attention — either it failed,
 // or it's unknown because we have positive evidence the agent went away
-// (tmux gone, sentinel mismatched). Used by readiness derivations and the
+// (tmux gone, sentinel mismatched), or it crashed mid-session
+// (idle_after_unexpected_exit). Used by readiness derivations and the
 // workspace-card status dot. Single source of truth for the predicate.
 export function sessionNeedsAttention(session: Pick<AgentSession, "status" | "statusReason">): boolean {
   if (session.status === "failed") return true;
-  if (session.status !== "unknown") return false;
+  if (
+    session.status === "waiting_for_input" ||
+    session.status === "rate_limited" ||
+    session.status === "usage_limited"
+  ) {
+    return true;
+  }
   const reason = session.statusReason;
-  return reason !== null && reason !== undefined && ATTENTION_UNKNOWN_REASONS.has(reason);
+  if (session.status === "unknown") {
+    return reason !== null && reason !== undefined && ATTENTION_UNKNOWN_REASONS.has(reason);
+  }
+  if (session.status === "idle") {
+    return reason !== null && reason !== undefined && ATTENTION_IDLE_REASONS.has(reason);
+  }
+  return false;
 }
 
 export function createId(prefix: string) {
@@ -197,3 +216,12 @@ export function summarizeWorkspaceState(input: {
   ].filter((reason): reason is string => Boolean(reason));
   return { suggestedSection, reasons };
 }
+
+export { FUNNY_ADJECTIVES, FUNNY_ANIMALS, generateFunnyName } from "./funny-name.js";
+export {
+  type FuzzyBlockMatch,
+  type FuzzyMatchIndex,
+  SEARCH_LIMITS,
+  buildFuzzyIndex,
+  fuzzySearchBlocks,
+} from "./scratchpad-search.js";

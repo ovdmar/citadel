@@ -6,12 +6,16 @@ import type { HookDiagnostic, HookOutput, Operation, Repo, Workspace } from "@ci
 import type { SqliteStore } from "@citadel/db";
 import { hookDiagnostic } from "@citadel/hooks";
 import {
-  isAgentLive,
   killTmuxSession,
+  panePidProcess,
   stopBackgroundSessionPipe,
   tmuxPaneDead,
   tmuxSessionExists,
 } from "@citadel/terminal";
+
+// Foreground commands that mean "pane is at a shell prompt, agent not
+// running". Mirrors the set used in agent-messages.ts and status-monitor.ts.
+const SHELL_BINARIES = new Set(["bash", "sh", "zsh", "fish", "dash"]);
 
 export function asObject(payload: unknown) {
   return typeof payload === "object" && payload !== null ? payload : {};
@@ -200,6 +204,84 @@ export function workspaceHasUnpushedCommits(workspacePath: string) {
   }
 }
 
+// Cap output payload sizes so dirty summaries don't unbounded grow in
+// pathological cases (e.g. a worktree with thousands of untracked files).
+const DIRTY_SUMMARY_FILE_CAP = 50;
+const DIRTY_SUMMARY_COMMIT_CAP = 20;
+
+export type WorkspaceDirtySummary = {
+  files: Array<{ status: string; path: string }>;
+  unpushedCommits: Array<{ sha: string; subject: string }>;
+};
+
+// Companion to workspaceIsDirty: returns the actual change summary so the
+// cockpit can show which files / commits are blocking the drop. We re-run
+// the underlying git invocations (status + log) rather than threading the
+// raw output through workspaceIsDirty so this helper can be called
+// independently from any code path that needs to surface the detail.
+export function workspaceDirtySummary(workspacePath: string): WorkspaceDirtySummary {
+  if (!fs.existsSync(workspacePath)) return { files: [], unpushedCommits: [] };
+
+  const files: WorkspaceDirtySummary["files"] = [];
+  try {
+    const statusOutput = execFileSync("git", ["status", "--porcelain=v1"], {
+      cwd: workspacePath,
+      encoding: "utf8",
+      maxBuffer: 512 * 1024,
+    });
+    for (const line of statusOutput.split("\n")) {
+      if (!line) continue;
+      // Porcelain v1 format: 2-char status code, single space, then path.
+      // Renames are `R  src -> dst`; we keep the right-hand side for display.
+      const status = line.slice(0, 2);
+      const rest = line.slice(3);
+      const file = rest.includes(" -> ") ? (rest.split(" -> ")[1] ?? rest) : rest;
+      files.push({ status, path: file });
+      if (files.length >= DIRTY_SUMMARY_FILE_CAP) break;
+    }
+  } catch {
+    // Not a git repo or git unavailable — return empty rather than throwing,
+    // so callers can render a defensive fallback message.
+  }
+
+  const unpushedCommits: WorkspaceDirtySummary["unpushedCommits"] = [];
+  try {
+    // Try the upstream-aware path first. If `@{u}` resolves, list commits
+    // between upstream and HEAD; otherwise fall through to the rev-list
+    // fallback that excludes anything reachable from a remote.
+    let logOutput = "";
+    try {
+      execFileSync("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], {
+        cwd: workspacePath,
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+      logOutput = execFileSync(
+        "git",
+        ["log", "--pretty=format:%H%x00%s", `--max-count=${DIRTY_SUMMARY_COMMIT_CAP}`, "@{u}..HEAD"],
+        { cwd: workspacePath, encoding: "utf8", maxBuffer: 512 * 1024 },
+      );
+    } catch {
+      logOutput = execFileSync(
+        "git",
+        ["log", "--pretty=format:%H%x00%s", `--max-count=${DIRTY_SUMMARY_COMMIT_CAP}`, "HEAD", "--not", "--remotes"],
+        { cwd: workspacePath, encoding: "utf8", maxBuffer: 512 * 1024 },
+      );
+    }
+    for (const line of logOutput.split("\n")) {
+      if (!line) continue;
+      const [sha, ...subjectParts] = line.split(" ");
+      if (!sha) continue;
+      unpushedCommits.push({ sha, subject: subjectParts.join(" ") });
+      if (unpushedCommits.length >= DIRTY_SUMMARY_COMMIT_CAP) break;
+    }
+  } catch {
+    // Same as above — return whatever we've collected so far.
+  }
+
+  return { files, unpushedCommits };
+}
+
 export function withActionHookIds(output: HookOutput, hookId: string): HookOutput {
   return {
     ...output,
@@ -308,18 +390,43 @@ export function reconcileStore(
       sessionCount += 1;
       continue;
     }
-    // Pane is still alive but the agent process inside the wrapper script has
-    // exited (the wrapper drops the user into a fallback shell). Flip status
-    // to "stopped" so the cockpit accurately reflects that the agent is gone,
-    // while leaving the tmux session intact for the user to keep working in.
-    if (!isAgentLive(session.tmuxSessionName)) {
-      store.updateSessionStatus(session.id, {
-        status: "stopped",
-        statusReason: "exit_code_0",
-        lastStatusAt: nowIso,
-        endedAt: nowIso,
-      });
-      sessionCount += 1;
+    // Shell-first lifecycle: the pane PID is `bash -l`; the agent runs as a
+    // child. To detect "agent stopped, shell still here", inspect the
+    // foreground process command via tmux. If it's a shell binary, the agent
+    // isn't running; mark `idle` (NOT `stopped` — the user can restart the
+    // agent in-place via the cockpit Restart button). Critically, this path
+    // must NOT mass-flip every session to `stopped` when tmux died and the
+    // wrapper's .exit files were written — the wrapper is gone, the .exit
+    // files don't get written, and the status-monitor's tmux_missing branch
+    // above already handles tmux being unreachable.
+    //
+    // For background sessions and the legacy raw-spawn path, the pane PID is
+    // the command itself; absence of a shell foreground means the command
+    // is still running → leave the row alone.
+    const pane = panePidProcess(session.tmuxSessionName);
+    if (pane === null) {
+      // tmux missing → handled by the workspace-membership branch above.
+      // We re-checked here just to be paranoid; status-monitor's next tick
+      // will mark it unknown if the workspace is still around.
+      continue;
+    }
+    if (SHELL_BINARIES.has(pane.command)) {
+      // Foreground is a shell binary. For the `shell` runtime, this is
+      // normal ("Plain Terminal" — bash IS the runtime) — leave status alone.
+      // For agent runtimes, the agent has exited; reflect as idle (NOT
+      // stopped) so the cockpit Restart affordance still applies.
+      if (session.runtimeId === "shell") continue;
+      // Only update if the cached row says the agent is still active —
+      // avoids churning rows that the status-monitor tick already labeled.
+      if (session.status === "running" || session.status === "starting") {
+        store.updateSessionStatus(session.id, {
+          status: "idle",
+          statusReason: null,
+          statusReasonAt: null,
+          lastStatusAt: nowIso,
+        });
+        sessionCount += 1;
+      }
     }
   }
   for (const workspace of store.listWorkspaces()) {

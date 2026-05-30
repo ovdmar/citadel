@@ -4,6 +4,13 @@ import { useMutation } from "@tanstack/react-query";
 import { ExternalLink, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
+import {
+  applySessionOrder,
+  loadSessionOrder,
+  pruneSessionOrder,
+  saveSessionOrder,
+  spliceSessionOrder,
+} from "./stage-session-order.js";
 import { TerminalPane, getTerminalHandle, subscribeTerminalHandle } from "./terminal-pane.js";
 import { lifecycleToneClass } from "./workspace-card.js";
 
@@ -17,6 +24,67 @@ type StageTab = {
 // the same number so the UI never lets the user create a session that
 // would inevitably fail to bind a terminal port.
 const WORKSPACE_AGENT_CAP = 20;
+const SESSION_REORDER_MIME = "application/x-citadel-agent-session-reorder";
+export const TERMINAL_PANE_RETAIN_LIMIT = 5;
+
+function compareStageSessions(a: AgentSession, b: AgentSession) {
+  const aKey = a.tabId ?? a.id;
+  const bKey = b.tabId ?? b.id;
+  const cmp = aKey.localeCompare(bKey);
+  return cmp !== 0 ? cmp : a.createdAt.localeCompare(b.createdAt);
+}
+
+export function stableVisitedSessions(allSessions: AgentSession[], visitedIds: Set<string>): AgentSession[] {
+  const byId = new Map(allSessions.map((session) => [session.id, session]));
+  const result: AgentSession[] = [];
+  for (const id of visitedIds) {
+    const session = byId.get(id);
+    if (session) result.push(session);
+  }
+  return result;
+}
+
+export function retainRecentTerminalIds(
+  visitedIds: Set<string>,
+  activeId: string | null | undefined,
+  liveIds: Set<string>,
+  limit = TERMINAL_PANE_RETAIN_LIMIT,
+): Set<string> {
+  const safeLimit = Math.max(1, Math.trunc(limit));
+  const ordered: string[] = [];
+  for (const id of visitedIds) {
+    if (!liveIds.has(id) || id === activeId) continue;
+    ordered.push(id);
+  }
+  if (activeId && liveIds.has(activeId)) ordered.push(activeId);
+  return new Set(ordered.slice(-safeLimit));
+}
+
+export function stableWorkspaceSessionIdsKey(sessions: AgentSession[]): string {
+  return [...sessions]
+    .sort(compareStageSessions)
+    .map((session) => session.id)
+    .join("\0");
+}
+
+function sameOrderedIds(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false;
+  const aIds = [...a];
+  const bIds = [...b];
+  for (let i = 0; i < aIds.length; i += 1) {
+    if (aIds[i] !== bIds[i]) return false;
+  }
+  return true;
+}
+
+function releaseTerminalViewer(sessionId: string): void {
+  void fetch(`/api/agent-sessions/${encodeURIComponent(sessionId)}/terminal`, {
+    method: "DELETE",
+    keepalive: true,
+  }).catch(() => {
+    // Best-effort: eviction should never block switching tabs.
+  });
+}
 
 export function Stage(props: {
   workspace: Workspace;
@@ -26,8 +94,24 @@ export function Stage(props: {
   activeSessionId: string | undefined;
   onActiveSession: (id: string) => void;
 }) {
-  const sortedSessions = [...props.sessions].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // Sort by tabId (time-encoded by createId on the daemon side), with createdAt
+  // as a stable tie-breaker for legacy rows whose tab_id pre-dates migration 11.
+  // The point of tabId: when a session is restored via `claude --resume <uuid>`
+  // the new row inherits the source row's tabId, so the restored tab appears
+  // in the same slot the original lived in — sorting by createdAt instead would
+  // jump the restored session to the end of the strip.
+  const defaultSortedSessions = [...props.sessions].sort(compareStageSessions);
+  const [sessionOrder, setSessionOrder] = useState<Record<string, string[]>>(() => loadSessionOrder());
+  useEffect(() => saveSessionOrder(sessionOrder), [sessionOrder]);
+  useEffect(() => {
+    const live = new Set(
+      props.allSessions?.map((session) => session.id) ?? props.sessions.map((session) => session.id),
+    );
+    setSessionOrder((prev) => pruneSessionOrder(prev, live));
+  }, [props.allSessions, props.sessions]);
+  const sortedSessions = applySessionOrder(defaultSortedSessions, sessionOrder[props.workspace.id]);
   const tabs: StageTab[] = sortedSessions.map((session) => ({ session, label: session.displayName }));
+  const visibleTabIds = tabs.map((tab) => tab.session.id);
   const allSessions = props.allSessions ?? props.sessions;
 
   // If the caller just selected a session that hasn't shown up in props.sessions
@@ -58,41 +142,49 @@ export function Stage(props: {
     }
   }, [activeSession, keepPending, props]);
 
-  // Keep TerminalPane instances alive across workspace/session switches once
-  // the user has actually opened them. The set grows when a session becomes
-  // active and shrinks when the underlying session goes away. Without this,
-  // every workspace switch unmounts the previously-visible iframe — ttyd
-  // tears down the WebSocket and re-handshakes on remount, which the user
-  // perceives as a grey flash on the main stage.
+  // Keep a bounded LRU of TerminalPane instances alive across workspace/session
+  // switches once the user has opened them. This preserves fast returns for the
+  // most recent terminals without letting hidden iframes keep every ttyd/tmux
+  // viewer attached forever.
   const [visitedIds, setVisitedIds] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     if (props.activeSessionId) initial.add(props.activeSessionId);
     return initial;
   });
+  const retainedIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!activeSession) return;
-    const id = activeSession.session.id;
+    const activeId = activeSession?.session.id ?? null;
     setVisitedIds((prev) => {
-      if (prev.has(id)) return prev;
-      const next = new Set(prev);
-      next.add(id);
-      return next;
-    });
-  }, [activeSession]);
-  useEffect(() => {
-    setVisitedIds((prev) => {
-      if (prev.size === 0) return prev;
       const live = new Set(allSessions.map((session) => session.id));
-      const next = new Set<string>();
-      for (const id of prev) if (live.has(id)) next.add(id);
-      return next.size === prev.size ? prev : next;
+      const next = retainRecentTerminalIds(prev, activeId, live);
+      return sameOrderedIds(prev, next) ? prev : next;
     });
-  }, [allSessions]);
-  const visitedPanes = allSessions.filter((session) => visitedIds.has(session.id));
+  }, [activeSession?.session.id, allSessions]);
+  useEffect(() => {
+    const previous = retainedIdsRef.current;
+    retainedIdsRef.current = visitedIds;
+    for (const id of previous) {
+      if (!visitedIds.has(id)) releaseTerminalViewer(id);
+    }
+  }, [visitedIds]);
+  const visitedPanes = stableVisitedSessions(allSessions, visitedIds);
+  const workspaceSessionIdsKey = stableWorkspaceSessionIdsKey(props.sessions);
+
+  useEffect(() => {
+    if (!workspaceSessionIdsKey) return;
+    const sessionIds = workspaceSessionIdsKey.split("\0").filter(Boolean);
+    const timer = window.setTimeout(() => {
+      for (const sessionId of sessionIds) {
+        getTerminalHandle(sessionId)?.recoverIfDisconnected();
+      }
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [workspaceSessionIdsKey]);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  const [tabDropIndicator, setTabDropIndicator] = useState<{ id: string; side: "before" | "after" } | null>(null);
   const addMenuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -142,10 +234,18 @@ export function Stage(props: {
 
   const startError = startSession.error instanceof Error ? startSession.error.message : null;
   const atSessionCap = props.sessions.length >= WORKSPACE_AGENT_CAP;
-  const addDisabled = startSession.isPending || atSessionCap;
+  // Per spec B.2 §Center Stage Sessions #10: starting a session needs a
+  // ready worktree, so the "+" button is gated off while the workspace is
+  // still being provisioned. AC3 (async create) will surface this state
+  // visibly on the card; today the lifecycle is briefly "creating" only
+  // during the synchronous setup window.
+  const lifecycleCreating = props.workspace.lifecycle === "creating";
+  const addDisabled = startSession.isPending || atSessionCap || lifecycleCreating;
   const addTitle = atSessionCap
     ? `Workspace is at the ${WORKSPACE_AGENT_CAP}-session cap. Close a session to start another.`
-    : "Add session";
+    : lifecycleCreating
+      ? "Workspace is still being set up."
+      : "Add session";
   return (
     <>
       <div className="stage-tabbar">
@@ -153,8 +253,48 @@ export function Stage(props: {
           {tabs.map((tab, index) => {
             const isActive = tab.session.id === activeSession?.session.id;
             const lifecycleTone = deriveAgentLifecycleTone(tab.session);
+            const dropSide = tabDropIndicator?.id === tab.session.id ? tabDropIndicator.side : null;
             return (
-              <div key={tab.session.id} className={`stage-tab ${isActive ? "active" : ""}`}>
+              <div
+                key={tab.session.id}
+                className={`stage-tab ${isActive ? "active" : ""} ${
+                  dropSide === "before" ? "is-drop-before" : dropSide === "after" ? "is-drop-after" : ""
+                }`}
+                draggable={editingId !== tab.session.id}
+                onDragStart={(event) => {
+                  event.dataTransfer.setData(SESSION_REORDER_MIME, tab.session.id);
+                  event.dataTransfer.effectAllowed = "move";
+                }}
+                onDragOver={(event) => {
+                  if (!event.dataTransfer.types.includes(SESSION_REORDER_MIME)) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const midpoint = rect.left + rect.width / 2;
+                  setTabDropIndicator({ id: tab.session.id, side: event.clientX < midpoint ? "before" : "after" });
+                }}
+                onDragLeave={() => setTabDropIndicator(null)}
+                onDrop={(event) => {
+                  if (!event.dataTransfer.types.includes(SESSION_REORDER_MIME)) return;
+                  event.preventDefault();
+                  const draggedId = event.dataTransfer.getData(SESSION_REORDER_MIME);
+                  if (!draggedId || draggedId === tab.session.id) {
+                    setTabDropIndicator(null);
+                    return;
+                  }
+                  const targetIndex = visibleTabIds.indexOf(tab.session.id);
+                  if (targetIndex === -1) {
+                    setTabDropIndicator(null);
+                    return;
+                  }
+                  const insertIndex = tabDropIndicator?.side === "after" ? targetIndex + 1 : targetIndex;
+                  setSessionOrder((prev) => ({
+                    ...prev,
+                    [props.workspace.id]: spliceSessionOrder(visibleTabIds, draggedId, insertIndex),
+                  }));
+                  setTabDropIndicator(null);
+                }}
+              >
                 <button
                   type="button"
                   onClick={() => props.onActiveSession(tab.session.id)}
@@ -234,6 +374,16 @@ export function Stage(props: {
                     aria-label="Stop session"
                     onClick={(event) => {
                       event.stopPropagation();
+                      // Pre-pick the next active tab BEFORE mutating so the
+                      // 4s `keepPending` grace never opens a blank window on
+                      // close. Prefer the LEFT sibling; fall back to the
+                      // right sibling. If this is the only tab, leave the
+                      // active pointer alone (Stage falls back to "no
+                      // session yet" empty state).
+                      if (tab.session.id === activeSession?.session.id && tabs.length > 1) {
+                        const next = tabs[index - 1] ?? tabs[index + 1];
+                        if (next) props.onActiveSession(next.session.id);
+                      }
                       stopSession.mutate(tab.session.id);
                     }}
                     title="Stop session"

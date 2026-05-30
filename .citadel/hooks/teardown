@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# Citadel teardown hook for Citadel worktrees.
+#
+# Stops artifacts created by .citadel/hooks/deploy / make deploy before
+# Citadel removes the worktree:
+#   - the detached daemon+vite process group recorded in .citadel/logs/daemon.pid
+#   - the per-worktree tmux server named citadel-w-<cksum(abs worktree path)>
+
+set -euo pipefail
+
+payload="$(cat || true)"
+
+json_field() {
+  local expr="$1"
+  if [[ -n "$payload" ]] && command -v jq >/dev/null 2>&1; then
+    printf '%s' "$payload" | jq -r "$expr // empty" 2>/dev/null || true
+  fi
+}
+
+WORKTREE="$(json_field '.workspace.path')"
+if [[ -z "$WORKTREE" ]]; then
+  WORKTREE="${CITADEL_WORKSPACE_PATH:-$(pwd)}"
+fi
+
+log() {
+  echo "$*" >&2
+}
+
+REPO_ROOT="$(json_field '.repo.rootPath')"
+
+if [[ -n "$REPO_ROOT" && "$WORKTREE" == "$REPO_ROOT" ]]; then
+  log "Skipping teardown for repo root workspace: $WORKTREE"
+  exit 0
+fi
+
+if [[ "$WORKTREE" != /* ]]; then
+  echo "Refusing to teardown non-absolute workspace path: $WORKTREE" >&2
+  exit 2
+fi
+
+stop_recorded_dev_stack() {
+  local pid_file="$WORKTREE/.citadel/logs/daemon.pid"
+  if [[ ! -r "$pid_file" ]]; then
+    log "No recorded dev stack pid file at $pid_file"
+    return
+  fi
+
+  local pgid
+  pgid="$(tr -cd '0-9' < "$pid_file")"
+  if [[ -z "$pgid" ]]; then
+    log "Ignoring empty dev stack pid file at $pid_file"
+    rm -f "$pid_file" 2>/dev/null || true
+    return
+  fi
+
+  if kill -0 -- "-$pgid" 2>/dev/null && process_group_matches_worktree "$pgid"; then
+    log "Stopping recorded dev stack pgid=$pgid"
+    kill -TERM -- "-$pgid" 2>/dev/null || true
+    sleep 1
+    kill -KILL -- "-$pgid" 2>/dev/null || true
+  elif kill -0 -- "-$pgid" 2>/dev/null; then
+    log "Recorded dev stack pgid=$pgid exists but does not reference $WORKTREE; leaving it alone"
+  else
+    log "Recorded dev stack pgid=$pgid is not running"
+  fi
+  rm -f "$pid_file" 2>/dev/null || true
+}
+
+process_group_matches_worktree() {
+  local target_pgid="$1"
+  local proc stat_pgid cwd cmdline
+  for proc in /proc/[0-9]*; do
+    [[ -r "$proc/stat" ]] || continue
+    stat_pgid="$(awk '{print $5}' "$proc/stat" 2>/dev/null || true)"
+    [[ "$stat_pgid" == "$target_pgid" ]] || continue
+
+    cwd="$(readlink "$proc/cwd" 2>/dev/null || true)"
+    if [[ "$cwd" == "$WORKTREE"* ]]; then
+      return 0
+    fi
+
+    cmdline="$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)"
+    if [[ "$cmdline" == *"$WORKTREE"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+kill_worktree_tmux_socket() {
+  if ! command -v tmux >/dev/null 2>&1; then
+    log "tmux not found; skipping worktree tmux cleanup"
+    return
+  fi
+
+  local sum socket
+  sum="$(printf '%s' "$WORKTREE" | cksum | awk '{print $1}')"
+  socket="citadel-w-$sum"
+
+  if tmux -L "$socket" list-sessions >/dev/null 2>&1; then
+    log "Killing worktree tmux server socket=$socket"
+    tmux -L "$socket" kill-server
+  else
+    log "No worktree tmux server found for socket=$socket"
+  fi
+}
+
+stop_recorded_dev_stack
+kill_worktree_tmux_socket

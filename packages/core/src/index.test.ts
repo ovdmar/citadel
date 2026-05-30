@@ -1,5 +1,43 @@
 import type { AgentSession, PullRequestSummary } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
+import { sessionNeedsAttention } from "./index.js";
+
+describe("sessionNeedsAttention (shell-first attention predicate)", () => {
+  it("returns true for status='idle' with statusReason='idle_after_unexpected_exit' (crashed agent signal)", () => {
+    expect(sessionNeedsAttention({ status: "idle", statusReason: "idle_after_unexpected_exit" })).toBe(true);
+  });
+
+  it("returns false for status='idle' with statusReason=null (user-initiated Ctrl+C / Restart cleared the label)", () => {
+    expect(sessionNeedsAttention({ status: "idle", statusReason: null })).toBe(false);
+  });
+
+  it("preserves the existing unknown-with-tmux_missing path (still attention-worthy)", () => {
+    expect(sessionNeedsAttention({ status: "unknown", statusReason: "tmux_missing" })).toBe(true);
+    expect(sessionNeedsAttention({ status: "unknown", statusReason: "sentinel_missing_tmux_alive" })).toBe(true);
+    expect(sessionNeedsAttention({ status: "unknown", statusReason: "migrated_from_orphaned" })).toBe(true);
+  });
+
+  it("preserves the existing daemon_restart_indeterminate path (NOT attention-worthy)", () => {
+    expect(sessionNeedsAttention({ status: "unknown", statusReason: "daemon_restart_indeterminate" })).toBe(false);
+  });
+
+  it("preserves the existing status='failed' (always attention)", () => {
+    expect(sessionNeedsAttention({ status: "failed", statusReason: null })).toBe(true);
+  });
+
+  it("returns false for normal running status", () => {
+    for (const status of ["running"] as const) {
+      expect(sessionNeedsAttention({ status, statusReason: null })).toBe(false);
+    }
+  });
+
+  it("returns true for blocked statuses", () => {
+    for (const status of ["waiting_for_input", "rate_limited", "usage_limited"] as const) {
+      expect(sessionNeedsAttention({ status, statusReason: null })).toBe(true);
+    }
+  });
+});
+
 import {
   assertUniqueRepoPath,
   assertUniqueWorkspaceName,
@@ -40,6 +78,13 @@ function makePr(overrides: Partial<PullRequestSummary> = {}): PullRequestSummary
     additions: null,
     deletions: null,
     reviewers: [],
+    commits: [],
+    headRefName: null,
+    parentPr: null,
+    mergeable: "unknown",
+    allowedMergeStrategies: [],
+    mergeStateStatus: null,
+    headSha: null,
     ...overrides,
   };
 }
@@ -201,15 +246,22 @@ describe("deriveAgentLifecycleTone", () => {
   it("maps active lifecycle states to running", () => {
     expect(deriveAgentLifecycleTone(makeAgent({ status: "starting" }))).toBe("running");
     expect(deriveAgentLifecycleTone(makeAgent({ status: "running" }))).toBe("running");
-    expect(deriveAgentLifecycleTone(makeAgent({ status: "idle" }))).toBe("running");
+  });
+
+  it("maps plain idle to done and crashed idle to attention", () => {
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "idle" }))).toBe("done");
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "idle", statusReason: "idle_after_unexpected_exit" }))).toBe(
+      "attention",
+    );
   });
 
   it("maps waiting_for_input to attention", () => {
     expect(deriveAgentLifecycleTone(makeAgent({ status: "waiting_for_input" }))).toBe("attention");
   });
 
-  it("maps rate_limited to rate-limited (blue, not red)", () => {
-    expect(deriveAgentLifecycleTone(makeAgent({ status: "rate_limited" }))).toBe("rate-limited");
+  it("maps rate_limited and usage_limited to attention", () => {
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "rate_limited" }))).toBe("attention");
+    expect(deriveAgentLifecycleTone(makeAgent({ status: "usage_limited" }))).toBe("attention");
   });
 
   it("treats clean and operator-initiated stops as done", () => {
@@ -247,6 +299,8 @@ describe("deriveAgentLifecycleTone", () => {
       "starting",
       "running",
       "waiting_for_input",
+      "rate_limited",
+      "usage_limited",
       "idle",
       "stopped",
       "failed",
@@ -280,15 +334,15 @@ describe("deriveWorkspaceLifecycleTone", () => {
     ).toBe("running");
   });
 
-  it("rate-limited beats running but loses to attention", () => {
+  it("rate-limited and usage-limited map to attention", () => {
     expect(
       deriveWorkspaceLifecycleTone({
         sessions: [makeAgent({ id: "a", status: "running" }), makeAgent({ id: "b", status: "rate_limited" })],
       }),
-    ).toBe("rate-limited");
+    ).toBe("attention");
     expect(
       deriveWorkspaceLifecycleTone({
-        sessions: [makeAgent({ id: "a", status: "rate_limited" }), makeAgent({ id: "b", status: "waiting_for_input" })],
+        sessions: [makeAgent({ id: "a", status: "usage_limited" }), makeAgent({ id: "b", status: "running" })],
       }),
     ).toBe("attention");
   });
@@ -369,6 +423,21 @@ describe("deriveWorkspaceLifecycleTone", () => {
         }),
       }),
     ).toBe("done");
+  });
+
+  it("PR conflict escalates to attention", () => {
+    expect(
+      deriveWorkspaceLifecycleTone({
+        sessions: [makeAgent({ status: "stopped", exitCode: 0 })],
+        pullRequest: makePr({ mergeable: "conflicting" }),
+      }),
+    ).toBe("attention");
+    expect(
+      deriveWorkspaceLifecycleTone({
+        sessions: [makeAgent({ status: "stopped", exitCode: 0 })],
+        pullRequest: makePr({ mergeStateStatus: "DIRTY" }),
+      }),
+    ).toBe("attention");
   });
 });
 

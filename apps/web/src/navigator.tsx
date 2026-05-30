@@ -1,12 +1,4 @@
-import type {
-  AgentSession,
-  Namespace,
-  Operation,
-  PullRequestSummary,
-  Repo,
-  Workspace,
-  WorkspaceCockpitSummary,
-} from "@citadel/contracts";
+import type { AgentSession, Namespace, Operation, PullRequestSummary, Repo, Workspace } from "@citadel/contracts";
 import { type LifecycleTone, deriveWorkspaceLifecycleTone } from "@citadel/core";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
@@ -21,7 +13,7 @@ import {
   Plus,
   Settings2,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { AddRepoModal, CreateWorkspaceModal, GroupByMenu, type GroupKey } from "./modals.js";
 import {
@@ -31,6 +23,8 @@ import {
   buildGroupTree,
   collectGroupPaths,
 } from "./navigator-groups.js";
+import { applyLocalOrder, loadOrder, pruneOrder, saveOrder, spliceIntoOrder } from "./navigator-order.js";
+import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { WorkspaceCard, lifecycleToneClass } from "./workspace-card.js";
 
 const GROUP_STORAGE = "citadel.navigator-group";
@@ -40,28 +34,22 @@ function runningCount(sessions: AgentSession[]): number {
   return sessions.filter((session) => session.status === "running").length;
 }
 
-// Roll up per-workspace lifecycle tones into the single navigator footer dot.
-// Same priority as the workspace card aggregator: attention > running > done
-// > never-started. Each workspace folds its own PR/CI signal via
-// deriveWorkspaceLifecycleTone so CI-red on any workspace surfaces here too.
 export function aggregateNavigatorTone(
   workspaces: Workspace[],
   sessions: AgentSession[],
-  workspacePullRequests: Map<string, PullRequestSummary | null> | undefined,
+  prByWorkspaceId?: Map<string, PullRequestSummary | null>,
 ): LifecycleTone {
-  let result: LifecycleTone = "never-started";
+  let aggregate: LifecycleTone = "never-started";
   for (const workspace of workspaces) {
-    const workspaceSessions = sessions.filter((session) => session.workspaceId === workspace.id);
     const tone = deriveWorkspaceLifecycleTone({
-      sessions: workspaceSessions,
-      pullRequest: workspacePullRequests?.get(workspace.id) ?? null,
+      sessions: sessions.filter((session) => session.workspaceId === workspace.id),
+      pullRequest: prByWorkspaceId?.get(workspace.id) ?? null,
     });
     if (tone === "attention") return "attention";
-    if (tone === "rate-limited" && result !== "rate-limited") result = "rate-limited";
-    else if (tone === "running" && result !== "rate-limited" && result !== "running") result = "running";
-    else if (tone === "done" && result === "never-started") result = "done";
+    if (tone === "running") aggregate = "running";
+    else if (tone === "done" && aggregate === "never-started") aggregate = "done";
   }
-  return result;
+  return aggregate;
 }
 
 export function Navigator(props: {
@@ -69,23 +57,17 @@ export function Navigator(props: {
   workspaces: Workspace[];
   sessions: AgentSession[];
   operations: Operation[];
-  activeSummary: WorkspaceCockpitSummary | undefined;
+  prByWorkspaceId: Map<string, PullRequestSummary | null>;
   activeWorkspaceId: string;
   runtimes: import("@citadel/contracts").AgentRuntime[];
   namespaces: Namespace[];
-  // Per-workspace PR data so the navigator's "Running" lifecycle dot can
-  // fold PR/CI signals into the global aggregate (same rules as the
-  // workspace card dot — see specs/B.3 item 14). Optional: callers that
-  // don't yet have PR data can omit it; the aggregate then runs without
-  // the fold, which degrades to "agents only" but never produces a wrong
-  // signal.
-  workspacePullRequests?: Map<string, PullRequestSummary | null>;
   lastRepoId: string | undefined;
   createWorkspaceOpen: boolean;
   onOpenCreateWorkspace: () => void;
   onCloseCreateWorkspace: () => void;
   onCollapse: () => void;
   onPickWorkspace: (workspace: Workspace) => void;
+  onPickWorkspaceId: (workspaceId: string) => void;
 }) {
   const location = useLocation();
   const path = location.pathname;
@@ -136,7 +118,30 @@ export function Navigator(props: {
   }, []);
 
   const [showGroupBy, setShowGroupBy] = useState(false);
+  const groupByContainerRef = useRef<HTMLDivElement | null>(null);
   const [showAddRepo, setShowAddRepo] = useState(false);
+
+  // Per-group user-defined ordering, persisted in localStorage. Keyed by
+  // group path so switching grouping (repo ↔ status ↔ namespace ↔ none)
+  // selects a different order bucket and doesn't bleed across modes.
+  const [navigatorOrder, setNavigatorOrder] = useState<Record<string, string[]>>(() => loadOrder());
+  useEffect(() => saveOrder(navigatorOrder), [navigatorOrder]);
+  // Prune stale workspace ids on mount + whenever the workspace list
+  // changes, so dropped/removed workspaces don't linger in the order map.
+  useEffect(() => {
+    const liveIds = new Set(props.workspaces.map((w) => w.id));
+    setNavigatorOrder((prev) => pruneOrder(prev, liveIds));
+  }, [props.workspaces]);
+
+  const reorderWorkspace = useCallback(
+    (groupPath: string, visibleIds: readonly string[], draggedId: string, targetIndex: number) => {
+      setNavigatorOrder((prev) => ({
+        ...prev,
+        [groupPath]: spliceIntoOrder(visibleIds, draggedId, targetIndex),
+      }));
+    },
+    [],
+  );
 
   // Intentionally exclude props.activeSummary from buildGroupTree: status sections
   // are derived from /api/state only, so the active workspace doesn't drift
@@ -154,6 +159,8 @@ export function Navigator(props: {
     [props.workspaces, props.repos, props.sessions, props.operations, treeGrouping, props.namespaces],
   );
   const historyCount = props.operations.length;
+  const navigatorTone = aggregateNavigatorTone(props.workspaces, props.sessions, props.prByWorkspaceId);
+  const running = runningCount(props.sessions);
 
   // Prune collapsed entries whose group no longer exists, so localStorage doesn't accumulate
   // orphans across repo/workspace renames or deletions. Skip when grouping is off or the tree
@@ -204,24 +211,39 @@ export function Navigator(props: {
   );
 
   const renderWorkspace = useCallback(
-    ({ workspace, sessions }: WorkspaceEntry) => (
+    ({ workspace, sessions }: WorkspaceEntry, groupPath: string, visibleIds: readonly string[]) => (
       <WorkspaceCard
         key={workspace.id}
         workspace={workspace}
         sessions={sessions}
-        pullRequest={
-          workspace.id === props.activeSummary?.workspaceId
-            ? (props.activeSummary.versionControl.pullRequest ?? null)
-            : null
+        operation={
+          props.operations
+            .filter((operation) => operation.workspaceId === workspace.id && operation.type === "workspace.create")
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null
         }
+        pullRequest={props.prByWorkspaceId.get(workspace.id) ?? null}
         namespace={workspace.namespaceId ? (namespacesById.get(workspace.namespaceId) ?? null) : null}
         namespaces={props.namespaces}
         active={workspace.id === props.activeWorkspaceId}
-        draggable={grouping === "namespace"}
+        dropTarget={grouping === "namespace" ? "namespace" : null}
+        reorder={{
+          groupPath,
+          visibleIds,
+          onReorder: (draggedId, targetIndex) => reorderWorkspace(groupPath, visibleIds, draggedId, targetIndex),
+        }}
         onSelect={() => props.onPickWorkspace(workspace)}
       />
     ),
-    [props.activeSummary, props.activeWorkspaceId, props.onPickWorkspace, props.namespaces, namespacesById, grouping],
+    [
+      props.prByWorkspaceId,
+      props.operations,
+      props.activeWorkspaceId,
+      props.onPickWorkspace,
+      props.namespaces,
+      namespacesById,
+      grouping,
+      reorderWorkspace,
+    ],
   );
 
   const flatEntries = useMemo<WorkspaceEntry[]>(
@@ -251,13 +273,7 @@ export function Navigator(props: {
               <PanelLeftClose size={14} />
             </button>
           </div>
-          <Link
-            to="/scratchpad"
-            className={path === "/scratchpad" ? "active" : ""}
-            title="Scratchpad — markdown notes orchestrator agents can read via MCP"
-          >
-            <NotebookPen size={13} /> Scratchpad
-          </Link>
+          <ScratchpadNavLink />
           <Link
             to="/scheduled-agents"
             className={path === "/scheduled-agents" ? "active" : ""}
@@ -274,7 +290,7 @@ export function Navigator(props: {
         <div className="nav-section">
           <strong>Workspaces</strong>
           <div className="nav-section-icons">
-            <div className="cit-gb">
+            <div className="cit-gb" ref={groupByContainerRef}>
               <button
                 type="button"
                 className={`cit-icon-btn cit-icon-btn--sm cit-gb-btn ${showGroupBy ? "is-open" : ""}`}
@@ -285,7 +301,12 @@ export function Navigator(props: {
                 <Settings2 size={12} />
               </button>
               {showGroupBy ? (
-                <GroupByMenu value={grouping} onChange={setGrouping} onClose={() => setShowGroupBy(false)} />
+                <GroupByMenu
+                  value={grouping}
+                  onChange={setGrouping}
+                  onClose={() => setShowGroupBy(false)}
+                  containerRef={groupByContainerRef}
+                />
               ) : null}
             </div>
             <button
@@ -307,23 +328,31 @@ export function Navigator(props: {
           </div>
         </div>
         <div className="nav-groups">
-          {grouping === "none" ? (
-            <div className="nav-group nav-group-flat">{flatEntries.map((entry) => renderWorkspace(entry))}</div>
-          ) : (
-            tree.map((node) => (
-              <GroupNodeView
-                key={node.id}
-                node={node}
-                depth={0}
-                collapsed={collapsed}
-                onToggle={toggleCollapsed}
-                renderWorkspace={renderWorkspace}
-                dropTargetPath={dropTargetPath}
-                onDropTargetChange={setDropTargetPath}
-                onDropOnNamespace={onDropOnNamespace}
-              />
-            ))
-          )}
+          {grouping === "none"
+            ? (() => {
+                const groupPath = "__flat";
+                const orderedFlat = applyLocalOrder(flatEntries, navigatorOrder[groupPath]);
+                const visibleIds = orderedFlat.map((entry) => entry.workspace.id);
+                return (
+                  <div className="nav-group nav-group-flat">
+                    {orderedFlat.map((entry) => renderWorkspace(entry, groupPath, visibleIds))}
+                  </div>
+                );
+              })()
+            : tree.map((node) => (
+                <GroupNodeView
+                  key={node.id}
+                  node={node}
+                  depth={0}
+                  collapsed={collapsed}
+                  onToggle={toggleCollapsed}
+                  renderWorkspace={renderWorkspace}
+                  navigatorOrder={navigatorOrder}
+                  dropTargetPath={dropTargetPath}
+                  onDropTargetChange={setDropTargetPath}
+                  onDropOnNamespace={onDropOnNamespace}
+                />
+              ))}
           {!props.workspaces.length ? (
             <div className="empty compact">
               {props.repos.length
@@ -340,13 +369,8 @@ export function Navigator(props: {
           <div className="nav-foot-stat">
             <div className="nav-foot-stat-label">Running</div>
             <div className="nav-foot-stat-val">
-              <span
-                className={`cit-pulse cit-pulse-sm ${lifecycleToneClass(
-                  aggregateNavigatorTone(props.workspaces, props.sessions, props.workspacePullRequests),
-                )}`}
-                aria-hidden
-              />
-              {runningCount(props.sessions)}
+              <span className={`cit-pulse cit-pulse-sm ${lifecycleToneClass(navigatorTone)}`} aria-hidden />
+              {running}
             </div>
           </div>
         </div>
@@ -363,6 +387,7 @@ export function Navigator(props: {
             props.onCloseCreateWorkspace();
             const created = props.workspaces.find((workspace) => workspace.id === workspaceId);
             if (created) props.onPickWorkspace(created);
+            else props.onPickWorkspaceId(workspaceId);
           }}
         />
       ) : null}
@@ -377,7 +402,10 @@ type GroupNodeViewProps = {
   depth: number;
   collapsed: Record<string, boolean>;
   onToggle: (path: string) => void;
-  renderWorkspace: (entry: WorkspaceEntry) => React.ReactNode;
+  renderWorkspace: (entry: WorkspaceEntry, groupPath: string, visibleIds: readonly string[]) => React.ReactNode;
+  // Per-group user-defined ordering map (keyed by node.path), consumed in
+  // the leaf branch via applyLocalOrder before rendering workspace cards.
+  navigatorOrder: Record<string, string[]>;
   // Namespace leaves accept workspace drops; non-namespace groupings simply
   // ignore these.
   dropTargetPath: string | null;
@@ -386,8 +414,17 @@ type GroupNodeViewProps = {
 };
 
 function GroupNodeView(props: GroupNodeViewProps) {
-  const { node, depth, collapsed, onToggle, renderWorkspace, dropTargetPath, onDropTargetChange, onDropOnNamespace } =
-    props;
+  const {
+    node,
+    depth,
+    collapsed,
+    onToggle,
+    renderWorkspace,
+    navigatorOrder,
+    dropTargetPath,
+    onDropTargetChange,
+    onDropOnNamespace,
+  } = props;
   const isCollapsed = collapsed[node.path] === true;
   // encodeURIComponent keeps DOM ids unique even when group labels contain spaces,
   // slashes, or other characters that would otherwise collapse to the same id.
@@ -437,18 +474,47 @@ function GroupNodeView(props: GroupNodeViewProps) {
                 collapsed={collapsed}
                 onToggle={onToggle}
                 renderWorkspace={renderWorkspace}
+                navigatorOrder={navigatorOrder}
                 dropTargetPath={dropTargetPath}
                 onDropTargetChange={onDropTargetChange}
                 onDropOnNamespace={onDropOnNamespace}
               />
             ))
           ) : node.workspaces.length ? (
-            node.workspaces.map((entry) => renderWorkspace(entry))
+            (() => {
+              // Apply the per-group user-defined order before rendering.
+              // The visibleIds list is recomputed here so card reorder
+              // callbacks have the current rendered sequence to splice into.
+              const ordered = applyLocalOrder(node.workspaces, navigatorOrder[node.path]);
+              const visibleIds = ordered.map((entry) => entry.workspace.id);
+              return ordered.map((entry) => renderWorkspace(entry, node.path, visibleIds));
+            })()
           ) : acceptsDrop ? (
             <div className="nav-group-empty">Drop a workspace here</div>
           ) : null}
         </div>
       )}
     </div>
+  );
+}
+
+function ScratchpadNavLink() {
+  const { open, toggle } = useScratchpadDrawer();
+  const isMac =
+    typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  const hint = isMac ? "Shift+Cmd+S" : "Shift+Ctrl+S";
+  return (
+    <button
+      type="button"
+      className={`nav-link-button${open ? " active" : ""}`}
+      onClick={toggle}
+      title={`Scratchpad — markdown notes orchestrator agents can read via MCP (${hint})`}
+      aria-pressed={open}
+    >
+      <NotebookPen size={13} /> Scratchpad
+      <kbd className="nav-kbd-hint" aria-hidden>
+        {hint}
+      </kbd>
+    </button>
   );
 }

@@ -57,6 +57,13 @@ function makePr(over: Partial<PullRequestSummary> = {}): PullRequestSummary {
     additions: null,
     deletions: null,
     reviewers: [],
+    commits: [],
+    headRefName: null,
+    parentPr: null,
+    mergeable: "unknown",
+    allowedMergeStrategies: [],
+    mergeStateStatus: null,
+    headSha: null,
     ...over,
   };
 }
@@ -135,6 +142,21 @@ describe("aggregateNavigatorTone", () => {
         [makeWorkspace({ id: "w1" }), makeWorkspace({ id: "w2" })],
         [
           makeAgent({ id: "a", workspaceId: "w1", status: "running" }),
+          makeAgent({ id: "b", workspaceId: "w2", status: "stopped", exitCode: 0 }),
+        ],
+        map,
+      ),
+    ).toBe("attention");
+  });
+
+  it("PR conflict on one workspace escalates the global tone to attention", () => {
+    const map = new Map<string, PullRequestSummary | null>();
+    map.set("w1", makePr({ mergeable: "conflicting" }));
+    expect(
+      aggregateNavigatorTone(
+        [makeWorkspace({ id: "w1" }), makeWorkspace({ id: "w2" })],
+        [
+          makeAgent({ id: "a", workspaceId: "w1", status: "stopped", exitCode: 0 }),
           makeAgent({ id: "b", workspaceId: "w2", status: "stopped", exitCode: 0 }),
         ],
         map,

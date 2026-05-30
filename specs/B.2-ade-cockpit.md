@@ -19,7 +19,7 @@
 [ ] 1. The cockpit shell is a three-column layout: navigator (left), agent stage (center), inspector (right).
 [ ] 2. Both side columns are independently resizable via drag handles between columns.
 [ ] 3. Both side columns are independently collapsible.
-[ ] 4. The left collapse control sits on the same row as the `Dashboard` link inside the navigator's primary nav. The right collapse control lives in the top-left corner of the inspector.
+[ ] 4. The left collapse control sits on the same row as the `Dashboard` link inside the navigator's primary nav. The right collapse control lives in the top-left corner of the inspector. Both controls use the same chevron-style affordance (Lucide `PanelLeftClose` / `PanelRightClose`) for visual symmetry — never an `X` glyph.
 [ ] 5. When a side column is collapsed, the column disappears entirely but its expand affordance remains visible so it can be reopened.
 [ ] 6. The center column always takes the remaining horizontal space.
 [ ] 7. The application shell never page-scrolls. Each column owns its own scroll context.
@@ -46,7 +46,9 @@
 [ ] 5. When a workspace is created with an associated default agent, the cockpit opens that agent automatically in a new session tab.
 [ ] 6. The selected session occupies the rest of the column height.
 [ ] 7. Terminal keyboard shortcuts must be passed through to the active terminal correctly.
-[~] 8. Each session tab carries a per-agent lifecycle status dot following the same four-tone `LifecycleTone` taxonomy described in `specs/B.3-agent-sessions-terminal.md` item 14 (never-started / running / done / attention). Per-agent uses `deriveAgentLifecycleTone` from `@citadel/core`. The dot is a flex sibling of the tab label, not nested inside any truncating container, so ripple animations are not clipped.
+[ ] 8. Selecting a workspace in the navigator focuses that workspace's currently-active session terminal iframe. Because ttyd runs on a different origin (a separate port), the iframe element receives focus but xterm keyboard capture still requires one click inside the terminal pane — this is a documented cross-origin limitation, not a silent failure. If the workspace has no active session, focusing the workspace is a no-op (no error).
+[ ] 9. Closing the active agent session tab immediately focuses the LEFT-sibling tab (falling back to the right sibling if none) — no blank-grace window. Closing the only remaining tab leaves the active-session pointer untouched.
+[ ] 10. The Stage's `+` add-session button is disabled while `workspace.lifecycle === "creating"` — starting a session requires a ready worktree.
 
 ## Inspector Tabs
 
@@ -106,10 +108,10 @@
 
 ## Scratchpad
 
-The cockpit's scratchpad view renders the per-workspace `scratchpad.md` (see B.7 for the storage format) as a stack of discrete, focusable blocks.
+The cockpit's scratchpad opens as a **right-anchored overlay drawer** rendered at the root `Shell` level so it is reachable from every route (`/`, `/settings`, `/history`, etc.) without replacing the underlying view. The drawer is always mounted; `hidden` toggles visibility, preserving local state across close/reopen and across route changes.
 
-[ ] 1. Blocks render as sanitized markdown when not focused (headings, lists, bold/italic, inline + fenced code, links). Raw HTML is sanitized (scripts and inline event handlers removed); `<img>` tags are stripped in v1 since block content can originate from external MCP agents.
-[ ] 2. Clicking a block enters inline edit mode with a `<textarea>` containing the raw markdown.
+[ ] 1. Blocks render as sanitized markdown when not focused (headings, lists, bold/italic, inline + fenced code, links). Raw HTML is sanitized (scripts and inline event handlers removed); `<img>` tags are stripped in v1 since block content can originate from external MCP agents. Bare angle-bracket text like `<user_id>` is preserved as visible text (not treated as raw HTML); markdown autolinks `<https://example.com>` and `<foo@bar.com>` continue to render as anchors.
+[ ] 2. Clicking a block enters inline edit mode with a `<textarea>` containing the raw markdown. The textarea uses `wrap="off"` so line numbers and visual lines stay 1:1; long lines force horizontal scroll inside the drawer.
 [ ] 3. Saving triggers: blur, Cmd/Ctrl-Enter (also exits edit mode), and ~1s debounce after the last keystroke. Esc cancels unsaved changes without a network call.
 [ ] 4. Editing a block to empty/whitespace deletes the block (empty blocks are never persisted).
 [ ] 5. A pinned composer at the bottom of the list is always visible. Cmd/Ctrl-Enter or blur-with-non-empty-content creates a new block at the end of the file. The list autoscrolls so the composer stays in view.
@@ -117,6 +119,33 @@ The cockpit's scratchpad view renders the per-workspace `scratchpad.md` (see B.7
 [ ] 7. The version history sidebar continues to show whole-file snapshots, including the `migrate-to-blocks` entry that runs on the first read after upgrade.
 [ ] 8. No drag-drop reorder, no typed blocks (code/todo/heading), no per-block diff in v1 — out of scope.
 
+### Scratchpad shortcuts
+
+[ ] 9. `Shift+Cmd+S` (Mac) / `Shift+Ctrl+S` (other) toggles the drawer open/close from any route. The shortcut is registered at the `Shell` level. Closing the drawer returns the user to the underlying view without a route change. The left-nav scratchpad link shows the binding as a `<kbd>` hint using plain text labels (no Mac-specific glyph chars).
+[ ] 10. `Cmd+S` / `Ctrl+S` while the drawer is open flushes the debounced auto-save immediately and shows an animated check-mark pulse on success (or a red pulse on failure). The silent debounced auto-save remains the fallback.
+[ ] 11. `/` (when no input/textarea/contenteditable is focused) opens the floating fuzzy searchbar inside the drawer. `Esc` precedence inside the drawer: clear/close searchbar → cancel block edit → close diff modal → close drawer.
+
+### Auto-scroll on open
+
+[ ] 12. The drawer auto-scrolls to the bottom (latest block) on the first open per session. On subsequent reopens, scroll position is preserved unless the user was at the bottom when they closed.
+
+### Line numbers
+
+[ ] 13. Each block has a per-block line-number gutter restarting at 1, counting `\n` boundaries within the block's text. The gutter renders in both read-only and edit modes; the textarea's scroll position is forwarded to the gutter.
+
+### Fuzzy search
+
+[ ] 14. The floating searchbar performs fuzzy matching over block text only (using `fuse.js`). Matching blocks render with `<mark>` highlights around match index ranges; non-matching blocks collapse out. Input is debounced ~80ms; the `Fuse` instance is memoized on the blocks array identity.
+
+### Citadel Actions
+
+[ ] 15. A "Citadel Actions" section in Settings exposes configurable action presets (name, description, icon, prompt template) stored at `<dataDir>/citadel-actions.json` and serialized through a daemon-side mutex with `updatedAt` stale-write protection. A built-in `refine-scratchpad` action seeds on first read; built-ins can be edited or reset to default but not deleted.
+[ ] 16. A "Refine" button in the drawer header opens a modal pre-filled with the `refine-scratchpad` action's prompt template, the target repo (cockpit-active by default with override dropdown), and a "Save as default" option. Confirm launches an agent workspace named `refine-scratchpad-<timestamp>`. If the prompt does not mention `in-progress` (case-insensitive), the daemon returns a soft warning that the modal renders inline.
+
+### Deep link
+
+[ ] 17. The `/scratchpad` URL is a one-shot deep link: on visit, opens the drawer and normalizes the URL to `<last-route>?scratchpad=1` (or `/?scratchpad=1` if no prior route). The `scratchpad` query param drives drawer state at cold start; the in-memory drawer store is the source of truth thereafter.
+
 ---
 
-keywords: ade, cockpit, readiness, next action, workspace detail, operator, attention state, scratchpad, blocks
+keywords: ade, cockpit, readiness, next action, workspace detail, operator, attention state, scratchpad, blocks, drawer, fuzzy search, refine, citadel actions, shortcuts

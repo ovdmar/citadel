@@ -208,6 +208,38 @@ describe("OperationService", () => {
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
 
+  it("allows successful teardown hooks with unstructured stdout", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [
+        {
+          id: "teardown-logs",
+          kind: "command",
+          event: "workspace.teardown",
+          command: "node",
+          args: ["-e", "process.stdout.write('No recorded dev stack pid file')"],
+          blocking: true,
+        },
+      ],
+      repoDefaults: { setupHookIds: [], teardownHookIds: ["teardown-logs"] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "Teardown Logs", source: "scratch" });
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === created.workspaceId);
+
+    const removed = await service.removeWorkspace({ workspaceId: created.workspaceId });
+
+    expect(removed).toMatchObject({ removed: true, archived: false, dirty: false });
+    expect(fs.existsSync(workspace?.path ?? "")).toBe(false);
+    expect(store.listOperations().find((operation) => operation.id === removed.operationId)).toMatchObject({
+      status: "succeeded",
+    });
+  });
+
   it("skips teardown hooks and prunes when the worktree directory is already gone", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
@@ -556,7 +588,16 @@ describe("OperationService", () => {
     expect(reconciledRepo).toBeUndefined();
   });
 
-  it("reconcile flips session to 'stopped' when agent exited but tmux pane is still alive", async () => {
+  // Shell-first replacement of the legacy "reconcile flips to stopped" test.
+  // The legacy assertion was: wrapper-`.live` sentinel removed → reconcile
+  // flips status='stopped'. New behavior (shell-first lifecycle): the
+  // pane's foreground command IS the source of truth. For a `shell`
+  // runtime session, the pane PID is bash itself (no separate agent); the
+  // reconciler leaves it alone because the shell IS the runtime. The
+  // operator-visible "stopped" state is reserved for explicit Stop button
+  // presses (which delete the row entirely). The new regression-pin tests
+  // for non-shell agent runtimes live in status-monitor.test.ts.
+  it("reconcile no longer mass-flips shell-runtime sessions to 'stopped' (shell-first invariant)", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
@@ -575,17 +616,19 @@ describe("OperationService", () => {
     try {
       expect(session.tmuxSessionName).toBeTruthy();
       const sessionName = session.tmuxSessionName as string;
-      // Simulate the wrapper's "agent exited" cleanup: the inner agent has
-      // died, the wrapper has removed the sentinel, but the tmux pane is
-      // still alive (showing the fallback login shell).
+      // Legacy sentinel removal is now a no-op — the wrapper is gone and
+      // reconcile doesn't read /tmp sentinels at all (it reads the pane's
+      // foreground command via tmux). For a shell runtime session, the
+      // pane foreground IS bash, which is the runtime binary — reconcile
+      // leaves it alone.
       fs.rmSync(agentLiveSentinelPath(sessionName), { force: true });
 
-      const result = service.reconcile();
-      expect(result.sessions).toBeGreaterThan(0);
+      service.reconcile();
 
       const reconciled = store.listSessions().find((candidate) => candidate.id === session.id);
-      expect(reconciled?.status).toBe("stopped");
-      // Pane must remain alive — the user can keep working in the shell.
+      // Shell-runtime session: status preserved (NOT flipped to stopped).
+      expect(reconciled?.status).not.toBe("stopped");
+      // Pane is still alive — the user can keep working in the shell.
       expect(tmuxSessionExists(sessionName)).toBe(true);
     } finally {
       if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
@@ -732,6 +775,10 @@ describe("OperationService", () => {
     ).rejects.toThrow(/Unknown repo/);
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
+
+  // The new tests for funny-name auto-generation and dirtySummary attach
+  // live in `workspace-lifecycle.test.ts` to keep this file under the
+  // 800-line cap enforced by `scripts/checks/file-size.ts`.
 });
 
 function createGitFixture() {

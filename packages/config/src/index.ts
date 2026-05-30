@@ -44,7 +44,18 @@ const BUILTIN_RUNTIMES: BuiltinRuntime[] = [
     id: "codex",
     displayName: "Codex",
     command: "codex",
-    args: [],
+    // `--yolo` (alias for `--dangerously-bypass-approvals-and-sandbox`) is a
+    // global flag — codex accepts it before the `resume` subcommand, so the
+    // same default works for both launch (`codex --yolo`) and resume
+    // (`codex --yolo resume <uuid>`). Operators can clear it via Settings →
+    // Runtimes if they want approval prompts back.
+    args: ["--yolo"],
+    // `codex resume <uuid>` is a subcommand (not a flag), but the daemon's
+    // resume splice is `[resumeArg, <uuid>]` either way — passing "resume"
+    // here yields the right argv. No `sessionIdArg`: codex auto-generates the
+    // UUID at spawn and we recover it via discoverCodexSessionId (with a
+    // lazy backfill at restore-collection time, see restore-routes.ts).
+    resumeArg: "resume",
     supportsResume: true,
     supportsPrompt: true,
   },
@@ -96,6 +107,30 @@ export const UsageProviderConfigSchema = z.object({
     .optional()
     .refine((value) => value === undefined || path.isAbsolute(value), "Usage provider cwd must be an absolute path"),
 });
+
+export const DEFAULT_FIX_CI_AUTOMATION = {
+  enabled: true,
+  runtimeId: "claude-code",
+  fallbackRuntimeId: "codex",
+  idleThresholdMs: 5 * 60 * 1000,
+  debounceMs: 30 * 60 * 1000,
+  intervalMs: 60 * 1000,
+} as const;
+
+export const FixCiAutomationConfigSchema = z.object({
+  enabled: z.boolean().default(DEFAULT_FIX_CI_AUTOMATION.enabled),
+  runtimeId: z.string().min(1).default(DEFAULT_FIX_CI_AUTOMATION.runtimeId),
+  fallbackRuntimeId: z.string().min(1).nullable().default(DEFAULT_FIX_CI_AUTOMATION.fallbackRuntimeId),
+  idleThresholdMs: z.number().int().min(0).default(DEFAULT_FIX_CI_AUTOMATION.idleThresholdMs),
+  debounceMs: z.number().int().min(0).default(DEFAULT_FIX_CI_AUTOMATION.debounceMs),
+  intervalMs: z.number().int().min(1000).default(DEFAULT_FIX_CI_AUTOMATION.intervalMs),
+});
+
+export const AutomationConfigSchema = z
+  .object({
+    fixCi: FixCiAutomationConfigSchema.default(DEFAULT_FIX_CI_AUTOMATION),
+  })
+  .default({ fixCi: DEFAULT_FIX_CI_AUTOMATION });
 
 export const HookEventSchema = z.enum([
   "workspace.setup",
@@ -156,6 +191,7 @@ export const CitadelConfigSchema = z
       }),
     runtimes: z.array(RuntimeConfigSchema).default(() => BUILTIN_RUNTIMES.map((r) => ({ ...r, args: [...r.args] }))),
     usageProviders: z.array(UsageProviderConfigSchema).default([]),
+    automations: AutomationConfigSchema,
     hooks: z.array(HookConfigSchema).default([]),
     repoDefaults: z
       .object({
@@ -171,6 +207,25 @@ export const CitadelConfigSchema = z
         allowDestructiveWorkspaceCleanup: z.boolean().default(false),
       })
       .default({ hookTimeoutMs: 120000, allowDestructiveWorkspaceCleanup: false }),
+    scratchpad: z
+      .object({
+        path: z
+          .preprocess(
+            (value) => {
+              if (typeof value !== "string") return value;
+              if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2));
+              return value;
+            },
+            z
+              .string()
+              .refine(
+                (value) => path.isAbsolute(value),
+                "scratchpad.path must be an absolute path (e.g. /Users/you/notes.md). `~/` is expanded to your home directory.",
+              ),
+          )
+          .optional(),
+      })
+      .default({}),
   })
   .superRefine((config, context) => {
     const hooksById = new Map<string, z.infer<typeof HookConfigSchema>>();
@@ -206,10 +261,25 @@ export const CitadelConfigSchema = z
 export type CitadelConfig = z.infer<typeof CitadelConfigSchema>;
 export type RuntimeConfig = z.infer<typeof RuntimeConfigSchema>;
 export type UsageProviderConfig = z.infer<typeof UsageProviderConfigSchema>;
+export type AutomationConfig = z.infer<typeof AutomationConfigSchema>;
+export type FixCiAutomationConfig = z.infer<typeof FixCiAutomationConfigSchema>;
 export type HookConfig = z.infer<typeof HookConfigSchema>;
 
 export function defaultDataDir() {
   return process.env.CITADEL_DATA_DIR || path.join(os.homedir(), ".local", "share", "citadel");
+}
+
+export const SCRATCHPAD_DEFAULT_FILENAME = "scratchpad.md";
+
+export function defaultNotesPath(dataDir: string) {
+  return path.join(dataDir, SCRATCHPAD_DEFAULT_FILENAME);
+}
+
+// Returns the absolute filesystem path the daemon should use for the markdown
+// notes file. Honors `scratchpad.path` when set (the user opted in to a custom
+// location, e.g. a cloud-sync folder), else falls back to `<dataDir>/scratchpad.md`.
+export function effectiveNotesPath(config: Pick<CitadelConfig, "dataDir" | "scratchpad">) {
+  return config.scratchpad?.path ?? defaultNotesPath(config.dataDir);
 }
 
 // Walk up from `cwd` looking for a `.git` entry. Returns the worktree name if
@@ -284,8 +354,22 @@ export function loadConfig(configPath = defaultConfigPath()): CitadelConfig {
   // `databasePath` so an operator who has customized those settings in
   // `~/.local/share/citadel/citadel.config.json` actually sees them applied.
   if (process.env.CITADEL_WORKTREE === "1") {
-    const { dataDir: _ignoredDataDir, databasePath: _ignoredDbPath, ...rawWithoutPaths } = raw ?? {};
-    return backfillBuiltinRuntimes(CitadelConfigSchema.parse({ ...defaults, ...rawWithoutPaths }));
+    const {
+      dataDir: _ignoredDataDir,
+      databasePath: _ignoredDbPath,
+      scratchpad: rawScratchpad,
+      ...rawWithoutPaths
+    } = raw ?? {};
+    // Strip `scratchpad.path` while preserving sibling fields so future
+    // `scratchpad.*` additions are not accidentally clobbered when the worktree
+    // daemon loads a leaked prod config.
+    const cleanedScratchpad =
+      rawScratchpad && typeof rawScratchpad === "object"
+        ? (({ path: _ignoredScratchpadPath, ...rest }) => rest)(rawScratchpad as Record<string, unknown>)
+        : undefined;
+    const merged: Record<string, unknown> = { ...defaults, ...rawWithoutPaths };
+    if (cleanedScratchpad !== undefined) merged.scratchpad = cleanedScratchpad;
+    return backfillBuiltinRuntimes(CitadelConfigSchema.parse(merged));
   }
   return backfillBuiltinRuntimes(CitadelConfigSchema.parse({ ...defaults, ...(raw ?? {}) }));
 }

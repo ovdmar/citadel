@@ -244,6 +244,27 @@
   position: relative;
 }
 
+/* Intra-group drag-reorder indicator: a thin accent line above or below
+ * the card during a hover-over-drop. The wrap is `position: relative`
+ * already, so absolute lines slot in without affecting layout. */
+.workspace-card-wrap.is-drop-above::before,
+.workspace-card-wrap.is-drop-below::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  background: var(--c-accent, #5b8df8);
+  border-radius: 1px;
+  pointer-events: none;
+}
+.workspace-card-wrap.is-drop-above::before {
+  top: -1px;
+}
+.workspace-card-wrap.is-drop-below::after {
+  bottom: -1px;
+}
+
 .workspace-card {
   width: 100%;
   display: grid;
@@ -335,10 +356,113 @@
   color: var(--color-danger);
 }
 
+/* Structured summary of uncommitted changes / unpushed commits shown when
+ * the drop is blocked by dirty state. Two collapsible sections; each list
+ * is bounded server-side so we don't need a tall scrollbox here. */
+.drop-workspace-summary {
+  display: grid;
+  gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--panel-sunken, transparent);
+}
+
+.drop-workspace-summary summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 2px 0;
+}
+
+.drop-workspace-summary-list {
+  list-style: none;
+  padding: 4px 0 0;
+  margin: 0;
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.drop-workspace-summary-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+}
+
+.drop-workspace-summary-status,
+.drop-workspace-summary-sha {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: pre;
+}
+
+.drop-workspace-summary-path,
+.drop-workspace-summary-subject {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .drop-workspace-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* Toast surface (AC4 rollback path + future create-error notifications).
+ * Bottom-right stack, each entry auto-dismisses after 6s. */
+.cit-toast-stack {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  display: grid;
+  gap: 8px;
+  z-index: 9000;
+  pointer-events: none;
+}
+
+.cit-toast {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-width: 240px;
+  max-width: 360px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: CanvasText;
+  font-size: 13px;
+  line-height: 1.4;
+  box-shadow: 0 16px 48px rgb(var(--shadow-color) / 0.18);
+  pointer-events: auto;
+}
+
+.cit-toast-error {
+  border-color: var(--color-danger, #c64646);
+  color: var(--color-danger, #c64646);
+}
+
+.cit-toast-message {
+  word-wrap: break-word;
+}
+
+.cit-toast-dismiss {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 6px;
 }
 
 .drop-workspace-cancel,
@@ -407,7 +531,8 @@
   color: var(--c-ok);
 }
 
-.workspace-card-agent.tone-failing {
+.workspace-card-agent.tone-failing,
+.workspace-card-agent.tone-conflicting {
   color: var(--c-bad);
 }
 
@@ -427,7 +552,8 @@
   color: var(--c-ok);
 }
 
-.workspace-card.active .workspace-card-agent.tone-failing {
+.workspace-card.active .workspace-card-agent.tone-failing,
+.workspace-card.active .workspace-card-agent.tone-conflicting {
   color: var(--c-bad);
 }
 
@@ -477,6 +603,25 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.workspace-card-lifecycle {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-fg-3);
+  font-size: 10.5px;
+  line-height: 1.25;
+}
+
+.workspace-card-lifecycle.creating {
+  color: var(--color-action);
+}
+
+.workspace-card-lifecycle.failed {
+  color: var(--color-danger);
 }
 
 .workspace-card-right {
@@ -549,6 +694,7 @@
 }
 
 .pr-pill.tone-failing,
+.pr-pill.tone-conflicting,
 .approval-pill.tone-changes {
   background: transparent;
   color: var(--c-bad);
