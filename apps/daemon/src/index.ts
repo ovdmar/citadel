@@ -3,6 +3,7 @@ import { defaultConfigPath, loadConfig, loadDevState, resolveWorktreeRoot, saveD
 import { SqliteStore } from "@citadel/db";
 import { OperationService } from "@citadel/operations";
 import { ensureCitadelTmuxRunning, ensureWorktreeTmuxRunning } from "@citadel/terminal";
+import { parsePositiveInt } from "./app-helpers.js";
 import { createDaemonApp } from "./app.js";
 import { runBootRestore } from "./boot-restore.js";
 import { shouldReapTmuxOrphans } from "./orphan-reaper-safety.js";
@@ -84,6 +85,9 @@ const operations = new OperationService(store, config);
 operations.reconcile();
 const daemon = createDaemonApp({ config, configPath, store, operations });
 const { server } = daemon;
+const keepAliveTimeoutMs = parsePositiveInt(process.env.CITADEL_HTTP_KEEP_ALIVE_TIMEOUT_MS, server.keepAliveTimeout);
+server.keepAliveTimeout = keepAliveTimeoutMs;
+server.headersTimeout = Math.max(server.headersTimeout, keepAliveTimeoutMs + 1000);
 
 // Try to bind; on EADDRINUSE, walk the next 10 ports so worktree-derived ports
 // that happen to collide (cksum-mod-100 birthday hits at ~15 worktrees) don't
