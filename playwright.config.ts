@@ -6,12 +6,13 @@ import { defineConfig, devices } from "@playwright/test";
 // Playwright silently reuse a production daemon listening on that port and
 // the e2e suite overwrote the user's scratchpad with fixture data
 // ("first idea\n\nsecond idea\n", etc.) instead of writing to its sandbox
-// data dir at /tmp/citadel-playwright-data.
+// data dir under /tmp/citadel-playwright-data*.
 const daemonPort = process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012";
 const webPort = process.env.CITADEL_PLAYWRIGHT_WEB_PORT || "15174";
 const ttydPortBase = process.env.CITADEL_PLAYWRIGHT_TTYD_PORT_BASE || "24000";
 const ttydPortMax = process.env.CITADEL_PLAYWRIGHT_TTYD_PORT_MAX || "24999";
 const daemonLog = process.env.CITADEL_PLAYWRIGHT_DAEMON_LOG || "/tmp/citadel-playwright-daemon.log";
+const daemonDataDir = process.env.CITADEL_PLAYWRIGHT_DATA_DIR || `/tmp/citadel-playwright-data-${process.pid}`;
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
 const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}`).replace(
@@ -21,7 +22,11 @@ const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playw
 
 export default defineConfig({
   testDir: "e2e",
-  timeout: 30_000,
+  // The suite mutates daemon-global config, scratchpad files, repos, and tmux
+  // sessions. Keep it serial even on high-core local machines; GitHub Actions
+  // happened to run one worker, while local parallelism exposed state races.
+  workers: 1,
+  timeout: 45_000,
   expect: { timeout: 10_000 },
   use: {
     baseURL: webBase,
@@ -47,7 +52,7 @@ export default defineConfig({
       // boot orphan-reaper can mistake production tmux panes for sandbox
       // orphans and kill the user's live terminals.
       command: [
-        "CITADEL_DATA_DIR=/tmp/citadel-playwright-data",
+        `CITADEL_DATA_DIR=${daemonDataDir}`,
         `CITADEL_PORT=${daemonPort}`,
         `CITADEL_TMUX_SOCKET=${tmuxSocket}`,
         "CITADEL_OWN_TMUX_SOCKET=1",
