@@ -267,42 +267,11 @@ test("desktop primary terminal WebSocket streams a fresh shell session", async (
     const ws = await openTerminalSocket(session.id);
     try {
       const output = waitForTerminalOutput(ws, marker);
-      ws.send(JSON.stringify({ type: "input", data: `printf '${marker}\\n'\r` }));
+      ws.send(Buffer.from(`printf '${marker}\\n'\r`, "utf8"));
       await output;
     } finally {
       ws.close();
     }
-  } finally {
-    if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
-    fs.rmSync(fixture.dir, { recursive: true, force: true });
-  }
-});
-
-test("desktop fallback terminal endpoint returns a ttyd proxy URL for a fresh session", async ({
-  request,
-}, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "fallback terminal smoke runs once against the shared local daemon");
-  const fixture = createGitFixture();
-  let workspaceId: string | null = null;
-  try {
-    const repo = await registerRepo(request, fixture);
-    workspaceId = (await createWorkspace(request, repo.id, `e2e-${Date.now().toString(36)}`)).workspaceId;
-    await waitForWorkspace(request, workspaceId, "ready");
-    const session = await startSession(request, workspaceId, "Fallback ttyd Shell");
-
-    // Citadel still exposes ttyd as an explicit fallback/standalone terminal.
-    // If ttyd is unavailable (e.g. binary missing on the CI runner) we accept
-    // 503 and skip the rest — the smoke still proves the daemon wiring is
-    // intact.
-    const response = await request.post(`${API_BASE}/api/agent-sessions/${session.id}/terminal`);
-    if (response.status() === 503) {
-      test.info().annotations.push({ type: "skip-reason", description: "ttyd unavailable on runner" });
-      return;
-    }
-    expect(response.ok()).toBe(true);
-    const body = (await response.json()) as { terminal: { url: string; port: number } };
-    expect(body.terminal.url).toMatch(/^\/terminals\//);
-    expect(body.terminal.port).toBeGreaterThan(0);
   } finally {
     if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
     fs.rmSync(fixture.dir, { recursive: true, force: true });
@@ -332,16 +301,18 @@ function waitForTerminalOutput(ws: WebSocket, expected: string) {
       cleanup();
       reject(new Error(`Timed out waiting for terminal output ${expected}`));
     }, 10_000);
-    const onMessage = (raw: RawData) => {
-      const message = parseTerminalSocketMessage(raw);
-      if (!message) return;
-      if ((message.type === "output" || message.type === "outputChunk") && typeof message.data === "string") {
-        buffered += message.data;
+    const onMessage = (raw: RawData, isBinary: boolean) => {
+      if (isBinary) {
+        buffered += raw.toString();
         if (buffered.includes(expected)) {
           cleanup();
           resolve();
         }
-      } else if (message.type === "error" || message.type === "exit") {
+        return;
+      }
+      const message = parseTerminalSocketMessage(raw);
+      if (!message) return;
+      if (message.type === "error" || message.type === "exit") {
         cleanup();
         reject(new Error(`Terminal bridge returned ${message.type}: ${message.data ?? ""}`));
       }

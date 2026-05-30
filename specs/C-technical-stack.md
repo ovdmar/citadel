@@ -11,7 +11,7 @@
 [~] 3. Citadel targets Node.js 24+.
 [~] 4. Citadel uses ESM modules.
 [ ] 5. The first supported runtime is direct local Linux host install.
-[~] 6. Required local tools are git and tmux. `ttyd` is required only for the fallback/standalone browser renderer; the daemon resolves ttyd via `TTYD_BIN` (default `/home/linuxbrew/.linuxbrew/bin/ttyd`).
+[~] 6. Required local tools are git and tmux. Browser terminal attach uses the in-process daemon bridge plus the native `node-pty` dependency; no separate terminal renderer binary is required.
 [ ] 7. Optional shell-backed providers rely on their own installed CLIs and auth.
 
 ## Applications
@@ -29,7 +29,7 @@
 [~] 2. The web app uses Vite.
 [~] 3. The web app uses TanStack Router for routing.
 [~] 4. The web app uses TanStack Query for server state.
-[~] 5. The web app renders interactive terminals with xterm.js over the daemon WebSocket at `/terminal/:sessionId`. It does not mount ttyd iframes during normal cockpit navigation.
+[~] 5. The web app renders interactive terminals with xterm.js over the daemon WebSocket at `/terminal/:sessionId`. It does not mount terminal iframes during normal cockpit navigation.
 [~] 6. The web app uses lucide-react for icons.
 [~] 7. shadcn-style UI is built with local components, Radix primitives where useful, class-variance-authority, clsx, tailwind-merge, and Tailwind CSS.
 [ ] 8. Shared UI components live in packages/ui only when reuse is real.
@@ -40,7 +40,7 @@
 [~] 1. The daemon uses Express for HTTP APIs.
 [~] 2. The daemon uses REST for commands and snapshots.
 [~] 3. The daemon uses SSE for app-state/events.
-[~] 4. The daemon serves primary interactive terminal I/O through `/terminal/:sessionId` WebSocket upgrades backed by tmux control mode. Fallback ttyd processes are bound to `127.0.0.1` on dynamic loopback ports and routed through `/terminals/:sessionId/*` using `http-proxy`.
+[~] 4. The daemon serves interactive terminal I/O through `/terminal/:sessionId` WebSocket upgrades backed by node-pty running `tmux attach-session`. Terminal bytes move as binary frames; JSON is used for control messages.
 [~] 5. The daemon uses Zod-backed contracts for shared request/response/event schemas.
 [ ] 6. Long-running or side-effectful work is represented as operations.
 [ ] 7. Terminal transport remains separate from app-state transport.
@@ -58,12 +58,12 @@
 
 [~] 1. Agent runtimes launch through tmux.
 [~] 2. Citadel persists tmux session identity.
-[~] 3. Browser attach/reconnect is owned by packages/terminal: the primary xterm/WebSocket bridge uses tmux control mode at `/terminal/:sessionId`, and fallback ttyd lifecycle (spawn, port reservation, readiness wait, stale cleanup, release) lives in `packages/terminal/src/ttyd.ts`.
-[~] 4. Primary browser terminal traffic is scoped by session ID through `/terminal/:sessionId` WebSocket upgrades. Fallback ttyd traffic is scoped by `/terminals/:sessionId/*`; stale ttyd processes inside the configured port range are reaped on daemon startup.
-[~] 5. The cockpit shows an explicit, actionable error (`session_not_found`, `tmux_session_missing`, `terminal_unavailable`, `ttyd_missing`, `no_free_port`, `ttyd_start_timeout`, `spawn_failed`) when a terminal cannot be served — never a blank black surface.
+[~] 3. Browser attach/reconnect is owned by packages/terminal: the xterm/WebSocket bridge uses node-pty `tmux attach-session` at `/terminal/:sessionId`.
+[~] 4. Browser terminal traffic is scoped by session ID through `/terminal/:sessionId` WebSocket upgrades; there is no daemon-managed per-session terminal renderer process or secondary proxy route.
+[~] 5. The cockpit shows an explicit, actionable error (`session_not_found`, `tmux_session_missing`, `terminal_unavailable`, `spawn_failed`) when a terminal cannot be served — never a blank black surface.
 [ ] 6. Runtime adapters live behind capability-based contracts.
 [ ] 7. Runtime health is visible before session start.
-[~] 8. Trade-offs of using xterm.js over tmux control mode as the primary renderer are accepted: Citadel owns the bridge, but avoids per-session ttyd renderer processes for normal navigation. ttyd remains available as a fallback/standalone renderer when compatibility is more important than footprint.
+[~] 8. Trade-offs of using xterm.js over node-pty/tmux attach are accepted: Citadel owns the bridge, but preserves real PTY semantics while avoiding per-session external renderer processes for normal navigation.
 
 ## Package Boundaries
 
@@ -72,7 +72,7 @@
 [~] 3. packages/config contains versioned config loading and validation.
 [~] 4. packages/db contains SQLite schema, migrations, repositories, and transaction helpers.
 [~] 5. packages/operations contains side-effectful workflows.
-[~] 6. packages/terminal contains the tmux gateway, the primary tmux-control WebSocket bridge, and the fallback ttyd manager (port allocation, spawn, readiness, stale cleanup).
+[~] 6. packages/terminal contains the tmux gateway, node-pty WebSocket bridge, input helpers, capture utilities, and pane/log lifecycle helpers.
 [~] 7. packages/runtimes contains agent runtime provider contracts and adapters.
 [~] 8. packages/providers contains version-control, PR, CI, issue tracker, usage, and notification providers.
 [~] 9. packages/hooks contains hook contracts, command execution, and event dispatch.
@@ -110,4 +110,4 @@
 
 ---
 
-keywords: tech stack, architecture, typescript, pnpm, node, react, vite, tanstack, express, sqlite, tmux, ttyd, reverse proxy, http-proxy, websocket, sse, zod, biome, vitest, playwright
+keywords: tech stack, architecture, typescript, pnpm, node, react, vite, tanstack, express, sqlite, tmux, node-pty, xterm, websocket, sse, zod, biome, vitest, playwright

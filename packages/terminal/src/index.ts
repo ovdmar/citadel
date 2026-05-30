@@ -4,11 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
-export { createTtydManager, discoverExistingTtyds, TtydUnavailableError } from "./ttyd.js";
-export type { TtydEntry, TtydManager, TtydManagerConfig, TtydTheme } from "./ttyd.js";
 export { submitPrompt } from "./submit-prompt.js";
-export { tmuxPrefix } from "./tmux.js";
-import { tmuxPrefix } from "./tmux.js";
+export { ensureTmuxExtendedKeys, tmuxPrefix } from "./tmux.js";
+import { ensureTmuxExtendedKeys, tmuxPrefix } from "./tmux.js";
 
 import { tokenizeTerminalInput } from "./input-tokens.js";
 export { keyForControlCharacter, keyForEscapeSequence, tokenizeTerminalInput } from "./input-tokens.js";
@@ -17,13 +15,10 @@ export type { InputToken } from "./input-tokens.js";
 import { captureTmuxSnapshot, waitForTerminalIdle } from "./capture.js";
 export {
   attachTerminalWebSocket,
-  attachTmuxControlStream,
-  decodeTmuxControlValue,
-  parseTmuxControlOutput,
-  tmuxControlInputCommands,
-  tmuxControlQuote,
-  tmuxControlResizeCommand,
-} from "./tmux-control-bridge.js";
+  attachTmuxPty,
+  clampSize as clampTerminalPtySize,
+  parseTerminalSocketMessage,
+} from "./tmux-pty-bridge.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -468,26 +463,6 @@ export async function ensureCitadelTmuxRunning(): Promise<TmuxServerOwnership> {
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   return getTmuxServerOwnership();
-}
-
-export function ensureTmuxExtendedKeys() {
-  execFileSync("tmux", [...tmuxPrefix(), "set-option", "-s", "extended-keys", "on"], { stdio: "ignore" });
-  const features = execFileSync("tmux", [...tmuxPrefix(), "show-options", "-s", "-g", "terminal-features"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (!/xterm\*[^\n]*\bextkeys\b/.test(features)) {
-    execFileSync("tmux", [...tmuxPrefix(), "set-option", "-as", "terminal-features", ",xterm*:extkeys"], {
-      stdio: "ignore",
-    });
-  }
-  // Cap per-pane scrollback. The previous default (2000) was already low in
-  // line-count, but unset history-limit is what compounds: long-running tmux
-  // servers in citadel-tmux.service accumulate tmux client structs (one per
-  // ttyd browser connection / WS reconnect), and the per-client screen state
-  // grows with the per-pane scrollback ceiling. 5000 keeps headroom for
-  // operator inspection while bounding worst-case server memory.
-  execFileSync("tmux", [...tmuxPrefix(), "set-option", "-g", "history-limit", "5000"], { stdio: "ignore" });
 }
 
 export {

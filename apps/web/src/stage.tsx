@@ -1,6 +1,6 @@
 import type { AgentRuntime, AgentSession, Workspace } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
-import { ExternalLink, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
+import { Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import {
@@ -18,8 +18,8 @@ type StageTab = {
 };
 
 // Per-workspace guardrail so one workspace cannot monopolize the cockpit and
-// status monitor. The default renderer no longer consumes one ttyd port per
-// session; ttyd is fallback-only.
+// status monitor. The renderer no longer consumes one external terminal
+// process per session.
 const WORKSPACE_AGENT_CAP = 20;
 const SESSION_REORDER_MIME = "application/x-citadel-agent-session-reorder";
 export const TERMINAL_PANE_RETAIN_LIMIT = 5;
@@ -333,20 +333,6 @@ export function Stage(props: {
                     }}
                   >
                     <RefreshCw size={11} />
-                  </button>
-                  <button
-                    type="button"
-                    className="stage-tab-act"
-                    aria-label="Open terminal in standalone tab"
-                    title="Open in standalone tab"
-                    disabled={!getTerminalHandle(tab.session.id)?.url}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      const handle = getTerminalHandle(tab.session.id);
-                      if (handle?.url) window.open(handle.url, "_blank");
-                    }}
-                  >
-                    <ExternalLink size={11} />
                   </button>
                   <button
                     type="button"

@@ -54,9 +54,6 @@ import {
 } from "./workspace-apps.js";
 
 export class OperationService {
-  // Daemon registers onSessionStopped to release the ttyd whenever stopAgentSession runs (REST, MCP, restore route).
-  private terminalHooks: { onSessionStopped?: (sessionId: string) => void } = {};
-
   constructor(
     private readonly store: SqliteStore,
     private readonly config?: {
@@ -70,9 +67,6 @@ export class OperationService {
       commandPolicy: CitadelConfig["commandPolicy"];
     },
   ) {}
-
-  // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-  setTerminalHooks(hooks: { onSessionStopped?: (sessionId: string) => void }) { this.terminalHooks = hooks; }
 
   registerRepo(input: { rootPath: string; name?: string | undefined; worktreeParent?: string | undefined }) {
     const now = nowIso();
@@ -200,7 +194,6 @@ export class OperationService {
     const session = this.store.listSessions().find((candidate) => candidate.id === input.sessionId);
     if (!session) return { stopped: false, reason: "session_not_found" as const };
     if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
-    this.terminalHooks.onSessionStopped?.(session.id);
     this.store.deleteSession(session.id);
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     this.activity(
@@ -562,7 +555,6 @@ export class OperationService {
       activity: (...args) => this.activity(...args),
       runWorkspaceHooks: (...args) => this.runWorkspaceHooks(...args),
       runNotificationHooks: (...args) => this.runNotificationHooks(...args),
-      onSessionStopped: (sessionId) => this.terminalHooks.onSessionStopped?.(sessionId),
     };
   }
 }

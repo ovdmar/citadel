@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "./components/ui/button.js";
+import { postTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
 import { useResolvedTheme } from "./use-resolved-theme.js";
 
 type TerminalError = {
@@ -16,19 +17,17 @@ export type TerminalSocketMessage = {
 };
 
 const RUNBOOK_URL = "/docs/operations/terminal-runbook";
-const TERMINAL_CLIENT_VERSION = "shortcut-bridge-v2";
 const XTERM_FONT = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
 
 /**
- * Per-session handle used by Stage tabs to drive a live terminal (reload the
- * WebSocket bridge, open fallback ttyd in a standalone tab). The in-pane status bar was
- * removed; these affordances live on the tab now and need access to state
- * owned by TerminalPane, so we publish a tiny registry on the window.
+ * Per-session handle used by Stage tabs to drive a live terminal WebSocket.
+ * The in-pane status bar was removed; these affordances live on the tab now
+ * and need access to state owned by TerminalPane, so we publish a tiny
+ * registry on the window.
  *
  * Keyed by session id. TerminalPane registers on mount and clears on unmount.
  */
 export type TerminalHandle = {
-  url: string | null;
   reload: () => void;
   // Historical name kept for Stage callers; now focuses the in-process xterm.
   focusIframe: () => void;
@@ -36,17 +35,13 @@ export type TerminalHandle = {
 };
 
 const REGISTRY = new Map<string, TerminalHandle>();
-const FRAME_WINDOWS = new Map<string, Window>();
 const LISTENERS = new Set<(id: string) => void>();
 
-function publish(id: string, handle: TerminalHandle | null, frameWindow: Window | null = null) {
+function publish(id: string, handle: TerminalHandle | null) {
   if (handle) {
     REGISTRY.set(id, handle);
-    if (frameWindow) FRAME_WINDOWS.set(id, frameWindow);
-    else FRAME_WINDOWS.delete(id);
   } else {
     REGISTRY.delete(id);
-    FRAME_WINDOWS.delete(id);
   }
   for (const listener of LISTENERS) listener(id);
 }
@@ -61,14 +56,9 @@ export function subscribeTerminalHandle(listener: (sessionId: string) => void): 
 }
 
 export function isRegisteredTerminalMessageSource(
-  source: MessageEventSource | null,
+  _source: MessageEventSource | null,
   sessionId: string | null | undefined,
 ): boolean {
-  if (source) {
-    for (const frameWindow of FRAME_WINDOWS.values()) {
-      if (source === frameWindow) return true;
-    }
-  }
   return Boolean(sessionId && REGISTRY.has(sessionId));
 }
 
@@ -95,11 +85,12 @@ export function TerminalPane(props: { session: AgentSession }) {
   const fitRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const themeRef = useRef(theme);
+  const encoderRef = useRef(new TextEncoder());
+  const decoderRef = useRef(new TextDecoder());
   themeRef.current = theme;
   const [connectionState, setConnectionState] = useState<"connecting" | "attached">("connecting");
   const [error, setError] = useState<TerminalError | null>(null);
   const [generation, setGeneration] = useState(0);
-  const fallbackUrl = terminalFallbackUrl(sessionId);
 
   const reload = useCallback(() => {
     setGeneration((value) => value + 1);
@@ -138,6 +129,7 @@ export function TerminalPane(props: { session: AgentSession }) {
     });
     const fit = new FitAddon();
     const ws = new WebSocket(terminalWebSocketUrl(sessionId));
+    ws.binaryType = "arraybuffer";
     terminalRef.current = terminal;
     fitRef.current = fit;
     wsRef.current = ws;
@@ -164,8 +156,10 @@ export function TerminalPane(props: { session: AgentSession }) {
           });
     resizeObserver?.observe(host);
     window.addEventListener("resize", sendResize);
+    terminal.attachCustomKeyEventHandler((event) => handleTerminalKeyEvent(event, terminal, sessionId, ws));
     const inputDisposable = terminal.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "input", data }));
+      if (data.includes("\u0003")) recordTerminalUserAction(sessionId, "ctrl_c");
+      if (ws.readyState === WebSocket.OPEN) ws.send(encoderRef.current.encode(data));
     });
 
     ws.addEventListener("open", () => {
@@ -174,11 +168,16 @@ export function TerminalPane(props: { session: AgentSession }) {
       sendResize();
     });
     ws.addEventListener("message", (event) => {
+      if (typeof event.data !== "string") {
+        void writeTerminalBinary(event.data, terminal, decoderRef.current);
+        return;
+      }
       const message = parseTerminalSocketMessage(event.data);
-      if (!message) return;
-      if ((message.type === "output" || message.type === "outputChunk") && typeof message.data === "string") {
-        terminal.write(message.data);
-      } else if (message.type === "error") {
+      if (!message) {
+        terminal.write(event.data);
+        return;
+      }
+      if (message.type === "error") {
         setError({ code: message.data || "terminal_unavailable", detail: message.data ?? "" });
       } else if (message.type === "exit") {
         setError({ code: "terminal_closed", detail: message.data ?? "Terminal bridge closed." });
@@ -216,9 +215,9 @@ export function TerminalPane(props: { session: AgentSession }) {
   // The status bar used to render these affordances inside the pane; that was
   // removed in favour of the tab actions, but the state still lives here.
   useEffect(() => {
-    publish(sessionId, { url: fallbackUrl, reload, focusIframe, recoverIfDisconnected }, window);
+    publish(sessionId, { reload, focusIframe, recoverIfDisconnected });
     return () => publish(sessionId, null);
-  }, [sessionId, fallbackUrl, reload, focusIframe, recoverIfDisconnected]);
+  }, [sessionId, reload, focusIframe, recoverIfDisconnected]);
   return (
     <div className="terminal-shell">
       <div className="terminal-surface">
@@ -241,15 +240,6 @@ export function TerminalPane(props: { session: AgentSession }) {
 export function terminalWebSocketUrl(sessionId: string, location: Location = window.location): string {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${location.host}/terminal/${encodeURIComponent(sessionId)}`;
-}
-
-export function terminalFallbackUrl(sessionId: string): string {
-  return `/terminals/${encodeURIComponent(sessionId)}/`;
-}
-
-export function terminalIframeSrc(url: string): string {
-  const separator = url.includes("?") ? "&" : "?";
-  return `${url}${separator}citadelClient=${encodeURIComponent(TERMINAL_CLIENT_VERSION)}`;
 }
 
 function TerminalErrorState(props: { error: TerminalError; onRetry: () => void; retrying: boolean }) {
@@ -283,21 +273,92 @@ function guidanceFor(code: string) {
       return "The terminal WebSocket disconnected. Retry reconnects to the same tmux session.";
     case "terminal_closed":
       return "The terminal bridge closed. Retry reconnects if the underlying tmux session is still present.";
-    case "ttyd_missing":
-      return "ttyd binary not found. Install ttyd or set TTYD_BIN to its absolute path in Citadel settings, then retry.";
-    case "no_free_port":
-      return "Citadel could not allocate a port in the ttyd range. Stop unused terminals or widen CITADEL_TTYD_PORT_BASE..MAX.";
-    case "ttyd_start_timeout":
-      return "ttyd was spawned but never began listening. Check daemon logs and that the shell/runtime command exits cleanly.";
     case "tmux_session_missing":
       return "The tmux session this terminal would attach to no longer exists. Restart the agent session or reconcile.";
     case "session_not_found":
       return "This Citadel session is not registered. Refresh or recreate it from the cockpit.";
     case "spawn_failed":
-      return "ttyd failed to spawn. Verify TTYD_BIN, file permissions, and shell binary configuration.";
+      return "The terminal PTY failed to spawn. Verify tmux is installed and reachable from the daemon environment.";
     default:
       return "Open the terminal runbook below for diagnostic steps.";
   }
+}
+
+function handleTerminalKeyEvent(event: KeyboardEvent, terminal: Terminal, sessionId: string, ws: WebSocket): boolean {
+  if (event.type !== "keydown" || event.isComposing) return true;
+  const key = event.key.toLowerCase();
+  if (key === "k" && (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey) {
+    postTerminalShortcutMessage("command-palette", sessionId);
+    return false;
+  }
+  if (key === "s" && (event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey) {
+    postTerminalShortcutMessage("scratchpad-toggle", sessionId);
+    return false;
+  }
+  if (key === "n" && event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+    postTerminalShortcutMessage("new-workspace", sessionId);
+    return false;
+  }
+  if (key === "enter" && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+    sendTerminalInput(ws, "\n");
+    return false;
+  }
+  if (isMacPlatform()) {
+    if (key === "backspace" && event.metaKey && !event.ctrlKey && !event.altKey) {
+      sendTerminalInput(ws, "\u0015");
+      return false;
+    }
+    if (key === "arrowleft" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+      sendTerminalInput(ws, "\u0001");
+      return false;
+    }
+    if (key === "arrowright" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+      sendTerminalInput(ws, "\u0005");
+      return false;
+    }
+    if (key === "c" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+      copyTerminalSelection(terminal);
+      return false;
+    }
+    if (key === "v" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+      void pasteClipboardIntoTerminal(ws);
+      return false;
+    }
+    if (key === "a" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+      terminal.selectAll();
+      return false;
+    }
+  }
+  return true;
+}
+
+function sendTerminalInput(ws: WebSocket, data: string): void {
+  if (ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
+}
+
+async function writeTerminalBinary(data: unknown, terminal: Terminal, decoder: TextDecoder): Promise<void> {
+  if (data instanceof ArrayBuffer) {
+    terminal.write(decoder.decode(data));
+    return;
+  }
+  if (data instanceof Blob) {
+    terminal.write(decoder.decode(await data.arrayBuffer()));
+  }
+}
+
+function copyTerminalSelection(terminal: Terminal): void {
+  const selection = terminal.getSelection();
+  if (!selection) return;
+  void navigator.clipboard?.writeText(selection).catch(() => undefined);
+}
+
+async function pasteClipboardIntoTerminal(ws: WebSocket): Promise<void> {
+  const text = await navigator.clipboard?.readText().catch(() => "");
+  if (text) sendTerminalInput(ws, text);
+}
+
+function isMacPlatform(): boolean {
+  return /Mac|iPhone|iPad|iPod/.test(navigator.platform || "");
 }
 
 export function parseTerminalSocketMessage(raw: unknown): TerminalSocketMessage | null {
@@ -362,60 +423,6 @@ const DARK_XTERM_THEME = {
   brightWhite: "#fffaef",
 };
 
-export function isTtydReconnectPromptVisible(iframe: HTMLIFrameElement | null): boolean {
-  try {
-    const doc = iframe?.contentDocument;
-    const view = iframe?.contentWindow;
-    if (!doc || !view) return false;
-
-    const ttydOverlayCandidates = Array.from(doc.querySelectorAll(".xterm > div"));
-    for (const element of ttydOverlayCandidates) {
-      if (isHiddenElement(element, view)) continue;
-      if (isReconnectPromptText(element.textContent ?? "")) return true;
-    }
-
-    for (const button of Array.from(doc.querySelectorAll("button"))) {
-      if (isHiddenElement(button, view)) continue;
-      if (/\breconnect\b/i.test(normalizeText(button.textContent ?? ""))) return true;
-    }
-  } catch {
-    return false;
-  }
-  return false;
-}
-
-export function isTtydHttpErrorPageVisible(iframe: HTMLIFrameElement | null): boolean {
-  try {
-    const doc = iframe?.contentDocument;
-    if (!doc?.body) return false;
-    if (doc.querySelector(".xterm")) return false;
-    const text = normalizeText(doc.body.textContent ?? "").toLowerCase();
-    const title = normalizeText(doc.title).toLowerCase();
-    if (!text && !title) return false;
-    return (
-      text === "terminal_not_found" || text === "404 page not found" || text.startsWith("404") || title.includes("404")
-    );
-  } catch {
-    return false;
-  }
-}
-
-function isHiddenElement(element: Element, view: Window): boolean {
-  const style = view.getComputedStyle(element);
-  if (style.display === "none" || style.visibility === "hidden") return true;
-  const opacity = Number.parseFloat(style.opacity || "1");
-  return Number.isFinite(opacity) && opacity <= 0.05;
-}
-
-function isReconnectPromptText(value: string): boolean {
-  const text = normalizeText(value);
-  return /^press (?:⏎|enter|return) to reconnect$/i.test(text);
-}
-
-function normalizeText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
-}
-
 function recordTerminalClientEvent(sessionId: string, event: string, extra: Record<string, unknown> = {}) {
   fetch(`/api/agent-sessions/${encodeURIComponent(sessionId)}/terminal-client-event`, {
     method: "POST",
@@ -426,6 +433,15 @@ function recordTerminalClientEvent(sessionId: string, event: string, extra: Reco
       path: window.location.pathname,
       visibility: document.visibilityState,
     }),
+    keepalive: true,
+  }).catch(() => undefined);
+}
+
+function recordTerminalUserAction(sessionId: string, reason: string) {
+  fetch(`/api/agent-sessions/${encodeURIComponent(sessionId)}/user-action`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
     keepalive: true,
   }).catch(() => undefined);
 }

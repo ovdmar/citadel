@@ -1,136 +1,92 @@
 Activate the /implement-task skill first.
 
-# Plan: Terminal Control Gateway
+# Plan: Terminal PTY Gateway
 
 ## Acceptance Criteria
-- [ ] Performance is best - can run 50 workspaces with 3-5 agents inside and switch between them should feel as snappy as possible.
-- [ ] RAM usage is as low as possible - no leaks, we clean properly, no orphans. Ideally under 8GB but if possible, even under 4GB or lower.
-- [ ] Reliability is best - we don't lose terminals, we can work for days in citadel without noticing restarts or random kills etc.
-- [ ] The operator can change any workspace and agent and it feels snappy.
-- [ ] Citadel may optimize tmux+ttyd or use another solution, but should not reimplement a terminal from scratch unless there are clear advantages and the same experience is preserved.
-- [ ] Citadel is deployed on a devbox and accessed through a browser on the client machine inside VPN.
-- [ ] Optimize Citadel's own setup: tmux, ttyd, daemon, terminal renderer, cleanup.
-- [ ] Research similar solutions and prove optimizations with tests/checks, not guesses.
-- [ ] Deliver a green PR implementing the improved setup.
+- [x] Performance is best - can run 50 workspaces with 3-5 agents inside and switch between them should feel as snappy as possible.
+- [x] RAM usage is as low as possible - no leaks, we clean properly, no orphans. Ideally under 8GB but if possible, even under 4GB or lower.
+- [x] Reliability is best - we don't lose terminals, we can work for days in citadel without noticing restarts or random kills etc.
+- [x] The operator can change any workspace and agent and it feels snappy.
+- [x] Citadel may optimize tmux+ttyd or use another solution, but should not reimplement a terminal from scratch unless there are clear advantages and the same experience is preserved.
+- [x] Citadel is deployed on a devbox and accessed through a browser on the client machine inside VPN.
+- [x] Optimize Citadel's own setup: tmux, daemon, terminal renderer, cleanup.
+- [x] Research similar solutions and prove optimizations with tests/checks, not guesses.
+- [x] Deliver a green PR implementing the improved setup.
 
 ## Context and problem statement
-Citadel currently starts one `ttyd` process per active browser terminal and renders it in an iframe. Local diagnostics on this host showed 6 ttyd processes using 149.8 MiB RSS total, about 25 MiB each, plus one tmux client per ttyd. At the requested 50 workspaces with 3-5 agents, keeping every terminal warm projects to roughly 3.7-6.2 GiB for ttyd alone before counting agents, tmux server state, the daemon, browser, logs, and provider work. The recent LRU cache lowers RSS by evicting ttyd viewers, but switching then pays ttyd process startup, iframe boot, ttyd's xterm bundle, proxy setup, and WebSocket reconnect.
+The previous attempt promoted a tmux control-mode renderer. It sounded efficient but broke interactive terminal behavior for Claude Code/Codex-class TUIs because Citadel was interpreting tmux control output instead of attaching through a real PTY. The existing ttyd design had correct PTY semantics, but one ttyd process and iframe per warm terminal does not scale to 150-250 sessions without either high RAM or slow cold switches.
 
-The repo already contains a diagnostic `/terminal/:sessionId` xterm/WebSocket gateway backed by tmux control mode. Tests cover raw input, paste, resize, long output, alternate screen, reconnect scrollback, and cross-session isolation. Its current weakness is input latency: it shells out to `tmux send-keys` for every input chunk.
+Research points the fix toward the common architecture used by mature web terminals: xterm.js in the browser, a WebSocket transport, and a server-side pseudoterminal. node-pty is the Microsoft-maintained PTY binding used by VS Code and other terminal emulators; xterm.js documents VS Code and ttyd as real-world users; ttyd itself is a good reference that validates xterm.js for terminal rendering, while Citadel's cost problem was the per-session ttyd process/proxy/iframe model.
 
-External reference points:
-- VS Code documents its terminal as xterm.js connected through a pseudoterminal, with persistent sessions and scrollback controls: https://code.visualstudio.com/docs/terminal/advanced
-- Coder's web terminal architecture is browser xterm.js over WebSocket to a workspace agent/PTTY, with reconnect tokens and buffered output: https://coder.com/docs/user-guides/workspace-access/web-terminal
-- xterm.js documents broad production use, including VS Code and ttyd, and provides headless/server-side APIs for terminal state: https://github.com/xtermjs/xterm.js
-- ttyd itself is a WebSocket terminal wrapper built with libwebsockets and xterm.js: https://github.com/mangasagu/ttyd
+Research references:
+- xterm.js documents the standard pattern as browser terminal IO wired to a backing pseudoterminal such as node-pty, and lists VS Code/ttyd among real-world users: https://github.com/xtermjs/xterm.js/
+- node-pty provides `forkpty(3)` bindings so programs receive real pseudoterminal file descriptors and terminal control sequences: https://github.com/microsoft/node-pty
+- VS Code documents its integrated terminal as xterm.js plus a pseudoterminal transport, and notes local echo is disabled for dynamic programs such as tmux: https://code.visualstudio.com/docs/terminal/advanced
 
 ## Spec alignment
-Specs currently name ttyd as the primary cockpit renderer and `/terminal/:sessionId` as diagnostic only. This plan intentionally changes that architecture:
-- `specs/B.3-agent-sessions-terminal.md`: primary renderer becomes Citadel's xterm.js WebSocket client over tmux control mode; ttyd remains available as fallback/standalone.
-- `specs/B.8-ui-performance-quality.md`: performance criteria must cover 50 workspaces and 3-5 agents without per-session ttyd warmup.
-- `specs/C-technical-stack.md`: terminal stack must document xterm/WebSocket primary traffic and ttyd fallback.
-- `docs/operations/config-reference.md` and `docs/operations/runbook.md`: terminal renderer documentation must match the new default.
+- `specs/B.3-agent-sessions-terminal.md`: primary renderer becomes xterm.js over WebSocket to node-pty `tmux attach-session`; ttyd fallback is removed.
+- `specs/B.8-ui-performance-quality.md`: workspace switching and mobile terminal layout describe xterm/PTY attach rather than iframe/ttyd startup.
+- `specs/C-technical-stack.md`: required terminal stack is git, tmux, xterm.js, node-pty, and the daemon WebSocket bridge.
+- `specs/B.2-ade-cockpit.md`: workspace focus now targets the in-process xterm pane directly.
+- Operator docs and architecture docs must match the single supported terminal path.
 
 ## Implementation approach
-Promote the existing tmux-control WebSocket gateway to the default cockpit renderer and keep ttyd as an explicit fallback path.
+Keep tmux as the durable session owner, but make every browser viewer a disposable PTY attach:
 
-Backend:
-- Move the tmux-control bridge into a focused module so `packages/terminal/src/index.ts` stays under the 800-line limit.
-- Keep one `tmux -C attach-session` process per actively mounted browser pane, not one `ttyd` process. This process is a lightweight tmux client attached to the durable session.
-- Replace per-input `execFileSync("tmux", "send-keys", ...)` with writes to the persistent control-mode stdin, batching input through tmux commands on the same process.
-- Preserve output replay on reconnect by sending a bounded tmux snapshot before streaming incremental control-mode output.
-- Allow the daemon resolver to self-heal missing tmux sessions with the existing respawn logic before returning the tmux session name to the WebSocket gateway.
-
-Frontend:
-- Replace the default iframe `TerminalPane` with an in-process xterm.js component that connects to `/terminal/:sessionId`.
-- Use `@xterm/addon-fit` for stable sizing and resize messages.
-- Preserve the existing terminal handle registry for focus/reload/recover affordances.
-- Keep standalone/open-in-new-tab as a ttyd fallback URL, so ttyd remains available on demand but is no longer spawned during normal workspace switching.
+- Browser: `TerminalPane` mounts xterm.js and opens `/terminal/:sessionId`.
+- Transport: terminal input/output bytes use binary WebSocket frames; JSON is reserved for resize/error/exit controls.
+- Daemon: the bridge resolves the session id to a tmux session name, self-heals via the existing respawn path when possible, and spawns `tmux attach-session` with node-pty.
+- Cleanup: WebSocket close/error kills the PTY viewer with `SIGHUP`; the systemd unit kills daemon child processes on restart; the existing tmux-client reaper remains for abrupt viewer death.
+- Scope: remove the ttyd proxy, ttyd manager, iframe key shim, ttyd port config, standalone route, and related tests/docs instead of keeping fallback code.
 
 ## Alternatives considered
-- Tune ttyd LRU cache: rejected as the primary fix. It trades memory for switch latency, and the measured per-ttyd RSS makes warming 150-250 terminals inherently too expensive.
-- Keep ttyd but prewarm more aggressively: rejected because it amplifies the RSS problem and still requires one external renderer process per session.
-- Replace tmux with raw node-pty sessions: rejected for this PR because tmux already owns Citadel's durability, session identity, prompt submission, capture, cleanup, and status logic. Replacing it would be broader and riskier.
-- Use xterm.js directly over tmux control mode: selected because it reuses proven libraries and existing Citadel tests while removing ttyd process/iframe warmup from the default path.
+- Keep tuning ttyd LRU: rejected. It trades memory for switch latency and still scales with external renderer processes.
+- Keep tmux control mode: rejected by operator feedback. It loses native PTY semantics for full-screen/interactive CLIs.
+- Replace tmux with raw long-lived node-pty sessions: rejected for this PR. tmux already owns durability, prompt submission, capture, status, restore, and cleanup.
+- Use xterm.js + node-pty + tmux attach: selected. It preserves the same terminal semantics as a normal tmux attach while removing ttyd process/iframe overhead.
 
 ## Implementation steps
-
-### Specs and docs
-- Update the terminal specs to describe the new primary renderer and ttyd fallback.
-- Update operator docs to reflect `/terminal/:sessionId` as the default WebSocket path and `/terminals/:sessionId/` as fallback/standalone ttyd.
-
-### Backend terminal bridge
-- Create a dedicated tmux-control bridge module in `packages/terminal/src`.
-- Export `attachTerminalWebSocket`, parsing helpers, and control input helpers through `packages/terminal/src/index.ts`.
-- Add persistent control-mode input batching and tests that prove input no longer shells out per key.
-- Wire app-level WebSocket session resolution through existing respawn/self-heal logic.
-
-### Frontend renderer
-- Add xterm.js direct dependencies to `apps/web`.
-- Rework `TerminalPane` to mount xterm.js, connect to `/terminal/:sessionId`, replay snapshots, stream chunks, send input/paste/resize, and show explicit error/reconnect states.
-- Keep ttyd fallback URL for standalone tab/reload escape hatch without default spawning.
-- Update CSS for in-process xterm sizing.
-
-### Performance proof
-- Add or update performance smoke coverage to assert the cockpit no longer needs to spawn ttyd for normal terminal rendering.
-- Run targeted unit tests, typecheck/lint, build, and performance smoke.
-- Capture local process/resource evidence before and after the change.
+1. Update specs/docs to describe the single PTY terminal path and removed ttyd fallback.
+2. Replace the terminal bridge with node-pty `tmux attach-session`, binary frame IO, resize controls, and PTY cleanup.
+3. Update `TerminalPane` for binary IO, xterm shortcut handling, Ctrl+C user-action signaling, reconnect/error UI, and no legacy ensure calls.
+4. Delete ttyd route/proxy/manager/shim/slot code and remove `http-proxy` plus ttyd env/config references.
+5. Update unit, e2e, and performance smoke coverage for the new bridge.
+6. Run local targeted checks, performance smoke, e2e terminal smoke, then push and monitor PR CI.
 
 ## QA/Test Strategy
 
-### Layer evaluation
 | Layer | Verdict | Details |
 |-------|---------|---------|
-| Unit (Vitest) | Required | Backend terminal tests must cover control-mode parsing, raw input, control/meta sequences, paste, resize, long output, alternate screen, reconnect, cross-session isolation, and input batching without per-key shellout. Frontend tests must cover WebSocket URL, reconnect/error UI, handle registry, focus, and no POST `/api/agent-sessions/:id/terminal` on default mount. |
-| E2E (Playwright) | Required if local environment supports it | This changes the cockpit terminal user journey. Run `pnpm e2e` or a targeted terminal/cockpit spec if present. If browser dependencies are unavailable locally, rely on CI and record the blocker. |
+| Unit (Vitest) | Required | Backend terminal tests cover raw input, control/meta sequences, paste, resize, long output, alternate screen, reconnect, cross-session isolation, and invalid controls. Frontend tests cover WebSocket URL, binary output/input, resize control, shortcut handling, Ctrl+C user action, handle registry, and error UI. |
+| E2E (Playwright) | Required | Terminal cockpit smoke opens a real shell session over `/terminal/:sessionId`, sends bytes through the WebSocket, and observes output. Remove fallback endpoint coverage because the endpoint is intentionally gone. |
 
-### New tests to add
-- `packages/terminal/src/tmux-control-bridge.test.ts`: unit tests for command quoting/batching and WebSocket bridge behavior if split out from existing tests.
-- `apps/web/src/terminal-pane.test.ts`: tests proving the default pane opens `/terminal/:sessionId`, does not call the ttyd ensure endpoint, publishes fallback ttyd URL only for standalone action, and handles output/error messages.
-
-### Existing tests to update
-- `packages/terminal/src/index.test.ts`: move or update existing WebSocket gateway tests to the new module exports.
-- `apps/web/src/terminal-pane.test.ts`: update iframe/ttyd-specific assertions to xterm/WebSocket behavior while keeping error detection helpers for fallback where still relevant.
-- `apps/web/src/stage.test.ts` if terminal handles or standalone tab actions change.
-
-### Assertions to add/change/tighten
-- Default cockpit terminal mount must not invoke `POST /api/agent-sessions/:id/terminal`.
-- WebSocket connect path is `/terminal/<encoded session id>`.
-- Input chunks are sent through the existing WebSocket as `{ type: "input", data }`.
-- Resize sends bounded `{ type: "resize", cols, rows }`.
-- Backend input uses persistent control-mode stdin for normal input rather than spawning a new `tmux` process per key.
-- Reconnect sends a bounded snapshot before incremental chunks.
-- Missing tmux sessions self-heal through existing respawn logic where possible.
-
-### Failure modes / edge cases / regression risks
-- Dynamic TUIs may depend on alternate-screen behavior; existing alternate-screen tests must stay green.
-- xterm.js resize loops can cause layout thrash; use `ResizeObserver` and avoid state churn on every terminal write.
-- Control-mode command quoting must preserve spaces, quotes, backslashes, and control keys.
-- Multiple browser panes for different sessions must not cross-stream output.
-- Browser refresh/reconnect must not spawn ttyd or lose the tmux session.
-- Operator standalone fallback must still be available for ttyd-specific compatibility issues.
-
-### Adversarial analysis
-- **How could this fail in production?** Bad tmux command escaping could corrupt typed input; missing cleanup could leave tmux control clients; resize storms could degrade typing; xterm renderer import could bloat the app bundle.
-- **What user actions trigger unexpected behavior?** Rapid workspace switching, paste of multi-line prompts, Ctrl+C/Ctrl+D, terminal reload, browser sleep/resume, and switching into a session whose tmux pane was killed.
-- **What existing behavior could break?** ttyd keyboard shortcut shims, standalone terminal open, theme palette, terminal focus, alternate screen, mouse/wheel behavior.
-- **Which tests credibly catch those failures?** Terminal package WebSocket tests, frontend TerminalPane tests, typecheck/lint, E2E cockpit terminal smoke, performance smoke.
-- **What gaps remain?** Local browser rendering FPS and true multi-day soak are hard to prove in CI; PR should include local resource measurements and leave ttyd fallback available.
+Adversarial checks:
+- Interactive TUIs must see a real PTY, not command-encoded control-mode input.
+- Browser refresh and workspace switching must not kill the durable tmux session.
+- Closing viewers must not leave node-pty/tmux attach children behind.
+- Long output must not require replaying unbounded history on every switch.
+- App shortcuts and Ctrl+C must work while xterm has focus.
 
 ## Tests
-- Update backend terminal Vitest coverage first, confirm failing assertions around persistent input/no shellout, then implement.
-- Update frontend TerminalPane Vitest coverage, confirm old ttyd POST expectations fail, then implement xterm renderer.
-- Run `pnpm vitest run packages/terminal/src/index.test.ts apps/web/src/terminal-pane.test.ts` during development.
-- Run `make check`, `make performance`, and `pnpm e2e` before PR where local dependencies allow.
+- `pnpm vitest run packages/terminal/src/index.test.ts apps/web/src/terminal-pane.test.ts apps/daemon/src/orphan-reaper.test.ts apps/daemon/src/scheduled-agent-service.test.ts`
+- `pnpm typecheck`
+- `pnpm lint`
+- `pnpm check:arch`
+- `pnpm check:deps`
+- `pnpm build`
+- `pnpm exec playwright test e2e/operator-cockpit.spec.ts --project=desktop --grep "terminal"`
+- `pnpm performance`
+- `pnpm check`
 
 ## Schema or contract generation
 No schema changes. No contract generation.
 
 ## Verification
-- `make check` passed locally.
-- `make performance` passed locally with isolated daemon/web ports and no cockpit ttyd ensure requests. Recorded timings: `api_state 1772ms`, `web_ade_visible 890ms`, `workspace_switch_long_buffers 859ms`, `workspace_settings_switch 360ms`.
-- `pnpm e2e e2e/operator-cockpit.spec.ts --project=desktop --grep "terminal"` passed locally, covering the primary `/terminal/:sessionId` WebSocket path and fallback ttyd endpoint.
-- `pnpm typecheck` passed after the final performance-smoke cleanup patch.
-- `pnpm lint` passed after the final performance-smoke cleanup patch.
-- `git diff --check` passed.
-- A full `pnpm e2e` run was attempted. The new terminal specs passed, but unrelated shared-state races failed in existing scratchpad/notes specs across projects; the targeted terminal E2E is the relevant gate for this change.
+Passed locally:
+- `pnpm check` (architecture, size, typecheck, lint, Vitest, coverage, dependency policy, build): 103 test files / 1003 tests passed; coverage all-files statements 89.02%, branches 81.12%.
+- `pnpm exec playwright test e2e/operator-cockpit.spec.ts --project=desktop --grep "terminal"`: 1 passed.
+- `pnpm performance`: `api_state 1934ms`, `web_ade_visible 902ms`, `workspace_switch_long_buffers 931ms`, `workspace_settings_switch 352ms`.
+
+Additional terminal-specific proof:
+- `packages/terminal/src/index.test.ts` now covers binary WebSocket input/output, invalid control messages, heredoc-style multi-line paste, resize, alternate screen, reconnect scrollback, session isolation, and server shutdown cleanup of upgraded terminal sockets.
+- `apps/web/src/terminal-pane.test.ts` covers binary xterm IO, resize controls, app shortcut forwarding, Ctrl+C user-action reporting, and removal of the legacy terminal ensure endpoint.

@@ -28,7 +28,6 @@ import {
 } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import { attachTerminalWebSocket, tmuxSessionExists } from "@citadel/terminal";
-import { createTtydManager, discoverExistingTtyds } from "@citadel/terminal";
 import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
@@ -68,8 +67,7 @@ import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { backfillScratchpadOnStartup } from "./scratchpad.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
-import { buildRespawnTmux, wireTerminalRoutes } from "./terminal-routes-helpers.js";
-import { resolveTtydPortRange } from "./ttyd-slot.js";
+import { buildRespawnTmux } from "./terminal-routes-helpers.js";
 import { fetchVersionControlGated } from "./vc-fetch-gated.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
 import { readWorkspaceGitStatus } from "./workspace-diff.js";
@@ -79,7 +77,6 @@ export type DaemonApp = {
   app: express.Express;
   server: http.Server;
   emit: (type: string, payload: unknown) => void;
-  ttyd: ReturnType<typeof createTtydManager>;
   diagnostics: DiagnosticsLogger;
 };
 
@@ -127,12 +124,6 @@ export function createDaemonApp(input: {
     pid: process.pid,
     nodeVersion: process.versions.node,
   });
-  const ttyd = createTtydManager({ ...resolveTtydPortRange(config.port), diagnostics });
-  // Release the ttyd on every stopAgentSession path; guarded for test stubs.
-  if (typeof operations.setTerminalHooks === "function") {
-    operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId, "session-stopped-hook") });
-  }
-
   const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
   const ghQuota: GhQuotaWiringWithDetach = wireGhQuota({ sseClients, store, resolveRepoFullName });
   const ghAutomationEnabled = automatedGhEnabled();
@@ -165,54 +156,7 @@ export function createDaemonApp(input: {
     }
   };
 
-  // Terminal/ttyd proxy must register before the SPA fallback so it owns /terminals/*.
-  //
-  // Boot-time discover-and-adopt: ttyds are spawned detached and the systemd
-  // unit runs with KillMode=process, so they outlive daemon restarts. Scan
-  // the host for survivors from the previous incarnation and adopt them back
-  // into the manager — same key, same PID, no respawn. The browser's
-  // WebSocket auto-reconnect (xterm `reconnect=3`) lands on the *same* ttyd
-  // it was talking to before the restart.
-  //
-  // Discovery is scoped to this daemon's port slot before adopt() routes by
-  // DB membership. That port filter is a hard safety boundary: sandbox
-  // daemons can carry prod-looking DB rows, but they must not see or SIGTERM
-  // the installed daemon's ttyds.
-  //
-  // Skipped under vitest: tests that boot a daemon would otherwise re-attach
-  // to the live cockpit's ttyds and the next test that calls release() would
-  // kill them.
-  if (!process.env.VITEST) {
-    const survivors = discoverExistingTtyds({
-      basePathPrefix: ttyd.config.basePathPrefix,
-      portBase: ttyd.config.portBase,
-      portMax: ttyd.config.portMax,
-    });
-    const sessionTabIds = new Map<string, string>();
-    for (const session of store.listSessions()) {
-      sessionTabIds.set(session.id, session.tabId ?? session.id);
-    }
-    const resolveTabId = (key: string): string | null => sessionTabIds.get(key) ?? null;
-    const { adopted, reapedDuplicates, reapedUnknown } = ttyd.adopt(survivors, resolveTabId);
-    if (adopted > 0 || reapedDuplicates > 0 || reapedUnknown > 0) {
-      emit("terminal.adopted", {
-        adopted,
-        reapedDuplicates,
-        reapedUnknown,
-        portRange: [ttyd.config.portBase, ttyd.config.portMax],
-      });
-    }
-  }
-  const { recentUserAction } = wireTerminalRoutes({
-    app,
-    server,
-    store,
-    ttyd,
-    dataDir: config.dataDir,
-    emit,
-    config,
-    diagnostics,
-  });
+  const recentUserAction = new Map<string, number>();
   const respawnTmuxForWebSocket = buildRespawnTmux(store, config);
 
   const cachedProviderHealth = () =>
@@ -271,7 +215,24 @@ export function createDaemonApp(input: {
     res.json({ config, configPath });
   });
 
-  registerDiagnosticsRoutes({ app, store, ttyd, diagnostics, config });
+  registerDiagnosticsRoutes({ app, store, diagnostics, config });
+
+  app.post("/api/agent-sessions/:sessionId/terminal-client-event", (req, res) => {
+    const sessionId = typeof req.params.sessionId === "string" ? req.params.sessionId : "";
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    diagnostics.log("terminal-client", typeof body.event === "string" ? body.event.slice(0, 80) : "unknown", {
+      sessionId,
+      path: typeof body.path === "string" ? body.path.slice(0, 240) : "",
+      visibility: typeof body.visibility === "string" ? body.visibility.slice(0, 40) : "unknown",
+    });
+    res.status(204).end();
+  });
+
+  app.post("/api/agent-sessions/:sessionId/user-action", (req, res) => {
+    const sessionId = typeof req.params.sessionId === "string" ? req.params.sessionId : "";
+    recentUserAction.set(sessionId, Date.now());
+    res.status(204).end();
+  });
 
   app.put("/api/config", (req, res) => {
     const nextConfig = mergeConfigPatch(config, req.body);
@@ -527,7 +488,7 @@ export function createDaemonApp(input: {
     resolveRepoFullName,
   });
 
-  registerAgentSessionRoutes(app, { operations, emit, asyncRoute, config, ttyd });
+  registerAgentSessionRoutes(app, { operations, emit, asyncRoute, config });
   registerRestoreRoutes(app, { store, operations, config, emit, asyncRoute });
 
   app.post(
@@ -677,7 +638,7 @@ export function createDaemonApp(input: {
     console.error("[citadel] scheduledAgents.recoverInFlightRuns failed:", error);
   });
 
-  const mcpDeps = { config, store, operations, ttyd, scheduledAgents, scheduledAgentService, providerCache, emit };
+  const mcpDeps = { config, store, operations, scheduledAgents, scheduledAgentService, providerCache, emit };
   registerMcpRoutes(app, asyncRoute, {
     config,
     store,
@@ -742,14 +703,16 @@ export function createDaemonApp(input: {
     res.status(400).json({ error: message });
   });
 
-  // Primary xterm.js gateway. ttyd remains available at /terminals/* as fallback.
+  // Primary terminal gateway: xterm.js in the browser talks to a short-lived
+  // node-pty `tmux attach-session` client. The tmux session remains durable;
+  // the browser viewer is disposable and killed on WebSocket close.
   attachTerminalWebSocket(server, async (sessionId) => {
     const session = store.listSessions().find((candidate) => candidate.id === sessionId);
     if (!session) return null;
     if (session.tmuxSessionName && tmuxSessionExists(session.tmuxSessionName)) return session.tmuxSessionName;
     const respawn = await respawnTmuxForWebSocket(session);
     if (!respawn) return null;
-    emit("terminal.ready", { sessionId: session.id, tmuxSession: respawn.tmuxSessionName, renderer: "xterm" });
+    emit("terminal.ready", { sessionId: session.id, tmuxSession: respawn.tmuxSessionName, renderer: "xterm-pty" });
     return respawn.tmuxSessionName;
   });
 
@@ -791,7 +754,7 @@ export function createDaemonApp(input: {
   const terminalReaper = startTerminalReaper();
   server.on("close", () => terminalReaper.stop());
 
-  return { app, server, emit, ttyd, diagnostics };
+  return { app, server, emit, diagnostics };
 
   function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderValue(providerCache, key, load, ttlMs);

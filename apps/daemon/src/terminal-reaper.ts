@@ -2,10 +2,10 @@ import { execFileSync } from "node:child_process";
 import { sweepPtyLogs as defaultSweepPtyLogs, sweepLegacyAgentSentinels, tmuxPrefix } from "@citadel/terminal";
 
 // citadel-tmux.service SEGV'd at 29.8 GB on 2026-05-26 after accumulating
-// per-client tmux server allocations. Each ttyd browser connection / WS
-// reconnect spawns a fresh `bash -lc → exec tmux attach` child; when the
-// owning ttyd dies or the bash wrapper is killed, the tmux client struct
-// inside the server is sometimes left behind ("orphan") and never reclaimed.
+// per-client tmux server allocations. Each browser terminal connection
+// attaches a tmux client; when the owning viewer process is killed abruptly,
+// the tmux client struct inside the server can be left behind ("orphan") and
+// never reclaimed.
 // On a long-lived host with many sessions, those orphans compound to
 // gigabytes. This reaper periodically detaches clients whose owning
 // process is gone — safe by construction since detach only removes the

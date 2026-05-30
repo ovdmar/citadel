@@ -166,28 +166,25 @@ For interactive runtimes like Claude Code, an initial `prompt` passed to `start_
 
 ## Terminal Renderer
 
-Shell-backed sessions are tmux sessions. The cockpit's default interactive renderer is an in-process xterm.js pane connected to the daemon WebSocket at `/terminal/:sessionId`. The daemon bridges that socket to the matching tmux session through tmux control mode, so normal workspace and agent switching does not spawn one renderer process per session.
-
-`ttyd` remains available as an explicit fallback/standalone renderer at `/terminals/:sessionId/*`. Opening the standalone terminal action lazily starts ttyd for that session; normal cockpit navigation does not.
+Shell-backed sessions are tmux sessions. The cockpit's interactive renderer is an in-process xterm.js pane connected to the daemon WebSocket at `/terminal/:sessionId`. The daemon bridges that socket to the matching tmux session with node-pty running `tmux attach-session`, so normal workspace and agent switching does not spawn one renderer process per session and interactive TUIs get real PTY behavior.
 
 Environment variables:
 
-- `TTYD_BIN` — absolute path to the ttyd binary (default `/home/linuxbrew/.linuxbrew/bin/ttyd`).
-- `CITADEL_SHELL_BIN` — shell used to wrap `tmux attach` (default `$SHELL` then `/bin/bash`).
-- `CITADEL_TTYD_PORT_BASE`, `CITADEL_TTYD_PORT_MAX` — inclusive port range used for fallback ttyd allocation. When unset, the daemon picks a per-instance port slot from the default ttyd range. All ports are bound to `127.0.0.1`.
+- `CITADEL_TMUX_SOCKET` — tmux socket name used by the daemon and terminal bridge.
+- `CITADEL_SHELL_BIN` — shell used when Citadel creates shell-first tmux sessions (default `$SHELL` then `/bin/bash`).
 
 Lifecycle:
 
-- A fallback ttyd process is spawned the first time a client hits `POST /api/agent-sessions/:sessionId/terminal` or opens `/terminals/:sessionId/`. ttyd is launched with `-W --check-origin=false -i 127.0.0.1 -b /terminals/<sessionId>` and runs `bash -lc 'tmux attach -t <session>'`.
-- Stopping a session releases its ttyd. `DELETE /api/agent-sessions/:id/terminal` releases without stopping tmux.
-- On daemon startup, stale `ttyd` processes that listen inside the configured port range are reaped.
+- Opening a terminal WebSocket spawns one disposable node-pty viewer process for `tmux attach-session`.
+- Closing the WebSocket kills that viewer process with `SIGHUP`; the durable tmux session and agent process remain alive.
+- Stopping a session kills the underlying tmux session and deletes the session row.
 
 ## WebSocket Terminal Gateway
 
-The primary xterm/WebSocket gateway is exposed at `/terminal/:sessionId`:
+The xterm/WebSocket gateway is exposed at `/terminal/:sessionId`:
 
-- reconnect sends a bounded visible-screen snapshot,
-- live output streams from tmux control mode as incremental chunks,
-- input, paste, and resize are relayed to tmux.
+- terminal input/output bytes move as binary WebSocket frames,
+- JSON control messages carry resize and error/exit events,
+- reconnect attaches to the same tmux session and resumes from tmux's current visible state plus live PTY output.
 
-This gateway is the cockpit's default renderer and is also used for scripted tests or remote debugging.
+This gateway is the cockpit renderer and is also used for scripted tests or remote debugging.

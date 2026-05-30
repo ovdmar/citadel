@@ -7,8 +7,6 @@ import WebSocket from "ws";
 
 const managedApiPort = process.env.CITADEL_PERFORMANCE_DAEMON_PORT || "14110";
 const managedWebPort = process.env.CITADEL_PERFORMANCE_WEB_PORT || "15173";
-const managedTtydPortBase = process.env.CITADEL_PERFORMANCE_TTYD_PORT_BASE || "25000";
-const managedTtydPortMax = process.env.CITADEL_PERFORMANCE_TTYD_PORT_MAX || "25999";
 const managedTmuxSocket = `citadel-perf-${managedApiPort}`.replace(/[^A-Za-z0-9_.-]/g, "-");
 const apiBaseUrl = process.env.CITADEL_BASE_URL || `http://127.0.0.1:${managedApiPort}`;
 const webBaseUrl = process.env.CITADEL_WEB_URL || `http://127.0.0.1:${managedWebPort}`;
@@ -48,11 +46,11 @@ try {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-    let ttydEnsureRequests = 0;
+    let legacyTerminalRequests = 0;
     page.on("request", (request) => {
       const url = new URL(request.url());
       if (request.method() === "POST" && /^\/api\/agent-sessions\/[^/]+\/terminal$/.test(url.pathname)) {
-        ttydEnsureRequests += 1;
+        legacyTerminalRequests += 1;
       }
     });
     const selectWorkspaceAndSession = async (workspaceName: RegExp, sessionName: string) => {
@@ -85,7 +83,9 @@ try {
       await page.locator("a.set-back").click();
       await page.locator("main[aria-label='Agent stage']").waitFor();
     });
-    if (ttydEnsureRequests > 0) throw new Error(`Cockpit spawned ttyd ${ttydEnsureRequests} time(s) during smoke`);
+    if (legacyTerminalRequests > 0) {
+      throw new Error(`Cockpit hit legacy terminal ensure ${legacyTerminalRequests} time(s) during smoke`);
+    }
   } finally {
     await browser.close();
   }
@@ -119,8 +119,6 @@ async function ensureLocalServices() {
           CITADEL_CONFIG: path.join(managedDataDir, "citadel.config.json"),
           CITADEL_TMUX_SOCKET: managedTmuxSocket,
           CITADEL_OWN_TMUX_SOCKET: "1",
-          CITADEL_TTYD_PORT_BASE: managedTtydPortBase,
-          CITADEL_TTYD_PORT_MAX: managedTtydPortMax,
           CITADEL_DISABLE_BOOT_RESTORE: "1",
           CITADEL_DISABLE_REAPER: "1",
           CITADEL_DISABLE_STATUS_MONITOR: "1",
@@ -226,7 +224,7 @@ async function seedTerminal(sessionId: string) {
     ws.once("open", resolve);
     ws.once("error", reject);
   });
-  ws.send(JSON.stringify({ type: "paste", data: `printf '${"terminal-buffer-line\\n".repeat(600)}'\\r` }));
+  ws.send(Buffer.from(`printf '${"terminal-buffer-line\\n".repeat(600)}'\\r`, "utf8"));
   await new Promise((resolve) => setTimeout(resolve, 250));
   ws.close();
 }

@@ -108,7 +108,7 @@ async function reconcileStaleLiveRows(
     // a non-null but incomplete set. A retried `has-session -t <name>` is
     // the second opinion (3 attempts, 250ms apart); skip the flip whenever
     // it confirms the pane is still alive. This is what stops the cockpit
-    // from showing a Restore banner for sessions whose tmux + ttyd are
+    // from showing a Restore banner for sessions whose tmux viewer path is
     // perfectly fine.
     if (await hasSession(session.tmuxSessionName)) continue;
     store.updateSessionStatus(session.id, {

@@ -52,7 +52,7 @@ export function buildStatusMonitorDeps(
   // it cheaply at the adapter boundary — but we can avoid forking `tmux
   // capture-pane` for sessions whose activity timestamp didn't advance
   // since the last call. This is critical because the daemon also proxies
-  // ttyd WebSockets; sync capture storms in this process cause terminal
+  // terminal WebSockets; sync capture storms in this process cause terminal
   // input lag and reconnects.
   const captureCache = new Map<string, { activityMs: number; content: string }>();
   // Shared snapshot of session_activity from the most recent tick. Updated

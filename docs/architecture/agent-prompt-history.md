@@ -17,7 +17,7 @@ per-runtime adapter. Three things follow from this:
 - **Parsing is deterministic and token-free.** Adapters are pure JS — a
   file read + `JSON.parse` per line + a small filter. No LLM call anywhere.
 - **The cockpit UI doesn't need a special path.** Keystrokes go through
-  ttyd → tmux → runtime; the runtime captures them; the adapter surfaces
+  xterm.js → WebSocket → node-pty → tmux → runtime; the runtime captures them; the adapter surfaces
   them.
 
 ## Adapters (`packages/runtimes/src/transcripts/`)
