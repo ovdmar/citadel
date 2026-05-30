@@ -253,6 +253,37 @@ a:hover {
   display: grid;
   min-height: 100vh;
   background: var(--surface);
+  /* Positioning context for .route-overlay (Settings/Scratchpad/etc render
+   * inside it as absolute overlays so the Cockpit and its ttyd iframes stay
+   * mounted underneath). Without this the overlay would anchor to the
+   * viewport via the default initial containing block and the cockpit-shell
+   * grid below would still receive pointer events. */
+  position: relative;
+}
+
+/* Holds the active child route content when the URL is anything other than
+ * `/`. Sits over the Cockpit (which is always mounted in CockpitLayout) so
+ * Settings/Scratchpad/etc. visually replace the cockpit without unmounting
+ * its TerminalPane iframes. Returning to `/` simply hides this layer via
+ * `data-hidden` and the live iframes are right where they were — the
+ * overlay's Outlet stays mounted in a stable DOM position, so TanStack
+ * Router never tears the parent layout (and Cockpit underneath) down. */
+.route-overlay {
+  position: absolute;
+  inset: 0;
+  background: var(--surface);
+  z-index: 10;
+  overflow: hidden;
+  display: grid;
+  min-height: 0;
+}
+
+/* `display: none` collapses the overlay completely when the user is on `/`,
+ * giving the Cockpit full pointer-event and visual real estate. The Outlet
+ * still mounts the index route's component (which is `() => null`), so no
+ * extra DOM weight; we just take this branch out of layout. */
+.route-overlay[data-hidden] {
+  display: none;
 }
 
 /* Pulse / dots — shared across sidebar, tabs, deploys, bottom bar */

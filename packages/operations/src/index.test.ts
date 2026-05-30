@@ -560,7 +560,16 @@ describe("OperationService", () => {
     expect(reconciledRepo).toBeUndefined();
   });
 
-  it("reconcile flips session to 'stopped' when agent exited but tmux pane is still alive", async () => {
+  // Shell-first replacement of the legacy "reconcile flips to stopped" test.
+  // The legacy assertion was: wrapper-`.live` sentinel removed → reconcile
+  // flips status='stopped'. New behavior (shell-first lifecycle): the
+  // pane's foreground command IS the source of truth. For a `shell`
+  // runtime session, the pane PID is bash itself (no separate agent); the
+  // reconciler leaves it alone because the shell IS the runtime. The
+  // operator-visible "stopped" state is reserved for explicit Stop button
+  // presses (which delete the row entirely). The new regression-pin tests
+  // for non-shell agent runtimes live in status-monitor.test.ts.
+  it("reconcile no longer mass-flips shell-runtime sessions to 'stopped' (shell-first invariant)", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
@@ -579,17 +588,19 @@ describe("OperationService", () => {
     try {
       expect(session.tmuxSessionName).toBeTruthy();
       const sessionName = session.tmuxSessionName as string;
-      // Simulate the wrapper's "agent exited" cleanup: the inner agent has
-      // died, the wrapper has removed the sentinel, but the tmux pane is
-      // still alive (showing the fallback login shell).
+      // Legacy sentinel removal is now a no-op — the wrapper is gone and
+      // reconcile doesn't read /tmp sentinels at all (it reads the pane's
+      // foreground command via tmux). For a shell runtime session, the
+      // pane foreground IS bash, which is the runtime binary — reconcile
+      // leaves it alone.
       fs.rmSync(agentLiveSentinelPath(sessionName), { force: true });
 
-      const result = service.reconcile();
-      expect(result.sessions).toBeGreaterThan(0);
+      service.reconcile();
 
       const reconciled = store.listSessions().find((candidate) => candidate.id === session.id);
-      expect(reconciled?.status).toBe("stopped");
-      // Pane must remain alive — the user can keep working in the shell.
+      // Shell-runtime session: status preserved (NOT flipped to stopped).
+      expect(reconciled?.status).not.toBe("stopped");
+      // Pane is still alive — the user can keep working in the shell.
       expect(tmuxSessionExists(sessionName)).toBe(true);
     } finally {
       if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);

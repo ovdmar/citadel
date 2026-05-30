@@ -237,8 +237,8 @@ describe("namespace routes + MCP integration", () => {
       expect(recreate.namespace.archivedAt).toBeNull();
       expect(recreate.namespace.color).toBe("#445566");
 
-      // assign_workspace_to_namespace via MCP without namespaceId is rejected
-      // by the daemon (Zod parse), surfacing a validation error to the caller.
+      // assign_workspace_to_namespace via JSON-RPC without namespaceId returns
+      // a protocol-level error envelope; JSON-RPC errors still use HTTP 200.
       const missingArgResponse = await fetch(`${baseUrl}/api/mcp/rpc`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -249,12 +249,11 @@ describe("namespace routes + MCP integration", () => {
           params: { name: "assign_workspace_to_namespace", arguments: { workspaceId: workspaceCreate.workspaceId } },
         }),
       });
-      expect(missingArgResponse.status).toBe(400);
+      expect(missingArgResponse.status).toBe(200);
       const missingArgBody = (await missingArgResponse.json()) as {
-        error?: string;
-        issues?: Array<{ path: string }>;
+        error?: { message?: string };
       };
-      expect(missingArgBody.issues?.some((issue) => issue.path === "namespaceId")).toBe(true);
+      expect(missingArgBody.error?.message).toContain("namespaceId");
     } finally {
       await closeServer(server);
     }

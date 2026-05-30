@@ -25,6 +25,13 @@ export type {
   TeardownHookEnv,
   TeardownStreamHandler,
 } from "./teardown.js";
+export {
+  FIX_CONFLICTS_DEFAULT_PROMPT,
+  FIX_CONFLICTS_HOOK_RELATIVE_PATH,
+  resolveFixConflictsPrompt,
+} from "./fix-conflicts.js";
+export type { FixConflictsHookEnv, ResolveFixConflictsPromptResult } from "./fix-conflicts.js";
+export { CITADEL_NON_FF_POLICY } from "./non-ff-policy.js";
 
 export type CommandHook = {
   id: string;

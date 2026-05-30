@@ -19,18 +19,20 @@ export type WorkspaceCardData = {
   namespaces?: Namespace[];
 };
 
-export type PrTone = "missing" | "pending" | "passing" | "failing" | "merged";
+export type PrTone = "missing" | "pending" | "passing" | "failing" | "merged" | "conflicting";
 export type ApprovalTone = "none" | "pending" | "changes" | "approved";
 
 export type WorkspaceAgentTone = "attention" | "rate_limited" | "running" | "idle";
 
 // Aggregates the per-agent statuses for a workspace into one tone for the
 // status dot. Priority: attention > rate_limited > running > idle. Shell
-// sessions are excluded — they're plain terminals, not agents.
+// sessions are excluded — they're plain terminals, not agents. usage_limited
+// (account-wide cap, waits for a known reset) collapses into the same blue
+// `rate_limited` tone since both mean "stalled, will recover".
 export function deriveWorkspaceAgentTone(sessions: AgentSession[]): WorkspaceAgentTone {
   const agentSessions = sessions.filter((s) => s.runtimeId !== "shell");
   if (agentSessions.some((s) => s.status === "waiting_for_input" || sessionNeedsAttention(s))) return "attention";
-  if (agentSessions.some((s) => s.status === "rate_limited")) return "rate_limited";
+  if (agentSessions.some((s) => s.status === "rate_limited" || s.status === "usage_limited")) return "rate_limited";
   if (agentSessions.some((s) => s.status === "starting" || s.status === "running")) return "running";
   return "idle";
 }
@@ -446,6 +448,7 @@ export function prToneFor(pr: PullRequestSummary | null | undefined): PrTone {
   if (!pr) return "missing";
   if (pr.state?.toLowerCase() === "merged") return "merged";
   if (pr.state?.toLowerCase() === "closed") return "missing";
+  if (pr.mergeable === "conflicting" || pr.mergeStateStatus === "DIRTY") return "conflicting";
   const failed = pr.checks.some((check) =>
     ["failure", "cancelled", "timed_out", "action_required"].includes(String(check.conclusion ?? "").toLowerCase()),
   );
