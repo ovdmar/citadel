@@ -17,12 +17,15 @@ type RepoRoutesInput = {
 };
 
 export function registerRepoRoutes({ app, store, operations, config, providerCache, emit }: RepoRoutesInput): void {
-  app.post("/api/repos", (req, res) => {
-    const input = CreateRepoInputSchema.parse(req.body);
-    const repo = operations.registerRepo(input);
-    emit("repo.updated", { repoId: repo.id, repo });
-    res.status(201).json({ repo });
-  });
+  app.post(
+    "/api/repos",
+    asyncRoute(async (req, res) => {
+      const input = CreateRepoInputSchema.parse(req.body);
+      const repo = operations.registerRepo(input);
+      emit("repo.updated", { repoId: repo.id, repo });
+      res.status(201).json({ repo });
+    }),
+  );
 
   registerRepoDiscoveryRoutes({ app, config, asyncRoute });
 

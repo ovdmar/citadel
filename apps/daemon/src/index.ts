@@ -85,6 +85,28 @@ operations.reconcile();
 const daemon = createDaemonApp({ config, configPath, store, operations });
 const { server } = daemon;
 
+process.on("uncaughtException", (error) => {
+  console.error("[daemon] uncaughtException", error);
+  process.exit(1);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[daemon] unhandledRejection", reason);
+  process.exit(1);
+});
+process.on("exit", (code) => {
+  console.log(`[daemon] process exit ${code}`);
+});
+for (const [signal, exitCode] of [
+  ["SIGHUP", 129],
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+] as const) {
+  process.once(signal, () => {
+    console.log(`[daemon] received ${signal}`);
+    process.exit(exitCode);
+  });
+}
+
 // Try to bind; on EADDRINUSE, walk the next 10 ports so worktree-derived ports
 // that happen to collide (cksum-mod-100 birthday hits at ~15 worktrees) don't
 // silently kill the daemon. Persist the chosen port to .citadel/dev.json so

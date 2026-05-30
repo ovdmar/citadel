@@ -23,6 +23,10 @@ export default defineConfig({
   testDir: "e2e",
   timeout: 30_000,
   expect: { timeout: 10_000 },
+  // The e2e suite shares one sandbox daemon and SQLite database. Keep CI
+  // deterministic even on high-core runners; local developers can still opt
+  // into parallelism by running without CI=true or passing --workers.
+  workers: process.env.CI ? 1 : undefined,
   use: {
     baseURL: webBase,
     trace: "retain-on-failure",
@@ -67,7 +71,7 @@ export default defineConfig({
         // E2E writes screenshot artifacts under docs/campaigns. Run the
         // built daemon, not tsx watch/source mode, so CI cannot restart the
         // API server between tests and surface transient ECONNRESETs.
-        'sh -c \'rm -f "$CITADEL_PLAYWRIGHT_DAEMON_LOG"; (pnpm --filter @citadel/daemon build && pnpm --filter @citadel/daemon start) >"$CITADEL_PLAYWRIGHT_DAEMON_LOG" 2>&1; code=$?; echo "[playwright-daemon] exited $code at $(date -u +%FT%TZ)" >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG"; exit $code\'',
+        'sh -c \'rm -f "$CITADEL_PLAYWRIGHT_DAEMON_LOG"; case "$CITADEL_DATA_DIR" in /tmp/citadel-playwright-data*) rm -rf "$CITADEL_DATA_DIR" ;; *) echo "[playwright-daemon] refusing to wipe unexpected CITADEL_DATA_DIR=$CITADEL_DATA_DIR" >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG"; exit 2 ;; esac; mkdir -p "$CITADEL_DATA_DIR"; (pnpm --filter @citadel/daemon build && pnpm --filter @citadel/daemon start) >"$CITADEL_PLAYWRIGHT_DAEMON_LOG" 2>&1; code=$?; echo "[playwright-daemon] exited $code at $(date -u +%FT%TZ)" >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG"; exit $code\'',
       ].join(" "),
       url: `${daemonBase}/api/health`,
       reuseExistingServer: false,
