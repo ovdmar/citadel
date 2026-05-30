@@ -36,7 +36,7 @@ import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
-import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
+import { asyncRoute, cachedProviderValue, parsePositiveInt } from "./app-helpers.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { getBootRestoreSummary } from "./boot-restore.js";
@@ -117,6 +117,13 @@ export function createDaemonApp(input: {
   };
   const app = express();
   const server = http.createServer(app);
+  // Playwright's API client can reuse daemon sockets across long browser-only
+  // stretches of the e2e suite. Node's 5s default keep-alive timeout can close
+  // those sockets just as the next request starts on slower CI runners, which
+  // surfaces as a transient ECONNRESET instead of an application response.
+  const keepAliveTimeoutMs = parsePositiveInt(process.env.CITADEL_HTTP_KEEP_ALIVE_TIMEOUT_MS, 120_000);
+  server.keepAliveTimeout = keepAliveTimeoutMs;
+  server.headersTimeout = Math.max(server.headersTimeout, keepAliveTimeoutMs + 5_000);
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
   // Always-on structured diagnostics. Writes JSONL to <dataDir>/diagnostics.jsonl
