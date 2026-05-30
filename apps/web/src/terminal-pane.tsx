@@ -18,7 +18,7 @@ export type TerminalSocketMessage = {
 
 const RUNBOOK_URL = "/docs/operations/terminal-runbook";
 const XTERM_FONT = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
-const SHIFT_ENTER_LITERAL = "\n";
+const SHIFT_ENTER_INPUT = "\n";
 
 /**
  * Per-session handle used by Stage tabs to drive a live terminal WebSocket.
@@ -157,6 +157,13 @@ export function TerminalPane(props: { session: AgentSession }) {
           });
     resizeObserver?.observe(host);
     window.addEventListener("resize", sendResize);
+    const nativeKeyHandler = (event: KeyboardEvent) => {
+      if (!handleTerminalKeyEvent(event, terminal, sessionId, ws)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    };
+    host.addEventListener("keydown", nativeKeyHandler, true);
     terminal.attachCustomKeyEventHandler((event) => handleTerminalKeyEvent(event, terminal, sessionId, ws));
     const inputDisposable = terminal.onData((data) => {
       if (data.includes("\u0003")) recordTerminalUserAction(sessionId, "ctrl_c");
@@ -202,6 +209,7 @@ export function TerminalPane(props: { session: AgentSession }) {
       disposed = true;
       inputDisposable.dispose();
       resizeObserver?.disconnect();
+      host.removeEventListener("keydown", nativeKeyHandler, true);
       window.removeEventListener("resize", sendResize);
       ws.close();
       terminal.dispose();
@@ -301,7 +309,7 @@ function handleTerminalKeyEvent(event: KeyboardEvent, terminal: Terminal, sessio
     return false;
   }
   if (key === "enter" && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
-    sendTerminalControl(ws, { type: "input", data: SHIFT_ENTER_LITERAL });
+    sendTerminalControl(ws, { type: "input", data: SHIFT_ENTER_INPUT });
     return false;
   }
   if (isMacPlatform()) {

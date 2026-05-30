@@ -215,6 +215,24 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     );
   });
 
+  it("captures Shift+Enter before the browser terminal can emit a plain Enter", async () => {
+    await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+
+    await act(async () => ws.open());
+    const event = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true });
+    const downstream = vi.fn();
+    host.addEventListener("keydown", downstream);
+
+    host.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(downstream).not.toHaveBeenCalled();
+    expect(ws.sent).toContain(JSON.stringify({ type: "input", data: "\n" }));
+  });
+
   it("does not reconnect the terminal when the resolved theme changes", async () => {
     applyThemePreference("dark");
     await renderTerminal();
