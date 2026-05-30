@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { type APIRequestContext, expect, test } from "@playwright/test";
+import { retryTransientApiError } from "./helpers/api.js";
 
 // These tests target the current ADE cockpit shell. They were rewritten in the
 // 2026-05-22 feedback round when the older spec drifted from the redesigned UI
@@ -293,15 +294,31 @@ async function waitForWorkspace(request: APIRequestContext, workspaceId: string,
 }
 
 async function registerRepo(request: APIRequestContext, fixture: ReturnType<typeof createGitFixture>, name?: string) {
-  const repoResponse = await request.post(`${API_BASE}/api/repos`, {
-    data: {
-      rootPath: fixture.repoPath,
-      name: name ?? `E2E ${Date.now().toString(36)}`,
-      worktreeParent: path.join(fixture.dir, "worktrees"),
-    },
-  });
-  expect(repoResponse.ok()).toBe(true);
-  return ((await repoResponse.json()) as { repo: { id: string } }).repo;
+  const repoName = name ?? `E2E ${Date.now().toString(36)}`;
+  const rootPath = path.resolve(fixture.repoPath);
+  const repoData = {
+    rootPath,
+    name: repoName,
+    worktreeParent: path.join(fixture.dir, "worktrees"),
+  };
+
+  try {
+    const repoResponse = await retryTransientApiError("POST /api/repos", () =>
+      request.post(`${API_BASE}/api/repos`, { data: repoData }),
+    );
+    expect(repoResponse.ok()).toBe(true);
+    return ((await repoResponse.json()) as { repo: { id: string } }).repo;
+  } catch (error) {
+    const reposResponse = await retryTransientApiError("GET /api/repos after register reset", () =>
+      request.get(`${API_BASE}/api/repos`),
+    );
+    if (reposResponse.ok()) {
+      const body = (await reposResponse.json()) as { repos: Array<{ id: string; name: string; rootPath: string }> };
+      const repo = body.repos.find((candidate) => candidate.name === repoName && candidate.rootPath === rootPath);
+      if (repo) return { id: repo.id };
+    }
+    throw error;
+  }
 }
 
 async function createWorkspace(request: APIRequestContext, repoId: string, name: string) {

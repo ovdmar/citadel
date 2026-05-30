@@ -1,4 +1,5 @@
 import type { APIRequestContext } from "@playwright/test";
+import { retryTransientApiError } from "./api.js";
 
 // Last line of defense against the e2e suite writing into a production install.
 //
@@ -14,7 +15,7 @@ import type { APIRequestContext } from "@playwright/test";
 // so a misconfigured run aborts before any destructive PUT happens.
 export async function assertDaemonIsSandbox(request: APIRequestContext, apiBase: string): Promise<void> {
   const expectedPrefix = process.env.CITADEL_PLAYWRIGHT_SANDBOX_PREFIX || "/tmp/citadel-playwright-data";
-  const res = await request.get(`${apiBase}/api/health`);
+  const res = await retryTransientApiError("GET /api/health", () => request.get(`${apiBase}/api/health`));
   if (!res.ok()) {
     throw new Error(
       `[sandbox-guard] could not reach ${apiBase}/api/health (status ${res.status()}). Refusing to run destructive tests against an unknown daemon.`,
