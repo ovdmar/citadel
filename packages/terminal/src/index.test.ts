@@ -24,6 +24,7 @@ import {
   shellQuote,
   stopBackgroundSessionPipe,
   submitPrompt,
+  tmuxPrefix,
   tmuxSessionExists,
 } from "./index.js";
 import { hasCollapsedPasteMarker } from "./submit-prompt.js";
@@ -502,5 +503,5 @@ function waitForWebSocketOutput(ws: WebSocket, expected: string, type?: string) 
 }
 
 function execTmux(args: string[]) {
-  return execFileSync("tmux", args, { encoding: "utf8" });
+  return execFileSync("tmux", [...tmuxPrefix(), ...args], { encoding: "utf8" });
 }

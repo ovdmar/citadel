@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { LaunchAgentInputSchema } from "@citadel/contracts";
 import { SqliteStore } from "@citadel/db";
-import { agentLiveSentinelPath, killTmuxSession, tmuxSessionExists } from "@citadel/terminal";
+import { agentLiveSentinelPath, killTmuxSession, tmuxPrefix, tmuxSessionExists } from "@citadel/terminal";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperationService } from "./index.js";
 
@@ -13,11 +13,7 @@ const tmuxSessions: string[] = [];
 
 afterEach(() => {
   for (const session of tmuxSessions.splice(0)) {
-    try {
-      execFileSync("tmux", ["kill-session", "-t", session], { stdio: "ignore" });
-    } catch {
-      /* already gone */
-    }
+    killTmuxSession(session);
   }
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -407,6 +403,7 @@ describe("OperationService", () => {
       // chat input. If our follow-up does not press Enter, the loop never
       // resolves and the assertion below times out.
       execFileSync("tmux", [
+        ...tmuxPrefix(),
         "send-keys",
         "-t",
         session.tmuxSessionName ?? "",
@@ -560,7 +557,7 @@ describe("OperationService", () => {
       { command: "bash", args: ["-l"], displayName: "Shell" },
     );
     // Kill the underlying tmux session out-of-band and remove the repo from disk.
-    if (session.tmuxSessionName) execFileSync("tmux", ["kill-session", "-t", session.tmuxSessionName]);
+    if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
     fs.rmSync(fixture.repoPath, { recursive: true, force: true });
     const result = service.reconcile();
     expect(result.sessions).toBeGreaterThan(0);
