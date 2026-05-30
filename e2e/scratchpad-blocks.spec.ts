@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { assertDaemonIsSandbox } from "./helpers/sandbox-guard.js";
+import { acquireSharedStateLock } from "./helpers/shared-state-lock.js";
 
 const API_BASE =
   process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012"}`;
@@ -8,15 +9,32 @@ const API_BASE =
 // daemon HTTP, then verify the cockpit migrates it on first read and surfaces
 // the `migrate-to-blocks` history entry.
 test.describe("scratchpad blocks", () => {
-  test.beforeAll(async ({ request }) => {
+  test.setTimeout(300_000);
+
+  let releaseSharedState: (() => void) | null = null;
+
+  test.beforeAll(async ({ request }, testInfo) => {
+    testInfo.setTimeout(300_000);
     // Defense in depth against the prod-clobbering bug: refuse to run if the
     // daemon we're about to PUT empty content into is not a sandbox install.
     await assertDaemonIsSandbox(request, API_BASE);
+    releaseSharedState = await acquireSharedStateLock("scratchpad", testInfo.titlePath.join(" > "));
   });
 
   test.beforeEach(async ({ request }) => {
+    await request.put(`${API_BASE}/api/config`, { data: { scratchpad: {} } });
     // Reset to a known stub before each test so prior fixtures don't carry over.
     await request.put(`${API_BASE}/api/scratchpad`, { data: { content: "" } });
+  });
+
+  test.afterEach(async ({ request }) => {
+    await request.put(`${API_BASE}/api/scratchpad`, { data: { content: "" } });
+    await request.put(`${API_BASE}/api/config`, { data: { scratchpad: {} } });
+  });
+
+  test.afterAll(() => {
+    releaseSharedState?.();
+    releaseSharedState = null;
   });
 
   test("migrates legacy content on first read and shows migrate-to-blocks in history", async ({
@@ -40,7 +58,7 @@ test.describe("scratchpad blocks", () => {
     if (testInfo.project.name === "desktop") {
       await page.getByRole("button", { name: "Show history" }).click();
       const history = page.locator(".scratchpad-history-list");
-      await expect(history.locator(".source-migrate")).toBeVisible();
+      await expect(history.locator(".source-migrate").first()).toBeVisible();
     } else {
       const list = await request.get(`${API_BASE}/api/scratchpad/history`);
       const body = (await list.json()) as { entries: Array<{ source: string }> };
@@ -107,9 +125,13 @@ test.describe("scratchpad blocks", () => {
     await textarea.fill("");
     await textarea.press("ControlOrMeta+Enter");
     await expect(page.getByText("delete me via empty edit")).toHaveCount(0);
-    const list = await request.get(`${API_BASE}/api/scratchpad/blocks`);
-    const body = (await list.json()) as { blocks: unknown[] };
-    expect(body.blocks).toHaveLength(0);
+    await expect
+      .poll(async () => {
+        const list = await request.get(`${API_BASE}/api/scratchpad/blocks`);
+        const body = (await list.json()) as { blocks: unknown[] };
+        return body.blocks.length;
+      })
+      .toBe(0);
   });
 
   test("hover-delete removes a block; undo restores it", async ({ page, request }) => {

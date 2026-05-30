@@ -4,6 +4,7 @@ import type { McpToolCall } from "@citadel/mcp";
 import { mcpStatus, mcpToolDefinitions, serializeWorkspaceResource } from "@citadel/mcp";
 import { collectProviderHealth } from "@citadel/providers";
 import type express from "express";
+import { ZodError } from "zod";
 import { rpcError, rpcJsonContent, rpcResourceContent, rpcResult } from "./rpc.js";
 
 export type McpRouteContext = {
@@ -119,6 +120,7 @@ export function registerMcpRoutes(
             return res.json(rpcError(request.id, -32601, "method_not_found"));
         }
       } catch (error) {
+        if (error instanceof ZodError) throw error;
         if (isNotification) return res.status(202).end();
         return res.json(rpcError(request.id, -32000, errorMessage(error)));
       }

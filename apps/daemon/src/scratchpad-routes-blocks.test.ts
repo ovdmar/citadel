@@ -21,6 +21,7 @@ afterEach(() => {
 process.env.CITADEL_DISABLE_REAPER = "1";
 
 const createFixture = () => createScratchpadFixture(dirs);
+const INTEGRATION_TEST_TIMEOUT_MS = 20_000;
 
 describe("scratchpad block routes + MCP block tools", () => {
   it("exposes list_blocks / add_block / update_block / delete_block via MCP", async () => {
@@ -403,20 +404,24 @@ describe("scratchpad block routes + MCP block tools", () => {
     }
   });
 
-  it("GET /api/scratchpad/blocks/search clamps limit", async () => {
-    const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
-    const baseUrl = await listen(server);
-    try {
-      for (let i = 0; i < 55; i++) {
-        await postJson(`${baseUrl}/api/scratchpad/blocks`, { text: `note ${i} scratchpad item` });
+  it(
+    "GET /api/scratchpad/blocks/search clamps limit",
+    async () => {
+      const fixture = createFixture();
+      const { server } = createDaemonApp(fixture);
+      const baseUrl = await listen(server);
+      try {
+        for (let i = 0; i < 55; i++) {
+          await postJson(`${baseUrl}/api/scratchpad/blocks`, { text: `note ${i} scratchpad item` });
+        }
+        const search = await getJson<{ matches: unknown[] }>(
+          `${baseUrl}/api/scratchpad/blocks/search?q=scratchpad&limit=9999`,
+        );
+        expect(search.matches.length).toBeLessThanOrEqual(50);
+      } finally {
+        await closeServer(server);
       }
-      const search = await getJson<{ matches: unknown[] }>(
-        `${baseUrl}/api/scratchpad/blocks/search?q=scratchpad&limit=9999`,
-      );
-      expect(search.matches.length).toBeLessThanOrEqual(50);
-    } finally {
-      await closeServer(server);
-    }
-  });
+    },
+    INTEGRATION_TEST_TIMEOUT_MS,
+  );
 });

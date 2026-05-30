@@ -13,7 +13,7 @@ import { type APIRequestContext, expect, test } from "@playwright/test";
 // hits the real daemon — that path is exercised by jira-routes tests.
 
 const API_BASE =
-  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "4012"}`;
+  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012"}`;
 
 test.describe("Jira picker", () => {
   test("opens picker, selects a recent issue, then unattaches via the hover affordance", async ({
@@ -77,6 +77,7 @@ test.describe("Jira picker", () => {
       // Picker returns to the "Attach Jira ticket" empty state.
       await expect(inspector.getByRole("button", { name: /Attach Jira ticket/i })).toBeVisible();
     } finally {
+      await page.unrouteAll({ behavior: "ignoreErrors" }).catch(() => {});
       if (workspaceId)
         await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`).catch(() => {});
       fs.rmSync(fixture.dir, { recursive: true, force: true });
@@ -169,6 +170,7 @@ test.describe("Jira picker", () => {
       // (mocked) server response settles.
       await expect(chip.getByText(/In Progress/i)).toBeVisible();
     } finally {
+      await page.unrouteAll({ behavior: "ignoreErrors" }).catch(() => {});
       if (workspaceId)
         await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`).catch(() => {});
       fs.rmSync(fixture.dir, { recursive: true, force: true });
