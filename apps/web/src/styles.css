@@ -309,25 +309,45 @@ a:hover {
 .cit-pulse-run {
   background: var(--c-warn);
   box-shadow: 0 0 0 3px var(--c-warn-bg);
+  --cit-pulse-ripple: var(--c-warn);
 }
 .cit-pulse-bad {
   background: var(--c-bad);
   box-shadow: 0 0 0 3px var(--c-bad-bg);
+  --cit-pulse-ripple: var(--c-bad);
 }
 .cit-pulse-info {
   background: var(--c-info);
   box-shadow: 0 0 0 3px var(--c-info-bg);
+  --cit-pulse-ripple: var(--c-info);
 }
 .cit-pulse-idle {
   background: var(--c-fg-4);
 }
+/* Lifecycle "done" — distinct from cit-pulse-ok (solid green, used for
+   non-lifecycle indicators like the auto-mode pill and deploy-health badge).
+   cit-pulse-done is a pulsing green that signals "work has finished, awaits
+   review" per specs/B.3 item 14. */
+.cit-pulse-done {
+  background: var(--c-ok);
+  box-shadow: 0 0 0 3px var(--c-ok-bg);
+  --cit-pulse-ripple: var(--c-ok);
+}
+/* Shared ripple animation for the "something is happening" pulse modifiers.
+   Each modifier sets --cit-pulse-ripple to its own color via the rules above.
+   Note: applying the ripple to cit-pulse-bad universally (not just lifecycle
+   dots) means the inspector's "down" deploy chip at inspector.tsx:283 now
+   pulses too — that is intentional. Red pulse = attention is the design
+   language; a "down" app is an attention state. */
 .cit-pulse-run::after,
+.cit-pulse-done::after,
+.cit-pulse-bad::after,
 .cit-pulse-info::after {
   content: "";
   position: absolute;
   inset: -3px;
   border-radius: 50%;
-  border: 1px solid var(--c-warn);
+  border: 1px solid var(--cit-pulse-ripple);
   opacity: 0;
   animation: cit-ripple 1.8s ease-out infinite;
 }

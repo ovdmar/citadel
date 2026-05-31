@@ -499,15 +499,27 @@ async function waitForWorkspace(request: APIRequestContext, workspaceId: string,
 }
 
 async function registerRepo(request: APIRequestContext, fixture: ReturnType<typeof createGitFixture>, name?: string) {
-  const repoResponse = await apiPost(request, `${API_BASE}/api/repos`, {
-    data: {
-      rootPath: fixture.repoPath,
-      name: name ?? `E2E ${Date.now().toString(36)}`,
-      worktreeParent: path.join(fixture.dir, "worktrees"),
-    },
-  });
-  expect(repoResponse.ok()).toBe(true);
-  return ((await repoResponse.json()) as { repo: { id: string } }).repo;
+  const repoName = name ?? `E2E ${Date.now().toString(36)}`;
+  const rootPath = path.resolve(fixture.repoPath);
+  const repoData = {
+    rootPath,
+    name: repoName,
+    worktreeParent: path.join(fixture.dir, "worktrees"),
+  };
+
+  try {
+    const repoResponse = await apiPost(request, `${API_BASE}/api/repos`, { data: repoData });
+    expect(repoResponse.ok()).toBe(true);
+    return ((await repoResponse.json()) as { repo: { id: string } }).repo;
+  } catch (error) {
+    const reposResponse = await apiGet(request, `${API_BASE}/api/repos`);
+    if (reposResponse.ok()) {
+      const body = (await reposResponse.json()) as { repos: Array<{ id: string; name: string; rootPath: string }> };
+      const repo = body.repos.find((candidate) => candidate.name === repoName && candidate.rootPath === rootPath);
+      if (repo) return { id: repo.id };
+    }
+    throw error;
+  }
 }
 
 async function createWorkspace(request: APIRequestContext, repoId: string, name: string) {

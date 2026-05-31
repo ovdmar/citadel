@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   COMM_TRUNCATION,
+  agentExitHintCommand,
   ensureTmuxSession,
   killTmuxSession,
   launchAgentInSession,
@@ -63,6 +64,12 @@ describe("ensureTmuxSession (shell-first)", () => {
 });
 
 describe("launchAgentInSession", () => {
+  it("builds a Claude exit hint with the real runtime session id and no placeholder", () => {
+    const command = agentExitHintCommand({ runtimeId: "claude-code", runtimeSessionId: "session-real-123" });
+    expect(command).toContain("claude resume session-real-123");
+    expect(command).not.toContain("<sessionId>");
+  });
+
   it("sends env-prefixed argv via send-keys and waits for the runtime binary to be foreground (positive predicate)", async () => {
     const { cwd, sessionName } = makeShellSession("launch");
     await ensureTmuxSession({ sessionName, cwd });
@@ -104,6 +111,29 @@ describe("launchAgentInSession", () => {
     expect(longName.slice(0, COMM_TRUNCATION).length).toBe(15);
     expect(longName.slice(0, COMM_TRUNCATION)).toBe("really-long-run");
   });
+
+  it("prints the Claude resume hint after the launched agent exits", async () => {
+    const { cwd, sessionName } = makeShellSession("hint");
+    await ensureTmuxSession({ sessionName, cwd });
+    await launchAgentInSession(sessionName, "sleep", ["1"], {
+      timeoutMs: 3000,
+      exitHint: { runtimeId: "claude-code", runtimeSessionId: "session-real-456" },
+    });
+
+    const deadline = Date.now() + 5000;
+    let scroll = "";
+    while (Date.now() < deadline) {
+      scroll = execFileSync("tmux", [...tmuxPrefix(), "capture-pane", "-p", "-J", "-S", "-50", "-t", sessionName], {
+        encoding: "utf8",
+        maxBuffer: 65_536,
+      });
+      if (scroll.includes("claude resume session-real-456")) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(scroll).toContain("[citadel] Agent exited.");
+    expect(scroll).toContain("claude resume session-real-456");
+    expect(scroll).not.toContain("<sessionId>");
+  }, 10_000);
 });
 
 describe("sweepLegacyAgentSentinels", () => {
