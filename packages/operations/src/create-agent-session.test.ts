@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SqliteStore } from "@citadel/db";
+import { codexSqliteHomeForWorkspace } from "@citadel/runtimes";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperationService } from "./index.js";
 
@@ -20,7 +21,7 @@ describe("createAgentSession session-id wiring", () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
-    const service = makeService(store);
+    const service = makeService(store, fixture.dir);
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "sid-create", source: "scratch" });
 
@@ -44,7 +45,7 @@ describe("createAgentSession session-id wiring", () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
-    const service = makeService(store);
+    const service = makeService(store, fixture.dir);
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "sid-resume", source: "scratch" });
 
@@ -74,7 +75,7 @@ describe("createAgentSession session-id wiring", () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
-    const service = makeService(store);
+    const service = makeService(store, fixture.dir);
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "sid-none", source: "scratch" });
 
@@ -93,7 +94,7 @@ describe("createAgentSession session-id wiring", () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
-    const service = makeService(store);
+    const service = makeService(store, fixture.dir);
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "codex-prompt", source: "scratch" });
     const argvPath = path.join(fixture.dir, "codex-argv.json");
@@ -124,11 +125,41 @@ describe("createAgentSession session-id wiring", () => {
     }
   }, 15_000);
 
+  it("launches Codex with an isolated workspace CODEX_SQLITE_HOME", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = makeService(store, fixture.dir);
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "codex-sqlite-home", source: "scratch" });
+    const envPath = path.join(fixture.dir, "codex-sqlite-home-env.txt");
+    const scriptPath = path.join(fixture.dir, "codex-sqlite-home-runtime.js");
+    fs.writeFileSync(
+      scriptPath,
+      [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(envPath)}, process.env.CODEX_SQLITE_HOME || '');`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+    );
+
+    const session = await service.createAgentSession(
+      { workspaceId: created.workspaceId, runtimeId: "codex" },
+      { command: "node", args: [scriptPath], displayName: "Fake Codex", sessionIdArg: "--session-id" },
+    );
+    try {
+      expect(fs.readFileSync(envPath, "utf8")).toBe(codexSqliteHomeForWorkspace(created.workspaceId, fixture.dir));
+      expect(fs.existsSync(codexSqliteHomeForWorkspace(created.workspaceId, fixture.dir))).toBe(true);
+    } finally {
+      service.stopAgentSession({ sessionId: session.id });
+    }
+  }, 15_000);
+
   it("retries Codex startup when its state database is temporarily locked", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
-    const service = makeService(store);
+    const service = makeService(store, fixture.dir);
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "codex-db-lock", source: "scratch" });
     const attemptsPath = path.join(fixture.dir, "attempts.txt");
@@ -167,8 +198,9 @@ describe("createAgentSession session-id wiring", () => {
   }, 20_000);
 });
 
-function makeService(store: SqliteStore) {
+function makeService(store: SqliteStore, dataDir?: string) {
   return new OperationService(store, {
+    ...(dataDir ? { dataDir } : {}),
     hooks: [],
     repoDefaults: { setupHookIds: [], teardownHookIds: [] },
     commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },

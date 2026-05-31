@@ -162,6 +162,7 @@ export class OperationService {
     return createAgentSessionImpl(
       {
         store: this.store,
+        ...(this.config?.dataDir ? { dataDir: this.config.dataDir } : {}),
         activity: (...args) => this.activity(...args),
         runNotificationHooks: (event, repo, workspace, operationId, payload) =>
           this.runNotificationHooks(event, repo, workspace, operationId, payload),
