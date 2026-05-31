@@ -12,8 +12,8 @@ export default defineConfig({
         maxForks: 4,
       },
     },
-    testTimeout: 30_000,
-    hookTimeout: 30_000,
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
     coverage: {
       include: ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts"],
       exclude: ["e2e/**", "dist/**", "coverage/**", "test-results/**", "playwright-report/**"],

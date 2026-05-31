@@ -224,9 +224,10 @@ test("dialogs render near viewport center on desktop and tablet", async ({ page,
     // and a 90vh cap, so vertical slack is wider; horizontal must still be
     // tight to catch the original "drifted right" symptom.
     await page.getByRole("button", { name: "Create workspace" }).click();
-    await assertCentered(page.locator("dialog.modal-frame"), "create-workspace modal", { verticalSlack: 32 });
+    const createWorkspaceDialog = page.getByRole("dialog", { name: "New workspace" });
+    await assertCentered(createWorkspaceDialog, "create-workspace modal", { verticalSlack: 32 });
     await page.keyboard.press("Escape");
-    await expect(page.locator("dialog.modal-frame")).toHaveCount(0);
+    await expect(createWorkspaceDialog).toHaveCount(0);
 
     // 3. Drop-workspace confirmation. The trash button only appears on hover,
     // so we force the hover state on the wrapping element first. Small fixed-

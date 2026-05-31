@@ -331,6 +331,14 @@
   border-bottom: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
 }
 
+.cockpit-shortcut-error {
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--color-danger) 14%, transparent);
+  color: var(--color-danger);
+  font-size: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
+}
+
 /* Unused — pane-head was removed; the tab strip + body alone form the chrome.
    Keeping the .stage-pane-chip rule for any future button that wants the
    same warm-cream pill look. */
