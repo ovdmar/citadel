@@ -21,6 +21,7 @@ const IGNORED_TOP_LEVEL = new Set([
 ]);
 const IGNORED_GIT_INTERNAL = new Set(["objects", "logs", "lfs", "hooks"]);
 const DEBOUNCE_MS = 350;
+const FALLBACK_POLL_INTERVAL_MS = 250;
 
 type ProviderCache = Map<string, { expiresAt: number; value: unknown }>;
 
@@ -51,7 +52,7 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
   // a single workspace can hold thousands of watches; tests churning files
   // in node_modules then flood the event loop with ignored callbacks and
   // terminal WebSockets start missing timely reads/writes.
-  const watchers = new Map<string, fs.FSWatcher[]>();
+  const watchers = new Map<string, Array<{ close: () => void }>>();
   const debounces = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingHeadBusts = new Set<string>();
   const failed = new Set<string>();
@@ -72,8 +73,8 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
     );
   };
 
-  const watchTree = (rootPath: string, callback: (rel: string) => void): fs.FSWatcher[] => {
-    const acc: fs.FSWatcher[] = [];
+  const watchTree = (rootPath: string, callback: (rel: string) => void): Array<{ close: () => void }> => {
+    const acc: Array<{ close: () => void }> = [];
     const walk = (absDir: string, relDir: string) => {
       if (relDir) {
         const parts = relDir.split(path.sep);
@@ -112,6 +113,22 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
     return acc;
   };
 
+  const pollTree = (rootPath: string, callback: (rel: string) => void): { close: () => void } => {
+    let previous = snapshotTree(rootPath);
+    const timer = setInterval(() => {
+      const next = snapshotTree(rootPath);
+      for (const [rel, fingerprint] of next) {
+        if (previous.get(rel) !== fingerprint) callback(rel);
+      }
+      for (const rel of previous.keys()) {
+        if (!next.has(rel)) callback(rel);
+      }
+      previous = next;
+    }, FALLBACK_POLL_INTERVAL_MS);
+    timer.unref();
+    return { close: () => clearInterval(timer) };
+  };
+
   const closeFor = (id: string) => {
     const ws = watchers.get(id);
     if (ws) for (const w of ws) w.close();
@@ -137,15 +154,15 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
       try {
         const set = watchTree(ws.path, onChange(id));
         if (set.length === 0) {
-          failed.add(id);
-          console.error(`[fs-watch] failed to install any watch for ${ws.path}`);
-          continue;
+          console.error(`[fs-watch] failed to install native watch for ${ws.path}; falling back to polling`);
+          watchers.set(id, [pollTree(ws.path, onChange(id))]);
+        } else {
+          watchers.set(id, set);
         }
-        watchers.set(id, set);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[fs-watch] failed to watch ${ws.path}: ${message}`);
-        failed.add(id);
+        watchers.set(id, [pollTree(ws.path, onChange(id))]);
       }
     }
   };
@@ -185,6 +202,36 @@ function bustWorkspaceGlobalPrCache(deps: WorkspaceFsWatcherDeps, workspaceId: s
 function isGitHeadRef(rel: string): boolean {
   const parts = rel.split(path.sep);
   return rel === path.join(".git", "HEAD") || (parts[0] === ".git" && parts[1] === "refs" && parts[2] === "heads");
+}
+
+function snapshotTree(rootPath: string): Map<string, string> {
+  const snapshot = new Map<string, string>();
+  const walk = (absDir: string, relDir: string) => {
+    if (relDir && isIgnored(relDir)) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const rel = relDir ? path.join(relDir, entry.name) : entry.name;
+      if (isIgnored(rel)) continue;
+      const abs = path.join(absDir, entry.name);
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        walk(abs, rel);
+        continue;
+      }
+      try {
+        const stat = fs.statSync(abs);
+        snapshot.set(rel, `${stat.mtimeMs}:${stat.size}`);
+      } catch {
+        /* file may have raced with the scan */
+      }
+    }
+  };
+  walk(rootPath, "");
+  return snapshot;
 }
 
 function isIgnored(rel: string): boolean {
