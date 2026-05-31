@@ -38,6 +38,7 @@ import { getBootRestoreSummary } from "./boot-restore.js";
 import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerDiagnosticsRoutes } from "./diagnostics-routes.js";
+import { E2E_RUN_ID_HEADER, e2eHealthFields, e2eRunIdMismatch } from "./e2e-guard.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import {
   AUTOMATED_GH_DISABLED_REASON,
@@ -159,6 +160,11 @@ export function createDaemonApp(input: {
   };
 
   app.use(cors());
+  app.use((req, res, next) => {
+    const mismatch = e2eRunIdMismatch(req.get(E2E_RUN_ID_HEADER));
+    if (!mismatch) return next();
+    res.status(409).json(mismatch);
+  });
   app.use(express.json({ limit: "2mb" }));
 
   let fsWatchers: { reconcile: () => void; close: () => void } | null = null;
@@ -200,6 +206,7 @@ export function createDaemonApp(input: {
         app: "citadel",
         mode: "local-first",
         databasePath: config.databasePath,
+        ...e2eHealthFields(config),
         degradedProviders: degradedProviders.length,
         providerHealth,
         mcp: mcpStatus(config.mcp.enabled),
@@ -594,17 +601,27 @@ export function createDaemonApp(input: {
   // Primary terminal gateway: xterm.js in the browser talks to a short-lived
   // node-pty `tmux attach-session` client. The tmux session remains durable;
   // the browser viewer is disposable and killed on WebSocket close.
-  attachTerminalWebSocket(server, async (sessionId) => {
-    const session = store.listSessions().find((candidate) => candidate.id === sessionId);
-    if (!session) return null;
-    if (session.tmuxSessionName && tmuxSessionExists(session.tmuxSessionName, session.tmuxSocketName ?? null)) {
-      return { sessionName: session.tmuxSessionName, socketName: session.tmuxSocketName ?? null };
-    }
-    const respawn = await respawnTmuxForWebSocket(session);
-    if (!respawn) return null;
-    emit("terminal.ready", { sessionId: session.id, tmuxSession: respawn.tmuxSessionName, renderer: "xterm-pty" });
-    return { sessionName: respawn.tmuxSessionName, socketName: respawn.tmuxSocketName ?? null };
-  });
+  attachTerminalWebSocket(
+    server,
+    async (sessionId) => {
+      const session = store.listSessions().find((candidate) => candidate.id === sessionId);
+      if (!session) return null;
+      if (session.tmuxSessionName && tmuxSessionExists(session.tmuxSessionName, session.tmuxSocketName ?? null)) {
+        return { sessionName: session.tmuxSessionName, socketName: session.tmuxSocketName ?? null };
+      }
+      const respawn = await respawnTmuxForWebSocket(session);
+      if (!respawn) return null;
+      emit("terminal.ready", { sessionId: session.id, tmuxSession: respawn.tmuxSessionName, renderer: "xterm-pty" });
+      return { sessionName: respawn.tmuxSessionName, socketName: respawn.tmuxSocketName ?? null };
+    },
+    {
+      authorize: (request) => {
+        const raw = request.headers[E2E_RUN_ID_HEADER];
+        const mismatch = e2eRunIdMismatch(Array.isArray(raw) ? raw[0] : raw);
+        return mismatch ? { status: 409, body: mismatch } : null;
+      },
+    },
+  );
 
   // Reap orphan tmux sessions / ghost worktrees on a slow interval.
   if (process.env.CITADEL_DISABLE_REAPER !== "1") {

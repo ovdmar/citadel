@@ -24,6 +24,7 @@ import {
   addWorktree,
   classifyWorktreeError,
   isUniqueWorkspaceNameViolation,
+  isUniqueWorkspacePathViolation,
   tryRunGit,
 } from "./helpers.js";
 
@@ -111,23 +112,22 @@ export async function createWorkspaceImpl(
 
   // Resolve the workspace name with daemon-side funny-name generation when
   // the caller leaves it blank. The insert is wrapped in a retry loop so
-  // unique-name collisions (rare with a 30×30 dictionary) don't surface as
-  // operator-facing errors. After 5 fresh draws we fall back to a 4-char
-  // random suffix to keep the create attempt from failing.
+  // unique-name collisions don't surface as operator-facing errors: generated
+  // names redraw, while caller-provided names get "-2", "-3", ... appended.
+  // After 5 generated draws we fall back to a 4-char random suffix to keep the
+  // create attempt from failing.
   const callerName = input.name.trim();
   const wantsGenerated = callerName.length === 0;
   let workspace: Workspace | null = null;
   let lastTriedName = callerName;
   let branch = "";
   let workspacePath = "";
-  const maxAttempts = wantsGenerated ? 6 : 1;
+  const maxAttempts = wantsGenerated ? 6 : 25;
+  const initialBranch = resolveWorkspaceBranch(input, newBranch, callerName, 0, "");
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    let candidate = callerName;
-    if (wantsGenerated) {
-      candidate = attempt < 5 ? generateFunnyName() : `${generateFunnyName()}-${createId("x").slice(-4)}`;
-    }
+    const candidate = workspaceNameForAttempt(callerName, wantsGenerated, attempt);
     lastTriedName = candidate;
-    branch = newBranch ?? workspaceBranchName({ ...input, name: candidate });
+    branch = resolveWorkspaceBranch(input, newBranch, candidate, attempt, initialBranch);
     workspacePath = path.join(repo.worktreeParent, branch);
     const draft: Workspace = {
       id: createId("ws"),
@@ -157,8 +157,8 @@ export async function createWorkspaceImpl(
       workspace = draft;
       break;
     } catch (error) {
-      if (isUniqueWorkspaceNameViolation(error)) {
-        if (wantsGenerated && attempt < maxAttempts - 1) continue;
+      if (isUniqueWorkspaceNameViolation(error) || isUniqueWorkspacePathViolation(error)) {
+        if (attempt < maxAttempts - 1) continue;
         deps.store.upsertOperation({
           ...operation,
           status: "failed",
@@ -205,6 +205,29 @@ export async function createWorkspaceImpl(
 
   await provision();
   return { operationId: operation.id, workspaceId: workspace.id };
+}
+
+function workspaceNameForAttempt(callerName: string, wantsGenerated: boolean, attempt: number): string {
+  if (wantsGenerated) return attempt < 5 ? generateFunnyName() : `${generateFunnyName()}-${createId("x").slice(-4)}`;
+  if (attempt === 0) return callerName;
+  return `${callerName}-${attempt + 1}`;
+}
+
+function resolveWorkspaceBranch(
+  input: CreateWorkspaceInput,
+  newBranch: string | null,
+  workspaceName: string,
+  attempt: number,
+  initialBranch: string,
+): string {
+  const candidate = newBranch ?? workspaceBranchName({ ...input, name: workspaceName });
+  if (attempt === 0 || candidate !== initialBranch) return candidate;
+  return appendNumericSuffix(candidate, attempt + 1, 96);
+}
+
+function appendNumericSuffix(value: string, suffix: number, maxLength: number): string {
+  const tail = `-${suffix}`;
+  return `${value.slice(0, Math.max(1, maxLength - tail.length))}${tail}`;
 }
 
 async function provisionWorkspace(
