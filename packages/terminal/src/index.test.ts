@@ -256,7 +256,7 @@ describe("tmux terminal gateway helpers", () => {
     sendKeys(sessionName, "\u0004");
     await waitForCapture(sessionName, "$");
 
-    expect(fs.readFileSync(path.join(cwd, "pasted.txt"), "utf8")).toBe("alpha\nbeta\n");
+    await waitForFile(path.join(cwd, "pasted.txt"), "alpha\nbeta\n");
   });
 
   it("captures active alternate-screen output when an interactive program switches screens", async () => {

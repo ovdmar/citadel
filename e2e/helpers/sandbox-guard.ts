@@ -1,4 +1,5 @@
 import type { APIRequestContext, APIResponse } from "@playwright/test";
+import { apiGet } from "./api-request.js";
 
 // Last line of defense against the e2e suite writing into a production install.
 //
@@ -37,7 +38,7 @@ async function getHealthWithTransientRetry(request: APIRequestContext, apiBase: 
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      return await request.get(`${apiBase}/api/health`);
+      return await apiGet(request, `${apiBase}/api/health`);
     } catch (error) {
       if (!isTransientConnectionError(error) || attempt === 2) {
         throw error;
