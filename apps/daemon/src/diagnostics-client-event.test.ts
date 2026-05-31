@@ -24,6 +24,7 @@ describe("diagnostics client events", () => {
           path: "/",
           href: "http://127.0.0.1/",
           visibility: "hidden",
+          focused: false,
           navigationType: "reload",
           ageMs: 123,
           persisted: false,
@@ -44,6 +45,7 @@ describe("diagnostics client events", () => {
           data: expect.objectContaining({
             pageId: "page_1",
             navigationType: "reload",
+            focused: false,
             persisted: false,
             swController: true,
           }),

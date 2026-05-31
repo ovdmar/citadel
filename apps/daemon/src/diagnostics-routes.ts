@@ -4,6 +4,7 @@ import type { DiagnosticsLogger } from "@citadel/operations";
 import type { TtydManager } from "@citadel/terminal";
 import type express from "express";
 import { buildDiagnosticsSnapshot, streamDiagnosticsBundle } from "./diagnostics-bundle.js";
+import type { UiActivityTracker } from "./ui-activity.js";
 
 export function registerDiagnosticsRoutes(input: {
   app: express.Express;
@@ -11,18 +12,21 @@ export function registerDiagnosticsRoutes(input: {
   ttyd: TtydManager;
   diagnostics: DiagnosticsLogger;
   config: CitadelConfig;
+  uiActivity?: UiActivityTracker;
 }) {
-  const { app, store, ttyd, diagnostics, config } = input;
+  const { app, store, ttyd, diagnostics, config, uiActivity } = input;
   app.get("/api/diagnostics/snapshot", (_req, res) => {
     res.json(buildDiagnosticsSnapshot({ store, ttyd, diagnostics, config }));
   });
   app.post("/api/diagnostics/client-event", (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
+    uiActivity?.recordClientEvent(body);
     diagnostics.log("ui-client", clippedString(body.event, "unknown", 80), {
       pageId: clippedString(body.pageId, "", 80),
       path: clippedString(body.path, "", 240),
       href: clippedString(body.href, "", 360),
       visibility: clippedString(body.visibility, "unknown", 40),
+      focused: typeof body.focused === "boolean" ? body.focused : null,
       navigationType: clippedString(body.navigationType, "", 40),
       ageMs: finiteNumber(body.ageMs),
       persisted: typeof body.persisted === "boolean" ? body.persisted : null,

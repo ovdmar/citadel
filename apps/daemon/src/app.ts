@@ -53,6 +53,7 @@ import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
 import { wireTerminalRoutes } from "./terminal-routes-helpers.js";
 import { resolveTtydPortRange } from "./ttyd-slot.js";
+import { createUiActivityTracker } from "./ui-activity.js";
 import { fetchVersionControlGated } from "./vc-fetch-gated.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
 import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
@@ -123,6 +124,7 @@ export async function createDaemonApp(input: {
   // Sprinkled through every session-killing path so that when a user reports
   // "all my sessions died", we have the lifecycle trail to share.
   const diagnostics = createDiagnosticsLogger({ dataDir: config.dataDir });
+  const uiActivity = createUiActivityTracker();
   diagnostics.log("daemon", "createDaemonApp", {
     port: config.port,
     dataDir: config.dataDir,
@@ -246,7 +248,7 @@ export async function createDaemonApp(input: {
     }),
   );
 
-  registerDiagnosticsRoutes({ app, store, ttyd, diagnostics, config });
+  registerDiagnosticsRoutes({ app, store, ttyd, diagnostics, config, uiActivity });
   registerConfigRepoWorkspaceRoutes({ app, config, configPath, store, operations, providerCache, emit, asyncRoute });
   registerRepoDiscoveryRoutes({ app, config, asyncRoute });
 
@@ -516,6 +518,7 @@ export async function createDaemonApp(input: {
               import("@citadel/providers").then((mod) => mod.collectRuntimeUsage(provider)),
             listRuntimeHealth: () => listRuntimeHealth(config.runtimes),
           },
+          hasFocusedWindow: () => uiActivity.hasFocusedWindow(),
         })
       : null;
   if (refreshJob) server.on("close", () => refreshJob.stop());

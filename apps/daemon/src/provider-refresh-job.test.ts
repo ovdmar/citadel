@@ -237,27 +237,22 @@ describe("startProviderRefreshJob", () => {
     (deps.config as CitadelConfig).providerRefresh.maxConcurrentRefreshes = 2;
     let inFlight = 0;
     let peak = 0;
-    const releaseAll: Array<() => void> = [];
-    deps.providers.collectGitHubVersionControlSummary = vi.fn(
-      (): Promise<VersionControlSummary> =>
-        new Promise((resolve) => {
-          inFlight++;
-          peak = Math.max(peak, inFlight);
-          releaseAll.push(() => {
-            inFlight--;
-            resolve({
-              providerId: "github-gh",
-              status: "healthy" as const,
-              reason: null,
-              checkedAt: new Date().toISOString(),
-              defaultBranch: null,
-              currentBranch: null,
-              remotes: [],
-              pullRequest: null,
-            });
-          });
-        }),
-    );
+    deps.providers.collectGitHubVersionControlSummary = vi.fn(async (): Promise<VersionControlSummary> => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      inFlight--;
+      return {
+        providerId: "github-gh",
+        status: "healthy" as const,
+        reason: null,
+        checkedAt: new Date().toISOString(),
+        defaultBranch: null,
+        currentBranch: null,
+        remotes: [],
+        pullRequest: null,
+      };
+    });
     deps.providers.collectGitHubCiRuns = vi.fn(async () => {
       // CI runs are fast — only VC measures concurrency for this test.
       return {
@@ -269,16 +264,8 @@ describe("startProviderRefreshJob", () => {
       };
     });
     const job = startProviderRefreshJob({ ...deps, tickIntervalMs: 0, jitterMaxMs: 0 });
-    const tickPromise = job.runTickForTest();
-    // Allow jitter (set to 0) + scheduler to fire all queued items.
-    await new Promise((r) => setTimeout(r, 30));
+    await job.runTickForTest();
     expect(peak).toBeLessThanOrEqual(2);
-    while (releaseAll.length) {
-      const r = releaseAll.shift();
-      r?.();
-      await new Promise((res) => setTimeout(res, 5));
-    }
-    await tickPromise;
     job.stop();
   });
 
@@ -337,6 +324,24 @@ describe("startProviderRefreshJob", () => {
     await job.runTickForTest();
     expect(listCalls).toBeGreaterThan(1);
     expect(deps.providers.collectRuntimeUsage).not.toHaveBeenCalled();
+    job.stop();
+  });
+
+  it("pauses usage refresh when no Citadel window is focused", async () => {
+    const runtime = makeRuntime("r1", true);
+    const deps = makeDeps({ workspaces: [], runtimes: [runtime], hasFocusedWindow: () => false });
+    const job = startProviderRefreshJob({ ...deps, tickIntervalMs: 0, jitterMaxMs: 0 });
+    await job.runTickForTest();
+    expect(deps.providers.collectRuntimeUsage).not.toHaveBeenCalled();
+    job.stop();
+  });
+
+  it("refreshes usage when a Citadel window is focused", async () => {
+    const runtime = makeRuntime("r1", true);
+    const deps = makeDeps({ workspaces: [], runtimes: [runtime], hasFocusedWindow: () => true });
+    const job = startProviderRefreshJob({ ...deps, tickIntervalMs: 0, jitterMaxMs: 0 });
+    await job.runTickForTest();
+    expect(deps.providers.collectRuntimeUsage).toHaveBeenCalledTimes(1);
     job.stop();
   });
 

@@ -45,6 +45,7 @@ export type ProviderRefreshDeps = {
     }) => Promise<RuntimeUsageSummary>;
     listRuntimeHealth: () => AgentRuntime[];
   };
+  hasFocusedWindow?: () => boolean;
   now?: () => number;
   tickIntervalMs?: number;
   jitterMaxMs?: number;
@@ -117,6 +118,7 @@ export function startProviderRefreshJob(deps: ProviderRefreshDeps): ProviderRefr
   }
 
   function collectItemsForRuntime(runtime: AgentRuntime): RefreshItem[] {
+    if (deps.hasFocusedWindow && !deps.hasFocusedWindow()) return [];
     if (!runtime.capabilities.supportsUsage) return [];
     if (runtime.health !== "healthy") return [];
     // Provider-id key mirrors runtime-usage-routes.ts so the live route and

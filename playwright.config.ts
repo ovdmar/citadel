@@ -12,6 +12,7 @@ const webPort = process.env.CITADEL_PLAYWRIGHT_WEB_PORT || "15174";
 const ttydPortBase = process.env.CITADEL_PLAYWRIGHT_TTYD_PORT_BASE || "24000";
 const ttydPortMax = process.env.CITADEL_PLAYWRIGHT_TTYD_PORT_MAX || "24999";
 const daemonLog = process.env.CITADEL_PLAYWRIGHT_DAEMON_LOG || "/tmp/citadel-playwright-daemon.log";
+const dataDir = process.env.CITADEL_PLAYWRIGHT_DATA_DIR || "/tmp/citadel-playwright-data";
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
 const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}`).replace(
@@ -23,6 +24,9 @@ export default defineConfig({
   testDir: "e2e",
   timeout: 30_000,
   expect: { timeout: 10_000 },
+  // The suite intentionally shares one daemon and one data dir. Keep workers
+  // serial so stateful specs do not race each other through global settings.
+  workers: 1,
   use: {
     baseURL: webBase,
     trace: "retain-on-failure",
@@ -47,7 +51,7 @@ export default defineConfig({
       // boot orphan-reaper can mistake production tmux panes for sandbox
       // orphans and kill the user's live terminals.
       command: [
-        "CITADEL_DATA_DIR=/tmp/citadel-playwright-data",
+        `CITADEL_DATA_DIR=${dataDir}`,
         `CITADEL_PORT=${daemonPort}`,
         `CITADEL_TMUX_SOCKET=${tmuxSocket}`,
         "CITADEL_OWN_TMUX_SOCKET=1",

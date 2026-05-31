@@ -2,7 +2,9 @@ type UiDiagnosticExtra = {
   persisted?: boolean;
 };
 
+const HEARTBEAT_MS = 60_000;
 let installed = false;
+let cleanup: (() => void) | null = null;
 const pageId = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 const startedAt = Date.now();
 
@@ -11,11 +13,27 @@ export function installUiDiagnostics() {
   installed = true;
 
   postUiDiagnostic("page.load");
-  window.addEventListener("pageshow", (event) => postUiDiagnostic("page.pageshow", { persisted: event.persisted }));
-  window.addEventListener("pagehide", (event) =>
-    postUiDiagnostic("page.pagehide", { persisted: event.persisted }, true),
-  );
-  document.addEventListener("visibilitychange", () => postUiDiagnostic("page.visibility"));
+  const onPageShow = (event: PageTransitionEvent) => postUiDiagnostic("page.pageshow", { persisted: event.persisted });
+  const onPageHide = (event: PageTransitionEvent) =>
+    postUiDiagnostic("page.pagehide", { persisted: event.persisted }, true);
+  const onVisibility = () => postUiDiagnostic("page.visibility");
+  const onFocus = () => postUiDiagnostic("page.focus");
+  const onBlur = () => postUiDiagnostic("page.blur");
+  window.addEventListener("pageshow", onPageShow);
+  window.addEventListener("pagehide", onPageHide);
+  window.addEventListener("focus", onFocus);
+  window.addEventListener("blur", onBlur);
+  document.addEventListener("visibilitychange", onVisibility);
+  const heartbeatTimer = window.setInterval(() => postUiDiagnostic("page.heartbeat"), HEARTBEAT_MS);
+  (heartbeatTimer as unknown as { unref?: () => void }).unref?.();
+  cleanup = () => {
+    window.removeEventListener("pageshow", onPageShow);
+    window.removeEventListener("pagehide", onPageHide);
+    window.removeEventListener("focus", onFocus);
+    window.removeEventListener("blur", onBlur);
+    document.removeEventListener("visibilitychange", onVisibility);
+    window.clearInterval(heartbeatTimer);
+  };
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.addEventListener("controllerchange", () => postUiDiagnostic("sw.controllerchange"));
@@ -28,6 +46,8 @@ export function installUiDiagnostics() {
 }
 
 export function resetUiDiagnosticsForTests() {
+  cleanup?.();
+  cleanup = null;
   installed = false;
 }
 
@@ -38,6 +58,7 @@ function postUiDiagnostic(event: string, extra: UiDiagnosticExtra = {}, unload =
     path: `${window.location.pathname}${window.location.search}${window.location.hash}`,
     href: window.location.href,
     visibility: document.visibilityState,
+    focused: document.hasFocus(),
     navigationType: navigationType(),
     ageMs: Date.now() - startedAt,
     persisted: extra.persisted,
