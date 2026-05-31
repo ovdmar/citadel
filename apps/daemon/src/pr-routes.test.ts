@@ -21,7 +21,7 @@ import { registerPrRoutes } from "./pr-routes.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   setGithubCommand(undefined);
 });
 
@@ -109,7 +109,7 @@ describe("PR routes", () => {
       archivedAt: null,
     });
 
-    const { server } = createDaemonApp({
+    const { server } = await createDaemonApp({
       ...fixture,
       providers: {
         collectGitHubVersionControlSummary: async () => ({
@@ -200,7 +200,7 @@ describe("PR routes", () => {
       archivedAt: null,
     });
     let calls = 0;
-    const { server } = createDaemonApp({
+    const { server } = await createDaemonApp({
       ...fixture,
       providers: {
         collectGitHubVersionControlSummary: async () => {

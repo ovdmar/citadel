@@ -20,6 +20,7 @@ const LINE_START_KEY = "C-a";
 const LINE_END_KEY = "C-e";
 const LINE_KILL_KEY = "C-u";
 const TERMINAL_SCROLLBACK_LINES = 20_000;
+const TERMINAL_WHEEL_PIXELS_PER_LINE = 16;
 const TERMINAL_AUTO_RETRY_LIMIT = 3;
 const TERMINAL_AUTO_RETRY_BACKOFF_MS = 5_000;
 const AUTO_RETRYABLE_TERMINAL_ERRORS = new Set(["terminal_disconnected", "terminal_socket_error"]);
@@ -29,6 +30,7 @@ export type TerminalSocketMessage = {
   type?: string;
   data?: string;
   key?: TerminalPaneKey;
+  lines?: number;
 };
 
 /**
@@ -173,6 +175,7 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
     if (!host) return;
     let disposed = false;
     let resizeFrame: number | null = null;
+    let wheelRemainder = 0;
     let lastSentResize: { cols: number; rows: number } | null = null;
     const terminal = new Terminal({
       allowTransparency: false,
@@ -240,8 +243,12 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
     const nativeCopyHandler = (event: ClipboardEvent) => {
       copyTerminalSelection(event, terminal, host, latestSelectionText);
     };
+    const nativeWheelHandler = (event: WheelEvent) => {
+      wheelRemainder = handleTerminalWheelEvent(event, terminal.rows, ws, wheelRemainder);
+    };
     const selectionDisposable = terminal.onSelectionChange(updateSelectionSnapshot);
     host.addEventListener("keydown", nativeKeyHandler, true);
+    host.addEventListener("wheel", nativeWheelHandler, { capture: true, passive: false });
     document.addEventListener("copy", nativeCopyHandler, true);
     terminal.attachCustomKeyEventHandler((event) =>
       handleTerminalKeyEvent(event, terminal, sessionId, ws, host, latestSelectionText),
@@ -308,6 +315,7 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
       selectionDisposable.dispose();
       resizeObserver?.disconnect();
       host.removeEventListener("keydown", nativeKeyHandler, true);
+      host.removeEventListener("wheel", nativeWheelHandler, { capture: true });
       document.removeEventListener("copy", nativeCopyHandler, true);
       window.removeEventListener("resize", scheduleResize);
       ws.close();
@@ -457,6 +465,34 @@ function isLineKillShortcut(key: string, event: KeyboardEvent): boolean {
   if (key !== "backspace" || event.shiftKey || event.altKey) return false;
   if (event.metaKey && !event.ctrlKey) return true;
   return event.ctrlKey && !event.metaKey && !isApplePlatform();
+}
+
+function handleTerminalWheelEvent(event: WheelEvent, terminalRows: number, ws: WebSocket, remainder: number): number {
+  const delta = wheelDeltaToLines(event, terminalRows, remainder);
+  if (!delta) return remainder;
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  if (delta.lines !== 0) sendTerminalControl(ws, { type: "scroll", lines: delta.lines });
+  return delta.remainder;
+}
+
+function wheelDeltaToLines(
+  event: WheelEvent,
+  terminalRows: number,
+  remainder: number,
+): { lines: number; remainder: number } | null {
+  if (!Number.isFinite(event.deltaY) || event.deltaY === 0) return null;
+  const rows = Number.isFinite(terminalRows) && terminalRows > 1 ? Math.trunc(terminalRows) : 24;
+  const lineDelta =
+    event.deltaMode === 1
+      ? event.deltaY
+      : event.deltaMode === 2
+        ? event.deltaY * Math.max(1, rows - 1)
+        : event.deltaY / TERMINAL_WHEEL_PIXELS_PER_LINE;
+  const total = remainder + lineDelta;
+  const lines = total < 0 ? Math.ceil(total) : Math.floor(total);
+  return { lines, remainder: total - lines };
 }
 
 function sendTerminalInput(ws: WebSocket, data: string): void {

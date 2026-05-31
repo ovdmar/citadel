@@ -7,7 +7,7 @@ import { SqliteStore } from "./index.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("SqliteStore", () => {
@@ -49,10 +49,11 @@ describe("SqliteStore", () => {
       { version: 12 },
       { version: 13 },
       { version: 14 },
+      { version: 15 },
     ]);
   });
 
-  it("round-trips agent_sessions.status_reason_at via updateSessionStatus", () => {
+  it("round-trips workspace_sessions.status_reason_at via updateSessionStatus", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
     const store = new SqliteStore(path.join(dir, "test.sqlite"));
@@ -250,7 +251,11 @@ describe("SqliteStore", () => {
         dirty: true,
       },
     ]);
+    expect(store.query("SELECT kind, runtime_id FROM workspace_sessions WHERE id = 'sess_test'")).toEqual([
+      { kind: "terminal", runtime_id: null },
+    ]);
     expect(store.listSessions("ws_test")).toMatchObject([{ id: "sess_test", transport: "connected" }]);
+    expect(store.listSessions("ws_test")[0]?.runtimeId).toBe("shell");
     expect(store.listOperations()).toMatchObject([{ id: "op_test", status: "succeeded", progress: 100 }]);
     expect(store.listActivity("ws_test")).toMatchObject([
       { id: "evt_test", source: "system", hookOutput: { links: [{ label: "Preview" }] } },
