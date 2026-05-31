@@ -100,7 +100,8 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
 
   const focusIframe = useCallback(() => {
     terminalRef.current?.focus();
-  }, []);
+    recordTerminalClientEvent(sessionId, "terminal.focus");
+  }, [sessionId]);
 
   const recoverIfDisconnected = useCallback(() => {
     if (!error || !["terminal_disconnected", "terminal_closed", "terminal_socket_error"].includes(error.code)) {
@@ -174,6 +175,7 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
 
     ws.addEventListener("open", () => {
       if (disposed) return;
+      recordTerminalClientEvent(sessionId, "websocket.open");
       setConnectionState("attached");
       sendResize();
     });
