@@ -156,8 +156,8 @@ export async function runStatusMonitorTick(
   deps: MonitorTickDeps,
   opts: MonitorTickOptions,
 ): Promise<MonitorTickResult> {
-  // Include shell-runtime sessions so the auto-clear path can run on them
-  // too; the per-session derivation below treats them specially.
+  // Terminal tabs are no longer passed into the agent monitor; status-based
+  // terminal rows are filtered out defensively for old fixtures.
   const sessions = deps.listSessions().filter((s) => !TERMINAL_STATUSES.has(s.status));
   if (sessions.length === 0) return { sessionsTouched: 0, deletedSessions: 0 };
 

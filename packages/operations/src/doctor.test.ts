@@ -16,7 +16,8 @@ function fakeConfig(overrides: Record<string, unknown> = {}) {
       github: { enabled: true, command: "gh" },
       jira: { enabled: true, command: "jtk" },
     },
-    runtimes: [],
+    agentRuntimes: [{ id: "claude-code", displayName: "Claude Code", command: "claude" }],
+    terminal: { displayName: "Terminal", command: "bash" },
     usageProviders: [],
     hooks: [],
     repoDefaults: { setupHookIds: [], teardownHookIds: [], appHookIds: [], actionHookIds: [] },
@@ -323,6 +324,44 @@ describe("runDoctorChecks — bind-host-tls inverse warning", () => {
     });
     const tlsCheck = report.checks.find((c) => c.id === "config.bind-host-tls");
     expect(tlsCheck?.status).toBe("ok");
+  });
+});
+
+describe("runDoctorChecks — agent runtimes and terminal", () => {
+  it("warns for a missing agent runtime command while another runtime is executable", async () => {
+    const report = await runDoctorChecks({
+      config: fakeConfig({
+        agentRuntimes: [
+          { id: "claude-code", displayName: "Claude Code", command: "missing-claude" },
+          { id: "codex", displayName: "Codex", command: "codex" },
+        ],
+      }),
+      mode: "cli",
+      deps: depsWithDefaults({ which: async (bin) => (bin === "missing-claude" ? null : `/usr/bin/${bin}`) }),
+    });
+    expect(report.checks.find((c) => c.id === "agent-runtime.claude-code")?.status).toBe("warn");
+    expect(report.checks.find((c) => c.id === "agent-runtime.available")?.status).toBe("ok");
+  });
+
+  it("fails when no configured agent runtime command is executable", async () => {
+    const report = await runDoctorChecks({
+      config: fakeConfig({
+        agentRuntimes: [{ id: "claude-code", displayName: "Claude Code", command: "missing-claude" }],
+      }),
+      mode: "cli",
+      deps: depsWithDefaults({ which: async (bin) => (bin === "missing-claude" ? null : `/usr/bin/${bin}`) }),
+    });
+    expect(report.checks.find((c) => c.id === "agent-runtime.available")?.status).toBe("fail");
+    expect(report.summary).toBe("failing");
+  });
+
+  it("fails when the terminal command is missing", async () => {
+    const report = await runDoctorChecks({
+      config: fakeConfig({ terminal: { displayName: "Terminal", command: "missing-shell" } }),
+      mode: "cli",
+      deps: depsWithDefaults({ which: async (bin) => (bin === "missing-shell" ? null : `/usr/bin/${bin}`) }),
+    });
+    expect(report.checks.find((c) => c.id === "terminal.command")?.status).toBe("fail");
   });
 });
 

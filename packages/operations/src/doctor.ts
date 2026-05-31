@@ -25,6 +25,8 @@ export type DoctorConfig = {
   bindHost: string;
   port: number;
   providers: { github: { enabled: boolean; command: string }; jira: { enabled: boolean; command: string } };
+  agentRuntimes: Array<{ id: string; displayName: string; command: string }>;
+  terminal: { displayName: string; command: string };
   tls?: { certPath: string; keyPath: string } | undefined;
 };
 
@@ -266,6 +268,61 @@ function checkBindHostTls(config: DoctorConfig): DoctorCheck {
   };
 }
 
+async function checkAgentRuntimes(config: DoctorConfig, deps: DoctorDeps): Promise<DoctorCheck[]> {
+  const checks: DoctorCheck[] = [];
+  if (config.agentRuntimes.length === 0) {
+    return [
+      {
+        id: "agent-runtime.available",
+        kind: "agent-runtime",
+        label: "agent runtimes",
+        status: "fail",
+        detail: "no agent runtimes configured",
+        hint: "configure at least one agent runtime before launching agents",
+      },
+    ];
+  }
+
+  let executableCount = 0;
+  for (const runtime of config.agentRuntimes) {
+    const found = await deps.which(runtime.command);
+    if (found) executableCount++;
+    checks.push({
+      id: `agent-runtime.${runtime.id}`,
+      kind: "agent-runtime",
+      label: runtime.displayName,
+      status: found ? "ok" : "warn",
+      detail: found ? found : `command "${runtime.command}" not found in PATH`,
+      hint: found ? undefined : `install ${runtime.command} or update this agent runtime in Settings`,
+    });
+  }
+
+  checks.push({
+    id: "agent-runtime.available",
+    kind: "agent-runtime",
+    label: "executable agent runtime",
+    status: executableCount > 0 ? "ok" : "fail",
+    detail:
+      executableCount > 0
+        ? `${executableCount}/${config.agentRuntimes.length} configured agent runtimes executable`
+        : "no configured agent runtime command is executable",
+    hint: executableCount > 0 ? undefined : "install or configure at least one executable agent runtime",
+  });
+  return checks;
+}
+
+async function checkTerminal(config: DoctorConfig, deps: DoctorDeps): Promise<DoctorCheck> {
+  const found = await deps.which(config.terminal.command);
+  return {
+    id: "terminal.command",
+    kind: "terminal",
+    label: config.terminal.displayName,
+    status: found ? "ok" : "fail",
+    detail: found ? found : `command "${config.terminal.command}" not found in PATH`,
+    hint: found ? undefined : "configure a valid terminal command before opening terminal tabs",
+  };
+}
+
 async function checkSystemd(deps: DoctorDeps): Promise<DoctorCheck[]> {
   const services = await deps.listSystemdServices();
   if (!services.available) {
@@ -314,6 +371,8 @@ export async function runDoctorChecks(input: {
   }
 
   checks.push(checkBindHostTls(config));
+  checks.push(...(await checkAgentRuntimes(config, deps)));
+  checks.push(await checkTerminal(config, deps));
   checks.push(await checkSchemaVersion("(daemon-owned)", deps));
 
   for (const repo of deps.listRepos()) {

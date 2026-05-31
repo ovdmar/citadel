@@ -199,7 +199,7 @@ export function createDaemonApp(input: {
       portMax: ttyd.config.portMax,
     });
     const sessionTabIds = new Map<string, string>();
-    for (const session of store.listSessions()) {
+    for (const session of store.listWorkspaceSessions()) {
       sessionTabIds.set(session.id, session.tabId ?? session.id);
     }
     const resolveTabId = (key: string): string | null => sessionTabIds.get(key) ?? null;
@@ -396,7 +396,7 @@ export function createDaemonApp(input: {
       workspaceId: workspace.id,
       readiness: deriveReadiness({
         workspace,
-        sessions: store.listSessions(workspace.id),
+        sessions: store.listWorkspaceSessions(workspace.id),
         operations: store.listOperations().filter((operation) => operation.workspaceId === workspace.id),
         providerHealth: await cachedProviderHealth(),
         git,
@@ -636,7 +636,7 @@ export function createDaemonApp(input: {
 
   // Diagnostic xterm.js gateway. The cockpit uses ttyd via /terminals/* instead; this stays for tooling.
   attachTerminalWebSocket(server, (sessionId) => {
-    const session = store.listSessions().find((candidate) => candidate.id === sessionId);
+    const session = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
     return session?.tmuxSessionName ?? null;
   });
 

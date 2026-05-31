@@ -111,8 +111,8 @@ describe("createDaemonApp", () => {
       ).toMatchObject({
         providerHealth: [expect.objectContaining({ id: "github-gh" }), expect.objectContaining({ id: "jira-jtk" })],
       });
-      expect(await getJson<{ runtimes: unknown[] }>(`${baseUrl}/api/runtimes`)).toMatchObject({
-        runtimes: [expect.objectContaining({ id: "shell" })],
+      expect(await getJson<{ agentRuntimes: unknown[] }>(`${baseUrl}/api/agent-runtimes`)).toMatchObject({
+        agentRuntimes: [expect.objectContaining({ id: "test-agent" })],
       });
       expect(
         await getJson<{ usage: { runtimeId: string; status: string } }>(`${baseUrl}/api/runtimes/shell/usage`),

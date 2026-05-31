@@ -44,7 +44,7 @@ function fakeWorkspace(overrides: Record<string, unknown> = {}) {
 
 function fakeConfig() {
   return {
-    runtimes: [
+    agentRuntimes: [
       {
         id: "claude-code",
         displayName: "Claude Code",
@@ -52,6 +52,7 @@ function fakeConfig() {
         args: [],
       },
     ],
+    terminal: { displayName: "Terminal", command: "bash", args: ["-l"] },
   } as unknown as Parameters<typeof registerScaffoldHookRoutes>[0]["config"];
 }
 

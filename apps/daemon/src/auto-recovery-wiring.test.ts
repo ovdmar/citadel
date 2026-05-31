@@ -12,11 +12,11 @@ function config(overrides: Partial<CitadelConfig["automations"]["fixCi"]> = {}):
     port: 4010,
     mcp: { enabled: true },
     providers: { github: { enabled: false, command: "gh" }, jira: { enabled: false, command: "jtk" } },
-    runtimes: [
+    agentRuntimes: [
       { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] },
       { id: "codex", displayName: "Codex", command: "codex", args: [] },
-      { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
     ],
+    terminal: { displayName: "Terminal", command: "bash", args: ["-l"] },
     usageProviders: [],
     automations: { fixCi: { ...DEFAULT_FIX_CI_AUTOMATION, ...overrides } },
     repoDefaults: { setupHookIds: [], teardownHookIds: [], appHookIds: [], actionHookIds: [] },

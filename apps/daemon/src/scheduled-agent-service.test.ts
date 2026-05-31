@@ -49,7 +49,7 @@ describe("ScheduledAgentService", () => {
     const repo = createRepo();
 
     const deps = {
-      config: { runtimes: [{ id: "shell", displayName: "Shell", command: "bash", args: [] }] } as never,
+      config: { agentRuntimes: [{ id: "shell", displayName: "Shell", command: "bash", args: [] }] } as never,
       store,
       operations: {} as never,
       ttyd: {} as never,
@@ -91,7 +91,7 @@ describe("ScheduledAgentService", () => {
     const repo = createRepo();
 
     const deps = {
-      config: { runtimes: [{ id: "shell", displayName: "Shell", command: "bash", args: [] }] } as never,
+      config: { agentRuntimes: [{ id: "shell", displayName: "Shell", command: "bash", args: [] }] } as never,
       store,
       operations: {} as never,
       ttyd: {} as never,
@@ -158,7 +158,7 @@ describe("ScheduledAgentService", () => {
     const { service, runner, store } = createService();
     const repo = createRepo();
     const deps = {
-      config: { runtimes: [{ id: "shell", displayName: "Shell", command: "bash", args: [] }] } as never,
+      config: { agentRuntimes: [{ id: "shell", displayName: "Shell", command: "bash", args: [] }] } as never,
       store,
       operations: {} as never,
       ttyd: {} as never,

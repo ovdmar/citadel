@@ -50,6 +50,8 @@ function toDoctorConfig(config: CitadelConfig): DoctorConfig {
     bindHost: config.bindHost,
     port: config.port,
     providers: config.providers,
+    agentRuntimes: config.agentRuntimes,
+    terminal: config.terminal,
     tls: config.tls,
   };
 }

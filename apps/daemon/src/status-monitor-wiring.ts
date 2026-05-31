@@ -41,10 +41,10 @@ export function buildStatusMonitorDeps(
   const monitorStates = new Map<string, MonitorSessionState>();
   const runtimeSessionBackfillAttempts = new Map<string, number>();
   // Build runtimeId → command map once at deps construction. Re-reading
-  // config on every tick would be wasteful; runtimes are static for the
+  // config on every tick would be wasteful; agent runtimes are static for the
   // daemon's lifetime (a config change triggers daemon restart).
   const runtimeBinaryByRuntimeId = new Map<string, string>();
-  for (const rt of config.runtimes ?? []) {
+  for (const rt of config.agentRuntimes ?? []) {
     if (rt.id && rt.command) runtimeBinaryByRuntimeId.set(rt.id, rt.command);
   }
   // Per-session capture cache keyed by tmux session_activity. Adapter

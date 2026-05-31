@@ -29,10 +29,10 @@ export function registerRuntimeUsageRoutes(input: {
     asyncRoute(async (req, res) => {
       const runtimeId = req.params.runtimeId;
       if (typeof runtimeId !== "string") return res.status(400).json({ error: "runtime_id_required" });
-      const runtime = config.runtimes.find((candidate) => candidate.id === runtimeId);
+      const runtime = config.agentRuntimes.find((candidate) => candidate.id === runtimeId);
       if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
 
-      const runtimeHealth = listRuntimeHealth(config.runtimes).find((entry) => entry.id === runtimeId);
+      const runtimeHealth = listRuntimeHealth(config.agentRuntimes).find((entry) => entry.id === runtimeId);
       const checkedAt = new Date().toISOString();
       // Health gate: a runtime that isn't healthy has no usage to fetch. We
       // short-circuit BEFORE spawning anything (tmux, PTY, external command).

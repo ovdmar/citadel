@@ -3,7 +3,7 @@ import type http from "node:http";
 import type { Socket } from "node:net";
 import path from "node:path";
 import type { Duplex } from "node:stream";
-import type { AgentSession } from "@citadel/contracts";
+import type { AgentSession, WorkspaceSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type TtydEntry, type TtydManager, TtydUnavailableError } from "@citadel/terminal";
 import type express from "express";
@@ -20,7 +20,7 @@ type ResolvedSession = {
   tabId: string | null;
   tmuxSession: string;
   worktreePath: string | null;
-  runtimeId: string;
+  runtimeId: string | null;
 };
 
 // Runtimes whose TUIs enable DEC mouse tracking and consume wheel events for
@@ -114,7 +114,7 @@ export function registerTerminalRoutes(input: {
   dataDir: string;
   emit?: (type: string, payload: unknown) => void;
   /** Recreate the tmux session a terminal needs. Returns the live tmux name/id. */
-  respawnTmux?: (session: AgentSession) => Promise<{ tmuxSessionName: string; tmuxSessionId: string } | null>;
+  respawnTmux?: (session: WorkspaceSession) => Promise<{ tmuxSessionName: string; tmuxSessionId: string } | null>;
   /** Relaunch the agent inside an existing pane (shell-first Restart endpoint). */
   restartAgent?: (session: AgentSession) => Promise<void>;
   /** In-memory map of recent operator-initiated terminations. Written by the
@@ -264,7 +264,7 @@ export function registerTerminalRoutes(input: {
   });
 
   const resolveSession = (sessionId: string): ResolvedSession | null => {
-    const session = store.listSessions().find((candidate) => candidate.id === sessionId);
+    const session = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
     if (!session?.tmuxSessionName) return null;
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     return {
@@ -272,7 +272,7 @@ export function registerTerminalRoutes(input: {
       tabId: session.tabId ?? null,
       tmuxSession: session.tmuxSessionName,
       worktreePath: workspace?.path ?? null,
-      runtimeId: session.runtimeId,
+      runtimeId: session.kind === "agent" ? session.runtimeId : null,
     };
   };
 
@@ -325,7 +325,8 @@ export function registerTerminalRoutes(input: {
   // injected respawnTmux hook to bring the underlying tmux session back, then
   // retry. Returns null if no self-heal was possible.
   const ensureWithHeal = async (session: ResolvedSession, theme?: Theme, force?: boolean): Promise<TtydEntry> => {
-    const enableTmuxMouse = MOUSE_GRABBING_RUNTIMES.has(session.runtimeId);
+      const enableTmuxMouse =
+        typeof session.runtimeId === "string" && MOUSE_GRABBING_RUNTIMES.has(session.runtimeId);
     const base = {
       key: session.sessionId,
       tabId: session.tabId,
@@ -343,7 +344,7 @@ export function registerTerminalRoutes(input: {
     } catch (error) {
       if (!(error instanceof TtydUnavailableError) || error.code !== "tmux_session_missing") throw error;
       if (!input.respawnTmux) throw error;
-      const dbSession = store.listSessions().find((candidate) => candidate.id === session.sessionId);
+      const dbSession = store.listWorkspaceSessions().find((candidate) => candidate.id === session.sessionId);
       if (!dbSession) throw error;
       const respawn = await input.respawnTmux(dbSession);
       if (!respawn) throw error;
@@ -360,7 +361,7 @@ export function registerTerminalRoutes(input: {
     }
   };
 
-  app.post("/api/agent-sessions/:sessionId/terminal", async (req, res) => {
+  const ensureTerminalRoute: express.RequestHandler = async (req, res) => {
     const sessionId = String(req.params.sessionId ?? "");
     const session = resolveSession(sessionId);
     if (!session) return res.status(404).json({ error: "session_not_found" });
@@ -381,13 +382,17 @@ export function registerTerminalRoutes(input: {
       const message = error instanceof Error ? error.message : "terminal_failed";
       return res.status(status).json({ error: code, detail: message });
     }
-  });
+  };
+  app.post("/api/workspace-sessions/:sessionId/terminal", ensureTerminalRoute);
+  app.post("/api/agent-sessions/:sessionId/terminal", ensureTerminalRoute);
 
-  app.delete("/api/agent-sessions/:sessionId/terminal", (req, res) => {
+  const releaseTerminalRoute: express.RequestHandler = (req, res) => {
     const sessionId = String(req.params.sessionId ?? "");
     ttyd.release(sessionId, "terminal-route-delete");
     res.status(202).json({ released: true });
-  });
+  };
+  app.delete("/api/workspace-sessions/:sessionId/terminal", releaseTerminalRoute);
+  app.delete("/api/agent-sessions/:sessionId/terminal", releaseTerminalRoute);
 
   // Restart endpoint — relaunches the agent inside an existing pane.
   // Records recentUserAction BEFORE the mutation so the next status-monitor

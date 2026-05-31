@@ -47,13 +47,14 @@ export type DiagnosticsSnapshot = {
   tmuxLiveSessions: string[] | null;
   sessions: Array<{
     id: string;
+    kind: "agent" | "terminal";
     workspaceId: string;
     tabId: string | null;
     status: string;
     statusReason: string | null;
     tmuxSessionName: string | null;
     lastStatusAt: string | null;
-    runtimeId: string;
+    runtimeId: string | null;
   }>;
   workspaces: Array<{ id: string; name: string; path: string; archivedAt: string | null }>;
   recentEvents: DiagnosticEvent[];
@@ -81,8 +82,9 @@ export function buildDiagnosticsSnapshot(deps: DiagnosticsSnapshotDeps): Diagnos
       const set = listAllTmuxSessions();
       return set === null ? null : Array.from(set).sort();
     })(),
-    sessions: deps.store.listSessions().map((s) => ({
+    sessions: deps.store.listWorkspaceSessions().map((s) => ({
       id: s.id,
+      kind: s.kind,
       workspaceId: s.workspaceId,
       tabId: s.tabId ?? null,
       status: s.status,

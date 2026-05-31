@@ -73,13 +73,13 @@ function makeRepoOnDisk(dir: string): string {
   return repoPath;
 }
 
-type RuntimeFixture = CitadelConfig["runtimes"][number];
+type RuntimeFixture = CitadelConfig["agentRuntimes"][number];
 
 const claudeRuntime: RuntimeFixture = { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] };
 const codexRuntime: RuntimeFixture = { id: "codex", displayName: "Codex", command: "codex", args: ["--yolo"] };
-const shellRuntime: RuntimeFixture = { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] };
+const bashRuntime: RuntimeFixture = { id: "bash-agent", displayName: "Bash Agent", command: "bash", args: ["-l"] };
 
-function makeFixture(opts?: { withClaudeRuntime?: boolean; withRepo?: boolean; runtimes?: RuntimeFixture[] }) {
+function makeFixture(opts?: { withClaudeRuntime?: boolean; withRepo?: boolean; agentRuntimes?: RuntimeFixture[] }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-refine-"));
   dirs.push(dir);
   const configPath = path.join(dir, "citadel.config.json");
@@ -94,9 +94,9 @@ function makeFixture(opts?: { withClaudeRuntime?: boolean; withRepo?: boolean; r
     github: { enabled: false, command: "gh" },
     jira: { enabled: false, command: "jtk" },
   };
-  // Only seed runtimes when the caller wants them (so we can exercise the
+  // Only seed agent runtimes when the caller wants them (so we can exercise the
   // runtime_unavailable branches without depending on local binaries).
-  config.runtimes = opts?.runtimes ?? (opts?.withClaudeRuntime ? [claudeRuntime] : []);
+  config.agentRuntimes = opts?.agentRuntimes ?? (opts?.withClaudeRuntime ? [claudeRuntime] : []);
   const store = new SqliteStore(config.databasePath);
   store.migrate();
   let repoId: string | undefined;
@@ -192,7 +192,7 @@ describe("refineScratchpad — degradation matrix", () => {
       health: "unavailable",
       healthReason: "Claude subscription access is disabled",
     });
-    const { config, store, repoId } = makeFixture({ runtimes: [claudeRuntime, codexRuntime], withRepo: true });
+    const { config, store, repoId } = makeFixture({ agentRuntimes: [claudeRuntime, codexRuntime], withRepo: true });
     const launchAgent = vi.fn(async (_input: LaunchAgentInput, _runtime: { displayName: string }) => ({
       workspaceId: "ws-codex",
       sessionId: "session-codex",
@@ -215,7 +215,7 @@ describe("refineScratchpad — degradation matrix", () => {
   });
 
   it("honors the saved action runtime preference when it is available", async () => {
-    const { config, store, repoId } = makeFixture({ runtimes: [claudeRuntime, codexRuntime], withRepo: true });
+    const { config, store, repoId } = makeFixture({ agentRuntimes: [claudeRuntime, codexRuntime], withRepo: true });
     const [action] = await listCitadelActions(config.dataDir);
     if (!action) throw new Error("expected seeded action");
     await updateCitadelAction(config.dataDir, action.id, { runtimeId: "codex", updatedAt: action.updatedAt });
@@ -237,12 +237,12 @@ describe("refineScratchpad — degradation matrix", () => {
     expect(launchInput.runtimeId).toBe("codex");
   });
 
-  it("does not fall back to a plain shell runtime", async () => {
+  it("does not fall back to a plain shell command", async () => {
     runtimeHealthOverrides.set("claude-code", {
       health: "unavailable",
       healthReason: "Claude subscription access is disabled",
     });
-    const { config, store, repoId } = makeFixture({ runtimes: [claudeRuntime, shellRuntime], withRepo: true });
+    const { config, store, repoId } = makeFixture({ agentRuntimes: [claudeRuntime, bashRuntime], withRepo: true });
     const operations: FakeOps = { launchAgent: vi.fn(), removeWorkspace: vi.fn() } as unknown as FakeOps;
 
     const result = await refineScratchpad(

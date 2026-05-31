@@ -77,7 +77,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
     // the route picks it for the spawn. The "--" makes the synthetic promptArg
     // a script argument instead of a node option, so the fake agent stays
     // alive until test cleanup.
-    fixture.config.runtimes = [
+    fixture.config.agentRuntimes = [
       { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
       {
         id: "claude-code",
@@ -172,7 +172,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
     // executed by bash); createAgentSession pastes the prompt into the
     // agent TUI when promptArg is absent.
     const fixture = createFixture();
-    fixture.config.runtimes = [
+    fixture.config.agentRuntimes = [
       { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
       // Mirror the real built-in: no promptArg. The raw-mode node process is
       // a non-shell stdin consumer that echoes bytes as they arrive, so
@@ -302,7 +302,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
     const fixture = createFixture();
     const git = createGitRepo(fixture.config.dataDir);
     const now = new Date().toISOString();
-    fixture.config.runtimes = [
+    fixture.config.agentRuntimes = [
       { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
       { id: "claude-code", displayName: "Claude Code", command: "echo", args: [] },
     ];

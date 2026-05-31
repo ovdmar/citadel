@@ -46,11 +46,12 @@ export function registerStateRoutes(input: {
       res.json({
         repos: store.listRepos(),
         workspaces: store.listWorkspaces(),
-        sessions: store.listSessions(),
+        sessions: store.listWorkspaceSessions(),
         operations: store.listOperations(),
         activity: store.listActivity(),
         providerHealth: health,
-        runtimes: listRuntimeHealth(config.runtimes),
+        agentRuntimes: listRuntimeHealth(config.agentRuntimes),
+        terminal: config.terminal,
         mcp: mcpStatus(config.mcp.enabled),
         scheduledAgents: scheduledAgents.list(),
         namespaces: store.listNamespaces(),
@@ -59,7 +60,7 @@ export function registerStateRoutes(input: {
     }),
   );
 
-  app.get("/api/runtimes", (_req, res) => {
-    res.json({ runtimes: listRuntimeHealth(config.runtimes) });
+  app.get("/api/agent-runtimes", (_req, res) => {
+    res.json({ agentRuntimes: listRuntimeHealth(config.agentRuntimes) });
   });
 }

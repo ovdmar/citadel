@@ -153,9 +153,9 @@ export function registerScaffoldHookRoutes(input: {
       const template = loadTemplate();
       const prompt = buildHookScaffoldPrompt({ repo, template });
 
-      const runtime = config.runtimes.find((r) => r.id === "claude-code") ?? config.runtimes[0];
+      const runtime = config.agentRuntimes.find((r) => r.id === "claude-code") ?? config.agentRuntimes[0];
       if (!runtime) {
-        return res.status(500).json({ error: "no_runtime_configured" });
+        return res.status(500).json({ error: "no_agent_runtime_configured" });
       }
 
       const launchInput: LaunchAgentInput = {

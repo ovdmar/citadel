@@ -60,7 +60,7 @@ export function startDaemonAutoRecoveryMonitor(deps: AutoRecoveryWiringDeps): Au
         ((workspacePath) => collectGitHubVersionControlSummary(workspacePath)),
       fetchCi: deps.fetchCi ?? cachedFetchers?.fetchCi ?? ((workspacePath) => collectGitHubCiRuns(workspacePath)),
       spawnAutoRecoveryAgent: async ({ workspaceId, runtimeId, prompt }) => {
-        const runtime = deps.config.runtimes.find((candidate) => candidate.id === runtimeId);
+        const runtime = deps.config.agentRuntimes.find((candidate) => candidate.id === runtimeId);
         if (!runtime) throw new Error(`runtime_not_found:${runtimeId}`);
         const session = await deps.operations.createAgentSession(
           {
@@ -106,7 +106,7 @@ export function startDaemonAutoRecoveryMonitor(deps: AutoRecoveryWiringDeps): Au
 
 export function resolveAutoRecoveryRuntimeId(
   config: CitadelConfig,
-  runtimeHealth: AgentRuntime[] = listRuntimeHealth(config.runtimes),
+  runtimeHealth: AgentRuntime[] = listRuntimeHealth(config.agentRuntimes),
 ): string | null {
   const configured = config.automations?.fixCi ?? DEFAULT_FIX_CI_AUTOMATION;
   const ordered = uniqueRuntimeIds([configured.runtimeId, configured.fallbackRuntimeId]);

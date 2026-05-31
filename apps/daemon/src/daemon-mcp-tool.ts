@@ -100,7 +100,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
   }
   if (call.name === "start_agent_session") {
     const input = CreateAgentSessionInputSchema.parse(call.arguments ?? {});
-    const runtime = config.runtimes.find((candidate) => candidate.id === input.runtimeId);
+    const runtime = config.agentRuntimes.find((candidate) => candidate.id === input.runtimeId);
     if (!runtime) throw new Error(`Unknown runtime: ${input.runtimeId}`);
     const session = await operations.createAgentSession(input, {
       command: runtime.command,
@@ -115,7 +115,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
   }
   if (call.name === "launch_agent") {
     const input = LaunchAgentInputSchema.parse(call.arguments ?? {});
-    const runtime = config.runtimes.find((candidate) => candidate.id === input.runtimeId);
+    const runtime = config.agentRuntimes.find((candidate) => candidate.id === input.runtimeId);
     if (!runtime) throw new Error(`Unknown runtime: ${input.runtimeId}`);
     try {
       const result = await operations.launchAgent(input, {
@@ -419,7 +419,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     operations: store.listOperations(),
     activity: store.listActivity(),
     providerHealth,
-    runtimes: listRuntimeHealth(config.runtimes),
+    runtimes: listRuntimeHealth(config.agentRuntimes),
     scheduledAgents: scheduledAgents.list(),
     namespaces: store.listNamespaces(),
     scratchpadPath: effectiveNotesPath(config),

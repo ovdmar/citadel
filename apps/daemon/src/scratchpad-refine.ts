@@ -7,7 +7,7 @@
 // Two callers:
 //   1) POST /api/scratchpad/refine (HTTP, used by the cockpit's Refine modal).
 //   2) `refine_scratchpad` MCP tool handler (used by external agents).
-import type { CitadelConfig, RuntimeConfig } from "@citadel/config";
+import type { AgentRuntimeConfig, CitadelConfig } from "@citadel/config";
 import type { AgentRuntime, LaunchAgentInput, ProviderHealth } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
@@ -45,7 +45,7 @@ export type RefineDeps = {
 };
 
 type RuntimeResolution =
-  | { ok: true; runtimeConfig: RuntimeConfig; fallbackWarning?: string }
+  | { ok: true; runtimeConfig: AgentRuntimeConfig; fallbackWarning?: string }
   | { ok: false; detail: string };
 
 export async function refineScratchpad(deps: RefineDeps, input: RefineInput): Promise<RefineResult> {
@@ -66,8 +66,8 @@ export async function refineScratchpad(deps: RefineDeps, input: RefineInput): Pr
   //    preferred runtime, but launches should degrade to another configured
   //    agent runtime when the preference is missing or unavailable.
   const preferredRuntimeId = action?.runtimeId ?? BUILT_IN_REFINE_SCRATCHPAD.runtimeId;
-  const healthList = listRuntimeHealth(config.runtimes);
-  const runtimeResolution = resolveCitadelActionRuntime(config.runtimes, healthList, preferredRuntimeId);
+  const healthList = listRuntimeHealth(config.agentRuntimes);
+  const runtimeResolution = resolveCitadelActionRuntime(config.agentRuntimes, healthList, preferredRuntimeId);
   if (!runtimeResolution.ok) return { ok: false, error: "runtime_unavailable", detail: runtimeResolution.detail };
   const { runtimeConfig } = runtimeResolution;
 
@@ -161,7 +161,7 @@ export async function refineScratchpad(deps: RefineDeps, input: RefineInput): Pr
 }
 
 export function resolveCitadelActionRuntime(
-  runtimes: RuntimeConfig[],
+  runtimes: AgentRuntimeConfig[],
   runtimeHealth: AgentRuntime[],
   preferredRuntimeId: string = DEFAULT_CITADEL_ACTION_RUNTIME_ID,
 ): RuntimeResolution {
@@ -191,7 +191,7 @@ export function resolveCitadelActionRuntime(
 }
 
 function runtimeProblem(
-  runtime: RuntimeConfig | undefined,
+  runtime: AgentRuntimeConfig | undefined,
   health: AgentRuntime | undefined,
   runtimeId: string,
 ): string | null {
@@ -203,8 +203,7 @@ function runtimeProblem(
   return null;
 }
 
-function isAgentRuntime(runtime: RuntimeConfig): boolean {
-  if (runtime.id === "shell") return false;
+function isAgentRuntime(runtime: AgentRuntimeConfig): boolean {
   const command = runtime.command.split(/[\\/]/).pop() ?? runtime.command;
   return !["bash", "sh", "zsh", "fish"].includes(command);
 }

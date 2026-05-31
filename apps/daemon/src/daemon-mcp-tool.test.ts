@@ -46,7 +46,7 @@ describe("daemon launch_agent MCP tool", () => {
         arguments: {
           repoId: repoResp.repo.id,
           prompt: "hello",
-          runtimeId: "shell",
+          runtimeId: "test-agent",
           workspaceName: "mcp-idem",
           branchName: "fb-brand-new-mcp",
         },
@@ -65,7 +65,7 @@ describe("daemon launch_agent MCP tool", () => {
         arguments: {
           repoId: repoResp.repo.id,
           prompt: "again",
-          runtimeId: "shell",
+          runtimeId: "test-agent",
           workspaceName: "mcp-idem",
           branchName: "fb-brand-new-mcp",
         },

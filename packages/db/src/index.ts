@@ -33,6 +33,8 @@ export type SqliteDatabase = {
   prepare(sql: string): SqliteStatement;
   close(): void;
 };
+type LegacyAgentSessionInput = Omit<AgentSession, "kind"> & { kind?: "agent" };
+type WorkspaceSessionInput = WorkspaceSession | LegacyAgentSessionInput;
 export type SqliteStatement = {
   all(...params: unknown[]): unknown[];
   get(...params: unknown[]): unknown;
@@ -361,7 +363,7 @@ export class SqliteStore {
     return this.listWorkspaceSessions(workspaceId).filter((session): session is AgentSession => session.kind === "agent");
   }
 
-  insertWorkspaceSession(session: WorkspaceSession) {
+  insertWorkspaceSession(session: WorkspaceSessionInput) {
     const kind = session.kind ?? "agent";
     this.database
       .prepare(
@@ -404,7 +406,7 @@ export class SqliteStore {
       );
   }
 
-  insertSession(session: AgentSession) {
+  insertSession(session: LegacyAgentSessionInput) {
     this.insertWorkspaceSession(session);
   }
 

@@ -71,7 +71,8 @@ function makeConfig(): CitadelConfig {
     dataDir: "/tmp/fake",
     databasePath: "/tmp/fake/db",
     providers: { github: { enabled: false, command: "gh" }, jira: { enabled: false, command: "jtk" } },
-    runtimes: [{ id: "claude-code", displayName: "Claude Code", command: "claude", args: [] }],
+    agentRuntimes: [{ id: "claude-code", displayName: "Claude Code", command: "claude", args: [] }],
+    terminal: { displayName: "Terminal", command: "bash", args: ["-l"] },
     repoDefaults: { setupHookIds: [], teardownHookIds: [] },
     hooks: [],
     commandPolicy: { hookTimeoutMs: 120_000 },
@@ -206,7 +207,7 @@ describe("runAutoRecoveryTick (integration via in-memory store)", () => {
     expect(spawnCount).toBe(0);
   });
 
-  it("does not spawn when no non-shell runtime is configured", async () => {
+  it("does not spawn when no agent runtime is configured", async () => {
     const store = makeStore();
     seedRepoAndWorkspace(store, "ws_no_runtime");
     let spawnCount = 0;
@@ -214,7 +215,7 @@ describe("runAutoRecoveryTick (integration via in-memory store)", () => {
       spawnCount += 1;
       return { id: "x" };
     });
-    deps.config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: [] }];
+    deps.config.agentRuntimes = [];
     await runAutoRecoveryTick(deps, new Date("2026-05-25T12:00:00.000Z"));
     expect(spawnCount).toBe(0);
   });

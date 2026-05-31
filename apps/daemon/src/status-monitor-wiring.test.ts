@@ -27,7 +27,7 @@ describe("buildStatusMonitorDeps — shell-first wiring", () => {
     fs.rmSync(tmpDbDir, { recursive: true, force: true });
   });
 
-  function makeConfig(runtimes: Array<{ id: string; command: string }>): CitadelConfig {
+  function makeConfig(agentRuntimes: Array<{ id: string; command: string }>): CitadelConfig {
     return {
       version: 1,
       dataDir: tmpDbDir,
@@ -39,7 +39,8 @@ describe("buildStatusMonitorDeps — shell-first wiring", () => {
         github: { enabled: false, command: "gh" },
         jira: { enabled: false, command: "jtk" },
       },
-      runtimes: runtimes.map((r) => ({ ...r, args: [], displayName: r.id })),
+      agentRuntimes: agentRuntimes.map((r) => ({ ...r, args: [], displayName: r.id })),
+      terminal: { displayName: "Terminal", command: "bash", args: ["-l"] },
     } as unknown as CitadelConfig;
   }
 

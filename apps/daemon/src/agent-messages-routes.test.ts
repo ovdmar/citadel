@@ -478,7 +478,7 @@ function createFixture() {
     github: { enabled: false, command: "gh" },
     jira: { enabled: false, command: "jtk" },
   };
-  config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
+  config.agentRuntimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
   const store = new SqliteStore(config.databasePath);
   store.migrate();
   return { config, configPath, store };

@@ -2,8 +2,8 @@
 // Extracted so app.ts stays under the 800-line file-size cap.
 
 import type http from "node:http";
-import type { CitadelConfig } from "@citadel/config";
-import type { AgentSession } from "@citadel/contracts";
+import type { AgentRuntimeConfig, CitadelConfig } from "@citadel/config";
+import type { AgentSession, WorkspaceSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type TtydManager, ensureTmuxSession, launchAgentInSession, panePidProcess } from "@citadel/terminal";
 import type express from "express";
@@ -18,24 +18,27 @@ function isShellCommand(command: string): boolean {
   return (SHELL_COMMANDS as readonly string[]).includes(command);
 }
 
-function sessionTmuxName(session: AgentSession, workspaceId: string): string {
+function sessionTmuxName(session: WorkspaceSession, workspaceId: string): string {
   return session.tmuxSessionName ?? `citadel_${workspaceId}_${session.id.slice(-8)}`;
 }
 
 function resolveSessionContext(
   store: SqliteStore,
   config: CitadelConfig,
-  session: AgentSession,
-): { workspacePath: string; sessionName: string; runtime: CitadelConfig["runtimes"][number] } | null {
+  session: WorkspaceSession,
+): { workspacePath: string; sessionName: string; runtime: AgentRuntimeConfig | null } | null {
   const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
-  const runtime = config.runtimes.find((candidate) => candidate.id === session.runtimeId);
-  if (!workspace || !runtime) return null;
+  let runtime: AgentRuntimeConfig | null = null;
+  if (session.kind === "agent") {
+    runtime = config.agentRuntimes.find((candidate) => candidate.id === session.runtimeId) ?? null;
+  }
+  if (!workspace || (session.kind === "agent" && !runtime)) return null;
   return { workspacePath: workspace.path, sessionName: sessionTmuxName(session, workspace.id), runtime };
 }
 
-// Recreate the tmux session a terminal needs (operator reconnect after
-// tmux gone). Shell-first three-step: spawn `bash -l`, then send-keys the
-// runtime argv (skipped for the `shell` runtime — bash IS the runtime).
+// Recreate the tmux session a tab needs after operator reconnect. Agent tabs
+// spawn the configured terminal profile and then launch the agent runtime;
+// terminal tabs only spawn the terminal profile.
 // Wire the terminal-routes + supporting helpers in one call. Returns the
 // shared recentUserAction map so the status-monitor wiring (separate file)
 // can read it by reference. Keeping the wiring in this helper module
@@ -69,12 +72,12 @@ export function wireTerminalRoutes(input: {
 export function buildRespawnTmux(
   store: SqliteStore,
   config: CitadelConfig,
-): (session: AgentSession) => Promise<{ tmuxSessionName: string; tmuxSessionId: string } | null> {
+): (session: WorkspaceSession) => Promise<{ tmuxSessionName: string; tmuxSessionId: string } | null> {
   return async (session) => {
     const ctx = resolveSessionContext(store, config, session);
     if (!ctx) return null;
-    const tmux = await ensureTmuxSession({ sessionName: ctx.sessionName, cwd: ctx.workspacePath });
-    if (!isShellCommand(ctx.runtime.command)) {
+    const tmux = await ensureTmuxSession({ sessionName: ctx.sessionName, cwd: ctx.workspacePath, terminal: config.terminal });
+    if (session.kind === "agent" && ctx.runtime && !isShellCommand(ctx.runtime.command)) {
       const argv = [...ctx.runtime.args];
       if (session.runtimeSessionId && ctx.runtime.resumeArg) {
         argv.push(ctx.runtime.resumeArg, session.runtimeSessionId);
@@ -95,11 +98,12 @@ export function buildRestartAgent(store: SqliteStore, config: CitadelConfig): (s
   return async (session) => {
     const ctx = resolveSessionContext(store, config, session);
     if (!ctx) throw new Error("session_resolution_failed");
+    if (!ctx.runtime) throw new Error("session_not_agent");
     const pane = panePidProcess(ctx.sessionName);
     if (pane && pane.command === ctx.runtime.command.slice(0, 15)) {
       throw new Error("agent_already_running");
     }
-    await ensureTmuxSession({ sessionName: ctx.sessionName, cwd: ctx.workspacePath });
+    await ensureTmuxSession({ sessionName: ctx.sessionName, cwd: ctx.workspacePath, terminal: config.terminal });
     if (!isShellCommand(ctx.runtime.command)) {
       const argv = [...ctx.runtime.args];
       if (session.runtimeSessionId && ctx.runtime.resumeArg) {

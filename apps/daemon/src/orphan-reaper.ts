@@ -58,7 +58,7 @@ export async function reapOrphans(deps: {
   // Every tmux session referenced by any DB row, regardless of status —
   // status=terminated rows still have the original tmuxSessionName recorded.
   const referencedTmuxNames = new Set<string>();
-  for (const session of deps.store.listSessions()) {
+  for (const session of deps.store.listWorkspaceSessions()) {
     if (session.tmuxSessionName) referencedTmuxNames.add(session.tmuxSessionName);
   }
 
