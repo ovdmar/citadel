@@ -48,7 +48,7 @@ export function ensureTmuxExtendedKeys(socketName?: TmuxSocketName) {
         stdio: "ignore",
       });
     }
-    execFileSync("tmux", [...tmuxPrefix(socketName), "set-option", "-g", "mouse", "on"], { stdio: "ignore" });
+    execFileSync("tmux", [...tmuxPrefix(socketName), "set-option", "-g", "mouse", "off"], { stdio: "ignore" });
     execFileSync("tmux", [...tmuxPrefix(socketName), "set-option", "-g", "set-clipboard", "on"], {
       stdio: "ignore",
     });

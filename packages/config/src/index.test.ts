@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CitadelConfigSchema,
+  HookConfigSchema,
+  HookEventSchema,
   RuntimeConfigSchema,
   UsageProviderConfigSchema,
   defaultConfigPath,
@@ -488,6 +490,46 @@ describe("RuntimeConfig contract surface (regression guard)", () => {
   it("does NOT contain usageRefreshIntervalMs", () => {
     const shape = RuntimeConfigSchema.shape;
     expect(shape).not.toHaveProperty("usageRefreshIntervalMs");
+  });
+});
+
+describe("HookEventSchema (re-exported from @citadel/contracts)", () => {
+  it("accepts the new framework events: pr.merge, merge.conflict.detected, review.requested", () => {
+    expect(HookEventSchema.parse("pr.merge")).toBe("pr.merge");
+    expect(HookEventSchema.parse("merge.conflict.detected")).toBe("merge.conflict.detected");
+    expect(HookEventSchema.parse("review.requested")).toBe("review.requested");
+  });
+
+  it("still accepts the existing workspace.* and agent.started events", () => {
+    expect(HookEventSchema.parse("workspace.setup")).toBe("workspace.setup");
+    expect(HookEventSchema.parse("agent.started")).toBe("agent.started");
+  });
+});
+
+describe("HookConfigSchema", () => {
+  it("defaults blocking:true for workspace.setup and workspace.teardown (existing behavior)", () => {
+    const setup = HookConfigSchema.parse({ id: "x", event: "workspace.setup", command: "true" });
+    const teardown = HookConfigSchema.parse({ id: "x", event: "workspace.teardown", command: "true" });
+    expect(setup.blocking).toBe(true);
+    expect(teardown.blocking).toBe(true);
+  });
+
+  it("defaults blocking:true for pr.merge — a failing merge must surface, not silently continue", () => {
+    const merge = HookConfigSchema.parse({ id: "x", event: "pr.merge", command: "true" });
+    expect(merge.blocking).toBe(true);
+  });
+
+  it("defaults blocking:false for non-mutating events like workspace.apps", () => {
+    const apps = HookConfigSchema.parse({ id: "x", event: "workspace.apps", command: "true" });
+    expect(apps.blocking).toBe(false);
+  });
+
+  it("rejects a config-hook id with the reserved 'file:' prefix (file-based hooks own that namespace)", () => {
+    expect(() => HookConfigSchema.parse({ id: "file:foo", event: "workspace.setup", command: "true" })).toThrow();
+  });
+
+  it("accepts normal ids", () => {
+    expect(() => HookConfigSchema.parse({ id: "bootstrap", event: "workspace.setup", command: "true" })).not.toThrow();
   });
 });
 

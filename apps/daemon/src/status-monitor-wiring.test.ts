@@ -4,7 +4,7 @@ import path from "node:path";
 import type { CitadelConfig } from "@citadel/config";
 import { SqliteStore } from "@citadel/db";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildStatusMonitorDeps } from "./status-monitor-wiring.js";
+import { buildStatusMonitorDeps, shouldReusePaneCaptureCache } from "./status-monitor-wiring.js";
 
 // Shell-first wiring smoke tests. The legacy readSentinels stale-.exit guard
 // is gone (the wrapper that wrote those files is removed). The replacement
@@ -74,5 +74,15 @@ describe("buildStatusMonitorDeps — shell-first wiring", () => {
     // The deps holds the SAME Map reference, so the status-monitor will see
     // the write on its next tick.
     expect(deps.recentUserAction.get("sess_x")).toBe(12345);
+  });
+
+  it("reuses pane captures only while activity and max-age agree", () => {
+    const cached = { activityMs: 1000, capturedAtMs: 10_000, content: "old pane" };
+
+    expect(shouldReusePaneCaptureCache(cached, 1000, 15_000)).toBe(true);
+    expect(shouldReusePaneCaptureCache(cached, 1000, 21_000)).toBe(false);
+    expect(shouldReusePaneCaptureCache(cached, 2000, 15_000)).toBe(false);
+    expect(shouldReusePaneCaptureCache(cached, 1000, 10_500, { maxAgeMs: 250 })).toBe(false);
+    expect(shouldReusePaneCaptureCache(cached, 1000, 10_100, { force: true })).toBe(false);
   });
 });

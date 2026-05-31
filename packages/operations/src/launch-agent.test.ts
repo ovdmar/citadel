@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { LaunchAgentInputSchema } from "@citadel/contracts";
 import { SqliteStore } from "@citadel/db";
+import { tmuxPrefix } from "@citadel/terminal";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperationService, WorkspaceInUseError } from "./index.js";
 
@@ -13,7 +14,7 @@ const tmuxSessions: string[] = [];
 afterEach(() => {
   for (const session of tmuxSessions.splice(0)) {
     try {
-      execFileSync("tmux", ["kill-session", "-t", session], { stdio: "ignore" });
+      execFileSync("tmux", [...tmuxPrefix(), "kill-session", "-t", session], { stdio: "ignore" });
     } catch {
       /* already gone */
     }

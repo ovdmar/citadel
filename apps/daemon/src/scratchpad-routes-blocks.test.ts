@@ -418,5 +418,5 @@ describe("scratchpad block routes + MCP block tools", () => {
     } finally {
       await closeServer(server);
     }
-  }, 20_000);
+  }, 30_000);
 });

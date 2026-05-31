@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { tmuxPrefix } from "@citadel/terminal";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   closeServer,
@@ -16,7 +17,7 @@ const tmuxSessions: string[] = [];
 afterEach(() => {
   for (const session of tmuxSessions.splice(0)) {
     try {
-      execFileSync("tmux", ["kill-session", "-t", session], { stdio: "ignore" });
+      execFileSync("tmux", [...tmuxPrefix(), "kill-session", "-t", session], { stdio: "ignore" });
     } catch {
       /* already gone */
     }

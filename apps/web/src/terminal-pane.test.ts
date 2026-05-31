@@ -25,9 +25,11 @@ const xtermMocks = vi.hoisted(() => {
     focus = vi.fn();
     dispose = vi.fn();
     selectAll = vi.fn();
+    hasSelection = vi.fn(() => true);
     getSelection = vi.fn(() => "selected text");
     private dataHandler: ((data: string) => void) | null = null;
     private keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
+    private selectionHandler: (() => void) | null = null;
 
     constructor(options: Record<string, unknown>) {
       this.options = options;
@@ -48,11 +50,18 @@ const xtermMocks = vi.hoisted(() => {
     attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
       this.keyHandler = handler;
     }
+    onSelectionChange(handler: () => void) {
+      this.selectionHandler = handler;
+      return { dispose: vi.fn() };
+    }
     emitData(data: string) {
       this.dataHandler?.(data);
     }
     emitKey(event: KeyboardEvent) {
       return this.keyHandler?.(event);
+    }
+    emitSelectionChange() {
+      this.selectionHandler?.();
     }
   }
 
@@ -65,6 +74,8 @@ const xtermMocks = vi.hoisted(() => {
 
 vi.mock("@xterm/xterm", () => ({ Terminal: xtermMocks.FakeTerminal }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: xtermMocks.FakeFitAddon }));
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 class FakeWebSocket extends EventTarget {
   static CONNECTING = 0;
@@ -245,25 +256,126 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     );
   });
 
-  it("copies the xterm selection on macOS Cmd+C without forwarding Ctrl+C to the PTY", async () => {
+  it("lets macOS Cmd+C with an xterm selection reach the browser copy event", async () => {
     await renderTerminal();
     const ws = FakeWebSocket.instances[0];
     const term = xtermMocks.FakeTerminal.instances[0];
-    const writeText = vi.fn().mockResolvedValue(undefined);
     if (!ws || !term) throw new Error("terminal rig missing");
 
     Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
-    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-    Object.defineProperty(document, "execCommand", { configurable: true, value: undefined });
     await flushReact(() => ws.open());
 
     const copied = term.emitKey(
       new KeyboardEvent("keydown", { key: "c", metaKey: true, bubbles: true, cancelable: true }),
     );
 
-    expect(copied).toBe(false);
-    expect(writeText).toHaveBeenCalledWith("selected text");
+    expect(copied).toBe(true);
     expect(decodeBinarySent(ws.sent).join("")).not.toContain("\u0003");
+  });
+
+  it("does not cancel the native host keydown before macOS selected-text copy", async () => {
+    await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+    await flushReact(() => ws.open());
+    const event = new KeyboardEvent("keydown", { key: "c", metaKey: true, bubbles: true, cancelable: true });
+
+    host.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(decodeBinarySent(ws.sent).join("")).not.toContain("\u0003");
+  });
+
+  it("does not turn browser-selected terminal text into a macOS Cmd+C interrupt", async () => {
+    await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !term || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+    term.hasSelection.mockReturnValue(false);
+    term.getSelection.mockReturnValue("");
+    selectTextInside(host, "browser selected text");
+    await flushReact(() => ws.open());
+    const event = new KeyboardEvent("keydown", { key: "c", metaKey: true, bubbles: true, cancelable: true });
+
+    host.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(decodeBinarySent(ws.sent).join("")).not.toContain("\u0003");
+  });
+
+  it("writes xterm selection text during the browser copy event", async () => {
+    await renderTerminal();
+    const term = xtermMocks.FakeTerminal.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!term || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+
+    const clipboardData = clipboardDataMock();
+    const event = new Event("copy", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { configurable: true, value: clipboardData });
+
+    host.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(clipboardData.setData).toHaveBeenCalledWith("text/plain", "selected text");
+  });
+
+  it("writes terminal selection text when the browser copy event targets the document", async () => {
+    await renderTerminal();
+    const clipboardData = clipboardDataMock();
+    const event = new Event("copy", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { configurable: true, value: clipboardData });
+
+    document.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(clipboardData.setData).toHaveBeenCalledWith("text/plain", "selected text");
+  });
+
+  it("sends Ctrl+C to the PTY on macOS Cmd+C when there is no xterm selection", async () => {
+    await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    if (!ws || !term) throw new Error("terminal rig missing");
+
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+    term.hasSelection.mockReturnValue(false);
+    term.getSelection.mockReturnValue("");
+    await flushReact(() => ws.open());
+
+    const interrupted = term.emitKey(
+      new KeyboardEvent("keydown", { key: "c", metaKey: true, bubbles: true, cancelable: true }),
+    );
+
+    expect(interrupted).toBe(false);
+    expect(decodeBinarySent(ws.sent).join("")).toContain("\u0003");
+    expect(window.fetch).toHaveBeenCalledWith(
+      "/api/agent-sessions/sess_1/user-action",
+      expect.objectContaining({ body: JSON.stringify({ reason: "ctrl_c" }) }),
+    );
+  });
+
+  it("uses the latest xterm selection snapshot when copy fires after selection text is cleared", async () => {
+    await renderTerminal();
+    const term = xtermMocks.FakeTerminal.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!term || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+
+    term.getSelection.mockReturnValue("snapshot text");
+    term.emitSelectionChange();
+    term.getSelection.mockReturnValue("");
+    const clipboardData = clipboardDataMock();
+    const event = new Event("copy", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { configurable: true, value: clipboardData });
+
+    host.dispatchEvent(event);
+
+    expect(clipboardData.setData).toHaveBeenCalledWith("text/plain", "snapshot text");
   });
 
   it("captures Shift+Enter before the browser terminal can emit a plain Enter", async () => {
@@ -367,6 +479,22 @@ function decodeBinarySent(sent: unknown[]): string[] {
   return sent
     .filter((item): item is Uint8Array => item instanceof Uint8Array)
     .map((item) => new TextDecoder().decode(item));
+}
+
+function clipboardDataMock() {
+  return {
+    setData: vi.fn(),
+  };
+}
+
+function selectTextInside(host: HTMLElement, text: string) {
+  const node = document.createTextNode(text);
+  host.appendChild(node);
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  const selection = document.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
 }
 
 function sessionFixture(): AgentSession {

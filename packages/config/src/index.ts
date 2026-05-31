@@ -1,10 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { HookEventSchema } from "@citadel/contracts";
 import { z } from "zod";
 
 export { devStatePath, loadDevState, saveDevState, resolveWorktreeRoot, DevStateSchema } from "./dev-state.js";
 export type { DevState } from "./dev-state.js";
+
+// Re-export HookEventSchema so existing consumers importing it from
+// @citadel/config keep working. The canonical home is @citadel/contracts —
+// see `packages/contracts/src/hooks.ts` for the rationale.
+export { HookEventSchema } from "@citadel/contracts";
+export type { HookEvent } from "@citadel/contracts";
 
 // Built-in defaults for the runtimes Citadel ships with. Held as a constant so
 // we can both seed the schema's default (fresh install) AND backfill missing
@@ -140,20 +147,20 @@ export const AutomationConfigSchema = z
   })
   .default({ fixCi: DEFAULT_FIX_CI_AUTOMATION });
 
-export const HookEventSchema = z.enum([
-  "workspace.setup",
-  "workspace.teardown",
-  "workspace.apps",
-  "workspace.action",
-  "workspace.created",
-  "workspace.archived",
-  "workspace.removed",
-  "agent.started",
-]);
-
+// HookConfigSchema describes a hook configured in citadel's global JSON
+// config. File-based hooks (`.citadel/hooks/<event>/<name>.{sh,agent}`) own
+// the `file:` id prefix — config-defined ids cannot collide with discovered
+// hook ids. Blocking defaults to true for events whose failure must surface
+// rather than be swallowed: workspace setup/teardown (today) plus pr.merge
+// (a failing `gh pr merge` must not silently let the operation proceed).
 export const HookConfigSchema = z
   .object({
-    id: z.string().min(1),
+    id: z
+      .string()
+      .min(1)
+      .refine((id) => !id.startsWith("file:"), {
+        message: "Hook id 'file:' prefix is reserved for file-based hooks",
+      }),
     kind: z.literal("command").default("command"),
     event: HookEventSchema,
     command: z.string().min(1),
@@ -166,7 +173,7 @@ export const HookConfigSchema = z
   })
   .transform((hook) => ({
     ...hook,
-    blocking: hook.blocking ?? ["workspace.setup", "workspace.teardown"].includes(hook.event),
+    blocking: hook.blocking ?? ["workspace.setup", "workspace.teardown", "pr.merge"].includes(hook.event),
   }));
 
 export const CitadelConfigSchema = z
