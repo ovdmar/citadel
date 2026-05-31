@@ -185,6 +185,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     await renderTerminal();
 
     expect(TerminalPaneWebSocketMock.instances[0]?.url).toBe(terminalWebSocketUrl("sess_1"));
+    expect(xtermMocks.FakeTerminal.instances[0]?.options.scrollback).toBe(20_000);
     expect(window.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/api/agent-sessions/sess_1/terminal"));
     expect(getTerminalHandle("sess_1")).toBeDefined();
   });
@@ -322,6 +323,27 @@ describe("TerminalPane xterm WebSocket renderer", () => {
       expect.objectContaining({ action: "close-overlay", sessionId: "sess_1" }),
       window.location.origin,
     );
+  });
+
+  it("copies the xterm selection on macOS Cmd+C without forwarding Ctrl+C to the PTY", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    if (!ws || !term) throw new Error("terminal rig missing");
+
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    Object.defineProperty(document, "execCommand", { configurable: true, value: undefined });
+    await flushReactUpdate(async () => ws.open());
+
+    const copied = term.emitKey(
+      new KeyboardEvent("keydown", { key: "c", metaKey: true, bubbles: true, cancelable: true }),
+    );
+
+    expect(copied).toBe(false);
+    expect(writeText).toHaveBeenCalledWith("selected text");
+    expect(decodeBinarySent(ws.sent).join("")).not.toContain("\u0003");
   });
 
   it("captures Shift+Enter before the browser terminal can emit a plain Enter", async () => {
