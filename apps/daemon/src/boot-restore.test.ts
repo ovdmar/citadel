@@ -378,7 +378,7 @@ describe("runBootRestore", () => {
     // list-sessions ...`), but `has-session -t <name>` confirms the pane
     // is still there. Pre-fix, boot-restore flipped the row to "unknown"
     // and the cockpit popped a Restore banner for a session whose tmux +
-    // ttyd were perfectly fine. With the double-check, the row stays in
+    // terminal viewer path was perfectly fine. With the double-check, the row stays in
     // its live status and no restore work happens.
     const { config, store } = fixture();
     const ts = new Date().toISOString();

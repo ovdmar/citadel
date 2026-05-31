@@ -33,6 +33,8 @@ describe("createAgentSession session-id wiring", () => {
       expect(session.runtimeSessionId).toMatch(UUID_V4);
       const row = store.listSessions(created.workspaceId).find((s) => s.id === session.id);
       expect(row?.runtimeSessionId).toBe(session.runtimeSessionId);
+      expect(session.tmuxSocketName).toBe(`${process.env.CITADEL_TMUX_SOCKET ?? "citadel"}-ws-${created.workspaceId}`);
+      expect(row?.tmuxSocketName).toBe(session.tmuxSocketName);
     } finally {
       service.stopAgentSession({ sessionId: session.id });
     }

@@ -20,13 +20,7 @@ export default defineConfig({
     proxy: {
       "/api": process.env.CITADEL_DAEMON_URL || "http://127.0.0.1:4010",
       "/events": process.env.CITADEL_DAEMON_URL || "http://127.0.0.1:4010",
-      // ttyd-backed terminals: HTTP assets + WS upgrades both proxy through the daemon.
-      "/terminals": {
-        target: process.env.CITADEL_DAEMON_URL || "http://127.0.0.1:4010",
-        ws: true,
-        changeOrigin: true,
-      },
-      // Legacy xterm/WebSocket diagnostic gateway (no longer the default renderer).
+      // xterm/WebSocket terminal gateway.
       "/terminal": {
         target: (process.env.CITADEL_DAEMON_URL || "http://127.0.0.1:4010").replace(/^http/, "ws"),
         ws: true,

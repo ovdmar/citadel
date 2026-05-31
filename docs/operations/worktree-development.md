@@ -56,8 +56,8 @@ match where the stack is actually listening.
 ## Worktree isolation: how it works
 
 A worktree dev stack must never accidentally talk to the systemd long-term
-daemon at `:4010`, **and must never share runtime state (DB, tmux sessions,
-ttyds) with the prod daemon**. Six hard isolation points enforce that
+daemon at `:4010`, **and must never share runtime state (DB or tmux sessions)
+with the prod daemon**. Five hard isolation points enforce that
 contract — if any of them regress, the cockpit silently routes to the wrong
 daemon, new backend routes 404, *or* the worktree's orphan-reaper SIGKILLs
 prod's live agent panes (2026-05-27 incident). Audit-friendly file:line
@@ -82,16 +82,8 @@ citations:
 - **Daemon refusal to bind `:4010`** — `apps/daemon/src/index.ts:47-52`. A
   worktree daemon with no `CITADEL_PORT` exits non-zero rather than clobber
   the systemd-reserved port.
-- **ttyd slot disjointness** — `apps/daemon/src/ttyd-slot.ts`. Each daemon
-  computes a per-instance ttyd port slot from `(((daemonPort - 4010) % 11) + 11) % 11`
-  (200 ports wide). The systemd daemon and worktree daemons land in disjoint
-  slots so ttyd ports never collide. NB: ~9% of worktree ports (every 11th
-  in the 4110–4209 range) hash into slot 0 — same as prod. With the
-  per-worktree tmux socket now in place, this is no longer catastrophic
-  (the adopted ttyds would point at sessions on a *different* tmux server),
-  but it still leaks process names — track as a follow-up.
 - **Vite proxy reads `CITADEL_DAEMON_URL`** — `apps/web/vite.config.ts:21-32`.
-  Every proxy target (`/api`, `/events`, `/terminals`, `/terminal`) reads the
+  Every proxy target (`/api`, `/events`, `/terminal`) reads the
   env var. `make deploy` sets it explicitly, so the cockpit always reaches its
   own daemon.
 
@@ -103,9 +95,7 @@ classification:
 
 | File:line | Code | Verdict |
 |---|---|---|
-| `apps/web/vite.config.ts:21,22,25,31` | `process.env.CITADEL_DAEMON_URL \|\| "http://127.0.0.1:4010"` | Intentional. Bare `pnpm dev` (no `make deploy`) is a supported UI-only workflow that targets the systemd daemon. `make deploy` always sets the env var. Keep. |
-| `apps/daemon/src/ttyd-slot.ts` | ttyd slot math + comment | Intentional. Modular origin for disjoint port slots. Keep. |
-| `apps/daemon/src/app.ts:115` | Comment about cleanupStale skip for `config.port=4010` | Intentional. Documents the production-install slot collision rationale. Keep. |
+| `apps/web/vite.config.ts:21,22,25` | `process.env.CITADEL_DAEMON_URL \|\| "http://127.0.0.1:4010"` | Intentional. Bare `pnpm dev` (no `make deploy`) is a supported UI-only workflow that targets the systemd daemon. `make deploy` always sets the env var. Keep. |
 | `apps/daemon/src/index.ts:8,49` | Comment + error message | Intentional. Refuses to bind `:4010` from a worktree daemon. Keep. |
 | `packages/config/src/index.ts:76` | `port: …default(4010)` | Intentional. Schema default for the systemd unit. Keep. |
 | `scripts/dev/smoke.ts:1`, `scripts/dev/performance-smoke.ts:8` | `process.env.CITADEL_BASE_URL \|\| "http://127.0.0.1:4010"` | Intentional. Smoke scripts target the systemd daemon by default; overridable via env var. Keep. |

@@ -11,12 +11,13 @@ import {
   captureTmux,
   captureTmuxVisibleScreen,
   captureTranscript,
+  clampTerminalPtySize,
   ensureTmuxExtendedKeys,
   ensureTmuxSession,
   ensureTmuxSessionRaw,
   isAgentLive,
   killTmuxSession,
-  parseTmuxControlOutput,
+  parseTerminalSocketMessage,
   pasteText,
   pipeBackgroundSessionToLog,
   resizePane,
@@ -29,10 +30,19 @@ import {
 import { hasCollapsedPasteMarker } from "./submit-prompt.js";
 
 const sessions: string[] = [];
+const socketSessions: Array<{ sessionName: string; socketName: string }> = [];
 const dirs: string[] = [];
 
 afterEach(() => {
   for (const session of sessions.splice(0)) killTmuxSession(session);
+  for (const { sessionName, socketName } of socketSessions.splice(0)) {
+    killTmuxSession(sessionName, socketName);
+    try {
+      execFileSync("tmux", ["-L", socketName, "kill-server"], { stdio: "ignore" });
+    } catch {
+      /* server already gone */
+    }
+  }
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -43,9 +53,14 @@ describe("tmux terminal gateway helpers", () => {
     expect(hasCollapsedPasteMarker("Pasted Content 3298 chars")).toBe(false);
   });
 
-  it("decodes tmux control-mode output chunks", () => {
-    expect(parseTmuxControlOutput("%output %1 hello\\015\\012")).toBe("hello\r\n");
-    expect(parseTmuxControlOutput("%session-changed $1 shell")).toBeNull();
+  it("parses PTY WebSocket messages defensively and clamps terminal sizes", () => {
+    expect(parseTerminalSocketMessage(JSON.stringify({ type: "input", data: "ok" }))).toEqual({
+      type: "input",
+      data: "ok",
+    });
+    expect(parseTerminalSocketMessage("{nope")).toBeNull();
+    expect(parseTerminalSocketMessage(JSON.stringify({ data: "missing-type" }))).toBeNull();
+    expect(clampTerminalPtySize(1000, 1)).toEqual({ cols: 400, rows: 5 });
   });
 
   it("creates durable sessions, sends input, captures output, resizes, and cleans up", async () => {
@@ -80,6 +95,27 @@ describe("tmux terminal gateway helpers", () => {
     expect(tmuxSessionExists(sessionName)).toBe(false);
   });
 
+  it("keeps same-named sessions isolated across tmux sockets", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
+    dirs.push(cwd);
+    const suffix = `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const sessionName = `citadel_socket_${suffix}`;
+    const socketA = `citadel_test_a_${suffix}`;
+    const socketB = `citadel_test_b_${suffix}`;
+    socketSessions.push({ sessionName, socketName: socketA });
+
+    const session = await ensureTmuxSession({ sessionName, cwd, socketName: socketA });
+
+    expect(session.tmuxSocketName).toBe(socketA);
+    expect(tmuxSessionExists(sessionName, socketA)).toBe(true);
+    expect(tmuxSessionExists(sessionName, socketB)).toBe(false);
+
+    sendKeys(sessionName, "printf socket-a", socketA);
+    sendKeys(sessionName, "\r", socketA);
+    await waitForCapture(sessionName, "socket-a", socketA);
+    expect(captureTmux(sessionName, 20, socketA)).toContain("socket-a");
+  });
+
   it("enables tmux extended keys for modified terminal shortcuts", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
     dirs.push(cwd);
@@ -93,11 +129,17 @@ describe("tmux terminal gateway helpers", () => {
     ensureTmuxExtendedKeys();
 
     const extendedKeys = execTmux(["show-options", "-s", "-g", "extended-keys"]);
+    const extendedKeysFormat = maybeExecTmux(["show-options", "-s", "-g", "extended-keys-format"]);
     const terminalFeatures = execTmux(["show-options", "-s", "-g", "terminal-features"]);
     const historyLimit = execTmux(["show-options", "-g", "history-limit"]);
+    const mouse = execTmux(["show-options", "-g", "mouse"]);
+    const clipboard = execTmux(["show-options", "-g", "set-clipboard"]);
     expect(extendedKeys).toContain("extended-keys on");
+    if (extendedKeysFormat) expect(extendedKeysFormat).toContain("extended-keys-format csi-u");
     expect(terminalFeatures).toMatch(/xterm\*.*extkeys/);
     expect(historyLimit).toContain("history-limit 5000");
+    expect(mouse).toContain("mouse on");
+    expect(clipboard).toContain("set-clipboard on");
   });
 
   it("submitPrompt pastes the prompt and presses Enter so the runtime actually executes it", async () => {
@@ -214,7 +256,7 @@ describe("tmux terminal gateway helpers", () => {
     sendKeys(sessionName, "\u0004");
     await waitForCapture(sessionName, "$");
 
-    expect(fs.readFileSync(path.join(cwd, "pasted.txt"), "utf8")).toBe("alpha\nbeta\n");
+    await waitForFile(path.join(cwd, "pasted.txt"), "alpha\nbeta\n");
   });
 
   it("captures active alternate-screen output when an interactive program switches screens", async () => {
@@ -252,8 +294,8 @@ describe("tmux terminal gateway helpers", () => {
       const ws = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/alt`);
       await waitForOpen(ws);
 
-      ws.send(JSON.stringify({ type: "input", data: "printf '\\033[?1049hWSALT'; sleep 1; printf '\\033[?1049l'" }));
-      ws.send(JSON.stringify({ type: "input", data: "\r" }));
+      sendWsInput(ws, "printf '\\033[?1049hWSALT'; sleep 1; printf '\\033[?1049l'");
+      sendWsInput(ws, "\r");
       await waitForWebSocketOutput(ws, "WSALT");
 
       ws.close();
@@ -281,16 +323,17 @@ describe("tmux terminal gateway helpers", () => {
       const ws = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/sess_test`);
       await waitForOpen(ws);
 
-      const streamedOutput = waitForWebSocketOutput(ws, "websocket-smoke", "outputChunk");
-      ws.send(JSON.stringify({ type: "input", data: "printf websocket-smoke" }));
-      ws.send(JSON.stringify({ type: "input", data: "\r" }));
+      const invalidMessageError = waitForWebSocketOutput(ws, "invalid_message", "error");
+      ws.send("{not-json");
+      await invalidMessageError;
+
+      const streamedOutput = waitForWebSocketOutput(ws, "websocket-smoke", "binary");
+      sendWsInput(
+        ws,
+        "printf 'websocket-smoke\\n'; cat <<'CITADEL_EOF' > websocket-paste.txt\none\ntwo\nCITADEL_EOF\n",
+      );
       await waitForWebSocketOutput(ws, "websocket-smoke");
       await streamedOutput;
-
-      ws.send(JSON.stringify({ type: "input", data: "cat > websocket-paste.txt" }));
-      ws.send(JSON.stringify({ type: "input", data: "\r" }));
-      ws.send(JSON.stringify({ type: "paste", data: "one\ntwo\n" }));
-      ws.send(JSON.stringify({ type: "input", data: "\u0004" }));
       await waitForFile(path.join(cwd, "websocket-paste.txt"), "one\ntwo\n");
 
       ws.send(JSON.stringify({ type: "resize", cols: 90, rows: 24 }));
@@ -301,7 +344,77 @@ describe("tmux terminal gateway helpers", () => {
     } finally {
       await closeServer(server);
     }
-  });
+  }, 15000);
+
+  it("sends WebSocket input control messages as literal pane input", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
+    dirs.push(cwd);
+    const sessionName = `citadel_ws_literal_${Date.now().toString(36)}`;
+    sessions.push(sessionName);
+    await ensureTmuxSession({ sessionName, cwd });
+    const readerPath = path.join(cwd, "read-byte.py");
+    fs.writeFileSync(
+      readerPath,
+      [
+        "import sys, tty, termios, select, time",
+        "fd=sys.stdin.fileno()",
+        "old=termios.tcgetattr(fd)",
+        "tty.setraw(fd)",
+        "print('READY', flush=True)",
+        "data=b''",
+        "end=time.time()+2",
+        "while time.time()<end:",
+        "    r,_,_=select.select([sys.stdin], [], [], 0.1)",
+        "    if r: data += sys.stdin.buffer.read(1)",
+        "print('BYTES:'+data.hex(), flush=True)",
+        "termios.tcsetattr(fd, termios.TCSADRAIN, old)",
+      ].join("\n"),
+    );
+    sendKeys(sessionName, `python3 ${shellQuote(readerPath)}`);
+    sendKeys(sessionName, "\r");
+    await waitForCapture(sessionName, "READY");
+
+    const server = http.createServer();
+    attachTerminalWebSocket(server, (id) => (id === "literal" ? sessionName : null));
+    await listen(server);
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP test server address");
+      const ws = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/literal`);
+      await waitForOpen(ws);
+
+      ws.send(JSON.stringify({ type: "input", data: "\n" }));
+
+      await waitForCapture(sessionName, "BYTES:0a");
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      await closeServer(server);
+    }
+  }, 15000);
+
+  it("tears down attached PTY viewers before HTTP server close waits on upgraded sockets", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
+    dirs.push(cwd);
+    const sessionName = `citadel_ws_shutdown_${Date.now().toString(36)}`;
+    sessions.push(sessionName);
+    await ensureTmuxSession({
+      sessionName,
+      cwd,
+    });
+    const server = http.createServer();
+    attachTerminalWebSocket(server, (id) => (id === "shutdown" ? sessionName : null));
+    await listen(server);
+
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Expected TCP test server address");
+    const ws = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/shutdown`);
+    await waitForOpen(ws);
+
+    await closeServer(server);
+    await waitForClose(ws);
+    expect(tmuxSessionExists(sessionName)).toBe(true);
+  }, 15000);
 
   // Regression test for the Ctrl+C-leaves-unusable-terminal complaint.
   // We stand in for a real agent with a loop that traps SIGINT and exits 0,
@@ -328,18 +441,14 @@ describe("tmux terminal gateway helpers", () => {
       const wsB = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/b`);
       await Promise.all([waitForOpen(wsA), waitForOpen(wsB)]);
 
-      wsA.send(
-        JSON.stringify({
-          type: "input",
-          data: "printf 'session-a-only\\n'; for i in $(seq 1 120); do echo long-a-$i; done",
-        }),
-      );
-      wsA.send(JSON.stringify({ type: "input", data: "\r" }));
-      wsB.send(JSON.stringify({ type: "input", data: "printf session-b-only" }));
-      wsB.send(JSON.stringify({ type: "input", data: "\r" }));
+      const outputA = waitForWebSocketOutput(wsA, "long-a-120");
+      const outputB = waitForWebSocketOutput(wsB, "session-b-only");
+      sendWsInput(wsA, "printf 'session-a-only\\n'; for i in $(seq 1 120); do echo long-a-$i; done");
+      sendWsInput(wsA, "\r");
+      sendWsInput(wsB, "printf session-b-only");
+      sendWsInput(wsB, "\r");
 
-      await waitForWebSocketOutput(wsA, "long-a-120");
-      await waitForWebSocketOutput(wsB, "session-b-only");
+      await Promise.all([outputA, outputB]);
       expect(captureTmux(sessionB, 40)).not.toContain("session-a-only");
       expect(captureTmux(sessionA, 1000)).toContain("long-a-120");
 
@@ -417,18 +526,18 @@ async function waitFor(predicate: () => boolean, timeoutMs: number) {
   throw new Error("waitFor timed out");
 }
 
-async function waitForCapture(sessionName: string, expected: string) {
+async function waitForCapture(sessionName: string, expected: string, socketName?: string | null) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
-    const output = captureTmux(sessionName, 200);
+    const output = captureTmux(sessionName, 200, socketName);
     if (output.includes(expected)) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`Timed out waiting for ${expected}`);
 }
 
-async function waitForVisibleScreen(sessionName: string, expected: string) {
+async function waitForVisibleScreen(sessionName: string, expected: string, socketName?: string | null) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
-    const output = captureTmuxVisibleScreen(sessionName, 200);
+    const output = captureTmuxVisibleScreen(sessionName, 200, socketName);
     if (output.includes(expected)) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
@@ -449,25 +558,72 @@ function listen(server: http.Server) {
 
 function closeServer(server: http.Server) {
   return new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
+    const timeout = setTimeout(() => reject(new Error("Timed out waiting for HTTP test server close")), 10000);
+    server.close((error) => {
+      clearTimeout(timeout);
+      error ? reject(error) : resolve();
+    });
   });
 }
 
 function waitForOpen(ws: WebSocket) {
   return new Promise<void>((resolve, reject) => {
-    ws.once("open", resolve);
-    ws.once("error", reject);
+    if (ws.readyState === WebSocket.OPEN) {
+      resolve();
+      return;
+    }
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("Timed out waiting for WebSocket open"));
+    }, 10000);
+    const onOpen = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error("WebSocket closed before open"));
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      ws.off("open", onOpen);
+      ws.off("error", onError);
+      ws.off("close", onClose);
+    };
+    ws.once("open", onOpen);
+    ws.once("error", onError);
+    ws.once("close", onClose);
   });
 }
 
 function waitForClose(ws: WebSocket) {
-  return new Promise<void>((resolve) => {
+  return new Promise<void>((resolve, reject) => {
     if (ws.readyState === WebSocket.CLOSED) {
       resolve();
       return;
     }
-    ws.once("close", () => resolve());
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("Timed out waiting for WebSocket close"));
+    }, 10000);
+    const onClose = () => {
+      cleanup();
+      resolve();
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      ws.off("close", onClose);
+    };
+    ws.once("close", onClose);
   });
+}
+
+function sendWsInput(ws: WebSocket, data: string) {
+  ws.send(Buffer.from(data, "utf8"));
 }
 
 function waitForWebSocketOutput(ws: WebSocket, expected: string, type?: string) {
@@ -477,10 +633,14 @@ function waitForWebSocketOutput(ws: WebSocket, expected: string, type?: string) 
       cleanup();
       reject(new Error(`Timed out waiting for WebSocket output ${expected}`));
     }, 5000);
-    const onMessage = (raw: WebSocket.RawData) => {
-      const message = JSON.parse(raw.toString()) as { type?: string; data?: string };
-      if ((!type || message.type === type) && message.data) {
-        accumulated = `${accumulated}${message.data}`.slice(-64_000);
+    const onMessage = (raw: WebSocket.RawData, isBinary: boolean) => {
+      if (isBinary) {
+        if (!type || type === "binary") accumulated = `${accumulated}${raw.toString("utf8")}`.slice(-64_000);
+      } else {
+        const message = JSON.parse(raw.toString()) as { type?: string; data?: string };
+        if ((!type || message.type === type) && message.data) {
+          accumulated = `${accumulated}${message.data}`.slice(-64_000);
+        }
       }
       if (accumulated.includes(expected)) {
         cleanup();
@@ -503,4 +663,12 @@ function waitForWebSocketOutput(ws: WebSocket, expected: string, type?: string) 
 
 function execTmux(args: string[]) {
   return execFileSync("tmux", args, { encoding: "utf8" });
+}
+
+function maybeExecTmux(args: string[]) {
+  try {
+    return execTmux(args);
+  } catch {
+    return null;
+  }
 }

@@ -373,10 +373,10 @@ export class SqliteStore {
       .prepare(
         `INSERT INTO agent_sessions (id, workspace_id, runtime_id, display_name, status, status_reason,
           last_status_at, last_output_at, ended_at, exit_code, transport,
-          tmux_session_name, tmux_session_id, tab_id, runtime_session_id,
+          tmux_session_name, tmux_session_id, tmux_socket_name, tab_id, runtime_session_id,
           rate_limit_resume_attempts, next_resume_at, last_resume_from_rate_limit_at,
           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -395,6 +395,7 @@ export class SqliteStore {
         session.transport,
         session.tmuxSessionName ?? null,
         session.tmuxSessionId ?? null,
+        session.tmuxSocketName ?? null,
         // Default tab_id to the row id so callers that forget to supply one
         // still get sensible tab ordering (each session becomes its own tab,
         // matching pre-migration behaviour). Restore paths supply the source
