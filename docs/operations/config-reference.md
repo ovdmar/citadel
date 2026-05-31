@@ -171,6 +171,7 @@ Shell-backed sessions are tmux sessions. The cockpit's interactive renderer is a
 Environment variables:
 
 - `CITADEL_TMUX_SOCKET` — tmux socket name used by the daemon and terminal bridge.
+- `CITADEL_TMUX_HISTORY_LIMIT` — tmux scrollback lines per pane (default `20000`, clamped to `1000`-`100000`).
 - `CITADEL_SHELL_BIN` — shell used when Citadel creates shell-first tmux sessions (default `$SHELL` then `/bin/bash`).
 
 Lifecycle:
