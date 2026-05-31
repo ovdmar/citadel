@@ -4,6 +4,7 @@ import { type FormEvent, type RefObject, useEffect, useRef, useState } from "rea
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
 import { Modal } from "./modals.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 
 type AddRepoSearchHit = {
   name: string;
@@ -160,6 +161,7 @@ function PathAutocomplete(props: {
 export const __testing__ = { pathCompletionSelection };
 
 export function AddRepoModal(props: AddRepoModalProps) {
+  useOverlayPresent();
   const [mode, setMode] = useState<"path" | "url" | "search">("path");
   const [path, setPath] = useState("");
   const [url, setUrl] = useState("");
