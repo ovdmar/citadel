@@ -11,10 +11,8 @@ import {
   FileText,
   FolderGit2,
   History,
-  Moon,
   Server,
   Sparkles,
-  Sun,
   Workflow,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -28,7 +26,7 @@ import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { RestoreModal, RestorePanelBody } from "../settings-restore.js";
 import { AgentsPanel } from "../settings-runtimes.js";
-import { applyThemePreference, useResolvedTheme } from "../use-resolved-theme.js";
+import { ThemeControls } from "../theme-controls.js";
 
 type SectionId =
   | "overview"
@@ -135,7 +133,7 @@ export function SettingsView() {
         <div />
 
         <div className="set-top-right">
-          <ThemeToggle />
+          <ThemeControls />
         </div>
       </header>
 
@@ -285,23 +283,6 @@ function PageHead(props: { title: string; sub?: string; help?: string }) {
       {props.sub ? <div className="set-page-sub">{props.sub}</div> : null}
       {props.help ? <div className="set-page-help">{props.help}</div> : null}
     </div>
-  );
-}
-
-function ThemeToggle() {
-  const resolved = useResolvedTheme();
-  const isDark = resolved === "dark";
-  const toggle = () => applyThemePreference(isDark ? "light" : "dark");
-  return (
-    <button
-      type="button"
-      className="set-icon-btn"
-      onClick={toggle}
-      title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-      aria-label="Toggle theme"
-    >
-      {isDark ? <Sun size={15} /> : <Moon size={15} />}
-    </button>
   );
 }
 

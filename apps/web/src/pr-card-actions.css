@@ -32,7 +32,7 @@
 
 .pr-card-btn-merge {
   background: var(--color-action, oklch(55% 0.18 145));
-  color: #fff;
+  color: var(--c-on-dark);
   border-color: transparent;
 }
 
