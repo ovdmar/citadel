@@ -47,19 +47,16 @@ export function keyForControlCharacter(char: string): string | null {
       return "Enter";
     case "\t":
       return "Tab";
-    case "":
-      return "C-c";
-    case "":
-      return "C-d";
-    case "":
-      return "C-z";
     case "":
       return "Escape";
     case "":
       return "BSpace";
     default:
-      return null;
+      break;
   }
+  const code = char.charCodeAt(0);
+  if (code >= 1 && code <= 26) return `C-${String.fromCharCode(96 + code)}`;
+  return null;
 }
 
 export function keyForEscapeSequence(input: string): { key: string; length: number } | null {

@@ -13,7 +13,11 @@ import type { APIRequestContext, APIResponse } from "@playwright/test";
 // The check is cheap (one HTTP call per file) and runs from `test.beforeAll`
 // so a misconfigured run aborts before any destructive PUT happens.
 export async function assertDaemonIsSandbox(request: APIRequestContext, apiBase: string): Promise<void> {
-  const expectedPrefix = process.env.CITADEL_PLAYWRIGHT_SANDBOX_PREFIX || "/tmp/citadel-playwright-data";
+  const expectedPrefix =
+    process.env.CITADEL_PLAYWRIGHT_SANDBOX_PREFIX ||
+    process.env.CITADEL_DATA_DIR ||
+    process.env.CITADEL_PLAYWRIGHT_DATA_DIR ||
+    "/tmp/citadel-playwright-data";
   const res = await getHealthWithTransientRetry(request, apiBase);
   if (!res.ok()) {
     throw new Error(

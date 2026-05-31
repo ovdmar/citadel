@@ -265,7 +265,7 @@ export function SettingsView() {
               <PageHead
                 title="Debug"
                 sub="Download a diagnostics bundle when sessions misbehave."
-                help="Citadel keeps a structured event log (.citadel/diagnostics.jsonl) covering tmux/ttyd lifecycle, status-monitor decisions, and boot-restore. The bundle includes that log plus a state snapshot and a 30-minute slice of the citadel.service systemd journal."
+                help="Citadel keeps a structured event log (.citadel/diagnostics.jsonl) covering tmux and terminal lifecycle, status-monitor decisions, and boot-restore. The bundle includes that log plus a state snapshot and a 30-minute slice of the citadel.service systemd journal."
               />
               <DebugPanel />
             </>
