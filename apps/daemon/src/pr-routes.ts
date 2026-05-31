@@ -1,7 +1,10 @@
 import type {
   CiProviderSummary,
+  HookEvent,
   PullRequestSummary,
+  Repo,
   VersionControlSummary,
+  Workspace,
   WorkspaceCockpitSummary,
 } from "@citadel/contracts";
 import { PrMergeRequestSchema, WorkspaceCockpitSummaryBatchRequestSchema } from "@citadel/contracts/pr-routes";
@@ -17,7 +20,12 @@ import {
 import type express from "express";
 import { ZodError } from "zod";
 import { buildVersionControlProviderDeps, decorateWithCooldown } from "./gh-quota-wiring.js";
-import { globalPrCacheKey, globalPrCacheKeyForWorkspace, writeGlobalPrSummary } from "./global-pr-cache.js";
+import {
+  bustGlobalPrEntry,
+  globalPrCacheKey,
+  globalPrCacheKeyForWorkspace,
+  writeGlobalPrSummary,
+} from "./global-pr-cache.js";
 import { bustCacheByPrefixes } from "./workspace-fs-watcher.js";
 
 type ProviderCollectors = {
@@ -37,6 +45,17 @@ type ProviderCache = Map<string, { expiresAt: number; value: unknown }>;
 
 const VC_PROVIDER_CACHE_TTL_MS = 90_000;
 
+type HookEventRunner = {
+  runHookEvent(input: {
+    event: HookEvent;
+    repo: Repo;
+    workspace: Workspace;
+    payload?: unknown;
+    operationType?: string;
+    operationMessage?: string;
+  }): Promise<{ operationId: string; ran: number }>;
+};
+
 // Repo-level PR/CI routes + workspace-level batch poll, force-refresh, and
 // merge endpoints.
 //
@@ -53,6 +72,7 @@ export function registerPrRoutes(input: {
   providerCache: ProviderCache;
   resolveRepoFullName: (repoId: string) => string | null;
   buildWorkspaceCockpitSummary: (workspaceId: string) => Promise<WorkspaceCockpitSummary | null>;
+  operations?: HookEventRunner;
 }) {
   const {
     app,
@@ -63,6 +83,7 @@ export function registerPrRoutes(input: {
     providerCache,
     resolveRepoFullName,
     buildWorkspaceCockpitSummary,
+    operations,
   } = input;
   const providerDepsForRepo = (repoId: string) =>
     buildVersionControlProviderDeps(providerCache, () => resolveRepoFullName(repoId));
@@ -213,6 +234,31 @@ export function registerPrRoutes(input: {
       const number = pr?.number;
       if (!pr || typeof number !== "number")
         return res.status(409).json({ ok: false, reason: "no_pr", detail: "Workspace has no open PR" });
+      const hookResult = operations
+        ? await operations.runHookEvent({
+            event: "pr.merge",
+            repo,
+            workspace,
+            operationType: "pr.merge",
+            operationMessage: `Running PR #${number} merge hooks`,
+            payload: {
+              strategy: parsed.strategy,
+              pullRequest: summary.pullRequest,
+              versionControl: summary,
+            },
+          })
+        : { operationId: null, ran: 0 };
+      if (hookResult.ran > 0) {
+        const nameWithOwner = resolveRepoFullName(repo.id);
+        bustCacheByPrefixes(
+          providerCache,
+          [`vc:${workspace.id}`, `ci:${repo.id}`, nameWithOwner ? `ci:${nameWithOwner}` : null].filter(
+            Boolean,
+          ) as string[],
+        );
+        if (nameWithOwner) bustGlobalPrEntry(providerCache, nameWithOwner, number);
+        return res.status(202).json({ ok: true });
+      }
       const result = await mergePr({ rootPath: workspace.path, number, strategy: parsed.strategy });
       const nameWithOwner = resolveRepoFullName(repo.id);
       if (result.ok) {

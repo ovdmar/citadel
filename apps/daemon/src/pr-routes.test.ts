@@ -304,6 +304,42 @@ describe("PR routes", () => {
     }
   });
 
+  it("runs pr.merge hooks as the merge handler when present", async () => {
+    const now = new Date().toISOString();
+    const script = fakeGhScript("strategy-failure");
+    setGithubCommand(script);
+    const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
+    providerCache.set(globalPrCacheKey("owner/repo", 42), { expiresAt: Date.now() + 60_000, value: { number: 42 } });
+    const hookCalls: Array<{ event: string; payload: unknown }> = [];
+    const { server } = createPrRouteHarness({
+      providerCache,
+      workspaceUpdatedAt: now,
+      repoUpdatedAt: now,
+      runHookEvent: async (input) => {
+        hookCalls.push({ event: input.event, payload: input.payload });
+        return { operationId: "op_pr_merge", ran: 1 };
+      },
+    });
+    const baseUrl = await listen(server);
+    try {
+      const response = await fetch(`${baseUrl}/api/workspaces/ws_a/pr-merge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ strategy: "squash" }),
+      });
+      const result = (await response.json()) as { ok: true };
+
+      expect(response.status).toBe(202);
+      expect(result).toEqual({ ok: true });
+      expect(hookCalls).toHaveLength(1);
+      expect(hookCalls[0]?.event).toBe("pr.merge");
+      expect(hookCalls[0]?.payload).toMatchObject({ strategy: "squash", pullRequest: { number: 42 } });
+      expect(providerCache.has(globalPrCacheKey("owner/repo", 42))).toBe(false);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("merge strategy failures bust the repo merge-strategies cache", async () => {
     const now = new Date().toISOString();
     const script = fakeGhScript("strategy-failure");
@@ -332,6 +368,7 @@ function createPrRouteHarness(input: {
   providerCache: Map<string, { expiresAt: number; value: unknown }>;
   workspaceUpdatedAt?: string;
   repoUpdatedAt?: string;
+  runHookEvent?: (input: { event: string; payload: unknown }) => Promise<{ operationId: string; ran: number }>;
   collectGitHubCiRuns?: () => Promise<{
     providerId: "github-gh";
     status: "healthy";
@@ -429,6 +466,7 @@ function createPrRouteHarness(input: {
     providerCache: input.providerCache,
     resolveRepoFullName: () => "owner/repo",
     buildWorkspaceCockpitSummary: async () => null,
+    ...(input.runHookEvent ? { operations: { runHookEvent: input.runHookEvent } as never } : {}),
   });
   return { server: http.createServer(app), snapshotUpdates };
 }
