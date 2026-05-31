@@ -14,7 +14,7 @@ import {
 } from "@citadel/operations";
 import type { RuntimeStatusAdapter, SessionAdapterState } from "@citadel/runtimes";
 import { discoverCodexSessionIdFromProcess, getStatusAdapter } from "@citadel/runtimes";
-import { captureTmux, panePidProcess, tmuxPrefix, tmuxSessionExists } from "@citadel/terminal";
+import { captureTmuxAsync, panePidProcess, tmuxPrefix, tmuxSessionExists } from "@citadel/terminal";
 
 // Dedupe monitor-side failures so a persistent tmux outage doesn't flood
 // stderr at 2 Hz. Key is `kind:message` so distinct error messages are still
@@ -72,13 +72,11 @@ export function buildStatusMonitorDeps(
   for (const rt of config.runtimes ?? []) {
     if (rt.id && rt.command) runtimeBinaryByRuntimeId.set(rt.id, rt.command);
   }
-  // Per-session capture cache keyed by tmux session_activity. Adapter
-  // ObservationContext requires `paneCapture: string`, so we can't defer
-  // it cheaply at the adapter boundary — but we can avoid forking `tmux
-  // capture-pane` for sessions whose activity timestamp didn't advance
-  // since the last call. This is critical because the daemon also proxies
-  // terminal WebSockets; sync capture storms in this process cause terminal
-  // input lag and reconnects.
+  // Per-session capture cache keyed by tmux session_activity. Capture uses
+  // async subprocesses so terminal WebSocket input/output can keep flowing
+  // while status detection waits on tmux; the cache avoids spawning another
+  // `tmux capture-pane` when tmux says the pane content has not advanced and
+  // the cached capture is still fresh enough for runtime status detection.
   const captureCache = new Map<string, PaneCaptureCacheEntry>();
   const sessionSocketByName = new Map<string, string | null>();
   const sessionNameById = new Map<string, string>();
@@ -240,7 +238,7 @@ export function buildStatusMonitorDeps(
         return new Map();
       }
     },
-    paneCapture: (name, options) => {
+    paneCapture: async (name, options) => {
       // Cache check: if tmux says the session's activity timestamp hasn't
       // advanced and our capture is still fresh enough, another
       // `tmux capture-pane` fork would just burn CPU. The max-age guard is
@@ -250,7 +248,7 @@ export function buildStatusMonitorDeps(
       const cached = captureCache.get(name);
       if (cached && shouldReusePaneCaptureCache(cached, activityMs, Date.now(), options)) return cached.content;
       try {
-        const content = captureTmux(name, 50, sessionSocket(name));
+        const content = await captureTmuxAsync(name, 50, sessionSocket(name));
         captureCache.set(name, { activityMs, capturedAtMs: Date.now(), content });
         return content;
       } catch (err) {

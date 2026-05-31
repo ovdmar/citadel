@@ -61,7 +61,7 @@ interface DepsOver {
   runtimeBinaries?: Map<string, string>;
   recentUserAction?: Map<string, number>;
   tmuxActivities?: Map<string, number>;
-  paneCapture?: string | ((name: string, options?: PaneCaptureOptions) => string);
+  paneCapture?: string | ((name: string, options?: PaneCaptureOptions) => string | Promise<string>);
   adapter?: RuntimeStatusAdapter;
   recoverRuntimeSessionId?: MonitorTickDeps["recoverRuntimeSessionId"];
   setRuntimeSessionId?: MonitorTickDeps["setRuntimeSessionId"];
@@ -331,6 +331,23 @@ describe("shell-first per-runtime status derivation", () => {
     expect(updates).toHaveLength(1);
     expect(updates[0]?.update).toMatchObject({ status: "running", reason: REASON_ELAPSED_TIMER });
     expect(updates[0]?.update.status).not.toBe("idle");
+  });
+
+  it("awaits async pane capture before runtime adapter observation", async () => {
+    const adapter: RuntimeStatusAdapter = {
+      runtimeId: "claude-code",
+      createSessionState: () => ({ ticksObserved: 0, lastPaneHash: null }),
+      observe: vi.fn((_state, ctx) => (ctx.paneCapture.includes("async-ready") ? "waiting_for_input" : null)),
+    };
+    const { deps, updates } = makeDeps({
+      paneCapture: async () => "async-ready",
+      adapter,
+    });
+
+    await runStatusMonitorTick(deps, { source: "tick" });
+
+    expect(adapter.observe).toHaveBeenCalled();
+    expect(updates[0]?.update).toMatchObject({ status: "waiting_for_input" });
   });
 });
 

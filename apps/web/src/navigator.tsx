@@ -13,8 +13,9 @@ import {
   Settings2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AddRepoModal } from "./add-repo-modal.js";
 import { api, queryClient } from "./api.js";
-import { AddRepoModal, CreateWorkspaceModal, GroupByMenu, type GroupKey } from "./modals.js";
+import { CreateWorkspaceModal, GroupByMenu, type GroupKey } from "./modals.js";
 import {
   type GroupNode,
   type GroupableKey,
@@ -201,7 +202,13 @@ export function Navigator(props: {
             .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null
         }
         pullRequest={props.prByWorkspaceId.get(workspace.id) ?? null}
-        namespace={workspace.namespaceId ? (namespacesById.get(workspace.namespaceId) ?? null) : null}
+        namespace={
+          grouping === "namespace"
+            ? null
+            : workspace.namespaceId
+              ? (namespacesById.get(workspace.namespaceId) ?? null)
+              : null
+        }
         namespaces={props.namespaces}
         active={workspace.id === props.activeWorkspaceId}
         dropTarget={grouping === "namespace" ? "namespace" : null}

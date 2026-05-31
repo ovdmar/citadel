@@ -5,7 +5,13 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 export { submitPrompt } from "./submit-prompt.js";
-export { ensureTmuxExtendedKeys, tmuxPrefix, tmuxSocketNameForWorkspace } from "./tmux.js";
+export {
+  DEFAULT_TMUX_HISTORY_LIMIT,
+  ensureTmuxExtendedKeys,
+  tmuxHistoryLimit,
+  tmuxPrefix,
+  tmuxSocketNameForWorkspace,
+} from "./tmux.js";
 export type { TmuxSocketName } from "./tmux.js";
 import { ensureTmuxExtendedKeys, tmuxPrefix } from "./tmux.js";
 
@@ -479,6 +485,7 @@ export async function ensureCitadelTmuxRunning(): Promise<TmuxServerOwnership> {
 
 export {
   captureTmux,
+  captureTmuxAsync,
   captureTmuxSnapshot,
   captureTmuxVisibleScreen,
   captureTranscript,
@@ -533,8 +540,13 @@ export function resizePane(sessionName: string, cols: number, rows: number, sock
 }
 
 export function killTmuxSession(sessionName: string, socketName?: string | null) {
-  if (tmuxSessionExists(sessionName, socketName)) {
-    execFileSync("tmux", [...tmuxPrefix(socketName), "kill-session", "-t", sessionName]);
+  try {
+    if (tmuxSessionExists(sessionName, socketName)) {
+      execFileSync("tmux", [...tmuxPrefix(socketName), "kill-session", "-t", sessionName]);
+    }
+  } catch {
+    // The server/session can disappear between has-session and kill-session.
+    // Cleanup callers should still remove sentinels and continue.
   }
   try {
     fs.rmSync(agentLiveSentinelPath(sessionName), { force: true });

@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import {
+  DEFAULT_TMUX_HISTORY_LIMIT,
   agentLiveSentinelPath,
   attachTerminalWebSocket,
   captureTmux,
@@ -25,6 +26,8 @@ import {
   shellQuote,
   stopBackgroundSessionPipe,
   submitPrompt,
+  tmuxHistoryLimit,
+  tmuxPrefix,
   tmuxSessionExists,
 } from "./index.js";
 import { hasCollapsedPasteMarker } from "./submit-prompt.js";
@@ -61,6 +64,25 @@ describe("tmux terminal gateway helpers", () => {
     expect(parseTerminalSocketMessage("{nope")).toBeNull();
     expect(parseTerminalSocketMessage(JSON.stringify({ data: "missing-type" }))).toBeNull();
     expect(clampTerminalPtySize(1000, 1)).toEqual({ cols: 400, rows: 5 });
+  });
+
+  it("parses the configurable tmux history limit with bounded defaults", () => {
+    const previous = process.env.CITADEL_TMUX_HISTORY_LIMIT;
+    try {
+      Reflect.deleteProperty(process.env, "CITADEL_TMUX_HISTORY_LIMIT");
+      expect(tmuxHistoryLimit()).toBe(DEFAULT_TMUX_HISTORY_LIMIT);
+      process.env.CITADEL_TMUX_HISTORY_LIMIT = "25000";
+      expect(tmuxHistoryLimit()).toBe(25_000);
+      process.env.CITADEL_TMUX_HISTORY_LIMIT = "42";
+      expect(tmuxHistoryLimit()).toBe(1_000);
+      process.env.CITADEL_TMUX_HISTORY_LIMIT = "200000";
+      expect(tmuxHistoryLimit()).toBe(100_000);
+      process.env.CITADEL_TMUX_HISTORY_LIMIT = "invalid";
+      expect(tmuxHistoryLimit()).toBe(DEFAULT_TMUX_HISTORY_LIMIT);
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, "CITADEL_TMUX_HISTORY_LIMIT");
+      else process.env.CITADEL_TMUX_HISTORY_LIMIT = previous;
+    }
   });
 
   it("creates durable sessions, sends input, captures output, resizes, and cleans up", async () => {
@@ -137,7 +159,7 @@ describe("tmux terminal gateway helpers", () => {
     expect(extendedKeys).toContain("extended-keys on");
     if (extendedKeysFormat) expect(extendedKeysFormat).toContain("extended-keys-format csi-u");
     expect(terminalFeatures).toMatch(/xterm\*.*extkeys/);
-    expect(historyLimit).toContain("history-limit 5000");
+    expect(historyLimit).toContain(`history-limit ${tmuxHistoryLimit()}`);
     expect(mouse).toContain("mouse on");
     expect(clipboard).toContain("set-clipboard on");
   });
@@ -253,9 +275,9 @@ describe("tmux terminal gateway helpers", () => {
     sendKeys(sessionName, "cat > pasted.txt");
     sendKeys(sessionName, "\r");
     pasteText(sessionName, "alpha\nbeta\n");
+    await waitForCapture(sessionName, "beta");
     sendKeys(sessionName, "\u0004");
     await waitForCapture(sessionName, "$");
-
     await waitForFile(path.join(cwd, "pasted.txt"), "alpha\nbeta\n");
   });
 
@@ -533,14 +555,19 @@ describe("tmux terminal gateway helpers", () => {
     const sessionName = `citadel_bg_pipe_${Date.now().toString(36)}`;
     sessions.push(sessionName);
     const logPath = path.join(dir, "run.log");
+    const triggerPath = path.join(dir, "start-output");
     // 50,000 zeros via head from /dev/zero — over the buffer threshold.
     await ensureTmuxSessionRaw({
       sessionName,
       cwd: dir,
       command: "bash",
-      args: ["-c", "sleep 0.3; head -c 50000 /dev/zero; sleep 0.5"],
+      args: [
+        "-c",
+        `while [ ! -f ${shellQuote(triggerPath)} ]; do sleep 0.05; done; head -c 50000 /dev/zero; sleep 0.5`,
+      ],
     });
     pipeBackgroundSessionToLog(sessionName, logPath);
+    fs.writeFileSync(triggerPath, "go");
     await waitFor(() => fs.existsSync(logPath) && fs.statSync(logPath).size >= 1024, 5000);
     expect(fs.statSync(logPath).size).toBeGreaterThanOrEqual(1024);
     // stopBackgroundSessionPipe must not throw even if pane is dead.
@@ -717,7 +744,7 @@ function waitForWebSocketOutput(ws: WebSocket, expected: string, type?: string) 
 }
 
 function execTmux(args: string[]) {
-  return execFileSync("tmux", args, { encoding: "utf8" });
+  return execFileSync("tmux", [...tmuxPrefix(), ...args], { encoding: "utf8" });
 }
 
 function maybeExecTmux(args: string[]) {
