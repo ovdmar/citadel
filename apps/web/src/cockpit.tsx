@@ -1,4 +1,4 @@
-import type { AgentSession, Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
+import type { AgentSession, PullRequestSummary, Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { ChevronsLeft, ChevronsRight, Search as SearchIcon, Settings as SettingsIcon } from "lucide-react";
@@ -13,9 +13,11 @@ import {
   useAllWorkspacesPrSummary,
   useStickyWorkspaceSummaries,
   useWorkspaceCockpitSummary,
+  useWorkspacesPrState,
 } from "./cockpit-tools.js";
 import { CommandPalette } from "./command-palette.js";
 import { GhCooldownBanner } from "./gh-cooldown-banner.js";
+import { useFocusRefresh } from "./hooks/use-focus-refresh.js";
 import { Inspector } from "./inspector.js";
 import {
   expandGroupPath,
@@ -26,10 +28,10 @@ import {
 import { buildGroupTree, flattenWorkspaceOrder, treeGroupingFor } from "./navigator-groups.js";
 import { Navigator } from "./navigator.js";
 import { RestoreBanner } from "./restore-banner.js";
-import { FORWARDABLE_CHORDS, type ShortcutMatch, matchShortcut } from "./shortcuts.js";
+import { type ShortcutMatch, matchShortcut } from "./shortcuts.js";
 import { Stage } from "./stage.js";
 import { focusActiveTerminal, isRegisteredTerminalMessageSource } from "./terminal-pane.js";
-import { type TerminalShortcutMessage, parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
+import { parseTerminalShortcutMessage, terminalShortcutMatch } from "./terminal-shortcut-bridge.js";
 import { ThemeControls } from "./theme-controls.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
@@ -46,22 +48,6 @@ function focusTerminalSoon(sessionId: string) {
   for (const delay of TERMINAL_FOCUS_DELAYS_MS) {
     window.setTimeout(() => focusActiveTerminal(sessionId), delay);
   }
-}
-
-function shortcutMatchFromTerminalMessage(message: TerminalShortcutMessage): ShortcutMatch | null {
-  if (message.action === "scratchpad-toggle" || message.action === "new-workspace") return null;
-  if ((message.action === "nav-workspace" || message.action === "nav-session") && message.index === undefined) {
-    return null;
-  }
-  const chord = FORWARDABLE_CHORDS.find((candidate) => {
-    if (candidate.id !== message.action) return false;
-    if (message.index !== undefined) return candidate.index === message.index;
-    return candidate.index === undefined;
-  });
-  if (!chord) return null;
-  const match: ShortcutMatch = { id: chord.id, chord };
-  if (message.index !== undefined) match.index = message.index;
-  return match;
 }
 
 export function Cockpit() {
@@ -119,23 +105,45 @@ export function Cockpit() {
   );
   const placeholderSummary = activeWorkspace ? stickySummaries.get(activeWorkspace.id) : undefined;
   const cockpitSummary = useWorkspaceCockpitSummary(activeWorkspace, placeholderSummary);
+  const prStateQuery = useWorkspacesPrState();
   useEffect(() => {
     if (cockpitSummary.data) rememberSummary(cockpitSummary.data);
   }, [cockpitSummary.data, rememberSummary]);
   useEffect(() => {
     invalidateActiveWorkspaceFromBatch(queryClient, activeWorkspace?.id, batchPrSummary.dataUpdatedAt);
   }, [activeWorkspace?.id, batchPrSummary.dataUpdatedAt, queryClient]);
-  // Feed the active workspace result back into the sticky cache. The active
-  // query is preferred for the selected workspace only when it is healthy;
-  // degraded provider reads are non-authoritative and should not erase the
+  // On focus, refresh the active workspace plus the cache-only and batch PR
+  // maps when cached data is older than focusRefreshThresholdMs (default 30s).
+  const focusConfig = useQuery({
+    queryKey: ["config"],
+    queryFn: () => api<{ config: { providerRefresh?: { focusRefreshThresholdMs?: number } } }>("/api/config"),
+  });
+  const focusThresholdMs = focusConfig.data?.config?.providerRefresh?.focusRefreshThresholdMs ?? 30_000;
+  useFocusRefresh({
+    workspaceId: activeWorkspace?.id ?? null,
+    thresholdMs: focusThresholdMs,
+    queryClient,
+  });
+  // Feed the active workspace result back into the sticky cache by recomputing
+  // the PR map from all sources. Cache-only pr-state gives the navigator an
+  // instant warm snapshot after daemon restart; the sticky batch cache keeps
+  // richer PR-display data stable through transient GitHub failures. The
+  // active query is preferred for the selected workspace only when it is
+  // healthy; degraded reads are non-authoritative and should not erase the
   // last-known navbar PR/check tone.
   const prByWorkspaceId = useMemo(() => {
-    const map = prMapFromSummaries(stickySummaries);
+    const map = new Map<string, PullRequestSummary | null>();
+    for (const [workspaceId, entry] of Object.entries(prStateQuery.data?.workspacePrState ?? {})) {
+      map.set(workspaceId, entry.pullRequest ?? null);
+    }
+    for (const [workspaceId, pullRequest] of prMapFromSummaries(stickySummaries)) {
+      map.set(workspaceId, pullRequest);
+    }
     if (cockpitSummary.data?.versionControl.status === "healthy") {
       map.set(cockpitSummary.data.workspaceId, cockpitSummary.data.versionControl.pullRequest ?? null);
     }
     return map;
-  }, [stickySummaries, cockpitSummary.data]);
+  }, [prStateQuery.data, stickySummaries, cockpitSummary.data]);
   const selectedRepo = activeWorkspace
     ? (data?.repos.find((repo) => repo.id === activeWorkspace.repoId) ?? null)
     : (data?.repos[0] ?? null);
@@ -312,7 +320,7 @@ export function Cockpit() {
         openCreateWorkspace();
         return;
       }
-      const match = shortcutMatchFromTerminalMessage(message);
+      const match = terminalShortcutMatch(message);
       if (!match) return;
       applyShortcutMatch(match);
     };

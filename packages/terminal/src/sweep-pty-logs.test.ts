@@ -16,7 +16,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  fs.rmSync(sweepDir, { recursive: true, force: true });
+  fs.rmSync(sweepDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   sweepDir = "";
 });
 
@@ -46,7 +46,7 @@ describe("sweepPtyLogs", () => {
 
   it("returns zero counts when the directory does not exist", () => {
     const missingDir = path.join(os.tmpdir(), `citadel-pty-missing-${Date.now()}`);
-    fs.rmSync(missingDir, { recursive: true, force: true });
+    fs.rmSync(missingDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 
     const result = sweepPtyLogs(1000, missingDir);
 

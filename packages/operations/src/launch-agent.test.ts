@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { LaunchAgentInputSchema } from "@citadel/contracts";
 import { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,7 +15,7 @@ afterEach(() => {
   for (const session of tmuxSessions.splice(0)) {
     killTmuxSession(session);
   }
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function shellService() {
@@ -30,6 +31,25 @@ function shellService() {
 }
 
 describe("launchAgent", () => {
+  describe("input validation", () => {
+    it("requires exactly one of repoId or repoName", () => {
+      expect(() => LaunchAgentInputSchema.parse({ prompt: "hello" })).toThrow(/repoId or repoName/);
+      expect(() => LaunchAgentInputSchema.parse({ prompt: "hello", repoId: "repo_test", repoName: "fixture" })).toThrow(
+        /repoId or repoName/,
+      );
+    });
+
+    it("requires a non-empty prompt", () => {
+      expect(() => LaunchAgentInputSchema.parse({ repoId: "repo_test" })).toThrow();
+      expect(() => LaunchAgentInputSchema.parse({ repoId: "repo_test", prompt: "" })).toThrow();
+    });
+
+    it("defaults runtimeId to claude-code", () => {
+      const parsed = LaunchAgentInputSchema.parse({ repoName: "fixture", prompt: "do a thing" });
+      expect(parsed.runtimeId).toBe("claude-code");
+    });
+  });
+
   it("auto-derives a fresh branch when caller omits branchName", async () => {
     const { fixture, store, service } = shellService();
     const repo = service.registerRepo({ rootPath: fixture.repoPath });

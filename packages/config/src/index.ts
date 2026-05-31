@@ -117,6 +117,10 @@ export const UsageProviderConfigSchema = z.object({
     .string()
     .optional()
     .refine((value) => value === undefined || path.isAbsolute(value), "Usage provider cwd must be an absolute path"),
+  // Override the daemon-wide `providerRefresh.intervals.usageMs` cadence for
+  // this specific usage provider. Only the provider knob is honored — there is
+  // no per-runtime knob because RuntimeConfig is consumed in too many places.
+  refreshIntervalMs: z.number().int().min(30_000).optional(),
 });
 
 export const DEFAULT_FIX_CI_AUTOMATION = {
@@ -218,6 +222,44 @@ export const CitadelConfigSchema = z
         allowDestructiveWorkspaceCleanup: z.boolean().default(false),
       })
       .default({ hookTimeoutMs: 120000, allowDestructiveWorkspaceCleanup: false }),
+    providerRefresh: z
+      .object({
+        enabled: z.boolean().default(true),
+        // workingHours uses the daemon process's local clock. Operators working
+        // across timezones from a laptop should expect the gate to follow the
+        // laptop, not the human — set explicit hours or enabled:false to override.
+        workingHours: z
+          .object({
+            startHour: z.number().int().min(0).max(23).default(9),
+            endHour: z.number().int().min(0).max(24).default(18),
+            weekdaysOnly: z.boolean().default(true),
+          })
+          .default({ startHour: 9, endHour: 18, weekdaysOnly: true }),
+        intervals: z
+          .object({
+            prCiMs: z.number().int().min(15_000).default(60_000),
+            jiraMs: z
+              .number()
+              .int()
+              .min(30_000)
+              .default(5 * 60_000),
+            usageMs: z
+              .number()
+              .int()
+              .min(30_000)
+              .default(5 * 60_000),
+          })
+          .default({ prCiMs: 60_000, jiraMs: 5 * 60_000, usageMs: 5 * 60_000 }),
+        focusRefreshThresholdMs: z.number().int().min(5_000).default(30_000),
+        maxConcurrentRefreshes: z.number().int().min(1).max(16).default(4),
+      })
+      .default({
+        enabled: true,
+        workingHours: { startHour: 9, endHour: 18, weekdaysOnly: true },
+        intervals: { prCiMs: 60_000, jiraMs: 5 * 60_000, usageMs: 5 * 60_000 },
+        focusRefreshThresholdMs: 30_000,
+        maxConcurrentRefreshes: 4,
+      }),
     scratchpad: z
       .object({
         path: z

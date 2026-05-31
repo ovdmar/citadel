@@ -51,7 +51,7 @@ beforeAll(() => {
 afterEach(() => {
   killTestTmuxServer();
   removeTestPipeLogs();
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 afterAll(() => {
@@ -127,7 +127,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       // No hook file → default prompt; both POSTs accepted (no 409 / dedupe by design).
@@ -219,7 +219,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const response = await fetch(`${baseUrl}/api/workspaces/ws_nopromptarg/fix-conflicts`, {
@@ -295,7 +295,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const body = await postJson<{ hooked: true; operationId: string; promptSource: string }>(
@@ -373,7 +373,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const body = await postJson<{ hooked: true; operationId: string }>(
@@ -437,7 +437,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
     // createFixture defaults to a shell-only runtime list. Without a
     // non-shell runtime, fix-conflicts must refuse so the multi-line prompt
     // doesn't get pasted into a bash pane and executed as commands.
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const response = await fetch(`${baseUrl}/api/workspaces/ws_shell/fix-conflicts`, {
@@ -499,7 +499,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const response = await fetch(`${baseUrl}/api/workspaces/ws_shellexp/fix-conflicts`, {
@@ -517,7 +517,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
 
   it("returns 404 workspace_not_found when the workspace does not exist", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const response = await fetch(`${baseUrl}/api/workspaces/ws_missing/fix-conflicts`, {

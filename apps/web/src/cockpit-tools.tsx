@@ -1,4 +1,9 @@
-import type { PullRequestSummary, Workspace, WorkspaceCockpitSummary } from "@citadel/contracts";
+import type {
+  PullRequestSummary,
+  Workspace,
+  WorkspaceCockpitSummary,
+  WorkspacesPrStateResponse,
+} from "@citadel/contracts";
 import type { WorkspaceCockpitSummaryBatchResponse } from "@citadel/contracts/pr-routes";
 import type { QueryClient } from "@tanstack/react-query";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -77,6 +82,19 @@ export function useAllWorkspacesPrSummary(workspaces: Workspace[]) {
         method: "POST",
         body: JSON.stringify({ ids: filteredIds }),
       }),
+  });
+}
+
+// Navigator-wide PR/CI snapshot. Polled every 30s (lighter than the per-
+// workspace cockpit-summary cadence) — the background refresh job is the
+// freshness driver. Focus invalidation in useFocusRefresh also busts this
+// query so newly-focused windows see fresh data immediately.
+export function useWorkspacesPrState() {
+  return useQuery({
+    queryKey: ["workspaces-pr-state"],
+    refetchInterval: 30_000,
+    staleTime: 25_000,
+    queryFn: () => api<WorkspacesPrStateResponse>("/api/workspaces/pr-state"),
   });
 }
 
