@@ -32,6 +32,13 @@ export function registerWorkspaceExtraRoutes(input: {
 }) {
   const { app, store, emit, asyncRoute, operations, config } = input;
   let githubQuotaCache: { expiresAt: number; value: GitHubQuotaSummary } | null = null;
+  const resolveWorkspaceRepo = (workspaceId: string) => {
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+    if (!workspace) return { ok: false as const, error: "workspace_not_found" as const };
+    const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+    if (!repo) return { ok: false as const, error: "repo_not_found" as const };
+    return { ok: true as const, repo, workspace };
+  };
 
   app.get(
     "/api/workspaces/:workspaceId/deployed-apps",
@@ -169,24 +176,34 @@ export function registerWorkspaceExtraRoutes(input: {
   app.get(
     "/api/integrations/github/search",
     asyncRoute(async (req: express.Request, res: express.Response) => {
-      const query = typeof req.query.q === "string" ? req.query.q : "";
+      const query = typeof req.query.q === "string" ? req.query.q.trim() : "";
       if (!query) return res.json({ results: [] });
       try {
-        const { execFile: execFileCb } = await import("node:child_process");
-        const { promisify } = await import("node:util");
-        const exec = promisify(execFileCb);
-        const { stdout } = await exec(
-          "gh",
-          ["search", "repos", query, "--limit", "8", "--json", "fullName,url,description"],
+        const { stdout } = await execFileAsync(
+          config.providers.github.command ?? "gh",
+          ["api", "--method", "GET", "search/repositories", "-f", `q=${query}`, "-f", "per_page=8"],
           { timeout: 10_000 },
         );
-        const parsed = JSON.parse(stdout) as Array<{ fullName: string; url: string; description?: string }>;
+        const parsed = JSON.parse(stdout) as {
+          items?: Array<{
+            full_name?: unknown;
+            html_url?: unknown;
+            description?: unknown;
+            default_branch?: unknown;
+          } | null>;
+        };
         res.json({
-          results: parsed.map((entry) => ({
-            name: entry.fullName,
-            url: entry.url,
-            description: entry.description ?? undefined,
-          })),
+          results: (parsed.items ?? []).flatMap((entry) => {
+            if (!entry || typeof entry.full_name !== "string" || typeof entry.html_url !== "string") return [];
+            return [
+              {
+                name: entry.full_name,
+                url: entry.html_url,
+                description: typeof entry.description === "string" ? entry.description : undefined,
+                defaultBranch: typeof entry.default_branch === "string" ? entry.default_branch : undefined,
+              },
+            ];
+          }),
         });
       } catch (error) {
         res.status(200).json({ results: [], error: error instanceof Error ? error.message : "gh_search_failed" });
@@ -215,10 +232,9 @@ export function registerWorkspaceExtraRoutes(input: {
         return res.json({ rootPath, cloned: false });
       }
       try {
-        const { execFile: execFileCb } = await import("node:child_process");
-        const { promisify } = await import("node:util");
-        const exec = promisify(execFileCb);
-        await exec("gh", ["repo", "clone", url, rootPath], { timeout: 120_000 });
+        await execFileAsync(config.providers.github.command ?? "gh", ["repo", "clone", url, rootPath], {
+          timeout: 120_000,
+        });
         res.json({ rootPath, cloned: true });
       } catch (error) {
         res.status(200).json({
@@ -250,11 +266,23 @@ export function registerWorkspaceExtraRoutes(input: {
     asyncRoute(async (req: express.Request, res: express.Response) => {
       const workspaceId = req.params.workspaceId;
       if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      // Require an agent runtime. The fix-conflicts prompt is
+      const resolvedWorkspace = resolveWorkspaceRepo(workspaceId);
+      if (!resolvedWorkspace.ok) return res.status(404).json({ error: resolvedWorkspace.error });
+      const { repo, workspace } = resolvedWorkspace;
+      const hookResult = await operations.runHookEvent({
+        event: "merge.conflict.detected",
+        repo,
+        workspace,
+        operationType: "merge.conflict.detected",
+        operationMessage: "Running merge-conflict hooks",
+        payload: { reason: "operator-requested", request: req.body ?? {} },
+      });
+      if (hookResult.ran > 0) {
+        emit("operation.updated", { operationId: hookResult.operationId });
+        emit("agent.updated", { workspaceId: workspace.id });
+        return res.status(202).json({ hooked: true, operationId: hookResult.operationId, promptSource: "hook" });
+      }
+      // Require a non-shell agent runtime. The fix-conflicts prompt is
       // multi-line ("git pull origin main", "make check", "git push"); if it
       // were pasted into a bash/sh/zsh/fish tmux pane those would execute
       // line-by-line as shell commands. The invariant is "the runtime is an
@@ -310,6 +338,34 @@ export function registerWorkspaceExtraRoutes(input: {
       });
       emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
       res.status(202).json({ session, promptSource: resolved.source, diagnostic: resolved.diagnostic });
+    }),
+  );
+
+  app.post(
+    "/api/workspaces/:workspaceId/review-requested",
+    asyncRoute(async (req: express.Request, res: express.Response) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      const resolvedWorkspace = resolveWorkspaceRepo(workspaceId);
+      if (!resolvedWorkspace.ok) return res.status(404).json({ error: resolvedWorkspace.error });
+      const { repo, workspace } = resolvedWorkspace;
+      const body = (req.body ?? {}) as { reason?: unknown };
+      const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim() : "manual";
+      const hookResult = await operations.runHookEvent({
+        event: "review.requested",
+        repo,
+        workspace,
+        operationType: "review.requested",
+        operationMessage: "Running review-requested hooks",
+        payload: { reason, request: req.body ?? {} },
+      });
+      emit("operation.updated", { operationId: hookResult.operationId });
+      if (hookResult.ran === 0)
+        return res
+          .status(404)
+          .json({ hooked: false, operationId: hookResult.operationId, error: "review_hook_not_found" });
+      emit("agent.updated", { workspaceId: workspace.id });
+      res.status(202).json({ hooked: true, operationId: hookResult.operationId });
     }),
   );
 }

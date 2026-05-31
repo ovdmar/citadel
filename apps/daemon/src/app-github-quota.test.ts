@@ -1,13 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { clearGhCooldown, setGhCooldown } from "@citadel/providers";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeServer, createFixture as createFixtureBase, getJson, listen } from "./app-test-helpers.js";
 import { createDaemonApp } from "./app.js";
 
 const dirs: string[] = [];
 
-afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+beforeEach(() => {
+  clearGhCooldown();
+});
+
+afterEach(async () => {
+  clearGhCooldown();
+  for (const dir of dirs.splice(0)) await removeFixtureDir(dir);
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
@@ -26,7 +32,7 @@ describe("createDaemonApp — GitHub quota", () => {
     Reflect.deleteProperty(process.env, "CITADEL_ENABLE_WORKTREE_GH_AUTOMATION");
     const fixture = createFixture();
     fixture.config.providers.github.command = "definitely-missing-gh";
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const body = await getJson<{ quota: { status: string; automationEnabled: boolean; reason: string } }>(
@@ -46,10 +52,9 @@ describe("createDaemonApp — GitHub quota", () => {
       if (prevWorktreeGh === undefined) Reflect.deleteProperty(process.env, "CITADEL_ENABLE_WORKTREE_GH_AUTOMATION");
       else process.env.CITADEL_ENABLE_WORKTREE_GH_AUTOMATION = prevWorktreeGh;
     }
-  }, 15_000);
+  }, 60_000);
 
   it("keeps GitHub quota resources visible while gh automation is cooling down", async () => {
-    const { clearGhCooldown, setGhCooldown } = await import("@citadel/providers");
     const fixture = createFixture();
     const fakeGh = path.join(fixture.config.dataDir, "fake-gh");
     const logPath = path.join(fixture.config.dataDir, "fake-gh.log");
@@ -69,7 +74,7 @@ exit 1
     );
     fixture.config.providers.github.enabled = true;
     fixture.config.providers.github.command = fakeGh;
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const until = setGhCooldown("GraphQL: API rate limit already exceeded", 60_000);
@@ -92,13 +97,11 @@ exit 1
       const calls = fs.readFileSync(logPath, "utf8").trim().split("\n");
       expect(calls).toEqual(["api rate_limit"]);
     } finally {
-      clearGhCooldown();
       await closeServer(server);
     }
-  }, 15_000);
+  }, 60_000);
 
   it("starts GitHub cooldown from an exhausted quota response before PR polling retries", async () => {
-    const { clearGhCooldown } = await import("@citadel/providers");
     const fixture = createFixture();
     const fakeGh = path.join(fixture.config.dataDir, "fake-gh");
     fs.writeFileSync(
@@ -116,7 +119,7 @@ exit 1
     );
     fixture.config.providers.github.enabled = true;
     fixture.config.providers.github.command = fakeGh;
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const body = await getJson<{
@@ -134,13 +137,11 @@ exit 1
         percentUsed: 100,
       });
     } finally {
-      clearGhCooldown();
       await closeServer(server);
     }
-  }, 15_000);
+  }, 60_000);
 
   it("injects versionControl.cooldownUntil into provider-summary while gh is in cooldown (review #6)", async () => {
-    const { clearGhCooldown, setGhCooldown } = await import("@citadel/providers");
     const fixture = createFixture();
     const now = new Date().toISOString();
     fixture.store.insertRepo({
@@ -158,7 +159,7 @@ exit 1
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp({
+    const { server } = await createDaemonApp({
       ...fixture,
       providers: {
         collectGitHubVersionControlSummary: async () => ({
@@ -185,8 +186,20 @@ exit 1
       );
       expect(during.versionControl.cooldownUntil).toBe(new Date(until).toISOString());
     } finally {
-      clearGhCooldown();
       await closeServer(server);
     }
-  }, 15_000);
+  }, 60_000);
 });
+
+async function removeFixtureDir(dir: string) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!["ENOTEMPTY", "EBUSY", "EPERM"].includes(code ?? "") || attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+}

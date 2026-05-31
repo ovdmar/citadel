@@ -2,13 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import type { ActivityEvent, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceInput, HookAction, HookOutput, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
-import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
+import type { ActivityEvent, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
+import { createId, nowIso, repoDisplayName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
 import * as agentHistory from "./agent-history.js";
 import * as agentMessages from "./agent-messages.js";
 import {
+  type RuntimeDescriptor,
   createAgentSession as createAgentSessionImpl,
   createTerminalSession as createTerminalSessionImpl,
 } from "./create-agent-session.js";
@@ -21,17 +22,21 @@ export type { LaunchAgentResult } from "./launch-agent.js";
 export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
 export type { AgentHistoryResult, AgentHistoryErrorResult } from "./agent-history.js";
 export * from "./status.js";
-// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-export { ScheduledAgentRunner, parseCronExpression, cronMatches, nextCronRun, describeCron } from "./scheduled-agents.js";
+export {
+  ScheduledAgentRunner,
+  parseCronExpression,
+  cronMatches,
+  nextCronRun,
+  describeCron,
+} from "./scheduled-agents.js";
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export { createDiagnosticsLogger, noopDiagnosticsLogger, type DiagnosticEvent, type DiagnosticsLogger, type DiagnosticsLoggerOptions } from "./diagnostics.js";
-export { parseUsageLimitResetFromReason, deriveAccountUsageLimit } from "./usage-limit.js";
-export type { AccountRateLimitInfo } from "./usage-limit.js";
-export { DEFAULT_AUTO_RESUME_INTERVAL_MS, startAutoResumeLoop } from "./auto-resume.js";
-export type { AutoResumeDeps, AutoResumeLoopHandle } from "./auto-resume.js";
+export { parseUsageLimitResetFromReason, deriveAccountUsageLimit, type AccountRateLimitInfo } from "./usage-limit.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+export { DEFAULT_AUTO_RESUME_INTERVAL_MS, startAutoResumeLoop, type AutoResumeDeps, type AutoResumeLoopHandle } from "./auto-resume.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import { type DeployOpsDeps, listDeployedApps as listDeployedAppsImpl, redeployApp as redeployAppImpl } from "./deploy.js";
 import {
@@ -44,17 +49,23 @@ import {
 
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export { BranchInUseByWorktreeError, RemoteRefMissingError, WorkspaceInUseError, WorkspaceNameTakenError } from "./helpers.js";
-import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
+import { buildDispatchAgentHookDeps, dispatchAgentHook as dispatchAgentHookImpl } from "./dispatch-agent-hook.js";
+import { type DispatchAgentHook, runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import { type WorkspaceAppsDeps, discoverWorkspaceApps as discoverWorkspaceAppsImpl, runWorkspaceAction as runWorkspaceActionImpl } from "./workspace-apps.js";
 
-export class OperationService {
-  // Daemon registers onSessionStopped to release the ttyd whenever stopAgentSession runs (REST, MCP, restore route).
-  private terminalHooks: { onSessionStopped?: (sessionId: string) => void } = {};
+export function defaultWorktreeParent(rootPathInput: string, dataDir?: string): string {
+  const rootPath = path.resolve(rootPathInput);
+  const repoDir = path.basename(rootPath);
+  if (dataDir) return path.join(dataDir, "worktrees", repoDir);
+  return path.join(path.dirname(rootPath), `${repoDir}-worktrees`);
+}
 
+export class OperationService {
   constructor(
     private readonly store: SqliteStore,
     private readonly config?: {
+      dataDir?: string;
       hooks: HookConfig[];
       repoDefaults: {
         setupHookIds: string[];
@@ -64,11 +75,9 @@ export class OperationService {
       };
       commandPolicy: CitadelConfig["commandPolicy"];
       terminal?: CitadelConfig["terminal"];
+      agentRuntimes?: CitadelConfig["agentRuntimes"];
     },
   ) {}
-
-  // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-  setTerminalHooks(hooks: { onSessionStopped?: (sessionId: string) => void }) { this.terminalHooks = hooks; }
 
   registerRepo(input: { rootPath: string; name?: string | undefined; worktreeParent?: string | undefined }) {
     const now = nowIso();
@@ -80,7 +89,7 @@ export class OperationService {
       rootPath,
       defaultBranch: discoverDefaultBranch(rootPath),
       defaultRemote: "origin",
-      worktreeParent: input.worktreeParent || path.join(path.dirname(rootPath), `${path.basename(rootPath)}-worktrees`),
+      worktreeParent: input.worktreeParent || defaultWorktreeParent(rootPath, this.config?.dataDir),
       setupHookIds: this.config?.repoDefaults.setupHookIds ?? [],
       teardownHookIds: this.config?.repoDefaults.teardownHookIds ?? [],
       providerIds: ["github-gh", "jira-jtk"],
@@ -133,14 +142,7 @@ export class OperationService {
 
   createAgentSession = (
     input: CreateAgentSessionInput,
-    runtime: {
-      command: string;
-      args: string[];
-      displayName: string;
-      promptArg?: string | null;
-      sessionIdArg?: string | null;
-      resumeArg?: string | null;
-    },
+    runtime: RuntimeDescriptor,
     options: { activitySource?: ActivityEvent["source"] } = {},
   ) => {
     if (input.namespaceId) {
@@ -152,6 +154,7 @@ export class OperationService {
       {
         store: this.store,
         terminal: this.config?.terminal,
+        ...(this.config?.dataDir ? { dataDir: this.config.dataDir } : {}),
         activity: (...args) => this.activity(...args),
         runNotificationHooks: (event, repo, workspace, operationId, payload) =>
           this.runNotificationHooks(event, repo, workspace, operationId, payload),
@@ -182,17 +185,7 @@ export class OperationService {
     );
   };
 
-  launchAgent = (
-    input: LaunchAgentInput,
-    runtime: {
-      command: string;
-      args: string[];
-      displayName: string;
-      promptArg?: string | null;
-      sessionIdArg?: string | null;
-      resumeArg?: string | null;
-    },
-  ) =>
+  launchAgent = (input: LaunchAgentInput, runtime: RuntimeDescriptor) =>
     launchAgentImpl(
       {
         store: this.store,
@@ -223,8 +216,7 @@ export class OperationService {
   stopWorkspaceSession(input: { sessionId: string }) {
     const session = this.store.listWorkspaceSessions().find((candidate) => candidate.id === input.sessionId);
     if (!session) return { stopped: false, reason: "session_not_found" as const };
-    if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
-    this.terminalHooks.onSessionStopped?.(session.id);
+    if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
     this.store.deleteWorkspaceSession(session.id);
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     const activityType = session.kind === "agent" ? "agent.stopped" : "terminal.stopped";
@@ -277,14 +269,6 @@ export class OperationService {
     return { retried: false, reason: "unknown_kind" as const };
   }
 
-  /**
-   * Reconcile local state with reality:
-   *  - mark sessions as `orphaned` when their tmux session is gone
-   *  - mark workspaces whose worktree directory no longer exists as failed
-   *  - archive repos whose rootPath no longer exists.
-   *
-   * Returns counts of the cleanup performed.
-   */
   reconcile(): { sessions: number; workspaces: number; repos: number; deletedSessions: number } {
     return reconcileStore(this.store, (message, repoId) =>
       this.activity("repo.removed", "system", message, repoId, null, null),
@@ -346,7 +330,8 @@ export class OperationService {
     }
 
     for (const session of sessions) {
-      if (session.tmuxSessionName && input.cleanupWorktrees) killTmuxSession(session.tmuxSessionName);
+      if (session.tmuxSessionName && input.cleanupWorktrees)
+        killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
     }
 
     let cleanedWorktrees = 0;
@@ -429,7 +414,6 @@ export class OperationService {
 
   listDeployedApps = (input: { workspaceId: string }) =>
     listDeployedAppsImpl(this.deployOpsDeps(), this.resolveRepoWorkspace(input.workspaceId));
-  // Per-workspace inflight guard prevents concurrent redeploys (double-click, human+MCP overlap).
   private redeployInflight = new Map<string, ReturnType<typeof redeployAppImpl>>();
   redeployApp = (input: { workspaceId: string; appName?: string | undefined }) => {
     const existing = this.redeployInflight.get(input.workspaceId);
@@ -487,6 +471,54 @@ export class OperationService {
       hookTimeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
     });
 
+  async runHookEvent(input: {
+    event: HookEvent;
+    repo: Repo;
+    workspace: Workspace;
+    payload?: unknown;
+    hookIds?: string[] | null;
+    operationType?: string;
+    operationMessage?: string;
+  }): Promise<{ operationId: string; ran: number }> {
+    const operation = this.operation(
+      input.operationType ?? `hook.${input.event}`,
+      "running",
+      input.repo.id,
+      input.workspace.id,
+      10,
+      input.operationMessage ?? `Running ${input.event} hooks`,
+    );
+    try {
+      const result = await this.runWorkspaceHooks(
+        input.event,
+        input.hookIds ?? null,
+        input.repo,
+        input.workspace,
+        operation.id,
+        input.payload,
+      );
+      this.store.upsertOperation({
+        ...operation,
+        status: "succeeded",
+        progress: 100,
+        message: result.ran ? `Ran ${result.ran} ${input.event} hook(s)` : `No ${input.event} hooks found`,
+        updatedAt: nowIso(),
+      });
+      return { operationId: operation.id, ran: result.ran };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : `hook_${input.event}_failed`;
+      this.logOp(operation.id, "error", `${input.event} hook failed: ${errorMessage}`);
+      this.store.upsertOperation({
+        ...operation,
+        status: "failed",
+        progress: 100,
+        error: errorMessage,
+        updatedAt: nowIso(),
+      });
+      throw error;
+    }
+  }
+
   private operation(
     type: string,
     status: Operation["status"],
@@ -541,39 +573,33 @@ export class OperationService {
     });
   }
 
+  private hooksDeps() {
+    return {
+      config: this.config,
+      activity: (...args: Parameters<typeof this.activity>) => this.activity(...args),
+      dispatchAgentHook: this.dispatchAgentHook,
+    };
+  }
+
   private runWorkspaceHooks = (
-    event: HookConfig["event"],
-    hookIds: string[],
+    event: HookEvent,
+    hookIds: string[] | null,
     repo: Repo,
     workspace: Workspace,
-    operationId: string,
-  ) =>
-    runWorkspaceHooks({
-      config: this.config,
-      activity: (...args) => this.activity(...args),
-      event,
-      hookIds,
-      repo,
-      workspace,
-      operationId,
-    });
+    operationId: string | null,
+    payload?: unknown,
+  ) => runWorkspaceHooks({ ...this.hooksDeps(), event, hookIds, repo, workspace, operationId, payload });
 
   private runNotificationHooks = (
-    event: HookConfig["event"],
+    event: HookEvent,
     repo: Repo,
     workspace: Workspace,
     operationId: string | null,
     payload: unknown,
-  ) =>
-    runNotificationHooks({
-      config: this.config,
-      activity: (...args) => this.activity(...args),
-      event,
-      repo,
-      workspace,
-      operationId,
-      payload,
-    });
+  ) => runNotificationHooks({ ...this.hooksDeps(), event, repo, workspace, operationId, payload });
+
+  private dispatchAgentHook: DispatchAgentHook = (input) =>
+    dispatchAgentHookImpl(buildDispatchAgentHookDeps(this.config, this.createAgentSession), input);
 
   // Binds the class's private helpers as deps for the extracted
   // create-workspace / remove-workspace modules. Built once per call so
@@ -587,7 +613,6 @@ export class OperationService {
       activity: (...args) => this.activity(...args),
       runWorkspaceHooks: (...args) => this.runWorkspaceHooks(...args),
       runNotificationHooks: (...args) => this.runNotificationHooks(...args),
-      onSessionStopped: (sessionId) => this.terminalHooks.onSessionStopped?.(sessionId),
     };
   }
 }

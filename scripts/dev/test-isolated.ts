@@ -37,14 +37,22 @@ if (mode === "e2e") {
   // ranges. Also isolate tmux so E2E never touches live agent panes.
   env.CITADEL_PLAYWRIGHT_DATA_DIR = env.CITADEL_PLAYWRIGHT_DATA_DIR ?? dataDir;
   env.CITADEL_PLAYWRIGHT_SANDBOX_PREFIX = env.CITADEL_PLAYWRIGHT_SANDBOX_PREFIX ?? dataDir;
+  env.CITADEL_PLAYWRIGHT_CONFIG = env.CITADEL_PLAYWRIGHT_CONFIG ?? configPath;
   env.CITADEL_PLAYWRIGHT_DAEMON_PORT = env.CITADEL_PLAYWRIGHT_DAEMON_PORT ?? randomPort(14020, 14199);
   env.CITADEL_PLAYWRIGHT_WEB_PORT = env.CITADEL_PLAYWRIGHT_WEB_PORT ?? randomPort(15180, 15399);
   env.CITADEL_PLAYWRIGHT_TMUX_SOCKET =
-    env.CITADEL_PLAYWRIGHT_TMUX_SOCKET ?? `citadel-playwright-${env.CITADEL_PLAYWRIGHT_DAEMON_PORT}`;
+    env.CITADEL_PLAYWRIGHT_TMUX_SOCKET ?? `citadel-playwright-${path.basename(baseTmp)}`;
+  cleanupListeningPorts([env.CITADEL_PLAYWRIGHT_DAEMON_PORT, env.CITADEL_PLAYWRIGHT_WEB_PORT], "before");
+  cleanupTmuxSockets(env.CITADEL_PLAYWRIGHT_TMUX_SOCKET, "before");
 }
 
 console.log(`[test-isolated] mode=${mode} CITADEL_DATA_DIR=${dataDir}`);
 const result = spawnSync(chosen.cmd, chosen.args, { stdio: "inherit", env });
+
+if (mode === "e2e" && env.CITADEL_PLAYWRIGHT_TMUX_SOCKET) {
+  cleanupListeningPorts([env.CITADEL_PLAYWRIGHT_DAEMON_PORT, env.CITADEL_PLAYWRIGHT_WEB_PORT], "after");
+  cleanupTmuxSockets(env.CITADEL_PLAYWRIGHT_TMUX_SOCKET, "after");
+}
 
 if (cleanup) {
   try {
@@ -60,4 +68,52 @@ process.exit(result.status ?? 1);
 
 function randomPort(min: number, max: number) {
   return String(Math.floor(min + Math.random() * (max - min)));
+}
+
+function cleanupListeningPorts(ports: Array<string | undefined>, phase: "before" | "after") {
+  const seen = new Set<string>();
+  for (const port of ports) {
+    if (!port || seen.has(port)) continue;
+    seen.add(port);
+    const result = spawnSync("fuser", ["-k", "-n", "tcp", port], { stdio: "ignore" });
+    if (result.error && (result.error as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.warn(`[test-isolated] port cleanup failed ${phase} run for ${port}:`, result.error);
+    }
+  }
+}
+
+function cleanupTmuxSockets(socket: string, phase: "before" | "after") {
+  const socketDir = tmuxSocketDir();
+  for (const name of discoverTmuxSockets(socket)) {
+    const result = spawnSync("tmux", ["-L", name, "kill-server"], { stdio: "ignore" });
+    if (result.error && (result.error as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.warn(`[test-isolated] tmux cleanup failed ${phase} run for ${name}:`, result.error);
+    }
+    try {
+      fs.rmSync(path.join(socketDir, name), { force: true });
+    } catch (error) {
+      console.warn(`[test-isolated] tmux socket unlink failed ${phase} run for ${name}:`, error);
+    }
+  }
+}
+
+function discoverTmuxSockets(baseSocket: string): string[] {
+  const names = new Set([baseSocket]);
+  const socketDir = tmuxSocketDir();
+  try {
+    for (const entry of fs.readdirSync(socketDir)) {
+      if (entry === baseSocket || entry.startsWith(`${baseSocket}-ws-`)) names.add(entry);
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      console.warn(`[test-isolated] tmux socket discovery failed for ${socketDir}:`, error);
+    }
+  }
+  return [...names];
+}
+
+function tmuxSocketDir(): string {
+  const uid = typeof process.getuid === "function" ? process.getuid() : 0;
+  return path.join(process.env.TMUX_TMPDIR || os.tmpdir(), `tmux-${uid}`);
 }

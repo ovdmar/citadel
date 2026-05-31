@@ -275,6 +275,10 @@
   align-items: center;
   gap: 6px;
   height: 24px;
+  /* min-width is sized for the widest healthy text ("100%·12h") plus padding
+   * so the reload variant (an icon) doesn't shift neighboring top-bar
+   * controls when the operator's usage data is missing or errored. */
+  min-width: 88px;
   padding: 0 8px 0 6px;
   border-radius: 999px;
   background: transparent;
@@ -291,6 +295,19 @@
   color: var(--c-fg-1);
   border-color: var(--c-line-1);
   text-decoration: none;
+}
+
+/* Reload variant: <button> instead of <Link>, with a refresh icon. Keeps
+ * the same chrome (min-width above) so the swap is layout-stable. The
+ * disabled state during an in-flight refresh prevents click-spam. */
+.cit-usage-pill--reload {
+  cursor: pointer;
+  font: inherit;
+}
+
+.cit-usage-pill--reload:disabled {
+  cursor: progress;
+  opacity: 0.6;
 }
 
 .cit-usage-pill.is-warn {
@@ -498,9 +515,9 @@
   text-decoration: none;
 }
 .debug-panel__primary {
-  background: var(--c-accent, #3a6dd2);
+  background: var(--color-action);
   border-color: transparent;
-  color: #fff;
+  color: var(--c-on-dark);
 }
 .debug-panel__primary:hover {
   filter: brightness(1.05);

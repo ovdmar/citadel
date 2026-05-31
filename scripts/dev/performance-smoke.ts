@@ -5,13 +5,21 @@ import path from "node:path";
 import { chromium } from "@playwright/test";
 import WebSocket from "ws";
 
-const defaultApiPort = process.env.CITADEL_PERFORMANCE_DAEMON_PORT || "14013";
-const defaultWebPort = process.env.CITADEL_PERFORMANCE_WEB_PORT || "15175";
-const apiBaseUrl = process.env.CITADEL_BASE_URL || `http://127.0.0.1:${defaultApiPort}`;
-const webBaseUrl = process.env.CITADEL_WEB_URL || `http://127.0.0.1:${defaultWebPort}`;
+const managedApiPort = process.env.CITADEL_PERFORMANCE_DAEMON_PORT || "14110";
+const managedWebPort = process.env.CITADEL_PERFORMANCE_WEB_PORT || "15173";
+const managedTmuxSocket = `citadel-perf-${managedApiPort}`.replace(/[^A-Za-z0-9_.-]/g, "-");
+const apiBaseUrl = process.env.CITADEL_BASE_URL || `http://127.0.0.1:${managedApiPort}`;
+const webBaseUrl = process.env.CITADEL_WEB_URL || `http://127.0.0.1:${managedWebPort}`;
 const managedProcesses: ChildProcess[] = [];
 const managedDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-perf-runtime-"));
-const managedTmuxSocket = `citadel-perf-${process.pid}`;
+const workspaceSwitchBudgetMs = readPositiveInt(
+  process.env.CITADEL_PERF_WORKSPACE_SWITCH_MAX_MS,
+  process.env.CI === "true" ? 1500 : 1000,
+);
+const webInitialLoadBudgetMs = readPositiveInt(
+  process.env.CITADEL_PERF_WEB_ADE_MAX_MS,
+  process.env.CI === "true" ? 2500 : 2000,
+);
 
 await ensureLocalServices();
 
@@ -46,30 +54,33 @@ try {
   const browser = await chromium.launch();
   try {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-    await time("web_ade_visible", 2000, async () => {
+    let legacyTerminalRequests = 0;
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (request.method() === "POST" && /^\/api\/agent-sessions\/[^/]+\/terminal$/.test(url.pathname)) {
+        legacyTerminalRequests += 1;
+      }
+    });
+    const selectWorkspaceAndSession = async (workspaceName: RegExp, sessionName: string) => {
+      const navigator = page.locator("aside[aria-label='Navigator']");
+      await navigator.getByRole("button", { name: workspaceName }).click();
+      await navigator.locator(".workspace-card.active").filter({ hasText: workspaceName }).waitFor();
+      await page.getByRole("button", { name: `Switch to ${sessionName}` }).click();
+      await page
+        .locator(`.terminal-active .terminal-xterm-host[aria-label="Terminal ${sessionName}"]`)
+        .waitFor({ state: "visible" });
+    };
+    await time("web_ade_visible", webInitialLoadBudgetMs, async () => {
       await page.goto(webBaseUrl);
       // The current cockpit identifies itself via the cit-brand "Citadel"
       // and the agent-stage main element rather than the old ADE copy.
       await page.locator(".cit-brand").waitFor();
       await page.locator("main[aria-label='Agent stage']").waitFor();
     });
-    await time("workspace_switch_long_buffers", 1000, async () => {
-      const navigator = page.locator("aside[aria-label='Navigator']");
-      await navigator.getByRole("button", { name: /perf-a-/i }).click();
-      await navigator
-        .locator(".workspace-card.active")
-        .filter({ hasText: /perf-a-/i })
-        .waitFor();
-      await navigator.getByRole("button", { name: /perf-b-/i }).click();
-      await navigator
-        .locator(".workspace-card.active")
-        .filter({ hasText: /perf-b-/i })
-        .waitFor();
-      await navigator.getByRole("button", { name: /perf-a-/i }).click();
-      await navigator
-        .locator(".workspace-card.active")
-        .filter({ hasText: /perf-a-/i })
-        .waitFor();
+    await time("workspace_switch_long_buffers", workspaceSwitchBudgetMs, async () => {
+      await selectWorkspaceAndSession(/perf-a-/i, "Perf Shell A");
+      await selectWorkspaceAndSession(/perf-b-/i, "Perf Shell B");
+      await selectWorkspaceAndSession(/perf-a-/i, "Perf Shell A");
     });
     await time("workspace_settings_switch", 1000, async () => {
       await page.getByRole("link", { name: "Settings" }).first().click();
@@ -80,6 +91,9 @@ try {
       await page.locator("a.set-back").click();
       await page.locator("main[aria-label='Agent stage']").waitFor();
     });
+    if (legacyTerminalRequests > 0) {
+      throw new Error(`Cockpit hit legacy terminal ensure ${legacyTerminalRequests} time(s) during smoke`);
+    }
   } finally {
     await browser.close();
   }
@@ -88,6 +102,13 @@ try {
     await fetch(`${apiBaseUrl}/api/workspaces/${workspaceId}?archiveOnly=true`, { method: "DELETE" });
   }
   for (const child of managedProcesses) child.kill("SIGTERM");
+  if (!process.env.CITADEL_BASE_URL) {
+    try {
+      execFileSync("tmux", ["-L", managedTmuxSocket, "kill-server"], { stdio: "ignore" });
+    } catch {
+      // The daemon may already have stopped its owned tmux server.
+    }
+  }
   fs.rmSync(managedDataDir, { recursive: true, force: true });
   fs.rmSync(fixture.dir, { recursive: true, force: true });
 }
@@ -96,16 +117,17 @@ async function ensureLocalServices() {
   const externalApi = Boolean(process.env.CITADEL_BASE_URL);
   const externalWeb = Boolean(process.env.CITADEL_WEB_URL);
   if (!externalApi && !(await canFetch(`${apiBaseUrl}/api/health`))) {
-    const apiPort = new URL(apiBaseUrl).port || defaultApiPort;
     managedProcesses.push(
       spawn("pnpm", ["--filter", "@citadel/daemon", "dev"], {
         cwd: process.cwd(),
         env: {
           ...process.env,
+          // Do not let a Citadel-launched shell force worktree-mode path
+          // rewriting over this smoke test's managed sandbox paths.
+          CITADEL_WORKTREE: "",
+          CITADEL_PORT: managedApiPort,
           CITADEL_DATA_DIR: managedDataDir,
           CITADEL_CONFIG: path.join(managedDataDir, "citadel.config.json"),
-          CITADEL_PORT: apiPort,
-          CITADEL_BIND_HOST: "127.0.0.1",
           CITADEL_TMUX_SOCKET: managedTmuxSocket,
           CITADEL_OWN_TMUX_SOCKET: "1",
           CITADEL_DISABLE_BOOT_RESTORE: "1",
@@ -124,15 +146,10 @@ async function ensureLocalServices() {
     );
   }
   if (!externalWeb && !(await canFetch(webBaseUrl))) {
-    const webPort = new URL(webBaseUrl).port || defaultWebPort;
     managedProcesses.push(
-      spawn("pnpm", ["--filter", "@citadel/web", "dev", "--", "--host", "127.0.0.1", "--port", webPort], {
+      spawn("pnpm", ["--filter", "@citadel/web", "dev", "--", "--host", "127.0.0.1", "--port", managedWebPort], {
         cwd: process.cwd(),
-        env: {
-          ...process.env,
-          CITADEL_DAEMON_URL: apiBaseUrl,
-          CITADEL_WEB_PORT: webPort,
-        },
+        env: { ...process.env, CITADEL_DAEMON_URL: apiBaseUrl, CITADEL_WEB_PORT: managedWebPort },
         stdio: "ignore",
       }),
     );
@@ -166,6 +183,11 @@ async function time<T>(name: string, maxMs: number, fn: () => Promise<T>) {
   console.log(`${name} ${durationMs}ms`);
   if (durationMs > maxMs) throw new Error(`${name} exceeded ${maxMs}ms`);
   return { durationMs, result };
+}
+
+function readPositiveInt(raw: string | undefined, fallback: number) {
+  const parsed = Number.parseInt(raw ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 async function registerRepo(fixture: ReturnType<typeof createGitFixture>) {
@@ -218,7 +240,7 @@ async function seedTerminal(sessionId: string) {
     ws.once("open", resolve);
     ws.once("error", reject);
   });
-  ws.send(JSON.stringify({ type: "paste", data: `printf '${"terminal-buffer-line\\n".repeat(600)}'\\r` }));
+  ws.send(Buffer.from(`printf '${"terminal-buffer-line\\n".repeat(600)}'\\r`, "utf8"));
   await new Promise((resolve) => setTimeout(resolve, 250));
   ws.close();
 }

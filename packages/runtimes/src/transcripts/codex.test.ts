@@ -16,7 +16,7 @@ const children: ChildProcess[] = [];
 
 afterEach(() => {
   for (const child of children.splice(0)) child.kill("SIGTERM");
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function writeRollout(filePath: string, lines: unknown[]) {

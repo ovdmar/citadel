@@ -11,11 +11,9 @@ import {
   FileText,
   FolderGit2,
   History,
-  Moon,
   Server,
   Sparkles,
   Stethoscope,
-  Sun,
   Workflow,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -30,7 +28,7 @@ import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { RestoreModal, RestorePanelBody } from "../settings-restore.js";
 import { AgentsPanel } from "../settings-runtimes.js";
-import { applyThemePreference, useResolvedTheme } from "../use-resolved-theme.js";
+import { ThemeControls } from "../theme-controls.js";
 
 type SectionId =
   | "overview"
@@ -144,7 +142,7 @@ export function SettingsView() {
         <div />
 
         <div className="set-top-right">
-          <ThemeToggle />
+          <ThemeControls />
         </div>
       </header>
 
@@ -280,7 +278,7 @@ export function SettingsView() {
               <PageHead
                 title="Debug"
                 sub="Download a diagnostics bundle when sessions misbehave."
-                help="Citadel keeps a structured event log (.citadel/diagnostics.jsonl) covering tmux/ttyd lifecycle, status-monitor decisions, and boot-restore. The bundle includes that log plus a state snapshot and a 30-minute slice of the citadel.service systemd journal."
+                help="Citadel keeps a structured event log (.citadel/diagnostics.jsonl) covering tmux and terminal lifecycle, status-monitor decisions, and boot-restore. The bundle includes that log plus a state snapshot and a 30-minute slice of the citadel.service systemd journal."
               />
               <DebugPanel />
             </>
@@ -300,23 +298,6 @@ function PageHead(props: { title: string; sub?: string; help?: string }) {
       {props.sub ? <div className="set-page-sub">{props.sub}</div> : null}
       {props.help ? <div className="set-page-help">{props.help}</div> : null}
     </div>
-  );
-}
-
-function ThemeToggle() {
-  const resolved = useResolvedTheme();
-  const isDark = resolved === "dark";
-  const toggle = () => applyThemePreference(isDark ? "light" : "dark");
-  return (
-    <button
-      type="button"
-      className="set-icon-btn"
-      onClick={toggle}
-      title={isDark ? "Switch to light mode" : "Switch to dark mode"}
-      aria-label="Toggle theme"
-    >
-      {isDark ? <Sun size={15} /> : <Moon size={15} />}
-    </button>
   );
 }
 

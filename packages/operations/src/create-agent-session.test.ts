@@ -4,13 +4,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SqliteStore } from "@citadel/db";
+import { codexSqliteHomeForWorkspace } from "@citadel/runtimes";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperationService } from "./index.js";
 
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -20,7 +21,7 @@ describe("createAgentSession session-id wiring", () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
-    const service = makeService(store);
+    const service = makeService(store, fixture.dir);
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "sid-create", source: "scratch" });
 
@@ -33,6 +34,8 @@ describe("createAgentSession session-id wiring", () => {
       expect(session.runtimeSessionId).toMatch(UUID_V4);
       const row = store.listSessions(created.workspaceId).find((s) => s.id === session.id);
       expect(row?.runtimeSessionId).toBe(session.runtimeSessionId);
+      expect(session.tmuxSocketName).toBe(`${process.env.CITADEL_TMUX_SOCKET ?? "citadel"}-ws-${created.workspaceId}`);
+      expect(row?.tmuxSocketName).toBe(session.tmuxSocketName);
     } finally {
       service.stopAgentSession({ sessionId: session.id });
     }
@@ -42,7 +45,7 @@ describe("createAgentSession session-id wiring", () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
-    const service = makeService(store);
+    const service = makeService(store, fixture.dir);
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "sid-resume", source: "scratch" });
 
@@ -72,7 +75,7 @@ describe("createAgentSession session-id wiring", () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
-    const service = makeService(store);
+    const service = makeService(store, fixture.dir);
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "sid-none", source: "scratch" });
 
@@ -115,19 +118,21 @@ describe("createAgentSession session-id wiring", () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
-    const service = makeService(store);
+    const service = makeService(store, fixture.dir);
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "codex-prompt", source: "scratch" });
     const argvPath = path.join(fixture.dir, "codex-argv.json");
+    const scriptPath = path.join(fixture.dir, "fake-codex-argv.js");
     const script = [
       "const fs = require('node:fs');",
-      `fs.writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(1)));`,
+      `fs.writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));`,
       "setTimeout(() => {}, 10000);",
     ].join(" ");
+    fs.writeFileSync(scriptPath, script);
 
     const session = await service.createAgentSession(
       { workspaceId: created.workspaceId, runtimeId: "codex", prompt: "hello codex" },
-      { command: "node", args: ["-e", script], displayName: "Fake Codex", sessionIdArg: "--session-id" },
+      { command: "node", args: [scriptPath], displayName: "Fake Codex", sessionIdArg: "--session-id" },
     );
     try {
       const deadline = Date.now() + 3000;
@@ -135,7 +140,40 @@ describe("createAgentSession session-id wiring", () => {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
       const argv = JSON.parse(fs.readFileSync(argvPath, "utf8")) as string[];
+      const goalsFlagIndex = argv.indexOf("--enable");
+      expect(goalsFlagIndex).toBeGreaterThanOrEqual(0);
+      expect(argv[goalsFlagIndex + 1]).toBe("goals");
       expect(argv).toContain("hello codex");
+    } finally {
+      service.stopAgentSession({ sessionId: session.id });
+    }
+  }, 15_000);
+
+  it("launches Codex with an isolated workspace CODEX_SQLITE_HOME", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = makeService(store, fixture.dir);
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "codex-sqlite-home", source: "scratch" });
+    const envPath = path.join(fixture.dir, "codex-sqlite-home-env.txt");
+    const scriptPath = path.join(fixture.dir, "codex-sqlite-home-runtime.js");
+    fs.writeFileSync(
+      scriptPath,
+      [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(envPath)}, process.env.CODEX_SQLITE_HOME || '');`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+    );
+
+    const session = await service.createAgentSession(
+      { workspaceId: created.workspaceId, runtimeId: "codex" },
+      { command: "node", args: [scriptPath], displayName: "Fake Codex", sessionIdArg: "--session-id" },
+    );
+    try {
+      expect(fs.readFileSync(envPath, "utf8")).toBe(codexSqliteHomeForWorkspace(created.workspaceId, fixture.dir));
+      expect(fs.existsSync(codexSqliteHomeForWorkspace(created.workspaceId, fixture.dir))).toBe(true);
     } finally {
       service.stopAgentSession({ sessionId: session.id });
     }
@@ -145,7 +183,7 @@ describe("createAgentSession session-id wiring", () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
-    const service = makeService(store);
+    const service = makeService(store, fixture.dir);
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "codex-db-lock", source: "scratch" });
     const attemptsPath = path.join(fixture.dir, "attempts.txt");
@@ -184,8 +222,9 @@ describe("createAgentSession session-id wiring", () => {
   }, 20_000);
 });
 
-function makeService(store: SqliteStore) {
+function makeService(store: SqliteStore, dataDir?: string) {
   return new OperationService(store, {
+    ...(dataDir ? { dataDir } : {}),
     hooks: [],
     repoDefaults: { setupHookIds: [], teardownHookIds: [] },
     commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },

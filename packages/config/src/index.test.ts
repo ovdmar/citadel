@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  AgentRuntimeConfigSchema,
   CitadelConfigSchema,
+  HookConfigSchema,
+  HookEventSchema,
+  UsageProviderConfigSchema,
   defaultConfigPath,
   defaultNotesPath,
   detectWorktree,
@@ -11,14 +15,13 @@ import {
   loadConfig,
   mergeConfigPatch,
   saveConfig,
-  validateTlsAssets,
 } from "./index.js";
 
 const dirs: string[] = [];
 
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("loadConfig", () => {
@@ -32,7 +35,11 @@ describe("loadConfig", () => {
     expect(config.version).toBe(1);
     expect(config.mcp.enabled).toBe(true);
     expect(config.agentRuntimes.map((runtime) => runtime.id)).not.toContain("shell");
-    expect(config.agentRuntimes.find((runtime) => runtime.id === "codex")?.args).toEqual(["--yolo"]);
+    expect(config.agentRuntimes.find((runtime) => runtime.id === "codex")?.args).toEqual([
+      "--yolo",
+      "--enable",
+      "goals",
+    ]);
     expect(config.terminal).toEqual({ displayName: "Terminal", command: "bash", args: ["-l"] });
     expect(config.usageProviders).toEqual([]);
     expect(config.automations.fixCi).toMatchObject({
@@ -314,6 +321,57 @@ describe("loadConfig", () => {
     expect(fs.existsSync(`${configPath}.legacy-runtimes.bak`)).toBe(true);
   });
 
+  it("keeps Codex goals enabled across stale config loads and settings patches", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-config-"));
+    dirs.push(dir);
+    const configPath = path.join(dir, "citadel.config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        dataDir: dir,
+        databasePath: path.join(dir, "citadel.sqlite"),
+        runtimes: [{ id: "codex", displayName: "Codex", command: "codex", args: ["--yolo"] }],
+      }),
+    );
+
+    const config = loadConfig(configPath);
+    expect(config.agentRuntimes.find((runtime) => runtime.id === "codex")?.args).toEqual([
+      "--yolo",
+      "--enable",
+      "goals",
+    ]);
+
+    const patched = mergeConfigPatch(config, {
+      agentRuntimes: [{ id: "codex", displayName: "Codex", command: "codex", args: [] }],
+    });
+    expect(patched.agentRuntimes.find((runtime) => runtime.id === "codex")?.args).toEqual(["--enable", "goals"]);
+
+    const alreadyEnabled = mergeConfigPatch(config, {
+      agentRuntimes: [{ id: "codex", displayName: "Codex", command: "codex", args: ["--enable=goals"] }],
+    });
+    expect(alreadyEnabled.agentRuntimes.find((runtime) => runtime.id === "codex")?.args).toEqual(["--enable=goals"]);
+
+    const disabledLater = mergeConfigPatch(config, {
+      agentRuntimes: [
+        {
+          id: "codex",
+          displayName: "Codex",
+          command: "codex",
+          args: ["--enable", "goals", "--config", "features.goals=false"],
+        },
+      ],
+    });
+    expect(disabledLater.agentRuntimes.find((runtime) => runtime.id === "codex")?.args).toEqual([
+      "--enable",
+      "goals",
+      "--config",
+      "features.goals=false",
+      "--enable",
+      "goals",
+    ]);
+  });
+
   it("in prod mode (no CITADEL_WORKTREE), honors dataDir/databasePath persisted in the config file", () => {
     // Prod regression: the systemd-supervised daemon at the main install must
     // be able to persist a customized `databasePath` in
@@ -350,6 +408,145 @@ describe("loadConfig", () => {
       if (prevData !== undefined) process.env.CITADEL_DATA_DIR = prevData;
       if (prevWorktree !== undefined) process.env.CITADEL_WORKTREE = prevWorktree;
     }
+  });
+});
+
+describe("providerRefresh schema", () => {
+  function parseWith(refresh: unknown) {
+    return CitadelConfigSchema.parse({
+      dataDir: "/tmp/citadel-test",
+      databasePath: "/tmp/citadel-test/db.sqlite",
+      providerRefresh: refresh,
+    });
+  }
+
+  it("default-fills the full providerRefresh block when omitted", () => {
+    const config = CitadelConfigSchema.parse({
+      dataDir: "/tmp/citadel-test",
+      databasePath: "/tmp/citadel-test/db.sqlite",
+    });
+    expect(config.providerRefresh.enabled).toBe(true);
+    expect(config.providerRefresh.workingHours.startHour).toBe(9);
+    expect(config.providerRefresh.workingHours.endHour).toBe(18);
+    expect(config.providerRefresh.workingHours.weekdaysOnly).toBe(true);
+    expect(config.providerRefresh.intervals.prCiMs).toBe(60_000);
+    expect(config.providerRefresh.intervals.jiraMs).toBe(5 * 60_000);
+    expect(config.providerRefresh.intervals.usageMs).toBe(5 * 60_000);
+    expect(config.providerRefresh.focusRefreshThresholdMs).toBe(30_000);
+    expect(config.providerRefresh.maxConcurrentRefreshes).toBe(4);
+  });
+
+  it("rejects workingHours.startHour below 0 or above 23", () => {
+    expect(() => parseWith({ workingHours: { startHour: -1 } })).toThrow();
+    expect(() => parseWith({ workingHours: { startHour: 24 } })).toThrow();
+  });
+
+  it("rejects workingHours.endHour below 0 or above 24", () => {
+    expect(() => parseWith({ workingHours: { endHour: -1 } })).toThrow();
+    expect(() => parseWith({ workingHours: { endHour: 25 } })).toThrow();
+  });
+
+  it("rejects intervals below their respective minima", () => {
+    expect(() => parseWith({ intervals: { prCiMs: 14_999 } })).toThrow();
+    expect(() => parseWith({ intervals: { jiraMs: 29_999 } })).toThrow();
+    expect(() => parseWith({ intervals: { usageMs: 29_999 } })).toThrow();
+  });
+
+  it("rejects focusRefreshThresholdMs below 5s", () => {
+    expect(() => parseWith({ focusRefreshThresholdMs: 4_999 })).toThrow();
+  });
+
+  it("rejects maxConcurrentRefreshes outside 1..16", () => {
+    expect(() => parseWith({ maxConcurrentRefreshes: 0 })).toThrow();
+    expect(() => parseWith({ maxConcurrentRefreshes: 17 })).toThrow();
+  });
+
+  it("accepts enabled:false to disable the job", () => {
+    const config = parseWith({ enabled: false });
+    expect(config.providerRefresh.enabled).toBe(false);
+  });
+});
+
+describe("UsageProviderConfig.refreshIntervalMs", () => {
+  it("is optional and absent by default", () => {
+    const parsed = UsageProviderConfigSchema.parse({
+      id: "p1",
+      runtimeId: "claude-code",
+      command: "/bin/true",
+    });
+    expect(parsed.refreshIntervalMs).toBeUndefined();
+  });
+
+  it("accepts values >= 30s", () => {
+    const parsed = UsageProviderConfigSchema.parse({
+      id: "p1",
+      runtimeId: "claude-code",
+      command: "/bin/true",
+      refreshIntervalMs: 30_000,
+    });
+    expect(parsed.refreshIntervalMs).toBe(30_000);
+  });
+
+  it("rejects values below 30s", () => {
+    expect(() =>
+      UsageProviderConfigSchema.parse({
+        id: "p1",
+        runtimeId: "claude-code",
+        command: "/bin/true",
+        refreshIntervalMs: 29_999,
+      }),
+    ).toThrow();
+  });
+});
+
+describe("AgentRuntimeConfig contract surface (regression guard)", () => {
+  // We deliberately do NOT widen AgentRuntimeConfigSchema with a per-runtime usage
+  // cadence override — that field belongs on UsageProviderConfigSchema. This
+  // negative guard catches a future drive-by addition that would silently
+  // cascade across ~19 consumers (web settings, MCP, agent session creation).
+  it("does NOT contain usageRefreshIntervalMs", () => {
+    const shape = AgentRuntimeConfigSchema.shape;
+    expect(shape).not.toHaveProperty("usageRefreshIntervalMs");
+  });
+});
+
+describe("HookEventSchema (re-exported from @citadel/contracts)", () => {
+  it("accepts the new framework events: pr.merge, merge.conflict.detected, review.requested", () => {
+    expect(HookEventSchema.parse("pr.merge")).toBe("pr.merge");
+    expect(HookEventSchema.parse("merge.conflict.detected")).toBe("merge.conflict.detected");
+    expect(HookEventSchema.parse("review.requested")).toBe("review.requested");
+  });
+
+  it("still accepts the existing workspace.* and agent.started events", () => {
+    expect(HookEventSchema.parse("workspace.setup")).toBe("workspace.setup");
+    expect(HookEventSchema.parse("agent.started")).toBe("agent.started");
+  });
+});
+
+describe("HookConfigSchema", () => {
+  it("defaults blocking:true for workspace.setup and workspace.teardown (existing behavior)", () => {
+    const setup = HookConfigSchema.parse({ id: "x", event: "workspace.setup", command: "true" });
+    const teardown = HookConfigSchema.parse({ id: "x", event: "workspace.teardown", command: "true" });
+    expect(setup.blocking).toBe(true);
+    expect(teardown.blocking).toBe(true);
+  });
+
+  it("defaults blocking:true for pr.merge — a failing merge must surface, not silently continue", () => {
+    const merge = HookConfigSchema.parse({ id: "x", event: "pr.merge", command: "true" });
+    expect(merge.blocking).toBe(true);
+  });
+
+  it("defaults blocking:false for non-mutating events like workspace.apps", () => {
+    const apps = HookConfigSchema.parse({ id: "x", event: "workspace.apps", command: "true" });
+    expect(apps.blocking).toBe(false);
+  });
+
+  it("rejects a config-hook id with the reserved 'file:' prefix (file-based hooks own that namespace)", () => {
+    expect(() => HookConfigSchema.parse({ id: "file:foo", event: "workspace.setup", command: "true" })).toThrow();
+  });
+
+  it("accepts normal ids", () => {
+    expect(() => HookConfigSchema.parse({ id: "bootstrap", event: "workspace.setup", command: "true" })).not.toThrow();
   });
 });
 
@@ -568,107 +765,5 @@ describe("scratchpad.path config field", () => {
     const override = path.join(dir, "elsewhere", "notes.md");
     const configWithOverride = { dataDir: dir, scratchpad: { path: override } };
     expect(effectiveNotesPath(configWithOverride)).toBe(override);
-  });
-});
-
-// Generate a tiny self-signed cert pair via openssl. Used only by TLS tests.
-// openssl is one of the doctor's required binaries (it's part of the host's
-// toolchain for HTTPS work); CI installs it via the standard image.
-function generateSelfSignedCert(input: {
-  outDir: string;
-  daysValid: number;
-}): { certPath: string; keyPath: string } {
-  const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
-  const keyPath = path.join(input.outDir, "key.pem");
-  const certPath = path.join(input.outDir, "cert.pem");
-  execFileSync(
-    "openssl",
-    [
-      "req",
-      "-x509",
-      "-newkey",
-      "rsa:2048",
-      "-keyout",
-      keyPath,
-      "-out",
-      certPath,
-      "-days",
-      String(input.daysValid),
-      "-nodes",
-      "-subj",
-      "/CN=localhost",
-    ],
-    { stdio: "ignore" },
-  );
-  return { keyPath, certPath };
-}
-
-describe("TLS config", () => {
-  it("zod schema rejects a relative certPath", () => {
-    const result = CitadelConfigSchema.safeParse({
-      dataDir: "/tmp/x",
-      databasePath: "/tmp/x/db",
-      tls: { certPath: "relative/cert.pem", keyPath: "/abs/key.pem" },
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("zod schema rejects a relative keyPath", () => {
-    const result = CitadelConfigSchema.safeParse({
-      dataDir: "/tmp/x",
-      databasePath: "/tmp/x/db",
-      tls: { certPath: "/abs/cert.pem", keyPath: "relative/key.pem" },
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("validateTlsAssets returns null when tls is unset (default config)", () => {
-    expect(validateTlsAssets({ tls: undefined })).toBeNull();
-  });
-
-  it("validateTlsAssets reports missing cert file", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tls-test-"));
-    dirs.push(dir);
-    const result = validateTlsAssets({
-      tls: { certPath: path.join(dir, "nope.pem"), keyPath: path.join(dir, "nope-key.pem") },
-    });
-    expect(result?.ok).toBe(false);
-    if (result?.ok === false) expect(result.reason).toMatch(/cert not found/);
-  });
-
-  it("validateTlsAssets reports an empty (0-byte) cert file", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tls-test-"));
-    dirs.push(dir);
-    const certPath = path.join(dir, "cert.pem");
-    const keyPath = path.join(dir, "key.pem");
-    fs.writeFileSync(certPath, "");
-    fs.writeFileSync(keyPath, "key-contents\n");
-    const result = validateTlsAssets({ tls: { certPath, keyPath } });
-    expect(result?.ok).toBe(false);
-    if (result?.ok === false) expect(result.reason).toMatch(/empty/i);
-  });
-
-  it("validateTlsAssets accepts a valid, non-expired self-signed cert pair", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tls-test-"));
-    dirs.push(dir);
-    const { certPath, keyPath } = generateSelfSignedCert({ outDir: dir, daysValid: 30 });
-    const result = validateTlsAssets({ tls: { certPath, keyPath } });
-    expect(result?.ok).toBe(true);
-  });
-
-  it("validateTlsAssets reports an unparseable cert", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tls-test-"));
-    dirs.push(dir);
-    const certPath = path.join(dir, "garbage-cert.pem");
-    const keyPath = path.join(dir, "garbage-key.pem");
-    fs.writeFileSync(certPath, "this is not a PEM file");
-    fs.writeFileSync(keyPath, "this is not a key");
-    const result = validateTlsAssets({ tls: { certPath, keyPath } });
-    expect(result?.ok).toBe(false);
-  });
-
-  it("default fixture asserts tls === undefined on a fresh-config parse (regression guard)", () => {
-    const parsed = CitadelConfigSchema.parse({ dataDir: "/tmp/x", databasePath: "/tmp/x/db" });
-    expect(parsed.tls).toBeUndefined();
   });
 });

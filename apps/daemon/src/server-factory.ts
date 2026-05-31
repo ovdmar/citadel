@@ -8,7 +8,7 @@ import type express from "express";
 // Build the HTTP or HTTPS server that the daemon listens on. Switches on
 // the presence of config.tls — when set, returns an https.Server with the
 // cert/key loaded from disk. WebSockets attach identically to either kind
-// of server, so ttyd proxy + diagnostic terminal gateway work unchanged.
+// of server, so the terminal WebSocket gateway works unchanged.
 //
 // validateTlsAssets() runs first: refuses to boot on missing/empty/expired
 // cert. The zod schema only checks path shape (pure refines); this is the

@@ -120,7 +120,7 @@
   gap: 2px;
 }
 
-.nav-section button {
+.nav-section-icons > button {
   display: inline-grid;
   place-items: center;
   width: 22px;
@@ -132,7 +132,7 @@
   cursor: pointer;
 }
 
-.nav-section button:hover {
+.nav-section-icons > button:hover {
   background: var(--c-line-1);
   color: var(--c-fg-1);
 }
@@ -731,4 +731,13 @@
   border-radius: 999px;
   background: color-mix(in srgb, var(--color-action) 14%, transparent);
   color: var(--color-action);
+}
+
+/* On a deliberately-dark surface (e.g. the active workspace card under a
+ * light cockpit), --color-action resolves to the same dark navy as the
+ * card background, making the chip text invisible. Flip the chip to a
+ * light fill on dark contexts regardless of cockpit theme. */
+[data-cit-on-dark="true"] .workspace-card-issue {
+  background: color-mix(in srgb, var(--c-on-dark) 14%, transparent);
+  color: var(--c-on-dark);
 }

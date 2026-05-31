@@ -1,30 +1,31 @@
 import type { CitadelConfig } from "@citadel/config";
 import type { SqliteStore } from "@citadel/db";
 import type { DiagnosticsLogger } from "@citadel/operations";
-import type { TtydManager } from "@citadel/terminal";
 import type express from "express";
 import { buildDiagnosticsSnapshot, streamDiagnosticsBundle } from "./diagnostics-bundle.js";
+import type { UiActivityTracker } from "./ui-activity.js";
 
 export function registerDiagnosticsRoutes(input: {
   app: express.Express;
   store: SqliteStore;
-  ttyd: TtydManager;
   diagnostics: DiagnosticsLogger;
   config: CitadelConfig;
+  uiActivity?: UiActivityTracker;
 }) {
-  const { app, store, ttyd, diagnostics, config } = input;
-
+  const { app, store, diagnostics, config, uiActivity } = input;
   app.get("/api/diagnostics/snapshot", (_req, res) => {
-    res.json(buildDiagnosticsSnapshot({ store, ttyd, diagnostics, config }));
+    res.json(buildDiagnosticsSnapshot({ store, diagnostics, config }));
   });
 
   app.post("/api/diagnostics/client-event", (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
+    uiActivity?.recordClientEvent(body);
     diagnostics.log("ui-client", clippedString(body.event, "unknown", 80), {
       pageId: clippedString(body.pageId, "", 80),
       path: clippedString(body.path, "", 240),
       href: clippedString(body.href, "", 360),
       visibility: clippedString(body.visibility, "unknown", 40),
+      focused: typeof body.focused === "boolean" ? body.focused : null,
       navigationType: clippedString(body.navigationType, "", 40),
       ageMs: finiteNumber(body.ageMs),
       persisted: typeof body.persisted === "boolean" ? body.persisted : null,
@@ -38,7 +39,7 @@ export function registerDiagnosticsRoutes(input: {
 
   app.get("/api/diagnostics/bundle.tar.gz", async (_req, res) => {
     try {
-      await streamDiagnosticsBundle(res, { store, ttyd, diagnostics, config });
+      await streamDiagnosticsBundle(res, { store, diagnostics, config });
     } catch (error) {
       if (!res.headersSent) {
         res.status(500).json({ error: error instanceof Error ? error.message : "diagnostics_bundle_failed" });

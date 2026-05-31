@@ -48,11 +48,24 @@ const SHELL_BINARIES = new Set(["bash", "sh", "zsh", "fish", "dash"]);
 const RUNNING_TO_IDLE_DEBOUNCE_TICKS = 2;
 const CODEX_OPTIMISTIC_SEND_IDLE_SUPPRESS_MS = 10_000;
 const CODEX_REASON_STABLE_TIMEOUT = "pane:codex:stable_timeout";
+const CODEX_POST_TURN_CAPTURE_MAX_AGE_MS = 1_000;
+const CODEX_RUNNING_CAPTURE_MAX_AGE_MS = 10_000;
+const CODEX_FRESH_CAPTURE_STATUSES = new Set<AgentSession["status"]>([
+  "idle",
+  "waiting_for_input",
+  "rate_limited",
+  "usage_limited",
+]);
 // At 2s/tick this gives ~6 seconds of "every probe is missing" before we
 // concede the session is gone. Anything below that is dominated by transient
 // tmux load — the journal already shows `[status-monitor] panes failed`
 // surfacing under sustained list-panes pressure.
 const TMUX_MISSING_DEBOUNCE_TICKS = 3;
+
+export interface PaneCaptureOptions {
+  maxAgeMs?: number;
+  force?: boolean;
+}
 
 // Dependencies the tick needs. All I/O is dependency-injected so the tick
 // can be tested without real tmux/fs/store. The real daemon wires real
@@ -65,7 +78,7 @@ export interface MonitorTickDeps {
   deleteSession: (sessionId: string) => void;
   emit: (event: string, payload: unknown) => void;
   tmuxActivities: () => Map<string, number>;
-  paneCapture: (tmuxSessionName: string) => string;
+  paneCapture: (tmuxSessionName: string, options?: PaneCaptureOptions) => string | Promise<string>;
   // Shell-first lifecycle hook: foreground command of the pane (the
   // runtime binary when the agent is running, a shell when it isn't, null
   // when tmux is unreachable). Replaces the legacy `readSentinels` —
@@ -146,6 +159,12 @@ function shouldSuppressCodexOptimisticIdle(
   const lastStatusMs = session.lastStatusAt ? new Date(session.lastStatusAt).valueOf() : Number.NaN;
   if (!Number.isFinite(lastStatusMs)) return false;
   return nowMs - lastStatusMs <= CODEX_OPTIMISTIC_SEND_IDLE_SUPPRESS_MS;
+}
+
+function paneCaptureOptionsForSession(session: AgentSession): PaneCaptureOptions | undefined {
+  if (session.runtimeId !== "codex") return undefined;
+  if (CODEX_FRESH_CAPTURE_STATUSES.has(session.status)) return { maxAgeMs: CODEX_POST_TURN_CAPTURE_MAX_AGE_MS };
+  return { maxAgeMs: CODEX_RUNNING_CAPTURE_MAX_AGE_MS };
 }
 
 // Walks non-terminal sessions and applies one round of status detection.
@@ -283,14 +302,17 @@ export async function runStatusMonitorTick(
     }
     let paneCaptureForObservation: string | null = null;
     let activeElapsedTimer: ActiveElapsedTimerProbe | null = null;
-    const capturePaneForObservation = () => {
+    const paneCaptureOptions = paneCaptureOptionsForSession(session);
+    const capturePaneForObservation = async () => {
       if (paneCaptureForObservation === null) {
-        paneCaptureForObservation = session.tmuxSessionName ? deps.paneCapture(session.tmuxSessionName) : "";
+        paneCaptureForObservation = session.tmuxSessionName
+          ? await deps.paneCapture(session.tmuxSessionName, paneCaptureOptions)
+          : "";
       }
       return paneCaptureForObservation;
     };
     if (tmuxAlive && pane && session.runtimeId !== "shell") {
-      activeElapsedTimer = observeActiveElapsedTimer(adapterState, capturePaneForObservation());
+      activeElapsedTimer = observeActiveElapsedTimer(adapterState, await capturePaneForObservation());
     }
 
     // First-pass lifecycle signals (deterministic). At most one applies.
@@ -367,7 +389,7 @@ export async function runStatusMonitorTick(
     if (liveBranch && tmuxAlive) {
       const observation = adapter.observe(
         adapterState,
-        buildContext(deps, session, monitorState, opts, activityChanged, paneCaptureForObservation, activeElapsedTimer),
+        buildContext(deps, monitorState, opts, activityChanged, await capturePaneForObservation(), activeElapsedTimer),
       );
       monitorState.hasObservedSinceBoot = true;
       if (observation !== null) {
@@ -449,15 +471,14 @@ export async function runStatusMonitorTick(
 
 function buildContext(
   deps: MonitorTickDeps,
-  session: AgentSession,
   monitorState: MonitorSessionState,
   opts: MonitorTickOptions,
   activityChanged: boolean,
-  paneCapture: string | null,
+  paneCapture: string,
   activeElapsedTimer: ActiveElapsedTimerProbe | null,
 ): ObservationContext {
   return {
-    paneCapture: paneCapture ?? (session.tmuxSessionName ? deps.paneCapture(session.tmuxSessionName) : ""),
+    paneCapture,
     tmuxActivityChangedSinceLastTick: activityChanged,
     ticksSinceActivityChange: monitorState.ticksSinceActivityChange,
     source: opts.source,

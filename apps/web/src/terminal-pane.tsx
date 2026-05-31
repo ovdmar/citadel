@@ -1,60 +1,61 @@
 import type { WorkspaceSession } from "@citadel/contracts";
+import { FitAddon } from "@xterm/addon-fit";
+import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, api } from "./api.js";
 import { Button } from "./components/ui/button.js";
+import { matchShortcut } from "./shortcuts.js";
+import { postTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
+import { readOverlayCount } from "./use-overlay-present.js";
 import { useResolvedTheme } from "./use-resolved-theme.js";
 
-type EnsureResponse = {
-  terminal: {
-    key: string;
-    url: string;
-    basePath: string;
-    port: number;
-    tmuxSession: string;
-    worktreePath: string | null;
-    startedAt: string;
-  };
-};
-
-type EnsureError = {
+type TerminalError = {
   code: string;
   detail: string;
 };
 
 const RUNBOOK_URL = "/docs/operations/terminal-runbook";
-const TERMINAL_CLIENT_VERSION = "shortcut-bridge-v2";
+const XTERM_FONT = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+const SHIFT_ENTER_INPUT = "\n";
+const LINE_START_KEY = "C-a";
+const LINE_END_KEY = "C-e";
+const LINE_KILL_KEY = "C-u";
+const TERMINAL_SCROLLBACK_LINES = 20_000;
+const TERMINAL_WHEEL_PIXELS_PER_LINE = 16;
+const TERMINAL_AUTO_RETRY_LIMIT = 3;
+const TERMINAL_AUTO_RETRY_BACKOFF_MS = 5_000;
+const AUTO_RETRYABLE_TERMINAL_ERRORS = new Set(["terminal_disconnected", "terminal_socket_error"]);
+type TerminalPaneKey = typeof LINE_START_KEY | typeof LINE_END_KEY | typeof LINE_KILL_KEY;
+
+export type TerminalSocketMessage = {
+  type?: string;
+  data?: string;
+  key?: TerminalPaneKey;
+  lines?: number;
+};
 
 /**
- * Per-session handle used by Stage tabs to drive a live terminal (reload the
- * ttyd frame, open it in a standalone tab). The in-pane status bar was
- * removed; these affordances live on the tab now and need access to state
- * owned by TerminalPane, so we publish a tiny registry on the window.
+ * Per-session handle used by Stage tabs to drive a live terminal WebSocket.
+ * The in-pane status bar was removed; these affordances live on the tab now
+ * and need access to state owned by TerminalPane, so we publish a tiny
+ * registry on the window.
  *
  * Keyed by session id. TerminalPane registers on mount and clears on unmount.
  */
 export type TerminalHandle = {
-  url: string | null;
   reload: () => void;
-  // Focus the iframe element programmatically. The ttyd payload is
-  // cross-origin (separate port) so this only focuses the iframe itself —
-  // xterm keyboard capture still requires one click inside the terminal
-  // area. See spec B.2 §Center Stage Sessions / select-focuses-terminal.
+  // Historical name kept for Stage callers; now focuses the in-process xterm.
   focusIframe: () => void;
   recoverIfDisconnected: () => boolean;
 };
 
 const REGISTRY = new Map<string, TerminalHandle>();
-const FRAME_WINDOWS = new Map<string, Window>();
 const LISTENERS = new Set<(id: string) => void>();
 
-function publish(id: string, handle: TerminalHandle | null, frameWindow: Window | null = null) {
+function publish(id: string, handle: TerminalHandle | null) {
   if (handle) {
     REGISTRY.set(id, handle);
-    if (frameWindow) FRAME_WINDOWS.set(id, frameWindow);
-    else FRAME_WINDOWS.delete(id);
   } else {
     REGISTRY.delete(id);
-    FRAME_WINDOWS.delete(id);
   }
   for (const listener of LISTENERS) listener(id);
 }
@@ -69,25 +70,17 @@ export function subscribeTerminalHandle(listener: (sessionId: string) => void): 
 }
 
 export function isRegisteredTerminalMessageSource(
-  source: MessageEventSource | null,
+  _source: MessageEventSource | null,
   sessionId: string | null | undefined,
 ): boolean {
-  if (source) {
-    for (const frameWindow of FRAME_WINDOWS.values()) {
-      if (source === frameWindow) return true;
-    }
-  }
   return Boolean(sessionId && REGISTRY.has(sessionId));
 }
 
-// Focus the iframe of an active session. No-op when:
+// Focus the terminal of an active session. No-op when:
 //   - sessionId is null/undefined (workspace has no active session)
 //   - no handle is registered (session not yet mounted)
 //   - document.activeElement is a text input or contenteditable (don't steal
 //     focus while the user is typing — e.g. inline workspace-title rename).
-// The cross-origin ttyd iframe may not always allow the parent to drive xterm
-// keyboard focus, but focusing both the frame element and WindowProxy gives
-// Chrome/ttyd the best chance of making workspace selection ready for typing.
 export function focusActiveTerminal(sessionId: string | null | undefined): void {
   if (!sessionId) return;
   const handle = REGISTRY.get(sessionId);
@@ -98,167 +91,274 @@ export function focusActiveTerminal(sessionId: string | null | undefined): void 
   handle.focusIframe();
 }
 
-export function TerminalPane(props: { session: WorkspaceSession }) {
+export function TerminalPane(props: { session: WorkspaceSession; active?: boolean }) {
   const sessionId = props.session.id;
+  const active = props.active ?? true;
   const theme = useResolvedTheme();
-  // Capture the theme in a ref so ensure() reads the current value without
-  // re-creating its identity on every theme change. We deliberately do not
-  // auto-respawn on theme change — ttyd bakes its palette at spawn time, so
-  // active sessions pick up a new palette only through the explicit reload
-  // affordance.
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const terminalRef = useRef<Terminal | null>(null);
+  const fitRef = useRef<FitAddon | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
   const themeRef = useRef(theme);
+  const encoderRef = useRef(new TextEncoder());
+  const decoderRef = useRef(new TextDecoder());
+  const autoRetryAttemptsRef = useRef(0);
+  const autoRetryTimerRef = useRef<number | null>(null);
   themeRef.current = theme;
-  const [url, setUrl] = useState<string | null>(null);
-  const [error, setError] = useState<EnsureError | null>(null);
-  const [pending, setPending] = useState(true);
-  const [iframeKey, setIframeKey] = useState(0);
-  const requestSeqRef = useRef(0);
-  const iframeRef = useRef<HTMLIFrameElement | null>(null);
-  const httpErrorRecoveryRef = useRef(false);
+  const [connectionState, setConnectionState] = useState<"connecting" | "attached" | "disconnected">("connecting");
+  const [error, setError] = useState<TerminalError | null>(null);
+  const [generation, setGeneration] = useState(0);
 
-  const ensure = useCallback(
-    async (options: { bumpFrame?: boolean; force?: boolean } = {}) => {
-      const seq = ++requestSeqRef.current;
-      setPending(true);
-      setError(null);
-      try {
-        const params = new URLSearchParams({ theme: themeRef.current });
-        if (options.force) params.set("force", "true");
-        const response = await api<EnsureResponse>(
-          `/api/workspace-sessions/${sessionId}/terminal?${params.toString()}`,
-          {
-            method: "POST",
-          },
-        );
-        if (requestSeqRef.current !== seq) return;
-        setUrl(response.terminal.url);
-        setError(null);
-        httpErrorRecoveryRef.current = false;
-        if (options.bumpFrame) setIframeKey((value) => value + 1);
-      } catch (raw) {
-        if (requestSeqRef.current !== seq) return;
-        setUrl(null);
-        setError(parseEnsureError(raw instanceof Error ? raw : new Error(String(raw))));
-      } finally {
-        if (requestSeqRef.current === seq) setPending(false);
-      }
-    },
-    [sessionId],
-  );
-
-  // Some classes of failure (tmux session vanished after daemon restart,
-  // ttyd reaped by an orphan-killer) are transient: a single retry usually
-  // reattaches. Auto-retry once with a short backoff so the user does not see
-  // a flash of "Terminal unavailable" before manual reload.
-  const retryOnceRef = useRef(false);
-  useEffect(() => {
-    if (!error) {
-      retryOnceRef.current = false;
-      return;
-    }
-    if (retryOnceRef.current) return;
-    if (!["tmux_session_missing", "terminal_unavailable", "spawn_failed", "ttyd_start_timeout"].includes(error.code))
-      return;
-    retryOnceRef.current = true;
-    const timer = window.setTimeout(() => {
-      void ensure({ bumpFrame: true });
-    }, 600);
-    return () => window.clearTimeout(timer);
-  }, [error, ensure]);
-
-  useEffect(() => {
-    setUrl(null);
-    setError(null);
-    setIframeKey(0);
-    void ensure();
-  }, [ensure]);
-
-  const retry = useCallback(() => {
-    void ensure();
-  }, [ensure]);
-
-  // Reload re-runs ensure() with force=true so the daemon respawns ttyd. It
-  // also self-heals stale entries from daemon restarts / orphan kills.
-  // Bumping the iframe key forces React to remount even if the URL is the
-  // same — the underlying ttyd process is new, so reconnecting is required.
-  const reload = useCallback(() => {
-    void ensure({ bumpFrame: true, force: true });
-  }, [ensure]);
-
-  // Focus the iframe element first, then ask the nested browsing context to
-  // focus itself. The try/catch keeps cross-origin focus restrictions from
-  // breaking workspace selection; preventScroll keeps the cockpit layout
-  // stable when selecting a workspace far down the nav.
-  const focusIframe = useCallback(() => {
-    const iframe = iframeRef.current;
-    if (!iframe) return;
-    iframe.focus({ preventScroll: true });
-    try {
-      iframe.contentWindow?.focus();
-    } catch {
-      // Cross-origin focus restrictions are browser-dependent.
+  const clearAutoRetryTimer = useCallback(() => {
+    if (autoRetryTimerRef.current !== null) {
+      window.clearTimeout(autoRetryTimerRef.current);
+      autoRetryTimerRef.current = null;
     }
   }, []);
 
-  const recoverIfTerminalHttpError = useCallback(() => {
-    if (!isTtydHttpErrorPageVisible(iframeRef.current)) {
-      httpErrorRecoveryRef.current = false;
-      return false;
-    }
-    if (httpErrorRecoveryRef.current) return true;
-    httpErrorRecoveryRef.current = true;
-    recordTerminalClientEvent(sessionId, "iframe.http-error");
-    void ensure({ bumpFrame: true, force: true });
-    return true;
-  }, [ensure, sessionId]);
+  const reconnect = useCallback(() => {
+    setGeneration((value) => value + 1);
+  }, []);
+
+  const reload = useCallback(() => {
+    autoRetryAttemptsRef.current = 0;
+    clearAutoRetryTimer();
+    reconnect();
+  }, [clearAutoRetryTimer, reconnect]);
+
+  const scheduleAutoRetry = useCallback(
+    (code: string) => {
+      if (!AUTO_RETRYABLE_TERMINAL_ERRORS.has(code)) return;
+      if (autoRetryTimerRef.current !== null) return;
+      if (autoRetryAttemptsRef.current >= TERMINAL_AUTO_RETRY_LIMIT) return;
+      autoRetryAttemptsRef.current += 1;
+      const attempt = autoRetryAttemptsRef.current;
+      autoRetryTimerRef.current = window.setTimeout(() => {
+        autoRetryTimerRef.current = null;
+        recordTerminalClientEvent(sessionId, "websocket.auto_retry", { attempt });
+        reconnect();
+      }, TERMINAL_AUTO_RETRY_BACKOFF_MS);
+    },
+    [reconnect, sessionId],
+  );
+
+  const focusIframe = useCallback(() => {
+    terminalRef.current?.focus();
+    recordTerminalClientEvent(sessionId, "terminal.focus");
+  }, [sessionId]);
 
   const recoverIfDisconnected = useCallback(() => {
-    if (!isTtydReconnectPromptVisible(iframeRef.current)) return false;
+    if (!error || !["terminal_disconnected", "terminal_closed", "terminal_socket_error"].includes(error.code)) {
+      return false;
+    }
     reload();
     return true;
-  }, [reload]);
+  }, [error, reload]);
+
+  useEffect(() => {
+    void sessionId;
+    autoRetryAttemptsRef.current = 0;
+    clearAutoRetryTimer();
+  }, [clearAutoRetryTimer, sessionId]);
+
+  useEffect(() => clearAutoRetryTimer, [clearAutoRetryTimer]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (terminal) terminal.options.theme = xtermTheme(theme);
+  }, [theme]);
+
+  useEffect(() => {
+    void generation;
+    if (!active) return;
+    const host = containerRef.current;
+    if (!host) return;
+    let disposed = false;
+    let resizeFrame: number | null = null;
+    let wheelRemainder = 0;
+    let lastSentResize: { cols: number; rows: number } | null = null;
+    const terminal = new Terminal({
+      allowTransparency: false,
+      convertEol: false,
+      cursorBlink: true,
+      fontFamily: XTERM_FONT,
+      fontSize: 13,
+      scrollback: TERMINAL_SCROLLBACK_LINES,
+      theme: xtermTheme(themeRef.current),
+    });
+    const fit = new FitAddon();
+    const ws = new WebSocket(terminalWebSocketUrl(sessionId));
+    ws.binaryType = "arraybuffer";
+    terminalRef.current = terminal;
+    fitRef.current = fit;
+    wsRef.current = ws;
+    terminal.loadAddon(fit);
+    terminal.open(host);
+    setConnectionState("connecting");
+    setError(null);
+    let latestSelectionText = "";
+    const updateSelectionSnapshot = () => {
+      latestSelectionText = terminal.hasSelection() ? terminal.getSelection() : "";
+    };
+
+    const runResize = () => {
+      if (disposed) return;
+      try {
+        fit.fit();
+      } catch {
+        return;
+      }
+      const cols = terminal.cols;
+      const rows = terminal.rows;
+      if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) return;
+      if (lastSentResize?.cols === cols && lastSentResize.rows === rows) return;
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "resize", cols, rows }));
+        lastSentResize = { cols, rows };
+      }
+    };
+
+    const scheduleResize = () => {
+      if (disposed || resizeFrame !== null) return;
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null;
+        runResize();
+      });
+    };
+
+    const resizeObserver =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(() => {
+            scheduleResize();
+          });
+    resizeObserver?.observe(host);
+    window.addEventListener("resize", scheduleResize);
+    const nativeKeyHandler = (event: KeyboardEvent) => {
+      if (!handleTerminalKeyEvent(event, terminal, sessionId, ws, host, latestSelectionText)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    };
+    const nativeCopyHandler = (event: ClipboardEvent) => {
+      copyTerminalSelection(event, terminal, host, latestSelectionText);
+    };
+    const nativeWheelHandler = (event: WheelEvent) => {
+      wheelRemainder = handleTerminalWheelEvent(event, terminal.rows, ws, wheelRemainder);
+    };
+    const selectionDisposable = terminal.onSelectionChange(updateSelectionSnapshot);
+    host.addEventListener("keydown", nativeKeyHandler, true);
+    host.addEventListener("wheel", nativeWheelHandler, { capture: true, passive: false });
+    document.addEventListener("copy", nativeCopyHandler, true);
+    terminal.attachCustomKeyEventHandler((event) =>
+      handleTerminalKeyEvent(event, terminal, sessionId, ws, host, latestSelectionText),
+    );
+    const inputDisposable = terminal.onData((data) => {
+      if (data.includes("\u0003")) recordTerminalUserAction(sessionId, "ctrl_c");
+      if (ws.readyState === WebSocket.OPEN) ws.send(encoderRef.current.encode(data));
+    });
+
+    ws.addEventListener("open", () => {
+      if (disposed) return;
+      autoRetryAttemptsRef.current = 0;
+      clearAutoRetryTimer();
+      recordTerminalClientEvent(sessionId, "websocket.open");
+      setConnectionState("attached");
+      scheduleResize();
+    });
+    ws.addEventListener("message", (event) => {
+      if (disposed) return;
+      if (typeof event.data !== "string") {
+        void writeTerminalBinary(event.data, terminal, decoderRef.current);
+        return;
+      }
+      const message = parseTerminalSocketMessage(event.data);
+      if (!message) {
+        terminal.write(event.data);
+        return;
+      }
+      if (message.type === "error") {
+        setConnectionState("disconnected");
+        setError({ code: message.data || "terminal_unavailable", detail: message.data ?? "" });
+      } else if (message.type === "exit") {
+        setConnectionState("disconnected");
+        setError({ code: "terminal_closed", detail: message.data ?? "Terminal bridge closed." });
+      }
+    });
+    ws.addEventListener("close", (event) => {
+      if (disposed) return;
+      recordTerminalClientEvent(sessionId, "websocket.close", { code: event.code, reason: event.reason });
+      const nextError = {
+        code: "terminal_disconnected",
+        detail: event.reason || `Terminal WebSocket closed with code ${event.code}.`,
+      };
+      setConnectionState("disconnected");
+      setError(nextError);
+      scheduleAutoRetry(nextError.code);
+    });
+    ws.addEventListener("error", () => {
+      if (disposed) return;
+      recordTerminalClientEvent(sessionId, "websocket.error");
+      const nextError = { code: "terminal_socket_error", detail: "Terminal WebSocket failed." };
+      setConnectionState("disconnected");
+      setError(nextError);
+      scheduleAutoRetry(nextError.code);
+    });
+    window.setTimeout(scheduleResize, 0);
+    return () => {
+      disposed = true;
+      if (resizeFrame !== null) {
+        window.cancelAnimationFrame(resizeFrame);
+        resizeFrame = null;
+      }
+      inputDisposable.dispose();
+      selectionDisposable.dispose();
+      resizeObserver?.disconnect();
+      host.removeEventListener("keydown", nativeKeyHandler, true);
+      host.removeEventListener("wheel", nativeWheelHandler, { capture: true });
+      document.removeEventListener("copy", nativeCopyHandler, true);
+      window.removeEventListener("resize", scheduleResize);
+      ws.close();
+      terminal.dispose();
+      if (terminalRef.current === terminal) terminalRef.current = null;
+      if (fitRef.current === fit) fitRef.current = null;
+      if (wsRef.current === ws) wsRef.current = null;
+    };
+  }, [sessionId, generation, active, clearAutoRetryTimer, scheduleAutoRetry]);
 
   // Publish the live URL + reload/focus/recover callbacks so nav selection and
   // tab actions can drive state owned by TerminalPane.
   // The status bar used to render these affordances inside the pane; that was
   // removed in favour of the tab actions, but the state still lives here.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: iframeKey remounts the iframe, which changes contentWindow even when URL/callbacks are stable.
   useEffect(() => {
-    publish(sessionId, { url, reload, focusIframe, recoverIfDisconnected }, iframeRef.current?.contentWindow ?? null);
+    publish(sessionId, { reload, focusIframe, recoverIfDisconnected });
     return () => publish(sessionId, null);
-  }, [sessionId, url, reload, focusIframe, recoverIfDisconnected, iframeKey]);
+  }, [sessionId, reload, focusIframe, recoverIfDisconnected]);
   return (
     <div className="terminal-shell">
-      <div className="terminal-surface terminal-surface-iframe">
-        {url ? (
-          <iframe
-            ref={iframeRef}
-            key={`${sessionId}-${iframeKey}`}
-            className="terminal-iframe"
-            src={terminalIframeSrc(url)}
-            title={`Terminal ${props.session.displayName}`}
-            allow="clipboard-read; clipboard-write"
-            // tabIndex makes the iframe a programmatic-focus target without
-            // adding it to the natural tab order.
-            tabIndex={-1}
-            onLoad={recoverIfTerminalHttpError}
-          />
-        ) : error ? (
-          <TerminalErrorState error={error} onRetry={retry} retrying={pending} />
-        ) : (
-          <div className="terminal-pending">Starting ttyd…</div>
-        )}
+      <div className="terminal-surface">
+        <div
+          ref={containerRef}
+          className={`terminal-xterm-host ${error ? "terminal-xterm-obscured" : ""}`}
+          aria-label={`Terminal ${props.session.displayName}`}
+        />
+        {!error && connectionState === "connecting" ? (
+          <div className="terminal-pending">Connecting terminal…</div>
+        ) : null}
+        {error ? (
+          <TerminalErrorState error={error} onRetry={reload} retrying={connectionState === "connecting"} />
+        ) : null}
       </div>
     </div>
   );
 }
 
-export function terminalIframeSrc(url: string): string {
-  const separator = url.includes("?") ? "&" : "?";
-  return `${url}${separator}citadelClient=${encodeURIComponent(TERMINAL_CLIENT_VERSION)}`;
+export function terminalWebSocketUrl(sessionId: string, location: Location = window.location): string {
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${location.host}/terminal/${encodeURIComponent(sessionId)}`;
 }
 
-function TerminalErrorState(props: { error: EnsureError; onRetry: () => void; retrying: boolean }) {
+function TerminalErrorState(props: { error: TerminalError; onRetry: () => void; retrying: boolean }) {
   const { code, detail } = props.error;
   const guidance = guidanceFor(code);
   return (
@@ -282,95 +382,274 @@ function TerminalErrorState(props: { error: EnsureError; onRetry: () => void; re
   );
 }
 
-function parseEnsureError(error: Error): EnsureError {
-  if (error instanceof ApiError) {
-    return { code: error.message || "terminal_unavailable", detail: error.detail ?? "" };
-  }
-  return { code: "terminal_unavailable", detail: error.message ?? "" };
-}
-
 function guidanceFor(code: string) {
   switch (code) {
-    case "ttyd_missing":
-      return "ttyd binary not found. Install ttyd or set TTYD_BIN to its absolute path in Citadel settings, then retry.";
-    case "no_free_port":
-      return "Citadel could not allocate a port in the ttyd range. Stop unused terminals or widen CITADEL_TTYD_PORT_BASE..MAX.";
-    case "ttyd_start_timeout":
-      return "ttyd was spawned but never began listening. Check daemon logs and that the terminal or agent command exits cleanly.";
+    case "terminal_disconnected":
+    case "terminal_socket_error":
+      return "The terminal WebSocket disconnected. Retry reconnects to the same tmux session.";
+    case "terminal_closed":
+      return "The terminal bridge closed. Retry reconnects if the underlying tmux session is still present.";
     case "tmux_session_missing":
       return "The tmux session this terminal would attach to no longer exists. Restart the agent session or reconcile.";
     case "session_not_found":
       return "This Citadel session is not registered. Refresh or recreate it from the cockpit.";
     case "spawn_failed":
-      return "ttyd failed to spawn. Verify TTYD_BIN, file permissions, and terminal command configuration.";
+      return "The terminal PTY failed to spawn. Verify tmux is installed and reachable from the daemon environment.";
     default:
       return "Open the terminal runbook below for diagnostic steps.";
   }
 }
 
-export function isTtydReconnectPromptVisible(iframe: HTMLIFrameElement | null): boolean {
-  try {
-    const doc = iframe?.contentDocument;
-    const view = iframe?.contentWindow;
-    if (!doc || !view) return false;
-
-    const ttydOverlayCandidates = Array.from(doc.querySelectorAll(".xterm > div"));
-    for (const element of ttydOverlayCandidates) {
-      if (isHiddenElement(element, view)) continue;
-      if (isReconnectPromptText(element.textContent ?? "")) return true;
+function handleTerminalKeyEvent(
+  event: KeyboardEvent,
+  terminal: Terminal,
+  sessionId: string,
+  ws: WebSocket,
+  host: HTMLElement,
+  selectionSnapshot = "",
+): boolean {
+  if (event.type !== "keydown" || event.isComposing) return true;
+  const key = event.key.toLowerCase();
+  const match = matchShortcut(event);
+  if (match) {
+    if (match.id === "close-overlay") {
+      if (readOverlayCount() > 0) postTerminalShortcutMessage(match.id, sessionId);
+      return true;
     }
-
-    for (const button of Array.from(doc.querySelectorAll("button"))) {
-      if (isHiddenElement(button, view)) continue;
-      if (/\breconnect\b/i.test(normalizeText(button.textContent ?? ""))) return true;
-    }
-  } catch {
+    postTerminalShortcutMessage(match.id, sessionId, match.index);
     return false;
   }
-  return false;
+  if (key === "s" && (event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey) {
+    postTerminalShortcutMessage("scratchpad-toggle", sessionId);
+    return false;
+  }
+  if (key === "n" && event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey) {
+    postTerminalShortcutMessage("new-workspace", sessionId);
+    return false;
+  }
+  if (key === "enter" && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
+    sendTerminalControl(ws, { type: "input", data: SHIFT_ENTER_INPUT });
+    return false;
+  }
+  if (isLineKillShortcut(key, event)) {
+    sendTerminalKey(ws, LINE_KILL_KEY);
+    return false;
+  }
+  if (event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (key === "arrowleft" && !event.shiftKey) {
+      sendTerminalKey(ws, LINE_START_KEY);
+      return false;
+    }
+    if (key === "arrowright" && !event.shiftKey) {
+      sendTerminalKey(ws, LINE_END_KEY);
+      return false;
+    }
+    if (key === "c" && !event.shiftKey) {
+      if (copyableTerminalSelectionText(terminal, host, selectionSnapshot)) return true;
+      sendTerminalInterrupt(ws, sessionId);
+      return false;
+    }
+    if (key === "v" && !event.shiftKey) {
+      void pasteClipboardIntoTerminal(ws);
+      return false;
+    }
+    if (key === "a" && !event.shiftKey) {
+      terminal.selectAll();
+      return false;
+    }
+  }
+  return true;
 }
 
-export function isTtydHttpErrorPageVisible(iframe: HTMLIFrameElement | null): boolean {
-  try {
-    const doc = iframe?.contentDocument;
-    if (!doc?.body) return false;
-    if (doc.querySelector(".xterm")) return false;
-    const text = normalizeText(doc.body.textContent ?? "").toLowerCase();
-    const title = normalizeText(doc.title).toLowerCase();
-    if (!text && !title) return false;
-    return (
-      text === "terminal_not_found" || text === "404 page not found" || text.startsWith("404") || title.includes("404")
-    );
-  } catch {
-    return false;
+function isLineKillShortcut(key: string, event: KeyboardEvent): boolean {
+  if (key !== "backspace" || event.shiftKey || event.altKey) return false;
+  if (event.metaKey && !event.ctrlKey) return true;
+  return event.ctrlKey && !event.metaKey && !isApplePlatform();
+}
+
+function handleTerminalWheelEvent(event: WheelEvent, terminalRows: number, ws: WebSocket, remainder: number): number {
+  const delta = wheelDeltaToLines(event, terminalRows, remainder);
+  if (!delta) return remainder;
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  if (delta.lines !== 0) sendTerminalControl(ws, { type: "scroll", lines: delta.lines });
+  return delta.remainder;
+}
+
+function wheelDeltaToLines(
+  event: WheelEvent,
+  terminalRows: number,
+  remainder: number,
+): { lines: number; remainder: number } | null {
+  if (!Number.isFinite(event.deltaY) || event.deltaY === 0) return null;
+  const rows = Number.isFinite(terminalRows) && terminalRows > 1 ? Math.trunc(terminalRows) : 24;
+  const lineDelta =
+    event.deltaMode === 1
+      ? event.deltaY
+      : event.deltaMode === 2
+        ? event.deltaY * Math.max(1, rows - 1)
+        : event.deltaY / TERMINAL_WHEEL_PIXELS_PER_LINE;
+  const total = remainder + lineDelta;
+  const lines = total < 0 ? Math.ceil(total) : Math.floor(total);
+  return { lines, remainder: total - lines };
+}
+
+function sendTerminalInput(ws: WebSocket, data: string): void {
+  if (ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
+}
+
+function sendTerminalKey(ws: WebSocket, key: TerminalPaneKey): void {
+  sendTerminalControl(ws, { type: "key", key });
+}
+
+function sendTerminalControl(ws: WebSocket, message: TerminalSocketMessage): void {
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+}
+
+function sendTerminalInterrupt(ws: WebSocket, sessionId: string): void {
+  recordTerminalUserAction(sessionId, "ctrl_c");
+  sendTerminalInput(ws, "\u0003");
+}
+
+async function writeTerminalBinary(data: unknown, terminal: Terminal, decoder: TextDecoder): Promise<void> {
+  if (data instanceof ArrayBuffer) {
+    terminal.write(decoder.decode(data));
+    return;
+  }
+  if (data instanceof Blob) {
+    terminal.write(decoder.decode(await data.arrayBuffer()));
   }
 }
 
-function isHiddenElement(element: Element, view: Window): boolean {
-  const style = view.getComputedStyle(element);
-  if (style.display === "none" || style.visibility === "hidden") return true;
-  const opacity = Number.parseFloat(style.opacity || "1");
-  return Number.isFinite(opacity) && opacity <= 0.05;
+function copyTerminalSelection(
+  event: ClipboardEvent,
+  terminal: Terminal,
+  host: HTMLElement,
+  selectionSnapshot: string,
+): void {
+  const selection = copyableTerminalSelectionText(terminal, host, selectionSnapshot);
+  if (!selection || !event.clipboardData) return;
+  event.clipboardData.setData("text/plain", selection);
+  event.preventDefault();
+  event.stopImmediatePropagation();
 }
 
-function isReconnectPromptText(value: string): boolean {
-  const text = normalizeText(value);
-  return /^press (?:⏎|enter|return) to reconnect$/i.test(text);
+function terminalSelectionText(terminal: Terminal, selectionSnapshot: string): string {
+  const selection = terminal.getSelection();
+  if (selection) return selection;
+  return terminal.hasSelection() ? selectionSnapshot : "";
 }
 
-function normalizeText(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+function copyableTerminalSelectionText(terminal: Terminal, host: HTMLElement, selectionSnapshot: string): string {
+  return terminalSelectionText(terminal, selectionSnapshot) || browserSelectionTextWithin(host);
 }
 
-function recordTerminalClientEvent(sessionId: string, event: string) {
-  fetch(`/api/workspace-sessions/${encodeURIComponent(sessionId)}/terminal-client-event`, {
+function browserSelectionTextWithin(host: HTMLElement): string {
+  const active = document.activeElement;
+  if (active instanceof HTMLTextAreaElement && host.contains(active)) {
+    return active.value.slice(active.selectionStart, active.selectionEnd);
+  }
+  if (active instanceof HTMLInputElement && host.contains(active)) {
+    return active.value.slice(active.selectionStart ?? 0, active.selectionEnd ?? 0);
+  }
+  const selection = document.getSelection();
+  if (!selection || selection.isCollapsed || !selection.anchorNode || !selection.focusNode) return "";
+  if (!host.contains(selection.anchorNode) || !host.contains(selection.focusNode)) return "";
+  return selection.toString();
+}
+
+async function pasteClipboardIntoTerminal(ws: WebSocket): Promise<void> {
+  const text = await navigator.clipboard?.readText().catch(() => "");
+  if (text) sendTerminalInput(ws, text);
+}
+
+function isApplePlatform(): boolean {
+  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+  return /Mac|iPhone|iPad|iPod/.test(nav.userAgentData?.platform || navigator.platform || "");
+}
+
+export function parseTerminalSocketMessage(raw: unknown): TerminalSocketMessage | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const parsed = JSON.parse(raw) as TerminalSocketMessage;
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function xtermTheme(theme: "light" | "dark") {
+  return theme === "light" ? LIGHT_XTERM_THEME : DARK_XTERM_THEME;
+}
+
+const LIGHT_XTERM_THEME = {
+  background: "#f5f1e8",
+  foreground: "#1a1814",
+  cursor: "#14171f",
+  cursorAccent: "#f5f1e8",
+  selectionBackground: "rgba(20, 23, 31, 0.18)",
+  black: "#1a1814",
+  red: "#9a1d12",
+  green: "#36680c",
+  yellow: "#825507",
+  blue: "#194d8e",
+  magenta: "#5f2a7a",
+  cyan: "#0a5d6e",
+  white: "#1a1814",
+  brightBlack: "#4a463e",
+  brightRed: "#b8281c",
+  brightGreen: "#4a8a14",
+  brightYellow: "#a06b0a",
+  brightBlue: "#2864ad",
+  brightMagenta: "#7d3a98",
+  brightCyan: "#0f7d92",
+  brightWhite: "#0c0a06",
+};
+
+const DARK_XTERM_THEME = {
+  background: "#1a1814",
+  foreground: "#e8e3d3",
+  cursor: "#f0ebdd",
+  cursorAccent: "#1a1814",
+  selectionBackground: "rgba(240, 235, 221, 0.18)",
+  black: "#1a1814",
+  red: "#ec7468",
+  green: "#a3d364",
+  yellow: "#e8b552",
+  blue: "#7eb5e4",
+  magenta: "#c896d4",
+  cyan: "#7dbedc",
+  white: "#e8e3d3",
+  brightBlack: "#948d7b",
+  brightRed: "#ff8d80",
+  brightGreen: "#bbe683",
+  brightYellow: "#f5c66a",
+  brightBlue: "#a2cef0",
+  brightMagenta: "#dcb1e4",
+  brightCyan: "#9ad0e8",
+  brightWhite: "#fffaef",
+};
+
+function recordTerminalClientEvent(sessionId: string, event: string, extra: Record<string, unknown> = {}) {
+  fetch(`/api/agent-sessions/${encodeURIComponent(sessionId)}/terminal-client-event`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       event,
+      ...extra,
       path: window.location.pathname,
       visibility: document.visibilityState,
     }),
+    keepalive: true,
+  }).catch(() => undefined);
+}
+
+function recordTerminalUserAction(sessionId: string, reason: string) {
+  fetch(`/api/agent-sessions/${encodeURIComponent(sessionId)}/user-action`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
     keepalive: true,
   }).catch(() => undefined);
 }

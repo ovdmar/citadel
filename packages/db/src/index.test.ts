@@ -7,7 +7,7 @@ import { SqliteStore } from "./index.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("SqliteStore", () => {
@@ -48,6 +48,8 @@ describe("SqliteStore", () => {
       { version: 11 },
       { version: 12 },
       { version: 13 },
+      { version: 14 },
+      { version: 15 },
     ]);
   });
 
@@ -250,6 +252,9 @@ describe("SqliteStore", () => {
         lifecycle: "ready",
         dirty: true,
       },
+    ]);
+    expect(store.query("SELECT kind, runtime_id FROM workspace_sessions WHERE id = 'sess_test'")).toEqual([
+      { kind: "agent", runtime_id: "claude-code" },
     ]);
     expect(store.listSessions("ws_test")).toMatchObject([{ id: "sess_test", transport: "connected" }]);
     store.insertWorkspaceSession({

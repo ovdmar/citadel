@@ -22,7 +22,7 @@
 [ ] 5. Agent runtime — a prompt-driven CLI agent integration such as Claude Code, Codex, Cursor Agent, Pi, or another configured adapter.
 [ ] 6. Terminal profile — the singular shell-backed terminal launcher used for plain terminal tabs and as the base shell for shell-first agent launch. It is not an agent runtime.
 [ ] 7. Provider — an integration that normalizes external system data into Citadel contracts.
-[ ] 8. Hook — a repo-scoped extension command that returns structured data or executes structured actions.
+[ ] 8. Hook — a repo-scoped extension command or agent prompt that returns structured data or executes structured actions.
 [ ] 9. Operation — a tracked long-running or side-effectful action with status, progress, logs, and activity.
 [ ] 10. Readiness — Citadel's operator-facing summary of what needs attention and why.
 [ ] 11. Link — a navigation target related to a repo, workspace, provider, application, issue, PR, or operation.

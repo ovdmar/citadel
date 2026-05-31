@@ -1,10 +1,12 @@
 import type { AgentRuntime, Namespace, Repo, Workspace } from "@citadel/contracts";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { Check, Search, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
+import { defaultAgentRuntimeId } from "./runtime-defaults.js";
 import { useToast } from "./toast.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 
 export type GroupKey = "repo" | "status" | "namespace" | "none";
 
@@ -77,211 +79,6 @@ export function GroupByMenu(props: GroupByMenuProps) {
         </button>
       ))}
     </div>
-  );
-}
-
-type AddRepoSearchHit = {
-  name: string;
-  url: string;
-  description?: string;
-  defaultBranch?: string;
-};
-
-type AddRepoModalProps = {
-  onClose: () => void;
-  workspaceRoot?: string;
-};
-
-export function AddRepoModal(props: AddRepoModalProps) {
-  const [mode, setMode] = useState<"path" | "url" | "search">("path");
-  const [path, setPath] = useState("");
-  const [url, setUrl] = useState("");
-  const [query, setQuery] = useState("");
-  const [name, setName] = useState("");
-  const [worktreeParent, setWorktreeParent] = useState("");
-  const [error, setError] = useState("");
-
-  const inspect = useMutation({
-    mutationFn: () =>
-      api<{ rootPath: string; isGit: boolean; suggestedWorktreeParent: string }>("/api/repos/inspect", {
-        method: "POST",
-        body: JSON.stringify({ rootPath: path }),
-      }),
-    onSuccess: (result) => {
-      if (result.isGit && !worktreeParent) setWorktreeParent(result.suggestedWorktreeParent);
-    },
-  });
-
-  const search = useQuery<{ results: AddRepoSearchHit[]; error?: string }>({
-    queryKey: ["gh-repo-search", query],
-    enabled: mode === "search" && query.trim().length >= 2,
-    queryFn: () =>
-      api<{ results: AddRepoSearchHit[]; error?: string }>(
-        `/api/integrations/github/search?q=${encodeURIComponent(query)}`,
-      ).catch((error_) => ({ results: [], error: error_ instanceof Error ? error_.message : "search_failed" })),
-  });
-
-  const register = useMutation({
-    mutationFn: () =>
-      api("/api/repos", {
-        method: "POST",
-        body: JSON.stringify({
-          rootPath: path,
-          name: name || undefined,
-          worktreeParent: worktreeParent || undefined,
-        }),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["state"] });
-      props.onClose();
-    },
-    onError: (err) => setError(err instanceof Error ? err.message : "register_failed"),
-  });
-
-  const clone = useMutation({
-    mutationFn: (target: { url: string; suggestedName?: string }) =>
-      api<{ rootPath: string; cloned: boolean; error?: string }>("/api/integrations/github/clone", {
-        method: "POST",
-        body: JSON.stringify({
-          url: target.url,
-          targetDir: props.workspaceRoot || undefined,
-        }),
-      }),
-    onSuccess: (result) => {
-      if (result.error) {
-        setError(result.error);
-        return;
-      }
-      setMode("path");
-      setPath(result.rootPath);
-      inspect.mutate();
-    },
-    onError: (err) => setError(err instanceof Error ? err.message : "clone_failed"),
-  });
-
-  return (
-    <Modal title="Add repository" onClose={props.onClose}>
-      <div className="tab-strip" role="tablist">
-        <button type="button" className={mode === "path" ? "active" : ""} onClick={() => setMode("path")}>
-          Local path
-        </button>
-        <button type="button" className={mode === "url" ? "active" : ""} onClick={() => setMode("url")}>
-          GitHub URL
-        </button>
-        <button type="button" className={mode === "search" ? "active" : ""} onClick={() => setMode("search")}>
-          GitHub search
-        </button>
-      </div>
-      <div className="modal-form">
-        {mode === "path" ? (
-          <>
-            <label>
-              Repository path
-              <input value={path} onChange={(event) => setPath(event.target.value)} placeholder="/home/me/project" />
-            </label>
-            <label>
-              Display name (optional)
-              <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Project" />
-            </label>
-            <label>
-              Worktree parent (optional)
-              <input
-                value={worktreeParent}
-                onChange={(event) => setWorktreeParent(event.target.value)}
-                placeholder={inspect.data?.suggestedWorktreeParent ?? "/path/to/worktree-parent"}
-              />
-            </label>
-          </>
-        ) : null}
-        {mode === "url" ? (
-          <>
-            <label>
-              GitHub URL
-              <input
-                value={url}
-                onChange={(event) => setUrl(event.target.value)}
-                placeholder="https://github.com/org/repo"
-              />
-            </label>
-            <p className="empty compact">
-              Citadel runs <code>gh repo clone</code> into{" "}
-              <code>{props.workspaceRoot || "~/Workspace"}/&lt;repo&gt;</code> when the repo is not local yet, then
-              registers the result here.
-            </p>
-            <div className="stack-form-actions">
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={!url || clone.isPending}
-                onClick={() => clone.mutate({ url })}
-              >
-                {clone.isPending ? "Cloning…" : "Clone & continue"}
-              </Button>
-            </div>
-          </>
-        ) : null}
-        {mode === "search" ? (
-          <>
-            <label>
-              Search GitHub
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="org/keyword" />
-            </label>
-            {search.data?.error ? <div className="empty compact">{search.data.error}</div> : null}
-            <div className="check-list">
-              {(search.data?.results ?? []).map((hit) => (
-                <button
-                  key={hit.url}
-                  type="button"
-                  className="check-row"
-                  onClick={() => clone.mutate({ url: hit.url })}
-                >
-                  <span>
-                    <strong>{hit.name}</strong>
-                    <span className="command-result-meta">{hit.description ?? hit.url}</span>
-                  </span>
-                  <span className="tone-pending">Clone</span>
-                </button>
-              ))}
-              {!search.data?.results?.length && query.length >= 2 && !search.isLoading ? (
-                <div className="empty compact">
-                  No results yet. Searching requires <code>gh</code> authentication.
-                </div>
-              ) : null}
-            </div>
-          </>
-        ) : null}
-        {error ? (
-          <div className="empty compact" style={{ color: "var(--color-danger)" }}>
-            {error}
-          </div>
-        ) : null}
-      </div>
-      {mode === "path" ? (
-        <div className="modal-footer">
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => inspect.mutate()}
-            disabled={!path || inspect.isPending}
-          >
-            Inspect
-          </Button>
-          <Button
-            type="button"
-            disabled={!path || !inspect.data?.isGit || register.isPending}
-            onClick={() => register.mutate()}
-          >
-            {register.isPending ? "Saving…" : "Register repo"}
-          </Button>
-        </div>
-      ) : (
-        <div className="modal-footer">
-          <Button type="button" variant="secondary" onClick={props.onClose}>
-            Close
-          </Button>
-        </div>
-      )}
-    </Modal>
   );
 }
 
@@ -358,6 +155,7 @@ function defaultNameForSubmit(linked: LinkedContext): string {
 }
 
 export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
+  useOverlayPresent();
   const toast = useToast();
   const initialRepo = props.repos.find((repo) => repo.id === props.lastRepoId)?.id ?? props.repos[0]?.id ?? "";
   const [repoId, setRepoId] = useState(initialRepo);
@@ -371,10 +169,7 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
     () => props.runtimes.filter((runtime) => runtime.health === "healthy"),
     [props.runtimes],
   );
-  const defaultRuntimeId = useMemo(() => {
-    if (launchableRuntimes.some((runtime) => runtime.id === "claude-code")) return "claude-code";
-    return launchableRuntimes[0]?.id ?? "";
-  }, [launchableRuntimes]);
+  const defaultRuntimeId = useMemo(() => defaultAgentRuntimeId(props.runtimes), [props.runtimes]);
   const [runtimeId, setRuntimeId] = useState(defaultRuntimeId);
   useEffect(() => {
     if (!runtimeId && defaultRuntimeId) setRuntimeId(defaultRuntimeId);

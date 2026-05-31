@@ -3,7 +3,7 @@ import type { RuntimeStatusAdapter } from "@citadel/runtimes";
 import { REASON_ELAPSED_TIMER } from "@citadel/runtimes";
 import { describe, expect, it, vi } from "vitest";
 import { reduceStatus } from "./agent-status.js";
-import { type MonitorTickDeps, runStatusMonitorTick } from "./status-monitor.js";
+import { type MonitorTickDeps, type PaneCaptureOptions, runStatusMonitorTick } from "./status-monitor.js";
 
 // Shell-first status monitor tests.
 //
@@ -62,7 +62,7 @@ interface DepsOver {
   runtimeBinaries?: Map<string, string>;
   recentUserAction?: Map<string, number>;
   tmuxActivities?: Map<string, number>;
-  paneCapture?: string | ((name: string) => string);
+  paneCapture?: string | ((name: string, options?: PaneCaptureOptions) => string | Promise<string>);
   adapter?: RuntimeStatusAdapter;
   recoverRuntimeSessionId?: MonitorTickDeps["recoverRuntimeSessionId"];
   setRuntimeSessionId?: MonitorTickDeps["setRuntimeSessionId"];
@@ -100,7 +100,8 @@ function makeDeps(over: DepsOver = {}) {
     deleteSession: (id) => deleted.push(id),
     emit: (event, payload) => emitted.push({ event, payload }),
     tmuxActivities: () => over.tmuxActivities ?? new Map(),
-    paneCapture: (name) => (typeof over.paneCapture === "function" ? over.paneCapture(name) : (over.paneCapture ?? "")),
+    paneCapture: (name, options) =>
+      typeof over.paneCapture === "function" ? over.paneCapture(name, options) : (over.paneCapture ?? ""),
     // CRITICAL: must use `has()` not `??` — the Map may explicitly store
     // `null` for tmux-missing test cases, and `??` would treat that as
     // "no override" and fall back to the agent-foreground default.
@@ -331,6 +332,59 @@ describe("shell-first per-runtime status derivation", () => {
     expect(updates).toHaveLength(1);
     expect(updates[0]?.update).toMatchObject({ status: "running", reason: REASON_ELAPSED_TIMER });
     expect(updates[0]?.update.status).not.toBe("idle");
+  });
+
+  it("awaits async pane capture before runtime adapter observation", async () => {
+    const adapter: RuntimeStatusAdapter = {
+      runtimeId: "claude-code",
+      createSessionState: () => ({ ticksObserved: 0, lastPaneHash: null }),
+      observe: vi.fn((_state, ctx) => (ctx.paneCapture.includes("async-ready") ? "waiting_for_input" : null)),
+    };
+    const { deps, updates } = makeDeps({
+      paneCapture: async () => "async-ready",
+      adapter,
+    });
+
+    await runStatusMonitorTick(deps, { source: "tick" });
+
+    expect(adapter.observe).toHaveBeenCalled();
+    expect(updates[0]?.update).toMatchObject({ status: "waiting_for_input" });
+  });
+});
+
+describe("pane capture freshness policy", () => {
+  it("asks for a very fresh Codex pane capture while the DB row is post-turn idle", async () => {
+    const captureOptions: PaneCaptureOptions[] = [];
+    const { deps } = makeDeps({
+      sessions: [makeSession({ runtimeId: "codex", status: "idle" })],
+      panePidProcess: new Map([["citadel_test_1", { command: "codex", pid: 100 }]]),
+      runtimeBinaries: new Map([["codex", "codex"]]),
+      paneCapture: (_name, options) => {
+        captureOptions.push(options ?? {});
+        return "idle pane";
+      },
+    });
+
+    await runStatusMonitorTick(deps, { source: "tick" });
+
+    expect(captureOptions[0]?.maxAgeMs).toBe(1000);
+  });
+
+  it("bounds Codex running-state capture staleness without forcing every global pane capture", async () => {
+    const captureOptions: PaneCaptureOptions[] = [];
+    const { deps } = makeDeps({
+      sessions: [makeSession({ runtimeId: "codex", status: "running" })],
+      panePidProcess: new Map([["citadel_test_1", { command: "codex", pid: 100 }]]),
+      runtimeBinaries: new Map([["codex", "codex"]]),
+      paneCapture: (_name, options) => {
+        captureOptions.push(options ?? {});
+        return "running pane";
+      },
+    });
+
+    await runStatusMonitorTick(deps, { source: "tick" });
+
+    expect(captureOptions[0]?.maxAgeMs).toBe(10_000);
   });
 });
 

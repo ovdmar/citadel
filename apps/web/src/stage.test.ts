@@ -1,3 +1,5 @@
+// @vitest-environment happy-dom
+
 import type { TerminalSession } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
 import { retainRecentTerminalIds, stableVisitedSessions, stableWorkspaceSessionIdsKey } from "./stage.js";

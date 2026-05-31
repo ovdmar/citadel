@@ -1,5 +1,4 @@
 import type { SqliteStore } from "@citadel/db";
-import type { TtydManager } from "@citadel/terminal";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { reapOrphans } from "./orphan-reaper.js";
 
@@ -23,12 +22,6 @@ function fakeStore(sessionNames: string[] = []): SqliteStore {
   } as unknown as SqliteStore;
 }
 
-function fakeTtyd(): TtydManager {
-  return {
-    list: () => [],
-  } as unknown as TtydManager;
-}
-
 describe("reapOrphans", () => {
   beforeEach(() => {
     terminalState.liveTmuxSessions.clear();
@@ -42,7 +35,6 @@ describe("reapOrphans", () => {
 
     const summary = await reapOrphans({
       store: fakeStore(),
-      ttyd: fakeTtyd(),
       diagnostics: {
         log: (category: string, event: string, data?: Record<string, unknown>) => {
           diagnostics.push(data === undefined ? { category, event } : { category, event, data });
@@ -66,7 +58,6 @@ describe("reapOrphans", () => {
 
     const summary = await reapOrphans({
       store: fakeStore(["citadel_referenced"]),
-      ttyd: fakeTtyd(),
       reapTmuxSessions: true,
     });
 

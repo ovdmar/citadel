@@ -21,6 +21,10 @@ export {
   extractCodexResumeSessionIdFromArgv,
 } from "./transcripts/index.js";
 export type { RuntimeUserPrompt, RuntimeTranscriptAdapter, GetUserPromptsInput } from "./transcripts/index.js";
+export {
+  codexSqliteHomeForWorkspace,
+  prepareCodexSqliteHomeForWorkspace,
+} from "./codex-sqlite-home.js";
 
 export {
   runtimeUsageFetchers,

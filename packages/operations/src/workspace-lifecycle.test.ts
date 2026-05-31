@@ -14,7 +14,7 @@ import { OperationService } from "./index.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("workspace lifecycle", () => {
@@ -115,6 +115,52 @@ describe("workspace lifecycle", () => {
     expect(result.removed).toBe(true);
     expect(result.dirty).toBe(false);
     expect(result.dirtySummary).toBeUndefined();
+  });
+
+  it("suffixes duplicate caller-provided workspace names instead of failing creation", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+
+    const first = await service.createWorkspace({ repoId: repo.id, name: "Duplicate Task", source: "scratch" });
+    const second = await service.createWorkspace({ repoId: repo.id, name: "Duplicate Task", source: "scratch" });
+    const firstWorkspace = store.listWorkspaces().find((w) => w.id === first.workspaceId);
+    const secondWorkspace = store.listWorkspaces().find((w) => w.id === second.workspaceId);
+
+    expect(firstWorkspace?.name).toBe("Duplicate Task");
+    expect(secondWorkspace?.name).toBe("Duplicate Task-2");
+    expect(secondWorkspace?.branch).toBe("duplicate-task-2");
+    expect(path.basename(secondWorkspace?.path ?? "")).toBe("duplicate-task-2");
+    expect(secondWorkspace?.lifecycle).toBe("ready");
+  });
+
+  it("suffixes recreated new-branch workspaces when the old branch still exists", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+
+    const first = await service.createWorkspace({ repoId: repo.id, name: "Reusable Branch", source: "scratch" });
+    const removed = await service.removeWorkspace({ workspaceId: first.workspaceId });
+    const second = await service.createWorkspace({ repoId: repo.id, name: "Reusable Branch", source: "scratch" });
+    const secondWorkspace = store.listWorkspaces().find((w) => w.id === second.workspaceId);
+
+    expect(removed.removed).toBe(true);
+    expect(secondWorkspace?.name).toBe("Reusable Branch-2");
+    expect(secondWorkspace?.branch).toBe("reusable-branch-2");
+    expect(path.basename(secondWorkspace?.path ?? "")).toBe("reusable-branch-2");
+    expect(secondWorkspace?.lifecycle).toBe("ready");
   });
 
   it("generates a funny-name when input.name is empty (no Jira key)", async () => {

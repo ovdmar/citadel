@@ -1,12 +1,16 @@
-import type { PullRequestSummary, Workspace, WorkspaceCockpitSummary } from "@citadel/contracts";
+import type {
+  PullRequestSummary,
+  Workspace,
+  WorkspaceCockpitSummary,
+  WorkspacesPrStateResponse,
+} from "@citadel/contracts";
 import type { WorkspaceCockpitSummaryBatchResponse } from "@citadel/contracts/pr-routes";
 import type { QueryClient } from "@tanstack/react-query";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 
 export { RuntimeLauncher, WorkspaceForm } from "./workspace-forms.js";
-export { TerminalPane } from "./terminal-pane.js";
 
 // Single-workspace summary. Freshness is driven by the 60s batch poll, focus,
 // and SSE invalidation; placeholderData keeps workspace switches instant.
@@ -81,11 +85,85 @@ export function useAllWorkspacesPrSummary(workspaces: Workspace[]) {
   });
 }
 
+// Navigator-wide PR/CI snapshot. Polled every 30s (lighter than the per-
+// workspace cockpit-summary cadence) — the background refresh job is the
+// freshness driver. Focus invalidation in useFocusRefresh also busts this
+// query so newly-focused windows see fresh data immediately.
+export function useWorkspacesPrState() {
+  return useQuery({
+    queryKey: ["workspaces-pr-state"],
+    refetchInterval: 30_000,
+    staleTime: 25_000,
+    queryFn: () => api<WorkspacesPrStateResponse>("/api/workspaces/pr-state"),
+  });
+}
+
 // Authoritative ok:false reasons mean "this workspace truly has no PR data
 // to cache" — clear the sticky entry. Any other reason (transient batch
 // failure, gh hiccup, network blip) is non-authoritative: leave the cached
 // entry untouched so the navbar keeps showing the last-known PR icon.
 const AUTHORITATIVE_EMPTY_REASONS = new Set(["no-remote", "root-workspace", "workspace_not_found"]);
+
+function isMergedState(state: string | null | undefined): boolean {
+  return state?.toLowerCase() === "merged";
+}
+
+export function markPullRequestMerged(pr: PullRequestSummary): PullRequestSummary {
+  return {
+    ...pr,
+    state: "MERGED",
+    mergeable: "unknown",
+    allowedMergeStrategies: [],
+    mergeStateStatus: null,
+  };
+}
+
+function summaryWithMergedPr(summary: WorkspaceCockpitSummary, prNumber: number): WorkspaceCockpitSummary {
+  const pr = summary.versionControl.pullRequest;
+  if (!pr || pr.number !== prNumber || isMergedState(pr.state)) return summary;
+  return {
+    ...summary,
+    versionControl: {
+      ...summary.versionControl,
+      pullRequest: markPullRequestMerged(pr),
+    },
+  };
+}
+
+function preserveMergedPrState(
+  previous: WorkspaceCockpitSummary | undefined,
+  next: WorkspaceCockpitSummary,
+): WorkspaceCockpitSummary {
+  const previousPr = previous?.versionControl.pullRequest;
+  const nextPr = next.versionControl.pullRequest;
+  if (!previousPr || !nextPr) return next;
+  if (previousPr.number !== nextPr.number) return next;
+  if (!isMergedState(previousPr.state) || isMergedState(nextPr.state)) return next;
+  return summaryWithMergedPr(next, nextPr.number);
+}
+
+export function markWorkspacePrMergedInQueryCache(
+  queryClient: Pick<QueryClient, "setQueryData">,
+  workspaceId: string,
+  prNumber: number,
+): void {
+  queryClient.setQueryData<WorkspaceCockpitSummary>(["workspace-cockpit", workspaceId], (previous) =>
+    previous ? summaryWithMergedPr(previous, prNumber) : previous,
+  );
+  queryClient.setQueryData<WorkspaceCockpitSummaryBatchResponse>(["workspaces-pr-batch"], (previous) => {
+    if (!previous) return previous;
+    let changed = false;
+    const summaries = previous.summaries.map((entry) => {
+      if (!entry.ok || entry.workspaceId !== workspaceId) return entry;
+      const summary = entry.summary as WorkspaceCockpitSummary;
+      const next = summaryWithMergedPr(summary, prNumber);
+      if (next === summary) return entry;
+      changed = true;
+      return { ...entry, summary: next };
+    });
+    return changed ? { ...previous, summaries } : previous;
+  });
+}
 
 // Apply a batch onto a sticky cache. Pulled out so the merge rules can be
 // unit-tested without React.
@@ -93,7 +171,8 @@ const AUTHORITATIVE_EMPTY_REASONS = new Set(["no-remote", "root-workspace", "wor
 // Update rules:
 //  - ok:true with versionControl.status === "healthy" — definitive update,
 //    overwrites the cached entry (a null pullRequest in a healthy response
-//    means "the PR was closed/merged or the branch genuinely has none").
+//    means "the PR was closed/merged or the branch genuinely has none"),
+//    except stale same-PR "open" data cannot downgrade a locally merged PR.
 //  - ok:true with versionControl.status === "degraded" — non-authoritative
 //    (the provider couldn't talk to gh cleanly), so we KEEP the previous
 //    entry to avoid the navbar's "PR state disappeared" flicker.
@@ -114,7 +193,7 @@ export function applyStickyUpdates(
         // a real WorkspaceCockpitSummary — cast it back here.
         const summary = entry.summary as WorkspaceCockpitSummary;
         if (summary.versionControl.status === "healthy") {
-          cache.set(entry.workspaceId, summary);
+          cache.set(entry.workspaceId, preserveMergedPrState(cache.get(entry.workspaceId), summary));
         } else if (summary.versionControl.cooldownUntil && cache.has(entry.workspaceId)) {
           // Degraded response carrying an active gh cooldown — merge cooldownUntil
           // onto the previous healthy entry so the banner has a data source even
@@ -143,15 +222,26 @@ export function applyStickyUpdates(
   return cache;
 }
 
+function knownIdsFromKey(idsKey: string): Set<string> {
+  return new Set(idsKey ? idsKey.split("\n") : []);
+}
+
+export type StickyWorkspaceSummaries = {
+  summaries: Map<string, WorkspaceCockpitSummary>;
+  rememberSummary: (summary: WorkspaceCockpitSummary) => void;
+};
+
 // Sticky per-workspace summary cache that survives transient batch failures.
-// The returned Map identity is stable across renders (we mutate the same ref);
-// callers must derive memoized views from it rather than relying on reference
-// equality.
+// Internally the cache is mutable, but the hook returns a fresh Map snapshot
+// whenever batch data, workspace ids, or an active-workspace summary changes.
+// That keeps downstream memoized PR maps honest: background batch updates must
+// be visible in the navbar without requiring the operator to select a workspace.
 export function useStickyWorkspaceSummaries(
   workspaces: Workspace[],
   batch: WorkspaceCockpitSummaryBatchResponse | undefined,
-): Map<string, WorkspaceCockpitSummary> {
+): StickyWorkspaceSummaries {
   const cacheRef = useRef(new Map<string, WorkspaceCockpitSummary>());
+  const [activeSummaryVersion, setActiveSummaryVersion] = useState(0);
   // Stable id key — derived from sorted ids so the downstream memo only re-runs
   // when the workspace set actually changes (the `workspaces` array gets a
   // fresh identity on every parent re-render).
@@ -163,11 +253,27 @@ export function useStickyWorkspaceSummaries(
         .join("\n"),
     [workspaces],
   );
-  return useMemo(() => {
-    const knownIds = new Set(idsKey ? idsKey.split("\n") : []);
+  const summaries = useMemo(() => {
+    void activeSummaryVersion;
+    const knownIds = knownIdsFromKey(idsKey);
     applyStickyUpdates(cacheRef.current, knownIds, batch);
-    return cacheRef.current;
-  }, [batch, idsKey]);
+    return new Map(cacheRef.current);
+  }, [batch, idsKey, activeSummaryVersion]);
+  const rememberSummary = useCallback(
+    (summary: WorkspaceCockpitSummary) => {
+      const knownIds = knownIdsFromKey(idsKey);
+      if (!knownIds.has(summary.workspaceId)) return;
+      const before = cacheRef.current.get(summary.workspaceId);
+      applyStickyUpdates(cacheRef.current, knownIds, {
+        summaries: [{ workspaceId: summary.workspaceId, ok: true, summary }],
+      });
+      if (cacheRef.current.get(summary.workspaceId) !== before) {
+        setActiveSummaryVersion((version) => version + 1);
+      }
+    },
+    [idsKey],
+  );
+  return { summaries, rememberSummary };
 }
 
 // Derive a PR map from the sticky summary cache. Used by the navbar /

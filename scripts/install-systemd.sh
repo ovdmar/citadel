@@ -11,7 +11,7 @@
 #   citadel.service       — the daemon. Always restarted by this script so the
 #                           freshly-built dist/ is picked up.
 #
-# Defaults auto-detected; override via env (TTYD_BIN, CITADEL_NODE_BIN,
+# Defaults auto-detected; override via env (CITADEL_NODE_BIN,
 # CITADEL_SHELL_BIN, OPENCLAW_ROOT, CITADEL_CONFIG, CITADEL_TMUX_SOCKET, etc.).
 # Release/main ref resolution is handled by scripts/install/upgrade.sh, which
 # is what the Makefile install and upgrade targets call before this script.
@@ -41,7 +41,6 @@ if [[ -z "$NODE_BIN" ]]; then
   echo "✗ node not found in PATH (set CITADEL_NODE_BIN to override)" >&2
   exit 127
 fi
-TTYD_BIN="${TTYD_BIN:-$(command -v ttyd || true)}"
 SHELL_BIN="${CITADEL_SHELL_BIN:-/usr/bin/bash}"
 OPENCLAW_ROOT="${OPENCLAW_ROOT:-$HOME/.openclaw}"
 CITADEL_CONFIG_PATH="${CITADEL_CONFIG:-$HOME/.local/share/citadel/citadel.config.json}"
@@ -109,15 +108,14 @@ CITADEL_UNIT_TMP="$(mktemp)"
   echo "Environment=CITADEL_SHELL_BIN=$SHELL_BIN"
   # Routes every tmux invocation to citadel-tmux.service's server.
   echo "Environment=CITADEL_TMUX_SOCKET=$TMUX_SOCK"
-  [[ -n "$TTYD_BIN" ]] && echo "Environment=TTYD_BIN=$TTYD_BIN"
   echo "Environment=PATH=$SERVICE_PATH"
   echo "ExecStart=$NODE_BIN $ROOT/apps/daemon/dist/index.js"
   echo "Restart=always"
   echo "RestartSec=3"
-  # Kill only the main daemon on stop/restart — ttyd and tmux survive, the
-  # next daemon discovers and adopts them. control-group kill would SIGTERM
-  # the whole subtree and lose every terminal.
-  echo "KillMode=process"
+  # Kill daemon child processes on restart so disposable node-pty viewer
+  # clients do not survive as orphans. Durable sessions live in the separate
+  # citadel-tmux.service unit and are not part of this control group.
+  echo "KillMode=control-group"
   echo ""
   echo "[Install]"
   echo "WantedBy=default.target"

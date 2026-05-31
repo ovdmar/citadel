@@ -23,7 +23,7 @@ import {
 } from "@citadel/operations";
 import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
-import type { TtydManager } from "@citadel/terminal";
+import type { ProviderCache } from "./app-helpers.js";
 import { readLogSlice } from "./log-slice.js";
 import type { ScheduledAgentService } from "./scheduled-agent-service.js";
 import { refineScratchpad } from "./scratchpad-refine.js";
@@ -43,10 +43,9 @@ export type DaemonMcpDeps = {
   config: CitadelConfig;
   store: SqliteStore;
   operations: OperationService;
-  ttyd: TtydManager;
   scheduledAgents: ScheduledAgentRunner;
   scheduledAgentService: ScheduledAgentService;
-  providerCache: Map<string, { expiresAt: number; value: unknown }>;
+  providerCache: ProviderCache;
   emit: (type: string, payload: unknown) => void;
 };
 
@@ -80,7 +79,7 @@ function structuredWorkspaceError(error: unknown): { error: string; [key: string
 }
 
 export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) {
-  const { config, store, operations, ttyd, scheduledAgents, scheduledAgentService, providerCache, emit } = deps;
+  const { config, store, operations, scheduledAgents, scheduledAgentService, providerCache, emit } = deps;
   if (call.name === "register_repo") {
     const input = CreateRepoInputSchema.parse(call.arguments ?? {});
     const repo = operations.registerRepo(input);
@@ -138,7 +137,6 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
   if (call.name === "stop_agent_session") {
     const sessionId = typeof call.arguments?.sessionId === "string" ? (call.arguments.sessionId as string) : "";
     const result = operations.stopAgentSession({ sessionId });
-    ttyd.release(sessionId, "mcp-stop-agent-session");
     emit("agent.updated", { sessionId });
     return result;
   }

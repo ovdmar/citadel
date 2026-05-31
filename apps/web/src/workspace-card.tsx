@@ -1,5 +1,4 @@
 import type {
-  AgentSession,
   Namespace,
   Operation,
   PullRequestSummary,
@@ -7,14 +6,16 @@ import type {
   WorkspaceDirtySummary,
   WorkspaceSession,
 } from "@citadel/contracts";
-import { sessionNeedsAttention } from "@citadel/core";
+import { type LifecycleTone, deriveWorkspaceLifecycleTone } from "@citadel/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { type StateResponse, useOptimisticRemove, useStateQuery } from "./app-state.js";
+import { pickReadableForeground } from "./color-contrast.js";
 import { encodeReorderMimeType, findReorderMimeType, parseReorderMimeType } from "./navigator-order.js";
 import { useToast } from "./toast.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 import "./workspace-status-dot.css";
 
 export type WorkspaceCardData = {
@@ -33,30 +34,30 @@ export type WorkspaceCardData = {
 export type PrTone = "missing" | "pending" | "passing" | "failing" | "merged" | "conflicting";
 export type ApprovalTone = "none" | "pending" | "changes" | "approved";
 
-export type WorkspaceAgentTone = "attention" | "rate_limited" | "running" | "idle";
-
-// Aggregates the per-agent statuses for a workspace into one tone for the
-// status dot. Priority: attention > rate_limited > running > idle. Terminal
-// sessions are excluded. usage_limited
-// (account-wide cap, waits for a known reset) collapses into the same blue
-// `rate_limited` tone since both mean "stalled, will recover".
-export function deriveWorkspaceAgentTone(sessions: WorkspaceSession[]): WorkspaceAgentTone {
-  const agentSessions = sessions.filter((s): s is AgentSession => s.kind === "agent");
-  if (agentSessions.some((s) => s.status === "waiting_for_input" || sessionNeedsAttention(s))) return "attention";
-  if (agentSessions.some((s) => s.status === "rate_limited" || s.status === "usage_limited")) return "rate_limited";
-  if (agentSessions.some((s) => s.status === "starting" || s.status === "running")) return "running";
-  return "idle";
+export function lifecycleToneClass(tone: LifecycleTone): string {
+  switch (tone) {
+    case "never-started":
+      return "cit-pulse-idle";
+    case "running":
+      return "cit-pulse-run";
+    case "done":
+      return "cit-pulse-done";
+    case "attention":
+      return "cit-pulse-bad";
+  }
 }
 
-// Maps the aggregated tone to the shared `cit-pulse-*` class used across
-// the cockpit (bottom-bar "auto mode" pill, navigator "Running" stat,
-// inspector deploy/runtime pulses). Keeps workspace-card chrome visually
-// consistent with the rest of the app.
-function citPulseClass(tone: WorkspaceAgentTone): string {
-  if (tone === "attention") return "cit-pulse-bad";
-  if (tone === "rate_limited") return "cit-pulse-info";
-  if (tone === "running") return "cit-pulse-run";
-  return "cit-pulse-idle";
+function lifecycleToneAriaSuffix(tone: LifecycleTone): string {
+  switch (tone) {
+    case "attention":
+      return ", agent needs attention";
+    case "running":
+      return ", agent running";
+    case "done":
+      return ", agent done";
+    case "never-started":
+      return ", agent never started";
+  }
 }
 
 export type WorkspaceReorderProps = {
@@ -87,9 +88,8 @@ export function WorkspaceCard(
   const titleDisplay = workspaceDisplayTitle(workspace);
   const prTone = pullRequest ? prToneFor(pullRequest) : "missing";
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
-  const agentTone = deriveWorkspaceAgentTone(props.sessions);
-  const agentToneSuffix =
-    agentTone === "attention" ? ", agent needs attention" : agentTone === "running" ? ", agent running" : "";
+  const lifecycleTone = deriveWorkspaceLifecycleTone({ sessions: props.sessions, pullRequest: pullRequest ?? null });
+  const agentToneSuffix = lifecycleToneAriaSuffix(lifecycleTone);
   const additions = pullRequest?.additions ?? null;
   const deletions = pullRequest?.deletions ?? null;
   const hasDiff = additions !== null || deletions !== null;
@@ -223,6 +223,12 @@ export function WorkspaceCard(
       <button
         type="button"
         className={`workspace-card ${props.active ? "active" : ""}`}
+        // The .active state paints the card with a dark navy background
+        // regardless of cockpit theme. Mark it as on-dark so descendants
+        // (e.g. .workspace-card-issue chip whose color tracks --color-action,
+        // which is also dark navy on light cockpit) can flip to a light-fg
+        // variant via [data-cit-on-dark="true"] selectors.
+        data-cit-on-dark={props.active ? "true" : undefined}
         {...dragHandlers}
         onClick={() => {
           if (!editing) props.onSelect();
@@ -251,7 +257,7 @@ export function WorkspaceCard(
                 <strong> has overflow: hidden for title-truncation, which
                 would clip the cit-pulse-run ripple animation's left edge. */}
             <span
-              className={`cit-pulse cit-pulse-sm ${citPulseClass(agentTone)} workspace-status-dot`}
+              className={`cit-pulse cit-pulse-sm ${lifecycleToneClass(lifecycleTone)} workspace-status-dot`}
               aria-hidden="true"
             />
             {editing ? (
@@ -300,7 +306,11 @@ export function WorkspaceCard(
             <span
               className="namespace-pill"
               title={`Namespace: ${namespace.name}`}
-              style={namespace.color ? { background: namespace.color, color: "#fff" } : undefined}
+              style={
+                namespace.color
+                  ? { background: namespace.color, color: pickReadableForeground(namespace.color) }
+                  : undefined
+              }
             >
               <Folder size={10} /> {namespace.name}
             </span>
@@ -348,6 +358,7 @@ export function WorkspaceCard(
 }
 
 function NamespacePickerDialog(props: { workspace: Workspace; namespaces: Namespace[]; onClose: () => void }) {
+  useOverlayPresent();
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -501,6 +512,7 @@ type DropCheckResult = {
 };
 
 function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void }) {
+  useOverlayPresent();
   const optimistic = useOptimisticRemove();
   const toast = useToast();
   const workspaceId = props.workspace.id;

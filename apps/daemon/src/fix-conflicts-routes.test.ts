@@ -51,7 +51,7 @@ beforeAll(() => {
 afterEach(() => {
   killTestTmuxServer();
   removeTestPipeLogs();
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 afterAll(() => {
@@ -127,7 +127,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       // No hook file → default prompt; both POSTs accepted (no 409 / dedupe by design).
@@ -219,7 +219,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const response = await fetch(`${baseUrl}/api/workspaces/ws_nopromptarg/fix-conflicts`, {
@@ -236,6 +236,159 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
       await closeServer(server);
     }
   }, 30_000);
+
+  it("uses merge.conflict.detected prompt hooks when the repo provides them", async () => {
+    const fixture = createFixture();
+    fixture.config.agentRuntimes = [
+      {
+        id: "claude-code",
+        displayName: "Claude Code",
+        command: "node",
+        args: nodeHoldAgentArgs,
+        promptArg: "--prompt",
+      },
+    ];
+    const git = createGitRepo(fixture.config.dataDir);
+    const hookDir = path.join(git.repoPath, ".citadel", "hooks", "merge.conflict.detected");
+    fs.mkdirSync(hookDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(hookDir, "10-resolve.prompt"),
+      "---\nruntime: claude-code\ndisplayName: Conflict hook\n---\nResolve conflicts for {{workspace.id}}\n",
+    );
+    const now = new Date().toISOString();
+    fixture.store.insertRepo({
+      id: "repo_fc_hook",
+      name: "FC Hook Repo",
+      rootPath: git.repoPath,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: ["github-gh"],
+      deployHookCommand: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fixture.store.insertWorkspace({
+      id: "ws_fc_hook",
+      repoId: "repo_fc_hook",
+      name: "FC Hook Workspace",
+      path: git.repoPath,
+      branch: "feature",
+      baseBranch: "main",
+      source: "scratch",
+      kind: "worktree",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      namespaceId: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    const { server } = await createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const body = await postJson<{ hooked: true; operationId: string; promptSource: string }>(
+        `${baseUrl}/api/workspaces/ws_fc_hook/fix-conflicts`,
+        {},
+      );
+
+      expect(body.hooked).toBe(true);
+      expect(body.promptSource).toBe("hook");
+      expect(body.operationId).toMatch(/^op_/);
+      expect(fixture.store.listSessions().some((session) => session.displayName === "Conflict hook")).toBe(true);
+      expect(
+        fixture.store.listActivity("ws_fc_hook").some((event) => event.type === "hook.merge.conflict.detected"),
+      ).toBe(true);
+    } finally {
+      await closeServer(server);
+    }
+  }, 20_000);
+
+  it("runs review.requested hooks from a daemon producer endpoint", async () => {
+    const fixture = createFixture();
+    fixture.config.agentRuntimes = [
+      {
+        id: "claude-code",
+        displayName: "Claude Code",
+        command: "node",
+        args: nodeHoldAgentArgs,
+        promptArg: "--prompt",
+      },
+    ];
+    const git = createGitRepo(fixture.config.dataDir);
+    const hookDir = path.join(git.repoPath, ".citadel", "hooks", "review.requested");
+    fs.mkdirSync(hookDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(hookDir, "10-review.prompt"),
+      "---\nruntime: claude-code\ndisplayName: Review hook\n---\nReview {{workspace.id}} because {{reason}}\n",
+    );
+    const now = new Date().toISOString();
+    fixture.store.insertRepo({
+      id: "repo_review_hook",
+      name: "Review Hook Repo",
+      rootPath: git.repoPath,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: ["github-gh"],
+      deployHookCommand: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fixture.store.insertWorkspace({
+      id: "ws_review_hook",
+      repoId: "repo_review_hook",
+      name: "Review Hook Workspace",
+      path: git.repoPath,
+      branch: "feature",
+      baseBranch: "main",
+      source: "scratch",
+      kind: "worktree",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
+      section: "needs-review",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      namespaceId: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    const { server } = await createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const body = await postJson<{ hooked: true; operationId: string }>(
+        `${baseUrl}/api/workspaces/ws_review_hook/review-requested`,
+        { reason: "manual-review" },
+      );
+
+      expect(body.hooked).toBe(true);
+      expect(body.operationId).toMatch(/^op_/);
+      expect(fixture.store.listSessions().some((session) => session.displayName === "Review hook")).toBe(true);
+      expect(fixture.store.listActivity("ws_review_hook").some((event) => event.type === "hook.review.requested")).toBe(
+        true,
+      );
+    } finally {
+      await closeServer(server);
+    }
+  }, 20_000);
 
   it("returns 404 runtime_not_found when the only configured runtime is shell-like", async () => {
     const fixture = createFixture();
@@ -282,7 +435,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
     // createFixture defaults to a shell-like test runtime list. Without a
     // non-shell runtime, fix-conflicts must refuse so the multi-line prompt
     // doesn't get pasted into a bash pane and executed as commands.
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const response = await fetch(`${baseUrl}/api/workspaces/ws_shell/fix-conflicts`, {
@@ -344,7 +497,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const response = await fetch(`${baseUrl}/api/workspaces/ws_shellexp/fix-conflicts`, {
@@ -362,7 +515,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
 
   it("returns 404 workspace_not_found when the workspace does not exist", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const response = await fetch(`${baseUrl}/api/workspaces/ws_missing/fix-conflicts`, {

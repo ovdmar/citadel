@@ -13,7 +13,7 @@
 [ ] 5. Usage provider is provider/hook based.
 [ ] 6. Provider health is visible per provider AND per interaction method.
 [ ] 7. Provider degraded state explains missing/stale data.
-[ ] 8. Provider data includes refresh age. The GitHub provider additionally surfaces an active rate-limit cooldown via `versionControl.cooldownUntil` (ISO timestamp) so the cockpit can render an explicit "retrying at HH:MM" banner instead of an opaque "degraded".
+[~] 8. Provider data includes refresh age. The GitHub provider additionally surfaces an active rate-limit cooldown via `versionControl.cooldownUntil` (ISO timestamp) so the cockpit can render an explicit "retrying at HH:MM" banner instead of an opaque "degraded".
 [ ] 9. Citadel prefers existing external tool auth for the first production baseline.
 
 ## Provider Category Model (source of truth)
@@ -48,16 +48,17 @@ Rules:
 
 ## Hooks
 
-[~] 1. Hooks are the extension path for repo-specific behavior.
+[~] 1. Hooks are the extension path for repo-specific behavior, configured either in citadel config (`config.hooks`) or as files tracked in the repo under `.citadel/hooks/<event>/<name>.{sh,agent,prompt}`.
 [ ] 2. Setup hooks are configured per repo.
 [ ] 3. Teardown hooks are configured per repo.
 [ ] 4. App/link discovery hooks are configured per repo.
 [ ] 5. Action hooks are configured per repo.
-[ ] 6. Hooks receive structured workspace/repo/provider context.
+[ ] 6. Hooks receive structured workspace/repo/provider context — payload shape is event-specific and validated before dispatch.
 [ ] 7. Hooks return structured JSON.
 [ ] 8. Hook output is validated before it appears in the UI.
-[ ] 9. Hook execution has explicit cwd/env policy, timeout, output bounds, and logs.
+[ ] 9. Hook execution has explicit cwd/env policy, timeout, output bounds, and logs. For `.agent` / `.prompt` hooks, the unit of execution is an agent session launch — the framework awaits session creation (including initial prompt delivery) but does not block on subsequent session output.
 [ ] 10. Hook diagnostics show configured hooks, last run, validation status, sample output shape, and errors.
+[ ] 11. Hooks may be implemented as agent prompts (`.agent` or `.prompt` files). Agent hooks spawn a fresh isolated agent session in the workspace with the file body as the seed prompt; the session runs to completion independently and logs its own activity. Agent-prompt hooks are not allowed under `agent.started/` to prevent infinite session-spawn loops.
 
 ## Config And Settings
 

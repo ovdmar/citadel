@@ -11,7 +11,7 @@ import { ScheduledAgentService } from "./scheduled-agent-service.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("ScheduledAgentService", () => {
@@ -52,7 +52,6 @@ describe("ScheduledAgentService", () => {
       config: { agentRuntimes: [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: [] }] } as never,
       store,
       operations: {} as never,
-      ttyd: {} as never,
       scheduledAgents: runner,
       scheduledAgentService: service,
       providerCache: new Map(),
@@ -94,7 +93,6 @@ describe("ScheduledAgentService", () => {
       config: { agentRuntimes: [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: [] }] } as never,
       store,
       operations: {} as never,
-      ttyd: {} as never,
       scheduledAgents: runner,
       scheduledAgentService: service,
       providerCache: new Map(),
@@ -161,7 +159,6 @@ describe("ScheduledAgentService", () => {
       config: { agentRuntimes: [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: [] }] } as never,
       store,
       operations: {} as never,
-      ttyd: {} as never,
       scheduledAgents: runner,
       scheduledAgentService: service,
       providerCache: new Map(),

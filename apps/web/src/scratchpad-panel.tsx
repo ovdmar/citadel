@@ -27,6 +27,7 @@ import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { BlockItem, type UiBlock } from "./scratchpad-panel-block.js";
 import { ScratchpadPanelSearch } from "./scratchpad-panel-search.js";
 import { ScratchpadVersionDiffDialog } from "./scratchpad-version-diff-dialog.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 
 // Matches cockpit.tsx's STORAGE_LAST_WORKSPACE constant — duplicated to avoid
 // importing the cockpit module just for a single string.
@@ -49,12 +50,12 @@ type UndoPayload = { block: BlockSummary; previousIds: string[] };
 const SAVE_DEBOUNCE_MS = 1000;
 const UNDO_WINDOW_MS = 5000;
 const PULSE_MS = 800;
-// Auto-scroll-to-bottom tolerance: a scroll position within this many pixels of
-// the bottom counts as "user was at the bottom" so reopening still scrolls.
+// Auto-scroll-to-bottom tolerance; within this many pixels counts as "at bottom".
 const BOTTOM_TOLERANCE = 4;
 
 export function ScratchpadPanel() {
   const { open, setOpen } = useScratchpadDrawer();
+  useOverlayPresent(open);
   const navigate = useNavigate();
   const [blocks, setBlocks] = useState<UiBlock[]>([]);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);

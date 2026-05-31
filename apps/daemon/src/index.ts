@@ -3,6 +3,7 @@ import { defaultConfigPath, loadConfig, loadDevState, resolveWorktreeRoot, saveD
 import { SqliteStore } from "@citadel/db";
 import { OperationService } from "@citadel/operations";
 import { ensureCitadelTmuxRunning, ensureWorktreeTmuxRunning } from "@citadel/terminal";
+import { parsePositiveInt } from "./app-helpers.js";
 import { createDaemonApp } from "./app.js";
 import { runBootRestore } from "./boot-restore.js";
 import { shouldReapTmuxOrphans } from "./orphan-reaper-safety.js";
@@ -82,7 +83,7 @@ const store = new SqliteStore(config.databasePath);
 store.migrate();
 const operations = new OperationService(store, config);
 operations.reconcile();
-const daemon = createDaemonApp({ config, configPath, store, operations });
+const daemon = await createDaemonApp({ config, configPath, store, operations });
 const { server, protocol } = daemon;
 
 // Boot-time inverse warning: binding a non-loopback host without TLS is the
@@ -98,6 +99,9 @@ const { server, protocol } = daemon;
     );
   }
 }
+const keepAliveTimeoutMs = parsePositiveInt(process.env.CITADEL_HTTP_KEEP_ALIVE_TIMEOUT_MS, server.keepAliveTimeout);
+server.keepAliveTimeout = keepAliveTimeoutMs;
+server.headersTimeout = Math.max(server.headersTimeout, keepAliveTimeoutMs + 1000);
 
 // Try to bind; on EADDRINUSE, walk the next 10 ports so worktree-derived ports
 // that happen to collide (cksum-mod-100 birthday hits at ~15 worktrees) don't
@@ -194,7 +198,6 @@ server.listen(config.port, config.bindHost, () => {
         try {
           const summary = await reapOrphans({
             store,
-            ttyd: daemon.ttyd,
             diagnostics: daemon.diagnostics,
             reapTmuxSessions: shouldReapTmuxOrphans({
               daemonPort: config.port,
@@ -204,12 +207,11 @@ server.listen(config.port, config.bindHost, () => {
               allowSharedTmuxReaper: process.env.CITADEL_ALLOW_SHARED_TMUX_REAPER,
             }),
           });
-          if (summary.tmuxReaped.length > 0 || summary.ttydReleased.length > 0) {
-            console.log(`[orphan-reaper] tmux=${summary.tmuxReaped.length} ttyd=${summary.ttydReleased.length}`);
+          if (summary.tmuxReaped.length > 0) {
+            console.log(`[orphan-reaper] tmux=${summary.tmuxReaped.length}`);
           }
           daemon.diagnostics.log("reaper", "orphan.done", {
             tmuxReaped: summary.tmuxReaped,
-            ttydReleased: summary.ttydReleased,
           });
         } catch (error) {
           console.warn(`Orphan reaper failed: ${error instanceof Error ? error.message : String(error)}`);

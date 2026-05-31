@@ -63,7 +63,9 @@ export function readAgentTranscript(
   if (!session) return { ok: false, error: "session_not_found" };
   if (session.kind !== "agent") return { ok: false, error: "session_not_agent" };
   if (!session.tmuxSessionName) return { ok: false, error: "session_has_no_terminal" };
-  const captureOptions: { lines?: number; maxChars?: number } = {};
+  const captureOptions: { lines?: number; maxChars?: number; socketName?: string | null } = {
+    socketName: session.tmuxSocketName ?? null,
+  };
   if (input.lines !== undefined) captureOptions.lines = input.lines;
   if (input.maxChars !== undefined) captureOptions.maxChars = input.maxChars;
   const transcript = captureTranscript(session.tmuxSessionName, captureOptions);
@@ -95,7 +97,7 @@ export async function sendAgentMessage(
   // just exited would still read as "running" but the foreground is bash,
   // and a paste here would land in the shell prompt instead of the TUI.
   //
-  const pane = panePidProcess(session.tmuxSessionName);
+  const pane = panePidProcess(session.tmuxSessionName, session.tmuxSocketName ?? null);
   if (pane === null) {
     return { ok: false, sessionId: session.id, status: session.status, error: "session_has_no_terminal" };
   }
@@ -108,7 +110,13 @@ export async function sendAgentMessage(
   // status-monitor tick to confirm via real pane observation whether the
   // rate-limit banner cleared, so backoff state isn't reset prematurely.
   const optimistic = input.optimistic ?? true;
-  const result = await submitPrompt(session.tmuxSessionName, input.message);
+  const result = await submitPrompt(session.tmuxSessionName, input.message, {
+    socketName: session.tmuxSocketName ?? null,
+    // Plain terminal sessions can be sitting in programs that do not echo
+    // input reliably. The shell/program itself is the runtime, so send the
+    // message without requiring a visual pre-submit echo.
+    skipVerification: session.runtimeId === "shell",
+  });
   if (result.ok) {
     // We don't record the message here — the runtime's own transcript
     // (claude-code .jsonl, codex rollout, …) captures it whether it arrived

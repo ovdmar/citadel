@@ -17,7 +17,7 @@ per-runtime adapter. Three things follow from this:
 - **Parsing is deterministic and token-free.** Adapters are pure JS — a
   file read + `JSON.parse` per line + a small filter. No LLM call anywhere.
 - **The cockpit UI doesn't need a special path.** Keystrokes go through
-  ttyd → tmux → runtime; the runtime captures them; the adapter surfaces
+  xterm.js → WebSocket → node-pty → tmux → runtime; the runtime captures them; the adapter surfaces
   them.
 
 ## Adapters (`packages/runtimes/src/transcripts/`)
@@ -50,7 +50,10 @@ followed by a closest-first-prompt-timestamp scoring pass.
 
 ### codex
 
-Transcripts live at `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<sessionId>.jsonl`.
+For Citadel-launched sessions, Codex runs with a workspace-scoped
+`CODEX_SQLITE_HOME`, while `CODEX_HOME` stays at the operator's global Codex
+home. Transcripts remain at
+`~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<sessionId>.jsonl`.
 Each file opens with a `session_meta` payload carrying `id`, `cwd`, and
 `timestamp`. User input arrives as `response_item` lines with
 `payload.role === "user"` and `content[].type === "input_text"`. We skip

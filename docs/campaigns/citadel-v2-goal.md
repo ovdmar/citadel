@@ -35,7 +35,7 @@ Fetch full task text with:
 - Future OpenClaw support must happen via Citadel MCP/API/provider integration.
 - Shell-backed agent runtimes always launch through tmux and persist tmux session id/name for reconnect.
 - Terminal architecture: tmux durable sessions, Citadel daemon terminal gateway, xterm.js in the browser, WebSocket for bidirectional terminal I/O, REST/SSE for app state/events.
-- `ttyd` may be used as reference/fallback only, not primary architecture.
+- Browser terminal attach uses real PTY semantics through node-pty `tmux attach-session`; no daemon-managed external renderer fallback is kept.
 - Do not interrupt Ovidiu unless blocked by missing credentials, unsafe destructive action, or impossible ambiguity.
 
 ## Target Repository Shape

@@ -67,7 +67,7 @@ export type DoctorDeps = {
   retryDelayMs: number;
 };
 
-const REQUIRED_BINARIES = ["node", "pnpm", "tmux", "ttyd", "bash", "git", "sqlite3", "jq"] as const;
+const REQUIRED_BINARIES = ["node", "pnpm", "tmux", "bash", "git", "sqlite3", "jq"] as const;
 const RECOMMENDED_BINARIES = ["gh", "jtk"] as const;
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);

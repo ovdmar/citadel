@@ -2,8 +2,8 @@
 // can email over. Two artefacts:
 //   - buildDiagnosticsSnapshot(): JSON object captured at the moment of the
 //     request. The ring buffer + a structured view of "what the daemon
-//     thinks the world looks like right now" (sessions/workspaces/ttyd
-//     inventory/live tmux session names + general process info).
+//     thinks the world looks like right now" (sessions/workspaces/live tmux
+//     session names + general process info).
 //   - streamDiagnosticsBundle(): tar.gz stream containing the JSONL log
 //     files (current + rotated), the same snapshot as a separate file,
 //     and a slice of the systemd-journal for the citadel.service unit
@@ -20,13 +20,12 @@ import { promisify } from "node:util";
 import type { CitadelConfig } from "@citadel/config";
 import type { SqliteStore } from "@citadel/db";
 import type { DiagnosticEvent, DiagnosticsLogger } from "@citadel/operations";
-import { type TtydManager, listAllTmuxSessions } from "@citadel/terminal";
+import { listAllTmuxSessions } from "@citadel/terminal";
 
 const execFileAsync = promisify(execFile);
 
 export type DiagnosticsSnapshotDeps = {
   store: SqliteStore;
-  ttyd: TtydManager;
   diagnostics: DiagnosticsLogger;
   config: CitadelConfig;
 };
@@ -43,7 +42,6 @@ export type DiagnosticsSnapshot = {
     worktree: boolean;
     tmuxSocket: string | null;
   };
-  ttydInventory: ReturnType<TtydManager["list"]>;
   tmuxLiveSessions: string[] | null;
   sessions: Array<{
     id: string;
@@ -53,6 +51,7 @@ export type DiagnosticsSnapshot = {
     status: string;
     statusReason: string | null;
     tmuxSessionName: string | null;
+    tmuxSocketName: string | null;
     lastStatusAt: string | null;
     runtimeId: string | null;
   }>;
@@ -77,10 +76,20 @@ export function buildDiagnosticsSnapshot(deps: DiagnosticsSnapshotDeps): Diagnos
       worktree: process.env.CITADEL_WORKTREE === "1",
       tmuxSocket: process.env.CITADEL_TMUX_SOCKET ?? null,
     },
-    ttydInventory: deps.ttyd.list(),
     tmuxLiveSessions: (() => {
-      const set = listAllTmuxSessions();
-      return set === null ? null : Array.from(set).sort();
+      const sessions = deps.store.listSessions();
+      const sockets = new Set<string | null>(sessions.map((session) => session.tmuxSocketName ?? null));
+      const live = new Set<string>();
+      let legacyUnavailable = false;
+      for (const socketName of sockets.size > 0 ? sockets : new Set<string | null>([null])) {
+        const set = listAllTmuxSessions(socketName);
+        if (set === null) {
+          if (socketName === null) legacyUnavailable = true;
+          continue;
+        }
+        for (const name of set) live.add(socketName ? `${socketName}:${name}` : name);
+      }
+      return live.size === 0 && legacyUnavailable && sockets.size <= 1 ? null : Array.from(live).sort();
     })(),
     sessions: deps.store.listWorkspaceSessions().map((s) => ({
       id: s.id,
@@ -90,6 +99,7 @@ export function buildDiagnosticsSnapshot(deps: DiagnosticsSnapshotDeps): Diagnos
       status: s.status,
       statusReason: s.statusReason ?? null,
       tmuxSessionName: s.tmuxSessionName ?? null,
+      tmuxSocketName: s.tmuxSocketName ?? null,
       lastStatusAt: s.lastStatusAt ?? null,
       runtimeId: s.runtimeId,
     })),

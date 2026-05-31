@@ -1,16 +1,39 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 
 import { shellQuote, tmuxPrefix, tmuxSessionExists } from "./index.js";
 
-export function captureTmux(sessionName: string, lines = 200) {
+const execFileAsync = promisify(execFile);
+
+export function captureTmux(sessionName: string, lines = 200, socketName?: string | null) {
   try {
-    return execFileSync("tmux", [...tmuxPrefix(), "capture-pane", "-p", "-S", `-${lines}`, "-t", sessionName], {
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-    });
+    return execFileSync(
+      "tmux",
+      [...tmuxPrefix(socketName), "capture-pane", "-p", "-S", `-${lines}`, "-t", sessionName],
+      {
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024,
+      },
+    );
+  } catch (error) {
+    return error instanceof Error ? error.message : "tmux capture failed";
+  }
+}
+
+export async function captureTmuxAsync(sessionName: string, lines = 200, socketName?: string | null): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync(
+      "tmux",
+      [...tmuxPrefix(socketName), "capture-pane", "-p", "-S", `-${lines}`, "-t", sessionName],
+      {
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024,
+      },
+    );
+    return stdout;
   } catch (error) {
     return error instanceof Error ? error.message : "tmux capture failed";
   }
@@ -35,18 +58,18 @@ export type TerminalTranscriptError = {
 // when an agent has scrolled for a long time.
 export function captureTranscript(
   sessionName: string,
-  options: { lines?: number; maxChars?: number } = {},
+  options: { lines?: number; maxChars?: number; socketName?: string | null } = {},
 ): TerminalTranscript | TerminalTranscriptError {
   const requestedLines = Math.min(2000, Math.max(1, options.lines ?? 200));
   const maxChars = Math.min(200_000, Math.max(256, options.maxChars ?? 16_000));
-  if (!tmuxSessionExists(sessionName)) {
+  if (!tmuxSessionExists(sessionName, options.socketName)) {
     return { ok: false, error: "tmux_session_missing" };
   }
   let raw: string;
   try {
     raw = execFileSync(
       "tmux",
-      [...tmuxPrefix(), "capture-pane", "-p", "-J", "-S", `-${requestedLines}`, "-t", sessionName],
+      [...tmuxPrefix(options.socketName), "capture-pane", "-p", "-J", "-S", `-${requestedLines}`, "-t", sessionName],
       {
         encoding: "utf8",
         maxBuffer: 4 * 1024 * 1024,
@@ -66,22 +89,26 @@ export function captureTranscript(
   };
 }
 
-export function captureTmuxVisibleScreen(sessionName: string, lines = 200) {
+export function captureTmuxVisibleScreen(sessionName: string, lines = 200, socketName?: string | null) {
   try {
-    return execFileSync("tmux", [...tmuxPrefix(), "capture-pane", "-a", "-p", "-S", `-${lines}`, "-t", sessionName], {
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    });
+    return execFileSync(
+      "tmux",
+      [...tmuxPrefix(socketName), "capture-pane", "-a", "-p", "-S", `-${lines}`, "-t", sessionName],
+      {
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
   } catch {
-    return captureTmux(sessionName, lines);
+    return captureTmux(sessionName, lines, socketName);
   }
 }
 
-export function captureTmuxSnapshot(sessionName: string) {
+export function captureTmuxSnapshot(sessionName: string, socketName?: string | null) {
   let text = "";
   try {
-    text = execFileSync("tmux", [...tmuxPrefix(), "capture-pane", "-p", "-e", "-t", sessionName], {
+    text = execFileSync("tmux", [...tmuxPrefix(socketName), "capture-pane", "-p", "-e", "-t", sessionName], {
       encoding: "utf8",
       maxBuffer: 1024 * 1024,
       stdio: ["ignore", "pipe", "ignore"],
@@ -95,7 +122,7 @@ export function captureTmuxSnapshot(sessionName: string) {
   try {
     const raw = execFileSync(
       "tmux",
-      [...tmuxPrefix(), "display-message", "-p", "-t", sessionName, "#{cursor_y},#{cursor_x}"],
+      [...tmuxPrefix(socketName), "display-message", "-p", "-t", sessionName, "#{cursor_y},#{cursor_x}"],
       {
         encoding: "utf8",
       },
@@ -126,7 +153,7 @@ export function captureTmuxSnapshot(sessionName: string) {
 export async function waitForPaneCommand(
   sessionName: string,
   predicate: (cmd: string) => boolean,
-  options: { timeoutMs?: number; pollMs?: number } = {},
+  options: { timeoutMs?: number; pollMs?: number; socketName?: string | null } = {},
 ): Promise<string> {
   const timeoutMs = options.timeoutMs ?? 8000;
   const pollMs = options.pollMs ?? 80;
@@ -136,7 +163,7 @@ export async function waitForPaneCommand(
     try {
       last = execFileSync(
         "tmux",
-        [...tmuxPrefix(), "display-message", "-p", "-t", sessionName, "#{pane_current_command}"],
+        [...tmuxPrefix(options.socketName), "display-message", "-p", "-t", sessionName, "#{pane_current_command}"],
         {
           encoding: "utf8",
           stdio: ["ignore", "pipe", "ignore"],
@@ -164,7 +191,7 @@ function silenceSentinelPath(sessionName: string) {
 // Arm tmux's monitor-silence hook so it touches a sentinel file whenever the
 // pane has been silent for `seconds`. Caller is responsible for clearing the
 // sentinel before arming and for calling `disarmSilenceHook` once done.
-function armSilenceHook(sessionName: string, seconds: number) {
+function armSilenceHook(sessionName: string, seconds: number, socketName?: string | null) {
   try {
     fs.mkdirSync(SILENCE_SENTINEL_DIR, { recursive: true });
   } catch {
@@ -177,14 +204,18 @@ function armSilenceHook(sessionName: string, seconds: number) {
     /* ignore */
   }
   try {
-    execFileSync("tmux", [...tmuxPrefix(), "set-option", "-p", "-t", sessionName, "monitor-silence", String(seconds)], {
-      stdio: "ignore",
-    });
+    execFileSync(
+      "tmux",
+      [...tmuxPrefix(socketName), "set-option", "-p", "-t", sessionName, "monitor-silence", String(seconds)],
+      {
+        stdio: "ignore",
+      },
+    );
     // -b: run the touch in the background so tmux doesn't block its event loop on it.
     execFileSync(
       "tmux",
       [
-        ...tmuxPrefix(),
+        ...tmuxPrefix(socketName),
         "set-hook",
         "-p",
         "-t",
@@ -199,16 +230,16 @@ function armSilenceHook(sessionName: string, seconds: number) {
   }
 }
 
-function disarmSilenceHook(sessionName: string) {
+function disarmSilenceHook(sessionName: string, socketName?: string | null) {
   try {
-    execFileSync("tmux", [...tmuxPrefix(), "set-option", "-p", "-u", "-t", sessionName, "monitor-silence"], {
+    execFileSync("tmux", [...tmuxPrefix(socketName), "set-option", "-p", "-u", "-t", sessionName, "monitor-silence"], {
       stdio: "ignore",
     });
   } catch {
     /* ignore */
   }
   try {
-    execFileSync("tmux", [...tmuxPrefix(), "set-hook", "-p", "-u", "-t", sessionName, "alert-silence-pane"], {
+    execFileSync("tmux", [...tmuxPrefix(socketName), "set-hook", "-p", "-u", "-t", sessionName, "alert-silence-pane"], {
       stdio: "ignore",
     });
   } catch {
@@ -230,7 +261,13 @@ function disarmSilenceHook(sessionName: string) {
 // Best-effort — never throws.
 export async function waitForTerminalIdle(
   sessionName: string,
-  options: { timeoutMs?: number; idleMs?: number; pollMs?: number; useSilenceHook?: boolean } = {},
+  options: {
+    timeoutMs?: number;
+    idleMs?: number;
+    pollMs?: number;
+    useSilenceHook?: boolean;
+    socketName?: string | null;
+  } = {},
 ): Promise<void> {
   const timeoutMs = options.timeoutMs ?? 1500;
   const idleMs = options.idleMs ?? 250;
@@ -239,15 +276,15 @@ export async function waitForTerminalIdle(
   const deadline = Date.now() + Math.max(idleMs + pollMs, timeoutMs);
 
   const silenceSeconds = useSilenceHook ? Math.max(1, Math.round(idleMs / 1000)) : 0;
-  if (silenceSeconds > 0) armSilenceHook(sessionName, silenceSeconds);
+  if (silenceSeconds > 0) armSilenceHook(sessionName, silenceSeconds, options.socketName);
   const sentinel = silenceSentinelPath(sessionName);
   try {
-    let last = safeCapture(sessionName);
+    let last = safeCapture(sessionName, options.socketName);
     let stableSince = Date.now();
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, pollMs));
       if (silenceSeconds > 0 && safeStatExists(sentinel)) return;
-      const current = safeCapture(sessionName);
+      const current = safeCapture(sessionName, options.socketName);
       if (current === last) {
         if (Date.now() - stableSince >= idleMs) return;
         continue;
@@ -256,7 +293,7 @@ export async function waitForTerminalIdle(
       stableSince = Date.now();
     }
   } finally {
-    if (silenceSeconds > 0) disarmSilenceHook(sessionName);
+    if (silenceSeconds > 0) disarmSilenceHook(sessionName, options.socketName);
   }
 }
 
@@ -268,9 +305,9 @@ function safeStatExists(filePath: string): boolean {
   }
 }
 
-function safeCapture(sessionName: string): string {
+function safeCapture(sessionName: string, socketName?: string | null): string {
   try {
-    return execFileSync("tmux", [...tmuxPrefix(), "capture-pane", "-p", "-t", sessionName], {
+    return execFileSync("tmux", [...tmuxPrefix(socketName), "capture-pane", "-p", "-t", sessionName], {
       encoding: "utf8",
       maxBuffer: 256 * 1024,
       stdio: ["ignore", "pipe", "ignore"],

@@ -11,7 +11,7 @@ import { createDaemonApp } from "./app.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
@@ -41,7 +41,7 @@ describe("namespace routes + MCP integration", () => {
       archivedAt: null,
     });
 
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       // 1. Empty list to start.
@@ -155,7 +155,7 @@ describe("namespace routes + MCP integration", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const missing = await fetch(`${baseUrl}/api/namespaces/ns_missing`, { method: "DELETE" });
@@ -283,7 +283,7 @@ function createFixture() {
   config.agentRuntimes = [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: ["-l"] }];
   const store = new SqliteStore(config.databasePath);
   store.migrate();
-  return { config, configPath, store };
+  return { config, configPath, store, enableRefreshJob: false };
 }
 
 function createGitRepo(dir: string) {

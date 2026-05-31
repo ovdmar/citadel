@@ -26,7 +26,7 @@ vi.mock("@citadel/terminal", () => ({
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   killCalls.splice(0);
   insertCalls.splice(0);
   vi.clearAllMocks();

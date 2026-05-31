@@ -4,6 +4,7 @@ import { Plus, RefreshCw, Save, Search, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { categoryKey, formatLocalReset } from "./lib/usage-format.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 
 type RuntimeConfig = {
   id: string;
@@ -378,6 +379,7 @@ function AddRuntimeModal(props: {
   onAdd: (entry: { id: string; displayName: string; command: string; args: string[] }) => void;
   existingIds: string[];
 }) {
+  useOverlayPresent();
   const [displayName, setDisplayName] = useState("");
   const [id, setId] = useState("");
   const [command, setCommand] = useState("");

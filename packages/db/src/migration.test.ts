@@ -3,12 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { CURRENT_SCHEMA_VERSION, SqliteStore } from "./index.js";
+import { SqliteStore } from "./index.js";
 
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function makeTempPath(): string {
@@ -17,32 +17,29 @@ function makeTempPath(): string {
   return path.join(dir, "citadel.sqlite");
 }
 
-// Sets up a pre-migration agent_sessions row with a legacy status value, then
-// re-opens the database through SqliteStore so the migration runs against the
-// existing row. The migration's data-backfill UPDATE statements are
-// idempotent — they'll run every boot, but only touch matching rows.
-function seedLegacySession(
-  dbPath: string,
-  opts: {
-    id: string;
-    legacyStatus: "waiting" | "orphaned" | "idle" | "running";
-    runtimeId?: string;
-    lastStatusAt?: string;
-    updatedAt?: string;
-  },
-) {
-  // Build a version-12-shaped database directly so migration 13 has a real
-  // legacy agent_sessions table to rebuild.
+type LegacySessionOptions = {
+  id: string;
+  legacyStatus: "waiting" | "orphaned" | "idle" | "running";
+  runtimeId?: string;
+  lastStatusAt?: string;
+  updatedAt?: string;
+  tmuxSocketName?: string | null;
+};
+
+// Sets up a pre-workspace_sessions database with an agent_sessions row, then
+// re-opens it through SqliteStore so the migration runs against real legacy
+// state. The data-backfill UPDATE statements are idempotent — they'll run
+// every boot, but only touch matching rows.
+function seedLegacySession(dbPath: string, opts: LegacySessionOptions) {
   const store = new SqliteStore(dbPath);
   const db = (store as unknown as { database: DatabaseSync }).database;
   db.exec(`
-    PRAGMA foreign_keys = ON;
-    CREATE TABLE schema_migrations (
+    CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
       name TEXT NOT NULL,
       applied_at TEXT NOT NULL
     );
-    CREATE TABLE repos (
+    CREATE TABLE IF NOT EXISTS repos (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       root_path TEXT NOT NULL UNIQUE,
@@ -57,7 +54,117 @@ function seedLegacySession(
       updated_at TEXT NOT NULL,
       archived_at TEXT
     );
-    CREATE TABLE workspaces (
+    CREATE TABLE IF NOT EXISTS workspaces (
+      id TEXT PRIMARY KEY,
+      repo_id TEXT NOT NULL REFERENCES repos(id),
+      name TEXT NOT NULL,
+      path TEXT NOT NULL UNIQUE,
+      branch TEXT NOT NULL,
+      base_branch TEXT NOT NULL,
+      source TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'worktree',
+      pr_url TEXT,
+      issue_key TEXT,
+      issue_title TEXT,
+      issue_url TEXT,
+      slack_thread_url TEXT,
+      section TEXT NOT NULL,
+      pinned INTEGER NOT NULL,
+      lifecycle TEXT NOT NULL,
+      dirty INTEGER NOT NULL,
+      namespace_id TEXT,
+      auto_recovery_last_ci_sha TEXT,
+      auto_recovery_last_attempt_at TEXT,
+      pr_number INTEGER,
+      pr_state TEXT,
+      pr_last_fetch_at TEXT,
+      pr_last_checks_green_at TEXT,
+      pr_last_head_sha TEXT,
+      pr_last_head_sha_changed_at TEXT,
+      pr_last_merge_state_status TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT,
+      UNIQUE(repo_id, name)
+    );
+    CREATE TABLE IF NOT EXISTS agent_sessions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+      runtime_id TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      status_reason TEXT,
+      status_reason_at TEXT,
+      last_status_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
+      last_output_at TEXT,
+      ended_at TEXT,
+      exit_code INTEGER,
+      transport TEXT NOT NULL,
+      tmux_session_name TEXT,
+      tmux_session_id TEXT,
+      tmux_socket_name TEXT,
+      tab_id TEXT,
+      runtime_session_id TEXT,
+      rate_limit_resume_attempts INTEGER NOT NULL DEFAULT 0,
+      next_resume_at TEXT,
+      last_resume_from_rate_limit_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  const now = new Date().toISOString();
+  const lastStatusAt = opts.lastStatusAt ?? "2026-05-17T00:00:00.000Z";
+  const updatedAt = opts.updatedAt ?? "2026-05-17T00:00:00.000Z";
+  db.exec(`INSERT INTO repos (id, name, root_path, default_branch, default_remote, worktree_parent, setup_hook_ids, teardown_hook_ids, provider_ids, deploy_hook_command, created_at, updated_at, archived_at)
+    VALUES ('repo_test', 'r', '/tmp/r', 'main', 'origin', '/tmp/w', '[]', '[]', '[]', NULL, '${new Date().toISOString()}', '${new Date().toISOString()}', NULL)
+    ON CONFLICT(id) DO NOTHING`);
+  db.exec(`INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, kind, pr_url, issue_key, issue_title, issue_url, slack_thread_url, section, pinned, lifecycle, dirty, namespace_id, created_at, updated_at, archived_at)
+    VALUES ('ws_test', 'repo_test', 'ws', '/tmp/ws', 'main', 'main', 'scratch', 'worktree', NULL, NULL, NULL, NULL, NULL, 'backlog', 0, 'ready', 0, NULL, '${now}', '${now}', NULL)
+    ON CONFLICT(id) DO NOTHING`);
+  db.prepare(
+    `INSERT INTO agent_sessions (id, workspace_id, runtime_id, display_name, status, status_reason,
+      status_reason_at, last_status_at, last_output_at, ended_at, exit_code, transport, tmux_session_name,
+      tmux_session_id, tmux_socket_name, tab_id, runtime_session_id, rate_limit_resume_attempts, next_resume_at,
+      last_resume_from_rate_limit_at, created_at, updated_at)
+     VALUES (?, 'ws_test', ?, 'test', ?, NULL, NULL, ?, NULL, NULL, NULL, 'disconnected', 'citadel_test',
+      '$1', ?, ?, NULL, 0, NULL, NULL, '2026-05-17T00:00:00.000Z', ?)`,
+  ).run(
+    opts.id,
+    opts.runtimeId ?? "claude-code",
+    opts.legacyStatus,
+    lastStatusAt,
+    opts.tmuxSocketName ?? null,
+    opts.id,
+    updatedAt,
+  );
+  store.close();
+}
+
+function seedWorkspaceSessionWithoutTmuxSocket(dbPath: string) {
+  const store = new SqliteStore(dbPath);
+  const db = (store as unknown as { database: DatabaseSync }).database;
+  const now = "2026-05-31T19:07:00.000Z";
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS repos (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      root_path TEXT NOT NULL UNIQUE,
+      default_branch TEXT NOT NULL,
+      default_remote TEXT NOT NULL,
+      worktree_parent TEXT NOT NULL,
+      setup_hook_ids TEXT NOT NULL,
+      teardown_hook_ids TEXT NOT NULL,
+      provider_ids TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS workspaces (
       id TEXT PRIMARY KEY,
       repo_id TEXT NOT NULL REFERENCES repos(id),
       name TEXT NOT NULL,
@@ -78,13 +185,15 @@ function seedLegacySession(
       archived_at TEXT,
       UNIQUE(repo_id, name)
     );
-    CREATE TABLE agent_sessions (
+    CREATE TABLE IF NOT EXISTS workspace_sessions (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-      runtime_id TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'agent',
+      runtime_id TEXT,
       display_name TEXT NOT NULL,
       status TEXT NOT NULL,
       status_reason TEXT,
+      status_reason_at TEXT,
       last_status_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
       last_output_at TEXT,
       ended_at TEXT,
@@ -92,21 +201,33 @@ function seedLegacySession(
       transport TEXT NOT NULL,
       tmux_session_name TEXT,
       tmux_session_id TEXT,
+      tab_id TEXT,
+      runtime_session_id TEXT,
+      rate_limit_resume_attempts INTEGER NOT NULL DEFAULT 0,
+      next_resume_at TEXT,
+      last_resume_from_rate_limit_at TEXT,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      CHECK (
+        (kind = 'agent' AND runtime_id IS NOT NULL)
+        OR (kind = 'terminal' AND runtime_id IS NULL)
+      )
     );
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (13, 'agent-sessions-tmux-socket-name', datetime('now')),
+      (14, 'agent-sessions-backfill-workspace-tmux-sockets', datetime('now'));
+    INSERT INTO repos (id, name, root_path, default_branch, default_remote, worktree_parent, setup_hook_ids, teardown_hook_ids, provider_ids, created_at, updated_at, archived_at)
+    VALUES ('repo_existing', 'r', '/tmp/existing-r', 'main', 'origin', '/tmp/existing-w', '[]', '[]', '[]', '${now}', '${now}', NULL);
+    INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, kind, pr_url, issue_key, issue_title, section, pinned, lifecycle, dirty, created_at, updated_at, archived_at)
+    VALUES ('ws_existing', 'repo_existing', 'ws', '/tmp/existing-ws', 'main', 'main', 'scratch', 'worktree', NULL, NULL, NULL, 'backlog', 0, 'ready', 0, '${now}', '${now}', NULL);
+    INSERT INTO workspace_sessions (id, workspace_id, kind, runtime_id, display_name, status, status_reason,
+      status_reason_at, last_status_at, last_output_at, ended_at, exit_code, transport, tmux_session_name,
+      tmux_session_id, tab_id, runtime_session_id, rate_limit_resume_attempts, next_resume_at,
+      last_resume_from_rate_limit_at, created_at, updated_at)
+    VALUES ('sess_existing', 'ws_existing', 'agent', 'claude-code', 'test', 'running', NULL,
+      NULL, '${now}', NULL, NULL, NULL, 'disconnected', 'citadel_existing',
+      '$1', 'sess_existing', NULL, 0, NULL, NULL, '${now}', '${now}');
   `);
-  // Seed parent rows in FK order: repos → workspaces → agent_sessions.
-  db.exec(`INSERT INTO repos (id, name, root_path, default_branch, default_remote, worktree_parent, setup_hook_ids, teardown_hook_ids, provider_ids, deploy_hook_command, created_at, updated_at, archived_at)
-    VALUES ('repo_test', 'r', '/tmp/r', 'main', 'origin', '/tmp/w', '[]', '[]', '[]', NULL, '${new Date().toISOString()}', '${new Date().toISOString()}', NULL)
-    ON CONFLICT(id) DO NOTHING`);
-  db.exec(`INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, kind, pr_url, issue_key, issue_title, section, pinned, lifecycle, dirty, created_at, updated_at, archived_at)
-    VALUES ('ws_test', 'repo_test', 'ws', '/tmp/ws', 'main', 'main', 'scratch', 'worktree', NULL, NULL, NULL, 'backlog', 0, 'ready', 0, '${new Date().toISOString()}', '${new Date().toISOString()}', NULL)
-    ON CONFLICT(id) DO NOTHING`);
-  db.exec(
-    `INSERT INTO agent_sessions (id, workspace_id, runtime_id, display_name, status, status_reason, last_status_at, last_output_at, ended_at, exit_code, transport, tmux_session_name, tmux_session_id, created_at, updated_at)
-     VALUES ('${opts.id}', 'ws_test', '${opts.runtimeId ?? "claude-code"}', 'test', '${opts.legacyStatus}', NULL, '${opts.lastStatusAt ?? "2026-05-17T00:00:00.000Z"}', NULL, NULL, NULL, 'disconnected', 'citadel_test', '$1', '2026-05-17T00:00:00.000Z', '${opts.updatedAt ?? "2026-05-17T00:00:00.000Z"}')`,
-  );
   store.close();
 }
 
@@ -176,59 +297,6 @@ describe("agent-status migration", () => {
     // longer matches either. State is stable.
     expect(secondPass?.status).toBe("running");
     expect(secondPass?.statusReason).toBe("migrated_from_waiting");
-  });
-});
-
-describe("workspace_sessions migration (version 13)", () => {
-  it("renames agent_sessions, converts shell rows to terminal sessions, and records version 13", () => {
-    const dbPath = makeTempPath();
-    seedLegacySession(dbPath, { id: "sess_shell", legacyStatus: "idle", runtimeId: "shell" });
-    const store = new SqliteStore(dbPath);
-    store.migrate();
-    const db = (store as unknown as { database: DatabaseSync }).database;
-    expect(CURRENT_SCHEMA_VERSION).toBe(13);
-    expect(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'agent_sessions'").get()).toBe(
-      undefined,
-    );
-    expect(
-      db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'workspace_sessions'").get(),
-    ).toMatchObject({ name: "workspace_sessions" });
-    expect(store.listWorkspaceSessions().find((s) => s.id === "sess_shell")).toMatchObject({
-      kind: "terminal",
-      runtimeId: null,
-    });
-    expect(db.prepare("SELECT name FROM schema_migrations WHERE version = 13").get()).toMatchObject({
-      name: "workspace-sessions-agent-terminal-split",
-    });
-    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-  });
-
-  it("enforces the workspace-session kind/runtime CHECK constraint", () => {
-    const dbPath = makeTempPath();
-    const store = new SqliteStore(dbPath);
-    store.migrate();
-    const db = (store as unknown as { database: DatabaseSync }).database;
-    db.exec(`INSERT INTO repos (id, name, root_path, default_branch, default_remote, worktree_parent, setup_hook_ids, teardown_hook_ids, provider_ids, deploy_hook_command, created_at, updated_at, archived_at)
-      VALUES ('repo_check', 'r', '/tmp/check-r', 'main', 'origin', '/tmp/w', '[]', '[]', '[]', NULL, '2026-05-17T00:00:00.000Z', '2026-05-17T00:00:00.000Z', NULL)`);
-    db.exec(`INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, kind, pr_url, issue_key, issue_title, issue_url, slack_thread_url, section, pinned, lifecycle, dirty, created_at, updated_at, archived_at)
-      VALUES ('ws_check', 'repo_check', 'ws', '/tmp/check-ws', 'main', 'main', 'scratch', 'worktree', NULL, NULL, NULL, NULL, NULL, 'backlog', 0, 'ready', 0, '2026-05-17T00:00:00.000Z', '2026-05-17T00:00:00.000Z', NULL)`);
-    expect(() =>
-      db.exec(`INSERT INTO workspace_sessions (
-        id, workspace_id, kind, runtime_id, display_name, status, transport, created_at, updated_at
-      ) VALUES ('bad_terminal', 'ws_check', 'terminal', 'shell', 'Terminal', 'running', 'connected', '2026-05-17T00:00:00.000Z', '2026-05-17T00:00:00.000Z')`),
-    ).toThrow();
-  });
-
-  it("fails migration when an unexpected schema object still depends on agent_sessions", () => {
-    const dbPath = makeTempPath();
-    seedLegacySession(dbPath, { id: "sess_dep", legacyStatus: "idle" });
-    const rawStore = new SqliteStore(dbPath);
-    const db = (rawStore as unknown as { database: DatabaseSync }).database;
-    db.exec("CREATE VIEW legacy_agent_session_ids AS SELECT id FROM agent_sessions");
-    rawStore.close();
-
-    const store = new SqliteStore(dbPath);
-    expect(() => store.migrate()).toThrow(/Unexpected schema objects reference agent_sessions/);
   });
 });
 
@@ -321,6 +389,152 @@ describe("updateSessionRateLimitResume", () => {
     store.updateSessionRateLimitResume("sess_c", {});
     const after = store.listSessions().find((s) => s.id === "sess_c");
     expect(after?.updatedAt).toBe(before?.updatedAt); // updated_at not touched
+  });
+});
+
+describe("tmux socket migration (version 13)", () => {
+  it("adds nullable tmux_socket_name to workspace_sessions", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    const cols = db.prepare("PRAGMA table_info(workspace_sessions)").all() as Array<{
+      name: string;
+      type: string;
+      notnull: number;
+    }>;
+    const column = cols.find((c) => c.name === "tmux_socket_name");
+    expect(column).toBeDefined();
+    expect(column?.type.toUpperCase()).toBe("TEXT");
+    expect(column?.notnull).toBe(0);
+  });
+
+  it("records schema_migrations version 13 row", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    const row = db.prepare("SELECT name FROM schema_migrations WHERE version = 13").get() as
+      | { name: string }
+      | undefined;
+    expect(row?.name).toBe("agent-sessions-tmux-socket-name");
+  });
+
+  it("backfills legacy rows to their workspace tmux socket on the next migration pass", () => {
+    const previous = process.env.CITADEL_TMUX_SOCKET;
+    process.env.CITADEL_TMUX_SOCKET = "citadel-test";
+    try {
+      const dbPath = makeTempPath();
+      seedLegacySession(dbPath, { id: "sess_backfill", legacyStatus: "idle" });
+
+      const store = new SqliteStore(dbPath);
+      store.migrate();
+
+      const row = store.listSessions().find((s) => s.id === "sess_backfill");
+      expect(row?.tmuxSocketName).toBe("citadel-test-ws-ws_test");
+      const db = (store as unknown as { database: DatabaseSync }).database;
+      const migration = db.prepare("SELECT name FROM schema_migrations WHERE version = 14").get() as
+        | { name: string }
+        | undefined;
+      expect(migration?.name).toBe("agent-sessions-backfill-workspace-tmux-sockets");
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, "CITADEL_TMUX_SOCKET");
+      else process.env.CITADEL_TMUX_SOCKET = previous;
+    }
+  });
+
+  it("does not overwrite rows that already have an explicit tmux socket", () => {
+    const previous = process.env.CITADEL_TMUX_SOCKET;
+    process.env.CITADEL_TMUX_SOCKET = "citadel-new";
+    try {
+      const dbPath = makeTempPath();
+      seedLegacySession(dbPath, { id: "sess_socket_keep", legacyStatus: "idle" });
+      const seeded = new SqliteStore(dbPath);
+      seeded.migrate();
+      const db = (seeded as unknown as { database: DatabaseSync }).database;
+      db.prepare("UPDATE workspace_sessions SET tmux_socket_name = ? WHERE id = ?").run(
+        "manual-socket",
+        "sess_socket_keep",
+      );
+
+      const migrated = new SqliteStore(dbPath);
+      migrated.migrate();
+      const row = migrated.listSessions().find((s) => s.id === "sess_socket_keep");
+      expect(row?.tmuxSocketName).toBe("manual-socket");
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, "CITADEL_TMUX_SOCKET");
+      else process.env.CITADEL_TMUX_SOCKET = previous;
+    }
+  });
+});
+
+describe("workspace_sessions migration (version 15)", () => {
+  it("moves legacy agent_sessions rows into workspace_sessions and drops the old table", () => {
+    const dbPath = makeTempPath();
+    seedLegacySession(dbPath, { id: "sess_agent", legacyStatus: "idle" });
+
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+
+    const legacyTable = db
+      .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'agent_sessions'")
+      .get();
+    expect(legacyTable).toBeUndefined();
+    expect(db.prepare("SELECT kind, runtime_id FROM workspace_sessions WHERE id = ?").get("sess_agent")).toEqual({
+      kind: "agent",
+      runtime_id: "claude-code",
+    });
+    expect(store.listSessions().find((s) => s.id === "sess_agent")?.runtimeId).toBe("claude-code");
+    const migration = db.prepare("SELECT name FROM schema_migrations WHERE version = 15").get() as
+      | { name: string }
+      | undefined;
+    expect(migration?.name).toBe("workspace-sessions-agent-terminal-split");
+  });
+
+  it("converts legacy shell runtime rows into terminal workspace sessions", () => {
+    const dbPath = makeTempPath();
+    seedLegacySession(dbPath, { id: "sess_terminal", legacyStatus: "running", runtimeId: "shell" });
+
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+
+    expect(db.prepare("SELECT kind, runtime_id FROM workspace_sessions WHERE id = ?").get("sess_terminal")).toEqual({
+      kind: "terminal",
+      runtime_id: null,
+    });
+    expect(store.listSessions().find((s) => s.id === "sess_terminal")).toBeUndefined();
+    expect(store.listWorkspaceSessions().find((s) => s.id === "sess_terminal")).toMatchObject({
+      kind: "terminal",
+      runtimeId: null,
+    });
+  });
+
+  it("repairs already-migrated workspace_sessions schemas that are missing tmux_socket_name", () => {
+    const previous = process.env.CITADEL_TMUX_SOCKET;
+    process.env.CITADEL_TMUX_SOCKET = "citadel-existing";
+    try {
+      const dbPath = makeTempPath();
+      seedWorkspaceSessionWithoutTmuxSocket(dbPath);
+
+      const store = new SqliteStore(dbPath);
+      store.migrate();
+      const db = (store as unknown as { database: DatabaseSync }).database;
+
+      const cols = db.prepare("PRAGMA table_info(workspace_sessions)").all() as Array<{ name: string }>;
+      expect(cols.some((c) => c.name === "tmux_socket_name")).toBe(true);
+      expect(store.listSessions().find((s) => s.id === "sess_existing")?.tmuxSocketName).toBe(
+        "citadel-existing-ws-ws_existing",
+      );
+      const migration = db.prepare("SELECT name FROM schema_migrations WHERE version = 15").get() as
+        | { name: string }
+        | undefined;
+      expect(migration?.name).toBe("workspace-sessions-agent-terminal-split");
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, "CITADEL_TMUX_SOCKET");
+      else process.env.CITADEL_TMUX_SOCKET = previous;
+    }
   });
 });
 

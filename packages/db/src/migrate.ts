@@ -1,3 +1,5 @@
+import process from "node:process";
+
 // All SQLite schema creation + additive migrations. Extracted from
 // SqliteStore so that index.ts stays under the 800-line file-size gate.
 //
@@ -10,15 +12,59 @@ type SqliteDatabase = {
   prepare(sql: string): {
     all(...params: unknown[]): unknown[];
     get(...params: unknown[]): unknown;
+    run(...params: unknown[]): { changes: number };
   };
 };
+
+type SessionTableName = "agent_sessions" | "workspace_sessions";
 
 // Highest schema_migrations version known to this code path. Bump alongside
 // the corresponding `INSERT OR IGNORE INTO schema_migrations` that introduces
 // the new version below. Consumed by the doctor's database-schema check so
 // `make doctor` can flag an installed daemon whose code is newer than the
 // database it's been given.
-export const CURRENT_SCHEMA_VERSION = 13;
+export const CURRENT_SCHEMA_VERSION = 15;
+
+function tmuxSocketBase(): string {
+  const configured = process.env.CITADEL_TMUX_SOCKET?.trim();
+  return configured && configured.length > 0 ? configured : "citadel";
+}
+
+function tmuxSocketNameForWorkspaceId(workspaceId: string): string {
+  const safeWorkspaceId = workspaceId.replace(/[^A-Za-z0-9_.-]/g, "_");
+  return `${tmuxSocketBase()}-ws-${safeWorkspaceId}`;
+}
+
+function backfillWorkspaceTmuxSocketNames(db: SqliteDatabase, tableName: SessionTableName): void {
+  const rows = db
+    .prepare(`
+      SELECT s.id AS session_id, s.workspace_id AS workspace_id
+      FROM ${tableName} s
+      JOIN workspaces w ON w.id = s.workspace_id
+      WHERE s.tmux_socket_name IS NULL OR s.tmux_socket_name = ''
+    `)
+    .all() as Array<{ session_id: string; workspace_id: string }>;
+
+  db.exec("BEGIN");
+  try {
+    const update = db.prepare(`
+      UPDATE ${tableName}
+      SET tmux_socket_name = ?
+      WHERE id = ? AND (tmux_socket_name IS NULL OR tmux_socket_name = '')
+    `);
+    for (const row of rows) {
+      update.run(tmuxSocketNameForWorkspaceId(row.workspace_id), row.session_id);
+    }
+    db.exec(`
+      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+        (14, 'agent-sessions-backfill-workspace-tmux-sockets', datetime('now'));
+    `);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
 
 export function runMigrations(
   db: SqliteDatabase,
@@ -27,9 +73,7 @@ export function runMigrations(
   const hasLegacyAgentSessions = tableExists(db, "agent_sessions");
   const hasWorkspaceSessions = tableExists(db, "workspace_sessions");
   const sessionBaselineTableSql =
-    hasLegacyAgentSessions && !hasWorkspaceSessions
-      ? legacyAgentSessionsTableSql()
-      : workspaceSessionsTableSql("workspace_sessions");
+    hasLegacyAgentSessions && !hasWorkspaceSessions ? legacyAgentSessionsTableSql() : workspaceSessionsTableSql();
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
@@ -105,8 +149,9 @@ export function runMigrations(
   ensureColumn("workspaces", "issue_url", "TEXT");
   ensureColumn("workspaces", "slack_thread_url", "TEXT");
   ensureColumn("workspaces", "kind", "TEXT NOT NULL DEFAULT 'worktree'");
-  const sessionTable = tableExists(db, "agent_sessions") ? "agent_sessions" : "workspace_sessions";
   ensureColumn("repos", "deploy_hook_command", "TEXT");
+  const sessionTable = sessionTableForMigrations(db);
+  if (sessionTable === "workspace_sessions") ensureColumn(sessionTable, "kind", "TEXT NOT NULL DEFAULT 'agent'");
   // Agent-status migration (canonical enum + tracking fields). All additive;
   // status remaps are idempotent. Wrapped in a transaction so a crash mid-
   // migration leaves rows untouched. See specs/B.3 for canonical values.
@@ -306,7 +351,19 @@ export function runMigrations(
     COMMIT;
   `);
 
+  // tmux_socket_name shards agent panes across tmux servers. v13 added the
+  // column; v14 backfills legacy rows onto the same workspace-specific socket
+  // formula used for new session spawns. Current live panes may still be bound
+  // to the old shared socket until the operator relaunches/restores them.
+  ensureColumn(sessionTable, "tmux_socket_name", "TEXT");
+  db.exec(`
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (13, 'agent-sessions-tmux-socket-name', datetime('now'));
+  `);
+  backfillWorkspaceTmuxSocketNames(db, sessionTable);
   migrateWorkspaceSessions(db);
+  ensureColumn("workspace_sessions", "tmux_socket_name", "TEXT");
+  backfillWorkspaceTmuxSocketNames(db, "workspace_sessions");
 }
 
 function tableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -314,6 +371,12 @@ function tableExists(db: SqliteDatabase, tableName: string): boolean {
     | { name: string }
     | undefined;
   return row?.name === tableName;
+}
+
+function sessionTableForMigrations(db: SqliteDatabase): SessionTableName {
+  return tableExists(db, "agent_sessions") && !tableExists(db, "workspace_sessions")
+    ? "agent_sessions"
+    : "workspace_sessions";
 }
 
 function legacyAgentSessionsTableSql() {
@@ -337,9 +400,9 @@ function legacyAgentSessionsTableSql() {
     );`;
 }
 
-function workspaceSessionsTableSql(tableName: string) {
+function workspaceSessionsTableSql() {
   return `
-    CREATE TABLE IF NOT EXISTS ${tableName} (
+    CREATE TABLE IF NOT EXISTS workspace_sessions (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL REFERENCES workspaces(id),
       kind TEXT NOT NULL DEFAULT 'agent',
@@ -355,6 +418,7 @@ function workspaceSessionsTableSql(tableName: string) {
       transport TEXT NOT NULL,
       tmux_session_name TEXT,
       tmux_session_id TEXT,
+      tmux_socket_name TEXT,
       tab_id TEXT,
       runtime_session_id TEXT,
       rate_limit_resume_attempts INTEGER NOT NULL DEFAULT 0,
@@ -370,82 +434,37 @@ function workspaceSessionsTableSql(tableName: string) {
 }
 
 function migrateWorkspaceSessions(db: SqliteDatabase) {
-  if (!tableExists(db, "agent_sessions")) {
-    db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_workspace_sessions_workspace ON workspace_sessions(workspace_id);
-      CREATE INDEX IF NOT EXISTS idx_workspace_sessions_runtime_session ON workspace_sessions(runtime_session_id);
-      CREATE INDEX IF NOT EXISTS idx_workspace_sessions_status ON workspace_sessions(status);
-      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
-        (13, 'workspace-sessions-agent-terminal-split', datetime('now'));
-    `);
+  const hasLegacyAgentSessions = tableExists(db, "agent_sessions");
+  if (!hasLegacyAgentSessions) {
+    finalizeWorkspaceSessionsMigration(db);
     return;
   }
-  if (tableExists(db, "workspace_sessions")) {
-    throw new Error("Unexpected schema state: both agent_sessions and workspace_sessions exist before migration 13");
-  }
   assertExpectedAgentSessionDependencies(db);
+  if (tableExists(db, "workspace_sessions")) {
+    mergeAgentSessionsIntoWorkspaceSessions(db);
+  } else {
+    renameAgentSessionsToWorkspaceSessions(db);
+  }
+  finalizeWorkspaceSessionsMigration(db);
+}
+
+function finalizeWorkspaceSessionsMigration(db: SqliteDatabase) {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_workspace_sessions_workspace ON workspace_sessions(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_workspace_sessions_runtime_session ON workspace_sessions(runtime_session_id);
+    CREATE INDEX IF NOT EXISTS idx_workspace_sessions_status ON workspace_sessions(status);
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (15, 'workspace-sessions-agent-terminal-split', datetime('now'));
+  `);
+}
+
+function renameAgentSessionsToWorkspaceSessions(db: SqliteDatabase) {
   db.exec("BEGIN IMMEDIATE");
   try {
     const before = countRows(db, "agent_sessions");
     db.exec(`
-      CREATE TABLE workspace_sessions_new (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-        kind TEXT NOT NULL,
-        runtime_id TEXT,
-        display_name TEXT NOT NULL,
-        status TEXT NOT NULL,
-        status_reason TEXT,
-        status_reason_at TEXT,
-        last_status_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
-        last_output_at TEXT,
-        ended_at TEXT,
-        exit_code INTEGER,
-        transport TEXT NOT NULL,
-        tmux_session_name TEXT,
-        tmux_session_id TEXT,
-        tab_id TEXT,
-        runtime_session_id TEXT,
-        rate_limit_resume_attempts INTEGER NOT NULL DEFAULT 0,
-        next_resume_at TEXT,
-        last_resume_from_rate_limit_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        CHECK (
-          (kind = 'agent' AND runtime_id IS NOT NULL)
-          OR (kind = 'terminal' AND runtime_id IS NULL)
-        )
-      );
-      INSERT INTO workspace_sessions_new (
-        id, workspace_id, kind, runtime_id, display_name, status, status_reason, status_reason_at,
-        last_status_at, last_output_at, ended_at, exit_code, transport, tmux_session_name, tmux_session_id,
-        tab_id, runtime_session_id, rate_limit_resume_attempts, next_resume_at, last_resume_from_rate_limit_at,
-        created_at, updated_at
-      )
-      SELECT
-        id,
-        workspace_id,
-        CASE WHEN runtime_id = 'shell' THEN 'terminal' ELSE 'agent' END AS kind,
-        CASE WHEN runtime_id = 'shell' THEN NULL ELSE runtime_id END AS runtime_id,
-        display_name,
-        status,
-        status_reason,
-        status_reason_at,
-        last_status_at,
-        last_output_at,
-        ended_at,
-        exit_code,
-        transport,
-        tmux_session_name,
-        tmux_session_id,
-        tab_id,
-        runtime_session_id,
-        rate_limit_resume_attempts,
-        next_resume_at,
-        last_resume_from_rate_limit_at,
-        created_at,
-        updated_at
-      FROM agent_sessions;
+      ${workspaceSessionsTableSql().replace("CREATE TABLE IF NOT EXISTS workspace_sessions", "CREATE TABLE workspace_sessions_new")}
+      ${copyAgentSessionsSql("workspace_sessions_new")}
     `);
     const after = countRows(db, "workspace_sessions_new");
     if (after !== before) {
@@ -454,28 +473,74 @@ function migrateWorkspaceSessions(db: SqliteDatabase) {
     db.exec(`
       DROP TABLE agent_sessions;
       ALTER TABLE workspace_sessions_new RENAME TO workspace_sessions;
-      CREATE INDEX IF NOT EXISTS idx_workspace_sessions_workspace ON workspace_sessions(workspace_id);
-      CREATE INDEX IF NOT EXISTS idx_workspace_sessions_runtime_session ON workspace_sessions(runtime_session_id);
-      CREATE INDEX IF NOT EXISTS idx_workspace_sessions_status ON workspace_sessions(status);
     `);
-    const violations = db.prepare("PRAGMA foreign_key_check").all();
-    if (violations.length > 0) {
-      throw new Error(`workspace_sessions migration produced foreign-key violations: ${JSON.stringify(violations)}`);
-    }
-    db.exec(`
-      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
-        (13, 'workspace-sessions-agent-terminal-split', datetime('now'));
-      COMMIT;
-    `);
+    assertNoForeignKeyViolations(db);
+    db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
   }
 }
 
+function mergeAgentSessionsIntoWorkspaceSessions(db: SqliteDatabase) {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec(copyAgentSessionsSql("workspace_sessions"));
+    db.exec("DROP TABLE agent_sessions;");
+    assertNoForeignKeyViolations(db);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function copyAgentSessionsSql(targetTable: string) {
+  return `
+    INSERT OR IGNORE INTO ${targetTable} (
+      id, workspace_id, kind, runtime_id, display_name, status, status_reason, status_reason_at,
+      last_status_at, last_output_at, ended_at, exit_code, transport, tmux_session_name, tmux_session_id,
+      tmux_socket_name, tab_id, runtime_session_id, rate_limit_resume_attempts, next_resume_at,
+      last_resume_from_rate_limit_at, created_at, updated_at
+    )
+    SELECT
+      id,
+      workspace_id,
+      CASE WHEN runtime_id = 'shell' THEN 'terminal' ELSE 'agent' END AS kind,
+      CASE WHEN runtime_id = 'shell' THEN NULL ELSE runtime_id END AS runtime_id,
+      display_name,
+      status,
+      status_reason,
+      status_reason_at,
+      last_status_at,
+      last_output_at,
+      ended_at,
+      exit_code,
+      transport,
+      tmux_session_name,
+      tmux_session_id,
+      tmux_socket_name,
+      tab_id,
+      runtime_session_id,
+      rate_limit_resume_attempts,
+      next_resume_at,
+      last_resume_from_rate_limit_at,
+      created_at,
+      updated_at
+    FROM agent_sessions;
+  `;
+}
+
 function countRows(db: SqliteDatabase, tableName: string): number {
   const row = db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get() as { count: number };
   return Number(row.count);
+}
+
+function assertNoForeignKeyViolations(db: SqliteDatabase) {
+  const violations = db.prepare("PRAGMA foreign_key_check").all();
+  if (violations.length > 0) {
+    throw new Error(`workspace_sessions migration produced foreign-key violations: ${JSON.stringify(violations)}`);
+  }
 }
 
 function assertExpectedAgentSessionDependencies(db: SqliteDatabase) {
@@ -485,7 +550,11 @@ function assertExpectedAgentSessionDependencies(db: SqliteDatabase) {
     )
     .all() as Array<{ type: string; name: string; tblName: string; sql: string | null }>;
   const unexpectedSqlRefs = schemaRefs.filter(
-    (row) => !(row.type === "table" && row.name === "agent_sessions" && row.tblName === "agent_sessions"),
+    (row) =>
+      !(
+        (row.type === "table" && row.name === "agent_sessions" && row.tblName === "agent_sessions") ||
+        ((row.type === "index" || row.type === "trigger") && row.tblName === "agent_sessions")
+      ),
   );
   if (unexpectedSqlRefs.length > 0) {
     throw new Error(

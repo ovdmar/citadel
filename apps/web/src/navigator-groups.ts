@@ -9,6 +9,15 @@ export const SECTION_ORDER = ["blocked", "needs-review", "working", "dirty", "id
 // the navigator's flat-list mode and never reaches buildGroupTree.
 export type GroupableKey = Exclude<GroupKey, "none">;
 
+// Translate the user-facing grouping mode into the level sequence buildGroupTree
+// consumes. Mirrors the inline mapping inside navigator.tsx so cockpit-side
+// callers (Ctrl+1..9 workspace nav) can derive the exact same tree.
+export function treeGroupingFor(grouping: GroupKey): GroupableKey[] {
+  if (grouping === "none") return [];
+  if (grouping === "namespace") return ["repo", "namespace"];
+  return [grouping];
+}
+
 export type WorkspaceEntry = { workspace: Workspace; sessions: WorkspaceSession[] };
 
 export type GroupNode =
@@ -163,4 +172,47 @@ export function collectGroupPaths(nodes: GroupNode[]): Set<string> {
   };
   walk(nodes);
   return paths;
+}
+
+// Depth-first flatten of the rendered tree to a list of workspace IDs in
+// in-tree visible order. Collapse state is intentionally ignored — this is
+// the index space cockpit-side nav shortcuts (Ctrl+1..9) map onto, and the
+// caller auto-expands the relevant group via expandGroupPath so the
+// selected workspace becomes visible.
+//
+// When the tree is empty (grouping = "none" — buildGroupTree returns []),
+// the cockpit falls back to walking `workspaces` in input order (see
+// the inline fallback at `apps/web/src/cockpit.tsx`'s flatWorkspaceIds memo).
+export function flattenWorkspaceOrder(nodes: GroupNode[]): string[] {
+  const out: string[] = [];
+  const walk = (list: GroupNode[]) => {
+    for (const node of list) {
+      if (node.kind === "leaf") {
+        for (const entry of node.workspaces) out.push(entry.workspace.id);
+      } else {
+        walk(node.children);
+      }
+    }
+  };
+  walk(nodes);
+  return out;
+}
+
+// Find the group node path that contains the given workspace, deepest match
+// first. Returns null when the workspace is not present in the tree (or the
+// tree is empty / grouping = "none", in which case no group expansion is
+// needed). Used by cockpit nav shortcuts to auto-expand the enclosing group.
+export function findGroupPathForWorkspace(nodes: GroupNode[], workspaceId: string): string | null {
+  const walk = (list: GroupNode[]): string | null => {
+    for (const node of list) {
+      if (node.kind === "leaf") {
+        if (node.workspaces.some((entry) => entry.workspace.id === workspaceId)) return node.path;
+      } else {
+        const inner = walk(node.children);
+        if (inner !== null) return inner;
+      }
+    }
+    return null;
+  };
+  return walk(nodes);
 }

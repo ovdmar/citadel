@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
+import { apiGet, apiPut } from "./helpers/api-request.js";
 import { assertDaemonIsSandbox } from "./helpers/sandbox-guard.js";
 
 const API_BASE =
@@ -20,12 +21,12 @@ test.describe("notes location", () => {
   test.afterEach(async ({ request }) => {
     // Reset to the default notes location so subsequent tests aren't pinned
     // to a tmp path that may have been deleted.
-    await request.put(`${API_BASE}/api/config`, { data: { scratchpad: { path: undefined } } });
+    await apiPut(request, `${API_BASE}/api/config`, { data: { scratchpad: { path: undefined } } });
     // Also empty the default scratchpad — otherwise leftover content here can
     // trigger a `migrate-to-blocks` history entry on the next test's first
     // read, which double-counts pills in scratchpad-blocks.spec.ts. Test
     // isolation only goes as deep as the shared daemon state allows.
-    await request.put(`${API_BASE}/api/scratchpad`, { data: { content: "" } });
+    await apiPut(request, `${API_BASE}/api/scratchpad`, { data: { content: "" } });
     for (const file of tmpFiles.splice(0)) {
       try {
         fs.rmSync(file, { force: true });
@@ -46,7 +47,12 @@ test.describe("notes location", () => {
     await expect(input).toBeVisible();
     await input.fill(tmpNotes);
 
-    await page.getByRole("button", { name: /^save$/i }).click();
+    await Promise.all([
+      page.waitForResponse(
+        (response) => response.url().endsWith("/api/config") && response.request().method() === "PUT",
+      ),
+      page.getByRole("button", { name: /^save$/i }).click(),
+    ]);
 
     // Reload — the field round-trips through PUT /api/config.
     await page.reload();
@@ -54,7 +60,7 @@ test.describe("notes location", () => {
     await expect(page.locator('[data-testid="notes-location-input"]')).toHaveValue(tmpNotes);
 
     // Daemon-side: /api/scratchpad now reads/writes at the configured path.
-    const snapshot = (await (await request.get(`${API_BASE}/api/scratchpad`)).json()) as {
+    const snapshot = (await (await apiGet(request, `${API_BASE}/api/scratchpad`)).json()) as {
       content: string;
       path: string;
     };
@@ -70,7 +76,7 @@ test.describe("notes location", () => {
     // other e2e specs assert exact history counts.
     const marker = `notes-location-e2e-${Date.now()}`;
     const fencedMarker = `<!-- block:11111111-aaaa-4bbb-8ccc-aaaaaaaaaaaa -->\n${marker}\n<!-- /block:11111111-aaaa-4bbb-8ccc-aaaaaaaaaaaa -->\n`;
-    await request.put(`${API_BASE}/api/scratchpad`, { data: { content: fencedMarker } });
+    await apiPut(request, `${API_BASE}/api/scratchpad`, { data: { content: fencedMarker } });
     expect(fs.existsSync(tmpNotes)).toBe(true);
     expect(fs.readFileSync(tmpNotes, "utf8")).toContain(marker);
 
@@ -84,7 +90,7 @@ test.describe("notes location", () => {
     tmpFiles.push(tmpNotes);
 
     // First set a custom path so there's something to clear.
-    await request.put(`${API_BASE}/api/config`, { data: { scratchpad: { path: tmpNotes } } });
+    await apiPut(request, `${API_BASE}/api/config`, { data: { scratchpad: { path: tmpNotes } } });
 
     await page.goto("/settings");
     await page.getByRole("button", { name: "Notes" }).click();
@@ -93,14 +99,27 @@ test.describe("notes location", () => {
 
     // Clear and save.
     await input.fill("");
-    await page.getByRole("button", { name: /^save$/i }).click();
+    await Promise.all([
+      page.waitForResponse(
+        (response) => response.url().endsWith("/api/config") && response.request().method() === "PUT",
+      ),
+      page.getByRole("button", { name: /^save$/i }).click(),
+    ]);
+
+    await expect
+      .poll(async () => {
+        const response = await apiGet(request, `${API_BASE}/api/config`);
+        const body = (await response.json()) as { config: { scratchpad?: { path?: string } } };
+        return body.config.scratchpad?.path ?? "";
+      })
+      .toBe("");
 
     await page.reload();
     await page.getByRole("button", { name: "Notes" }).click();
     await expect(page.locator('[data-testid="notes-location-input"]')).toHaveValue("");
 
     // Daemon-side: path resolves back to a non-tmp location under dataDir.
-    const snapshot = (await (await request.get(`${API_BASE}/api/scratchpad`)).json()) as {
+    const snapshot = (await (await apiGet(request, `${API_BASE}/api/scratchpad`)).json()) as {
       path: string;
     };
     expect(snapshot.path).not.toBe(tmpNotes);

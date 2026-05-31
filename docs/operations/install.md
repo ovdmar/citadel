@@ -11,7 +11,6 @@ Required on the host:
 - Node.js ≥ 24
 - pnpm ≥ 10 (Corepack-enabled)
 - tmux
-- ttyd (set `TTYD_BIN` if it isn't on PATH)
 - jq
 - bash
 - git
@@ -78,7 +77,7 @@ Install and upgrade both refuse dirty checkouts before any ref movement or reins
 
 After upgrade, the installer runs `make doctor` after restarting the daemon. For manual checks, use `make doctor`, not `curl /api/health` (doctor retries 5×1s; raw curl can race an async restart).
 
-Tmux sessions survive a daemon restart — Citadel uses a *separate* `citadel-tmux.service` for the tmux server precisely so agents don't churn. ttyd processes are recreated; the cockpit reattaches automatically.
+Tmux sessions survive a daemon restart — Citadel uses a *separate* `citadel-tmux.service` for the tmux server precisely so agents don't churn. The cockpit reattaches through the daemon's xterm/WebSocket terminal bridge.
 
 ### Failed-release recovery
 
@@ -101,7 +100,7 @@ make doctor --json      # machine-readable DoctorReport JSON
 
 The doctor checks:
 
-- **Required binaries** (node, pnpm, tmux, ttyd, bash, git, sqlite3, jq) — missing → `fail`.
+- **Required binaries** (node, pnpm, tmux, bash, git, sqlite3, jq) — missing → `fail`.
 - **Recommended binaries** (gh, jtk) — missing → `warn`.
 - **Agent runtimes** — missing configured agent runtime commands produce per-runtime `warn`; zero executable agent runtimes produces an aggregate `fail`.
 - **Terminal profile** — missing terminal command produces `fail`.

@@ -32,13 +32,19 @@ Agent runtimes are prompt-driven command adapters launched through tmux:
 ```json
 {
   "agentRuntimes": [
-    { "id": "codex", "displayName": "Codex", "command": "codex", "args": ["--yolo"] }
+    { "id": "codex", "displayName": "Codex", "command": "codex", "args": ["--yolo", "--enable", "goals"] }
   ],
   "terminal": { "displayName": "Terminal", "command": "bash", "args": ["-l"] }
 }
 ```
 
-Built-in agent defaults include `claude-code`, `codex`, `cursor-agent`, and `pi`. Plain shell is the singular `terminal` profile, not an agent runtime. Codex defaults to `--yolo` so interactive launches use the CLI's no-approval/no-sandbox mode; edit or clear the runtime args in Settings to change that. Agent runtime health is derived from command availability. Workspace sessions persist tmux session name/id for reconnect.
+Built-in agent defaults include `claude-code`, `codex`, `cursor-agent`, and `pi`. Plain shell is the singular `terminal` profile, not an agent runtime. Codex defaults to `--yolo` so interactive launches use the CLI's no-approval/no-sandbox mode; edit or clear the runtime args in Settings to change that. Citadel keeps `--enable goals` on the Codex runtime so all Citadel-launched Codex sessions use the experimental goals feature. Agent runtime health is derived from command availability. Workspace sessions persist tmux session name/id for reconnect.
+
+Citadel launches Codex with a workspace-scoped `CODEX_SQLITE_HOME` under
+`${dataDir}/codex-sqlite/<workspaceId>`. User auth/config and transcript/history
+entries stay in the operator's global Codex home, but SQLite-backed runtime
+state is isolated so live Codex sessions do not contend on the same global
+SQLite files.
 
 ## Runtime Usage Providers
 
@@ -164,28 +170,28 @@ Tools include read-only state inspection (including `read_agent_output`, which r
 
 For interactive runtimes like Claude Code, an initial `prompt` passed to `start_agent_session` and every `send_agent_message` are delivered into the tmux pane via paste-buffer + Enter, so the prompt is actually submitted to the agent and not just left in the input box. Citadel ships `claude-code` without `promptArg` for this reason — `-p` is Claude Code's non-interactive print mode, which exits after responding and is not what an interactive Citadel session needs.
 
-## Terminal Renderer (ttyd)
+## Terminal Renderer
 
-Workspace sessions are tmux sessions. Agent sessions use the configured terminal profile as their base shell before Citadel sends the agent runtime command. Terminal sessions run only the terminal profile. The cockpit's interactive renderer is `ttyd`, run as a per-session child process and reverse-proxied through the daemon at `/terminals/:sessionId/*`.
+Workspace sessions are tmux sessions. Agent sessions use the configured terminal profile as their base shell before Citadel sends the agent runtime command. Terminal sessions run only the terminal profile. The cockpit's interactive renderer is an in-process xterm.js pane connected to the daemon WebSocket at `/terminal/:sessionId`. The daemon bridges that socket to the matching tmux session with node-pty running `tmux attach-session`, so normal workspace and session switching does not spawn one renderer process per session and interactive TUIs get real PTY behavior.
 
 Environment variables:
 
-- `TTYD_BIN` — absolute path to the ttyd binary (default `/home/linuxbrew/.linuxbrew/bin/ttyd`).
-- `CITADEL_SHELL_BIN` — shell used to wrap `tmux attach` (default `$SHELL` then `/bin/bash`).
-- `CITADEL_TTYD_PORT_BASE`, `CITADEL_TTYD_PORT_MAX` — inclusive port range used for ttyd allocation. When unset, the daemon picks a per-instance 200-port slot starting at `7721 + 200 * ((daemonPort - 4010) mod 11)`, giving 11 disjoint slices in `7721..9920`. All ports are bound to `127.0.0.1`.
+- `CITADEL_TMUX_SOCKET` — tmux socket name used by the daemon and terminal bridge.
+- `CITADEL_TMUX_HISTORY_LIMIT` — tmux scrollback lines per pane (default `20000`, clamped to `1000`-`100000`).
+- `CITADEL_SHELL_BIN` — shell used when Citadel creates shell-first tmux sessions (default `$SHELL` then `/bin/bash`).
 
 Lifecycle:
 
-- A ttyd process is spawned the first time the cockpit hits the session terminal proxy endpoint. ttyd is launched with `-W --check-origin=false -i 127.0.0.1 -b /terminals/<sessionId>` and runs `bash -lc 'tmux attach -t <session>'`.
-- Stopping a workspace session releases its ttyd. Releasing the terminal proxy alone leaves tmux running.
-- On daemon startup, stale `ttyd` processes that listen inside the configured port range are reaped.
+- Opening a terminal WebSocket spawns one disposable node-pty viewer process for `tmux attach-session`.
+- Closing the WebSocket kills that viewer process with `SIGHUP`; the durable tmux session and agent process remain alive.
+- Stopping a session kills the underlying tmux session and deletes the session row.
 
-## Diagnostic Terminal Gateway
+## WebSocket Terminal Gateway
 
-A separate xterm/WebSocket gateway is still exposed at `/terminal/:sessionId` for tooling and tests:
+The xterm/WebSocket gateway is exposed at `/terminal/:sessionId`:
 
-- reconnect sends a bounded visible-screen snapshot,
-- live output streams from tmux control mode as incremental chunks,
-- input, paste, and resize are relayed to tmux.
+- terminal input/output bytes move as binary WebSocket frames,
+- JSON control messages carry resize and error/exit events,
+- reconnect attaches to the same tmux session and resumes from tmux's current visible state plus live PTY output.
 
-This gateway is *not* the cockpit's default renderer. Use it for scripted tests or remote debugging only.
+This gateway is the cockpit renderer and is also used for scripted tests or remote debugging.
