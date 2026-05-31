@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
-import type { AgentSession } from "@citadel/contracts";
-import { act, createElement } from "react";
+import type { TerminalSession } from "@citadel/contracts";
+import { createElement } from "react";
+import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -27,6 +28,11 @@ vi.mock("./api.js", () => apiMocks);
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const roots: Root[] = [];
+
+async function act(callback: () => void | Promise<void>) {
+  await callback();
+  await settle();
+}
 
 beforeEach(() => {
   document.body.innerHTML = "";
@@ -63,7 +69,9 @@ beforeEach(() => {
 
 afterEach(async () => {
   await act(async () => {
-    for (const root of roots.splice(0)) root.unmount();
+    flushSync(() => {
+      for (const root of roots.splice(0)) root.unmount();
+    });
   });
 });
 
@@ -85,7 +93,7 @@ describe("focusActiveTerminal", () => {
     roots.push(root);
 
     await act(async () => {
-      root.render(createElement(TerminalPane, { session: sessionFixture() }));
+      flushSync(() => root.render(createElement(TerminalPane, { session: sessionFixture() })));
       await settle();
     });
 
@@ -154,7 +162,7 @@ describe("TerminalPane theme handling", () => {
     roots.push(root);
 
     await act(async () => {
-      root.render(createElement(TerminalPane, { session: sessionFixture() }));
+      flushSync(() => root.render(createElement(TerminalPane, { session: sessionFixture() })));
       await settle();
     });
 
@@ -206,11 +214,12 @@ function installLocalStorageMock() {
   });
 }
 
-function sessionFixture(): AgentSession {
+function sessionFixture(): TerminalSession {
   return {
     id: "sess_1",
     workspaceId: "ws_1",
-    runtimeId: "shell",
+    kind: "terminal",
+    runtimeId: null,
     displayName: "Terminal",
     status: "idle",
     transport: "connected",

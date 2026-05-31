@@ -16,6 +16,12 @@ type RuntimeConfig = {
   supportsModelSelection?: boolean | undefined;
 };
 
+type TerminalProfileConfig = {
+  displayName: string;
+  command: string;
+  args: string[];
+};
+
 type HookConfig = {
   id: string;
   kind: "command";
@@ -49,7 +55,8 @@ type ConfigResponse = {
       github: { enabled: boolean; command?: string };
       jira: { enabled: boolean; command?: string; projectKey?: string };
     };
-    runtimes: RuntimeConfig[];
+    agentRuntimes: RuntimeConfig[];
+    terminal: TerminalProfileConfig;
     usageProviders: UsageProviderConfig[];
     hooks: HookConfig[];
     repoDefaults: { setupHookIds: string[]; teardownHookIds: string[] };
@@ -76,6 +83,11 @@ export function StructuredConfig() {
     queryFn: () => api<ConfigResponse>("/api/config"),
   });
   const [runtimes, setRuntimes] = useState<RuntimeConfig[]>([]);
+  const [terminal, setTerminal] = useState<TerminalProfileConfig>({
+    displayName: "Terminal",
+    command: "bash",
+    args: ["-l"],
+  });
   const [hooks, setHooks] = useState<HookConfig[]>([]);
   const [usageProviders, setUsageProviders] = useState<UsageProviderConfig[]>([]);
   const [mcpEnabled, setMcpEnabled] = useState(true);
@@ -93,7 +105,8 @@ export function StructuredConfig() {
   useEffect(() => {
     const cfg = configQuery.data?.config;
     if (!cfg) return;
-    setRuntimes(cfg.runtimes);
+    setRuntimes(cfg.agentRuntimes);
+    setTerminal(cfg.terminal);
     setHooks(cfg.hooks);
     setUsageProviders(cfg.usageProviders);
     setMcpEnabled(cfg.mcp.enabled);
@@ -123,7 +136,8 @@ export function StructuredConfig() {
               projectKey: jiraProject || undefined,
             },
           },
-          runtimes,
+          agentRuntimes: runtimes,
+          terminal,
           usageProviders,
           hooks,
           repoDefaults: {
@@ -228,7 +242,28 @@ export function StructuredConfig() {
       </section>
 
       <section className="config-section">
-        <h3>Runtimes</h3>
+        <h3>Terminal</h3>
+        <div className="structured-row">
+          <input
+            placeholder="Display name"
+            value={terminal.displayName}
+            onChange={(event) => setTerminal({ ...terminal, displayName: event.target.value })}
+          />
+          <input
+            placeholder="command"
+            value={terminal.command}
+            onChange={(event) => setTerminal({ ...terminal, command: event.target.value })}
+          />
+          <input
+            placeholder="args (space-separated)"
+            value={terminal.args.join(" ")}
+            onChange={(event) => setTerminal({ ...terminal, args: event.target.value.split(/\s+/).filter(Boolean) })}
+          />
+        </div>
+      </section>
+
+      <section className="config-section">
+        <h3>Agent runtimes</h3>
         {runtimes.map((runtime, index) => (
           <div key={`runtime-${index}-${runtime.id}`} className="structured-row">
             <input

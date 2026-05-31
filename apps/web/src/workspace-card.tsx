@@ -5,6 +5,7 @@ import type {
   PullRequestSummary,
   Workspace,
   WorkspaceDirtySummary,
+  WorkspaceSession,
 } from "@citadel/contracts";
 import { sessionNeedsAttention } from "@citadel/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -18,7 +19,7 @@ import "./workspace-status-dot.css";
 
 export type WorkspaceCardData = {
   workspace: Workspace;
-  sessions: AgentSession[];
+  sessions: WorkspaceSession[];
   operation?: Operation | null;
   pullRequest?: PullRequestSummary | null;
   approval?: ApprovalTone;
@@ -35,12 +36,12 @@ export type ApprovalTone = "none" | "pending" | "changes" | "approved";
 export type WorkspaceAgentTone = "attention" | "rate_limited" | "running" | "idle";
 
 // Aggregates the per-agent statuses for a workspace into one tone for the
-// status dot. Priority: attention > rate_limited > running > idle. Shell
-// sessions are excluded — they're plain terminals, not agents. usage_limited
+// status dot. Priority: attention > rate_limited > running > idle. Terminal
+// sessions are excluded. usage_limited
 // (account-wide cap, waits for a known reset) collapses into the same blue
 // `rate_limited` tone since both mean "stalled, will recover".
-export function deriveWorkspaceAgentTone(sessions: AgentSession[]): WorkspaceAgentTone {
-  const agentSessions = sessions.filter((s) => s.runtimeId !== "shell");
+export function deriveWorkspaceAgentTone(sessions: WorkspaceSession[]): WorkspaceAgentTone {
+  const agentSessions = sessions.filter((s): s is AgentSession => s.kind === "agent");
   if (agentSessions.some((s) => s.status === "waiting_for_input" || sessionNeedsAttention(s))) return "attention";
   if (agentSessions.some((s) => s.status === "rate_limited" || s.status === "usage_limited")) return "rate_limited";
   if (agentSessions.some((s) => s.status === "starting" || s.status === "running")) return "running";

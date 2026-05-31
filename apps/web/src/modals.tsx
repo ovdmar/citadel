@@ -368,7 +368,7 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   const [namespaceId, setNamespaceId] = useState("");
 
   const launchableRuntimes = useMemo(
-    () => props.runtimes.filter((runtime) => runtime.id !== "shell" && runtime.health === "healthy"),
+    () => props.runtimes.filter((runtime) => runtime.health === "healthy"),
     [props.runtimes],
   );
   const defaultRuntimeId = useMemo(() => {

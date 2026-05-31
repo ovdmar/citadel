@@ -115,7 +115,7 @@ export function registerTerminalRoutes(input: {
   emit?: (type: string, payload: unknown) => void;
   /** Recreate the tmux session a terminal needs. Returns the live tmux name/id. */
   respawnTmux?: (session: WorkspaceSession) => Promise<{ tmuxSessionName: string; tmuxSessionId: string } | null>;
-  /** Relaunch the agent inside an existing pane (shell-first Restart endpoint). */
+  /** Relaunch the agent inside an existing pane (terminal-first Restart endpoint). */
   restartAgent?: (session: AgentSession) => Promise<void>;
   /** In-memory map of recent operator-initiated terminations. Written by the
    * Restart endpoint and the user-action endpoint. The status-monitor reads
@@ -325,8 +325,7 @@ export function registerTerminalRoutes(input: {
   // injected respawnTmux hook to bring the underlying tmux session back, then
   // retry. Returns null if no self-heal was possible.
   const ensureWithHeal = async (session: ResolvedSession, theme?: Theme, force?: boolean): Promise<TtydEntry> => {
-      const enableTmuxMouse =
-        typeof session.runtimeId === "string" && MOUSE_GRABBING_RUNTIMES.has(session.runtimeId);
+    const enableTmuxMouse = typeof session.runtimeId === "string" && MOUSE_GRABBING_RUNTIMES.has(session.runtimeId);
     const base = {
       key: session.sessionId,
       tabId: session.tabId,
@@ -433,7 +432,7 @@ export function registerTerminalRoutes(input: {
     res.status(204).end();
   });
 
-  app.post("/api/agent-sessions/:sessionId/terminal-client-event", (req, res) => {
+  const terminalClientEventRoute: express.RequestHandler = (req, res) => {
     const sessionId = String(req.params.sessionId ?? "");
     const body = (req.body ?? {}) as Record<string, unknown>;
     const event = clippedString(body.event, "unknown", 80);
@@ -448,7 +447,9 @@ export function registerTerminalRoutes(input: {
       path: clippedString(body.path, "", 240),
     });
     res.status(204).end();
-  });
+  };
+  app.post("/api/workspace-sessions/:sessionId/terminal-client-event", terminalClientEventRoute);
+  app.post("/api/agent-sessions/:sessionId/terminal-client-event", terminalClientEventRoute);
 
   app.get("/api/terminals", (_req, res) => {
     res.json({

@@ -1,4 +1,4 @@
-import type { AgentSession, PullRequestSummary } from "@citadel/contracts";
+import type { AgentSession, PullRequestSummary, TerminalSession, WorkspaceSession } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
 import { approvalToneFor, deriveWorkspaceAgentTone, prToneFor } from "./workspace-card.js";
 
@@ -27,6 +27,7 @@ function session(over: Partial<AgentSession>): AgentSession {
   return {
     id: "s",
     workspaceId: "ws",
+    kind: "agent",
     runtimeId: "claude-code",
     displayName: "Test",
     status: "running",
@@ -42,6 +43,28 @@ function session(over: Partial<AgentSession>): AgentSession {
     updatedAt: "2026-05-25T12:00:00.000Z",
     ...over,
   } as AgentSession;
+}
+
+function terminalSession(over: Partial<TerminalSession> = {}): TerminalSession {
+  return {
+    id: "t",
+    workspaceId: "ws",
+    kind: "terminal",
+    runtimeId: null,
+    displayName: "Terminal",
+    status: "running",
+    statusReason: null,
+    lastStatusAt: "2026-05-25T12:00:00.000Z",
+    lastOutputAt: null,
+    endedAt: null,
+    exitCode: null,
+    transport: "connected",
+    tmuxSessionName: "citadel_terminal",
+    tmuxSessionId: "$2",
+    createdAt: "2026-05-25T12:00:00.000Z",
+    updatedAt: "2026-05-25T12:00:00.000Z",
+    ...over,
+  } as TerminalSession;
 }
 
 describe("prToneFor", () => {
@@ -169,8 +192,8 @@ describe("deriveWorkspaceAgentTone", () => {
     expect(deriveWorkspaceAgentTone([session({ status: "usage_limited" })])).toBe("rate_limited");
   });
 
-  it("shell-runtime sessions are excluded — running shell does NOT count as agent running", () => {
-    expect(deriveWorkspaceAgentTone([session({ status: "running", runtimeId: "shell" })])).toBe("idle");
+  it("terminal sessions are excluded — running terminal does NOT count as agent running", () => {
+    expect(deriveWorkspaceAgentTone([terminalSession({ status: "running" })])).toBe("idle");
   });
 
   describe("priority: attention > running > idle", () => {
@@ -219,12 +242,12 @@ describe("deriveWorkspaceAgentTone", () => {
       ).toBe("idle");
     });
 
-    it("attention from one session beats running shell + idle agent", () => {
+    it("attention from one session beats running terminal + idle agent", () => {
       expect(
         deriveWorkspaceAgentTone([
-          session({ id: "a", status: "running", runtimeId: "shell" }),
+          terminalSession({ id: "a", status: "running" }),
           session({ id: "b", status: "waiting_for_input" }),
-        ]),
+        ] satisfies WorkspaceSession[]),
       ).toBe("attention");
     });
   });

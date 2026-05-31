@@ -9,7 +9,17 @@ import { Button } from "./components/ui/button.js";
 // version unknown" banner when the daemon's report disagrees with the
 // cockpit's expected version (forward-compat).
 
-const KIND_ORDER: DoctorCheckKind[] = ["binary", "service", "daemon", "config", "database", "repo-hooks", "provider"];
+const KIND_ORDER: DoctorCheckKind[] = [
+  "binary",
+  "service",
+  "daemon",
+  "config",
+  "database",
+  "repo-hooks",
+  "provider",
+  "agent-runtime",
+  "terminal",
+];
 
 const KIND_LABEL: Record<DoctorCheckKind, string> = {
   binary: "Binaries",
@@ -19,6 +29,8 @@ const KIND_LABEL: Record<DoctorCheckKind, string> = {
   database: "Database",
   "repo-hooks": "Repositories",
   provider: "Providers",
+  "agent-runtime": "Agent runtimes",
+  terminal: "Terminal",
 };
 
 const SUMMARY_LABEL: Record<DoctorReport["summary"], { text: string; tone: "ok" | "warn" | "fail" }> = {

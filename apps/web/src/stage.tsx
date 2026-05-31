@@ -1,4 +1,4 @@
-import type { AgentRuntime, AgentSession, Workspace } from "@citadel/contracts";
+import type { AgentRuntime, TerminalProfile, Workspace, WorkspaceSession } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
 import { ExternalLink, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -13,7 +13,7 @@ import {
 import { TerminalPane, getTerminalHandle, subscribeTerminalHandle } from "./terminal-pane.js";
 
 type StageTab = {
-  session: AgentSession;
+  session: WorkspaceSession;
   label: string;
 };
 
@@ -21,20 +21,20 @@ type StageTab = {
 // per-daemon ttyd slice in apps/daemon/src/app.ts. We cap per workspace at
 // the same number so the UI never lets the user create a session that
 // would inevitably fail to bind a terminal port.
-const WORKSPACE_AGENT_CAP = 20;
+const WORKSPACE_SESSION_CAP = 20;
 const SESSION_REORDER_MIME = "application/x-citadel-agent-session-reorder";
 export const TERMINAL_PANE_RETAIN_LIMIT = 5;
 
-function compareStageSessions(a: AgentSession, b: AgentSession) {
+function compareStageSessions(a: WorkspaceSession, b: WorkspaceSession) {
   const aKey = a.tabId ?? a.id;
   const bKey = b.tabId ?? b.id;
   const cmp = aKey.localeCompare(bKey);
   return cmp !== 0 ? cmp : a.createdAt.localeCompare(b.createdAt);
 }
 
-export function stableVisitedSessions(allSessions: AgentSession[], visitedIds: Set<string>): AgentSession[] {
+export function stableVisitedSessions(allSessions: WorkspaceSession[], visitedIds: Set<string>): WorkspaceSession[] {
   const byId = new Map(allSessions.map((session) => [session.id, session]));
-  const result: AgentSession[] = [];
+  const result: WorkspaceSession[] = [];
   for (const id of visitedIds) {
     const session = byId.get(id);
     if (session) result.push(session);
@@ -58,7 +58,7 @@ export function retainRecentTerminalIds(
   return new Set(ordered.slice(-safeLimit));
 }
 
-export function stableWorkspaceSessionIdsKey(sessions: AgentSession[]): string {
+export function stableWorkspaceSessionIdsKey(sessions: WorkspaceSession[]): string {
   return [...sessions]
     .sort(compareStageSessions)
     .map((session) => session.id)
@@ -76,7 +76,7 @@ function sameOrderedIds(a: Set<string>, b: Set<string>): boolean {
 }
 
 function releaseTerminalViewer(sessionId: string): void {
-  void fetch(`/api/agent-sessions/${encodeURIComponent(sessionId)}/terminal`, {
+  void fetch(`/api/workspace-sessions/${encodeURIComponent(sessionId)}/terminal`, {
     method: "DELETE",
     keepalive: true,
   }).catch(() => {
@@ -86,9 +86,10 @@ function releaseTerminalViewer(sessionId: string): void {
 
 export function Stage(props: {
   workspace: Workspace;
-  sessions: AgentSession[];
-  allSessions?: AgentSession[];
+  sessions: WorkspaceSession[];
+  allSessions?: WorkspaceSession[];
   runtimes: AgentRuntime[];
+  terminal: TerminalProfile;
   activeSessionId: string | undefined;
   onActiveSession: (id: string) => void;
 }) {
@@ -194,9 +195,9 @@ export function Stage(props: {
     return () => window.removeEventListener("mousedown", onClick);
   }, [addMenuOpen]);
 
-  const startSession = useMutation({
+  const startAgentSession = useMutation({
     mutationFn: (input: { runtimeId: string; displayName: string }) =>
-      api<{ session: AgentSession }>("/api/agent-sessions", {
+      api<{ session: WorkspaceSession }>("/api/agent-sessions", {
         method: "POST",
         body: JSON.stringify({
           workspaceId: props.workspace.id,
@@ -211,14 +212,27 @@ export function Stage(props: {
     },
   });
 
+  const startTerminalSession = useMutation({
+    mutationFn: () =>
+      api<{ session: WorkspaceSession }>(`/api/workspaces/${props.workspace.id}/terminal-sessions`, {
+        method: "POST",
+        body: JSON.stringify({ displayName: props.terminal.displayName }),
+      }),
+    onSuccess: ({ session }) => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      props.onActiveSession(session.id);
+      setAddMenuOpen(false);
+    },
+  });
+
   const stopSession = useMutation({
-    mutationFn: (sessionId: string) => api(`/api/agent-sessions/${sessionId}`, { method: "DELETE" }),
+    mutationFn: (sessionId: string) => api(`/api/workspace-sessions/${sessionId}`, { method: "DELETE" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
 
   const renameSession = useMutation({
     mutationFn: (input: { sessionId: string; name: string }) =>
-      api(`/api/agent-sessions/${input.sessionId}`, {
+      api(`/api/workspace-sessions/${input.sessionId}`, {
         method: "PATCH",
         body: JSON.stringify({ displayName: input.name }),
       }),
@@ -230,17 +244,23 @@ export function Stage(props: {
   const [, setHandleTick] = useState(0);
   useEffect(() => subscribeTerminalHandle(() => setHandleTick((n) => n + 1)), []);
 
-  const startError = startSession.error instanceof Error ? startSession.error.message : null;
-  const atSessionCap = props.sessions.length >= WORKSPACE_AGENT_CAP;
+  const startError =
+    startAgentSession.error instanceof Error
+      ? startAgentSession.error.message
+      : startTerminalSession.error instanceof Error
+        ? startTerminalSession.error.message
+        : null;
+  const atSessionCap = props.sessions.length >= WORKSPACE_SESSION_CAP;
   // Per spec B.2 §Center Stage Sessions #10: starting a session needs a
   // ready worktree, so the "+" button is gated off while the workspace is
   // still being provisioned. AC3 (async create) will surface this state
   // visibly on the card; today the lifecycle is briefly "creating" only
   // during the synchronous setup window.
   const lifecycleCreating = props.workspace.lifecycle === "creating";
-  const addDisabled = startSession.isPending || atSessionCap || lifecycleCreating;
+  const addDisabled =
+    startAgentSession.isPending || startTerminalSession.isPending || atSessionCap || lifecycleCreating;
   const addTitle = atSessionCap
-    ? `Workspace is at the ${WORKSPACE_AGENT_CAP}-session cap. Close a session to start another.`
+    ? `Workspace is at the ${WORKSPACE_SESSION_CAP}-session cap. Close a session to start another.`
     : lifecycleCreating
       ? "Workspace is still being set up."
       : "Add session";
@@ -412,7 +432,7 @@ export function Stage(props: {
                 New session
                 {atSessionCap ? (
                   <output className="stage-add-cap">
-                    {props.sessions.length}/{WORKSPACE_AGENT_CAP} — cap reached
+                    {props.sessions.length}/{WORKSPACE_SESSION_CAP} — cap reached
                   </output>
                 ) : null}
               </div>
@@ -421,38 +441,38 @@ export function Stage(props: {
                 role="menuitem"
                 title={
                   atSessionCap
-                    ? `Cap reached (${WORKSPACE_AGENT_CAP}). Close a session first.`
-                    : "Start a shell terminal in this workspace"
+                    ? `Cap reached (${WORKSPACE_SESSION_CAP}). Close a session first.`
+                    : "Start a terminal in this workspace"
                 }
-                onClick={() => startSession.mutate({ runtimeId: "shell", displayName: "Terminal" })}
+                onClick={() => startTerminalSession.mutate()}
                 disabled={addDisabled}
               >
-                <TerminalSquare size={12} /> Plain Terminal
+                <TerminalSquare size={12} /> {props.terminal.displayName}
               </button>
-              {props.runtimes
-                .filter((runtime) => runtime.id !== "shell")
-                .map((runtime) => {
-                  const runtimeDisabled = runtime.health !== "healthy" || addDisabled;
-                  const runtimeTitle = atSessionCap
-                    ? `Cap reached (${WORKSPACE_AGENT_CAP}). Close a session first.`
-                    : runtime.health === "healthy"
-                      ? `Start ${runtime.displayName}`
-                      : `${runtime.displayName} is ${runtime.health}${runtime.healthReason ? ` · ${runtime.healthReason}` : ""}`;
-                  return (
-                    <button
-                      key={runtime.id}
-                      type="button"
-                      role="menuitem"
-                      disabled={runtimeDisabled}
-                      title={runtimeTitle}
-                      onClick={() => startSession.mutate({ runtimeId: runtime.id, displayName: runtime.displayName })}
-                    >
-                      {runtime.displayName} ·{" "}
-                      <span className={`stage-add-health ${runtime.health}`}>{runtime.health}</span>
-                    </button>
-                  );
-                })}
-              {props.runtimes.filter((runtime) => runtime.id !== "shell").length === 0 ? (
+              {props.runtimes.map((runtime) => {
+                const runtimeDisabled = runtime.health !== "healthy" || addDisabled;
+                const runtimeTitle = atSessionCap
+                  ? `Cap reached (${WORKSPACE_SESSION_CAP}). Close a session first.`
+                  : runtime.health === "healthy"
+                    ? `Start ${runtime.displayName}`
+                    : `${runtime.displayName} is ${runtime.health}${runtime.healthReason ? ` · ${runtime.healthReason}` : ""}`;
+                return (
+                  <button
+                    key={runtime.id}
+                    type="button"
+                    role="menuitem"
+                    disabled={runtimeDisabled}
+                    title={runtimeTitle}
+                    onClick={() =>
+                      startAgentSession.mutate({ runtimeId: runtime.id, displayName: runtime.displayName })
+                    }
+                  >
+                    {runtime.displayName} ·{" "}
+                    <span className={`stage-add-health ${runtime.health}`}>{runtime.health}</span>
+                  </button>
+                );
+              })}
+              {props.runtimes.length === 0 ? (
                 <div className="stage-add-empty">
                   No agents configured. <a href="/settings">Open settings</a> to add one.
                 </div>

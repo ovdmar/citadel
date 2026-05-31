@@ -1,13 +1,14 @@
 import type {
   ActivityEvent,
   AgentRuntime,
-  AgentSession,
   Namespace,
   Operation,
   ProviderHealth,
   Repo,
   ScheduledAgent,
+  TerminalProfile,
   Workspace,
+  WorkspaceSession,
 } from "@citadel/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, createContext, createElement, useContext, useEffect, useMemo, useState } from "react";
@@ -33,11 +34,12 @@ export type BootRestoreSummary = {
 export type StateResponse = {
   repos: Repo[];
   workspaces: Workspace[];
-  sessions: AgentSession[];
+  sessions: WorkspaceSession[];
   operations: Operation[];
   activity: ActivityEvent[];
   providerHealth: ProviderHealth[];
-  runtimes: AgentRuntime[];
+  agentRuntimes: AgentRuntime[];
+  terminal: TerminalProfile;
   mcp: { enabled: boolean; resources: string[]; tools: string[] };
   scheduledAgents: ScheduledAgent[];
   namespaces: Namespace[];

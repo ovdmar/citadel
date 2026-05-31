@@ -1,4 +1,4 @@
-import type { Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
+import type { Workspace, WorkspaceRecentCommits, WorkspaceSession } from "@citadel/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
@@ -238,7 +238,7 @@ export function Cockpit() {
         onSearch={() => setCommandOpen(true)}
         activeWorkspace={activeWorkspace}
         repo={selectedRepo}
-        runtimes={data?.runtimes ?? []}
+        runtimes={data?.agentRuntimes ?? []}
       />
       <GhCooldownBanner summaries={stickySummaries} />
       <RestoreBanner bootRestore={data?.bootRestore ?? null} />
@@ -285,7 +285,7 @@ export function Cockpit() {
               operations={data?.operations ?? []}
               prByWorkspaceId={prByWorkspaceId}
               activeWorkspaceId={activeWorkspace?.id ?? ""}
-              runtimes={data?.runtimes ?? []}
+              runtimes={data?.agentRuntimes ?? []}
               namespaces={data?.namespaces ?? []}
               lastRepoId={lastRepoId || undefined}
               createWorkspaceOpen={createWorkspaceOpen}
@@ -312,7 +312,8 @@ export function Cockpit() {
               workspace={activeWorkspace}
               sessions={activeWorkspaceSessions}
               allSessions={allSessions}
-              runtimes={data?.runtimes ?? []}
+              runtimes={data?.agentRuntimes ?? []}
+              terminal={data?.terminal ?? { displayName: "Terminal", command: "bash", args: ["-l"] }}
               activeSessionId={activeSessionId}
               onActiveSession={(sessionId) => {
                 setActiveSessionByWorkspace((current) => ({ ...current, [activeWorkspace.id]: sessionId }));
@@ -387,7 +388,7 @@ export function Cockpit() {
 function CollapsedLeftRail(props: {
   workspaces: Workspace[];
   activeWorkspaceId: string;
-  sessions: import("@citadel/contracts").AgentSession[];
+  sessions: WorkspaceSession[];
   onExpand: () => void;
   onPickWorkspace: (workspace: Workspace) => void;
 }) {
@@ -521,8 +522,8 @@ function ThemeToggle() {
 
 function BottomBar(props: {
   activeWorkspace: Workspace | null;
-  activeSession: import("@citadel/contracts").AgentSession | null;
-  sessions: import("@citadel/contracts").AgentSession[];
+  activeSession: WorkspaceSession | null;
+  sessions: WorkspaceSession[];
 }) {
   const [now, setNow] = useState(() => formatClock(new Date()));
   useEffect(() => {
@@ -530,9 +531,10 @@ function BottomBar(props: {
     return () => window.clearInterval(id);
   }, []);
 
-  const shellCount = props.sessions.filter((session) => session.runtimeId === "shell").length;
+  const terminalCount = props.sessions.filter((session) => session.kind === "terminal").length;
   const autoMode = props.sessions.some(
-    (s) => s.status === "running" || s.status === "starting" || s.status === "waiting_for_input",
+    (s) =>
+      s.kind === "agent" && (s.status === "running" || s.status === "starting" || s.status === "waiting_for_input"),
   );
 
   // Read the head commit of the active workspace so the status bar mirrors the
@@ -556,7 +558,7 @@ function BottomBar(props: {
         </span>
         <span className="cit-bb-divider" aria-hidden="true" />
         <span className="cit-bb-item">
-          <span className="cit-bb-mono">{shellCount}</span> {shellCount === 1 ? "shell" : "shells"}
+          <span className="cit-bb-mono">{terminalCount}</span> {terminalCount === 1 ? "terminal" : "terminals"}
         </span>
         <span className="cit-bb-divider" aria-hidden="true" />
         <span className="cit-bb-item cit-bb-muted">

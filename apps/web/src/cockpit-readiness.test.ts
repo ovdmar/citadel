@@ -1,4 +1,4 @@
-import type { AgentSession, Operation, Workspace } from "@citadel/contracts";
+import type { AgentSession, Operation, Workspace, WorkspaceSession } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
 import { readinessForWorkspace, readinessSection } from "./cockpit-readiness.js";
 
@@ -36,7 +36,7 @@ describe("readinessForWorkspace", () => {
   // from /api/state inputs only so the same workspace lands in the same
   // section regardless of whether the cockpit-summary has loaded.
   it("does not flip section when only /api/state inputs change reference but not value", () => {
-    const sessions: AgentSession[] = [];
+    const sessions: WorkspaceSession[] = [];
     const operations: Operation[] = [];
     const first = readinessForWorkspace(baseWorkspace, { sessions, operations });
     // Simulate the next poll: fresh array references, identical contents.
@@ -53,6 +53,7 @@ describe("readinessForWorkspace", () => {
       {
         id: "sess_x",
         workspaceId: baseWorkspace.id,
+        kind: "agent",
         runtimeId: "claude-code",
         displayName: "Claude",
         status: "unknown",
@@ -102,6 +103,7 @@ describe("readinessForWorkspace", () => {
       {
         id: "sess_running",
         workspaceId: baseWorkspace.id,
+        kind: "agent",
         runtimeId: "claude-code",
         displayName: "Claude",
         status: "running",

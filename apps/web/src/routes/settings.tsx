@@ -184,7 +184,7 @@ export function SettingsView() {
           {section === "overview" ? (
             <Overview
               providerHealth={data?.providerHealth ?? []}
-              runtimes={data?.runtimes ?? []}
+              runtimes={data?.agentRuntimes ?? []}
               repos={data?.repos ?? []}
               mcpEnabled={Boolean(data?.mcp.enabled)}
               onNavigate={(id) => {
@@ -206,7 +206,7 @@ export function SettingsView() {
                 sub="CLIs Citadel can launch in a workspace."
                 help="Built-in runtimes are first-class presets Citadel knows by name (and tests via PATH/auth). Custom runtimes are any extra command you want to expose to workspaces — they live in the same list."
               />
-              <AgentsPanel runtimes={data?.runtimes ?? []} />
+              <AgentsPanel runtimes={data?.agentRuntimes ?? []} />
             </>
           ) : null}
           {section === "automations" ? (
@@ -217,7 +217,7 @@ export function SettingsView() {
                 help="Fix-CI automation uses the primary agent when healthy, then the configured fallback. Scheduled agents keep their own cron/one-shot definitions."
               />
               <AutomationsPanel
-                runtimes={data?.runtimes ?? []}
+                runtimes={data?.agentRuntimes ?? []}
                 scheduledAgentsCount={data?.scheduledAgents.length ?? 0}
               />
             </>
@@ -249,7 +249,7 @@ export function SettingsView() {
                 sub="Configurable prompt presets surfaced as buttons in the cockpit."
                 help="Each action stores a name + description + icon + preferred agent + prompt template at <dataDir>/citadel-actions.json. The built-in 'Refine scratchpad' action seeds on first read; it can be edited or reset to default but not deleted."
               />
-              <CitadelActionsPanel runtimes={data?.runtimes ?? []} />
+              <CitadelActionsPanel runtimes={data?.agentRuntimes ?? []} />
             </>
           ) : null}
           {restoreModalOpen ? <RestoreModal onClose={() => setRestoreModalOpen(false)} /> : null}

@@ -1,4 +1,4 @@
-import type { AgentSession, Namespace, Operation, Repo, Workspace } from "@citadel/contracts";
+import type { Namespace, Operation, Repo, Workspace, WorkspaceSession } from "@citadel/contracts";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { formatLabel } from "./labels.js";
 import type { GroupKey } from "./modals.js";
@@ -9,7 +9,7 @@ export const SECTION_ORDER = ["blocked", "needs-review", "working", "dirty", "id
 // the navigator's flat-list mode and never reaches buildGroupTree.
 export type GroupableKey = Exclude<GroupKey, "none">;
 
-export type WorkspaceEntry = { workspace: Workspace; sessions: AgentSession[] };
+export type WorkspaceEntry = { workspace: Workspace; sessions: WorkspaceSession[] };
 
 export type GroupNode =
   | { kind: "group"; id: string; path: string; label: string; count: number; children: GroupNode[] }
@@ -76,7 +76,7 @@ function compareKeys(a: string, b: string, field: GroupableKey, namespaces: Name
 export function buildGroupTree(
   workspaces: Workspace[],
   repos: Repo[],
-  sessions: AgentSession[],
+  sessions: WorkspaceSession[],
   operations: Operation[],
   grouping: GroupableKey[],
   namespaces: Namespace[] = [],

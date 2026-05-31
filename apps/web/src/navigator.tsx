@@ -1,4 +1,4 @@
-import type { AgentSession, Namespace, Operation, PullRequestSummary, Repo, Workspace } from "@citadel/contracts";
+import type { Namespace, Operation, PullRequestSummary, Repo, Workspace, WorkspaceSession } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
@@ -29,14 +29,14 @@ import { WorkspaceCard } from "./workspace-card.js";
 const GROUP_STORAGE = "citadel.navigator-group";
 const COLLAPSE_STORAGE = "citadel.navigator-group-collapsed";
 
-function runningCount(sessions: AgentSession[]): number {
-  return sessions.filter((session) => session.status === "running").length;
+function runningCount(sessions: WorkspaceSession[]): number {
+  return sessions.filter((session) => session.kind === "agent" && session.status === "running").length;
 }
 
 export function Navigator(props: {
   repos: Repo[];
   workspaces: Workspace[];
-  sessions: AgentSession[];
+  sessions: WorkspaceSession[];
   operations: Operation[];
   prByWorkspaceId: Map<string, PullRequestSummary | null>;
   activeWorkspaceId: string;

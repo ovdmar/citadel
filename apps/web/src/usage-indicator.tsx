@@ -12,7 +12,7 @@ type RuntimeConfigEntry = {
   topBarCategoryKey?: string;
 };
 
-type ConfigResponse = { config: { runtimes: RuntimeConfigEntry[] } };
+type ConfigResponse = { config: { agentRuntimes: RuntimeConfigEntry[] } };
 
 // Low-contrast usage pill rendered in the cockpit top bar, left of the
 // Settings icon. One pill per runtime where:
@@ -26,7 +26,7 @@ export function UsageIndicator(props: { runtimes: AgentRuntime[] }) {
     queryKey: ["config"],
     queryFn: () => api<ConfigResponse>("/api/config"),
   });
-  const configRuntimes = configQuery.data?.config.runtimes ?? [];
+  const configRuntimes = configQuery.data?.config.agentRuntimes ?? [];
   const githubQuota = useQuery({
     queryKey: ["github-quota"],
     queryFn: () => api<{ quota: GitHubQuotaSummary }>("/api/integrations/github/quota"),

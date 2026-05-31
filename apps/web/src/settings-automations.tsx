@@ -23,7 +23,7 @@ type FixCiAutomationConfig = {
 
 type ConfigResponse = {
   config: {
-    runtimes: RuntimeConfig[];
+    agentRuntimes: RuntimeConfig[];
     automations?: { fixCi?: Partial<FixCiAutomationConfig> };
   };
 };
@@ -70,8 +70,8 @@ export function AutomationsPanel(props: { runtimes: AgentRuntime[]; scheduledAge
   }, [current]);
 
   const choices = useMemo(
-    () => buildAutomationRuntimeChoices(configQuery.data?.config.runtimes ?? [], props.runtimes),
-    [configQuery.data?.config.runtimes, props.runtimes],
+    () => buildAutomationRuntimeChoices(configQuery.data?.config.agentRuntimes ?? [], props.runtimes),
+    [configQuery.data?.config.agentRuntimes, props.runtimes],
   );
   const visibleChoices = useMemo(
     () => ensureSelectedChoices(choices, [draft?.runtimeId, draft?.fallbackRuntimeId]),
@@ -225,7 +225,7 @@ export function buildAutomationRuntimeChoices(
   const seen = new Set<string>();
   const choices: RuntimeChoice[] = [];
   for (const runtime of source) {
-    if (runtime.id === "shell" || seen.has(runtime.id)) continue;
+    if (seen.has(runtime.id)) continue;
     seen.add(runtime.id);
     const health = healthById.get(runtime.id);
     choices.push({

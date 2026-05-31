@@ -25,14 +25,13 @@ function runtime(id: string, health: AgentRuntime["health"]): AgentRuntime {
 }
 
 describe("buildAutomationRuntimeChoices", () => {
-  it("lists configured agent runtimes with current health and excludes shell", () => {
+  it("lists configured agent runtimes with current health", () => {
     const choices = buildAutomationRuntimeChoices(
       [
         { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] },
         { id: "codex", displayName: "Codex", command: "codex", args: [] },
-        { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
       ],
-      [runtime("claude-code", "unavailable"), runtime("codex", "healthy"), runtime("shell", "healthy")],
+      [runtime("claude-code", "unavailable"), runtime("codex", "healthy")],
     );
 
     expect(choices).toEqual([

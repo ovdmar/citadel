@@ -1,4 +1,4 @@
-import type { AgentSession } from "@citadel/contracts";
+import type { WorkspaceSession } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
 import { retainRecentTerminalIds, stableVisitedSessions, stableWorkspaceSessionIdsKey } from "./stage.js";
 
@@ -40,11 +40,12 @@ describe("Stage terminal pane ordering", () => {
   });
 });
 
-function sessionFixture(overrides: Partial<AgentSession> = {}): AgentSession {
+function sessionFixture(overrides: Partial<WorkspaceSession> = {}): WorkspaceSession {
   return {
     id: "sess_1",
     workspaceId: "ws_1",
-    runtimeId: "shell",
+    kind: "terminal",
+    runtimeId: null,
     displayName: "Terminal",
     status: "idle",
     transport: "connected",

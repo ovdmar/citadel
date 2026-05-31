@@ -1,4 +1,4 @@
-import type { AgentSession } from "@citadel/contracts";
+import type { WorkspaceSession } from "@citadel/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "./api.js";
 import { Button } from "./components/ui/button.js";
@@ -98,7 +98,7 @@ export function focusActiveTerminal(sessionId: string | null | undefined): void 
   handle.focusIframe();
 }
 
-export function TerminalPane(props: { session: AgentSession }) {
+export function TerminalPane(props: { session: WorkspaceSession }) {
   const sessionId = props.session.id;
   const theme = useResolvedTheme();
   // Capture the theme in a ref so ensure() reads the current value without
@@ -124,9 +124,12 @@ export function TerminalPane(props: { session: AgentSession }) {
       try {
         const params = new URLSearchParams({ theme: themeRef.current });
         if (options.force) params.set("force", "true");
-        const response = await api<EnsureResponse>(`/api/agent-sessions/${sessionId}/terminal?${params.toString()}`, {
-          method: "POST",
-        });
+        const response = await api<EnsureResponse>(
+          `/api/workspace-sessions/${sessionId}/terminal?${params.toString()}`,
+          {
+            method: "POST",
+          },
+        );
         if (requestSeqRef.current !== seq) return;
         setUrl(response.terminal.url);
         setError(null);
@@ -293,13 +296,13 @@ function guidanceFor(code: string) {
     case "no_free_port":
       return "Citadel could not allocate a port in the ttyd range. Stop unused terminals or widen CITADEL_TTYD_PORT_BASE..MAX.";
     case "ttyd_start_timeout":
-      return "ttyd was spawned but never began listening. Check daemon logs and that the shell/runtime command exits cleanly.";
+      return "ttyd was spawned but never began listening. Check daemon logs and that the terminal or agent command exits cleanly.";
     case "tmux_session_missing":
       return "The tmux session this terminal would attach to no longer exists. Restart the agent session or reconcile.";
     case "session_not_found":
       return "This Citadel session is not registered. Refresh or recreate it from the cockpit.";
     case "spawn_failed":
-      return "ttyd failed to spawn. Verify TTYD_BIN, file permissions, and shell binary configuration.";
+      return "ttyd failed to spawn. Verify TTYD_BIN, file permissions, and terminal command configuration.";
     default:
       return "Open the terminal runbook below for diagnostic steps.";
   }
@@ -360,7 +363,7 @@ function normalizeText(value: string): string {
 }
 
 function recordTerminalClientEvent(sessionId: string, event: string) {
-  fetch(`/api/agent-sessions/${encodeURIComponent(sessionId)}/terminal-client-event`, {
+  fetch(`/api/workspace-sessions/${encodeURIComponent(sessionId)}/terminal-client-event`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
