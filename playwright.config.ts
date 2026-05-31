@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { defineConfig, devices } from "@playwright/test";
 
 // Use a port well outside the 4010 (systemd prod) / 4110-4209 (worktree dev)
@@ -16,6 +17,8 @@ const configPath =
   process.env.CITADEL_PLAYWRIGHT_CONFIG || process.env.CITADEL_CONFIG || `${dataDir}/citadel.config.json`;
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
+const e2eRunId = process.env.CITADEL_PLAYWRIGHT_RUN_ID || `playwright-${randomUUID()}`;
+process.env.CITADEL_PLAYWRIGHT_RUN_ID = e2eRunId;
 const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}`).replace(
   /[^A-Za-z0-9_.-]/g,
   "-",
@@ -36,12 +39,24 @@ export default defineConfig({
     trace: "retain-on-failure",
     extraHTTPHeaders: {
       "X-Citadel-Api-Base": daemonBase,
+      "X-Citadel-E2E-Run-Id": e2eRunId,
     },
   },
   projects: [
-    { name: "desktop", use: { ...devices["Desktop Chrome"] } },
-    { name: "tablet", use: { ...devices["Desktop Chrome"], viewport: { width: 1024, height: 768 } } },
-    { name: "mobile", use: { ...devices["Pixel 7"] } },
+    { name: "sandbox", testMatch: /sandbox\.setup\.ts/ },
+    {
+      name: "desktop",
+      dependencies: ["sandbox"],
+      testIgnore: /sandbox\.setup\.ts/,
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "tablet",
+      dependencies: ["sandbox"],
+      testIgnore: /sandbox\.setup\.ts/,
+      use: { ...devices["Desktop Chrome"], viewport: { width: 1024, height: 768 } },
+    },
+    { name: "mobile", dependencies: ["sandbox"], testIgnore: /sandbox\.setup\.ts/, use: { ...devices["Pixel 7"] } },
   ],
   webServer: [
     {
@@ -59,6 +74,7 @@ export default defineConfig({
         `CITADEL_CONFIG=${configPath}`,
         `CITADEL_PORT=${daemonPort}`,
         `CITADEL_TMUX_SOCKET=${tmuxSocket}`,
+        `CITADEL_E2E_RUN_ID=${e2eRunId}`,
         "CITADEL_OWN_TMUX_SOCKET=1",
         "CITADEL_DISABLE_BOOT_RESTORE=1",
         "CITADEL_DISABLE_REAPER=1",
@@ -75,14 +91,14 @@ export default defineConfig({
         // E2E writes screenshot artifacts under docs/campaigns. Run the
         // built daemon, not tsx watch/source mode, so CI cannot restart the
         // API server between tests and surface transient ECONNRESETs.
-        'sh -c \'rm -f "$CITADEL_PLAYWRIGHT_DAEMON_LOG"; case "$CITADEL_DATA_DIR" in /tmp/citadel-playwright-*|/tmp/citadel-test-*) rm -rf "$CITADEL_DATA_DIR" ;; *) echo "Refusing to clean non-Playwright data dir: $CITADEL_DATA_DIR" >&2; exit 2 ;; esac; (pnpm --filter @citadel/daemon build && pnpm --filter @citadel/daemon start) >"$CITADEL_PLAYWRIGHT_DAEMON_LOG" 2>&1; code=$?; echo "[playwright-daemon] exited $code at $(date -u +%FT%TZ)" >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG"; exit $code\'',
+        'sh -c \'rm -f "$CITADEL_PLAYWRIGHT_DAEMON_LOG"; case "$CITADEL_DATA_DIR" in /tmp/citadel-playwright-*|/tmp/citadel-test-*) rm -rf "$CITADEL_DATA_DIR" ;; *) echo "Refusing to clean non-Playwright data dir: $CITADEL_DATA_DIR" >&2; exit 2 ;; esac; pnpm --filter @citadel/daemon build >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG" 2>&1 || exit $?; exec node apps/daemon/dist/index.js >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG" 2>&1\'',
       ].join(" "),
       url: `${daemonBase}/api/health`,
       reuseExistingServer: false,
       timeout: 30_000,
     },
     {
-      command: `CITADEL_DAEMON_URL=${daemonBase} CITADEL_WEB_PORT=${webPort} pnpm --filter @citadel/web dev`,
+      command: `CITADEL_DAEMON_URL=${daemonBase} CITADEL_WEB_PORT=${webPort} CITADEL_E2E_RUN_ID=${e2eRunId} sh -c 'cd apps/web && exec node node_modules/vite/bin/vite.js --host 0.0.0.0'`,
       url: webBase,
       reuseExistingServer: false,
       timeout: 30_000,

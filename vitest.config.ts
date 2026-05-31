@@ -6,6 +6,8 @@ export default defineConfig({
     exclude: ["**/node_modules/**", "e2e/**", "**/dist/**", "**/coverage/**"],
     pool: "forks",
     testTimeout: 60_000,
+    maxWorkers: 8,
+    minWorkers: 1,
     coverage: {
       include: ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts"],
       exclude: ["e2e/**", "dist/**", "coverage/**", "test-results/**", "playwright-report/**"],

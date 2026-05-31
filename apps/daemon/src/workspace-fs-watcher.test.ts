@@ -7,6 +7,8 @@ import { globalPrCacheKey } from "./global-pr-cache.js";
 import { createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
 
 const dirs: string[] = [];
+const canInstallFsWatch = probeFsWatch();
+const itWhenFsWatchAvailable = canInstallFsWatch ? it : it.skip;
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
@@ -67,7 +69,7 @@ function deterministicWatcher() {
 }
 
 describe("workspace fs watcher", () => {
-  it("emits workspace.fsChanged when a tracked file changes", async () => {
+  itWhenFsWatchAvailable("emits workspace.fsChanged when a tracked file changes", async () => {
     const ws = tmpWorkspace();
     fs.writeFileSync(path.join(ws.path, "README.md"), "initial\n");
     const harness = deterministicWatcher();
@@ -114,7 +116,7 @@ describe("workspace fs watcher", () => {
     }
   });
 
-  it("ignores changes inside .git/objects but not .git/index", async () => {
+  itWhenFsWatchAvailable("ignores changes inside .git/objects but not .git/index", async () => {
     const ws = tmpWorkspace();
     fs.mkdirSync(path.join(ws.path, ".git", "objects", "ab"), { recursive: true });
     const harness = deterministicWatcher();
@@ -140,7 +142,7 @@ describe("workspace fs watcher", () => {
     }
   });
 
-  it("busts the workspace global PR cache entry when HEAD moves", async () => {
+  itWhenFsWatchAvailable("busts the workspace global PR cache entry when HEAD moves", async () => {
     const ws = tmpWorkspace();
     fs.mkdirSync(path.join(ws.path, ".git"), { recursive: true });
     fs.writeFileSync(path.join(ws.path, ".git", "HEAD"), "ref: refs/heads/main\n");
@@ -191,3 +193,16 @@ describe("workspace fs watcher", () => {
     }
   });
 });
+
+function probeFsWatch(): boolean {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-fswatch-probe-"));
+  try {
+    const watcher = fs.watch(dir, { persistent: false }, () => {});
+    watcher.close();
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
