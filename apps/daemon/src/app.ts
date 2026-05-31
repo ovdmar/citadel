@@ -63,6 +63,7 @@ import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { registerPrDiffRoute } from "./pr-diff-route.js";
 import { registerPrRoutes } from "./pr-routes.js";
+import { wireRateLimitBackgroundResume } from "./rate-limit-background-resume.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerRepoDiscoveryRoutes } from "./repo-discovery-routes.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
@@ -693,6 +694,7 @@ export function createDaemonApp(input: {
   });
 
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, config });
+  wireRateLimitBackgroundResume(app, server, { store, operations, config, asyncRoute, emit, scheduledAgentService });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit, store, operations, providerHealth: cachedProviderHealth });
   registerCitadelActionRoutes({ app, config, emit });
@@ -767,7 +769,6 @@ export function createDaemonApp(input: {
     server.on("close", () => clearInterval(reaper));
   }
 
-  // Status monitor / auto-recovery / auto-resume / terminal reaper: see their own modules for context.
   const statusMonitor = startDaemonStatusMonitor(store, emit, config, recentUserAction, diagnostics);
   if (statusMonitor) server.on("close", () => statusMonitor.stop());
   const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({
