@@ -68,7 +68,12 @@ const xtermMocks = vi.hoisted(() => {
   }
 
   class FakeFitAddon {
+    static instances: FakeFitAddon[] = [];
     fit = vi.fn();
+
+    constructor() {
+      FakeFitAddon.instances.push(this);
+    }
   }
 
   return { FakeTerminal, FakeFitAddon };
@@ -121,15 +126,56 @@ class FakeWebSocket extends EventTarget {
 }
 
 const roots: Root[] = [];
+const frameCallbacks = new Map<number, FrameRequestCallback>();
+let nextFrameId = 1;
+
+class FakeResizeObserver {
+  static instances: FakeResizeObserver[] = [];
+  observe = vi.fn();
+  disconnect = vi.fn();
+
+  constructor(private readonly callback: ResizeObserverCallback) {
+    FakeResizeObserver.instances.push(this);
+  }
+
+  trigger() {
+    this.callback([], this as unknown as ResizeObserver);
+  }
+}
 
 beforeEach(() => {
   document.body.innerHTML = "";
   document.documentElement.removeAttribute("data-theme");
   installLocalStorageMock();
   xtermMocks.FakeTerminal.instances = [];
+  xtermMocks.FakeFitAddon.instances = [];
   FakeWebSocket.instances = [];
+  FakeResizeObserver.instances = [];
+  frameCallbacks.clear();
+  nextFrameId = 1;
   vi.spyOn(window, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
   Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true, value: FakeWebSocket });
+  Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    configurable: true,
+    writable: true,
+    value: FakeResizeObserver,
+  });
+  Object.defineProperty(window, "requestAnimationFrame", {
+    configurable: true,
+    writable: true,
+    value: vi.fn((callback: FrameRequestCallback) => {
+      const id = nextFrameId;
+      nextFrameId += 1;
+      frameCallbacks.set(id, callback);
+      return id;
+    }),
+  });
+  Object.defineProperty(window, "cancelAnimationFrame", {
+    configurable: true,
+    writable: true,
+    value: vi.fn((id: number) => frameCallbacks.delete(id)),
+  });
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     writable: true,
@@ -187,6 +233,17 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(getTerminalHandle("sess_1")).toBeDefined();
   });
 
+  it("creates an opaque xterm renderer", async () => {
+    await renderTerminal();
+
+    expect(xtermMocks.FakeTerminal.instances[0]?.options).toEqual(
+      expect.objectContaining({
+        allowTransparency: false,
+        theme: expect.objectContaining({ background: "#f5f1e8" }),
+      }),
+    );
+  });
+
   it("keeps retained hidden panes dormant until they become active", async () => {
     const rootElement = document.createElement("div");
     document.body.appendChild(rootElement);
@@ -224,6 +281,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     if (!ws || !term) throw new Error("terminal rig missing");
 
     await flushReact(() => ws.open());
+    flushAnimationFrames();
     ws.message(new TextEncoder().encode("snapshot").buffer);
     ws.message(new TextEncoder().encode("-chunk").buffer);
     term.emitData("abc");
@@ -233,7 +291,153 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(decodeBinarySent(ws.sent)).toContain("abc");
   });
 
-  it("keeps terminal shortcuts and Ctrl+C usable in the in-process xterm", async () => {
+  it("coalesces resize events and sends PTY resize only when rows or columns change", async () => {
+    await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    const fit = xtermMocks.FakeFitAddon.instances[0];
+    const observer = FakeResizeObserver.instances[0];
+    if (!ws || !term || !fit || !observer) throw new Error("terminal rig missing");
+
+    await flushReact(() => ws.open());
+    observer.trigger();
+    window.dispatchEvent(new Event("resize"));
+    observer.trigger();
+    expect(fit.fit).not.toHaveBeenCalled();
+
+    flushAnimationFrames();
+
+    expect(fit.fit).toHaveBeenCalledTimes(1);
+    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+
+    observer.trigger();
+    window.dispatchEvent(new Event("resize"));
+    flushAnimationFrames();
+
+    expect(fit.fit).toHaveBeenCalledTimes(2);
+    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+
+    term.cols = 100;
+    term.rows = 32;
+    observer.trigger();
+    window.dispatchEvent(new Event("resize"));
+    flushAnimationFrames();
+
+    expect(fit.fit).toHaveBeenCalledTimes(3);
+    expect(resizeMessages(ws)).toEqual([
+      { type: "resize", cols: 80, rows: 24 },
+      { type: "resize", cols: 100, rows: 32 },
+    ]);
+  });
+
+  it("does not send invalid terminal dimensions", async () => {
+    await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    const observer = FakeResizeObserver.instances[0];
+    if (!ws || !term || !observer) throw new Error("terminal rig missing");
+
+    await flushReact(() => ws.open());
+
+    const invalidDimensions: Array<[number, number]> = [
+      [0, 24],
+      [80, 0],
+      [-1, 24],
+      [80, -1],
+      [Number.NaN, 24],
+      [80, Number.POSITIVE_INFINITY],
+    ];
+
+    for (const [cols, rows] of invalidDimensions) {
+      term.cols = cols;
+      term.rows = rows;
+      observer.trigger();
+      flushAnimationFrames();
+    }
+
+    expect(resizeMessages(ws)).toEqual([]);
+
+    term.cols = 90;
+    term.rows = 30;
+    observer.trigger();
+    flushAnimationFrames();
+
+    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 90, rows: 30 }]);
+  });
+
+  it("sends the first valid resize when the WebSocket opens after an earlier fit", async () => {
+    await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    const observer = FakeResizeObserver.instances[0];
+    if (!ws || !observer) throw new Error("terminal rig missing");
+
+    observer.trigger();
+    flushAnimationFrames();
+    expect(resizeMessages(ws)).toEqual([]);
+
+    await flushReact(() => ws.open());
+    flushAnimationFrames();
+
+    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+  });
+
+  it("sends the first valid resize again after reconnect", async () => {
+    const root = await renderTerminal();
+    const first = FakeWebSocket.instances[0];
+    if (!first) throw new Error("missing first ws");
+    await flushReact(() => first.open());
+    flushAnimationFrames();
+    expect(resizeMessages(first)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+
+    await flushReact(() => {
+      getTerminalHandle("sess_1")?.reload();
+    });
+
+    const second = FakeWebSocket.instances[1];
+    if (!second) throw new Error("missing second ws");
+    await flushReact(() => second.open());
+    flushAnimationFrames();
+
+    expect(resizeMessages(second)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+  });
+
+  it("cancels pending resize work on unmount", async () => {
+    const root = await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    const fit = xtermMocks.FakeFitAddon.instances[0];
+    const observer = FakeResizeObserver.instances[0];
+    if (!ws || !fit || !observer) throw new Error("terminal rig missing");
+
+    await flushReact(() => ws.open());
+    observer.trigger();
+    await flushReact(() => root.unmount());
+    untrackRoot(root);
+    flushAnimationFrames();
+
+    expect(fit.fit).not.toHaveBeenCalled();
+    expect(resizeMessages(ws)).toEqual([]);
+  });
+
+  it("ignores late WebSocket events after unmount", async () => {
+    const root = await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    if (!ws || !term) throw new Error("terminal rig missing");
+
+    await flushReact(() => root.unmount());
+    untrackRoot(root);
+    ws.open();
+    flushAnimationFrames();
+    ws.message(new TextEncoder().encode("late").buffer);
+    ws.closeFromServer(1006, "late");
+    ws.dispatchEvent(new Event("error"));
+
+    expect(term.writes).toEqual([]);
+    expect(resizeMessages(ws)).toEqual([]);
+    expect(document.body.textContent).not.toContain("terminal_disconnected");
+  });
+
+  it("keeps raw input, control/meta shortcuts, paste, and Ctrl+C usable in the in-process xterm", async () => {
     await renderTerminal();
     const ws = FakeWebSocket.instances[0];
     const term = xtermMocks.FakeTerminal.instances[0];
@@ -241,16 +445,28 @@ describe("TerminalPane xterm WebSocket renderer", () => {
 
     await flushReact(() => ws.open());
     term.emitData("\u0003");
+    term.emitData("abc");
     const commandPalette = term.emitKey(
       new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true, cancelable: true }),
     );
     const multiline = term.emitKey(
       new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true }),
     );
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { readText: vi.fn().mockResolvedValue("pasted text") },
+    });
+    const paste = term.emitKey(
+      new KeyboardEvent("keydown", { key: "v", metaKey: true, bubbles: true, cancelable: true }),
+    );
+    await settle();
 
     expect(commandPalette).toBe(false);
     expect(multiline).toBe(false);
+    expect(paste).toBe(false);
     expect(decodeBinarySent(ws.sent)).toContain("\u0003");
+    expect(decodeBinarySent(ws.sent)).toContain("abc");
+    expect(decodeBinarySent(ws.sent)).toContain("pasted text");
     expect(ws.sent).toContain(JSON.stringify({ type: "input", data: "\n" }));
     expect(window.fetch).toHaveBeenCalledWith(
       "/api/agent-sessions/sess_1/user-action",
@@ -481,6 +697,36 @@ function decodeBinarySent(sent: unknown[]): string[] {
   return sent
     .filter((item): item is Uint8Array => item instanceof Uint8Array)
     .map((item) => new TextDecoder().decode(item));
+}
+
+function resizeMessages(ws: FakeWebSocket): Array<{ type: string; cols: number; rows: number }> {
+  return ws.sent
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => parseJsonObject(item))
+    .filter(
+      (item): item is { type: string; cols: number; rows: number } =>
+        item?.type === "resize" && typeof item.cols === "number" && typeof item.rows === "number",
+    );
+}
+
+function parseJsonObject(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function flushAnimationFrames() {
+  const callbacks = [...frameCallbacks.entries()];
+  frameCallbacks.clear();
+  for (const [id, callback] of callbacks) callback(performance.now() + id);
+}
+
+function untrackRoot(root: Root) {
+  const index = roots.indexOf(root);
+  if (index !== -1) roots.splice(index, 1);
 }
 
 function clipboardDataMock() {
