@@ -142,6 +142,7 @@ afterEach(async () => {
   await flushReact(() => {
     for (const root of roots.splice(0)) root.unmount();
   });
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -419,6 +420,36 @@ describe("TerminalPane xterm WebSocket renderer", () => {
 
     expect(document.body.textContent).toContain("terminal_disconnected");
     expect(document.body.textContent).toContain("lost");
+    expect((document.querySelector("button") as HTMLButtonElement | null)?.disabled).toBe(false);
+  });
+
+  it("auto-retries disconnected terminal sockets up to three times with 5s backoff", async () => {
+    vi.useFakeTimers();
+    await renderTerminal();
+
+    await flushReact(() => FakeWebSocket.instances[0]?.closeFromServer(1006, "lost"));
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    await flushReact(() => vi.advanceTimersByTime(4_999));
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    await flushReact(() => vi.advanceTimersByTime(1));
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    await flushReact(() => FakeWebSocket.instances[1]?.closeFromServer(1006, "still lost"));
+    await flushReact(() => vi.advanceTimersByTime(5_000));
+    expect(FakeWebSocket.instances).toHaveLength(3);
+
+    await flushReact(() => FakeWebSocket.instances[2]?.closeFromServer(1006, "still lost"));
+    await flushReact(() => vi.advanceTimersByTime(5_000));
+    expect(FakeWebSocket.instances).toHaveLength(4);
+
+    await flushReact(() => FakeWebSocket.instances[3]?.closeFromServer(1006, "exhausted"));
+    await flushReact(() => vi.advanceTimersByTime(10_000));
+
+    expect(FakeWebSocket.instances).toHaveLength(4);
+    expect(document.body.textContent).toContain("terminal_disconnected");
+    expect(document.body.textContent).toContain("exhausted");
   });
 });
 
