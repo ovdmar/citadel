@@ -31,6 +31,16 @@ process.env.CITADEL_DISABLE_SCHEDULER = "1";
 const createFixture = () => createFixtureBase(dirs);
 const createGitRepo = (dir: string) => createGitRepoBase(dir);
 
+type SnapshotRow = {
+  prNumber: number | null;
+  prState: "open" | "closed" | "merged" | null;
+  lastFetchAt: string | null;
+  lastChecksGreenAt: string | null;
+  lastHeadSha: string | null;
+  lastHeadShaChangedAt: string | null;
+  lastMergeStateStatus: string | null;
+};
+
 describe("PR routes", () => {
   it("POST /api/workspaces/cockpit-summary/batch returns per-workspace envelope with partial failures", async () => {
     const fixture = createFixture();
@@ -258,7 +268,7 @@ describe("PR routes", () => {
     }
   });
 
-  it("merge success busts workspace VC, repo CI, and the global PR cache entry", async () => {
+  it("merge success marks cached PR state merged and only busts repo CI", async () => {
     const now = new Date().toISOString();
     const script = fakeGhScript("success");
     setGithubCommand(script);
@@ -266,15 +276,29 @@ describe("PR routes", () => {
     providerCache.set(globalPrCacheKey("owner/repo", 42), { expiresAt: Date.now() + 60_000, value: { number: 42 } });
     providerCache.set(`ci:repo_a:${now}`, { expiresAt: Date.now() + 60_000, value: "cached-ci" });
     providerCache.set(`vc:ws_a:${now}`, { expiresAt: Date.now() + 60_000, value: makeVcSummary(now) });
-    const { server } = createPrRouteHarness({ providerCache, workspaceUpdatedAt: now, repoUpdatedAt: now });
+    const { server, snapshotUpdates } = createPrRouteHarness({
+      providerCache,
+      workspaceUpdatedAt: now,
+      repoUpdatedAt: now,
+    });
     const baseUrl = await listen(server);
     try {
       const result = await postJson<{ ok: true }>(`${baseUrl}/api/workspaces/ws_a/pr-merge`, { strategy: "squash" });
 
       expect(result).toEqual({ ok: true });
-      expect(providerCache.has(globalPrCacheKey("owner/repo", 42))).toBe(false);
       expect(providerCache.has(`ci:repo_a:${now}`)).toBe(false);
-      expect(providerCache.has(`vc:ws_a:${now}`)).toBe(false);
+      expect((providerCache.get(globalPrCacheKey("owner/repo", 42))?.value as { state?: string }).state).toBe("MERGED");
+      expect(
+        (
+          providerCache.get(`vc:ws_a:${now}`)?.value as {
+            pullRequest?: { state?: string; mergeable?: string; allowedMergeStrategies?: string[] };
+          }
+        ).pullRequest,
+      ).toMatchObject({ state: "MERGED", mergeable: "unknown", allowedMergeStrategies: [] });
+      expect(snapshotUpdates.at(-1)).toMatchObject({
+        workspaceId: "ws_a",
+        patch: { prNumber: 42, prState: "merged" },
+      });
     } finally {
       await closeServer(server);
     }
@@ -319,6 +343,21 @@ function createPrRouteHarness(input: {
   const now = new Date().toISOString();
   const workspaceUpdatedAt = input.workspaceUpdatedAt ?? now;
   const repoUpdatedAt = input.repoUpdatedAt ?? now;
+  const snapshotUpdates: Array<{ workspaceId: string; patch: Partial<SnapshotRow> }> = [];
+  const snapshots = new Map<string, SnapshotRow>([
+    [
+      "ws_a",
+      {
+        prNumber: 42,
+        prState: "open",
+        lastFetchAt: now,
+        lastChecksGreenAt: null,
+        lastHeadSha: null,
+        lastHeadShaChangedAt: null,
+        lastMergeStateStatus: null,
+      },
+    ],
+  ]);
   const app = express();
   app.use(express.json());
   registerPrRoutes({
@@ -366,7 +405,11 @@ function createPrRouteHarness(input: {
           archivedAt: null,
         },
       ],
-      getWorkspacePrSnapshot: () => ({ prNumber: 42 }),
+      getWorkspacePrSnapshot: (workspaceId: string) => snapshots.get(workspaceId) ?? null,
+      updateWorkspacePrSnapshot: (workspaceId: string, patch: Partial<SnapshotRow>) => {
+        snapshotUpdates.push({ workspaceId, patch });
+        snapshots.set(workspaceId, { ...(snapshots.get(workspaceId) ?? nullSnapshot()), ...patch });
+      },
     } as never,
     providers: {
       collectGitHubVersionControlSummary: async () => makeVcSummary(now),
@@ -387,7 +430,19 @@ function createPrRouteHarness(input: {
     resolveRepoFullName: () => "owner/repo",
     buildWorkspaceCockpitSummary: async () => null,
   });
-  return { server: http.createServer(app) };
+  return { server: http.createServer(app), snapshotUpdates };
+}
+
+function nullSnapshot(): SnapshotRow {
+  return {
+    prNumber: null,
+    prState: null,
+    lastFetchAt: null,
+    lastChecksGreenAt: null,
+    lastHeadSha: null,
+    lastHeadShaChangedAt: null,
+    lastMergeStateStatus: null,
+  };
 }
 
 function makeVcSummary(checkedAt: string) {

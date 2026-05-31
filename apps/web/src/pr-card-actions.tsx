@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { GitMerge, GitPullRequest, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { api, queryClient } from "./api.js";
+import { markWorkspacePrMergedInQueryCache } from "./cockpit-tools.js";
 import type { PrTone } from "./workspace-card.js";
 
 // Decides which (single) action button belongs in the PR card's bottom-right
@@ -75,6 +76,12 @@ function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
   const ghHealthy = providerHealth.data?.providerHealth.find((entry) => entry.id === "github-gh")?.status === "healthy";
   const canMerge = pr.mergeable === "mergeable" && allowed.length > 0 && ghHealthy === true;
   const merge = useMutation({
+    onMutate: async () => {
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: ["workspace-cockpit", workspace.id] }),
+        queryClient.cancelQueries({ queryKey: ["workspaces-pr-batch"] }),
+      ]);
+    },
     mutationFn: (strategy: PrMergeStrategy) =>
       api(`/api/workspaces/${workspace.id}/pr-merge`, {
         method: "POST",
@@ -82,8 +89,7 @@ function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
       }),
     onSuccess: () => {
       setOpen(false);
-      queryClient.invalidateQueries({ queryKey: ["workspace-cockpit", workspace.id] });
-      queryClient.invalidateQueries({ queryKey: ["workspaces-pr-batch"] });
+      markWorkspacePrMergedInQueryCache(queryClient, workspace.id, pr.number);
     },
   });
   const disabledReason =
