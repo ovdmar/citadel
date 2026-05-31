@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import type http from "node:http";
+import type { Duplex } from "node:stream";
 import { type IPty, spawn } from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
 import { ensureTmuxExtendedKeys, tmuxPrefix } from "./tmux.js";
@@ -8,18 +9,19 @@ export type TerminalPtyTarget = { sessionName: string; socketName?: string | nul
 type ResolveTerminalSession = (
   id: string,
 ) => TerminalPtyTarget | string | null | Promise<TerminalPtyTarget | string | null>;
+type TerminalUpgradeRejection = { status: number; body: unknown };
+type TerminalWebSocketOptions = {
+  authorize?: (request: http.IncomingMessage) => TerminalUpgradeRejection | null;
+  maxBufferedBytes?: number;
+  /** Internal test hook for deterministic backpressure coverage. */
+  getBufferedAmount?: (ws: WebSocket) => number;
+};
 
 type TerminalSocketMessage = {
   type?: string;
   cols?: number;
   rows?: number;
   data?: string;
-};
-
-type TerminalWebSocketOptions = {
-  maxBufferedBytes?: number;
-  /** Internal test hook for deterministic backpressure coverage. */
-  getBufferedAmount?: (ws: WebSocket) => number;
 };
 
 const DEFAULT_COLS = 80;
@@ -69,6 +71,11 @@ export function attachTerminalWebSocket(
   server.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url || "", "http://127.0.0.1");
     if (!url.pathname.startsWith("/terminal/")) return;
+    const rejection = options.authorize?.(request);
+    if (rejection) {
+      writeHttpError(socket, rejection.status, rejection.body);
+      return;
+    }
     const sessionId = decodeURIComponent(url.pathname.replace("/terminal/", ""));
     void Promise.resolve(resolveSession(sessionId))
       .then((resolved) => {
@@ -204,6 +211,21 @@ export function attachTmuxPty(
 function normalizeTarget(target: TerminalPtyTarget | string | null): TerminalPtyTarget | null {
   if (!target) return null;
   return typeof target === "string" ? { sessionName: target } : target;
+}
+
+function writeHttpError(socket: Duplex, status: number, body: unknown) {
+  const payload = `${JSON.stringify(body)}\n`;
+  socket.write(
+    [
+      `HTTP/1.1 ${status} WebSocket Upgrade Rejected`,
+      "Content-Type: application/json; charset=utf-8",
+      "Connection: close",
+      `Content-Length: ${Buffer.byteLength(payload, "utf8")}`,
+      "",
+      payload,
+    ].join("\r\n"),
+  );
+  socket.destroy();
 }
 
 export function parseTerminalSocketMessage(raw: string): TerminalSocketMessage | null {

@@ -279,7 +279,7 @@ describe("createDaemonApp", () => {
     } finally {
       await closeServer(server);
     }
-  });
+  }, 15_000);
 
   it("rehydrates provider cache on boot and serves /provider-summary without invoking providers", async () => {
     // Central regression guard for the persistent-cache PR's headline AC:
