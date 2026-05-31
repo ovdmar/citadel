@@ -30,6 +30,18 @@
   opacity: 0.55;
 }
 
+.pr-card-action-tooltip {
+  display: inline-flex;
+}
+
+.pr-card-action-tooltip.is-disabled {
+  cursor: not-allowed;
+}
+
+.pr-card-action-tooltip.is-disabled .pr-card-btn {
+  pointer-events: none;
+}
+
 .pr-card-btn-merge {
   background: var(--color-action, oklch(55% 0.18 145));
   color: var(--c-on-dark);

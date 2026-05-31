@@ -18,6 +18,9 @@ const LINE_START_KEY = "C-a";
 const LINE_END_KEY = "C-e";
 const LINE_KILL_KEY = "C-u";
 const TERMINAL_SCROLLBACK_LINES = 20_000;
+const TERMINAL_AUTO_RETRY_LIMIT = 3;
+const TERMINAL_AUTO_RETRY_BACKOFF_MS = 5_000;
+const AUTO_RETRYABLE_TERMINAL_ERRORS = new Set(["terminal_disconnected", "terminal_socket_error"]);
 type TerminalPaneKey = typeof LINE_START_KEY | typeof LINE_END_KEY | typeof LINE_KILL_KEY;
 
 export type TerminalSocketMessage = {
@@ -95,14 +98,45 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
   const themeRef = useRef(theme);
   const encoderRef = useRef(new TextEncoder());
   const decoderRef = useRef(new TextDecoder());
+  const autoRetryAttemptsRef = useRef(0);
+  const autoRetryTimerRef = useRef<number | null>(null);
   themeRef.current = theme;
-  const [connectionState, setConnectionState] = useState<"connecting" | "attached">("connecting");
+  const [connectionState, setConnectionState] = useState<"connecting" | "attached" | "disconnected">("connecting");
   const [error, setError] = useState<TerminalError | null>(null);
   const [generation, setGeneration] = useState(0);
 
-  const reload = useCallback(() => {
+  const clearAutoRetryTimer = useCallback(() => {
+    if (autoRetryTimerRef.current !== null) {
+      window.clearTimeout(autoRetryTimerRef.current);
+      autoRetryTimerRef.current = null;
+    }
+  }, []);
+
+  const reconnect = useCallback(() => {
     setGeneration((value) => value + 1);
   }, []);
+
+  const reload = useCallback(() => {
+    autoRetryAttemptsRef.current = 0;
+    clearAutoRetryTimer();
+    reconnect();
+  }, [clearAutoRetryTimer, reconnect]);
+
+  const scheduleAutoRetry = useCallback(
+    (code: string) => {
+      if (!AUTO_RETRYABLE_TERMINAL_ERRORS.has(code)) return;
+      if (autoRetryTimerRef.current !== null) return;
+      if (autoRetryAttemptsRef.current >= TERMINAL_AUTO_RETRY_LIMIT) return;
+      autoRetryAttemptsRef.current += 1;
+      const attempt = autoRetryAttemptsRef.current;
+      autoRetryTimerRef.current = window.setTimeout(() => {
+        autoRetryTimerRef.current = null;
+        recordTerminalClientEvent(sessionId, "websocket.auto_retry", { attempt });
+        reconnect();
+      }, TERMINAL_AUTO_RETRY_BACKOFF_MS);
+    },
+    [reconnect, sessionId],
+  );
 
   const focusIframe = useCallback(() => {
     terminalRef.current?.focus();
@@ -116,6 +150,14 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
     reload();
     return true;
   }, [error, reload]);
+
+  useEffect(() => {
+    void sessionId;
+    autoRetryAttemptsRef.current = 0;
+    clearAutoRetryTimer();
+  }, [clearAutoRetryTimer, sessionId]);
+
+  useEffect(() => clearAutoRetryTimer, [clearAutoRetryTimer]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -209,6 +251,8 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
 
     ws.addEventListener("open", () => {
       if (disposed) return;
+      autoRetryAttemptsRef.current = 0;
+      clearAutoRetryTimer();
       recordTerminalClientEvent(sessionId, "websocket.open");
       setConnectionState("attached");
       scheduleResize();
@@ -225,23 +269,31 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
         return;
       }
       if (message.type === "error") {
+        setConnectionState("disconnected");
         setError({ code: message.data || "terminal_unavailable", detail: message.data ?? "" });
       } else if (message.type === "exit") {
+        setConnectionState("disconnected");
         setError({ code: "terminal_closed", detail: message.data ?? "Terminal bridge closed." });
       }
     });
     ws.addEventListener("close", (event) => {
       if (disposed) return;
       recordTerminalClientEvent(sessionId, "websocket.close", { code: event.code, reason: event.reason });
-      setError({
+      const nextError = {
         code: "terminal_disconnected",
         detail: event.reason || `Terminal WebSocket closed with code ${event.code}.`,
-      });
+      };
+      setConnectionState("disconnected");
+      setError(nextError);
+      scheduleAutoRetry(nextError.code);
     });
     ws.addEventListener("error", () => {
       if (disposed) return;
       recordTerminalClientEvent(sessionId, "websocket.error");
-      setError({ code: "terminal_socket_error", detail: "Terminal WebSocket failed." });
+      const nextError = { code: "terminal_socket_error", detail: "Terminal WebSocket failed." };
+      setConnectionState("disconnected");
+      setError(nextError);
+      scheduleAutoRetry(nextError.code);
     });
     window.setTimeout(scheduleResize, 0);
     return () => {
@@ -262,7 +314,7 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
       if (fitRef.current === fit) fitRef.current = null;
       if (wsRef.current === ws) wsRef.current = null;
     };
-  }, [sessionId, generation, active]);
+  }, [sessionId, generation, active, clearAutoRetryTimer, scheduleAutoRetry]);
 
   // Publish the live URL + reload/focus/recover callbacks so nav selection and
   // tab actions can drive state owned by TerminalPane.
