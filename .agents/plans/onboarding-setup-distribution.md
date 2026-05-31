@@ -4,223 +4,330 @@ Activate the /implement-task skill first.
 
 ## Acceptance Criteria
 
-Verbatim from the topic in the scratchpad:
+Original prompt:
 
-- [ ] Define distribution (fixed releases) — a documented model that lets an operator pin a specific Citadel version, plus the GitHub-side surface (tagged release + asset) that backs it.
-- [ ] Install flow — a single documented path that takes an operator from a fresh checkout to a running, supervised Citadel without having to read source.
-- [ ] "Is everything configured?" verification — a programmatic, repeatable answer to that question. Reachable from the cockpit and from the shell.
-- [ ] Hook examples — operator-facing reference material for the supported hook events (`workspace.setup`, `workspace.teardown`, `workspace.apps`, `workspace.action`, `workspace.created`, `workspace.archived`, `workspace.removed`, `agent.started`) plus the per-worktree deploy hook.
-- [ ] HTTP vs HTTPS support — operators who want HTTPS can opt into it without forking; HTTP remains the default.
-- [ ] `make upgrade` — a dedicated verb that updates the long-term install to a new version of Citadel. Even though it largely shares behavior with `make install`, the verb is part of the published surface.
-- [ ] AI in empty states — when a registered repo has no hooks, the cockpit offers to scaffold the canonical hook by launching an interactive agent (via the existing `launch_agent` MCP primitive) primed with Citadel's own `.citadel/hooks/deploy` as the example. The operator is not pointed at a manual file path.
+- [ ] Define distribution (fixed releases), install flow, "is everything configured?" verification, hook examples
+- [ ] HTTP vs HTTPS support (some users will run http-only)
+- [ ] `make upgrade` command — even though `make install` does the same, the dedicated verb is clearer
+- [ ] Use AI in empty states wherever it makes sense: e.g. when a registered repo has no hooks, launch an interactive agent (on a new branch, primed with the citadel example) to author the hook — instead of pointing the user at manual edits
+
+Clarifications from grilling session:
+
+- [ ] Default `make install` and `make upgrade` install the latest released version, not latest `main`.
+- [ ] Latest release means the highest stable semver git tag matching `vX.Y.Z` from `origin`, sorted numerically and ignoring malformed/prerelease tags.
+- [ ] `make install REF=main` and `make upgrade REF=main` install latest `origin/main`.
+- [ ] `make install REF=vX.Y.Z` and `make upgrade REF=vX.Y.Z` install that exact annotated release tag.
+- [ ] Only `REF=main` and `REF=vX.Y.Z` are accepted; arbitrary branches, SHAs, and lightweight tags are rejected.
+- [ ] Dirty checkout state blocks all install/upgrade ref movement and also blocks reinstalling a fixed release, because a dirty source install is no longer that release.
+- [ ] Default latest-release and `REF=main` require network access; exact tag installs attempt to fetch tags and may use an already-present local annotated tag only when that fetch fails.
+- [ ] `make install` and `make upgrade` should be behaviorally identical except for the user-facing verb; `make upgrade` exists for clarity.
+- [ ] `make install` is self-contained after `git clone`: resolve ref, install dependencies with `pnpm install --frozen-lockfile`, build, write units, restart daemon, then verify with `make doctor`.
+- [ ] No separate required init/config command for this release; first boot creates default config.
+- [ ] Runtime CLI checks warn per missing agent runtime and fail only if zero usable agent runtimes are executable.
+- [ ] Plain shell is a terminal profile, not an agent runtime.
+- [ ] Config shape is split now: `config.agentRuntimes` and singular `config.terminal`.
+- [ ] Sessions are workspace sessions, not agent sessions at the storage/domain level.
+- [ ] Workspace sessions are a discriminated union: `kind: "agent"` has `runtimeId: string`; `kind: "terminal"` has `runtimeId: null`.
+- [ ] The physical database table is renamed from `agent_sessions` to `workspace_sessions`.
+- [ ] The app can still open terminal tabs through REST, but MCP does not expose terminal launch or terminal sessions.
+- [ ] MCP remains agent-only: `list_agent_sessions`, `start_agent_session`, `send_agent_message`, `stop_agent_session` operate only on `kind: "agent"` sessions.
+- [ ] Browser REST uses unified workspace-session reads/stops/renames and separate create paths for agent vs terminal sessions.
 
 ## Context and problem statement
 
-Citadel ships as a local-first cockpit installed from a git checkout. Today there is:
+This branch already contains a partial implementation of the original onboarding/distribution work: install docs, a release workflow, `make upgrade`, doctor contracts/routes/UI, optional HTTPS support, and AI-assisted hook scaffolding. The grilling session clarified that several of those pieces need different semantics:
 
-- A `make install` target that writes a systemd `--user` unit pointing at the current checkout (`scripts/install-systemd.sh`). It is idempotent but does not support pinning a ref — operators install from whatever HEAD happens to be checked out.
-- No tagged releases, no CHANGELOG, no `package.json` version-bump cadence. CI (`.github/workflows/ci.yml`) only runs on PR/push to main; it never publishes.
-- No `make upgrade`. The honest path today is "`git pull && make install`".
-- A provider-health-focused `/api/health` endpoint (`apps/daemon/src/app.ts:136`). No system-wide "is everything wired up" check. No `doctor` command — `apps/cli/src/index.ts` is a single placeholder export.
-- An HTTP-only daemon — `apps/daemon/src/app.ts:89` hardcodes `http.createServer(app)`. The config schema (`packages/config/src/index.ts`) has `bindHost`/`port` but no TLS knobs. The README explicitly recommends 127.0.0.1; there is no documented path for operators who want HTTPS (LAN exposure with self-signed certs, devbox accessed over Tailscale, etc.).
-- A repo settings UI (`apps/web/src/routes/repo-settings.tsx:105`, `RepoHooksSection`) that renders an empty `"No hooks bound to this repo"` chip when nothing is configured, with no remediation path.
-- A canonical, working example in this very repo: `.citadel/hooks/deploy` (Citadel deploying itself). It is the perfect AI fixture but is currently un-leveraged.
-- A `launch_agent` MCP tool (`packages/mcp/src/index.ts:343`, `packages/operations/src/launch-agent.ts:52`) that already does the one-shot "create workspace + start a primed Claude Code session" — the empty-state AI button can be built almost entirely from primitives that exist.
+- Install/upgrade defaults must target latest release tags, not the current branch.
+- `REF=main` is the only branch escape hatch.
+- `make install` must be a complete operator install path and run dependency install itself.
+- The product model must stop treating `shell` as an agent runtime.
+- The persisted session model must be renamed to workspace sessions and distinguish agent sessions from terminal sessions.
 
-The change is to fold these gaps into one onboarding/setup/distribution release: define how operators pick a version, install/upgrade, verify their install, and bootstrap their first repo's hook without writing it from scratch.
+The implementation must reconcile the existing branch work with the clarified product model rather than layering compatibility aliases on top of the old terminology. The repo has no external consumers requiring old MCP or REST names, but existing local operator data still needs a safe forward migration.
 
 ## Spec alignment
 
-| Spec | Touched? | What changes |
-|---|---|---|
-| `specs/B.6-providers-hooks-config.md` | Yes | First-run config + verification surface, hook scaffolding, settings-side "configured?" overview. Update **Config And Settings** ACs and add a "**Verification**" subsection. |
-| `specs/B.5-apps-links-actions.md` | No | Behavior unchanged; only the empty-state path leading to a hook gets a new affordance. No new app/link/action contracts. |
-| `specs/C-technical-stack.md` | Yes | Distribution model (tagged releases), `make upgrade`, optional HTTPS, documented install pre-reqs. Add "**Distribution**" and "**HTTP/HTTPS**" subsections. |
-| `specs/A-shared-definitions.md` | No | No new domain terms — Hook, Workspace, Agent session, Operation are already defined. |
-| `docs/operations/runbook.md`, `docs/architecture/citadel-v2-architecture.md` | Yes | Doc updates only. Runbook gets pointers; architecture gets a one-line note on the optional TLS path. |
+Touched specs:
 
-**Discrepancies found.**
-- `B.6 → Config And Settings` AC 1 ("first-run config/init surface") remains unticked — a wizard is out of scope.
-- `B.6 → Config And Settings` AC 5 ("Settings can validate a repository configuration before it is used by workspace flows") — doctor delivers **diagnosis only**, not gating. AC explicitly remains open with a follow-up entry in `CHANGELOG.md` "Known gaps". Plan does **not** mark this AC as `[~]` because the AC's plain-language reading is "validate before use" (i.e., gate the flow), which we are not delivering in this PR.
+| Spec | Alignment / update needed |
+|---|---|
+| `specs/A-shared-definitions.md` | Add or update core terms for `Workspace session`, `Agent runtime`, and `Terminal profile`. Existing `Agent session` term should become the agent-kind specialization of a workspace session. |
+| `specs/B.1-repositories-workspaces.md` | Workspace and repository counts/attention must count only agent sessions, not terminal tabs. Update references that describe `runtime except shell` to use `session.kind === "agent"`. |
+| `specs/B.2-ade-cockpit.md` | Center-stage tabs already distinguish Terminal vs agent runtime; update API/contract language to workspace sessions and separate terminal creation. |
+| `specs/B.3-agent-sessions-terminal.md` | Main divergence. Replace old `shell runtime` wording with `terminal profile`; update persisted table name, session union shape, and launcher semantics. |
+| `specs/B.6-providers-hooks-config.md` | Update settings IA from `runtimes` to `agentRuntimes` + `terminal`; doctor check kinds must include `agent-runtime` and `terminal`. |
+| `specs/B.7-operations-activity-mcp.md` | MCP remains agent-only. Update tool inventory/semantics so terminal sessions are not listed or launched by MCP. |
+| `specs/B.8-ui-performance-quality.md` | E2E first-run/configured state and terminal smoke are directly affected; plan must include browser coverage. |
+| `specs/C-technical-stack.md` | Distribution semantics currently say default upgrade fast-forwards current branch. Update to latest stable release tag by default, `REF=main` escape hatch, self-contained install, and workspace-session persistence. |
 
-The first implementation step is the spec update — see Implementation steps.
+Spec updates must be the first implementation unit. This is not a pure refactor; specs currently encode several old behaviors.
+
+## Hard-gate matrix
+
+| Gate | Applies? | Plan coverage |
+|---|---:|---|
+| Spec gate | Applies | Step 1 updates every touched spec before code changes. |
+| Regression test gate | Applies | QA/Test Strategy lists Vitest and Playwright coverage for config, DB migration, contracts, REST/MCP, terminal, doctor, install/upgrade, and UI workflows. |
+| Architecture-boundary gate | Applies | Core changes are limited to pure helpers over contract types. Web uses `@citadel/contracts` and daemon APIs only. CLI remains a thin shell/API surface. If implementation needs a new cross-package import, update `scripts/checks/architecture-boundaries.ts` in the same unit and explain why. |
+| Schema-safety gate | Applies | Migration strategy declares version 13, classifies every operation, preserves `PRAGMA foreign_keys = ON`, and states existing operator DB impact. |
+| File-size gate | Applies | Route changes must stay split across dedicated modules (`agent-session-routes`, `workspace-session-routes`, `doctor-routes`, `scaffold-hook-routes`) instead of expanding `app.ts`. Any file approaching 800 lines must be split before final verification. |
+| Provider-degradation gate | Applies | Provider behavior is not expanded beyond doctor/state diagnostics. Existing provider-health degradation remains; doctor continues to classify unconfigured providers as warn and configured-but-unreachable as fail. |
+| Workspace-cleanup-safety gate | Applies | The plan creates/reuses scaffold workspaces but does not add automatic deletion. Dirty worktrees are never deleted by scaffold/session/install flows. |
+| Terminal-completeness gate | Applies | Terminal changes must preserve raw input, control/meta sequences, paste, resize, long output, alternate screen where supported, reconnect, and cross-session isolation. Tests section requires updating terminal unit/E2E coverage for these dimensions before implementation is complete. |
+| Lockfile-sensitivity gate | Skips for dependency additions | No new dependencies are planned. Version metadata may affect package/lockfile entries, but no package lifecycle scripts need review unless implementation introduces a new dependency. |
 
 ## Implementation approach
 
-Five focused units, executed in order, each independently shippable in TDD order:
+Implement in three layers, keeping each boundary explicit:
 
-1. **Spec + docs updates first.** `B.6` and `C` get the new ACs and a Distribution / HTTP-vs-HTTPS subsection. New `docs/operations/install.md` and `docs/operations/hook-examples.md`. README quickstart points at install.md. This sets the contract before any code changes.
-2. **Distribution & `make upgrade`.** Bump `package.json` version to `0.3.0` (with an explicit `rg`-grep audit step). Add `CHANGELOG.md`. Add `.github/workflows/release.yml` triggered on `v*` tags — runs `make check` *first*, then `gh release create` only on success. Extend `scripts/install-systemd.sh` to honor an optional `CITADEL_INSTALL_REF`. Add a `make upgrade` Makefile target wrapping a new `scripts/upgrade.sh` that validates REF shape, refuses to run from a worktree that isn't the systemd-pointed checkout, and refuses dirty trees when pinning a ref.
-3. **Doctor / "is everything configured?".** Three-layer split to satisfy the architecture-boundary gate:
-   - `packages/contracts/src/doctor.ts` — zod schemas for `DoctorReport`/`DoctorCheck`. Pure types.
-   - `packages/core/src/doctor.ts` — pure functions only: `summarizeDoctor`, status precedence, label helpers. No fs/process/config imports.
-   - `packages/operations/src/doctor.ts` — the actual check runner (binary probes, config validation, systemctl/HTTP probes, repo-hook inspection). Operations is allowed to import implementation packages.
-   - `apps/daemon/src/doctor-routes.ts` — new route module (mirrors existing `registerTerminalRoutes` pattern) that exposes `GET /api/doctor`.
-   - `scripts/doctor/run.ts` — CLI entry that calls into `packages/operations`.
-   - `apps/web/src/routes/settings-diagnostics.tsx` — cockpit panel.
-4. **HTTP/HTTPS support.** Extend `CitadelConfigSchema` with optional `tls?: { certPath: string; keyPath: string }`. Extract server-factory branching out of `app.ts` into a new `apps/daemon/src/server-factory.ts` (also serves the file-size gate — see Unit 4 for the explicit pre-extraction step). Daemon uses `https.createServer({key, cert}, app)` when `tls` is set; otherwise `http.createServer(app)`. Add `protocol` to `DoctorReport`. Warn (in doctor + at boot) when `bindHost` is non-loopback AND `tls` is absent — not the inverse.
-5. **AI-assisted hook scaffolding empty state.** Build-time generation of `assets/hook-templates/citadel-deploy.sh` from `.citadel/hooks/deploy` via a sed-based sanitiser script (avoids drift). Unit test asserts the asset matches the regenerated output byte-for-byte. New `apps/daemon/src/scaffold-hook-routes.ts` (route module) wraps `OperationService.launchAgent` with a primed prompt. Lookup by `hook-scaffold-*` branch prefix to **reuse an in-flight scaffold workspace** instead of spawning duplicates. Cockpit affordances in `RepoHooksSection` and `RepoDeployHookSection`; an "in-flight" banner is rendered on the parent repo settings page until the scaffolded PR merges.
+1. **Contract/spec first.** Update specs and `@citadel/contracts` so the discriminated workspace-session shape, agent runtime config, terminal config, and doctor check kinds are the source of truth before implementation changes.
+2. **Storage/config/domain migration.** Split config loading/saving and migrate SQLite from `agent_sessions` to `workspace_sessions`. Existing local config/DB data is migrated forward once; canonical writes use only the new names.
+3. **Surface reconciliation.** Update operations, daemon REST/MCP, terminal routing, state payloads, web UI, docs, install scripts, and tests to use the new model and release semantics.
 
-Order rationale:
-- Specs first locks contract early.
-- Distribution / upgrade is self-contained Makefile + workflow.
-- Doctor lands before HTTPS so HTTPS can populate the new `protocol` field.
-- Scaffolding is last; it depends on no earlier unit and can ship even if doctor surfaces aren't fully polished.
+Terminology rule: public/product-facing code should say `workspace session`, `agent runtime`, or `terminal profile`. The `packages/runtimes` package can keep its name because it contains runtime adapter logic for agents, but config/API fields should not expose a generic `runtimes` array that includes terminal.
 
 ## Alternatives considered
 
-**A. Make distribution an `npm publish` of a single CLI package.**
-*Rejected.* Citadel is a multi-package monorepo that boots a daemon, a web app, supervises ttyd, talks to tmux, and reads SQLite from the install root. The artifact is the checkout. Source-on-disk install matches how the systemd unit references `apps/daemon/dist/index.js` directly.
-
-**B. Build a first-run wizard route in the cockpit instead of a doctor + AI empty-state.**
-*Rejected for this round.* A wizard imposes a happy path on operators who often drop into Settings/Advanced. Doctor (machine-readable, repeatable) plus per-repo empty-state remediation gives parity without forcing linear flow. B.6 AC 1 remains a future ticket.
-
-**C. Use a separate sub-agent CLI (sub-process spawned by the daemon) to author the hook instead of `launch_agent`.**
-*Rejected.* `launch_agent` already creates a fresh worktree on a new branch and starts Claude Code with a primed prompt. A parallel path would split the operator's mental model.
-
-**D. Ship HTTPS via a Caddy/Traefik sidecar instead of inline.**
-*Rejected.* A sidecar requires the operator to install and supervise a second daemon — exactly the friction this plan is removing. Node's `https` module with `{key, cert}` is ~10 lines of branching at bootstrap.
-
-**E. Inline the hook scaffolding prompt into `launch_agent`'s MCP tool itself.**
-*Rejected.* `launch_agent` is generic ("run this prompt in repo X"). Folding hook-templating into it would conflate two responsibilities.
-
-**F. Put the doctor library in `packages/core` only.**
-*Rejected.* Core's purity gate forbids fs/process/config imports. The check runner needs all three. Three-layer split (contracts/core/operations) is the only way to satisfy both the gate and the parity-between-CLI-and-daemon requirement.
+- **Keep `shell` in `config.runtimes` and only hide it in UI/doctor.** Rejected. This preserves the ambiguity the user explicitly wants removed.
+- **Keep the `agent_sessions` table and add `kind`.** Rejected. The user explicitly rejected leaving physical naming debt.
+- **Expose `start_terminal_session` in MCP.** Rejected. MCP is agent orchestration only for now; the browser can create terminals through REST.
+- **Default install/upgrade to the current branch.** Rejected. Fixed releases are the default operator path; latest `main` must be explicit via `REF=main`.
+- **Use GitHub Releases API for latest release resolution.** Rejected. Git tags are enough for source-checkout distribution and avoid requiring `gh` or API auth during install.
 
 ## Implementation steps
 
-### Unit 1 — Spec + docs
+### 1. Specs and docs
 
+- Update `specs/A-shared-definitions.md`:
+  - Add `Workspace session` as the durable tab/session attached to a workspace.
+  - Define `Agent session` as `Workspace session` with `kind: "agent"`.
+  - Define `Terminal profile` as the single shell-backed terminal launcher, not an agent runtime.
+  - Define `Agent runtime` as Claude/Codex/Cursor/Pi/custom prompt-driven agent adapters.
+- Update `specs/B.3-agent-sessions-terminal.md`:
+  - Replace `shell runtime` language with `terminal profile`.
+  - Document `WorkspaceSession = agent | terminal` union.
+  - Document `workspace_sessions` SQLite table.
+  - Clarify terminal sessions are durable tmux sessions but do not count as agents.
 - Update `specs/B.6-providers-hooks-config.md`:
-  - Add a new `## Verification` section: doctor structure, checks performed (binary / config / service / daemon / database / repo-hooks / provider), JSON shape contract reference, both cockpit and CLI surfaces.
-  - Leave `Config And Settings` AC 5 as `[ ]` and add an explicit note: "Diagnosis surface delivered in `make doctor` / `/api/doctor`; **gating** of workspace flows on a failing doctor is a deferred follow-up (tracked in CHANGELOG Known gaps)."
+  - Config shape: `agentRuntimes[]`, `terminal`, `providers`, `hooks`, `usageProviders`.
+  - Doctor check kinds include `agent-runtime` and `terminal`.
+  - Agent runtime checks warn per missing runtime and fail only if zero usable agent runtimes are executable.
+  - Terminal profile command missing is a `fail` because terminal tabs and shell-first agent launching depend on it.
+- Update `specs/B.7-operations-activity-mcp.md`:
+  - MCP tool inventory remains agent-only: `list_agent_sessions`, `start_agent_session`, `send_agent_message`, `stop_agent_session`.
+  - Terminal sessions are not listed or launched through MCP.
 - Update `specs/C-technical-stack.md`:
-  - New `## Distribution` section: tagged releases (`v<semver>`), GitHub Release per tag, `make upgrade [REF=v0.3.0]`, install-systemd.sh ref pinning, source-as-artifact rationale, tag-delete recovery procedure.
-  - New `## HTTP and HTTPS` section: HTTP default at 127.0.0.1, optional inline TLS via `config.tls`, mkcert recipe pointer, explicit non-goal: not a reverse-proxy replacement. Note that the inverse-warning (warn on non-loopback bind without TLS) lives in doctor + boot log.
-- New `docs/operations/install.md`:
-  - Pre-reqs: node ≥24, pnpm ≥10, tmux, ttyd, jq, bash, git, sqlite3, optional `gh` and `jtk` for providers.
-  - Fresh install: `git clone`, `make setup`, `make install`.
-  - Pin a specific version: `CITADEL_INSTALL_REF=v0.3.0 make install`.
-  - Upgrade: `make upgrade` or `make upgrade REF=v0.3.1`. Document that the daemon restart is async and recommend `make doctor` (which retries) over manual `curl /api/health`.
-  - Verify: `make doctor` — expected output (`ok` / `degraded` / `failing`); recognising "dev degraded" vs "broken".
-  - HTTPS: when to use; mkcert recipe; config snippet; mkcert + 127.0.0.1 is fine (local TLS testing); operators binding non-loopback must enable TLS.
-  - Failed release recovery: `git push --delete origin v<x.y.z>`, re-cut after fix.
-  - Troubleshooting cross-reference to `worktree-development.md`.
-- New `docs/operations/hook-examples.md`:
-  - Inline-rendered canonical deploy-hook contract + stubs for `workspace.setup`, `workspace.apps`, `workspace.action`. Each stub: JSON-in-stdin shape, expected stdout shape, exit-code semantics.
-- Update `README.md`:
-  - Replace stale `make dev` line in Quickstart with `make deploy`.
-  - Add `## Install (long-term)` pointing to `docs/operations/install.md` with one-line examples for `make install` and `make upgrade`.
+  - Distribution defaults to highest stable semver tag from `origin`.
+  - `REF=main` is the only branch override.
+  - `make install` and `make upgrade` share behavior and run dependency install.
+  - SQLite owns `workspace_sessions`, not `agent_sessions`.
+- Update `docs/operations/install.md`, `README.md`, and `CHANGELOG.md` to match the clarified install/upgrade commands and latest-release semantics.
+- Update `docs/operations/config-reference.md` and `docs/operations/runbook.md` examples so terminals are not launched via `runtimeId: "shell"` and MCP examples use agent runtimes only.
 
-### Unit 2 — Distribution & `make upgrade`
+### 2. Config model split
 
-- **Version audit step (TDD-style).** Before bumping anything: `rg -F '"0.2.0"' -g '*.{ts,tsx,json,md}'` (literal glob — `tsx` is not a default ripgrep type). Capture the full list. Every match must be updated together. Add the audit output as a one-time block-comment to the PR description so reviewers can confirm none was missed.
-- Bump root `package.json` `version` from `0.2.0` → `0.3.0`. Same in `apps/cli`, `apps/daemon`, `apps/web`, every package under `packages/*`. Use `pnpm -r exec` or a single sed pass against the audit list above.
-- Add `CHANGELOG.md` with:
-  - `## 0.3.0 — Onboarding, setup, distribution` describing the new items here.
-  - A `## Known gaps` section listing the deferred items (B.6 AC 1 first-run wizard; B.6 AC 5 doctor-gating; signed tag verification; rollback on failed health).
-- New `.github/workflows/release.yml`:
-  - Trigger: `push: tags: ['v*']`.
-  - Step 1 — `pnpm install --frozen-lockfile` and `make check`. If this fails, the workflow fails and `gh release create` is **never** reached. Document inline that the operator must `git push --delete origin <tag>` to recover.
-  - Step 2 (only on success) — `gh release create "$GITHUB_REF_NAME" --generate-notes` (no `--notes-file` — let GitHub generate from PR titles between tags). No artifacts uploaded; source is the artifact.
-- New `scripts/upgrade.sh`:
-  - Args / env: `CITADEL_INSTALL_REF` env var or `REF=` argument.
-  - **REF validation:** require `REF` to match `^v[0-9]+\.[0-9]+\.[0-9]+$` AND `git cat-file -t "$REF"` to return `tag` (annotated tag) — refuse SHAs, branches, and lightweight tags.
-  - **WorkingDirectory= equality check:** if `~/.config/systemd/user/citadel.service` exists, parse its `WorkingDirectory=` line. If that path differs from `$(pwd)`, refuse with a clear message listing both paths. This is the explicit guard that Concern F surfaced was missing.
-  - **Dirty-tree check:** if `REF` is set and the working tree has uncommitted changes (`git status --porcelain`), refuse with a message naming the dirty paths.
-  - If REF given: `git fetch --tags && git checkout "$REF"`. If not: `git pull --ff-only` on the current branch (logged clearly).
-  - Then `pnpm install --frozen-lockfile` and exec `scripts/install-systemd.sh`.
+- In `packages/config/src/index.ts`:
+  - Rename `runtimes` schema field to `agentRuntimes`.
+  - Remove the built-in `shell` entry from agent runtime defaults.
+  - Add singular `terminal` schema:
+    ```ts
+    terminal: {
+      displayName: "Terminal",
+      command: "bash",
+      args: ["-l"]
+    }
+    ```
+  - Keep runtime capability fields only for `agentRuntimes`.
+  - Update `DEFAULT_FIX_CI_AUTOMATION`, Citadel Actions, scheduled agents, usage providers, and validation to reference configured agent runtimes only.
+- Add a one-time config-file migration in `loadConfig`:
+  - If raw config has `agentRuntimes`, parse as canonical.
+  - If raw config only has legacy `runtimes`, split entries where `id === "shell"` or command is a known shell command into `terminal`; all others become `agentRuntimes`.
+  - If multiple shell-like entries exist, use the one with `id === "shell"` first, otherwise the first shell-like entry; leave the rest out of `agentRuntimes` and write a clear warning.
+  - After successful parse, attempt an atomic canonical writeback:
+    - Write `<config>.tmp`, `chmod 0600`, then `rename` over the original.
+    - Before overwrite, create `<config>.legacy-runtimes.bak` once if it does not already exist.
+    - If writeback fails because the file or directory is read-only, keep the migrated config in memory, log a warning with the path and reason, and do not crash boot.
+    - The warning must name any legacy shell-like entries that were not carried forward so the operator knows what changed.
+  - `saveConfig` writes only canonical fields; no legacy `runtimes` field.
+- Update config tests to cover fresh defaults, legacy split migration, canonical save, and validation failures.
+
+### 3. Contracts and pure helpers
+
+- In `packages/contracts/src/index.ts`:
+  - Add `TerminalProfileSchema`.
+  - Rename state/config contract fields from `runtimes` to `agentRuntimes`; add `terminal`.
+  - Add `WorkspaceSessionSchema` as a discriminated union:
+    - `kind: "agent"`, `runtimeId: IdSchema`.
+    - `kind: "terminal"`, `runtimeId: z.null()`.
+  - Keep/export `AgentSessionSchema` as the extracted agent variant for MCP and agent-only workflows.
+  - Add `CreateTerminalSessionInputSchema` for REST/app use; do not expose it through MCP.
+  - Keep `CreateAgentSessionInputSchema` agent-only and validate `runtimeId` against daemon config at route time.
+- In `packages/core`, update helpers such as attention/readiness/session grouping to use `session.kind === "agent"` instead of `runtimeId !== "shell"`.
+- Add tests for the discriminated union and pure helpers.
+
+### 4. SQLite migration to `workspace_sessions`
+
+Migration strategy:
+
+- Previous max migration in this branch is `12`; add version `13`, name `workspace-sessions-agent-terminal-split`, and update `CURRENT_SCHEMA_VERSION` to `13`.
+- Preserve `PRAGMA foreign_keys = ON;` at connection open; do not disable foreign keys globally.
+- Operation list:
+  - **Schema dependency audit** before rebuild:
+    - Query `sqlite_schema` for SQL containing `agent_sessions`.
+    - Query `PRAGMA foreign_key_list(<table>)` for every user table to find dependencies on `agent_sessions`.
+    - Inventory indexes/triggers/views that must be recreated or deleted.
+    - Fail the migration with a clear error if an unexpected dependent object is found and not handled by the migration code.
+    - Current expected inventory from this branch:
+      - `agent_sessions` is the only schema object whose own DDL names the old table.
+      - No current tables declare foreign keys to `agent_sessions`.
+      - No current indexes, triggers, or views reference `agent_sessions`.
+      - `scheduled_agents.last_session_id` and `scheduled_agent_runs.session_id` are plain nullable text pointers, not foreign keys; no rebuild is required for those tables, but their values remain valid because session IDs are preserved.
+  - **CREATE TABLE** `workspace_sessions_new` with the same durable fields as `agent_sessions`, plus `kind TEXT NOT NULL`, and with `runtime_id TEXT NULL`.
+  - Add a SQLite `CHECK` constraint enforcing:
+    ```sql
+    (kind = 'agent' AND runtime_id IS NOT NULL)
+    OR
+    (kind = 'terminal' AND runtime_id IS NULL)
+    ```
+  - **Data backfill** from `agent_sessions`:
+    - `kind = 'terminal'` and `runtime_id = NULL` when old `runtime_id = 'shell'`.
+    - `kind = 'agent'` and `runtime_id = old runtime_id` otherwise.
+    - Preserve `display_name`, tmux IDs, status fields, tab IDs, runtime session IDs, resume bookkeeping, timestamps.
+  - **Row-count parity check** after insert: new table count must equal old table count before old data is dropped.
+  - **DROP TABLE** old `agent_sessions` after successful copy inside the same transaction.
+  - **ALTER TABLE RENAME** `workspace_sessions_new` to `workspace_sessions`.
+  - Recreate any indexes/constraints needed by current query patterns (`workspace_id`, `runtime_session_id`, status if introduced).
+  - Run `PRAGMA foreign_key_check` before committing and fail/rollback if any violations are returned.
+  - **INSERT OR IGNORE** migration row `(13, 'workspace-sessions-agent-terminal-split', datetime('now'))`.
+- Classification:
+  - `CREATE TABLE` and indexes are additive.
+  - Data backfill is safe and transaction-bound.
+  - Dropping `agent_sessions` is destructive but data-preserving because the table is rebuilt and renamed in the same forward migration. Rollback remains Citadel's documented backup/restore strategy.
+  - Widening `runtime_id` from NOT NULL to nullable is intentional and required by the discriminated union.
+- Operator data implications:
+  - Existing terminal rows previously stored as `runtime_id='shell'` become `kind='terminal', runtime_id=NULL`.
+  - Existing agent rows keep their runtime IDs.
+  - Existing tmux session names and ttyd adoption continue because session IDs and tmux metadata are preserved.
+- Update `packages/db/src/rows.ts` and `packages/db/src/index.ts`:
+  - Rename reader/writer methods to `listWorkspaceSessions`, `insertWorkspaceSession`, `updateWorkspaceSessionStatus`, `renameWorkspaceSession`, `deleteWorkspaceSession`.
+  - Keep agent-only convenience filters if useful, but no SQL should refer to `agent_sessions`.
+  - Update tests to assert no `agent_sessions` table remains after migration, terminal rows have `runtimeId: null`, invalid direct inserts violate the CHECK constraint, row counts match, and `PRAGMA foreign_key_check` returns no rows.
+
+### 5. Operations and terminal lifecycle
+
+- Split operation entry points:
+  - `createAgentSession` remains agent-only and requires an agent runtime descriptor.
+  - Add `createTerminalSession`, using `config.terminal`.
+  - Rename stop/read/update internals to workspace-session terminology where they apply to both kinds.
+- Update `packages/terminal/src/index.ts`:
+  - `ensureTmuxSession` accepts a terminal shell profile `{ command, args }` instead of hardcoding `bash -l`.
+  - Agent sessions use the configured terminal profile as the base shell before sending the agent runtime command into the pane.
+  - Terminal sessions start only that terminal profile and never launch an agent child process.
+- Update status monitor and message sending:
+  - Terminal sessions are `running` while tmux exists; shell foreground is normal for `kind: "terminal"`.
+  - Agent sessions treat shell foreground as agent idle/stopped as today.
+  - `sendAgentMessage` rejects `kind: "terminal"` with a clear `session_not_agent` error.
+  - Auto-resume, auto-recovery, fix-conflicts, scratchpad refine, scheduled agents, and Citadel Actions select only configured agent runtimes.
+- Ensure `agent.started` hooks/activity fire only for agent sessions. Terminal launch can record a regular activity event such as `terminal.started`, but it must not run `agent.started` hooks.
+
+### 6. Daemon REST, state, MCP, restore, and doctor
+
+- REST:
+  - Add/keep `POST /api/agent-sessions` as agent-only.
+  - Add `POST /api/workspaces/:workspaceId/terminal-sessions` for browser terminal creation.
+  - Add unified workspace-session routes for stop/rename/read where kind-agnostic:
+    - `GET /api/workspace-sessions?workspaceId=...`
+    - `DELETE /api/workspace-sessions/:sessionId`
+    - `PATCH /api/workspace-sessions/:sessionId`
+  - Keep agent-only output/history/message routes under `/api/agent-sessions/:id/...`; they reject non-agent sessions.
+  - `/api/state` returns `sessions: WorkspaceSession[]`, `agentRuntimes`, and `terminal`.
+  - Rename `/api/runtimes` to `/api/agent-runtimes`; update all web callers.
+- MCP:
+  - `list_agent_sessions` returns only `kind: "agent"` sessions.
+  - `start_agent_session` validates against `config.agentRuntimes`.
+  - `send_agent_message`, `read_agent_output`, and `stop_agent_session` reject non-agent session IDs.
+  - Do not add `start_terminal_session` or any terminal listing tool.
+- Restore/boot/orphan handling:
+  - Restore only resumes `kind: "agent"` sessions with runtime session IDs.
+  - Terminal sessions can be reattached/recreated by the normal terminal route using preserved tmux metadata, but no runtime resume is attempted.
+  - Orphan reaper and ttyd release paths operate on workspace sessions by ID.
+- Doctor:
+  - Add doctor check kinds `agent-runtime` and `terminal`.
+  - Agent runtime checks run in CLI and daemon modes because both can resolve configured commands.
+  - Missing agent runtime command -> `warn` per runtime.
+  - Zero executable agent runtimes -> one aggregate `fail`.
+  - Missing terminal command -> `fail`.
+  - Keep provider, TLS, daemon, systemd, database, and repo-hook checks from the existing branch work.
+
+### 7. Web UI
+
+- State and API typing:
+  - `StateResponse.sessions` becomes `WorkspaceSession[]`.
+  - `data.agentRuntimes` replaces `data.runtimes`.
+  - `data.terminal` is available for terminal launcher/settings.
+- Center stage:
+  - The plus menu shows one `Terminal` item from `config.terminal` and agent runtime items from `agentRuntimes`.
+  - Selecting Terminal calls the new terminal REST endpoint.
+  - Selecting an agent calls `POST /api/agent-sessions`.
+  - Tab labels use `session.kind` and display name; terminal tabs default to `Terminal`.
+  - Workspace agent pulse/count/readiness only considers `kind: "agent"`.
+- Settings:
+  - Rename the current `settings-runtimes.tsx` surface to operator-facing Agents.
+  - Remove shell from the Agents list.
+  - Add a compact Terminal profile settings section for the singular terminal command/display name.
+  - Overview tile distinguishes Agents from Terminal.
+  - Diagnostics groups `Agent runtimes` and `Terminal`.
+- Empty states:
+  - Keep/finish "Scaffold with AI" for repo hooks using `config.agentRuntimes`, preferring `claude-code` if configured, otherwise the first available agent runtime.
+  - Never fall back to terminal for hook scaffolding.
+
+### 8. Distribution, install, upgrade, release
+
+- Refactor `scripts/install/install-guards.sh` into shared install/ref helpers:
+  - `citadel_require_clean_tree`.
+  - `citadel_fetch_origin_tags_required` for default latest release.
+  - `citadel_fetch_origin_tags_best_effort` for exact tag installs.
+  - `citadel_latest_release_tag` with numeric stable semver sorting.
+  - `citadel_resolve_install_ref`:
+    - no ref -> latest stable annotated release tag from `origin`; network fetch/list is required and local-only tags are ignored.
+    - `main` -> fetch `origin/main` and checkout exactly that fetched object (detached or otherwise without merge/rebase/local-branch ambiguity); network fetch is required.
+    - `vX.Y.Z` -> exact annotated tag; fetch tags best-effort. If fetch succeeds, require the tag to exist on `origin` and be annotated. If fetch fails, accept an already-present local annotated tag.
+    - anything else -> refusal.
+  - Latest-tag selection should derive candidates from remote tag refs, not from local `git tag`. One valid implementation is parsing `git ls-remote --tags origin` and accepting stable `vX.Y.Z` tags only when the remote output includes the peeled `refs/tags/vX.Y.Z^{}` companion that proves an annotated tag.
+  - If default latest-release resolution finds no valid annotated stable semver tag on `origin`, fail clearly with guidance: create/push a release tag or use `REF=main` for development/bootstrap installs.
+  - Annotated tag validation rejects lightweight tags, branches, and SHAs in both exact-tag resolution and latest-tag selection.
 - Update `scripts/install-systemd.sh`:
-  - Honor `CITADEL_INSTALL_REF` (same `git fetch --tags && git checkout <ref>` step before the existing pre-flight).
-  - Add the same WorkingDirectory= equality check as `upgrade.sh` (refactor into a shared `scripts/lib/install-guards.sh` sourced by both).
-  - Inline comment markers `# REF-PIN START / # REF-PIN END` around the new block for audit clarity.
+  - Accept `REF=...` arg and `CITADEL_INSTALL_REF`.
+  - Default to latest release tag.
+  - Refuse dirty checkout before any checkout/pull/reinstall.
+  - Run `pnpm install --frozen-lockfile` after ref selection and before build.
+  - Preserve WorkingDirectory mismatch guard.
+- Update `scripts/install/upgrade.sh`:
+  - Delegate to the same resolver and then to install.
+  - Behave identically to install except for log wording.
 - Update `Makefile`:
-  - New `make upgrade` target: `bash scripts/upgrade.sh $(if $(REF),REF=$(REF))`. Add to `.PHONY` and help text immediately under `make install`, mirroring tone.
+  - `make install REF=main`, `make install REF=vX.Y.Z`, and defaults pass through.
+  - `make upgrade` remains the clarity verb.
+  - `make setup` remains a dev convenience, not required for operator install.
+- Update release workflow/docs:
+  - `.github/workflows/release.yml` remains tag-triggered and gates release creation on `make check`.
+  - Add a workflow preflight before `gh release create`:
+    - `actions/checkout` must use `fetch-depth: 0`, and the workflow must explicitly fetch tag objects if needed before validation.
+    - `GITHUB_REF_NAME` must match `^v[0-9]+\.[0-9]+\.[0-9]+$`.
+    - `git cat-file -t "refs/tags/$GITHUB_REF_NAME"` must return `tag`, not `commit`, so lightweight tags cannot publish releases the installer refuses.
+  - Docs explain source checkout, tags-as-artifacts, latest-release default, dirty-tree policy, and exact-tag behavior when offline with a local tag.
 
-### Unit 3 — Doctor / "is everything configured?"
+### 9. HTTP/HTTPS and hook scaffolding reconciliation
 
-Three-layer split (explicit, to satisfy the architecture-boundary gate):
-
-- New `packages/contracts/src/doctor.ts`:
-  - Zod schemas: `DoctorCheckSchema`, `DoctorReportSchema`.
-  - `DoctorReport.version: z.literal(1)` — exact match, no upper-bound coercion.
-  - `DoctorCheck` discriminated union by `kind`: `"binary" | "config" | "service" | "daemon" | "database" | "repo-hooks" | "provider"`. Fields: `id`, `kind`, `label`, `status` ("ok" | "warn" | "fail" | "skipped"), `detail?`, `hint?`.
-  - Add `protocol: z.enum(["http", "https"])` (populated by Unit 4) and `summary: z.enum(["ok", "degraded", "failing"])`.
-  - Exported via `@citadel/contracts` index.
-- New `packages/core/src/doctor.ts`:
-  - **Pure functions only.** No imports beyond `@citadel/contracts`.
-  - Exports `summarizeDoctor(checks: DoctorCheck[]): "ok" | "degraded" | "failing"`. Precedence: any `fail` → `failing`; else any `warn` → `degraded`; else `ok`. `skipped` doesn't contribute.
-  - Exports `statusLabel(status)`, `groupChecksByKind(checks)` and similar helpers.
-  - Architecture verification: re-run `pnpm check:arch` after this lands.
-- New `packages/operations/src/doctor.ts`:
-  - The actual check runner. Operations is allowed to import `@citadel/config`, `@citadel/db`, providers, and node builtins.
-  - `runDoctorChecks(input: { config: CitadelConfig; store: SqliteStore; mode: "cli" | "daemon" }): Promise<DoctorReport>`.
-  - Probes:
-    - **Required binaries** (cli mode only — daemon's host already has them): `node`, `pnpm`, `tmux`, `ttyd`, `bash`, `git`, `sqlite3`, `jq`. Use `which`/`command -v` via `node:child_process`. Missing required binary → `status: "fail"`.
-    - **Recommended binaries** (cli mode only): `gh`, `jtk`. Missing → `status: "warn"`.
-    - **Config**: zod-validate via `@citadel/config`. Parse errors → `fail` with the zod error message.
-    - **systemd services** (cli mode only): `systemctl --user is-active citadel.service` and `citadel-tmux.service`. `skipped` when systemd is unavailable (dev worktree). Inactive when expected → `fail`.
-    - **Daemon reachability**: `GET <bindHost>:<port>/api/health` with **retry: 5 attempts, 1s apart**. Only the final attempt's failure marks `fail`. Captures the daemon's `databasePath` and `degradedProviders` count on success. Doctor's own daemon route skips this check (it IS the daemon).
-    - **Database schema version**: read `MAX(version)` from `schema_migrations`; compare to a constant exported from `@citadel/db`. Mismatch → `fail` with explicit "run pnpm db:migrate" hint (no such command yet — flag as a deferred follow-up in CHANGELOG Known gaps).
-    - **Per-repo hooks**: for each registered repo, resolve `.citadel/hooks/deploy` executability and `setupHookIds`/`teardownHookIds` references against the config. Repo with **no hooks bound AND no deploy hook file** → `warn` with hint pointing at `/settings/repos/<id>` (and the "Scaffold with AI" affordance).
-    - **Providers**: for each enabled provider (gh, jtk, plus any usage providers), classify per the warn-vs-fail contract:
-      - **Unconfigured** (binary missing OR provider explicitly disabled OR auth absent): `status: "warn"`, `hint: "provider unconfigured — features X disabled"`. Top-line summary downgrades to `degraded`.
-      - **Configured but unreachable** (binary present but health probe fails): `status: "fail"`. Top-line goes `failing`.
-      - **Healthy**: `status: "ok"`.
-    - **TLS-on-loopback inversion**: emit one check `id: "bind-host-tls"` that warns when `config.bindHost` is non-loopback (anything other than `127.0.0.1` / `::1` / `localhost`) AND `config.tls` is absent. Does NOT warn for loopback + TLS.
-- New `apps/daemon/src/doctor-routes.ts` (separate file — not in `app.ts` — for file-size gate compliance):
-  - `registerDoctorRoutes(app, deps)` mirroring the existing `registerTerminalRoutes` pattern.
-  - `GET /api/doctor`: runs `runDoctorChecks({ ..., mode: "daemon" })`, returns the report.
-- New `apps/web/src/routes/settings-diagnostics.tsx` — cockpit panel under `/settings/diagnostics`.
-  - **Version handling**: if `report.version !== 1`, render a banner "Diagnostics report version unknown — upgrade the cockpit". Renders raw JSON beneath for forward-compat consumers.
-- New Settings → Overview tile rendering the worst-status badge (`ok`/`degraded`/`failing`) plus a "Run diagnostics" link to the panel.
-- New `Makefile` target `make doctor`: `tsx scripts/doctor/run.ts "$@"`. Add to help and `.PHONY`.
-  - **tsx dependency confirmation:** `tsx@^4.19.3` is already in root `devDependencies` (root `package.json`). No new dep introduced.
-  - **Build prerequisite:** `tsx` resolves the workspace via TypeScript project references at runtime; no pre-build needed. The script imports directly from `packages/operations/src/doctor.ts` source. This matches the pattern used by `scripts/dev/smoke.ts` and `scripts/checks/architecture-boundaries.ts` (already in the repo) — no new invocation pattern.
-- `apps/cli/src/index.ts`: add a `doctor` subcommand that shells out to `scripts/doctor/run.ts`. **Optional** — only land if it fits inside the file-size guard for `index.ts` (currently a one-line placeholder). Otherwise defer.
-
-### Unit 4 — HTTP/HTTPS
-
-**Pre-step (file-size gate — explicit):** before adding any new TLS code to `apps/daemon/src/app.ts` (currently 794 lines, 6 lines below the 800-line `scripts/checks/file-size.ts` limit):
-
-1. Extract the `http.createServer(app)` line plus the impending TLS branching into a new `apps/daemon/src/server-factory.ts`. Export `createDaemonServer(app: express.Express, config: CitadelConfig): http.Server | https.Server`.
-2. Mount the new `/api/doctor` and `/api/repos/:repoId/scaffold-hook` routes via separate route modules (Units 3 and 5 already specify this — re-confirmed here).
-3. Target headroom: `app.ts` ≤ 700 lines after the extraction. Verify with `wc -l apps/daemon/src/app.ts` in the implementation TODO.
-
-Then:
-
-- Extend `CitadelConfigSchema` in `packages/config/src/index.ts`:
-  ```ts
-  tls: z.object({
-    certPath: z.string().refine(absolutePath, "cert path must be absolute"),
-    keyPath:  z.string().refine(absolutePath, "key path must be absolute"),
-  }).optional()
-  ```
-  - The zod `.refine()` stays pure (path-shape only): absolute path. Filesystem readability and cert-expiry checks live in a separate post-load validator (`validateTlsAssets(config)`) invoked by the daemon entry — refines stay side-effect-free.
-  - **`validateTlsAssets`**: confirms both files exist, are non-zero bytes (catches the "empty mkcert file" misuse), and parses the cert via Node's `crypto.X509Certificate`. Refuses if `validTo` is in the past (boot fails fast with the expiry date). Doctor's `kind: "config"` check runs the same validator and emits `warn` when the cert is within 7 days of expiry.
-- `apps/daemon/src/server-factory.ts` implements the branching: `config.tls != null` → `https.createServer({ key, cert }, app)`; else `http.createServer(app)`. WebSocket attachment continues to work — `ws` accepts an `https.Server` identically; verify in tests.
-- Boot log line in `apps/daemon/src/index.ts` shows the protocol explicitly (e.g. `→ Daemon listening on https://127.0.0.1:4010`).
-- `DoctorReport.protocol` populated from `config.tls != null`.
-- **Inverse warning** (from Concern G): doctor + boot-log warn when `config.bindHost` is non-loopback AND `config.tls` is absent. **Do not warn** for loopback + TLS (the normal mkcert dev pattern).
-- Documentation in `install.md` covers: mkcert recipe; how to add the cert to the system trust store; warning that the systemd unit's `bindHost` defaults to 127.0.0.1 and operators wanting LAN exposure need both TLS *and* firewall consideration.
-
-### Unit 5 — AI-assisted hook scaffolding empty state
-
-- New `scripts/dev/generate-hook-template.ts`:
-  - Reads `.citadel/hooks/deploy`, applies a documented sed-style sanitiser (strips the worktree-specific cksum port derivation, replaces with a `# Replace with your own port/URL derivation` comment block; replaces APP_NAME="citadel" with `APP_NAME="${MY_APP:-app}"`), writes to `assets/hook-templates/citadel-deploy.sh`.
-  - Idempotent.
-- New `assets/hook-templates/citadel-deploy.sh` (committed; product of the generator).
-- New unit test `scripts/dev/generate-hook-template.test.ts` asserts: running the generator against the current `.citadel/hooks/deploy` produces a byte-for-byte match with the committed `assets/hook-templates/citadel-deploy.sh`. Catches drift if either file changes without regeneration.
-- New `apps/daemon/src/scaffold-hook-routes.ts` (separate route module — file-size gate compliance):
-  - `buildHookScaffoldPrompt(input: { repo: Repo; template: string }): string` — constructs the prompt: you are operating inside a fresh worktree for repo `<name>` at `<path>`; your job is to write `.citadel/hooks/deploy` adapted to this repo's actual app(s); ensure `chmod +x`; run `./.citadel/hooks/deploy list` to validate it returns `{"apps":[...]}` JSON; iterate until validation passes; then stop. Provide the canonical Citadel template inline. Provide the env vars the hook receives (`CITADEL_WORKSPACE_ID`, etc.).
-  - **In-flight reuse:** before spawning, list workspaces filtered by `repoId === target && branch.startsWith("hook-scaffold-")` AND `lifecycle === "ready"`. If found, return that workspace + its (possibly running) session id instead of spawning a new one. This satisfies Blocker D's lifecycle policy.
-  - `POST /api/repos/:repoId/scaffold-hook` — validates repo exists; finds-or-creates the scaffold workspace; returns `{ workspaceId, sessionId, branchName, workspacePath, operationId, reused: boolean }`.
-  - **Lifecycle policy** (documented in install.md + hook-examples.md): scaffold workspaces are normal workspaces. The operator commits + opens a PR via the standard flow. Citadel does NOT auto-delete; the workspace-cleanup-safety gate is respected (dirty trees are never auto-deleted without explicit force).
-- Cockpit `apps/web/src/routes/repo-settings.tsx`:
-  - In `RepoHooksSection`, when no hooks are bound: render a panel with the message + "Scaffold with AI" button. Button calls `POST /api/repos/:repoId/scaffold-hook`. On `reused: true`, button label says "Resume scaffold session"; on `reused: false`, "Open scaffold workspace".
-  - Same affordance in `RepoDeployHookSection` when no `.citadel/hooks/deploy` file is detected AND `deployHookCommand` is empty.
-  - **In-flight banner:** when any `hook-scaffold-*` workspace exists for this repo, show a banner at the top of the repo settings page: "Scaffold session in-flight on branch `<name>` — [open workspace]". Banner disappears when the scaffold workspace is archived / its PR merges (no special wiring needed; existing state flow drives the disappearance).
-  - On click, after the POST, navigate to the cockpit for the spawned (or reused) workspace.
+- Keep optional in-process TLS support already introduced on the branch:
+  - `config.tls` absolute cert/key paths.
+  - non-empty, readable, non-expired cert validation.
+  - `http` default and `https` when configured.
+  - boot/doctor warning only for non-loopback bind without TLS.
+- Ensure every URL builder uses `protocol` from config/doctor/dev state.
+- Keep hook example docs and canonical `assets/hook-templates/citadel-deploy.sh`.
+- Ensure scaffold route cannot choose terminal; it must require an agent runtime.
+- Route and UI should reuse in-flight `hook-scaffold-*` workspaces and never auto-delete dirty scaffold worktrees.
 
 ## QA/Test Strategy
 
@@ -228,171 +335,144 @@ Then:
 
 | Layer | Verdict | Details |
 |-------|---------|---------|
-| Unit (Vitest) | **Required** | Config schema (TLS validation, expiry parsing), `packages/core/src/doctor.ts` (summary precedence), `packages/operations/src/doctor.ts` (each probe is mockable), `apps/daemon/src/scaffold-hook-routes.ts` (prompt builder snapshot + in-flight reuse logic), `scripts/upgrade.sh` REF validation + WorkingDirectory check, hook-template generator drift test. Doctor route returns the same shape as the CLI. |
-| E2E (Playwright) | **Required for two flows** | (a) Diagnostics tile + panel reflect daemon status (synthetic unhealthy provider → warn). (b) Scaffold-with-AI button POSTs to the right endpoint; new workspace appears in the cockpit; second click reuses the in-flight workspace (banner shows, button label changes). Both use existing isolated-daemon fixtures. |
+| Unit (Vitest) | Required | This change touches contracts, config migration, SQLite migration, install scripts, doctor logic, operations, MCP dispatch, status/readiness helpers, daemon route handlers, and React components. Unit tests must cover each critical boundary. |
+| E2E (Playwright) | Required | The browser creates terminal and agent sessions through different endpoints, renders workspace-session tabs, shows diagnostics, and exposes AI hook scaffolding. These are user-visible flows. |
 
 ### New tests to add
 
-- `packages/config/src/index.test.ts` — new `describe("TLS config")`:
-  - `accepts a valid tls block when both files exist and cert is non-empty + non-expired` (test generates a self-signed cert via `crypto.generateKeyPair`).
-  - `rejects relative cert/key paths`.
-  - `rejects missing cert file` (validation error surfaces filename).
-  - `rejects empty (0-byte) cert file`.
-  - `rejects expired cert` (test generates a cert with `validTo` in the past).
-  - `default fixture asserts tls === undefined` (regression — guards against the field becoming required).
-- `packages/core/src/doctor.test.ts` — new file:
-  - `summarizeDoctor returns "ok" when all checks ok or skipped`.
-  - `summarizeDoctor returns "degraded" when any check is warn but none fail`.
-  - `summarizeDoctor returns "failing" when any check is fail` (verifies fail > warn precedence).
-- `packages/operations/src/doctor.test.ts` — new file:
-  - Each probe (binary / config / systemd / daemon / database / repo-hooks / provider) tested in isolation with a fixture daemon + mocked `child_process.execFile`.
-  - Provider warn-vs-fail contract: unconfigured provider → `warn` + correct hint; configured-but-unreachable provider → `fail`.
-  - Daemon reachability retries 5 times before declaring fail; succeeds on the 3rd attempt is treated as ok.
-  - TLS-on-loopback inversion: `bindHost=127.0.0.1` + tls absent → no warn; `bindHost=0.0.0.0` + tls absent → warn.
-- `apps/daemon/src/doctor-routes.test.ts`:
-  - `GET /api/doctor returns 200 with a DoctorReport-shaped body`.
-  - `report.protocol === "https" when config.tls is set`.
-  - `report includes one repo-hooks check per registered repo`.
-  - `report.version === 1` always.
-- `apps/daemon/src/scaffold-hook-routes.test.ts`:
-  - `buildHookScaffoldPrompt embeds the canonical template` (snapshot a substring — guards loader bugs).
-  - `buildHookScaffoldPrompt includes the repo name and root path`.
-  - `POST returns { reused: false, workspaceId, sessionId } when no in-flight scaffold exists` (mocks `OperationService.launchAgent`).
-  - `POST returns { reused: true } when a hook-scaffold-* workspace already exists for the repo`.
-  - `404 when repoId is unknown`.
-  - Call args assertion: `launchAgent` called with `runtimeId === "claude-code"` and `branchName.startsWith("hook-scaffold-")`.
-- `apps/daemon/src/app.test.ts` — extend existing tests:
-  - Daemon boots in HTTPS mode when `config.tls` is set (fixture generates self-signed cert).
-  - `/api/health` reachable over HTTPS in that mode.
-  - WebSocket terminal endpoint reachable over `wss://` (smoke — just an upgrade handshake; tmux/ttyd not exercised).
-- `scripts/dev/generate-hook-template.test.ts`:
-  - Generator produces byte-for-byte match with committed `assets/hook-templates/citadel-deploy.sh` against current `.citadel/hooks/deploy`.
-- `scripts/install/upgrade.test.ts` (vitest, shells out to bash — keeps everything in the existing test harness; no new bats dependency):
-  - `REF=v0.3.0` from dirty worktree exits non-zero with stderr naming a dirty path.
-  - `REF=v0.3.O` (typo with letter O) exits non-zero on REF regex check.
-  - `REF=main` exits non-zero (not an annotated tag).
-  - Running from a path other than systemd unit's `WorkingDirectory=` exits non-zero with both paths in stderr.
-  - These tests use a tmp-dir fake checkout + fake systemd unit file via `os.tmpdir()` + `fs.writeFileSync`; no real `systemctl` invocation. Picked up automatically by `pnpm test` / `make check`.
-- `e2e/diagnostics.spec.ts` — new file:
-  - Visits `/settings`, asserts a "Diagnostics" tile present with a status badge.
-  - Opens `/settings/diagnostics`, sees one row per registered repo, sees overall summary badge.
-  - Mismatched-version banner: when daemon returns `version: 2` (stubbed via test interception), the cockpit renders the "report version unknown" banner.
-- `e2e/scaffold-hook.spec.ts` — new file:
-  - Boots a daemon with one registered repo and no hooks bound; opens `/settings/repos/<id>`; asserts the empty state shows "Scaffold with AI".
-  - Clicks → new workspace appears in the cockpit list with `branchName` matching `hook-scaffold-*`.
-  - Returns to `/settings/repos/<id>` → the in-flight banner is visible; the button label is now "Resume scaffold session"; clicking it reuses the existing workspace (verified via the workspace id staying the same).
-  - Stubs the underlying Claude Code spawn (existing agent-session e2es do this — re-use the helper).
+- `packages/contracts/src/index.test.ts`: validates `WorkspaceSessionSchema` discriminated union, `AgentSessionSchema` extraction, terminal `runtimeId: null`, and rejection of `kind: "terminal"` with runtime ID.
+- `packages/contracts/src/doctor.test.ts` or existing contract tests: validates new doctor kinds `agent-runtime` and `terminal`.
+- `packages/config/src/index.test.ts`: fresh config defaults to `agentRuntimes` without shell and singular `terminal`; legacy `runtimes` config migrates and is saved canonically; multiple shell-like legacy entries choose the shell entry deterministically.
+- `packages/db/src/migration.test.ts`: existing `agent_sessions` rows migrate to `workspace_sessions`; old `runtime_id='shell'` becomes terminal with null runtime; non-shell rows remain agents; old table no longer exists; `CURRENT_SCHEMA_VERSION` is 13.
+- `packages/db/src/migration.test.ts`: migration inventories dependent schema objects, preserves row-count parity, fails on unexpected dependent objects, and leaves `PRAGMA foreign_key_check` clean.
+- `packages/db/src/migration.test.ts`: current schema inventory expectation is pinned: no FK/table/index/trigger/view dependencies on `agent_sessions` beyond the old table itself, and `scheduled_agents.last_session_id` / `scheduled_agent_runs.session_id` remain text pointers with preserved IDs.
+- `packages/db/src/index.test.ts`: workspace session CRUD round-trips both agent and terminal variants; invalid discriminant/runtime combinations fail the SQLite CHECK constraint; rename/status/delete use `workspace_sessions`.
+- `packages/core/src/index.test.ts` or targeted helper tests: workspace pulse/readiness/count helpers ignore terminal sessions and count only `kind: "agent"`.
+- `packages/terminal/src/index.test.ts`: `ensureTmuxSession` builds tmux command from a supplied terminal profile rather than hardcoded `bash -l` (mock child_process).
+- `packages/terminal/src/input-tokens.test.ts` or existing terminal input tests: preserve raw input, control/meta sequences, and paste tokenization after the session model rename.
+- `apps/daemon/src/terminal-routes-proxy.test.ts`: terminal proxy still supports resize/reconnect and isolates ttyd entries by workspace-session ID for both agent and terminal kinds.
+- `packages/operations/src/create-agent-session.test.ts`: agent creation uses terminal profile as base shell and inserts `kind: "agent"`; terminal creation inserts `kind: "terminal"` and does not run agent hooks.
+- `packages/operations/src/agent-messages.test.ts`: sending a message to a terminal session returns `session_not_agent`.
+- `packages/operations/src/doctor.test.ts`: agent runtime missing -> warn; zero executable agent runtimes -> fail; terminal command missing -> fail; provider/TLS behavior remains unchanged.
+- `apps/daemon/src/agent-session-routes.test.ts`: `POST /api/agent-sessions` validates against `agentRuntimes` and rejects terminal IDs/unknown runtime IDs.
+- `apps/daemon/src/workspace-session-routes.test.ts`: terminal creation route creates terminal session; unified stop/rename routes work for both kinds.
+- `apps/daemon/src/daemon-mcp-tool.test.ts`: MCP `list_agent_sessions` filters terminal sessions; start/send/read/stop reject terminal IDs where applicable.
+- `apps/daemon/src/scaffold-hook-routes.test.ts`: scaffold chooses only agent runtimes and fails when no agent runtime is configured.
+- `scripts/install/upgrade.test.ts` and new or expanded install-guard tests: default resolves highest semver tag, `v0.10.0 > v0.9.9`, malformed/prerelease tags ignored, `REF=main` accepted, arbitrary refs rejected, dirty tree blocks, exact local annotated tag works when fetch fails.
+- `scripts/install/upgrade.test.ts` and new or expanded install-guard tests: local-only tags cannot win default latest-release selection; exact local tag is rejected when origin fetch succeeds but the tag is absent from origin; default install fails clearly when origin has no stable annotated release tags.
+- `scripts/install/upgrade.test.ts`: `REF=main` fetches `origin/main` and checks out exactly that fetched object without merging/rebasing local `main`.
+- `.github/workflows/release.yml` covered by a script-level test or shellcheckable helper test: release preflight rejects lightweight tags and malformed tag names before `gh release create`.
+- `apps/web/src/app-state.test.ts`: state helpers handle `WorkspaceSession[]`, agent-only counts, and terminal sessions.
+- `apps/web/src/stage.test.tsx` or nearest existing stage/session test: plus menu creates terminal via terminal endpoint and agent via agent endpoint.
+- `apps/web/src/settings-runtimes.test.tsx` or renamed Agents settings test: shell no longer appears as an agent runtime; terminal profile renders separately.
+- `apps/web/src/settings-diagnostics.test.tsx`: diagnostics renders `Agent runtimes` and `Terminal` groups.
 
 ### Existing tests to update
 
-- `packages/config/src/index.test.ts` — extend an existing fixture to assert `tls === undefined` by default.
-- `apps/daemon/src/app.test.ts` — `GET /api/health` body shape: no change; tests merely co-exist with the new doctor-route tests.
+- Any tests using `runtimeId: "shell"` for agent/session fixtures must become either:
+  - `kind: "terminal", runtimeId: null`, or
+  - an actual agent runtime such as `claude-code`/`codex` when testing agent behavior.
+- Update fixtures in:
+  - `apps/daemon/src/app-test-helpers.ts`
+  - `apps/daemon/src/scratchpad-routes.test-utils.ts`
+  - `packages/mcp/src/index.test.ts`
+  - `packages/operations/src/launch-agent.test.ts`
+  - `packages/operations/src/status-monitor.test.ts`
+  - `apps/daemon/src/auto-recovery*.test.ts`
+  - `apps/daemon/src/fix-conflicts-routes.test.ts`
+  - `apps/web/src/workspace-card.test.ts`
+  - `apps/web/src/terminal-pane.test.ts`
+- Update doctor route/UI tests for new check kinds and config names.
+- Update docs tests or snapshot expectations if any assert MCP tool inventory or config JSON.
 
 ### Assertions to add/change/tighten
 
-- `DoctorReport.version === 1` everywhere it's parsed.
-- Doctor JSON output round-trips through `JSON.parse(JSON.stringify(...))` without information loss.
-- Scaffold-hook prompt embeds the canonical template (snapshot substring).
-- HTTPS daemon refuses to listen if the cert is empty (zero-byte) — explicit assertion in app test.
-- `make upgrade REF=v0.3.0` from a dirty worktree exits non-zero (shell test).
-- WorkingDirectory= mismatch refusal exits non-zero with both paths in the message.
-- Hook-template generator output equals the committed asset byte-for-byte.
+- Assert no canonical config output contains a top-level `runtimes` key.
+- Assert no canonical state response contains `runtimes`; it contains `agentRuntimes` and `terminal`.
+- Assert terminal sessions do not appear in MCP `list_agent_sessions`.
+- Assert terminal session IDs passed to MCP agent-only methods return explicit errors.
+- Assert workspace cards and dashboard do not mark a workspace as working when only terminal sessions are running.
+- Assert hook scaffolding fails clearly when no agent runtime is configured, rather than launching a terminal.
+- Assert install/upgrade default checkout is the latest stable release tag, detached if needed.
+- Assert dirty trees block install/upgrade even when already on a tag.
+- Assert release preflight rejects lightweight semver tags.
+- Assert release workflow checkout/fetch makes annotated tag objects available before preflight.
+- Add mechanical reference checks in the implementation verification notes:
+  - `rg -n 'agent_sessions|runtimeId: "shell"|\\bruntimes\\b' apps packages specs docs scripts .github` must return only annotated legacy-migration/tests/docs allowlist entries.
+  - Any remaining allowlisted legacy reference must include a nearby comment explaining why it is intentionally legacy.
 
 ### Failure modes / edge cases / regression risks
 
-- **Operator runs `make upgrade` while the daemon is serving live sessions.** systemd restart drops every ttyd; the separate tmux unit survives, so agent processes keep running. Doctor's retry behavior masks the brief restart window. Documented in install.md.
-- **TLS cert expires.** Daemon refuses to boot; doctor warns within 7 days of expiry. Both paths tested.
-- **`CITADEL_INSTALL_REF` set to a non-existent ref.** `git checkout` fails (set -e); upgrade.sh propagates non-zero. Combined with the REF regex check, the failure surfaces before any state-mutating action.
-- **AI scaffolder writes a broken hook.** Out of our control once the agent runs. Mitigation: the prompt explicitly says "validate by running `./.citadel/hooks/deploy list` and iterate until JSON parses". The cockpit shows the agent's terminal — operator sees iteration.
-- **Concurrent `make upgrade` from two terminals.** Out of scope. systemd serializes; the pid-based stop in install-systemd.sh surfaces collisions.
-- **Repo without GitHub remote tries to scaffold.** No issue — the AI scaffolder works on filesystem-only repos. The empty-state button is not gated by `gh` health.
-- **Concurrent "Scaffold with AI" clicks.** Resolved by Unit 5's in-flight reuse: the second click reuses the existing scaffold workspace; no duplicates.
-- **Scaffold workspace abandoned by operator.** No auto-cleanup. Workspace-cleanup-safety gate respected — dirty trees never auto-deleted. Operator removes via the existing remove-workspace flow if desired. Documented in install.md.
-- **Config schema migration.** Adding optional `tls` is purely additive — no existing config breaks. No SQL DDL touched. No `schema_migrations` row.
-- **`scripts/install-systemd.sh` regression risk.** Mitigated by `# REF-PIN START / # REF-PIN END` comment markers, by gating new behavior behind `CITADEL_INSTALL_REF`, and by the shared `scripts/lib/install-guards.sh` having its own unit tests (the bash test described above).
-- **Doctor false-positive on freshly-restarted daemon.** Mitigated by the 5×1s retry on the daemon-reachability probe.
-- **Failed `make check` inside release.yml.** Workflow fails before `gh release create` runs; `install.md` documents the `git push --delete origin <tag>` recovery procedure.
+- **Data loss during table rebuild.** Migration must run in a transaction and preserve tmux/session metadata.
+- **Terminal tabs accidentally counted as agents.** This can produce false running indicators, auto-recovery suppression, and wrong readiness.
+- **MCP leaking terminal sessions.** Agents could read or stop an operator's terminal tab if filtering is missed.
+- **Agent launch using terminal config incorrectly.** If terminal profile args are not passed correctly, agent prompts may paste before the shell is ready.
+- **No agent runtimes installed.** Doctor must fail clearly, and agent launch/scaffold buttons must show actionable unavailable states.
+- **Install default silently using stale local tags.** Default latest-release path must require remote tag fetch.
+- **Dirty source checkout installed as release.** Dirty checks must happen before checkout and before reinstall.
+- **HTTPS config regressions.** ttyd proxy and diagnostic WebSocket must work under HTTP and HTTPS.
+- **Existing local config migration surprises.** Legacy `runtimes` split must be deterministic and write canonical config once.
+- **Invalid workspace-session rows from direct SQL.** SQLite CHECK constraints must enforce the discriminated union even outside Zod/API code.
+- **Release workflow publishes an unusable lightweight tag.** Workflow preflight must reject tags the installer would reject.
+- **Local-only release tag shadows origin.** Default latest-release selection must use remote tag refs only; exact-tag installs only accept local tags when remote fetch fails.
 
 ### Adversarial analysis
 
-- **How could this fail in production?**
-  Most-likely failure: TLS code paths work in tests with fixtures but break on a real mkcert install because of CA trust expectations. The Node `https` server accepting `{key, cert}` is fine; the cockpit talking to itself over `https://localhost:port` is fine; the failure mode is operator browsers refusing the cert. **Mitigation**: install.md spells out the mkcert + system trust-store step.
-
-- **What user actions could trigger unexpected behavior?**
-  Click "Scaffold with AI" while the registered repo's worktree parent is read-only — `launchAgent` already surfaces git errors as `LaunchAgentResult.error`; the cockpit must show that string, not eat it. Verify in the new e2e.
-
-  Run `make upgrade` from a worktree that isn't the systemd-pointed checkout — the new WorkingDirectory= equality check refuses it (Concern F). Verified by the bash test.
-
-  Run `make upgrade REF=v0.3.O` (letter O instead of zero) — REF regex refuses it before any state change. Verified by the bash test.
-
-- **What existing behavior could break?**
-  `/api/doctor` is additive. `package.json` version bump cascades through every package — the Unit 2 `rg` audit step catches this. `app.ts` extraction is structural but covered by the existing `app.test.ts` (every test must still pass after the route-module extraction; that's the gate).
-
-- **Which tests credibly catch those failures?**
-  See "New tests to add" — daemon HTTPS boot, doctor probes per-kind, scaffold-hook prompt + reuse, e2e for both new flows, bash tests for upgrade safety.
-
-- **What gaps remain?**
-  First-run wizard (B.6 AC 1) intentionally not delivered. No automatic upgrade rollback on failed health. No telemetry on scaffold-hook success rate (acceptable — local-first, no telemetry surface today). Doctor diagnoses; it does not gate workspace flows (B.6 AC 5 deferred). All listed in `CHANGELOG.md` Known gaps.
-
-### Architecture-boundary gate compliance
-
-- `packages/contracts/src/doctor.ts` — pure zod types. No code imports.
-- `packages/core/src/doctor.ts` — imports only from `@citadel/contracts`. Verified manually + by `pnpm check:arch` post-implementation.
-- `packages/operations/src/doctor.ts` — operations may import implementation packages; verified.
-- `apps/web/src/routes/settings-diagnostics.tsx` — imports `@citadel/contracts` (the types) only. No daemon-internal imports.
-- `apps/cli/src/index.ts` (if doctor subcommand lands) — shells out via `child_process` to `scripts/doctor/run.ts`. No daemon imports.
-
-### File-size gate compliance
-
-- `apps/daemon/src/app.ts` currently 794 lines. Pre-extraction step in Unit 4 moves the server-factory branching out into `apps/daemon/src/server-factory.ts`. New routes (`/api/doctor`, `/api/repos/:repoId/scaffold-hook`) land in separate route-module files (`doctor-routes.ts`, `scaffold-hook-routes.ts`) per the existing `registerXxxRoutes` pattern. Target: `app.ts` ≤ 700 lines after Unit 4 lands. Verified by `wc -l` in implementation TODO; `scripts/checks/file-size.ts` is the CI gate.
-- No other file approaches the 800-line limit (`packages/config/src/index.ts` and `apps/web/src/routes/repo-settings.tsx` are both well below).
-
-### Lockfile-sensitivity gate compliance
-
-- **No new dependencies.** `tsx` is already in root `devDependencies` at `^4.19.3` (verified at `package.json:48`). The `crypto` builtin generates self-signed certs in tests — no new deps for test fixtures. No `package-lock.json` / `yarn.lock` introduced.
+- **How could this fail in production?** A local database migration could drop session rows; install could pin the wrong tag; MCP could expose terminal tabs; terminal base shell config could break all agent launches.
+- **What user actions trigger unexpected behavior?** Running `make upgrade` from a dirty checkout, opening only terminal tabs, clicking hook scaffold with no agent runtime installed, migrating a config with custom shell-like runtimes, or passing an old terminal session ID to an MCP agent tool.
+- **What existing behavior could break?** Session tab rendering, restore/auto-resume, scheduled agents, scratchpad refine, fix-conflicts, terminal attach, provider/doctor settings, and all tests using `runtimeId: "shell"`.
+- **Which tests credibly catch those failures?** DB migration tests catch data loss; MCP tests catch terminal filtering; stage E2E catches terminal/agent creation; install script tests catch ref resolution; doctor tests catch runtime/terminal severity; core/web tests catch false agent counts.
+- **What gaps remain?** Manual QA is still needed on a real tmux/ttyd host for full terminal fidelity after the terminal profile is threaded into `ensureTmuxSession`. CI cannot fully prove every interactive terminal key path.
 
 ## Tests
 
-(TDD order — write the unit test before the implementation in each step.)
+TDD order:
 
-- `packages/core/src/doctor.test.ts` ← Unit 3, before `core/doctor.ts` impl.
-- `packages/contracts/src/index.test.ts` ← Unit 3, extend with `DoctorReport` shape parse tests.
-- `packages/operations/src/doctor.test.ts` ← Unit 3, before `operations/doctor.ts` impl.
-- `packages/config/src/index.test.ts` ← Unit 4, TLS describe block before schema edit.
-- `apps/daemon/src/doctor-routes.test.ts` ← Unit 3, after the core + operations libs.
-- `apps/daemon/src/scaffold-hook-routes.test.ts` ← Unit 5, before route impl.
-- `apps/daemon/src/app.test.ts` HTTPS additions ← Unit 4, before the server-factory extraction lands.
-- `scripts/dev/generate-hook-template.test.ts` ← Unit 5, alongside the generator script.
-- `scripts/install/upgrade.test.sh` ← Unit 2, alongside `upgrade.sh`.
-- `e2e/diagnostics.spec.ts` ← Unit 3, after the cockpit panel ships.
-- `e2e/scaffold-hook.spec.ts` ← Unit 5, after the route + button ship.
+1. Contract/config tests:
+   - `packages/contracts/src/index.test.ts`
+   - `packages/contracts/src/doctor.test.ts` if separate
+   - `packages/config/src/index.test.ts`
+2. DB migration/store tests:
+   - `packages/db/src/migration.test.ts`
+   - `packages/db/src/index.test.ts`
+3. Core/operations/terminal tests:
+   - `packages/core/src/index.test.ts`
+   - `packages/terminal/src/index.test.ts`
+   - `packages/operations/src/create-agent-session.test.ts`
+   - `packages/operations/src/agent-messages.test.ts`
+   - `packages/operations/src/doctor.test.ts`
+4. Daemon/MCP route tests:
+   - `apps/daemon/src/agent-session-routes.test.ts`
+   - `apps/daemon/src/workspace-session-routes.test.ts`
+   - `apps/daemon/src/daemon-mcp-tool.test.ts`
+   - `apps/daemon/src/scaffold-hook-routes.test.ts`
+   - `apps/daemon/src/doctor-routes.test.ts`
+5. Web unit tests:
+   - `apps/web/src/app-state.test.ts`
+   - `apps/web/src/stage.test.tsx` or nearest existing stage/session test
+   - `apps/web/src/workspace-card.test.ts`
+   - `apps/web/src/settings-runtimes.test.tsx` or renamed equivalent
+   - `apps/web/src/settings-diagnostics.test.tsx`
+6. Install/distribution tests:
+   - `scripts/install/upgrade.test.ts`
+   - New install guard/ref resolver tests if helpers are extracted.
+   - Release preflight helper test if the workflow shell logic is extracted for testability.
+7. E2E:
+- Add or update an E2E spec covering: open terminal tab, open agent tab with a fake healthy runtime, terminal-only workspace does not show running-agent attention, diagnostics page groups agent runtimes and terminal, hook scaffold button calls the agent-only route and reuses an in-flight scaffold workspace.
+- Add terminal smoke assertions to the E2E spec: paste text, send Ctrl/meta key sequences where Playwright can synthesize them, resize the viewport/pane, print long output, run an alternate-screen command when available, reload/reconnect, and verify two sessions do not share output.
 
 ## Schema or contract generation
 
-- New types: `DoctorReport`, `DoctorCheck` in `@citadel/contracts`; pure helpers in `@citadel/core`; check runner in `@citadel/operations`. Wire format goes through the daemon route in `apps/daemon/src/doctor-routes.ts`.
-- `CitadelConfigSchema` gains optional `tls` (additive). Existing config consumers continue to work because the field is optional.
-- No SQL schema changes. No `schema_migrations` row. `PRAGMA foreign_keys = ON;` unaffected.
-- No code-generation step — Citadel does not regenerate from a schema artifact today.
+No separate schema generation command exists. Update Zod contracts in `@citadel/contracts`, TypeScript references, and imports directly. No new dependencies should be added.
 
 ## Verification
 
-Before opening the PR, every one of these must pass:
+Required before PR:
 
-- `make check` — typecheck + Biome + Vitest + coverage + check:arch + check:size + check:deps + build. Architecture gate explicitly re-verified after the three-layer doctor split. File-size gate explicitly re-verified after the `app.ts` extraction.
-- `make e2e` — Playwright happy path including the two new specs.
-- `make smoke` — touches `/api/health`. New `/api/doctor` is additive; smoke unchanged.
-- `make doctor` — runs against the current checkout's `.citadel/data` daemon. Expected status `ok` or `degraded` (depending on provider CLI availability in the dev environment). Document the expected dev-mode output in `install.md`.
-- `make performance` — not expected to regress. New routes are not in hot paths.
-
-PR-time manual verification (called out in `/create-pr`'s "How to QA"):
-
-1. `make install` on a fresh clone — confirm citadel.service is up.
-2. `make doctor` — confirm all required-binary checks pass on a typical devbox.
-3. `CITADEL_INSTALL_REF=v0.3.0 make install` from a dirty worktree — confirm it refuses with a clear dirty-path message.
-4. `make upgrade REF=main` — confirm it refuses (not an annotated tag).
-5. `make upgrade` from a worktree that isn't the systemd-pointed checkout — confirm it refuses with both paths in the error.
-6. Edit `~/.local/share/citadel/citadel.config.json` to add a `tls` block with a self-signed cert; restart citadel.service; confirm `https://localhost:4010/api/health` returns 200; confirm doctor reports `protocol: "https"`.
-7. Edit the config to bind `0.0.0.0` without TLS; restart; confirm doctor warns on `bind-host-tls`.
-8. Register a repo with no hooks; open Settings → Repositories → that repo; click "Scaffold with AI"; confirm a new workspace appears with branch `hook-scaffold-*` and the agent terminal opens.
-9. Click "Scaffold with AI" a second time on the same repo; confirm the existing scaffold workspace is reused (no new branch) and the banner / button label reflect the in-flight state.
-10. Tag a release: `git tag v0.3.0 && git push --tags`; verify the release.yml workflow runs `make check` first, then publishes via `gh release create` only on success.
+- `make check` — comprehensive architecture, size, typecheck, lint, tests, coverage, dependency, and build gate.
+- `make e2e` — required because session creation, settings, diagnostics, and hook scaffolding touch browser workflows.
+- `make smoke` — required because daemon REST/MCP/session/install-facing APIs change.
+- `make performance` — required because `/api/state`, session tab rendering, terminal attach, and startup paths are touched.
+- Mechanical reference audit:
+  - `rg -n 'agent_sessions|runtimeId: "shell"|\\bruntimes\\b' apps packages specs docs scripts .github`
+  - Review every hit and leave only documented legacy-migration/test references.
