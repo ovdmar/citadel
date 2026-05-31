@@ -35,6 +35,14 @@ const rules: Rule[] = [
       "node:",
     ],
   },
+  {
+    // @citadel/hooks owns the file-based hook discovery + frontmatter +
+    // template surfaces. It must stay free of @citadel/operations because
+    // operations IS the wiring layer that injects dispatchAgentHook into
+    // the hooks runner — taking a direct edge would invert the dependency.
+    scope: "packages/hooks/src",
+    forbidden: ["@citadel/operations"],
+  },
 ];
 
 const violations: string[] = [];

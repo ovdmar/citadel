@@ -502,6 +502,7 @@ export function createDaemonApp(input: {
     providerCache,
     buildWorkspaceCockpitSummary,
     resolveRepoFullName,
+    operations,
   });
 
   registerAgentSessionRoutes(app, { operations, emit, asyncRoute, config });
