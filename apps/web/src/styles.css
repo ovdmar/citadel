@@ -373,6 +373,11 @@ a:hover {
 /* Cockpit shell */
 
 .cockpit-shell {
+  /* Keep tab bars, popovers, and iframe chrome below route-level overlays
+   * while the cockpit remains mounted under Settings/Scratchpad. */
+  position: relative;
+  z-index: 0;
+  isolation: isolate;
   display: grid;
   grid-template-rows: 48px minmax(0, 1fr) 28px;
   height: 100vh;

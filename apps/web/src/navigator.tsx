@@ -222,7 +222,13 @@ export function Navigator(props: {
             .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null
         }
         pullRequest={props.prByWorkspaceId.get(workspace.id) ?? null}
-        namespace={workspace.namespaceId ? (namespacesById.get(workspace.namespaceId) ?? null) : null}
+        namespace={
+          grouping === "namespace"
+            ? null
+            : workspace.namespaceId
+              ? (namespacesById.get(workspace.namespaceId) ?? null)
+              : null
+        }
         namespaces={props.namespaces}
         active={workspace.id === props.activeWorkspaceId}
         dropTarget={grouping === "namespace" ? "namespace" : null}

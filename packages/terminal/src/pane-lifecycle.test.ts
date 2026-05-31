@@ -81,7 +81,10 @@ describe("launchAgentInSession", () => {
     });
     // Use `sleep` as a stand-in agent — it sits as the foreground command
     // long enough for the predicate to match. Predicate uses COMM_TRUNCATION.
-    await launchAgentInSession(sessionName, "sleep", ["10"], { timeoutMs: 3000 });
+    await launchAgentInSession(sessionName, "sleep", ["10"], {
+      timeoutMs: 3000,
+      env: { CODEX_SQLITE_HOME: "/tmp/citadel-codex-sqlite" },
+    });
     const info = panePidProcess(sessionName);
     expect(info?.command).toBe("sleep".slice(0, COMM_TRUNCATION));
     // The session's pane history should contain the env prefix tokens. Strip
@@ -98,6 +101,7 @@ describe("launchAgentInSession", () => {
     expect(scroll).toContain("COLORTERM=truecolor");
     expect(scroll).toContain("FORCE_COLOR=1");
     expect(scroll).toContain("CLICOLOR_FORCE=1");
+    expect(scroll).toContain("CODEX_SQLITE_HOME=/tmp/citadel-codex-sqlite");
   }, 10_000);
 
   it("handles 15-character comm truncation for long binary names", async () => {

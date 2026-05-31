@@ -3,7 +3,7 @@ import { ensureCodexGoalsFeatureArgs } from "@citadel/config";
 import type { ActivityEvent, AgentSession, CreateAgentSessionInput, Repo, Workspace } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
-import { discoverCodexSessionId } from "@citadel/runtimes";
+import { discoverCodexSessionId, prepareCodexSqliteHomeForWorkspace } from "@citadel/runtimes";
 import {
   type AgentExitHint,
   COMM_TRUNCATION,
@@ -22,6 +22,9 @@ const CODEX_LAUNCH_STABILITY_MS = 1200;
 
 let codexLaunchQueue: Promise<void> = Promise.resolve();
 
+type RuntimeLaunchEnv = Record<string, string | null | undefined>;
+type RuntimeLaunchOptions = { exitHint: AgentExitHint; env?: RuntimeLaunchEnv };
+
 export type RuntimeDescriptor = {
   command: string;
   args: string[];
@@ -38,6 +41,7 @@ export type RuntimeDescriptor = {
 
 export type CreateAgentSessionDeps = {
   store: SqliteStore;
+  dataDir?: string;
   activity: (
     type: string,
     source: ActivityEvent["source"],
@@ -108,18 +112,28 @@ export async function createAgentSession(
   // and is already foreground; calling launchAgentInSession with "bash"
   // would re-launch bash inside the existing bash. Skip it.
   const isShellRuntime = ["bash", "sh", "zsh", "fish"].includes(runtime.command);
+  const codexSqliteHome =
+    input.runtimeId === "codex"
+      ? prepareCodexSqliteHomeForWorkspace({
+          workspaceId: workspace.id,
+          ...(deps.dataDir ? { dataDir: deps.dataDir } : {}),
+        })
+      : null;
+  const runtimeEnv = codexSqliteHome ? { CODEX_SQLITE_HOME: codexSqliteHome } : undefined;
   let tmux: Awaited<ReturnType<typeof ensureTmuxSession>>;
   let runtimeLaunchStartedMs: number | null = null;
   try {
     tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path, socketName: tmuxSocketName });
     if (!isShellRuntime) {
       const exitHint: AgentExitHint = { runtimeId: input.runtimeId, runtimeSessionId };
+      const launchOptions: RuntimeLaunchOptions = { exitHint };
+      if (runtimeEnv !== undefined) launchOptions.env = runtimeEnv;
       runtimeLaunchStartedMs =
         input.runtimeId === "codex"
           ? await withCodexLaunchLock(() =>
-              launchCodexWithRetry(sessionName, tmuxSocketName, runtime.command, runtimeArgs, exitHint),
+              launchCodexWithRetry(sessionName, tmuxSocketName, runtime.command, runtimeArgs, launchOptions),
             )
-          : await launchRuntimeOnce(sessionName, tmuxSocketName, runtime.command, runtimeArgs, exitHint);
+          : await launchRuntimeOnce(sessionName, tmuxSocketName, runtime.command, runtimeArgs, launchOptions);
     }
     if (promptForKeys) {
       // Treat the initial prompt as load-bearing: if submitPrompt couldn't
@@ -227,10 +241,10 @@ async function launchRuntimeOnce(
   socketName: string | null,
   command: string,
   args: string[],
-  exitHint: AgentExitHint,
+  options: RuntimeLaunchOptions,
 ): Promise<number> {
   const startedAt = Date.now();
-  await launchAgentInSession(sessionName, command, args, { socketName, exitHint });
+  await launchAgentInSession(sessionName, command, args, launchAgentOptions(socketName, options));
   return startedAt;
 }
 
@@ -253,13 +267,13 @@ async function launchCodexWithRetry(
   socketName: string | null,
   command: string,
   args: string[],
-  exitHint: AgentExitHint,
+  options: RuntimeLaunchOptions,
 ): Promise<number> {
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= CODEX_LAUNCH_MAX_ATTEMPTS; attempt += 1) {
     const startedAt = Date.now();
     try {
-      await launchAgentInSession(sessionName, command, args, { socketName, exitHint });
+      await launchAgentInSession(sessionName, command, args, launchAgentOptions(socketName, options));
       if (await runtimeStayedForeground(sessionName, socketName, command, CODEX_LAUNCH_STABILITY_MS)) return startedAt;
 
       const error = new Error(
@@ -274,6 +288,18 @@ async function launchCodexWithRetry(
     await sleep(codexRetryDelayMs(attempt));
   }
   throw lastError instanceof Error ? lastError : new Error("codex_launch_failed");
+}
+
+function launchAgentOptions(
+  socketName: string | null,
+  options: RuntimeLaunchOptions,
+): { socketName: string | null; exitHint: AgentExitHint; env?: RuntimeLaunchEnv } {
+  const launchOptions: { socketName: string | null; exitHint: AgentExitHint; env?: RuntimeLaunchEnv } = {
+    socketName,
+    exitHint: options.exitHint,
+  };
+  if (options.env !== undefined) launchOptions.env = options.env;
+  return launchOptions;
 }
 
 async function runtimeStayedForeground(

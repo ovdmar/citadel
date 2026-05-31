@@ -4,6 +4,7 @@
 import { type CitadelConfig, ensureCodexGoalsFeatureArgs } from "@citadel/config";
 import type { AgentSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
+import { prepareCodexSqliteHomeForWorkspace } from "@citadel/runtimes";
 import { ensureTmuxSession, launchAgentInSession, panePidProcess } from "@citadel/terminal";
 
 const SHELL_COMMANDS = ["bash", "sh", "zsh", "fish"] as const;
@@ -36,6 +37,19 @@ function resolveSessionContext(
   };
 }
 
+function codexEnvForSession(
+  session: AgentSession,
+  config: CitadelConfig,
+): Record<string, string | null | undefined> | undefined {
+  if (session.runtimeId !== "codex") return undefined;
+  return {
+    CODEX_SQLITE_HOME: prepareCodexSqliteHomeForWorkspace({
+      workspaceId: session.workspaceId,
+      dataDir: config.dataDir,
+    }),
+  };
+}
+
 export function buildRespawnTmux(
   store: SqliteStore,
   config: CitadelConfig,
@@ -55,9 +69,11 @@ export function buildRespawnTmux(
       if (session.runtimeSessionId && ctx.runtime.resumeArg) {
         argv.push(ctx.runtime.resumeArg, session.runtimeSessionId);
       }
+      const env = codexEnvForSession(session, config);
       await launchAgentInSession(ctx.sessionName, ctx.runtime.command, argv, {
         socketName: ctx.socketName,
         exitHint: { runtimeId: session.runtimeId, runtimeSessionId: session.runtimeSessionId ?? null },
+        ...(env ? { env } : {}),
       });
     }
     return tmux;
@@ -80,13 +96,15 @@ export function buildRestartAgent(store: SqliteStore, config: CitadelConfig): (s
     }
     await ensureTmuxSession({ sessionName: ctx.sessionName, cwd: ctx.workspacePath, socketName: ctx.socketName });
     if (!isShellCommand(ctx.runtime.command)) {
-      const argv = [...ctx.runtime.args];
+      const argv = ensureCodexGoalsFeatureArgs(session.runtimeId, ctx.runtime.args);
       if (session.runtimeSessionId && ctx.runtime.resumeArg) {
         argv.push(ctx.runtime.resumeArg, session.runtimeSessionId);
       }
+      const env = codexEnvForSession(session, config);
       await launchAgentInSession(ctx.sessionName, ctx.runtime.command, argv, {
         socketName: ctx.socketName,
         exitHint: { runtimeId: session.runtimeId, runtimeSessionId: session.runtimeSessionId ?? null },
+        ...(env ? { env } : {}),
       });
     }
     store.updateSessionStatus(session.id, {
