@@ -41,7 +41,7 @@
    - `Cmd+T` — spawn a new bare Terminal session in the active workspace. Browser-reserved in normal tab mode on every major desktop browser; works in Safari "Add to Dock" standalone PWAs and dedicated wrappers (Electron/Tauri). Chrome PWA window mode does NOT free it on macOS in current builds.
    - `Cmd+E` — spawn a new agent session in the active workspace using the workspace's default agent runtime (currently resolved as: prefer `claude-code` if healthy, else first healthy non-`shell` runtime). Collides benignly with Chrome/Safari "Use Selection for Find" on macOS — the cockpit handler `preventDefault`s before the browser acts, since `Cmd+E` is a renderer-level editing shortcut, not a window-management shortcut.
    - `Escape` — closes the top-most open overlay (command palette, modal, dialog).
-[x] 2. When focus is inside a terminal iframe (ttyd-rendered xterm), the iframe shim forwards the chords above to the cockpit instead of consuming them locally. `Escape` is forwarded ONLY when at least one cockpit overlay is open (the shim reads a ref-count exposed by the cockpit); otherwise xterm receives `Escape` unmodified so vim/Claude Code work normally. All other keystrokes pass through to xterm as today.
+[x] 2. When focus is inside the in-process xterm terminal, the terminal pane forwards the chords above to the cockpit instead of consuming them locally. `Escape` is forwarded ONLY when at least one cockpit overlay is open (the terminal pane reads a ref-count exposed by the cockpit); otherwise xterm receives `Escape` unmodified so vim/Claude Code work normally. All other keystrokes pass through to xterm as today.
 
 ## Dashboard
 
@@ -57,8 +57,8 @@
 [ ] 4. Each session tab has an editable title. Default titles are the agent runtime display name or `Terminal`.
 [ ] 5. When a workspace is created with an associated default agent, the cockpit opens that agent automatically in a new session tab.
 [ ] 6. The selected session occupies the rest of the column height.
-[x] 7. Terminal keyboard shortcuts pass through to the active terminal by default. A small, named allow-list of cockpit shortcuts (see §Keyboard Shortcuts) is forwarded to the parent cockpit when xterm has focus; everything else is delivered to xterm unchanged.
-[ ] 8. Selecting a workspace in the navigator focuses that workspace's currently-active session terminal iframe. Because ttyd runs on a different origin (a separate port), the iframe element receives focus but xterm keyboard capture still requires one click inside the terminal pane — this is a documented cross-origin limitation, not a silent failure. If the workspace has no active session, focusing the workspace is a no-op (no error).
+[x] 7. Terminal keyboard shortcuts pass through to the active terminal by default. The terminal pane intercepts a small, named allow-list of cockpit shortcuts (see §Keyboard Shortcuts) before xterm consumes them and posts the same terminal shortcut message path used by the cockpit; everything else is delivered to xterm/tmux unchanged.
+[ ] 8. Selecting a workspace in the navigator focuses that workspace's currently-active xterm pane directly. If the workspace has no active session, focusing the workspace is a no-op (no error).
 [ ] 9. Closing the active agent session tab immediately focuses the LEFT-sibling tab (falling back to the right sibling if none) — no blank-grace window. Closing the only remaining tab leaves the active-session pointer untouched.
 [ ] 10. The Stage's `+` add-session button is disabled while `workspace.lifecycle === "creating"` — starting a session requires a ready worktree.
 

@@ -23,6 +23,7 @@ const IGNORED_GIT_INTERNAL = new Set(["objects", "logs", "lfs", "hooks"]);
 const DEBOUNCE_MS = 350;
 
 type ProviderCache = Map<string, { expiresAt: number; value: unknown }>;
+type WatchHandle = { close: () => void };
 
 type WorkspaceFsWatcherDeps = {
   listWorkspaces: () => Workspace[];
@@ -30,6 +31,7 @@ type WorkspaceFsWatcherDeps = {
   getWorkspacePrSnapshot?: (workspaceId: string) => { prNumber: number | null } | null;
   providerCache: ProviderCache;
   emit: (type: string, payload: unknown) => void;
+  watchTree?: (rootPath: string, callback: (rel: string) => void) => WatchHandle[];
 };
 
 export function bustCacheByPrefixes(providerCache: ProviderCache, prefixes: string[]): number {
@@ -50,9 +52,8 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
   // the *callback*, not the watch installation. With node_modules included
   // a single workspace can hold thousands of watches; tests churning files
   // in node_modules then flood the event loop with ignored callbacks and
-  // ttyd's WS keepalive starts missing pings (visible as the cockpit's
-  // Reconnecting/Reconnected overlay storm).
-  const watchers = new Map<string, fs.FSWatcher[]>();
+  // terminal WebSockets start missing timely reads/writes.
+  const watchers = new Map<string, WatchHandle[]>();
   const debounces = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingHeadBusts = new Set<string>();
   const failed = new Set<string>();
@@ -73,45 +74,47 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
     );
   };
 
-  const watchTree = (rootPath: string, callback: (rel: string) => void): fs.FSWatcher[] => {
-    const acc: fs.FSWatcher[] = [];
-    const walk = (absDir: string, relDir: string) => {
-      if (relDir) {
-        const parts = relDir.split(path.sep);
-        const top = parts[0];
-        if (top && IGNORED_TOP_LEVEL.has(top)) return;
-        if (top === ".git" && parts[1] && IGNORED_GIT_INTERNAL.has(parts[1])) return;
-      }
-      try {
-        const w = fs.watch(absDir, { persistent: false }, (_eventType, filename) => {
-          if (filename == null) return;
-          const name = typeof filename === "string" ? filename : String(filename);
-          if (!name) return;
-          callback(relDir ? path.join(relDir, name) : name);
-        });
-        w.on("error", () => {
-          /* skip errors per-dir; the workspace-level error handler reports the aggregate failure */
-        });
-        acc.push(w);
-      } catch {
-        // ENOSPC or perms — skip this dir and continue with siblings.
-        return;
-      }
-      let entries: fs.Dirent[];
-      try {
-        entries = fs.readdirSync(absDir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of entries) {
-        if (entry.isDirectory() && !entry.isSymbolicLink()) {
-          walk(path.join(absDir, entry.name), relDir ? path.join(relDir, entry.name) : entry.name);
+  const watchTree =
+    deps.watchTree ??
+    ((rootPath: string, callback: (rel: string) => void): WatchHandle[] => {
+      const acc: WatchHandle[] = [];
+      const walk = (absDir: string, relDir: string) => {
+        if (relDir) {
+          const parts = relDir.split(path.sep);
+          const top = parts[0];
+          if (top && IGNORED_TOP_LEVEL.has(top)) return;
+          if (top === ".git" && parts[1] && IGNORED_GIT_INTERNAL.has(parts[1])) return;
         }
-      }
-    };
-    walk(rootPath, "");
-    return acc;
-  };
+        try {
+          const w = fs.watch(absDir, { persistent: false }, (_eventType, filename) => {
+            if (filename == null) return;
+            const name = typeof filename === "string" ? filename : String(filename);
+            if (!name) return;
+            callback(relDir ? path.join(relDir, name) : name);
+          });
+          w.on("error", () => {
+            /* skip errors per-dir; the workspace-level error handler reports the aggregate failure */
+          });
+          acc.push(w);
+        } catch {
+          // ENOSPC or perms — skip this dir and continue with siblings.
+          return;
+        }
+        let entries: fs.Dirent[];
+        try {
+          entries = fs.readdirSync(absDir, { withFileTypes: true });
+        } catch {
+          return;
+        }
+        for (const entry of entries) {
+          if (entry.isDirectory() && !entry.isSymbolicLink()) {
+            walk(path.join(absDir, entry.name), relDir ? path.join(relDir, entry.name) : entry.name);
+          }
+        }
+      };
+      walk(rootPath, "");
+      return acc;
+    });
 
   const closeFor = (id: string) => {
     const ws = watchers.get(id);

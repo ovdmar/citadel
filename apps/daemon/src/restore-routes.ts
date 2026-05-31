@@ -124,8 +124,8 @@ export function registerRestoreRoutes(app: express.Express, deps: Deps) {
       // older createdAt) and — worse — opening it triggers the terminal's
       // attach handler which ensureTmuxSession-creates a fresh empty pane
       // under the old name. The result is two tabs per conversation, one
-      // resumed and one bare-shell. stopAgentSession cleans up tmux + DB +
-      // ttyd in one call; best-effort, never blocks the response.
+      // resumed and one bare-shell. stopAgentSession cleans up tmux + DB in
+      // one call; best-effort, never blocks the response.
       try {
         operations.stopAgentSession({ sessionId: candidate.id });
         emit("agent.updated", { workspaceId: workspace.id, sessionId: candidate.id });

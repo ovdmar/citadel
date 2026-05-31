@@ -33,3 +33,15 @@ export function parseTerminalShortcutMessage(event: MessageEvent): TerminalShort
   if (typeof candidate.index !== "number" || !Number.isInteger(candidate.index) || candidate.index < 0) return null;
   return { action, sessionId, index: candidate.index };
 }
+
+export function postTerminalShortcutMessage(action: TerminalShortcutAction, sessionId: string, index?: number): void {
+  const message: {
+    source: string;
+    type: string;
+    action: TerminalShortcutAction;
+    sessionId: string;
+    index?: number;
+  } = { source: TERMINAL_SHORTCUT_SOURCE, type: TERMINAL_SHORTCUT_TYPE, action, sessionId };
+  if (index !== undefined) message.index = index;
+  window.postMessage(message, window.location.origin);
+}
