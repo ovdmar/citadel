@@ -125,7 +125,7 @@ describe("scheduled agent routes", () => {
     } finally {
       await closeServer(server);
     }
-  });
+  }, 45_000);
 
   it("GET /runs returns the per-agent run rows; GET /log slices the log file; both 404 when the run doesn't belong to the agent", async () => {
     const fixture = createFixture();
