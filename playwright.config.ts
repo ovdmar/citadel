@@ -12,6 +12,7 @@ const webPort = process.env.CITADEL_PLAYWRIGHT_WEB_PORT || "15174";
 const daemonLog = process.env.CITADEL_PLAYWRIGHT_DAEMON_LOG || "/tmp/citadel-playwright-daemon.log";
 const dataDir =
   process.env.CITADEL_DATA_DIR || process.env.CITADEL_PLAYWRIGHT_DATA_DIR || "/tmp/citadel-playwright-data";
+const configPath = process.env.CITADEL_PLAYWRIGHT_CONFIG || `${dataDir}/citadel.config.json`;
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
 const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}`).replace(
@@ -50,9 +51,11 @@ export default defineConfig({
       // boot orphan-reaper can mistake production tmux panes for sandbox
       // orphans and kill the user's live terminals.
       command: [
+        `CITADEL_CONFIG=${configPath}`,
         `CITADEL_DATA_DIR=${dataDir}`,
         `CITADEL_PORT=${daemonPort}`,
         `CITADEL_TMUX_SOCKET=${tmuxSocket}`,
+        "CITADEL_WORKTREE=0",
         "CITADEL_OWN_TMUX_SOCKET=1",
         "CITADEL_DISABLE_BOOT_RESTORE=1",
         "CITADEL_DISABLE_REAPER=1",
