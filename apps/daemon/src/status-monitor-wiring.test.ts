@@ -24,7 +24,7 @@ describe("buildStatusMonitorDeps — shell-first wiring", () => {
 
   afterEach(() => {
     store.close();
-    fs.rmSync(tmpDbDir, { recursive: true, force: true });
+    fs.rmSync(tmpDbDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   function makeConfig(runtimes: Array<{ id: string; command: string }>): CitadelConfig {

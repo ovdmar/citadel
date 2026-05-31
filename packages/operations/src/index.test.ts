@@ -14,7 +14,7 @@ afterEach(() => {
   for (const session of tmuxSessions.splice(0)) {
     killTmuxSession(session.sessionName, session.socketName);
   }
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("OperationService", () => {
@@ -261,7 +261,7 @@ describe("OperationService", () => {
 
     // Simulate the worktree directory disappearing out from under citadel
     // (e.g. it was removed manually, or by a parallel `git worktree remove`).
-    fs.rmSync(workspace?.path ?? "", { recursive: true, force: true });
+    fs.rmSync(workspace?.path ?? "", { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 
     const removed = await service.removeWorkspace({ workspaceId: created.workspaceId });
     expect(removed).toMatchObject({ removed: true, archived: false });
@@ -292,7 +292,7 @@ describe("OperationService", () => {
     // `git worktree remove` errors with "is not a working tree". This
     // matches what we observed in the wild after a partial cleanup.
     const workspacePath = workspace?.path ?? "";
-    fs.rmSync(workspacePath, { recursive: true, force: true });
+    fs.rmSync(workspacePath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     execFileSync("git", ["worktree", "prune"], { cwd: fixture.repoPath, stdio: "pipe" });
     fs.mkdirSync(workspacePath, { recursive: true });
     execFileSync("git", ["init", "--quiet"], { cwd: workspacePath, stdio: "pipe" });
@@ -563,7 +563,7 @@ describe("OperationService", () => {
         "-t",
         session.tmuxSessionName,
       ]);
-    fs.rmSync(fixture.repoPath, { recursive: true, force: true });
+    fs.rmSync(fixture.repoPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     const result = service.reconcile();
     expect(result.sessions).toBeGreaterThan(0);
     expect(result.repos).toBeGreaterThan(0);

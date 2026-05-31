@@ -58,7 +58,7 @@ describe("sweepPtyLogs", () => {
   it("returns zero counts when the directory does not exist", () => {
     // Use a sibling dir that we delete before calling, then restore.
     const decoy = path.join(os.tmpdir(), `citadel-pty-missing-${Date.now()}`);
-    fs.rmSync(decoy, { recursive: true, force: true });
+    fs.rmSync(decoy, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     // The helper reads from PIPE_PANE_LOG_DIR, not `decoy`, so to test the
     // missing-dir branch we temporarily remove PIPE_PANE_LOG_DIR. Do it on a
     // fresh dir + restore guard so we don't interfere with concurrent tests.

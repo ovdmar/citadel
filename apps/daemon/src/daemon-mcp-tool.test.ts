@@ -21,7 +21,7 @@ afterEach(() => {
       /* already gone */
     }
   }
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";

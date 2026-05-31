@@ -18,7 +18,7 @@ const dirs: string[] = [];
 
 afterEach(() => {
   for (const session of sessions.splice(0)) killTmuxSession(session);
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function makeShellSession(suffix: string) {

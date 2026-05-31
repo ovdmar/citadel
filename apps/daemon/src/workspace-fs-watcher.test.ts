@@ -9,7 +9,7 @@ import { createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function tmpWorkspace(): Workspace {

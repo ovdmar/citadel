@@ -22,7 +22,7 @@ describe("citadel-actions storage", () => {
   });
 
   afterEach(() => {
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
   it("seeds the built-in refine-scratchpad action on first read", async () => {

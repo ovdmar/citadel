@@ -74,7 +74,7 @@ describe("PR diff route", () => {
 async function removeFixtureDir(dir: string) {
   for (let attempt = 0; attempt < 5; attempt += 1) {
     try {
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
       return;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
