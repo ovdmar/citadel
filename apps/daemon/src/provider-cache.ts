@@ -55,6 +55,7 @@ export class PersistentProviderCache extends Map<string, ProviderCacheEntry> {
   // Public so app-helpers.ts can mint and check tokens from outside.
   readonly inFlightTokens = new Map<string, symbol>();
   loading = false;
+  private dirty = false;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private flushChain: Promise<void> = Promise.resolve();
   private readonly filePath: string;
@@ -71,6 +72,7 @@ export class PersistentProviderCache extends Map<string, ProviderCacheEntry> {
   override set(key: string, value: ProviderCacheEntry): this {
     super.set(key, value);
     this.inFlightTokens.delete(key);
+    this.dirty = true;
     this.scheduleFlush();
     return this;
   }
@@ -78,13 +80,17 @@ export class PersistentProviderCache extends Map<string, ProviderCacheEntry> {
   override delete(key: string): boolean {
     const removed = super.delete(key);
     this.inFlightTokens.delete(key);
-    if (removed) this.scheduleFlush();
+    if (removed) {
+      this.dirty = true;
+      this.scheduleFlush();
+    }
     return removed;
   }
 
   override clear(): void {
     super.clear();
     this.inFlightTokens.clear();
+    this.dirty = true;
     this.scheduleFlush();
   }
 
@@ -172,6 +178,7 @@ export class PersistentProviderCache extends Map<string, ProviderCacheEntry> {
     // Most-recently-cached wins on truncation.
     fresh.sort((a, b) => (b[1].cachedAt ?? 0) - (a[1].cachedAt ?? 0));
     const kept = fresh.slice(0, MAX_ENTRIES);
+    if (kept.length !== entries.length) this.dirty = true;
     for (const [key, entry] of kept) {
       // super.set bypasses our flush-scheduling subclass logic — we don't
       // want to write the file we just read.
@@ -197,11 +204,13 @@ export class PersistentProviderCache extends Map<string, ProviderCacheEntry> {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    this.flushNow();
+    if (this.dirty) this.flushNow();
     await this.flushChain;
   }
 
   private flushNow(): void {
+    if (!this.dirty) return;
+    this.dirty = false;
     const snapshot: PersistedShape = {
       version: SCHEMA_VERSION,
       savedAt: new Date().toISOString(),
@@ -231,7 +240,7 @@ export class PersistentProviderCache extends Map<string, ProviderCacheEntry> {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    this.flushNow();
+    if (this.dirty) this.flushNow();
     await this.flushChain;
   }
 }

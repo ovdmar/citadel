@@ -337,6 +337,17 @@ describe("resolveUsageRefreshInterval", () => {
 });
 
 describe("PersistentProviderCache.dispose()", () => {
+  it("does not write an empty cache on clean shutdown", async () => {
+    const dataDir = tempDataDir();
+    const filePath = path.join(dataDir, "provider-cache.json");
+    const cache = createProviderCache({ dataDir, listLiveIds: () => [] });
+    await cache.load();
+
+    await cache.dispose();
+
+    expect(fs.existsSync(filePath)).toBe(false);
+  });
+
   it("flushes pending writes synchronously", async () => {
     const dataDir = tempDataDir();
     const filePath = path.join(dataDir, "provider-cache.json");
