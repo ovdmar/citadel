@@ -8,6 +8,7 @@ import type { SqliteStore } from "@citadel/db";
 import {
   type MonitorSessionState,
   type MonitorTickDeps,
+  type PaneCaptureOptions,
   type StatusMonitorHandle,
   startStatusMonitor,
 } from "@citadel/operations";
@@ -20,6 +21,7 @@ import { captureTmuxAsync, panePidProcess, tmuxPrefix, tmuxSessionExists } from 
 // reported (e.g., "ENOENT" vs "EACCES"). Cleared on process exit.
 const reportedMonitorFailures = new Set<string>();
 const DEFAULT_STATUS_MONITOR_INTERVAL_MS = 5000;
+const DEFAULT_PANE_CAPTURE_CACHE_MAX_AGE_MS = 10_000;
 
 function logMonitorFailureOnce(kind: string, err: unknown): void {
   const msg = err instanceof Error ? err.message : String(err);
@@ -30,13 +32,36 @@ function logMonitorFailureOnce(kind: string, err: unknown): void {
   console.error(`[status-monitor] ${kind} failed (subsequent identical errors suppressed): ${msg}`);
 }
 
+export type PaneCaptureCacheEntry = { activityMs: number; capturedAtMs: number; content: string };
+
+export function shouldReusePaneCaptureCache(
+  cached: PaneCaptureCacheEntry | undefined,
+  activityMs: number,
+  nowMs: number,
+  options: PaneCaptureOptions = {},
+): boolean {
+  if (!cached || options.force === true) return false;
+  if (cached.activityMs !== activityMs) return false;
+  const rawMaxAgeMs = options.maxAgeMs ?? DEFAULT_PANE_CAPTURE_CACHE_MAX_AGE_MS;
+  const maxAgeMs = Number.isFinite(rawMaxAgeMs) ? Math.max(0, rawMaxAgeMs) : DEFAULT_PANE_CAPTURE_CACHE_MAX_AGE_MS;
+  return nowMs - cached.capturedAtMs <= maxAgeMs;
+}
+
+export interface DaemonStatusMonitorHandle extends StatusMonitorHandle {
+  invalidatePaneCapture(sessionId: string): void;
+}
+
+export interface DaemonStatusMonitorDeps extends MonitorTickDeps {
+  invalidatePaneCaptureForSession(sessionId: string): void;
+}
+
 export function buildStatusMonitorDeps(
   store: SqliteStore,
   emit: (event: string, payload: unknown) => void,
   config: CitadelConfig,
   recentUserAction: Map<string, number>,
   diagnostics?: MonitorTickDeps["diagnostics"],
-): MonitorTickDeps {
+): DaemonStatusMonitorDeps {
   const adapterStates = new Map<string, SessionAdapterState>();
   const monitorStates = new Map<string, MonitorSessionState>();
   const runtimeSessionBackfillAttempts = new Map<string, number>();
@@ -50,9 +75,11 @@ export function buildStatusMonitorDeps(
   // Per-session capture cache keyed by tmux session_activity. Capture uses
   // async subprocesses so terminal WebSocket input/output can keep flowing
   // while status detection waits on tmux; the cache avoids spawning another
-  // `tmux capture-pane` when tmux says the pane content has not advanced.
-  const captureCache = new Map<string, { activityMs: number; content: string }>();
+  // `tmux capture-pane` when tmux says the pane content has not advanced and
+  // the cached capture is still fresh enough for runtime status detection.
+  const captureCache = new Map<string, PaneCaptureCacheEntry>();
   const sessionSocketByName = new Map<string, string | null>();
+  const sessionNameById = new Map<string, string>();
   // Shared snapshot of session_activity from the most recent tick. Updated
   // by `tmuxActivities()` (which the status monitor calls first each tick),
   // read by `paneCapture()` to know whether its cache is fresh.
@@ -64,8 +91,12 @@ export function buildStatusMonitorDeps(
     listSessions: () => {
       const sessions = store.listSessions();
       sessionSocketByName.clear();
+      sessionNameById.clear();
       for (const session of sessions) {
-        if (session.tmuxSessionName) sessionSocketByName.set(session.tmuxSessionName, session.tmuxSocketName ?? null);
+        if (session.tmuxSessionName) {
+          sessionSocketByName.set(session.tmuxSessionName, session.tmuxSocketName ?? null);
+          sessionNameById.set(session.id, session.tmuxSessionName);
+        }
       }
       return sessions;
     },
@@ -207,21 +238,30 @@ export function buildStatusMonitorDeps(
         return new Map();
       }
     },
-    paneCapture: async (name) => {
+    paneCapture: async (name, options) => {
       // Cache check: if tmux says the session's activity timestamp hasn't
-      // advanced since we last captured, the pane content is byte-for-byte
-      // identical and another `tmux capture-pane` fork would just burn CPU.
+      // advanced and our capture is still fresh enough, another
+      // `tmux capture-pane` fork would just burn CPU. The max-age guard is
+      // important for Codex: its TUI can visibly repaint from idle to
+      // `esc to interrupt` without tmux advancing `#{session_activity}`.
       const activityMs = lastActivitiesSnapshot.get(name) ?? 0;
       const cached = captureCache.get(name);
-      if (cached && cached.activityMs === activityMs) return cached.content;
+      if (cached && shouldReusePaneCaptureCache(cached, activityMs, Date.now(), options)) return cached.content;
       try {
         const content = await captureTmuxAsync(name, 50, sessionSocket(name));
-        captureCache.set(name, { activityMs, content });
+        captureCache.set(name, { activityMs, capturedAtMs: Date.now(), content });
         return content;
       } catch (err) {
         logMonitorFailureOnce("paneCapture", err);
         return "";
       }
+    },
+    invalidatePaneCaptureForSession: (sessionId: string) => {
+      const name =
+        sessionNameById.get(sessionId) ??
+        store.listSessions().find((candidate) => candidate.id === sessionId)?.tmuxSessionName ??
+        null;
+      if (name) captureCache.delete(name);
     },
     getAdapter: (runtimeId): RuntimeStatusAdapter => getStatusAdapter(runtimeId),
     adapterStates,
@@ -235,10 +275,13 @@ export function startDaemonStatusMonitor(
   config: CitadelConfig,
   recentUserAction: Map<string, number>,
   diagnostics?: MonitorTickDeps["diagnostics"],
-): StatusMonitorHandle | null {
+): DaemonStatusMonitorHandle | null {
   if (process.env.CITADEL_DISABLE_STATUS_MONITOR === "1") return null;
   const deps = buildStatusMonitorDeps(store, emit, config, recentUserAction, diagnostics);
   const intervalMs =
     Number.parseInt(process.env.CITADEL_STATUS_MONITOR_INTERVAL_MS ?? "", 10) || DEFAULT_STATUS_MONITOR_INTERVAL_MS;
-  return startStatusMonitor(deps, intervalMs);
+  return {
+    ...startStatusMonitor(deps, intervalMs),
+    invalidatePaneCapture: deps.invalidatePaneCaptureForSession,
+  };
 }
