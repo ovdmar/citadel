@@ -38,6 +38,13 @@ function config(): CitadelConfig {
     hooks: [],
     repoDefaults: { setupHookIds: [], teardownHookIds: [], appHookIds: [], actionHookIds: [] },
     commandPolicy: { hookTimeoutMs: 120_000, allowDestructiveWorkspaceCleanup: false },
+    providerRefresh: {
+      enabled: true,
+      workingHours: { startHour: 9, endHour: 18, weekdaysOnly: true },
+      intervals: { prCiMs: 60_000, jiraMs: 5 * 60_000, usageMs: 5 * 60_000 },
+      focusRefreshThresholdMs: 30_000,
+      maxConcurrentRefreshes: 4,
+    },
     scratchpad: { path: undefined },
   } as CitadelConfig;
 }

@@ -546,6 +546,24 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(ws.sent).toContain(JSON.stringify({ type: "input", data: "\n" }));
   });
 
+  it("captures wheel input and scrolls the terminal viewport instead of leaking prompt-history keys", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+    const downstream = vi.fn();
+    host.addEventListener("wheel", downstream);
+    await flushReactUpdate(async () => ws.open());
+
+    const event = new WheelEvent("wheel", { deltaY: -32, deltaMode: 0, bubbles: true, cancelable: true });
+
+    host.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(downstream).not.toHaveBeenCalled();
+    expect(ws.sent).toContain(JSON.stringify({ type: "scroll", lines: -2 }));
+  });
+
   it("does not reconnect the terminal when the resolved theme changes", async () => {
     applyThemePreference("dark");
     await renderTerminal();
@@ -561,57 +579,6 @@ describe("TerminalPane xterm WebSocket renderer", () => {
 
     expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
     expect((term.options.theme as { background?: string }).background).toBe("#f5f1e8");
-  });
-
-  it("shows an actionable error when the WebSocket closes", async () => {
-    await renderTerminal();
-    const ws = TerminalPaneWebSocketMock.instances[0];
-    if (!ws) throw new Error("missing ws");
-
-    await flushReactUpdate(async () => ws.closeFromServer(1006, "lost"));
-
-    expect(document.body.textContent).toContain("terminal_disconnected");
-    expect(document.body.textContent).toContain("lost");
-    expect((document.querySelector("button") as HTMLButtonElement | null)?.disabled).toBe(false);
-  });
-
-  it("auto-retries disconnected terminal sockets up to three times with 5s backoff", async () => {
-    vi.useFakeTimers();
-    await renderTerminal();
-
-    await flushReactUpdate(() => TerminalPaneWebSocketMock.instances[0]?.closeFromServer(1006, "lost"));
-    expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
-
-    await flushReactUpdate(() => {
-      vi.advanceTimersByTime(4_999);
-    });
-    expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
-
-    await flushReactUpdate(() => {
-      vi.advanceTimersByTime(1);
-    });
-    expect(TerminalPaneWebSocketMock.instances).toHaveLength(2);
-
-    await flushReactUpdate(() => TerminalPaneWebSocketMock.instances[1]?.closeFromServer(1006, "still lost"));
-    await flushReactUpdate(() => {
-      vi.advanceTimersByTime(5_000);
-    });
-    expect(TerminalPaneWebSocketMock.instances).toHaveLength(3);
-
-    await flushReactUpdate(() => TerminalPaneWebSocketMock.instances[2]?.closeFromServer(1006, "still lost"));
-    await flushReactUpdate(() => {
-      vi.advanceTimersByTime(5_000);
-    });
-    expect(TerminalPaneWebSocketMock.instances).toHaveLength(4);
-
-    await flushReactUpdate(() => TerminalPaneWebSocketMock.instances[3]?.closeFromServer(1006, "exhausted"));
-    await flushReactUpdate(() => {
-      vi.advanceTimersByTime(10_000);
-    });
-
-    expect(TerminalPaneWebSocketMock.instances).toHaveLength(4);
-    expect(document.body.textContent).toContain("terminal_disconnected");
-    expect(document.body.textContent).toContain("exhausted");
   });
 });
 

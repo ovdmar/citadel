@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it } from "vitest";
-import { parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
+import { parseTerminalShortcutMessage, terminalShortcutMatch } from "./terminal-shortcut-bridge.js";
 
 describe("parseTerminalShortcutMessage", () => {
   it("accepts known terminal shortcut messages from the current origin", () => {
@@ -80,5 +80,20 @@ describe("parseTerminalShortcutMessage", () => {
         }),
       ),
     ).toBeNull();
+  });
+});
+
+describe("terminalShortcutMatch", () => {
+  it("maps canonical terminal messages back to cockpit shortcut matches", () => {
+    expect(terminalShortcutMatch({ action: "command-palette", sessionId: "sess_1" })?.id).toBe("command-palette");
+    expect(terminalShortcutMatch({ action: "nav-workspace", sessionId: "sess_1", index: 2 })).toMatchObject({
+      id: "nav-workspace",
+      index: 2,
+    });
+  });
+
+  it("ignores messages that are terminal-only or missing their required index", () => {
+    expect(terminalShortcutMatch({ action: "new-workspace", sessionId: "sess_1" })).toBeNull();
+    expect(terminalShortcutMatch({ action: "nav-workspace", sessionId: "sess_1" })).toBeNull();
   });
 });

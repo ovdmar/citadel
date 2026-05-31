@@ -3,8 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  CitadelConfigSchema,
   HookConfigSchema,
   HookEventSchema,
+  RuntimeConfigSchema,
+  UsageProviderConfigSchema,
   defaultConfigPath,
   defaultNotesPath,
   detectWorktree,
@@ -17,7 +20,7 @@ import {
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("loadConfig", () => {
@@ -388,6 +391,105 @@ describe("loadConfig", () => {
       if (prevData !== undefined) process.env.CITADEL_DATA_DIR = prevData;
       if (prevWorktree !== undefined) process.env.CITADEL_WORKTREE = prevWorktree;
     }
+  });
+});
+
+describe("providerRefresh schema", () => {
+  function parseWith(refresh: unknown) {
+    return CitadelConfigSchema.parse({
+      dataDir: "/tmp/citadel-test",
+      databasePath: "/tmp/citadel-test/db.sqlite",
+      providerRefresh: refresh,
+    });
+  }
+
+  it("default-fills the full providerRefresh block when omitted", () => {
+    const config = CitadelConfigSchema.parse({
+      dataDir: "/tmp/citadel-test",
+      databasePath: "/tmp/citadel-test/db.sqlite",
+    });
+    expect(config.providerRefresh.enabled).toBe(true);
+    expect(config.providerRefresh.workingHours.startHour).toBe(9);
+    expect(config.providerRefresh.workingHours.endHour).toBe(18);
+    expect(config.providerRefresh.workingHours.weekdaysOnly).toBe(true);
+    expect(config.providerRefresh.intervals.prCiMs).toBe(60_000);
+    expect(config.providerRefresh.intervals.jiraMs).toBe(5 * 60_000);
+    expect(config.providerRefresh.intervals.usageMs).toBe(5 * 60_000);
+    expect(config.providerRefresh.focusRefreshThresholdMs).toBe(30_000);
+    expect(config.providerRefresh.maxConcurrentRefreshes).toBe(4);
+  });
+
+  it("rejects workingHours.startHour below 0 or above 23", () => {
+    expect(() => parseWith({ workingHours: { startHour: -1 } })).toThrow();
+    expect(() => parseWith({ workingHours: { startHour: 24 } })).toThrow();
+  });
+
+  it("rejects workingHours.endHour below 0 or above 24", () => {
+    expect(() => parseWith({ workingHours: { endHour: -1 } })).toThrow();
+    expect(() => parseWith({ workingHours: { endHour: 25 } })).toThrow();
+  });
+
+  it("rejects intervals below their respective minima", () => {
+    expect(() => parseWith({ intervals: { prCiMs: 14_999 } })).toThrow();
+    expect(() => parseWith({ intervals: { jiraMs: 29_999 } })).toThrow();
+    expect(() => parseWith({ intervals: { usageMs: 29_999 } })).toThrow();
+  });
+
+  it("rejects focusRefreshThresholdMs below 5s", () => {
+    expect(() => parseWith({ focusRefreshThresholdMs: 4_999 })).toThrow();
+  });
+
+  it("rejects maxConcurrentRefreshes outside 1..16", () => {
+    expect(() => parseWith({ maxConcurrentRefreshes: 0 })).toThrow();
+    expect(() => parseWith({ maxConcurrentRefreshes: 17 })).toThrow();
+  });
+
+  it("accepts enabled:false to disable the job", () => {
+    const config = parseWith({ enabled: false });
+    expect(config.providerRefresh.enabled).toBe(false);
+  });
+});
+
+describe("UsageProviderConfig.refreshIntervalMs", () => {
+  it("is optional and absent by default", () => {
+    const parsed = UsageProviderConfigSchema.parse({
+      id: "p1",
+      runtimeId: "claude-code",
+      command: "/bin/true",
+    });
+    expect(parsed.refreshIntervalMs).toBeUndefined();
+  });
+
+  it("accepts values >= 30s", () => {
+    const parsed = UsageProviderConfigSchema.parse({
+      id: "p1",
+      runtimeId: "claude-code",
+      command: "/bin/true",
+      refreshIntervalMs: 30_000,
+    });
+    expect(parsed.refreshIntervalMs).toBe(30_000);
+  });
+
+  it("rejects values below 30s", () => {
+    expect(() =>
+      UsageProviderConfigSchema.parse({
+        id: "p1",
+        runtimeId: "claude-code",
+        command: "/bin/true",
+        refreshIntervalMs: 29_999,
+      }),
+    ).toThrow();
+  });
+});
+
+describe("RuntimeConfig contract surface (regression guard)", () => {
+  // We deliberately do NOT widen RuntimeConfigSchema with a per-runtime usage
+  // cadence override — that field belongs on UsageProviderConfigSchema. This
+  // negative guard catches a future drive-by addition that would silently
+  // cascade across ~19 consumers (web settings, MCP, agent session creation).
+  it("does NOT contain usageRefreshIntervalMs", () => {
+    const shape = RuntimeConfigSchema.shape;
+    expect(shape).not.toHaveProperty("usageRefreshIntervalMs");
   });
 });
 

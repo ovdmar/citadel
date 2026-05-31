@@ -23,6 +23,7 @@ import {
 } from "@citadel/operations";
 import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
+import type { ProviderCache } from "./app-helpers.js";
 import { readLogSlice } from "./log-slice.js";
 import type { ScheduledAgentService } from "./scheduled-agent-service.js";
 import { refineScratchpad } from "./scratchpad-refine.js";
@@ -44,7 +45,7 @@ export type DaemonMcpDeps = {
   operations: OperationService;
   scheduledAgents: ScheduledAgentRunner;
   scheduledAgentService: ScheduledAgentService;
-  providerCache: Map<string, { expiresAt: number; value: unknown }>;
+  providerCache: ProviderCache;
   emit: (type: string, payload: unknown) => void;
 };
 

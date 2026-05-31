@@ -11,9 +11,9 @@ beforeEach(() => {
   clearGhCooldown();
 });
 
-afterEach(() => {
+afterEach(async () => {
   clearGhCooldown();
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) await removeFixtureDir(dir);
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
@@ -32,7 +32,7 @@ describe("createDaemonApp — GitHub quota", () => {
     Reflect.deleteProperty(process.env, "CITADEL_ENABLE_WORKTREE_GH_AUTOMATION");
     const fixture = createFixture();
     fixture.config.providers.github.command = "definitely-missing-gh";
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const body = await getJson<{ quota: { status: string; automationEnabled: boolean; reason: string } }>(
@@ -74,7 +74,7 @@ exit 1
     );
     fixture.config.providers.github.enabled = true;
     fixture.config.providers.github.command = fakeGh;
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const until = setGhCooldown("GraphQL: API rate limit already exceeded", 60_000);
@@ -119,7 +119,7 @@ exit 1
     );
     fixture.config.providers.github.enabled = true;
     fixture.config.providers.github.command = fakeGh;
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const body = await getJson<{
@@ -159,7 +159,7 @@ exit 1
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp({
+    const { server } = await createDaemonApp({
       ...fixture,
       providers: {
         collectGitHubVersionControlSummary: async () => ({
@@ -190,3 +190,16 @@ exit 1
     }
   }, 60_000);
 });
+
+async function removeFixtureDir(dir: string) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!["ENOTEMPTY", "EBUSY", "EPERM"].includes(code ?? "") || attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+}

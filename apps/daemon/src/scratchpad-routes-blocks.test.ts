@@ -16,7 +16,7 @@ import {
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
@@ -26,7 +26,7 @@ const createFixture = () => createScratchpadFixture(dirs);
 describe("scratchpad block routes + MCP block tools", () => {
   it("exposes list_blocks / add_block / update_block / delete_block via MCP", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const added = await postJson<{ result: { structuredContent: { block: { id: string } } } }>(
@@ -74,7 +74,7 @@ describe("scratchpad block routes + MCP block tools", () => {
 
   it("GET /api/scratchpad/blocks lists fenced blocks", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       await postJson(`${baseUrl}/api/scratchpad/blocks`, { text: "first" });
@@ -97,7 +97,7 @@ describe("scratchpad block routes + MCP block tools", () => {
 
   it("POST /api/scratchpad/blocks supports position {afterId} and validates input", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const a = await postJson<{ block: { id: string } }>(`${baseUrl}/api/scratchpad/blocks`, { text: "a" });
@@ -131,7 +131,7 @@ describe("scratchpad block routes + MCP block tools", () => {
 
   it("PUT /api/scratchpad/blocks/:id updates; empty text deletes; unknown id 404s", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const a = await postJson<{ block: { id: string; text: string } }>(`${baseUrl}/api/scratchpad/blocks`, {
@@ -166,7 +166,7 @@ describe("scratchpad block routes + MCP block tools", () => {
 
   it("DELETE /api/scratchpad/blocks/:id removes the block; unknown id 404s", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const a = await postJson<{ block: { id: string } }>(`${baseUrl}/api/scratchpad/blocks`, { text: "one" });
@@ -184,7 +184,7 @@ describe("scratchpad block routes + MCP block tools", () => {
 
   it("block routes emit scratchpad.history.updated", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     const listener = await openHistorySseListener(baseUrl);
     try {
@@ -201,7 +201,7 @@ describe("scratchpad block routes + MCP block tools", () => {
 
   it("block routes emit scratchpad.updated on every mutation (used by the cockpit refresh)", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     const listener = await openSseListener(baseUrl, "scratchpad.updated");
     try {
@@ -218,7 +218,7 @@ describe("scratchpad block routes + MCP block tools", () => {
 
   it("POST /api/scratchpad/blocks returns 413 when adding a block would push past the size cap", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       await postJson(`${baseUrl}/api/scratchpad/blocks`, { text: "x".repeat(999_500) });
@@ -238,7 +238,7 @@ describe("scratchpad block routes + MCP block tools", () => {
 
   it("PUT /api/scratchpad/blocks/:id returns 413 when updating would push past the size cap", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const a = await postJson<{ block: { id: string } }>(`${baseUrl}/api/scratchpad/blocks`, { text: "small" });
@@ -255,7 +255,7 @@ describe("scratchpad block routes + MCP block tools", () => {
 
   it("update_block via MCP returns block on non-empty edit and labels delete with mcp:delete_block source", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const added = await postJson<{ result: { structuredContent: { block: { id: string } } } }>(
@@ -295,7 +295,7 @@ describe("scratchpad block routes + MCP block tools", () => {
 
   it("add_block via MCP supports position.afterId and surfaces position_invalid + block_id_required", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const a = await postJson<{ result: { structuredContent: { block: { id: string } } } }>(`${baseUrl}/api/mcp/rpc`, {
@@ -360,7 +360,7 @@ describe("scratchpad block routes + MCP block tools", () => {
 
   it("PUT /api/scratchpad/blocks/:id with empty text records source ui:delete_block in history", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const a = await postJson<{ block: { id: string } }>(`${baseUrl}/api/scratchpad/blocks`, { text: "tmp" });
@@ -374,7 +374,7 @@ describe("scratchpad block routes + MCP block tools", () => {
 
   it("GET /api/scratchpad/blocks/search returns ranked fuzzy matches", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       await postJson(`${baseUrl}/api/scratchpad/blocks`, { text: "refine scratchpad MCP" });
@@ -392,7 +392,7 @@ describe("scratchpad block routes + MCP block tools", () => {
 
   it("GET /api/scratchpad/blocks/search returns 400 on empty q", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const response = await fetch(`${baseUrl}/api/scratchpad/blocks/search?q=`);
@@ -406,7 +406,7 @@ describe("scratchpad block routes + MCP block tools", () => {
 
   it("GET /api/scratchpad/blocks/search clamps limit", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       await putJson(`${baseUrl}/api/scratchpad`, {

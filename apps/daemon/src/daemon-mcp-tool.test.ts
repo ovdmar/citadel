@@ -17,7 +17,7 @@ afterEach(() => {
   for (const session of tmuxSessions.splice(0)) {
     killTmuxSession(session);
   }
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
@@ -27,7 +27,7 @@ describe("daemon launch_agent MCP tool", () => {
   it("creates a workspace on a brand-new branch and is idempotent on workspaceName", async () => {
     const fixture = createFixtureBase(dirs);
     const { repoPath } = createGitFixtureWithRemoteBase(fixture.config.dataDir);
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const repoResp = await postJson<{ repo: { id: string; name: string } }>(`${baseUrl}/api/repos`, {

@@ -1,4 +1,4 @@
-import { FORWARDABLE_SHORTCUT_IDS, type ShortcutId } from "./shortcuts.js";
+import { FORWARDABLE_CHORDS, FORWARDABLE_SHORTCUT_IDS, type ShortcutId, type ShortcutMatch } from "./shortcuts.js";
 
 export type TerminalShortcutAction = ShortcutId | "scratchpad-toggle" | "new-workspace";
 export type TerminalShortcutMessage = {
@@ -32,6 +32,22 @@ export function parseTerminalShortcutMessage(event: MessageEvent): TerminalShort
   if (candidate.index === undefined) return { action, sessionId };
   if (typeof candidate.index !== "number" || !Number.isInteger(candidate.index) || candidate.index < 0) return null;
   return { action, sessionId, index: candidate.index };
+}
+
+export function terminalShortcutMatch(message: TerminalShortcutMessage): ShortcutMatch | null {
+  if (message.action === "scratchpad-toggle" || message.action === "new-workspace") return null;
+  if ((message.action === "nav-workspace" || message.action === "nav-session") && message.index === undefined) {
+    return null;
+  }
+  const chord = FORWARDABLE_CHORDS.find((candidate) => {
+    if (candidate.id !== message.action) return false;
+    if (message.index !== undefined) return candidate.index === message.index;
+    return candidate.index === undefined;
+  });
+  if (!chord) return null;
+  const match: ShortcutMatch = { id: chord.id, chord };
+  if (message.index !== undefined) match.index = message.index;
+  return match;
 }
 
 export function postTerminalShortcutMessage(action: TerminalShortcutAction, sessionId: string, index?: number): void {

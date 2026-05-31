@@ -15,11 +15,13 @@ const dataDir =
   process.env.CITADEL_PLAYWRIGHT_DATA_DIR ||
   (process.env.CITADEL_DATA_DIR?.startsWith("/tmp/citadel-test-") ? process.env.CITADEL_DATA_DIR : undefined) ||
   `/tmp/citadel-playwright-data-${process.pid}`;
-const configPath = `${dataDir}/citadel.config.json`;
+const configPath = process.env.CITADEL_PLAYWRIGHT_CONFIG || `${dataDir}/citadel.config.json`;
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
 const e2eRunId = process.env.CITADEL_PLAYWRIGHT_RUN_ID || `playwright-${randomUUID()}`;
 process.env.CITADEL_PLAYWRIGHT_RUN_ID = e2eRunId;
+const sandboxPrefix = process.env.CITADEL_PLAYWRIGHT_SANDBOX_PREFIX || dataDir;
+process.env.CITADEL_PLAYWRIGHT_SANDBOX_PREFIX = sandboxPrefix;
 const tmuxSocket = (
   process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}-${process.pid}`
 ).replace(/[^A-Za-z0-9_.-]/g, "-");
@@ -80,6 +82,7 @@ export default defineConfig({
         `CITADEL_CONFIG=${configPath}`,
         `CITADEL_PORT=${daemonPort}`,
         `CITADEL_TMUX_SOCKET=${tmuxSocket}`,
+        "CITADEL_WORKTREE=0",
         `CITADEL_E2E_RUN_ID=${e2eRunId}`,
         "CITADEL_OWN_TMUX_SOCKET=1",
         "CITADEL_DISABLE_BOOT_RESTORE=1",

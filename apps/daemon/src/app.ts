@@ -3,17 +3,9 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CitadelConfig } from "@citadel/config";
-import { mergeConfigPatch, saveConfig } from "@citadel/config";
-import {
-  type AppEvent,
-  CreateRepoInputSchema,
-  CreateWorkspaceInputSchema,
-  HookActionSchema,
-  TransitionIssueInputSchema,
-  type WorkspaceCockpitSummary,
-} from "@citadel/contracts";
+import { type AppEvent, HookActionSchema, TransitionIssueInputSchema } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
-import { mcpStatus, mcpToolDefinitions } from "@citadel/mcp";
+import { mcpStatus } from "@citadel/mcp";
 import { type DiagnosticsLogger, OperationService, createDiagnosticsLogger } from "@citadel/operations";
 import {
   type CollectGitHubVersionControlSummaryDeps,
@@ -32,32 +24,23 @@ import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
-import { asyncRoute, cachedProviderValue } from "./app-helpers.js";
+import { asyncRoute, cachedProviderValue, cachedProviderWithStaleFallback } from "./app-helpers.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
-import { getBootRestoreSummary } from "./boot-restore.js";
 import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
+import { createWorkspaceCockpitSummaryBuilder, registerCockpitSummaryRoute } from "./cockpit-summary-route.js";
+import { registerConfigRepoWorkspaceRoutes } from "./config-repo-workspace-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerDiagnosticsRoutes } from "./diagnostics-routes.js";
 import { E2E_RUN_ID_HEADER, e2eHealthFields, e2eRunIdMismatch } from "./e2e-guard.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
-import {
-  AUTOMATED_GH_DISABLED_REASON,
-  automatedGhEnabled,
-  cachedCiOrDisabled,
-  disabledVersionControlSummary,
-  githubCiCacheKey,
-  shouldFetchGithubCi,
-} from "./gh-automation.js";
-import {
-  type GhQuotaWiringWithDetach,
-  decorateWithCooldown,
-  resolveRepoFullNameFromWorkspaces,
-  wireGhQuota,
-} from "./gh-quota-wiring.js";
+import { AUTOMATED_GH_DISABLED_REASON, automatedGhEnabled } from "./gh-automation.js";
+import { type GhQuotaWiringWithDetach, resolveRepoFullNameFromWorkspaces, wireGhQuota } from "./gh-quota-wiring.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { registerPrDiffRoute } from "./pr-diff-route.js";
+import { createProviderCache, issueCacheKey } from "./provider-cache.js";
+import { startProviderRefreshJob } from "./provider-refresh-job.js";
 import { registerPrRoutes } from "./pr-routes.js";
 import { wireRateLimitBackgroundResume } from "./rate-limit-background-resume.js";
 import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
@@ -68,13 +51,15 @@ import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { backfillScratchpadOnStartup } from "./scratchpad.js";
 import { attachSseClientErrorHandler, writeSseEvent } from "./sse-broadcast.js";
+import { registerStateRoute } from "./state-route.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
 import { buildRespawnTmux } from "./terminal-routes-helpers.js";
+import { createUiActivityTracker } from "./ui-activity.js";
 import { fetchVersionControlGated } from "./vc-fetch-gated.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
-import { readWorkspaceGitStatus } from "./workspace-diff.js";
 import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
+import { registerWorkspacesPrStateRoute } from "./workspaces-pr-state-route.js";
 
 export type DaemonApp = {
   app: express.Express;
@@ -91,13 +76,18 @@ type ProviderCollectors = {
   transitionJiraIssue: typeof transitionJiraIssue;
 };
 
-export function createDaemonApp(input: {
+export async function createDaemonApp(input: {
   config: CitadelConfig;
   configPath: string;
   store: SqliteStore;
   operations?: OperationService;
   providers?: Partial<ProviderCollectors>;
-}): DaemonApp {
+  // Default true. Test helpers pass false so vitest boots don't spawn the
+  // 15s background tick (and the implied `gh`/`jtk` subprocesses on tick).
+  // Note: deliberately NOT gated on process.env.VITEST — that pattern would
+  // silently disable the feature in production if the env var leaks.
+  enableRefreshJob?: boolean;
+}): Promise<DaemonApp> {
   const { config, configPath, store } = input;
   setGithubCommand(config.providers.github.command);
   setJiraCommand(config.providers.jira.command);
@@ -112,6 +102,10 @@ export function createDaemonApp(input: {
   };
   const app = express();
   const server = http.createServer(app);
+  // The daemon owns several legitimate close hooks (provider cache flush,
+  // schedulers, status monitors, terminal cleanup). Keep Node from reporting
+  // these as listener leaks in integration tests and diagnostics-heavy boots.
+  server.setMaxListeners(24);
   // Node's 5s default keep-alive timeout is short enough for Playwright's
   // APIRequestContext to race a reused idle socket on slower CI runs, surfacing
   // as ECONNRESET even though the daemon is healthy. Keep browser/API
@@ -119,9 +113,25 @@ export function createDaemonApp(input: {
   server.keepAliveTimeout = 120_000;
   server.headersTimeout = 125_000;
   const sseClients = new Set<express.Response>();
-  const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
-  // Always-on structured diagnostics for Settings → Debug and support bundles.
+  const providerCache = createProviderCache({
+    dataDir: config.dataDir,
+    // Both workspace ids AND repo ids appear as the "id" segment of vc:/ci:
+    // cache keys (workspace via cockpit-summary, repo via the per-repo
+    // provider-summary / ci-runs routes). The orphan prune treats them
+    // homogeneously: keep entries whose id matches ANY live entity.
+    listLiveIds: () => [...store.listWorkspaces().map((w) => w.id), ...store.listRepos().map((r) => r.id)],
+  });
+  // Hydrate the persisted cache BEFORE any route is registered so the first
+  // post-restart request can hit warm cache. The load() is bounded by a 500ms
+  // hard timeout — slow disks degrade to an empty cache but never block boot.
+  await providerCache.load();
+  // Always-on structured diagnostics. Writes JSONL to <dataDir>/diagnostics.jsonl
+  // (rotated at 50 MB) and keeps the last 1000 events in memory for the
+  // Settings → Debug panel + the /api/diagnostics/bundle.tar.gz download.
+  // Sprinkled through every session-killing path so that when a user reports
+  // "all my sessions died", we have the lifecycle trail to share.
   const diagnostics = createDiagnosticsLogger({ dataDir: config.dataDir });
+  const uiActivity = createUiActivityTracker();
   diagnostics.log("daemon", "createDaemonApp", {
     port: config.port,
     dataDir: config.dataDir,
@@ -203,34 +213,8 @@ export function createDaemonApp(input: {
     }),
   );
 
-  app.get(
-    "/api/state",
-    asyncRoute(async (_req, res) => {
-      const repos = store.listRepos();
-      const workspaces = store.listWorkspaces();
-      const sessions = store.listSessions();
-      const providerHealth = await cachedProviderHealth();
-      res.json({
-        repos,
-        workspaces,
-        sessions,
-        operations: store.listOperations(),
-        activity: store.listActivity(),
-        providerHealth,
-        runtimes: listRuntimeHealth(config.runtimes),
-        mcp: mcpStatus(config.mcp.enabled),
-        scheduledAgents: scheduledAgents.list(),
-        namespaces: store.listNamespaces(),
-        bootRestore: getBootRestoreSummary(),
-      });
-    }),
-  );
-
-  app.get("/api/config", (_req, res) => {
-    res.json({ config, configPath });
-  });
-
-  registerDiagnosticsRoutes({ app, store, diagnostics, config });
+  registerDiagnosticsRoutes({ app, store, diagnostics, config, uiActivity });
+  registerConfigRepoWorkspaceRoutes({ app, config, configPath, store, operations, providerCache, emit, asyncRoute });
 
   app.post("/api/agent-sessions/:sessionId/terminal-client-event", (req, res) => {
     const sessionId = typeof req.params.sessionId === "string" ? req.params.sessionId : "";
@@ -250,103 +234,7 @@ export function createDaemonApp(input: {
     statusMonitor?.invalidatePaneCapture(sessionId);
     res.status(204).end();
   });
-
-  app.put("/api/config", (req, res) => {
-    const nextConfig = mergeConfigPatch(config, req.body);
-    const saved = saveConfig(nextConfig, configPath);
-    Object.assign(config, saved);
-    setGithubCommand(saved.providers.github.command);
-    setJiraCommand(saved.providers.jira.command);
-    providerCache.clear();
-    store.addActivity({
-      id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
-      type: "settings.updated",
-      source: "user",
-      repoId: null,
-      workspaceId: null,
-      operationId: null,
-      message: "Updated local config",
-      createdAt: new Date().toISOString(),
-    });
-    emit("config.updated", { configPath });
-    res.json({ config, configPath });
-  });
-
-  app.post("/api/repos", (req, res) => {
-    const input = CreateRepoInputSchema.parse(req.body);
-    const repo = operations.registerRepo(input);
-    emit("repo.updated", { repoId: repo.id, repo });
-    res.status(201).json({ repo });
-  });
-
   registerRepoDiscoveryRoutes({ app, config, asyncRoute });
-
-  app.get("/api/repos", (_req, res) => {
-    res.json({ repos: store.listRepos() });
-  });
-
-  app.delete(
-    "/api/repos/:repoId",
-    asyncRoute(async (req, res) => {
-      const repoId = req.params.repoId;
-      if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
-      const result = await operations.removeRepo({
-        repoId,
-        force: req.query.force === "true",
-        cleanupWorktrees: req.query.cleanupWorktrees === "true",
-      });
-      providerCache.clear();
-      emit("repo.updated", result);
-      res.status(result.removed ? 202 : 409).json(result);
-    }),
-  );
-
-  app.get("/api/workspaces", (_req, res) => {
-    res.json({ workspaces: store.listWorkspaces() });
-  });
-
-  app.get(
-    "/api/repos/:repoId/branches",
-    asyncRoute(async (req, res) => {
-      const repo = store.listRepos().find((candidate) => candidate.id === req.params.repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      try {
-        const { execFile: execFileCb } = await import("node:child_process");
-        const { promisify } = await import("node:util");
-        const exec = promisify(execFileCb);
-        const local = await exec("git", ["branch", "--list", "--format=%(refname:short)"], {
-          cwd: repo.rootPath,
-          timeout: 6000,
-        });
-        const remote = await exec("git", ["branch", "--remotes", "--list", "--format=%(refname:short)"], {
-          cwd: repo.rootPath,
-          timeout: 6000,
-        });
-        const localBranches = local.stdout
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean);
-        const remoteBranches = remote.stdout
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean)
-          .filter((line) => !line.endsWith("/HEAD"))
-          .map((line) => (line.includes("/") ? line.split("/").slice(1).join("/") : line));
-        return res.json({
-          defaultBranch: repo.defaultBranch,
-          local: localBranches,
-          remote: Array.from(new Set(remoteBranches)),
-        });
-      } catch (error) {
-        return res.json({
-          defaultBranch: repo.defaultBranch,
-          local: [],
-          remote: [],
-          error: error instanceof Error ? error.message : "git_branches_failed",
-        });
-      }
-    }),
-  );
 
   app.get(
     "/api/workspaces/:workspaceId/issue-summary",
@@ -354,84 +242,27 @@ export function createDaemonApp(input: {
       const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
       if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
       if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
-      const issueTracker = await cachedProvider(`issue:${workspace.issueKey}`, () =>
+      const issueTracker = await cachedProviderSwr(issueCacheKey(workspace.issueKey), () =>
         providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
       );
       res.json({ issueTracker });
     }),
   );
 
-  // Shared by the active-workspace and batch cockpit summary endpoints.
-  async function buildWorkspaceCockpitSummary(workspaceId: string): Promise<WorkspaceCockpitSummary | null> {
-    const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
-    if (!workspace) return null;
-    const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-    if (!repo) return null;
-    const ciKey = githubCiCacheKey(
-      workspace,
-      repo,
-      resolveRepoFullName(repo.id),
-      store.getWorkspacePrSnapshot(workspace.id),
-    );
-    const shouldFetchCi = ghAutomationEnabled && shouldFetchGithubCi(store, workspace);
-    const [git, versionControlRaw, ci, issueTracker, apps] = await Promise.all([
-      cachedProvider(`git:${workspace.id}:${workspace.updatedAt}`, () => readWorkspaceGitStatus(workspace.path), 3000),
-      ghAutomationEnabled
-        ? fetchVersionControlGated(gatedVcDeps, workspace, repo, `vc:${workspace.id}:${workspace.updatedAt}`)
-        : Promise.resolve(disabledVersionControlSummary(workspace, repo)),
-      shouldFetchCi
-        ? cachedProvider(ciKey, () => providers.collectGitHubCiRuns(workspace.path), 60_000)
-        : Promise.resolve(
-            cachedCiOrDisabled(
-              providerCache,
-              ciKey,
-              ghAutomationEnabled
-                ? "GitHub CI is cached until the PR receives a new local commit"
-                : AUTOMATED_GH_DISABLED_REASON,
-            ),
-          ),
-      workspace.issueKey
-        ? cachedProvider(`issue:${workspace.issueKey}`, () =>
-            providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
-          )
-        : Promise.resolve(null),
-      cachedProvider(
-        `apps:${workspace.id}:${workspace.updatedAt}`,
-        () => operations.discoverWorkspaceApps({ repo, workspace }),
-        60_000,
-      ),
-    ]);
-    const versionControl = decorateWithCooldown(versionControlRaw);
-    return {
-      workspaceId: workspace.id,
-      readiness: deriveReadiness({
-        workspace,
-        sessions: store.listSessions(workspace.id),
-        operations: store.listOperations().filter((operation) => operation.workspaceId === workspace.id),
-        providerHealth: await cachedProviderHealth(),
-        git,
-        versionControl,
-        ci,
-        apps,
-      }),
-      git,
-      versionControl,
-      ci,
-      issueTracker,
-      apps,
-    };
-  }
-
-  app.get(
-    "/api/workspaces/:workspaceId/cockpit-summary",
-    asyncRoute(async (req, res) => {
-      const workspaceId = req.params.workspaceId;
-      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
-      const summary = await buildWorkspaceCockpitSummary(workspaceId);
-      if (!summary) return res.status(404).json({ error: "workspace_not_found" });
-      res.json(summary);
-    }),
-  );
+  const buildWorkspaceCockpitSummary = createWorkspaceCockpitSummaryBuilder({
+    store,
+    operations,
+    providers,
+    providerCache,
+    cachedProvider,
+    cachedProviderSwr,
+    cachedProviderHealth,
+    ghAutomationEnabled,
+    resolveRepoFullName,
+    fetchVersionControl: (workspace, repo, cacheKey) =>
+      fetchVersionControlGated(gatedVcDeps, workspace, repo, cacheKey),
+  });
+  registerCockpitSummaryRoute({ app, buildWorkspaceCockpitSummary, asyncRoute });
 
   app.get("/api/repos/:repoId/hook-diagnostics", (req, res) => {
     const repo = store.listRepos().find((candidate) => candidate.id === req.params.repoId);
@@ -475,23 +306,6 @@ export function createDaemonApp(input: {
       res.status(result.status === "healthy" ? 202 : 424).json({ result });
     }),
   );
-
-  app.post(
-    "/api/workspaces",
-    asyncRoute(async (req, res) => {
-      const input = CreateWorkspaceInputSchema.parse(req.body);
-      const result = await operations.createWorkspace(input, {
-        deferProvisioning: true,
-        onWorkspaceUpdated: (payload) => emit("workspace.updated", payload),
-      });
-      emit("workspace.updated", result);
-      res.status(202).json(result);
-    }),
-  );
-
-  app.get("/api/runtimes", (_req, res) => {
-    res.json({ runtimes: listRuntimeHealth(config.runtimes) });
-  });
 
   registerRuntimeUsageRoutes({ app, config, asyncRoute, providerCache, cachedProvider });
   registerPrRoutes({
@@ -646,6 +460,11 @@ export function createDaemonApp(input: {
     emit,
     asyncRoute,
   });
+  // Extracted route registrations live here (post-scheduledAgents init) so the
+  // /api/state handler can close over a fully-initialized runner. app.ts hit
+  // the 800-line size gate, hence the extraction.
+  registerStateRoute({ app, store, config, scheduledAgents, cachedProviderHealth, asyncRoute });
+  registerWorkspacesPrStateRoute({ app, store, providerCache, asyncRoute });
   // Boot-sweep: close any 'running' run rows that were in flight when the
   // daemon last died, sync the denormalized lastRunStatus cache on the
   // affected agents, kill orphan background tmux sessions, and drain queued
@@ -671,15 +490,41 @@ export function createDaemonApp(input: {
   registerCitadelActionRoutes({ app, config, emit });
   backfillScratchpadOnStartup(config);
 
+  const refreshJob =
+    input.enableRefreshJob !== false
+      ? startProviderRefreshJob({
+          config,
+          store,
+          cache: providerCache,
+          providers: {
+            collectGitHubVersionControlSummary: (rootPath) => providers.collectGitHubVersionControlSummary(rootPath),
+            collectGitHubCiRuns: (rootPath) => providers.collectGitHubCiRuns(rootPath),
+            collectJiraIssueSummary: (issueKey) => providers.collectJiraIssueSummary(issueKey),
+            collectRuntimeUsage: (provider) =>
+              import("@citadel/providers").then((mod) => mod.collectRuntimeUsage(provider)),
+            listRuntimeHealth: () => listRuntimeHealth(config.runtimes),
+          },
+          hasFocusedWindow: () => uiActivity.hasFocusedWindow(),
+        })
+      : null;
+  if (refreshJob) server.on("close", () => refreshJob.stop());
+
   if (process.env.CITADEL_DISABLE_FS_WATCHERS !== "1") {
     fsWatchers = createWorkspaceFsWatchers({
       listWorkspaces: () => store.listWorkspaces(),
       providerCache,
       emit,
+      onSettled: refreshJob ? (workspaceId) => void refreshJob.pokeWorkspace(workspaceId) : undefined,
     });
     fsWatchers.reconcile();
     server.on("close", () => fsWatchers?.close());
   }
+
+  server.on("close", () => {
+    // Final synchronous flush so the persisted cache reflects in-memory state
+    // at shutdown. Errors are logged inside dispose() and not re-thrown.
+    void providerCache.dispose();
+  });
 
   registerWorkspaceDiffRoutes({ app, store, asyncRoute });
 
@@ -791,5 +636,12 @@ export function createDaemonApp(input: {
   return { app, server, emit, diagnostics };
   function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderValue(providerCache, key, load, ttlMs);
+  }
+  // Stale-while-revalidate variant used by the per-workspace provider routes
+  // (vc:*, ci:*, issue:*). Strict cachedProvider is preserved for provider-
+  // health, git:*, apps:* — they need authoritative freshness or have their
+  // own TTL semantics.
+  function cachedProviderSwr<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
+    return cachedProviderWithStaleFallback({ cache: providerCache, key, load, ttlMs });
   }
 }
