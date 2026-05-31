@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { type APIRequestContext, expect, test } from "@playwright/test";
 import WebSocket, { type RawData } from "ws";
+import { apiDelete, apiGet, apiPost } from "./helpers/api-request.js";
 
 // These tests target the current ADE cockpit shell. They were rewritten in the
 // 2026-05-22 feedback round when the older spec drifted from the redesigned UI
@@ -55,7 +56,7 @@ test("cockpit lists registered workspaces in the navigator", async ({ page, requ
     await expect(navigator.locator(".workspace-card.active").filter({ hasText: secondName })).toBeVisible();
   } finally {
     for (const workspaceId of workspaceIds) {
-      await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
+      await apiDelete(request, `${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
     }
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
@@ -79,7 +80,7 @@ test("mobile cockpit toggles between navigator/stage/inspector", async ({ page, 
     // The inspector is empty until a workspace is focused — at minimum the aria-labelled aside must render.
     await expect(page.locator("aside[aria-label='Inspector']")).toBeVisible();
   } finally {
-    if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
+    if (workspaceId) await apiDelete(request, `${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
@@ -112,7 +113,7 @@ test("desktop repo settings page renders identity and provider toggles", async (
     await expect(page.getByRole("heading", { name: "Actions" })).toBeVisible();
     await page.getByRole("button", { name: "Save providers" }).click();
   } finally {
-    if (repoId) await request.delete(`${API_BASE}/api/repos/${repoId}?force=true`).catch(() => {});
+    if (repoId) await apiDelete(request, `${API_BASE}/api/repos/${repoId}?force=true`).catch(() => {});
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
@@ -210,7 +211,7 @@ test("dialogs render near viewport center on desktop and tablet", async ({ page,
     await page.locator(".drop-workspace-backdrop").click({ position: { x: 5, y: 5 } });
   } finally {
     for (const workspaceId of workspaceIds) {
-      await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`).catch(() => {});
+      await apiDelete(request, `${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`).catch(() => {});
     }
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
@@ -225,14 +226,14 @@ test("desktop session stop endpoint removes the session", async ({ request }, te
     workspaceId = (await createWorkspace(request, repo.id, `stop-${Date.now().toString(36)}`)).workspaceId;
     await waitForWorkspace(request, workspaceId, "ready");
     const session = await startSession(request, workspaceId, "Stop Shell");
-    const stop = await request.delete(`${API_BASE}/api/agent-sessions/${session.id}`);
+    const stop = await apiDelete(request, `${API_BASE}/api/agent-sessions/${session.id}`);
     expect(stop.ok()).toBe(true);
-    const state = await request.get(`${API_BASE}/api/state`);
+    const state = await apiGet(request, `${API_BASE}/api/state`);
     const body = (await state.json()) as { sessions: Array<{ id: string }> };
     // Stop is destructive: the session is deleted from the cockpit, not merely marked stopped.
     expect(body.sessions.find((entry) => entry.id === session.id)).toBeUndefined();
   } finally {
-    if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
+    if (workspaceId) await apiDelete(request, `${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
@@ -245,9 +246,9 @@ test("desktop reconcile endpoint cleans orphan repos", async ({ request }, testI
     const repo = await registerRepo(request, fixture);
     repoId = repo.id;
     fs.rmSync(fixture.repoPath, { recursive: true, force: true });
-    const response = await request.post(`${API_BASE}/api/reconcile`);
+    const response = await apiPost(request, `${API_BASE}/api/reconcile`);
     expect(response.ok()).toBe(true);
-    const state = await request.get(`${API_BASE}/api/state`);
+    const state = await apiGet(request, `${API_BASE}/api/state`);
     const body = (await state.json()) as { repos: Array<{ id: string }> };
     expect(body.repos.find((entry) => entry.id === repoId)).toBeUndefined();
   } finally {
@@ -274,7 +275,7 @@ test("desktop primary terminal WebSocket streams a fresh shell session", async (
       ws.close();
     }
   } finally {
-    if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
+    if (workspaceId) await apiDelete(request, `${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
@@ -352,7 +353,7 @@ function parseTerminalSocketMessage(raw: RawData): { type: string; data?: string
 
 async function waitForWorkspace(request: APIRequestContext, workspaceId: string, lifecycle: string) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const response = await request.get(`${API_BASE}/api/workspaces`);
+    const response = await apiGet(request, `${API_BASE}/api/workspaces`);
     const body = (await response.json()) as { workspaces: Array<{ id: string; lifecycle: string }> };
     const workspace = body.workspaces.find((candidate) => candidate.id === workspaceId);
     if (workspace?.lifecycle === lifecycle) return;
@@ -362,7 +363,7 @@ async function waitForWorkspace(request: APIRequestContext, workspaceId: string,
 }
 
 async function registerRepo(request: APIRequestContext, fixture: ReturnType<typeof createGitFixture>, name?: string) {
-  const repoResponse = await request.post(`${API_BASE}/api/repos`, {
+  const repoResponse = await apiPost(request, `${API_BASE}/api/repos`, {
     data: {
       rootPath: fixture.repoPath,
       name: name ?? `E2E ${Date.now().toString(36)}`,
@@ -374,7 +375,7 @@ async function registerRepo(request: APIRequestContext, fixture: ReturnType<type
 }
 
 async function createWorkspace(request: APIRequestContext, repoId: string, name: string) {
-  const workspaceResponse = await request.post(`${API_BASE}/api/workspaces`, {
+  const workspaceResponse = await apiPost(request, `${API_BASE}/api/workspaces`, {
     data: { repoId, name, source: "scratch" },
   });
   expect(workspaceResponse.ok()).toBe(true);
@@ -382,7 +383,7 @@ async function createWorkspace(request: APIRequestContext, repoId: string, name:
 }
 
 async function startSession(request: APIRequestContext, workspaceId: string, displayName: string) {
-  const sessionResponse = await request.post(`${API_BASE}/api/agent-sessions`, {
+  const sessionResponse = await apiPost(request, `${API_BASE}/api/agent-sessions`, {
     data: { workspaceId, runtimeId: "shell", displayName },
   });
   expect(sessionResponse.ok()).toBe(true);
