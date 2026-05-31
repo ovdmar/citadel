@@ -2,7 +2,7 @@ import type { PullRequestSummary, Workspace, WorkspaceCockpitSummary } from "@ci
 import type { WorkspaceCockpitSummaryBatchResponse } from "@citadel/contracts/pr-routes";
 import type { QueryClient } from "@tanstack/react-query";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 
 export { RuntimeLauncher, WorkspaceForm } from "./workspace-forms.js";
@@ -142,15 +142,26 @@ export function applyStickyUpdates(
   return cache;
 }
 
+function knownIdsFromKey(idsKey: string): Set<string> {
+  return new Set(idsKey ? idsKey.split("\n") : []);
+}
+
+export type StickyWorkspaceSummaries = {
+  summaries: Map<string, WorkspaceCockpitSummary>;
+  rememberSummary: (summary: WorkspaceCockpitSummary) => void;
+};
+
 // Sticky per-workspace summary cache that survives transient batch failures.
-// The returned Map identity is stable across renders (we mutate the same ref);
-// callers must derive memoized views from it rather than relying on reference
-// equality.
+// Internally the cache is mutable, but the hook returns a fresh Map snapshot
+// whenever batch data, workspace ids, or an active-workspace summary changes.
+// That keeps downstream memoized PR maps honest: background batch updates must
+// be visible in the navbar without requiring the operator to select a workspace.
 export function useStickyWorkspaceSummaries(
   workspaces: Workspace[],
   batch: WorkspaceCockpitSummaryBatchResponse | undefined,
-): Map<string, WorkspaceCockpitSummary> {
+): StickyWorkspaceSummaries {
   const cacheRef = useRef(new Map<string, WorkspaceCockpitSummary>());
+  const [activeSummaryVersion, setActiveSummaryVersion] = useState(0);
   // Stable id key — derived from sorted ids so the downstream memo only re-runs
   // when the workspace set actually changes (the `workspaces` array gets a
   // fresh identity on every parent re-render).
@@ -162,11 +173,27 @@ export function useStickyWorkspaceSummaries(
         .join("\n"),
     [workspaces],
   );
-  return useMemo(() => {
-    const knownIds = new Set(idsKey ? idsKey.split("\n") : []);
+  const summaries = useMemo(() => {
+    void activeSummaryVersion;
+    const knownIds = knownIdsFromKey(idsKey);
     applyStickyUpdates(cacheRef.current, knownIds, batch);
-    return cacheRef.current;
-  }, [batch, idsKey]);
+    return new Map(cacheRef.current);
+  }, [batch, idsKey, activeSummaryVersion]);
+  const rememberSummary = useCallback(
+    (summary: WorkspaceCockpitSummary) => {
+      const knownIds = knownIdsFromKey(idsKey);
+      if (!knownIds.has(summary.workspaceId)) return;
+      const before = cacheRef.current.get(summary.workspaceId);
+      applyStickyUpdates(cacheRef.current, knownIds, {
+        summaries: [{ workspaceId: summary.workspaceId, ok: true, summary }],
+      });
+      if (cacheRef.current.get(summary.workspaceId) !== before) {
+        setActiveSummaryVersion((version) => version + 1);
+      }
+    },
+    [idsKey],
+  );
+  return { summaries, rememberSummary };
 }
 
 // Derive a PR map from the sticky summary cache. Used by the navbar /
