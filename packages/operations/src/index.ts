@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import type { ActivityEvent, CreateAgentSessionInput, CreateNamespaceInput, CreateWorkspaceInput, HookAction, HookOutput, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
@@ -52,6 +53,13 @@ import {
   runWorkspaceAction as runWorkspaceActionImpl,
 } from "./workspace-apps.js";
 
+export function defaultWorktreeParent(rootPathInput: string, dataDir?: string): string {
+  const rootPath = path.resolve(rootPathInput);
+  const repoDir = path.basename(rootPath);
+  if (dataDir) return path.join(dataDir, "worktrees", repoDir);
+  return path.join(path.dirname(rootPath), `${repoDir}-worktrees`);
+}
+
 export class OperationService {
   constructor(
     private readonly store: SqliteStore,
@@ -76,7 +84,10 @@ export class OperationService {
         ...(repoDefaults ? { repoDefaults } : {}),
         activity: (...args) => this.activity(...args),
       },
-      input,
+      {
+        ...input,
+        worktreeParent: input.worktreeParent || defaultWorktreeParent(input.rootPath, this.config?.dataDir),
+      },
     );
   }
 

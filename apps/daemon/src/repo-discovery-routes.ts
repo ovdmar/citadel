@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CitadelConfig } from "@citadel/config";
+import { defaultWorktreeParent } from "@citadel/operations";
 import type express from "express";
 
 type AsyncRoute = (
@@ -57,7 +58,7 @@ export function registerRepoDiscoveryRoutes(input: {
         isGit,
         defaultBranch,
         remotes,
-        suggestedWorktreeParent: path.join(path.dirname(resolved), `${path.basename(resolved)}-worktrees`),
+        suggestedWorktreeParent: defaultWorktreeParent(resolved, config.dataDir),
         providerCandidates: [
           { id: "github-gh", displayName: "GitHub CLI", enabled: config.providers.github.enabled },
           { id: "jira-jtk", displayName: "Jira CLI", enabled: config.providers.jira.enabled },
