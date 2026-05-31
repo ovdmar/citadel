@@ -13,7 +13,7 @@ import { expect, test } from "@playwright/test";
 // suite covers the cache hydration + serialization path.
 
 const API_BASE =
-  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "4012"}`;
+  process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012"}`;
 
 test("GET /api/workspaces/pr-state returns a cache-only snapshot", async ({ request }) => {
   const response = await request.get(`${API_BASE}/api/workspaces/pr-state`);
