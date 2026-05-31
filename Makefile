@@ -5,10 +5,10 @@ SHELL := /bin/bash
 #   1. Local iteration: `make deploy` (HMR foreground) or `make serve` (built,
 #      detached). Both bind to a derived port, write to a worktree-local data
 #      dir, and never touch the systemd-supervised long-term service.
-#   2. Long-term devbox install: `make install` (re)writes the user-systemd
-#      unit `citadel.service` to point at $(CURDIR) and brings it up. This is
-#      what you run once per machine — and again whenever you want to swap the
-#      long-running daemon to a different checkout.
+#   2. Long-term devbox install: `make install` resolves the requested install
+#      ref (latest release by default), (re)writes the user-systemd unit
+#      `citadel.service` to point at $(CURDIR), brings it up, and runs doctor.
+#      `make upgrade` is the same path under an operator-friendly verb.
 
 # Worktree-derived ports. cksum-mod-100 is deterministic per absolute path, so
 # `make deploy` from the same worktree always lands on the same ports. The
@@ -55,8 +55,10 @@ help:
 	@echo "                     daemon  → http://localhost:$(EFFECTIVE_PORT)"
 	@echo ""
 	@echo "Distribution:"
-	@echo "  make upgrade           Update the installed checkout to the latest commit of its current branch."
-	@echo "  make upgrade REF=v0.3.0  Pin the install to an annotated tag (refuses dirty trees and bad refs)."
+	@echo "  make install           Install/reinstall the latest released version."
+	@echo "  make upgrade           Upgrade/reinstall to the latest released version."
+	@echo "  make install REF=main  Install from latest origin/main instead of a release."
+	@echo "  make upgrade REF=v0.3.0  Pin the install to an exact annotated release tag."
 	@echo "  make doctor            Verify that everything is configured (binaries, daemon, config, hooks)."
 	@echo ""
 	@echo "Lifecycle:"
@@ -215,16 +217,16 @@ deploy:
 		tail -n 40 $(WORKTREE_LOG); \
 		exit 1
 
-# `make install` is for users (or your devbox). Writes a user-systemd unit
-# pointing at THIS checkout and brings it up. Idempotent: re-run after a
-# `git pull` on the long-term checkout, or to swap the supervised daemon to a
-# different checkout entirely. Does NOT touch any worktree-local `deploy` stack.
+# `make install` is for users (or your devbox). Resolves the install ref
+# (latest release by default, REF=main for origin/main, REF=vX.Y.Z for an
+# exact release), writes a user-systemd unit pointing at THIS checkout, brings
+# it up, and runs doctor. Does NOT touch any worktree-local `deploy` stack.
 #
 # Critically: `make install` never restarts citadel-tmux.service. tmux is the
 # substrate every live agent session lives in; restarting it kills them all.
 # Apply tmux-unit changes via `make tmux-service` instead.
 install:
-	@bash scripts/install-systemd.sh
+	@bash scripts/install/upgrade.sh $(if $(REF),REF=$(REF))
 
 # Dedicated upgrade verb. Same end-state as `make install`, but with a
 # named entry point that operators recognise + REF= pinning.

@@ -3,16 +3,18 @@
 # a new version of Citadel.
 #
 # Usage:
-#   bash scripts/install/upgrade.sh                 # ff-pull current branch, reinstall
-#   bash scripts/install/upgrade.sh REF=v0.3.0      # validate + checkout tag, reinstall
+#   bash scripts/install/upgrade.sh                 # latest annotated origin release, reinstall
+#   bash scripts/install/upgrade.sh REF=main        # latest origin/main, reinstall
+#   bash scripts/install/upgrade.sh REF=v0.3.0      # exact annotated release tag, reinstall
 #   CITADEL_INSTALL_REF=v0.3.0 bash scripts/install/upgrade.sh
 #
 # Refusals (no state mutated before each):
 #   - $(pwd) is not a Citadel checkout                  → exit 2
 #   - WorkingDirectory= of installed unit ≠ $(pwd)      → exit 3
-#   - REF does not match ^v<x>.<y>.<z>$                 → exit 4
+#   - REF is neither main nor ^v<x>.<y>.<z>$            → exit 4
 #   - REF is not an annotated tag in this repo          → exit 5
-#   - REF given but working tree is dirty               → exit 6
+#   - checkout target would change with a dirty tree    → exit 6
+#   - default latest-release resolution fails           → exit 7
 
 set -euo pipefail
 
@@ -37,16 +39,30 @@ citadel_require_checkout "$ROOT"
 citadel_require_working_directory_match "$ROOT"
 
 if [[ -n "$REF" ]]; then
-  citadel_require_valid_ref_shape "$REF"
-  citadel_require_annotated_tag "$ROOT" "$REF"
-  citadel_require_clean_tree "$ROOT"
-
-  echo "→ Pinning to ref $REF"
-  git -C "$ROOT" fetch --tags --quiet
-  git -C "$ROOT" checkout --quiet "$REF"
+  citadel_require_valid_install_ref_shape "$REF"
 else
-  echo "→ Updating current branch (fast-forward only)"
-  git -C "$ROOT" pull --ff-only
+  REF="$(citadel_latest_origin_release_ref "$ROOT")"
+fi
+citadel_require_clean_tree "$ROOT"
+
+if [[ "$REF" == "main" ]]; then
+  echo "→ Installing from origin/main"
+  citadel_fetch_origin_main "$ROOT"
+  git -C "$ROOT" checkout --quiet --detach origin/main
+else
+  echo "→ Installing release $REF"
+  if citadel_fetch_origin_annotated_tag "$ROOT" "$REF"; then
+    :
+  else
+    fetch_status=$?
+    if [[ "$fetch_status" -eq 20 ]]; then
+      citadel_require_annotated_tag "$ROOT" "$REF"
+      echo "→ Using local annotated tag $REF"
+    else
+      exit "$fetch_status"
+    fi
+  fi
+  git -C "$ROOT" checkout --quiet "$REF"
 fi
 
 # Test mode stops here so the test suite never actually invokes pnpm or systemctl.
@@ -59,4 +75,4 @@ echo "→ pnpm install --frozen-lockfile"
 ( cd "$ROOT" && pnpm install --frozen-lockfile )
 
 echo "→ delegating to scripts/install-systemd.sh"
-exec bash "$ROOT/scripts/install-systemd.sh"
+exec env -u CITADEL_INSTALL_REF bash "$ROOT/scripts/install-systemd.sh"

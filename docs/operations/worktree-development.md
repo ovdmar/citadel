@@ -7,7 +7,7 @@ from. There are exactly two commands you need.
 
 | Command | Audience | What it does |
 |---|---|---|
-| `make install` | A user (or your devbox) installing Citadel for long-term use | Writes/refreshes the systemd `--user` unit `citadel.service` so it supervises *this* checkout. Idempotent. Run it once per machine, and again whenever you `git pull` on the long-term checkout or swap it. |
+| `make install` | A user (or your devbox) installing Citadel for long-term use | Resolves the latest released tag by default (or `REF=main` / `REF=vX.Y.Z`), writes/refreshes the systemd `--user` unit `citadel.service` so it supervises *this* checkout, restarts the daemon, and runs doctor. |
 | `make deploy` | A dev working on Citadel itself | Starts the worktree-scoped HMR dev stack (daemon under `tsx watch` + vite under HMR, detached in one process group). The cockpit's "Redeploy" chip invokes the same command. |
 
 There is no third command for "deploy without HMR" or "deploy from main vs.
@@ -177,11 +177,12 @@ make stop      # when done
 **I want this checkout to be the long-term daemon on this devbox:**
 
 ```
-make install   # writes/refreshes ~/.config/systemd/user/citadel.service → this checkout
+make install   # latest release, writes/refreshes ~/.config/systemd/user/citadel.service → this checkout
 ```
 
-After `git pull`, `make install` (or `systemctl --user restart
-citadel.service` if you only need a restart and the unit is already current).
+For a development install from `origin/main`, use `make install REF=main`.
+For an exact release, use `make install REF=vX.Y.Z`. `make upgrade` is the same
+idempotent path with clearer operator wording.
 
 **The cockpit's "Redeploy" chip:**
 

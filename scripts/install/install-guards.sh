@@ -61,6 +61,24 @@ citadel_require_valid_ref_shape() {
   fi
 }
 
+citadel_is_release_tag_ref() {
+  local ref="$1"
+  [[ "$ref" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+citadel_require_valid_install_ref_shape() {
+  local ref="$1"
+  if [[ "$ref" == "main" ]]; then
+    return 0
+  fi
+  if citadel_is_release_tag_ref "$ref"; then
+    return 0
+  fi
+  echo "✗ REF must be either main or an annotated release tag v<major>.<minor>.<patch>" >&2
+  echo "  got: $ref" >&2
+  return 4
+}
+
 # Refuse a REF that doesn't resolve to an annotated tag in the local repo.
 # Pre-condition: $1 = REF (already validated by citadel_require_valid_ref_shape).
 citadel_require_annotated_tag() {
@@ -85,5 +103,58 @@ citadel_require_clean_tree() {
     echo "  uncommitted/untracked paths:" >&2
     echo "$porcelain" | sed 's/^/    /' >&2
     return 6
+  fi
+}
+
+citadel_latest_origin_release_ref() {
+  local root="$1"
+  local remote_tags
+  if ! remote_tags=$(git -C "$root" ls-remote --tags origin 'refs/tags/v*' 2>&1); then
+    echo "✗ unable to query origin for release tags" >&2
+    echo "$remote_tags" | sed 's/^/  /' >&2
+    echo "  Default install/upgrade requires network access to origin; pass REF=main or REF=vX.Y.Z explicitly." >&2
+    return 7
+  fi
+
+  local latest
+  latest=$(
+    printf '%s\n' "$remote_tags" \
+      | awk '$2 ~ /^refs\/tags\/v[0-9]+\.[0-9]+\.[0-9]+\^\{\}$/ { ref=$2; sub(/^refs\/tags\//, "", ref); sub(/\^\{\}$/, "", ref); print ref }' \
+      | sort -V \
+      | tail -n 1
+  )
+  if [[ -z "$latest" ]]; then
+    echo "✗ origin has no annotated release tags shaped v<major>.<minor>.<patch>" >&2
+    echo "  Lightweight, malformed, and prerelease tags are ignored." >&2
+    return 7
+  fi
+  printf '%s\n' "$latest"
+}
+
+citadel_fetch_origin_main() {
+  local root="$1"
+  if ! git -C "$root" fetch --quiet origin main; then
+    echo "✗ unable to fetch origin/main" >&2
+    return 8
+  fi
+}
+
+citadel_fetch_origin_annotated_tag() {
+  local root="$1"
+  local ref="$2"
+  local remote_tag
+  if ! remote_tag=$(git -C "$root" ls-remote --tags origin "refs/tags/$ref" "refs/tags/$ref^{}" 2>&1); then
+    echo "⚠ unable to query origin for $ref; will try local annotated tag fallback" >&2
+    echo "$remote_tag" | sed 's/^/  /' >&2
+    return 20
+  fi
+  if ! printf '%s\n' "$remote_tag" | awk -v ref="refs/tags/$ref^{}" '$2 == ref { found=1 } END { exit found ? 0 : 1 }'; then
+    echo "✗ origin tag $ref is missing or is not annotated" >&2
+    echo "  Lightweight tags, branches, and SHAs are not valid install targets." >&2
+    return 5
+  fi
+  if ! git -C "$root" fetch --quiet --force origin "refs/tags/$ref:refs/tags/$ref"; then
+    echo "✗ unable to fetch annotated tag $ref from origin" >&2
+    return 8
   fi
 }

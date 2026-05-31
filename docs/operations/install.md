@@ -33,7 +33,7 @@ cd citadel
 make install
 ```
 
-`make install` resolves the latest stable annotated release tag from `origin`, checks it out, runs `pnpm install --frozen-lockfile`, writes a systemd `--user` unit (`citadel.service`) plus a separate tmux server unit (`citadel-tmux.service`), builds `apps/daemon`, and brings them up. It is idempotent: re-running on the same checkout safely refreshes the unit and restarts the daemon.
+`make install` resolves the latest stable annotated release tag from `origin`, checks it out, runs `pnpm install --frozen-lockfile`, writes a systemd `--user` unit (`citadel.service`) plus a separate tmux server unit (`citadel-tmux.service`), builds `apps/daemon`, brings it up, and runs `make doctor`. It is idempotent: re-running on the same checkout safely refreshes the unit and restarts the daemon.
 
 To install from the development branch instead of the latest release, be explicit:
 
@@ -41,7 +41,7 @@ To install from the development branch instead of the latest release, be explici
 make install REF=main
 ```
 
-Verify:
+You can rerun verification any time:
 
 ```bash
 make doctor
@@ -57,7 +57,7 @@ Citadel uses annotated git tags shaped `v<major>.<minor>.<patch>` (e.g. `v0.3.0`
 make install REF=v0.3.0
 ```
 
-The script fetches origin tags best-effort, validates that the requested tag is annotated, refuses if your working tree is dirty, checks out the tag, runs `pnpm install --frozen-lockfile`, rebuilds, restarts the service, and runs doctor. If the origin tag fetch fails, an already-present local annotated tag may be used for exact-tag installs only.
+The script fetches origin tags best-effort, validates that the requested tag is annotated, refuses if your working tree is dirty, checks out the tag, runs `pnpm install --frozen-lockfile`, rebuilds, restarts the service, and runs `make doctor`. If the origin tag fetch fails, an already-present local annotated tag may be used for exact-tag installs only.
 
 ## Upgrade
 
@@ -76,7 +76,7 @@ make upgrade REF=main
 
 Install and upgrade both refuse dirty checkouts before any ref movement or reinstall. They also refuse to run from a worktree whose path differs from the installed `citadel.service`'s `WorkingDirectory=`.
 
-After upgrade, the daemon restart is asynchronous — `systemctl restart` returns before the daemon is listening. **Use `make doctor` to verify**, not `curl /api/health` (doctor retries 5×1s; raw curl can race the restart). Document this so operators don't read transient failures as breakage.
+After upgrade, the installer runs `make doctor` after restarting the daemon. For manual checks, use `make doctor`, not `curl /api/health` (doctor retries 5×1s; raw curl can race an async restart).
 
 Tmux sessions survive a daemon restart — Citadel uses a *separate* `citadel-tmux.service` for the tmux server precisely so agents don't churn. ttyd processes are recreated; the cockpit reattaches automatically.
 

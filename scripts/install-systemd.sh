@@ -13,6 +13,8 @@
 #
 # Defaults auto-detected; override via env (TTYD_BIN, CITADEL_NODE_BIN,
 # CITADEL_SHELL_BIN, OPENCLAW_ROOT, CITADEL_CONFIG, CITADEL_TMUX_SOCKET, etc.).
+# Release/main ref resolution is handled by scripts/install/upgrade.sh, which
+# is what the Makefile install and upgrade targets call before this script.
 
 set -euo pipefail
 
@@ -25,19 +27,6 @@ source "$(dirname -- "${BASH_SOURCE[0]}")/install/install-guards.sh"
 
 citadel_require_checkout "$ROOT"
 citadel_require_working_directory_match "$ROOT"
-
-# REF-PIN START — pin to an annotated tag when CITADEL_INSTALL_REF is set.
-# Default code path (no env var) is unchanged; this branch only fires when
-# operators explicitly opt into a pinned install.
-if [[ -n "${CITADEL_INSTALL_REF:-}" ]]; then
-  citadel_require_valid_ref_shape "$CITADEL_INSTALL_REF"
-  citadel_require_annotated_tag "$ROOT" "$CITADEL_INSTALL_REF"
-  citadel_require_clean_tree "$ROOT"
-  echo "→ Pinning to ref $CITADEL_INSTALL_REF"
-  git -C "$ROOT" fetch --tags --quiet
-  git -C "$ROOT" checkout --quiet "$CITADEL_INSTALL_REF"
-fi
-# REF-PIN END
 
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT_PATH="$UNIT_DIR/citadel.service"
@@ -179,3 +168,6 @@ if ! systemctl --user is-active --quiet citadel.service; then
 fi
 echo "✓ citadel.service active"
 systemctl --user status citadel.service --no-pager | head -8 || true
+
+echo "→ make doctor"
+( cd "$ROOT" && make doctor )
