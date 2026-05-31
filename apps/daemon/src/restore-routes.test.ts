@@ -28,7 +28,7 @@ function makeFixture() {
   config.databasePath = path.join(dir, "citadel.sqlite");
   config.providers = {
     github: { enabled: false, command: "gh" },
-    jira: { enabled: false, command: "jtk" },
+    jira: { enabled: false, command: "jtk", autoTransitions: [] },
   };
   const store = new SqliteStore(config.databasePath);
   store.migrate();

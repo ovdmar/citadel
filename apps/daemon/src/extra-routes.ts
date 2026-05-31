@@ -8,7 +8,7 @@ import type { GitHubQuotaResource, GitHubQuotaSummary } from "@citadel/contracts
 import { createId } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { resolveFixConflictsPrompt } from "@citadel/hooks";
-import type { OperationService } from "@citadel/operations";
+import type { OperationService, RunAutoTransitionsDep } from "@citadel/operations";
 import { getGhCooldown, isRateLimitError, setGhCooldown } from "@citadel/providers";
 import type express from "express";
 import { AUTOMATED_GH_DISABLED_REASON, automatedGhEnabled } from "./gh-automation.js";
@@ -28,9 +28,11 @@ export function registerWorkspaceExtraRoutes(input: {
   emit: Emit;
   asyncRoute: AsyncRoute;
   operations: OperationService;
+  runAutoTransitions?: RunAutoTransitionsDep | null;
   config: CitadelConfig;
 }) {
   const { app, store, emit, asyncRoute, operations, config } = input;
+  const runAutoTransitions = input.runAutoTransitions ?? null;
   let githubQuotaCache: { expiresAt: number; value: GitHubQuotaSummary } | null = null;
   const resolveWorkspaceRepo = (workspaceId: string) => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
@@ -118,9 +120,31 @@ export function registerWorkspaceExtraRoutes(input: {
       if (typeof patch.slackThreadUrl === "string" || patch.slackThreadUrl === null)
         allowed.slackThreadUrl = patch.slackThreadUrl as string | null;
       if (typeof patch.pinned === "boolean") allowed.pinned = patch.pinned;
+      const prevIssueKey = workspace.issueKey;
       store.updateWorkspace(workspace.id, allowed);
       const next = store.listWorkspaces().find((candidate) => candidate.id === workspace.id);
       emit("workspace.updated", { workspaceId: workspace.id, workspace: next });
+      // Fire workspace.issue_attached only when issueKey transitions from
+      // null|different value → new non-null value. Unattach (value → null)
+      // and no-change (null → null or value → same value) must NOT fire,
+      // otherwise the auto-transition would race against the operator's
+      // unattach intent.
+      if (
+        next &&
+        runAutoTransitions &&
+        allowed.issueKey !== undefined &&
+        next.issueKey != null &&
+        next.issueKey !== prevIssueKey
+      ) {
+        const repo = store.listRepos().find((r) => r.id === next.repoId);
+        if (repo) {
+          try {
+            await runAutoTransitions("workspace.issue_attached", repo, next, { repo, workspace: next });
+          } catch {
+            /* logged inside callback */
+          }
+        }
+      }
       res.json({ workspace: next });
     }),
   );

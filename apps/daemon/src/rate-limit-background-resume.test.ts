@@ -22,7 +22,10 @@ function config(): CitadelConfig {
     bindHost: "127.0.0.1",
     port: 4010,
     mcp: { enabled: true },
-    providers: { github: { enabled: true, command: "gh" }, jira: { enabled: true, command: "jtk" } },
+    providers: {
+      github: { enabled: true, command: "gh" },
+      jira: { enabled: true, command: "jtk", autoTransitions: [] },
+    },
     runtimes: [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"], supportsPrompt: true }],
     usageProviders: [],
     automations: {

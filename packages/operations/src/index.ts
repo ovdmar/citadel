@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import type { ActivityEvent, CreateAgentSessionInput, CreateNamespaceInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
+import type { ActivityEvent, AgentSession, CreateAgentSessionInput, CreateNamespaceInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
@@ -50,6 +50,16 @@ import { type DispatchAgentHook, runNotificationHooks, runWorkspaceHooks } from 
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import { type WorkspaceAppsDeps, discoverWorkspaceApps as discoverWorkspaceAppsImpl, runWorkspaceAction as runWorkspaceActionImpl } from "./workspace-apps.js";
 
+// Daemon-constructed callback that fires lifecycle-event-driven Jira
+// transitions. Optional — when not wired (e.g., unit tests that don't
+// involve Jira), all auto-transition paths short-circuit.
+export type RunAutoTransitionsDep = (
+  event: JiraAutoTransitionEvent,
+  repo: Repo,
+  workspace: Workspace,
+  payload: { repo: Repo; workspace: Workspace; session?: AgentSession },
+) => Promise<void>;
+
 export function defaultWorktreeParent(rootPathInput: string, dataDir?: string): string {
   const rootPath = path.resolve(rootPathInput);
   const repoDir = path.basename(rootPath);
@@ -72,6 +82,7 @@ export class OperationService {
       commandPolicy: CitadelConfig["commandPolicy"];
       runtimes?: CitadelConfig["runtimes"];
     },
+    private readonly runAutoTransitionsDep: RunAutoTransitionsDep | null = null,
   ) {}
 
   registerRepo(input: { rootPath: string; name?: string | undefined; worktreeParent?: string | undefined }) {
@@ -152,6 +163,7 @@ export class OperationService {
         activity: (...args) => this.activity(...args),
         runNotificationHooks: (event, repo, workspace, operationId, payload) =>
           this.runNotificationHooks(event, repo, workspace, operationId, payload),
+        runAutoTransitions: this.runAutoTransitionsDep,
       },
       input,
       runtime,
@@ -579,6 +591,7 @@ export class OperationService {
       activity: (...args) => this.activity(...args),
       runWorkspaceHooks: (...args) => this.runWorkspaceHooks(...args),
       runNotificationHooks: (...args) => this.runNotificationHooks(...args),
+      runAutoTransitions: this.runAutoTransitionsDep,
     };
   }
 }

@@ -1,6 +1,12 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { IssueTrackerSummary, IssueTransition, IssueTransitionActionResult } from "@citadel/contracts";
+import type {
+  IssueSearchResponse,
+  IssueSearchResult,
+  IssueTrackerSummary,
+  IssueTransition,
+  IssueTransitionActionResult,
+} from "@citadel/contracts";
 
 const execFileAsync = promisify(execFile);
 
@@ -83,6 +89,82 @@ export function parseJiraTransitionsOutput(output: string): IssueTransition[] {
       name: name ?? "",
       toStatus: toStatus ?? "",
     }));
+}
+
+// Issue keys per Jira's docs: project key + dash + numeric id. Match
+// case-insensitively (we upper-case below) and require the full string so
+// "AUTH-123 OR DROP" goes to the summary search, not the key search.
+const ISSUE_KEY_RE = /^[A-Za-z][A-Za-z0-9_]+-\d+$/;
+
+// JQL operands inside `summary ~` are interpreted by Jira's Lucene parser;
+// stripping the reserved set is more robust than escaping because most are
+// not useful inside a summary search anyway.
+const LUCENE_SPECIALS_RE = /[+\-&|!(){}\[\]^"~*?:\\/]/g;
+
+export function buildJiraSearchJql(query: string | null): string {
+  const trimmed = (query ?? "").trim();
+  if (!trimmed) {
+    // Broaden beyond `assignee` so reviewer / watcher tickets surface too —
+    // operators commonly attach a ticket assigned to someone else.
+    return "(assignee = currentUser() OR reporter = currentUser() OR watcher = currentUser()) AND updated >= -14d ORDER BY updated DESC";
+  }
+  if (ISSUE_KEY_RE.test(trimmed)) {
+    return `key = "${trimmed.toUpperCase()}" ORDER BY updated DESC`;
+  }
+  // Strip Lucene-reserved characters and collapse whitespace. JQL is passed
+  // to jtk via argv so shell-injection is already moot; this is purely
+  // about keeping Lucene from mis-parsing the operand.
+  const sanitized = trimmed.replace(LUCENE_SPECIALS_RE, " ").replace(/\s+/g, " ").trim();
+  return `summary ~ "${sanitized}" ORDER BY updated DESC`;
+}
+
+export function parseJiraSearchOutput(output: string): IssueSearchResult[] {
+  const results: IssueSearchResult[] = [];
+  for (const raw of output.split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("KEY |")) continue;
+    const parts = line.split("|").map((part) => part.trim());
+    const key = parts[0];
+    if (!key) continue;
+    results.push({
+      key,
+      summary: parts[1] ? parts[1] : null,
+      status: parts[2] ? parts[2] : null,
+      url: null,
+      updated: parts[3] ? parts[3] : null,
+    });
+  }
+  return results;
+}
+
+export async function searchJiraIssues(query: string | null): Promise<IssueSearchResponse> {
+  const jql = buildJiraSearchJql(query);
+  try {
+    const raw = await jtk(["issues", "search", "--jql", jql, "--max", "20", "--no-color"]);
+    return { status: "healthy", reason: null, results: parseJiraSearchOutput(raw) };
+  } catch (error) {
+    return {
+      status: "degraded",
+      reason: error instanceof Error ? error.message : "Jira search failed",
+      results: [],
+    };
+  }
+}
+
+// Picks a transition from a list whose `toStatus` matches the configured
+// target status (case-insensitive). Falls back to matching by transition
+// name so operators who configured the transition name (instead of the
+// target status) before the semantic clarification still work.
+export function resolveJiraTransitionByTargetStatus(transitions: IssueTransition[], target: string): string | null {
+  const needle = target.trim().toLowerCase();
+  if (!needle) return null;
+  for (const t of transitions) {
+    if (t.toStatus.trim().toLowerCase() === needle) return t.id;
+  }
+  for (const t of transitions) {
+    if (t.name.trim().toLowerCase() === needle) return t.id;
+  }
+  return null;
 }
 
 export async function transitionJiraIssue(input: {

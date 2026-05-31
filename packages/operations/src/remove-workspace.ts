@@ -181,5 +181,15 @@ export async function removeWorkspaceImpl(
     operation.id,
     { repo, workspace, result: { removed: !input.archiveOnly, archived: Boolean(input.archiveOnly), dirty } },
   );
+  if (deps.runAutoTransitions) {
+    try {
+      await deps.runAutoTransitions(input.archiveOnly ? "workspace.archived" : "workspace.removed", repo, workspace, {
+        repo,
+        workspace,
+      });
+    } catch {
+      // Logged inside the callback.
+    }
+  }
   return { operationId: operation.id, removed: !input.archiveOnly, archived: Boolean(input.archiveOnly), dirty };
 }

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { HookEventSchema } from "@citadel/contracts";
+import { HookEventSchema, JiraAutoTransitionSchema } from "@citadel/contracts";
 import { z } from "zod";
 
 export { devStatePath, loadDevState, saveDevState, resolveWorktreeRoot, DevStateSchema } from "./dev-state.js";
@@ -197,8 +197,15 @@ export const CitadelConfigSchema = z
             enabled: z.boolean().default(true),
             command: z.string().min(1).default("jtk"),
             projectKey: z.string().min(1).optional(),
+            // Lifecycle-event-driven auto-transitions. `transition` names the
+            // target status (e.g., "In Progress"); the runtime resolves it
+            // to an available transition by matching `toStatus`
+            // case-insensitively. Shape canonicalized in @citadel/contracts
+            // (see JiraAutoTransitionSchema) — config defers to keep a
+            // single source of truth.
+            autoTransitions: z.array(JiraAutoTransitionSchema).default([]),
           })
-          .default({ enabled: true, command: "jtk" }),
+          .default({ enabled: true, command: "jtk", autoTransitions: [] }),
       })
       .default({
         github: { enabled: true, command: "gh" },

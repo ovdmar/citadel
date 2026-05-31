@@ -3,7 +3,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CitadelConfig } from "@citadel/config";
-import { type AppEvent, HookActionSchema, TransitionIssueInputSchema } from "@citadel/contracts";
+import { type AppEvent, HookActionSchema } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { mcpStatus } from "@citadel/mcp";
 import { type DiagnosticsLogger, OperationService, createDiagnosticsLogger } from "@citadel/operations";
@@ -14,6 +14,7 @@ import {
   collectGitHubVersionControlSummary,
   collectJiraIssueSummary,
   collectProviderHealth,
+  searchJiraIssues,
   setGithubCommand,
   setJiraCommand,
   transitionJiraIssue,
@@ -36,14 +37,16 @@ import { E2E_RUN_ID_HEADER, e2eHealthFields, e2eRunIdMismatch } from "./e2e-guar
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { AUTOMATED_GH_DISABLED_REASON, automatedGhEnabled } from "./gh-automation.js";
 import { type GhQuotaWiringWithDetach, resolveRepoFullNameFromWorkspaces, wireGhQuota } from "./gh-quota-wiring.js";
+import { wireJiraAutoTransitions } from "./jira-auto-transitions.js";
+import { registerJiraRoutes } from "./jira-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { registerPrDiffRoute } from "./pr-diff-route.js";
-import { createProviderCache, issueCacheKey } from "./provider-cache.js";
-import { startProviderRefreshJob } from "./provider-refresh-job.js";
 import { registerPrRoutes } from "./pr-routes.js";
+import { createProviderCache } from "./provider-cache.js";
+import { startProviderRefreshJob } from "./provider-refresh-job.js";
 import { wireRateLimitBackgroundResume } from "./rate-limit-background-resume.js";
-import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
+import { workspaceAppHookSample } from "./readiness.js";
 import { registerRepoDiscoveryRoutes } from "./repo-discovery-routes.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
@@ -74,6 +77,7 @@ type ProviderCollectors = {
   collectGitHubCiRunLog: typeof collectGitHubCiRunLog;
   collectJiraIssueSummary: typeof collectJiraIssueSummary;
   transitionJiraIssue: typeof transitionJiraIssue;
+  searchJiraIssues: typeof searchJiraIssues;
 };
 
 export async function createDaemonApp(input: {
@@ -91,13 +95,13 @@ export async function createDaemonApp(input: {
   const { config, configPath, store } = input;
   setGithubCommand(config.providers.github.command);
   setJiraCommand(config.providers.jira.command);
-  const operations = input.operations ?? new OperationService(store, config);
   const providers: ProviderCollectors = {
     collectGitHubVersionControlSummary,
     collectGitHubCiRuns,
     collectGitHubCiRunLog,
     collectJiraIssueSummary,
     transitionJiraIssue,
+    searchJiraIssues,
     ...input.providers,
   };
   const app = express();
@@ -125,6 +129,17 @@ export async function createDaemonApp(input: {
   // post-restart request can hit warm cache. The load() is bounded by a 500ms
   // hard timeout — slow disks degrade to an empty cache but never block boot.
   await providerCache.load();
+  // Construct the Jira auto-transition callback ONCE so the same identity
+  // reaches OperationService (for agent.started + archive/remove) and
+  // registerWorkspaceExtraRoutes (for workspace.issue_attached).
+  const runAutoTransitions = wireJiraAutoTransitions({
+    config,
+    providers,
+    store,
+    emit: (type, payload) => emit(type, payload),
+    providerCache,
+  });
+  const operations = input.operations ?? new OperationService(store, config, runAutoTransitions);
   // Always-on structured diagnostics. Writes JSONL to <dataDir>/diagnostics.jsonl
   // (rotated at 50 MB) and keeps the last 1000 events in memory for the
   // Settings → Debug panel + the /api/diagnostics/bundle.tar.gz download.
@@ -234,20 +249,8 @@ export async function createDaemonApp(input: {
     statusMonitor?.invalidatePaneCapture(sessionId);
     res.status(204).end();
   });
-  registerRepoDiscoveryRoutes({ app, config, asyncRoute });
 
-  app.get(
-    "/api/workspaces/:workspaceId/issue-summary",
-    asyncRoute(async (req, res) => {
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
-      const issueTracker = await cachedProviderSwr(issueCacheKey(workspace.issueKey), () =>
-        providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
-      );
-      res.json({ issueTracker });
-    }),
-  );
+  registerRepoDiscoveryRoutes({ app, config, asyncRoute });
 
   const buildWorkspaceCockpitSummary = createWorkspaceCockpitSummaryBuilder({
     store,
@@ -289,23 +292,7 @@ export async function createDaemonApp(input: {
     }),
   );
 
-  app.post(
-    "/api/workspaces/:workspaceId/issue-transition",
-    asyncRoute(async (req, res) => {
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
-      const input = TransitionIssueInputSchema.parse(req.body);
-      const result = await providers.transitionJiraIssue({
-        issueKey: workspace.issueKey,
-        transition: input.transition,
-        fields: input.fields,
-      });
-      providerCache.delete(`issue:${workspace.issueKey}`);
-      emit("provider.issue_transition", { workspaceId: workspace.id, issueKey: workspace.issueKey, result });
-      res.status(result.status === "healthy" ? 202 : 424).json({ result });
-    }),
-  );
+  registerJiraRoutes({ app, asyncRoute, store, providers, providerCache, emit, cachedProvider: cachedProviderSwr });
 
   registerRuntimeUsageRoutes({ app, config, asyncRoute, providerCache, cachedProvider });
   registerPrRoutes({
@@ -483,7 +470,7 @@ export async function createDaemonApp(input: {
     readMcpResource: (uri) => readMcpResource(store, config, uri),
   });
 
-  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, config });
+  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, runAutoTransitions, config });
   wireRateLimitBackgroundResume(app, server, { store, operations, config, asyncRoute, emit, scheduledAgentService });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit, store, operations, providerHealth: cachedProviderHealth });

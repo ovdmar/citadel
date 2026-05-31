@@ -7,7 +7,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
-import type { CreateWorkspaceInput, HookOutput, Operation, Repo, Workspace } from "@citadel/contracts";
+import type {
+  CreateWorkspaceInput,
+  HookOutput,
+  JiraAutoTransitionEvent,
+  Operation,
+  Repo,
+  Workspace,
+} from "@citadel/contracts";
 import { createId, generateFunnyName, nowIso, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import {
@@ -70,6 +77,14 @@ export type WorkspaceOpsDeps = {
     operationId: string | null,
     payload: unknown,
   ) => Promise<unknown>;
+  runAutoTransitions?:
+    | ((
+        event: JiraAutoTransitionEvent,
+        repo: Repo,
+        workspace: Workspace,
+        payload: { repo: Repo; workspace: Workspace },
+      ) => Promise<void>)
+    | null;
   onSessionStopped?: (sessionId: string) => void;
 };
 
@@ -286,6 +301,13 @@ async function provisionWorkspace(
       operation.id,
     );
     await deps.runNotificationHooks("workspace.created", repo, workspace, operation.id, { repo, workspace });
+    if (workspace.issueKey && deps.runAutoTransitions) {
+      try {
+        await deps.runAutoTransitions("workspace.issue_attached", repo, workspace, { repo, workspace });
+      } catch {
+        // Logged inside the callback.
+      }
+    }
     deps.store.upsertOperation({
       ...operation,
       workspaceId: workspace.id,
