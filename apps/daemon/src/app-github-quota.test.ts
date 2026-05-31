@@ -1,12 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { clearGhCooldown, setGhCooldown } from "@citadel/providers";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { closeServer, createFixture as createFixtureBase, getJson, listen } from "./app-test-helpers.js";
 import { createDaemonApp } from "./app.js";
 
 const dirs: string[] = [];
 
+beforeEach(() => {
+  clearGhCooldown();
+});
+
 afterEach(() => {
+  clearGhCooldown();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -56,7 +62,6 @@ describe("createDaemonApp — GitHub quota", () => {
   it(
     "keeps GitHub quota resources visible while gh automation is cooling down",
     async () => {
-      const { clearGhCooldown, setGhCooldown } = await import("@citadel/providers");
       const fixture = createFixture();
       const fakeGh = path.join(fixture.config.dataDir, "fake-gh");
       const logPath = path.join(fixture.config.dataDir, "fake-gh.log");
@@ -109,7 +114,6 @@ exit 1
   it(
     "starts GitHub cooldown from an exhausted quota response before PR polling retries",
     async () => {
-      const { clearGhCooldown } = await import("@citadel/providers");
       const fixture = createFixture();
       const fakeGh = path.join(fixture.config.dataDir, "fake-gh");
       fs.writeFileSync(
@@ -155,7 +159,6 @@ exit 1
   it(
     "injects versionControl.cooldownUntil into provider-summary while gh is in cooldown (review #6)",
     async () => {
-      const { clearGhCooldown, setGhCooldown } = await import("@citadel/providers");
       const fixture = createFixture();
       const now = new Date().toISOString();
       fixture.store.insertRepo({

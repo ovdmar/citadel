@@ -219,7 +219,9 @@ function CockpitLayout() {
   const isIndex = location.pathname === "/" || location.pathname === "";
   return (
     <>
-      <Cockpit />
+      <div aria-hidden={!isIndex}>
+        <Cockpit />
+      </div>
       <div className="route-overlay" data-hidden={isIndex ? "" : undefined} aria-hidden={isIndex}>
         <Outlet />
       </div>

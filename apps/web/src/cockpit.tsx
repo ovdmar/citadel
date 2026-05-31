@@ -1,7 +1,7 @@
 import type { Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
-import { ChevronsLeft, ChevronsRight, Moon, Search as SearchIcon, Settings as SettingsIcon, Sun } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, Search as SearchIcon, Settings as SettingsIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api.js";
 import { useEventRefresh, useFilteredStateQuery } from "./app-state.js";
@@ -21,9 +21,9 @@ import { RestoreBanner } from "./restore-banner.js";
 import { Stage } from "./stage.js";
 import { focusActiveTerminal, isRegisteredTerminalMessageSource } from "./terminal-pane.js";
 import { parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
+import { ThemeControls } from "./theme-controls.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
-import { applyThemePreference, useResolvedTheme } from "./use-resolved-theme.js";
 import { prToneFor } from "./workspace-card.js";
 
 const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";
@@ -88,18 +88,25 @@ export function Cockpit() {
   // state instantly on workspace switch (otherwise the 10s `gh pr view`
   // round-trip leaves the PR section blank for several seconds).
   const batchPrSummary = useAllWorkspacesPrSummary(data?.workspaces ?? []);
-  const stickySummaries = useStickyWorkspaceSummaries(data?.workspaces ?? [], batchPrSummary.data);
+  const { summaries: stickySummaries, rememberSummary } = useStickyWorkspaceSummaries(
+    data?.workspaces ?? [],
+    batchPrSummary.data,
+  );
   const placeholderSummary = activeWorkspace ? stickySummaries.get(activeWorkspace.id) : undefined;
   const cockpitSummary = useWorkspaceCockpitSummary(activeWorkspace, placeholderSummary);
   useEffect(() => {
+    if (cockpitSummary.data) rememberSummary(cockpitSummary.data);
+  }, [cockpitSummary.data, rememberSummary]);
+  useEffect(() => {
     invalidateActiveWorkspaceFromBatch(queryClient, activeWorkspace?.id, batchPrSummary.dataUpdatedAt);
   }, [activeWorkspace?.id, batchPrSummary.dataUpdatedAt, queryClient]);
-  // Feed the active workspace result back into the sticky cache by recomputing
-  // the PR map from both sources. The active query is preferred for the
-  // selected workspace; the batch covers everyone else.
+  // Feed the active workspace result back into the sticky cache. The active
+  // query is preferred for the selected workspace only when it is healthy;
+  // degraded provider reads are non-authoritative and should not erase the
+  // last-known navbar PR/check tone.
   const prByWorkspaceId = useMemo(() => {
     const map = prMapFromSummaries(stickySummaries);
-    if (cockpitSummary.data) {
+    if (cockpitSummary.data?.versionControl.status === "healthy") {
       map.set(cockpitSummary.data.workspaceId, cockpitSummary.data.versionControl.pullRequest ?? null);
     }
     return map;
@@ -490,32 +497,12 @@ function TopBar(props: {
       </div>
       <div className="cit-top-right">
         <UsageIndicator runtimes={props.runtimes} />
-        <ThemeToggle />
+        <ThemeControls />
         <Link className="cit-icon-btn" to="/settings" aria-label="Settings" title="Open settings">
           <SettingsIcon size={15} />
         </Link>
       </div>
     </header>
-  );
-}
-
-function ThemeToggle() {
-  const resolved = useResolvedTheme();
-  const isDark = resolved === "dark";
-  const toggle = () => {
-    const next = isDark ? "light" : "dark";
-    applyThemePreference(next);
-  };
-  return (
-    <button
-      type="button"
-      className="cit-icon-btn"
-      onClick={toggle}
-      aria-label="Toggle theme"
-      title={isDark ? "Switch to light theme" : "Switch to dark theme"}
-    >
-      {isDark ? <Sun size={15} /> : <Moon size={15} />}
-    </button>
   );
 }
 

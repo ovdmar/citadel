@@ -21,10 +21,9 @@ const IGNORED_TOP_LEVEL = new Set([
 ]);
 const IGNORED_GIT_INTERNAL = new Set(["objects", "logs", "lfs", "hooks"]);
 const DEBOUNCE_MS = 350;
-const FALLBACK_POLL_MS = 500;
+const POLL_MS = 250;
 
 type ProviderCache = Map<string, { expiresAt: number; value: unknown }>;
-type WatchHandle = { close: () => void };
 
 type WorkspaceFsWatcherDeps = {
   listWorkspaces: () => Workspace[];
@@ -53,7 +52,8 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
   // a single workspace can hold thousands of watches; tests churning files
   // in node_modules then flood the event loop with ignored callbacks and
   // terminal WebSockets start missing timely reads/writes.
-  const watchers = new Map<string, WatchHandle[]>();
+  const watchers = new Map<string, fs.FSWatcher[]>();
+  const pollers = new Map<string, ReturnType<typeof setInterval>>();
   const debounces = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingHeadBusts = new Set<string>();
   const failed = new Set<string>();
@@ -74,8 +74,8 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
     );
   };
 
-  const watchTree = (rootPath: string, callback: (rel: string) => void): WatchHandle[] => {
-    const acc: WatchHandle[] = [];
+  const watchTree = (rootPath: string, callback: (rel: string) => void): fs.FSWatcher[] => {
+    const acc: fs.FSWatcher[] = [];
     const walk = (absDir: string, relDir: string) => {
       if (relDir) {
         const parts = relDir.split(path.sep);
@@ -114,26 +114,32 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
     return acc;
   };
 
-  const pollTree = (rootPath: string, callback: (rel: string) => void): WatchHandle => {
-    let previous = snapshotTree(rootPath);
-    const timer = setInterval(() => {
+  const pollTree = (rootPath: string, callback: (rel: string) => void): ReturnType<typeof setInterval> | null => {
+    const initial = snapshotTree(rootPath);
+    if (!initial) return null;
+    let previous: Map<string, string> = initial;
+    const interval = setInterval(() => {
       const next = snapshotTree(rootPath);
-      for (const [rel, signature] of next) {
-        if (previous.get(rel) !== signature) callback(rel);
+      if (!next) return;
+      for (const [rel, stamp] of next) {
+        if (previous.get(rel) !== stamp) callback(rel);
       }
       for (const rel of previous.keys()) {
         if (!next.has(rel)) callback(rel);
       }
       previous = next;
-    }, FALLBACK_POLL_MS);
-    timer.unref?.();
-    return { close: () => clearInterval(timer) };
+    }, POLL_MS);
+    interval.unref?.();
+    return interval;
   };
 
   const closeFor = (id: string) => {
     const ws = watchers.get(id);
     if (ws) for (const w of ws) w.close();
     watchers.delete(id);
+    const poller = pollers.get(id);
+    if (poller) clearInterval(poller);
+    pollers.delete(id);
     const d = debounces.get(id);
     if (d) clearTimeout(d);
     debounces.delete(id);
@@ -155,11 +161,18 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
       try {
         const set = watchTree(ws.path, onChange(id));
         if (set.length === 0) {
-          console.error(`[fs-watch] falling back to polling for ${ws.path}`);
-          watchers.set(id, [pollTree(ws.path, onChange(id))]);
-        } else {
-          watchers.set(id, set);
+          const poller = pollTree(ws.path, onChange(id));
+          if (poller) {
+            pollers.set(id, poller);
+            watchers.set(id, []);
+            console.warn(`[fs-watch] falling back to polling for ${ws.path}`);
+            continue;
+          }
+          failed.add(id);
+          console.error(`[fs-watch] failed to install any watch for ${ws.path}`);
+          continue;
         }
+        watchers.set(id, set);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[fs-watch] failed to watch ${ws.path}: ${message}`);
@@ -171,6 +184,8 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
   const close = () => {
     for (const set of watchers.values()) for (const w of set) w.close();
     watchers.clear();
+    for (const poller of pollers.values()) clearInterval(poller);
+    pollers.clear();
     for (const d of debounces.values()) clearTimeout(d);
     debounces.clear();
     failed.clear();
@@ -205,23 +220,9 @@ function isGitHeadRef(rel: string): boolean {
   return rel === path.join(".git", "HEAD") || (parts[0] === ".git" && parts[1] === "refs" && parts[2] === "heads");
 }
 
-function isIgnored(rel: string): boolean {
-  if (!rel) return false;
-  const parts = rel.split(path.sep);
-  const top = parts[0];
-  if (!top) return false;
-  if (IGNORED_TOP_LEVEL.has(top)) return true;
-  if (top === ".git") {
-    const sub = parts[1];
-    if (sub && IGNORED_GIT_INTERNAL.has(sub)) return true;
-  }
-  return false;
-}
-
-function snapshotTree(rootPath: string): Map<string, string> {
+function snapshotTree(rootPath: string): Map<string, string> | null {
   const snapshot = new Map<string, string>();
   const walk = (absDir: string, relDir: string) => {
-    if (relDir && isIgnored(relDir)) return;
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(absDir, { withFileTypes: true });
@@ -236,15 +237,29 @@ function snapshotTree(rootPath: string): Map<string, string> {
         walk(abs, rel);
         continue;
       }
-      if (!entry.isFile()) continue;
+      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
       try {
         const stat = fs.statSync(abs);
         snapshot.set(rel, `${stat.mtimeMs}:${stat.size}`);
       } catch {
-        // File disappeared while scanning; the next poll will reconcile it.
+        // File disappeared between readdir and stat; next poll will reconcile.
       }
     }
   };
+  if (!fs.existsSync(rootPath)) return null;
   walk(rootPath, "");
   return snapshot;
+}
+
+function isIgnored(rel: string): boolean {
+  if (!rel) return false;
+  const parts = rel.split(path.sep);
+  const top = parts[0];
+  if (!top) return false;
+  if (IGNORED_TOP_LEVEL.has(top)) return true;
+  if (top === ".git") {
+    const sub = parts[1];
+    if (sub && IGNORED_GIT_INTERNAL.has(sub)) return true;
+  }
+  return false;
 }

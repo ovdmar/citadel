@@ -1,15 +1,30 @@
+// @vitest-environment happy-dom
+
 import type { PullRequestSummary, Workspace, WorkspaceCockpitSummary } from "@citadel/contracts";
 import type { WorkspaceCockpitSummaryBatchResponse } from "@citadel/contracts/pr-routes";
-import { describe, expect, it } from "vitest";
+import { createElement } from "react";
+import { flushSync } from "react-dom";
+import { type Root, createRoot } from "react-dom/client";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  type StickyWorkspaceSummaries,
   applyStickyUpdates,
   filterPollableWorkspaceIds,
   invalidateActiveWorkspaceFromBatch,
   nextPollInterval,
   prMapFromSummaries,
   selectActiveGhCooldown,
+  useStickyWorkspaceSummaries,
   workspaceCockpitSummaryQueryOptions,
 } from "./cockpit-tools.js";
+
+const roots: Root[] = [];
+
+afterEach(() => {
+  flushSync(() => {
+    for (const root of roots.splice(0)) root.unmount();
+  });
+});
 
 const workspace = (overrides: Partial<Workspace>): Workspace =>
   ({
@@ -240,6 +255,71 @@ describe("prMapFromSummaries", () => {
     expect(prMapFromSummaries(cache).get("ws_nopr")).toBeNull();
   });
 });
+
+describe("useStickyWorkspaceSummaries", () => {
+  it("returns a fresh snapshot when the background batch mutates the sticky cache", async () => {
+    const ws = workspace({ id: "ws_a" });
+    const harness = await renderStickyHarness({ workspaces: [ws], batch: undefined });
+    const initial = harness.latest().summaries;
+    expect(initial.has("ws_a")).toBe(false);
+
+    const summary = makeSummary("ws_a", "healthy", makePr({ number: 7 }));
+    await harness.rerender({
+      workspaces: [ws],
+      batch: { summaries: [{ workspaceId: "ws_a", ok: true, summary }] },
+    });
+
+    const next = harness.latest().summaries;
+    expect(next).not.toBe(initial);
+    expect(prMapFromSummaries(next).get("ws_a")?.number).toBe(7);
+  });
+
+  it("can remember the active workspace summary so navbar state survives selection changes", async () => {
+    const ws = workspace({ id: "ws_active" });
+    const harness = await renderStickyHarness({ workspaces: [ws], batch: undefined });
+
+    const summary = makeSummary("ws_active", "healthy", makePr({ number: 8 }));
+    flushSync(() => {
+      harness.latest().rememberSummary(summary);
+    });
+
+    expect(prMapFromSummaries(harness.latest().summaries).get("ws_active")?.number).toBe(8);
+  });
+});
+
+type StickyHarnessProps = {
+  workspaces: Workspace[];
+  batch: WorkspaceCockpitSummaryBatchResponse | undefined;
+};
+
+async function renderStickyHarness(initialProps: StickyHarnessProps) {
+  let latestValue: StickyWorkspaceSummaries | null = null;
+  const rootElement = document.createElement("div");
+  document.body.appendChild(rootElement);
+  const root = createRoot(rootElement);
+  roots.push(root);
+
+  function Harness(props: StickyHarnessProps) {
+    latestValue = useStickyWorkspaceSummaries(props.workspaces, props.batch);
+    return null;
+  }
+
+  const render = async (props: StickyHarnessProps) => {
+    flushSync(() => {
+      root.render(createElement(Harness, props));
+    });
+  };
+
+  await render(initialProps);
+
+  return {
+    latest: () => {
+      if (!latestValue) throw new Error("sticky harness did not render");
+      return latestValue;
+    },
+    rerender: render,
+  };
+}
 
 describe("selectActiveGhCooldown", () => {
   it("returns null when no workspace carries a cooldownUntil", () => {
