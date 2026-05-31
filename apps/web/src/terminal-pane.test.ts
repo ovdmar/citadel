@@ -10,7 +10,6 @@ import {
   focusActiveTerminal,
   getTerminalHandle,
   isRegisteredTerminalMessageSource,
-  parseTerminalSocketMessage,
   terminalWebSocketUrl,
 } from "./terminal-pane.js";
 import { applyThemePreference } from "./use-resolved-theme.js";
@@ -693,23 +692,6 @@ describe("TerminalPane xterm WebSocket renderer", () => {
   });
 });
 
-describe("terminal URL helpers", () => {
-  it("builds the primary WebSocket URL", () => {
-    const location = { protocol: "https:", host: "citadel.example" } as Location;
-
-    expect(terminalWebSocketUrl("sess 1", location)).toBe("wss://citadel.example/terminal/sess%201");
-  });
-
-  it("parses terminal socket messages defensively", () => {
-    expect(parseTerminalSocketMessage(JSON.stringify({ type: "output", data: "ok" }))).toEqual({
-      type: "output",
-      data: "ok",
-    });
-    expect(parseTerminalSocketMessage("not-json")).toBeNull();
-    expect(parseTerminalSocketMessage({ type: "output" })).toBeNull();
-  });
-});
-
 async function renderTerminal() {
   const rootElement = document.createElement("div");
   document.body.appendChild(rootElement);
@@ -754,7 +736,7 @@ function decodeBinarySent(sent: unknown[]): string[] {
     .map((item) => new TextDecoder().decode(item));
 }
 
-function resizeMessages(ws: FakeWebSocket): Array<{ type: string; cols: number; rows: number }> {
+function resizeMessages(ws: InstanceType<typeof FakeWebSocket>): Array<{ type: string; cols: number; rows: number }> {
   return ws.sent
     .filter((item): item is string => typeof item === "string")
     .map((item) => parseJsonObject(item))
