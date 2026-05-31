@@ -120,11 +120,7 @@ export function createDaemonApp(input: {
   server.headersTimeout = Math.max(server.headersTimeout, keepAliveTimeoutMs + 5_000);
   const sseClients = new Set<express.Response>();
   const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
-  // Always-on structured diagnostics. Writes JSONL to <dataDir>/diagnostics.jsonl
-  // (rotated at 50 MB) and keeps the last 1000 events in memory for the
-  // Settings → Debug panel + the /api/diagnostics/bundle.tar.gz download.
-  // Sprinkled through every session-killing path so that when a user reports
-  // "all my sessions died", we have the lifecycle trail to share.
+  // Always-on structured diagnostics for Settings → Debug and support bundles.
   const diagnostics = createDiagnosticsLogger({ dataDir: config.dataDir });
   diagnostics.log("daemon", "createDaemonApp", {
     port: config.port,

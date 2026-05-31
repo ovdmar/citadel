@@ -18,18 +18,23 @@ import { AddRepoModal } from "./add-repo-modal.js";
 import { api, queryClient } from "./api.js";
 import { CreateWorkspaceModal, GroupByMenu, type GroupKey } from "./modals.js";
 import {
+  COLLAPSE_STORAGE_KEY as COLLAPSE_STORAGE,
+  GROUP_STORAGE_KEY as GROUP_STORAGE,
+  publishNavigatorGroupingChanged,
+  readCollapsedMap,
+  subscribeToCollapseChanges,
+} from "./navigator-collapse-store.js";
+import {
   type GroupNode,
   type GroupableKey,
   type WorkspaceEntry,
   buildGroupTree,
   collectGroupPaths,
+  treeGroupingFor,
 } from "./navigator-groups.js";
 import { applyLocalOrder, loadOrder, pruneOrder, saveOrder, spliceIntoOrder } from "./navigator-order.js";
 import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { WorkspaceCard, lifecycleToneClass } from "./workspace-card.js";
-
-const GROUP_STORAGE = "citadel.navigator-group";
-const COLLAPSE_STORAGE = "citadel.navigator-group-collapsed";
 
 function runningCount(sessions: AgentSession[]): number {
   return sessions.filter((session) => session.status === "running").length;
@@ -92,23 +97,20 @@ export function Navigator(props: {
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(GROUP_STORAGE, grouping);
+    // Notify same-tab consumers (the cockpit's flatWorkspaceIds memo) that the
+    // grouping changed — the browser's `storage` event only fires across tabs.
+    publishNavigatorGroupingChanged();
   }, [grouping]);
 
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
-    if (typeof window === "undefined") return {};
-    try {
-      const raw = window.localStorage.getItem(COLLAPSE_STORAGE);
-      if (!raw) return {};
-      const parsed = JSON.parse(raw) as Record<string, boolean>;
-      return parsed && typeof parsed === "object" ? parsed : {};
-    } catch {
-      return {};
-    }
-  });
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => readCollapsedMap());
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(COLLAPSE_STORAGE, JSON.stringify(collapsed));
   }, [collapsed]);
+  // External writers (e.g. cockpit nav shortcuts that auto-expand a group)
+  // mutate the same localStorage key and broadcast a custom event. Re-read
+  // and replace local state so the navigator visibly reflects the change.
+  useEffect(() => subscribeToCollapseChanges(() => setCollapsed(readCollapsedMap())), []);
   const toggleCollapsed = useCallback((nodePath: string) => {
     setCollapsed((prev) => {
       const next = { ...prev };
@@ -150,10 +152,7 @@ export function Navigator(props: {
   // Namespace mode renders as a two-level tree (repo → namespace) so two
   // workspaces named "main" in different repos don't collapse into a single
   // ambiguous bucket. The tree builder handles namespace bucketing natively.
-  const treeGrouping = useMemo<GroupableKey[]>(
-    () => (grouping === "none" ? [] : grouping === "namespace" ? ["repo", "namespace"] : [grouping as GroupableKey]),
-    [grouping],
-  );
+  const treeGrouping = useMemo<GroupableKey[]>(() => treeGroupingFor(grouping), [grouping]);
   const tree = useMemo(
     () =>
       buildGroupTree(props.workspaces, props.repos, props.sessions, props.operations, treeGrouping, props.namespaces),

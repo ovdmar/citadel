@@ -15,6 +15,7 @@ import { type StateResponse, useOptimisticRemove, useStateQuery } from "./app-st
 import { pickReadableForeground } from "./color-contrast.js";
 import { encodeReorderMimeType, findReorderMimeType, parseReorderMimeType } from "./navigator-order.js";
 import { useToast } from "./toast.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 import "./workspace-status-dot.css";
 
 export type WorkspaceCardData = {
@@ -357,6 +358,7 @@ export function WorkspaceCard(
 }
 
 function NamespacePickerDialog(props: { workspace: Workspace; namespaces: Namespace[]; onClose: () => void }) {
+  useOverlayPresent();
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -510,6 +512,7 @@ type DropCheckResult = {
 };
 
 function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void }) {
+  useOverlayPresent();
   const optimistic = useOptimisticRemove();
   const toast = useToast();
   const workspaceId = props.workspace.id;

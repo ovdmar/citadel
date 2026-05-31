@@ -3,7 +3,9 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "./components/ui/button.js";
+import { matchShortcut } from "./shortcuts.js";
 import { postTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
+import { readOverlayCount } from "./use-overlay-present.js";
 import { useResolvedTheme } from "./use-resolved-theme.js";
 
 type TerminalError = {
@@ -400,8 +402,13 @@ function handleTerminalKeyEvent(
 ): boolean {
   if (event.type !== "keydown" || event.isComposing) return true;
   const key = event.key.toLowerCase();
-  if (key === "k" && (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey) {
-    postTerminalShortcutMessage("command-palette", sessionId);
+  const match = matchShortcut(event);
+  if (match) {
+    if (match.id === "close-overlay") {
+      if (readOverlayCount() > 0) postTerminalShortcutMessage(match.id, sessionId);
+      return true;
+    }
+    postTerminalShortcutMessage(match.id, sessionId, match.index);
     return false;
   }
   if (key === "s" && (event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey) {

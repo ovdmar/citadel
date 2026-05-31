@@ -4,7 +4,9 @@ import { Check, Search, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
+import { defaultAgentRuntimeId } from "./runtime-defaults.js";
 import { useToast } from "./toast.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 
 export type GroupKey = "repo" | "status" | "namespace" | "none";
 
@@ -153,6 +155,7 @@ function defaultNameForSubmit(linked: LinkedContext): string {
 }
 
 export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
+  useOverlayPresent();
   const toast = useToast();
   const initialRepo = props.repos.find((repo) => repo.id === props.lastRepoId)?.id ?? props.repos[0]?.id ?? "";
   const [repoId, setRepoId] = useState(initialRepo);
@@ -166,10 +169,7 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
     () => props.runtimes.filter((runtime) => runtime.id !== "shell" && runtime.health === "healthy"),
     [props.runtimes],
   );
-  const defaultRuntimeId = useMemo(() => {
-    if (launchableRuntimes.some((runtime) => runtime.id === "claude-code")) return "claude-code";
-    return launchableRuntimes[0]?.id ?? "";
-  }, [launchableRuntimes]);
+  const defaultRuntimeId = useMemo(() => defaultAgentRuntimeId(props.runtimes), [props.runtimes]);
   const [runtimeId, setRuntimeId] = useState(defaultRuntimeId);
   useEffect(() => {
     if (!runtimeId && defaultRuntimeId) setRuntimeId(defaultRuntimeId);

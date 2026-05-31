@@ -7,7 +7,8 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": "./dist/index.js",
-    "./pr-routes": "./dist/pr-routes.js"
+    "./pr-routes": "./dist/pr-routes.js",
+    "./shortcuts": "./dist/shortcuts.js"
   },
   "dependencies": {
     "zod": "^3.24.1"
