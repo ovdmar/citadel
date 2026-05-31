@@ -548,6 +548,24 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(ws.sent).toContain(JSON.stringify({ type: "input", data: "\n" }));
   });
 
+  it("captures wheel input and scrolls the terminal viewport instead of leaking prompt-history keys", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+    const downstream = vi.fn();
+    host.addEventListener("wheel", downstream);
+    await flushReactUpdate(async () => ws.open());
+
+    const event = new WheelEvent("wheel", { deltaY: -32, deltaMode: 0, bubbles: true, cancelable: true });
+
+    host.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(downstream).not.toHaveBeenCalled();
+    expect(ws.sent).toContain(JSON.stringify({ type: "scroll", lines: -2 }));
+  });
+
   it("does not reconnect the terminal when the resolved theme changes", async () => {
     applyThemePreference("dark");
     await renderTerminal();

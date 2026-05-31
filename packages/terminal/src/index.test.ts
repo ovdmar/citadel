@@ -450,6 +450,38 @@ describe("tmux terminal gateway helpers", () => {
     }
   }, 15000);
 
+  it("maps WebSocket scroll controls to tmux copy-mode scrolling", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
+    dirs.push(cwd);
+    const sessionName = `citadel_ws_scroll_${Date.now().toString(36)}`;
+    sessions.push(sessionName);
+    await ensureTmuxSession({ sessionName, cwd });
+    sendKeys(sessionName, "for i in $(seq 1 80); do echo scroll-$i; done");
+    sendKeys(sessionName, "\r");
+    await waitForCapture(sessionName, "scroll-80");
+    const paneInMode = () =>
+      execFileSync("tmux", [...tmuxPrefix(), "display-message", "-p", "-t", sessionName, "#{pane_in_mode}"], {
+        encoding: "utf8",
+      }).trim() === "1";
+    const server = http.createServer();
+    attachTerminalWebSocket(server, (id) => (id === "scroll" ? sessionName : null));
+    await listen(server);
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP test server address");
+      const ws = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/scroll`);
+      await waitForOpen(ws);
+      ws.send(JSON.stringify({ type: "scroll", lines: -8 }));
+      await waitFor(paneInMode, 3000);
+      ws.send(JSON.stringify({ type: "scroll", lines: 1000 }));
+      await waitFor(() => !paneInMode(), 3000);
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      await closeServer(server);
+    }
+  }, 15000);
+
   it("tears down attached PTY viewers before HTTP server close waits on upgraded sockets", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
     dirs.push(cwd);
