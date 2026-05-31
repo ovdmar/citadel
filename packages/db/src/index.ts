@@ -281,7 +281,7 @@ export class SqliteStore {
   // reused immediately — archiveWorkspace leaves the row in place and would
   // block recreation under the same name.
   deleteWorkspace(workspaceId: string) {
-    this.database.prepare("DELETE FROM agent_sessions WHERE workspace_id = ?").run(workspaceId);
+    this.database.prepare("DELETE FROM workspace_sessions WHERE workspace_id = ?").run(workspaceId);
     this.database.prepare("DELETE FROM workspaces WHERE id = ?").run(workspaceId);
   }
 
@@ -362,29 +362,33 @@ export class SqliteStore {
 
   listSessions(workspaceId?: string): AgentSession[] {
     const stmt = workspaceId
-      ? this.database.prepare("SELECT * FROM agent_sessions WHERE workspace_id = ? ORDER BY updated_at DESC")
-      : this.database.prepare("SELECT * FROM agent_sessions ORDER BY updated_at DESC");
+      ? this.database.prepare("SELECT * FROM workspace_sessions WHERE workspace_id = ? ORDER BY updated_at DESC")
+      : this.database.prepare("SELECT * FROM workspace_sessions ORDER BY updated_at DESC");
     const rows = (workspaceId ? stmt.all(workspaceId) : stmt.all()) as Array<Record<string, unknown>>;
     return rows.map(sessionFromRow);
   }
 
   insertSession(session: AgentSession) {
+    const isTerminalSession = session.runtimeId === "shell";
     this.database
       .prepare(
-        `INSERT INTO agent_sessions (id, workspace_id, runtime_id, display_name, status, status_reason,
+        `INSERT INTO workspace_sessions (id, workspace_id, kind, runtime_id, display_name, status, status_reason,
+          status_reason_at,
           last_status_at, last_output_at, ended_at, exit_code, transport,
           tmux_session_name, tmux_session_id, tmux_socket_name, tab_id, runtime_session_id,
           rate_limit_resume_attempts, next_resume_at, last_resume_from_rate_limit_at,
           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
         session.workspaceId,
-        session.runtimeId,
+        isTerminalSession ? "terminal" : "agent",
+        isTerminalSession ? null : session.runtimeId,
         session.displayName,
         session.status,
         session.statusReason ?? null,
+        session.statusReasonAt ?? null,
         // Optional in the schema (older test fixtures + out-of-band callers
         // may omit these); the DB layer normalizes to sensible defaults so
         // the column constraints are still satisfied.
@@ -416,7 +420,7 @@ export class SqliteStore {
   // respawn picks it up via --resume.
   setSessionRuntimeSessionId(sessionId: string, runtimeSessionId: string | null) {
     this.database
-      .prepare("UPDATE agent_sessions SET runtime_session_id = ?, updated_at = ? WHERE id = ?")
+      .prepare("UPDATE workspace_sessions SET runtime_session_id = ?, updated_at = ? WHERE id = ?")
       .run(runtimeSessionId, new Date().toISOString(), sessionId);
   }
 
@@ -471,7 +475,7 @@ export class SqliteStore {
     sets.push("updated_at = ?");
     values.push(new Date().toISOString());
     values.push(sessionId);
-    this.database.prepare(`UPDATE agent_sessions SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+    this.database.prepare(`UPDATE workspace_sessions SET ${sets.join(", ")} WHERE id = ?`).run(...values);
   }
 
   // Partial update for the rate-limit auto-resume bookkeeping. Pass `null`
@@ -502,17 +506,17 @@ export class SqliteStore {
     sets.push("updated_at = ?");
     values.push(new Date().toISOString());
     values.push(sessionId);
-    this.database.prepare(`UPDATE agent_sessions SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+    this.database.prepare(`UPDATE workspace_sessions SET ${sets.join(", ")} WHERE id = ?`).run(...values);
   }
 
   updateSessionDisplayName(sessionId: string, displayName: string) {
     this.database
-      .prepare("UPDATE agent_sessions SET display_name = ?, updated_at = ? WHERE id = ?")
+      .prepare("UPDATE workspace_sessions SET display_name = ?, updated_at = ? WHERE id = ?")
       .run(displayName, new Date().toISOString(), sessionId);
   }
 
   deleteSession(sessionId: string) {
-    this.database.prepare("DELETE FROM agent_sessions WHERE id = ?").run(sessionId);
+    this.database.prepare("DELETE FROM workspace_sessions WHERE id = ?").run(sessionId);
   }
 
   upsertOperation(operation: Operation) {
