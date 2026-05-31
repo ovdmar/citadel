@@ -88,18 +88,25 @@ export function Cockpit() {
   // state instantly on workspace switch (otherwise the 10s `gh pr view`
   // round-trip leaves the PR section blank for several seconds).
   const batchPrSummary = useAllWorkspacesPrSummary(data?.workspaces ?? []);
-  const stickySummaries = useStickyWorkspaceSummaries(data?.workspaces ?? [], batchPrSummary.data);
+  const { summaries: stickySummaries, rememberSummary } = useStickyWorkspaceSummaries(
+    data?.workspaces ?? [],
+    batchPrSummary.data,
+  );
   const placeholderSummary = activeWorkspace ? stickySummaries.get(activeWorkspace.id) : undefined;
   const cockpitSummary = useWorkspaceCockpitSummary(activeWorkspace, placeholderSummary);
   useEffect(() => {
+    if (cockpitSummary.data) rememberSummary(cockpitSummary.data);
+  }, [cockpitSummary.data, rememberSummary]);
+  useEffect(() => {
     invalidateActiveWorkspaceFromBatch(queryClient, activeWorkspace?.id, batchPrSummary.dataUpdatedAt);
   }, [activeWorkspace?.id, batchPrSummary.dataUpdatedAt, queryClient]);
-  // Feed the active workspace result back into the sticky cache by recomputing
-  // the PR map from both sources. The active query is preferred for the
-  // selected workspace; the batch covers everyone else.
+  // Feed the active workspace result back into the sticky cache. The active
+  // query is preferred for the selected workspace only when it is healthy;
+  // degraded provider reads are non-authoritative and should not erase the
+  // last-known navbar PR/check tone.
   const prByWorkspaceId = useMemo(() => {
     const map = prMapFromSummaries(stickySummaries);
-    if (cockpitSummary.data) {
+    if (cockpitSummary.data?.versionControl.status === "healthy") {
       map.set(cockpitSummary.data.workspaceId, cockpitSummary.data.versionControl.pullRequest ?? null);
     }
     return map;
