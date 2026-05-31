@@ -11,15 +11,20 @@ type TerminalError = {
   detail: string;
 };
 
-export type TerminalSocketMessage = {
-  type?: string;
-  data?: string;
-};
-
 const RUNBOOK_URL = "/docs/operations/terminal-runbook";
 const XTERM_FONT = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
 const SHIFT_ENTER_INPUT = "\n";
+const LINE_START_KEY = "C-a";
+const LINE_END_KEY = "C-e";
+const LINE_KILL_KEY = "C-u";
 const TERMINAL_SCROLLBACK_LINES = 20_000;
+type TerminalPaneKey = typeof LINE_START_KEY | typeof LINE_END_KEY | typeof LINE_KILL_KEY;
+
+export type TerminalSocketMessage = {
+  type?: string;
+  data?: string;
+  key?: TerminalPaneKey;
+};
 
 /**
  * Per-session handle used by Stage tabs to drive a live terminal WebSocket.
@@ -337,29 +342,29 @@ function handleTerminalKeyEvent(
     sendTerminalControl(ws, { type: "input", data: SHIFT_ENTER_INPUT });
     return false;
   }
-  if (isMacPlatform()) {
-    if (key === "backspace" && event.metaKey && !event.ctrlKey && !event.altKey) {
-      sendTerminalInput(ws, "\u0015");
+  if (isLineKillShortcut(key, event)) {
+    sendTerminalKey(ws, LINE_KILL_KEY);
+    return false;
+  }
+  if (event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (key === "arrowleft" && !event.shiftKey) {
+      sendTerminalKey(ws, LINE_START_KEY);
       return false;
     }
-    if (key === "arrowleft" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-      sendTerminalInput(ws, "\u0001");
+    if (key === "arrowright" && !event.shiftKey) {
+      sendTerminalKey(ws, LINE_END_KEY);
       return false;
     }
-    if (key === "arrowright" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-      sendTerminalInput(ws, "\u0005");
-      return false;
-    }
-    if (key === "c" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+    if (key === "c" && !event.shiftKey) {
       if (copyableTerminalSelectionText(terminal, host, selectionSnapshot)) return true;
       sendTerminalInterrupt(ws, sessionId);
       return false;
     }
-    if (key === "v" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+    if (key === "v" && !event.shiftKey) {
       void pasteClipboardIntoTerminal(ws);
       return false;
     }
-    if (key === "a" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+    if (key === "a" && !event.shiftKey) {
       terminal.selectAll();
       return false;
     }
@@ -367,8 +372,18 @@ function handleTerminalKeyEvent(
   return true;
 }
 
+function isLineKillShortcut(key: string, event: KeyboardEvent): boolean {
+  if (key !== "backspace" || event.shiftKey || event.altKey) return false;
+  if (event.metaKey && !event.ctrlKey) return true;
+  return event.ctrlKey && !event.metaKey && !isApplePlatform();
+}
+
 function sendTerminalInput(ws: WebSocket, data: string): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
+}
+
+function sendTerminalKey(ws: WebSocket, key: TerminalPaneKey): void {
+  sendTerminalControl(ws, { type: "key", key });
 }
 
 function sendTerminalControl(ws: WebSocket, message: TerminalSocketMessage): void {
@@ -432,7 +447,7 @@ async function pasteClipboardIntoTerminal(ws: WebSocket): Promise<void> {
   if (text) sendTerminalInput(ws, text);
 }
 
-function isMacPlatform(): boolean {
+function isApplePlatform(): boolean {
   const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
   return /Mac|iPhone|iPad|iPod/.test(nav.userAgentData?.platform || navigator.platform || "");
 }

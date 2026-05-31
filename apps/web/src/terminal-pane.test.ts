@@ -254,6 +254,50 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     );
   });
 
+  it("maps command-style line editing to pane key events without relying on daemon platform", async () => {
+    await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    if (!ws || !term) throw new Error("terminal rig missing");
+
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "Linux x86_64" });
+    await flushReact(() => ws.open());
+
+    const killed = term.emitKey(
+      new KeyboardEvent("keydown", { key: "Backspace", metaKey: true, bubbles: true, cancelable: true }),
+    );
+    const home = term.emitKey(
+      new KeyboardEvent("keydown", { key: "ArrowLeft", metaKey: true, bubbles: true, cancelable: true }),
+    );
+    const end = term.emitKey(
+      new KeyboardEvent("keydown", { key: "ArrowRight", metaKey: true, bubbles: true, cancelable: true }),
+    );
+
+    expect(killed).toBe(false);
+    expect(home).toBe(false);
+    expect(end).toBe(false);
+    expect(ws.sent).toContain(JSON.stringify({ type: "key", key: "C-u" }));
+    expect(ws.sent).toContain(JSON.stringify({ type: "key", key: "C-a" }));
+    expect(ws.sent).toContain(JSON.stringify({ type: "key", key: "C-e" }));
+  });
+
+  it("uses Ctrl+Backspace as the non-Apple line-kill shortcut", async () => {
+    await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    if (!ws || !term) throw new Error("terminal rig missing");
+
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "Win32" });
+    await flushReact(() => ws.open());
+
+    const killed = term.emitKey(
+      new KeyboardEvent("keydown", { key: "Backspace", ctrlKey: true, bubbles: true, cancelable: true }),
+    );
+
+    expect(killed).toBe(false);
+    expect(ws.sent).toContain(JSON.stringify({ type: "key", key: "C-u" }));
+  });
+
   it("lets macOS Cmd+C with an xterm selection reach the browser copy event", async () => {
     await renderTerminal();
     const ws = FakeWebSocket.instances[0];
