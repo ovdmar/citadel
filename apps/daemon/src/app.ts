@@ -45,6 +45,7 @@ import { registerPrDiffRoute } from "./pr-diff-route.js";
 import { registerPrRoutes } from "./pr-routes.js";
 import { createProviderCache } from "./provider-cache.js";
 import { startProviderRefreshJob } from "./provider-refresh-job.js";
+import { wireRateLimitBackgroundResume } from "./rate-limit-background-resume.js";
 import { workspaceAppHookSample } from "./readiness.js";
 import { registerRepoDiscoveryRoutes } from "./repo-discovery-routes.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
@@ -52,6 +53,7 @@ import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { backfillScratchpadOnStartup } from "./scratchpad.js";
+import { attachSseClientErrorHandler, writeSseEvent } from "./sse-broadcast.js";
 import { registerStateRoute } from "./state-route.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
@@ -154,6 +156,9 @@ export async function createDaemonApp(input: {
   });
   const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
   const ghQuota: GhQuotaWiringWithDetach = wireGhQuota({ sseClients, store, resolveRepoFullName });
+  const detachSseClient = (client: express.Response) => {
+    if (sseClients.delete(client)) ghQuota.onViewerDetached();
+  };
   const ghAutomationEnabled = automatedGhEnabled();
   server.on("close", () => ghQuota.stop());
   const gatedVcDeps = {
@@ -183,7 +188,7 @@ export async function createDaemonApp(input: {
       source: "daemon",
       payload,
     };
-    for (const client of sseClients) client.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
+    writeSseEvent(sseClients, type, event, detachSseClient, diagnostics);
     if (fsWatchers && (type === "workspace.updated" || type === "state.reconciled" || type === "repo.updated")) {
       fsWatchers.reconcile();
     }
@@ -347,6 +352,31 @@ export async function createDaemonApp(input: {
     res.json({ operation });
   });
 
+  app.patch(
+    "/api/repos/:repoId",
+    asyncRoute(async (req, res) => {
+      const repoId = String(req.params.repoId);
+      const patch = req.body ?? {};
+      const allowed: Record<string, unknown> = {};
+      if (typeof patch.name === "string" && patch.name.length) allowed.name = patch.name;
+      if (typeof patch.worktreeParent === "string" && patch.worktreeParent.length)
+        allowed.worktreeParent = patch.worktreeParent;
+      if (Array.isArray(patch.setupHookIds))
+        allowed.setupHookIds = patch.setupHookIds.filter((id: unknown) => typeof id === "string");
+      if (Array.isArray(patch.teardownHookIds))
+        allowed.teardownHookIds = patch.teardownHookIds.filter((id: unknown) => typeof id === "string");
+      if (Array.isArray(patch.providerIds))
+        allowed.providerIds = patch.providerIds.filter((id: unknown) => typeof id === "string");
+      if (typeof patch.deployHookCommand === "string")
+        allowed.deployHookCommand = patch.deployHookCommand.trim() || null;
+      else if (patch.deployHookCommand === null) allowed.deployHookCommand = null;
+      const next = store.updateRepo(repoId, allowed);
+      if (!next) return res.status(404).json({ error: "repo_not_found" });
+      emit("repo.updated", { repoId: next.id, repo: next });
+      res.json({ repo: next });
+    }),
+  );
+
   registerPrDiffRoute({ app, store, providerCache, asyncRoute });
 
   app.post(
@@ -364,6 +394,18 @@ export async function createDaemonApp(input: {
       ].filter(Boolean) as string[];
       bustCacheByPrefixes(providerCache, prefixes);
       emit("workspace.refreshed", { workspaceId: workspace.id });
+      res.json({ refreshed: prefixes });
+    }),
+  );
+
+  app.post(
+    "/api/repos/:repoId/refresh",
+    asyncRoute(async (req, res) => {
+      const repo = store.listRepos().find((candidate) => candidate.id === req.params.repoId);
+      if (!repo) return res.status(404).json({ error: "repo_not_found" });
+      const prefixes = [`vc:${repo.id}`, `ci:${repo.id}`];
+      bustCacheByPrefixes(providerCache, prefixes);
+      emit("repo.refreshed", { repoId: repo.id });
       res.json({ refreshed: prefixes });
     }),
   );
@@ -429,6 +471,7 @@ export async function createDaemonApp(input: {
   });
 
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, runAutoTransitions, config });
+  wireRateLimitBackgroundResume(app, server, { store, operations, config, asyncRoute, emit, scheduledAgentService });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit, store, operations, providerHealth: cachedProviderHealth });
   registerCitadelActionRoutes({ app, config, emit });
@@ -480,14 +523,11 @@ export async function createDaemonApp(input: {
       Connection: "keep-alive",
     });
     sseClients.add(res);
-    // Fire AFTER the add so hasViewers() in the wiring sees the new state.
-    // 0→1 transition triggers scheduler.invalidateNotDue() so the next FE
-    // poll fetches fresh instead of waiting for the cadence window.
+    attachSseClientErrorHandler(res, detachSseClient, diagnostics);
     ghQuota.onViewerAttached();
     res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
     req.on("close", () => {
-      sseClients.delete(res);
-      ghQuota.onViewerDetached(); // stamps lastDetachAt iff this was the last viewer
+      detachSseClient(res);
     });
   });
 
@@ -581,7 +621,6 @@ export async function createDaemonApp(input: {
   server.on("close", () => terminalReaper.stop());
 
   return { app, server, emit, diagnostics };
-
   function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderValue(providerCache, key, load, ttlMs);
   }

@@ -509,7 +509,7 @@ async function registerRepo(request: APIRequestContext, fixture: ReturnType<type
   };
 
   try {
-    const repoResponse = await apiPost(request, `${API_BASE}/api/repos`, { data: repoData });
+    const repoResponse = await postRepoWithResetRetry(request, repoData);
     expect(repoResponse.ok()).toBe(true);
     return ((await repoResponse.json()) as { repo: { id: string } }).repo;
   } catch (error) {
@@ -521,6 +521,27 @@ async function registerRepo(request: APIRequestContext, fixture: ReturnType<type
     }
     throw error;
   }
+}
+
+async function postRepoWithResetRetry(
+  request: APIRequestContext,
+  data: { rootPath: string; name: string; worktreeParent: string },
+) {
+  try {
+    return await apiPost(request, `${API_BASE}/api/repos`, { data });
+  } catch (error) {
+    if (!isConnectionReset(error)) throw error;
+    const reposResponse = await apiGet(request, `${API_BASE}/api/repos`);
+    expect(reposResponse.ok()).toBe(true);
+    const body = (await reposResponse.json()) as { repos: Array<{ id: string; name: string; rootPath: string }> };
+    const existing = body.repos.find((repo) => repo.rootPath === data.rootPath && repo.name === data.name);
+    if (existing) return { ok: () => true, json: async () => ({ repo: existing }) };
+    return await apiPost(request, `${API_BASE}/api/repos`, { data });
+  }
+}
+
+function isConnectionReset(error: unknown) {
+  return error instanceof Error && /ECONNRESET|socket hang up|read ECONNRESET/i.test(error.message);
 }
 
 async function createWorkspace(request: APIRequestContext, repoId: string, name: string) {
