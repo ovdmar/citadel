@@ -1,10 +1,9 @@
 // @vitest-environment happy-dom
-
-import type { AgentSession } from "@citadel/contracts";
 import { createElement } from "react";
 import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clipboardDataMock, selectTextInside, sessionFixture } from "./terminal-pane-test-helpers.js";
 import {
   TerminalPane,
   focusActiveTerminal,
@@ -617,35 +616,4 @@ function decodeBinarySent(sent: unknown[]): string[] {
   return sent
     .filter((item): item is Uint8Array => item instanceof Uint8Array)
     .map((item) => new TextDecoder().decode(item));
-}
-
-function clipboardDataMock() {
-  return {
-    setData: vi.fn(),
-  };
-}
-
-function selectTextInside(host: HTMLElement, text: string) {
-  const node = document.createTextNode(text);
-  host.appendChild(node);
-  const range = document.createRange();
-  range.selectNodeContents(node);
-  const selection = document.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-}
-
-function sessionFixture(): AgentSession {
-  return {
-    id: "sess_1",
-    workspaceId: "ws_1",
-    runtimeId: "shell",
-    displayName: "Terminal",
-    status: "idle",
-    transport: "connected",
-    tmuxSessionName: "citadel_sess_1",
-    tmuxSessionId: "tmux_1",
-    createdAt: "2026-05-28T00:00:00.000Z",
-    updatedAt: "2026-05-28T00:00:00.000Z",
-  };
 }

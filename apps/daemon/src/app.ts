@@ -39,16 +39,18 @@ import { type GhQuotaWiringWithDetach, resolveRepoFullNameFromWorkspaces, wireGh
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { registerPrDiffRoute } from "./pr-diff-route.js";
-import { registerPrRoutes } from "./pr-routes.js";
 import { createProviderCache, issueCacheKey } from "./provider-cache.js";
 import { startProviderRefreshJob } from "./provider-refresh-job.js";
-import { workspaceAppHookSample } from "./readiness.js";
+import { registerPrRoutes } from "./pr-routes.js";
+import { wireRateLimitBackgroundResume } from "./rate-limit-background-resume.js";
+import { deriveReadiness, workspaceAppHookSample } from "./readiness.js";
 import { registerRepoDiscoveryRoutes } from "./repo-discovery-routes.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { backfillScratchpadOnStartup } from "./scratchpad.js";
+import { attachSseClientErrorHandler, writeSseEvent } from "./sse-broadcast.js";
 import { registerStateRoute } from "./state-route.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
@@ -139,6 +141,9 @@ export async function createDaemonApp(input: {
   });
   const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
   const ghQuota: GhQuotaWiringWithDetach = wireGhQuota({ sseClients, store, resolveRepoFullName });
+  const detachSseClient = (client: express.Response) => {
+    if (sseClients.delete(client)) ghQuota.onViewerDetached();
+  };
   const ghAutomationEnabled = automatedGhEnabled();
   server.on("close", () => ghQuota.stop());
   const gatedVcDeps = {
@@ -168,7 +173,7 @@ export async function createDaemonApp(input: {
       source: "daemon",
       payload,
     };
-    for (const client of sseClients) client.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
+    writeSseEvent(sseClients, type, event, detachSseClient, diagnostics);
     if (fsWatchers && (type === "workspace.updated" || type === "state.reconciled" || type === "repo.updated")) {
       fsWatchers.reconcile();
     }
@@ -479,6 +484,7 @@ export async function createDaemonApp(input: {
   });
 
   registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, config });
+  wireRateLimitBackgroundResume(app, server, { store, operations, config, asyncRoute, emit, scheduledAgentService });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit, store, operations, providerHealth: cachedProviderHealth });
   registerCitadelActionRoutes({ app, config, emit });
@@ -530,14 +536,11 @@ export async function createDaemonApp(input: {
       Connection: "keep-alive",
     });
     sseClients.add(res);
-    // Fire AFTER the add so hasViewers() in the wiring sees the new state.
-    // 0→1 transition triggers scheduler.invalidateNotDue() so the next FE
-    // poll fetches fresh instead of waiting for the cadence window.
+    attachSseClientErrorHandler(res, detachSseClient, diagnostics);
     ghQuota.onViewerAttached();
     res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
     req.on("close", () => {
-      sseClients.delete(res);
-      ghQuota.onViewerDetached(); // stamps lastDetachAt iff this was the last viewer
+      detachSseClient(res);
     });
   });
 
@@ -631,7 +634,6 @@ export async function createDaemonApp(input: {
   server.on("close", () => terminalReaper.stop());
 
   return { app, server, emit, diagnostics };
-
   function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderValue(providerCache, key, load, ttlMs);
   }
