@@ -40,6 +40,12 @@ Runtimes are shell-backed command adapters launched through tmux:
 
 Built-in defaults include `claude-code`, `codex`, `cursor-agent`, `pi`, and `shell`. Codex defaults to `--yolo` so interactive launches use the CLI's no-approval/no-sandbox mode; edit or clear that runtime arg in Settings to change approvals. Citadel keeps `--enable goals` on the Codex runtime so all Citadel-launched Codex sessions use the experimental goals feature. Runtime health is derived from command availability. Agent sessions persist tmux session name/id for reconnect.
 
+Citadel launches Codex with a workspace-scoped `CODEX_SQLITE_HOME` under
+`${dataDir}/codex-sqlite/<workspaceId>`. User auth/config and transcript/history
+entries stay in the operator's global Codex home, but SQLite-backed runtime
+state is isolated so live Codex sessions do not contend on the same global
+SQLite files.
+
 ## Runtime Usage Providers
 
 Usage providers are runtime-scoped command collectors. A configured command receives no special Citadel state today and must print JSON to stdout:
@@ -171,6 +177,7 @@ Shell-backed sessions are tmux sessions. The cockpit's interactive renderer is a
 Environment variables:
 
 - `CITADEL_TMUX_SOCKET` — tmux socket name used by the daemon and terminal bridge.
+- `CITADEL_TMUX_HISTORY_LIMIT` — tmux scrollback lines per pane (default `20000`, clamped to `1000`-`100000`).
 - `CITADEL_SHELL_BIN` — shell used when Citadel creates shell-first tmux sessions (default `$SHELL` then `/bin/bash`).
 
 Lifecycle:

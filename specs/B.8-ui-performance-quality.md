@@ -44,7 +44,7 @@
 [~] 2. Workspace switching remains responsive with long terminal buffers. The cockpit's terminal path reuses browser xterm.js panes over daemon WebSockets and disposable node-pty tmux attach viewers instead of forcing iframe or renderer-process startup on every cache miss. Terminal renderer stability includes opaque xterm surfaces and coalesced/de-duped active-pane resize controls so repaint or layout churn does not make the terminal unreadable.
 [ ] 3. Provider summaries load independently from the main workspace shell.
 [ ] 4. Slow provider commands appear as stale/degraded states.
-[ ] 5. Terminal scrollback is bounded or virtualized. The tmux server enforces a global `history-limit` (default 5000 lines per pane) so a forgotten session can't grow per-pane scrollback without bound.
+[ ] 5. Terminal scrollback is bounded or virtualized. The tmux server enforces a global `history-limit` (default 20000 lines per pane) so a forgotten session can't grow per-pane scrollback without bound.
 [~] 6. Normal navigation transfers only the terminal data needed for mounted views: tmux's current visible state on attach plus live PTY output while the pane is mounted.
 [ ] 7. Main happy paths have performance smoke coverage.
 
