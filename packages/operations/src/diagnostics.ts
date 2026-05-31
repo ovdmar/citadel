@@ -23,7 +23,7 @@
 //                  debounce state, missing-tick counter)
 //   - restore    : boot-restore reconcile flips, candidate count, results
 //   - reaper     : orphan-reaper actions (what was killed and why)
-//   - proxy      : terminal-routes ws upgrade, revive race, proxy errors
+//   - proxy      : terminal WebSocket upgrade, revive race, bridge errors
 //
 // Failure mode: if the underlying fs.appendFileSync throws (disk full,
 // EACCES, etc.) we log the failure once to console and silently drop

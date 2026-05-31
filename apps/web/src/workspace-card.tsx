@@ -12,6 +12,7 @@ import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, Shiel
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { type StateResponse, useOptimisticRemove, useStateQuery } from "./app-state.js";
+import { pickReadableForeground } from "./color-contrast.js";
 import { encodeReorderMimeType, findReorderMimeType, parseReorderMimeType } from "./navigator-order.js";
 import { useToast } from "./toast.js";
 import "./workspace-status-dot.css";
@@ -221,6 +222,12 @@ export function WorkspaceCard(
       <button
         type="button"
         className={`workspace-card ${props.active ? "active" : ""}`}
+        // The .active state paints the card with a dark navy background
+        // regardless of cockpit theme. Mark it as on-dark so descendants
+        // (e.g. .workspace-card-issue chip whose color tracks --color-action,
+        // which is also dark navy on light cockpit) can flip to a light-fg
+        // variant via [data-cit-on-dark="true"] selectors.
+        data-cit-on-dark={props.active ? "true" : undefined}
         {...dragHandlers}
         onClick={() => {
           if (!editing) props.onSelect();
@@ -298,7 +305,11 @@ export function WorkspaceCard(
             <span
               className="namespace-pill"
               title={`Namespace: ${namespace.name}`}
-              style={namespace.color ? { background: namespace.color, color: "#fff" } : undefined}
+              style={
+                namespace.color
+                  ? { background: namespace.color, color: pickReadableForeground(namespace.color) }
+                  : undefined
+              }
             >
               <Folder size={10} /> {namespace.name}
             </span>
