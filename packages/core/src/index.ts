@@ -1,4 +1,4 @@
-import type { AgentSession, CreateWorkspaceInput, ProviderHealth, Repo, Workspace } from "@citadel/contracts";
+import type { AgentSession, CreateWorkspaceInput, ProviderHealth, Repo, Workspace, WorkspaceSession } from "@citadel/contracts";
 
 export function nowIso() {
   return new Date().toISOString();
@@ -79,11 +79,12 @@ export function assertUniqueWorkspaceName(workspaces: Workspace[], repoId: strin
 
 export function summarizeWorkspaceState(input: {
   workspace: Workspace;
-  sessions: AgentSession[];
+  sessions: WorkspaceSession[];
   providerHealth: ProviderHealth[];
 }) {
-  const activeSession = input.sessions.some((session) => session.status === "running");
-  const failedSession = input.sessions.some(sessionNeedsAttention);
+  const agentSessions = input.sessions.filter((session): session is AgentSession => session.kind === "agent");
+  const activeSession = agentSessions.some((session) => session.status === "running");
+  const failedSession = agentSessions.some(sessionNeedsAttention);
   const degradedProvider = input.providerHealth.some((provider) => provider.status !== "healthy");
   const suggestedSection = input.workspace.pinned
     ? input.workspace.section

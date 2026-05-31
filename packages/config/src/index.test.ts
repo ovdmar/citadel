@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CitadelConfigSchema,
   defaultConfigPath,
@@ -17,6 +17,7 @@ import {
 const dirs: string[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -30,8 +31,9 @@ describe("loadConfig", () => {
 
     expect(config.version).toBe(1);
     expect(config.mcp.enabled).toBe(true);
-    expect(config.runtimes.map((runtime) => runtime.id)).toContain("shell");
-    expect(config.runtimes.find((runtime) => runtime.id === "codex")?.args).toEqual(["--yolo"]);
+    expect(config.agentRuntimes.map((runtime) => runtime.id)).not.toContain("shell");
+    expect(config.agentRuntimes.find((runtime) => runtime.id === "codex")?.args).toEqual(["--yolo"]);
+    expect(config.terminal).toEqual({ displayName: "Terminal", command: "bash", args: ["-l"] });
     expect(config.usageProviders).toEqual([]);
     expect(config.automations.fixCi).toMatchObject({
       enabled: true,
@@ -201,7 +203,7 @@ describe("loadConfig", () => {
     const next = mergeConfigPatch(current, {
       mcp: { enabled: false },
       providers: { github: { enabled: true }, jira: { enabled: false } },
-      usageProviders: [{ id: "usage-shell", runtimeId: "shell", command: "node", args: ["usage.js"] }],
+      usageProviders: [{ id: "usage-codex", runtimeId: "codex", command: "node", args: ["usage.js"] }],
       automations: { fixCi: { enabled: true, runtimeId: "codex", fallbackRuntimeId: "cursor-agent" } },
       hooks: [{ id: "setup", event: "workspace.setup", command: "node", args: ["setup.js"], blocking: false }],
       repoDefaults: { setupHookIds: ["setup"], teardownHookIds: [] },
@@ -211,7 +213,7 @@ describe("loadConfig", () => {
     const reloaded = loadConfig(configPath);
     expect(reloaded.mcp.enabled).toBe(false);
     expect(reloaded.providers.jira.enabled).toBe(false);
-    expect(reloaded.usageProviders[0]).toMatchObject({ id: "usage-shell", runtimeId: "shell" });
+    expect(reloaded.usageProviders[0]).toMatchObject({ id: "usage-codex", runtimeId: "codex" });
     expect(reloaded.automations.fixCi).toMatchObject({
       enabled: true,
       runtimeId: "codex",
@@ -261,17 +263,16 @@ describe("loadConfig", () => {
     }
   });
 
-  it("backfills missing runtime fields from built-in defaults so stale on-disk configs keep resume support", () => {
+  it("migrates legacy runtimes into agentRuntimes and terminal with canonical writeback", () => {
     // Regression: a config file written before `resumeArg`/`sessionIdArg`/
-    // `supportsResume` were added to RuntimeConfigSchema would persist a
+    // `supportsResume` were added to AgentRuntimeConfigSchema would persist a
     // claude-code entry without them. On reload, the top-level `runtimes`
-    // array fully replaced the schema's default array, so the built-in
-    // resume fields were lost — and the restore route then rejected every
-    // claude session with `runtime_does_not_support_resume`. We backfill
-    // missing fields per-id from built-ins; user overrides still win.
+    // array is split once into canonical `agentRuntimes` and `terminal`, then
+    // agent runtime built-in fields are backfilled per-id.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-config-"));
     dirs.push(dir);
     const configPath = path.join(dir, "citadel.config.json");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     fs.writeFileSync(
       configPath,
       JSON.stringify({
@@ -281,8 +282,10 @@ describe("loadConfig", () => {
         runtimes: [
           // Pre-schema-evolution shape: no resumeArg, no supportsResume, etc.
           { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] },
-          // User override that should be preserved over the built-in.
+          // User terminal override that should be preserved as the terminal profile.
           { id: "shell", displayName: "Custom Shell", command: "zsh", args: [] },
+          // Extra shell-like entries are not carried forward as agent runtimes.
+          { id: "alt-shell", displayName: "Alt Shell", command: "bash", args: ["-l"] },
           // Unknown id — left untouched (it's a user-defined custom runtime).
           { id: "custom", displayName: "Custom", command: "/usr/bin/custom", args: [] },
         ],
@@ -290,19 +293,25 @@ describe("loadConfig", () => {
     );
 
     const config = loadConfig(configPath);
-    const claude = config.runtimes.find((r) => r.id === "claude-code");
+    const claude = config.agentRuntimes.find((r) => r.id === "claude-code");
     expect(claude?.resumeArg).toBe("--resume");
     expect(claude?.sessionIdArg).toBe("--session-id");
     expect(claude?.supportsResume).toBe(true);
     expect(claude?.supportsModelSelection).toBe(true);
 
-    const shell = config.runtimes.find((r) => r.id === "shell");
-    expect(shell?.displayName).toBe("Custom Shell");
-    expect(shell?.command).toBe("zsh");
-    expect(shell?.supportsPrompt).toBe(true); // backfilled
+    expect(config.terminal).toEqual({ displayName: "Custom Shell", command: "zsh", args: [] });
+    expect(config.agentRuntimes.map((runtime) => runtime.id)).not.toContain("shell");
+    expect(config.agentRuntimes.map((runtime) => runtime.id)).not.toContain("alt-shell");
 
-    const custom = config.runtimes.find((r) => r.id === "custom");
+    const custom = config.agentRuntimes.find((r) => r.id === "custom");
     expect(custom?.resumeArg).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Alt Shell (alt-shell)"));
+
+    const onDisk = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    expect(onDisk.runtimes).toBeUndefined();
+    expect(onDisk.agentRuntimes.map((runtime: { id: string }) => runtime.id)).toEqual(["claude-code", "custom"]);
+    expect(onDisk.terminal).toEqual({ displayName: "Custom Shell", command: "zsh", args: [] });
+    expect(fs.existsSync(`${configPath}.legacy-runtimes.bak`)).toBe(true);
   });
 
   it("in prod mode (no CITADEL_WORKTREE), honors dataDir/databasePath persisted in the config file", () => {

@@ -25,6 +25,8 @@ export const DoctorCheckKindSchema = z.enum([
   "database",
   "repo-hooks",
   "provider",
+  "agent-runtime",
+  "terminal",
 ]);
 export type DoctorCheckKind = z.infer<typeof DoctorCheckKindSchema>;
 

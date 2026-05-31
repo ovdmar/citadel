@@ -7,12 +7,12 @@ import { z } from "zod";
 export { devStatePath, loadDevState, saveDevState, resolveWorktreeRoot, DevStateSchema } from "./dev-state.js";
 export type { DevState } from "./dev-state.js";
 
-// Built-in defaults for the runtimes Citadel ships with. Held as a constant so
+// Built-in defaults for the agent runtimes Citadel ships with. Held as a constant so
 // we can both seed the schema's default (fresh install) AND backfill missing
 // fields onto user-saved configs (existing installs whose `citadel.config.json`
 // was written before newer fields like `resumeArg`/`sessionIdArg` existed —
 // without backfill those installs silently lose resume support).
-type BuiltinRuntime = {
+type BuiltinAgentRuntime = {
   id: string;
   displayName: string;
   command: string;
@@ -25,7 +25,7 @@ type BuiltinRuntime = {
   supportsModelSelection?: boolean;
 };
 
-const BUILTIN_RUNTIMES: BuiltinRuntime[] = [
+const BUILTIN_AGENT_RUNTIMES: BuiltinAgentRuntime[] = [
   {
     id: "claude-code",
     displayName: "Claude Code",
@@ -49,7 +49,7 @@ const BUILTIN_RUNTIMES: BuiltinRuntime[] = [
     // global flag — codex accepts it before the `resume` subcommand, so the
     // same default works for both launch (`codex --yolo`) and resume
     // (`codex --yolo resume <uuid>`). Operators can clear it via Settings →
-    // Runtimes if they want approval prompts back.
+    // Agents if they want approval prompts back.
     args: ["--yolo"],
     // `codex resume <uuid>` is a subcommand (not a flag), but the daemon's
     // resume splice is `[resumeArg, <uuid>]` either way — passing "resume"
@@ -68,10 +68,15 @@ const BUILTIN_RUNTIMES: BuiltinRuntime[] = [
     supportsPrompt: true,
   },
   { id: "pi", displayName: "Pi", command: "pi", args: [] },
-  { id: "shell", displayName: "Shell", command: "bash", args: ["-l"], supportsPrompt: true },
 ];
 
-export const RuntimeConfigSchema = z.object({
+const DEFAULT_TERMINAL_PROFILE = {
+  displayName: "Terminal",
+  command: "bash",
+  args: ["-l"],
+} as const;
+
+export const AgentRuntimeConfigSchema = z.object({
   id: z.string().min(1),
   displayName: z.string().min(1),
   command: z.string().min(1),
@@ -96,6 +101,12 @@ export const RuntimeConfigSchema = z.object({
   // category sits inside a section, else just `<label>`. Stale keys (provider
   // renamed a row) silently fall back to the first available category.
   topBarCategoryKey: z.string().min(1).max(200).optional(),
+});
+
+export const TerminalProfileConfigSchema = z.object({
+  displayName: z.string().min(1).default(DEFAULT_TERMINAL_PROFILE.displayName),
+  command: z.string().min(1).default(DEFAULT_TERMINAL_PROFILE.command),
+  args: z.array(z.string()).default([...DEFAULT_TERMINAL_PROFILE.args]),
 });
 
 export const UsageProviderConfigSchema = z.object({
@@ -206,7 +217,10 @@ export const CitadelConfigSchema = z
         github: { enabled: true, command: "gh" },
         jira: { enabled: true, command: "jtk" },
       }),
-    runtimes: z.array(RuntimeConfigSchema).default(() => BUILTIN_RUNTIMES.map((r) => ({ ...r, args: [...r.args] }))),
+    agentRuntimes: z
+      .array(AgentRuntimeConfigSchema)
+      .default(() => BUILTIN_AGENT_RUNTIMES.map((r) => ({ ...r, args: [...r.args] }))),
+    terminal: TerminalProfileConfigSchema.default({ ...DEFAULT_TERMINAL_PROFILE }),
     usageProviders: z.array(UsageProviderConfigSchema).default([]),
     automations: AutomationConfigSchema,
     hooks: z.array(HookConfigSchema).default([]),
@@ -276,7 +290,8 @@ export const CitadelConfigSchema = z
   });
 
 export type CitadelConfig = z.infer<typeof CitadelConfigSchema>;
-export type RuntimeConfig = z.infer<typeof RuntimeConfigSchema>;
+export type AgentRuntimeConfig = z.infer<typeof AgentRuntimeConfigSchema>;
+export type TerminalProfileConfig = z.infer<typeof TerminalProfileConfigSchema>;
 export type UsageProviderConfig = z.infer<typeof UsageProviderConfigSchema>;
 export type AutomationConfig = z.infer<typeof AutomationConfigSchema>;
 export type FixCiAutomationConfig = z.infer<typeof FixCiAutomationConfigSchema>;
@@ -357,7 +372,7 @@ export function loadConfig(configPath = defaultConfigPath()): CitadelConfig {
   };
   if (!fs.existsSync(configPath)) {
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    const parsed = CitadelConfigSchema.parse(defaults);
+    const parsed = backfillBuiltinAgentRuntimes(CitadelConfigSchema.parse(defaults));
     fs.writeFileSync(configPath, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
     return parsed;
   }
@@ -386,26 +401,117 @@ export function loadConfig(configPath = defaultConfigPath()): CitadelConfig {
         : undefined;
     const merged: Record<string, unknown> = { ...defaults, ...rawWithoutPaths };
     if (cleanedScratchpad !== undefined) merged.scratchpad = cleanedScratchpad;
-    return backfillBuiltinRuntimes(CitadelConfigSchema.parse(merged));
+    return parseAndMaybeMigrateConfig(merged, configPath);
   }
-  return backfillBuiltinRuntimes(CitadelConfigSchema.parse({ ...defaults, ...(raw ?? {}) }));
+  return parseAndMaybeMigrateConfig({ ...defaults, ...(raw ?? {}) }, configPath);
 }
 
-// Heal user-saved runtime entries whose on-disk shape predates newer schema
+function parseAndMaybeMigrateConfig(raw: Record<string, unknown>, configPath: string): CitadelConfig {
+  const migration = migrateLegacyRuntimes(raw);
+  const parsed = backfillBuiltinAgentRuntimes(CitadelConfigSchema.parse(migration.raw));
+  if (migration.didMigrate) {
+    warnLegacyRuntimeMigration(configPath, migration);
+    writeCanonicalConfigAfterMigration(parsed, configPath);
+  }
+  return parsed;
+}
+
+type LegacyRuntimeMigration = {
+  raw: Record<string, unknown>;
+  didMigrate: boolean;
+  droppedShellLikeNames: string[];
+  terminalSourceName: string | null;
+};
+
+function migrateLegacyRuntimes(raw: Record<string, unknown>): LegacyRuntimeMigration {
+  if ("agentRuntimes" in raw || !Array.isArray(raw.runtimes)) {
+    return { raw, didMigrate: false, droppedShellLikeNames: [], terminalSourceName: null };
+  }
+
+  const legacyRuntimes: AgentRuntimeConfig[] = [];
+  for (const entry of raw.runtimes) {
+    const parsed = AgentRuntimeConfigSchema.safeParse(entry);
+    if (parsed.success) legacyRuntimes.push(parsed.data);
+  }
+  const shellLike = legacyRuntimes.filter(isShellLikeRuntime);
+  const terminalSource = shellLike.find((runtime) => runtime.id === "shell") ?? shellLike[0] ?? null;
+  const shellLikeIds = new Set(shellLike.map((runtime) => runtime.id));
+  const agentRuntimes = legacyRuntimes.filter((runtime) => !shellLikeIds.has(runtime.id));
+  const terminal = terminalSource
+    ? TerminalProfileConfigSchema.parse({
+        displayName: terminalSource.displayName || DEFAULT_TERMINAL_PROFILE.displayName,
+        command: terminalSource.command,
+        args: terminalSource.args,
+      })
+    : TerminalProfileConfigSchema.parse(DEFAULT_TERMINAL_PROFILE);
+  const { runtimes: _legacyRuntimes, ...withoutLegacy } = raw;
+  return {
+    raw: {
+      ...withoutLegacy,
+      agentRuntimes,
+      terminal,
+    },
+    didMigrate: true,
+    droppedShellLikeNames: shellLike
+      .filter((runtime) => runtime.id !== terminalSource?.id)
+      .map((runtime) => `${runtime.displayName} (${runtime.id})`),
+    terminalSourceName: terminalSource ? `${terminalSource.displayName} (${terminalSource.id})` : null,
+  };
+}
+
+function isShellLikeRuntime(runtime: AgentRuntimeConfig): boolean {
+  if (runtime.id === "shell") return true;
+  const command = path.basename(runtime.command);
+  return new Set(["bash", "sh", "zsh", "fish", "nu", "pwsh", "powershell"]).has(command);
+}
+
+function warnLegacyRuntimeMigration(configPath: string, migration: LegacyRuntimeMigration) {
+  const terminalDetail = migration.terminalSourceName
+    ? `terminal profile migrated from ${migration.terminalSourceName}`
+    : "terminal profile set to the default bash login shell";
+  const dropped = migration.droppedShellLikeNames.length
+    ? ` Dropped legacy shell-like entries from agentRuntimes: ${migration.droppedShellLikeNames.join(", ")}.`
+    : "";
+  console.warn(
+    `[citadel-config] Migrated legacy runtimes in ${configPath} to agentRuntimes + terminal; ${terminalDetail}.${dropped}`,
+  );
+}
+
+function writeCanonicalConfigAfterMigration(config: CitadelConfig, configPath: string) {
+  const backupPath = `${configPath}.legacy-runtimes.bak`;
+  try {
+    if (!fs.existsSync(backupPath) && fs.existsSync(configPath)) {
+      fs.copyFileSync(configPath, backupPath);
+      fs.chmodSync(backupPath, 0o600);
+    }
+    const tmpPath = `${configPath}.tmp`;
+    fs.writeFileSync(tmpPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+    fs.chmodSync(tmpPath, 0o600);
+    fs.renameSync(tmpPath, configPath);
+  } catch (error) {
+    console.warn(
+      `[citadel-config] Could not write canonical config to ${configPath}; using migrated config in memory only: ${
+        (error as Error).message
+      }`,
+    );
+  }
+}
+
+// Heal user-saved agent runtime entries whose on-disk shape predates newer schema
 // fields (resumeArg, sessionIdArg, supportsResume, etc.). User overrides win;
 // only fields the user didn't set get filled in from the built-in by id.
-// Unknown ids are left untouched — those are custom runtimes the user added.
-function backfillBuiltinRuntimes(config: CitadelConfig): CitadelConfig {
-  const byId = new Map(BUILTIN_RUNTIMES.map((r) => [r.id, r] as const));
+// Unknown ids are left untouched — those are custom agent runtimes the user added.
+function backfillBuiltinAgentRuntimes(config: CitadelConfig): CitadelConfig {
+  const byId = new Map(BUILTIN_AGENT_RUNTIMES.map((r) => [r.id, r] as const));
   let mutated = false;
-  const runtimes = config.runtimes.map((runtime) => {
+  const agentRuntimes = config.agentRuntimes.map((runtime) => {
     const builtin = byId.get(runtime.id);
     if (!builtin) return runtime;
     const merged: Record<string, unknown> = { ...builtin };
     for (const [key, value] of Object.entries(runtime)) {
       if (value !== undefined) merged[key] = value;
     }
-    const next = RuntimeConfigSchema.parse(merged);
+    const next = AgentRuntimeConfigSchema.parse(merged);
     if (
       Object.keys(next).some((k) => (next as Record<string, unknown>)[k] !== (runtime as Record<string, unknown>)[k])
     ) {
@@ -413,7 +519,7 @@ function backfillBuiltinRuntimes(config: CitadelConfig): CitadelConfig {
     }
     return next;
   });
-  return mutated ? { ...config, runtimes } : config;
+  return mutated ? { ...config, agentRuntimes } : config;
 }
 
 export function saveConfig(config: CitadelConfig, configPath = defaultConfigPath()) {

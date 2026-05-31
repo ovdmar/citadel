@@ -90,9 +90,10 @@ describe("workspace state summary", () => {
       sessions: [
         {
           id: "sess_test",
+          kind: "terminal",
           workspaceId: "ws_test",
-          runtimeId: "shell",
-          displayName: "Shell",
+          runtimeId: null,
+          displayName: "Terminal",
           status: "running",
           transport: "connected",
           tmuxSessionName: "citadel_test",
@@ -139,9 +140,10 @@ describe("workspace state summary", () => {
         sessions: [
           {
             id: "sess_failed",
+            kind: "agent",
             workspaceId: "ws_test",
-            runtimeId: "shell",
-            displayName: "Shell",
+            runtimeId: "claude-code",
+            displayName: "Claude Code",
             status: "failed",
             transport: "disconnected",
             tmuxSessionName: null,
@@ -160,9 +162,10 @@ describe("workspace state summary", () => {
         sessions: [
           {
             id: "sess_running",
+            kind: "agent",
             workspaceId: "ws_test",
-            runtimeId: "shell",
-            displayName: "Shell",
+            runtimeId: "codex",
+            displayName: "Codex",
             status: "running",
             transport: "connected",
             tmuxSessionName: "citadel_test",
@@ -174,6 +177,28 @@ describe("workspace state summary", () => {
         providerHealth: [],
       }).suggestedSection,
     ).toBe("in-progress");
+
+    expect(
+      summarizeWorkspaceState({
+        workspace,
+        sessions: [
+          {
+            id: "sess_terminal",
+            kind: "terminal",
+            workspaceId: "ws_test",
+            runtimeId: null,
+            displayName: "Terminal",
+            status: "running",
+            transport: "connected",
+            tmuxSessionName: "citadel_terminal",
+            tmuxSessionId: "$2",
+            createdAt: "2026-05-17T00:00:00.000Z",
+            updatedAt: "2026-05-17T00:00:00.000Z",
+          },
+        ],
+        providerHealth: [],
+      }).suggestedSection,
+    ).toBe("backlog");
 
     expect(
       summarizeWorkspaceState({
