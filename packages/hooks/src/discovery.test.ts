@@ -33,16 +33,19 @@ describe("discoverFileHooks", () => {
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("classifies .sh as command-file and .agent as agent-file", () => {
+  it("classifies .sh as command-file and .agent/.prompt as agent-file", () => {
     const ws = makeWorkspace();
     writeHook(ws, "workspace.setup", "10-bootstrap.sh", "#!/bin/sh\necho ok\n");
     writeHook(ws, "workspace.setup", "20-notify.agent", "Notify the team.\n");
+    writeHook(ws, "workspace.setup", "30-followup.prompt", "Prompt the team.\n");
     const result = discoverFileHooks({ workspacePath: ws, event: "workspace.setup" });
-    expect(result.hooks).toHaveLength(2);
+    expect(result.hooks).toHaveLength(3);
     expect(result.hooks[0]?.kind).toBe("command-file");
     expect(result.hooks[0]?.id).toBe("file:workspace.setup/10-bootstrap.sh");
     expect(result.hooks[1]?.kind).toBe("agent-file");
     expect(result.hooks[1]?.id).toBe("file:workspace.setup/20-notify.agent");
+    expect(result.hooks[2]?.kind).toBe("agent-file");
+    expect(result.hooks[2]?.id).toBe("file:workspace.setup/30-followup.prompt");
   });
 
   it("ignores files with unknown extensions and ignores subdirectories", () => {
@@ -133,16 +136,19 @@ describe("discoverFileHooks", () => {
     expect(result.diagnostics[0]?.error).toMatch(/displayName/i);
   });
 
-  it("rejects .agent under agent.started/ (prevents infinite session-spawn loop) but accepts .sh", () => {
+  it("rejects agent-prompt hooks under agent.started/ (prevents infinite session-spawn loop) but accepts .sh", () => {
     const ws = makeWorkspace();
     writeHook(ws, "agent.started", "loop.agent", "would loop\n");
+    writeHook(ws, "agent.started", "loop.prompt", "would loop too\n");
     writeHook(ws, "agent.started", "safe.sh", "#!/bin/sh\n");
     const result = discoverFileHooks({ workspacePath: ws, event: "agent.started" });
     expect(result.hooks).toHaveLength(1);
     expect(result.hooks[0]?.id).toBe("file:agent.started/safe.sh");
-    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics).toHaveLength(2);
     expect(result.diagnostics[0]?.id).toBe("file:agent.started/loop.agent");
     expect(result.diagnostics[0]?.error).toMatch(/agent\.started|loop/i);
+    expect(result.diagnostics[1]?.id).toBe("file:agent.started/loop.prompt");
+    expect(result.diagnostics[1]?.error).toMatch(/agent\.started|loop/i);
   });
 
   it("works for every HookEvent (parameterized smoke test — no per-event special-casing)", () => {

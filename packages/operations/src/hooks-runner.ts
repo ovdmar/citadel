@@ -55,6 +55,10 @@ type CollectHooksResult = {
   diagnostics: FileHookDiagnostic[];
 };
 
+export type RunHooksResult = {
+  ran: number;
+};
+
 function collectHooks(
   event: HookEvent,
   hookIds: string[] | null,
@@ -154,12 +158,13 @@ export async function runWorkspaceHooks(input: {
   config: RunnerConfig | undefined;
   activity: ActivityFn;
   event: HookEvent;
-  hookIds: string[];
+  hookIds: string[] | null;
   repo: Repo;
   workspace: Workspace;
-  operationId: string;
+  operationId: string | null;
+  payload?: unknown;
   dispatchAgentHook: DispatchAgentHook;
-}): Promise<void> {
+}): Promise<RunHooksResult> {
   const { hooks, diagnostics } = collectHooks(
     input.event,
     input.hookIds,
@@ -175,9 +180,11 @@ export async function runWorkspaceHooks(input: {
     input.activity,
   );
 
+  let ran = 0;
   for (const hook of hooks) {
-    await runOne(hook, input);
+    if (await runOne(hook, input)) ran += 1;
   }
+  return { ran };
 }
 
 export async function runNotificationHooks(input: {
@@ -189,7 +196,7 @@ export async function runNotificationHooks(input: {
   operationId: string | null;
   payload: unknown;
   dispatchAgentHook: DispatchAgentHook;
-}): Promise<void> {
+}): Promise<RunHooksResult> {
   // null hookIds = "run every config hook for this event" (today's notification
   // semantics). File hooks are unconditionally discovered.
   const { hooks, diagnostics } = collectHooks(input.event, null, input.config?.hooks ?? [], input.workspace.path);
@@ -202,9 +209,10 @@ export async function runNotificationHooks(input: {
     input.activity,
   );
 
+  let ran = 0;
   for (const hook of hooks) {
     try {
-      await runOneNotification(hook, input);
+      if (await runOneNotification(hook, input)) ran += 1;
     } catch (error) {
       // Notification hooks have always been best-effort (errors logged, never
       // propagated). Keep that behavior — distinct from runWorkspaceHooks
@@ -219,6 +227,7 @@ export async function runNotificationHooks(input: {
       );
     }
   }
+  return { ran };
 }
 
 async function runOne(
@@ -229,16 +238,15 @@ async function runOne(
     event: HookEvent;
     repo: Repo;
     workspace: Workspace;
-    operationId: string;
+    operationId: string | null;
+    payload?: unknown;
     dispatchAgentHook: DispatchAgentHook;
   },
-): Promise<void> {
+): Promise<boolean> {
+  const payload = workspaceHookPayload(input);
   if (hook.kind === "command-config") {
     const result = await runCommandHook(commandHook(hook.hook, input.workspace.path, input.config), {
-      event: input.event,
-      repo: input.repo,
-      workspace: input.workspace,
-      operationId: input.operationId,
+      ...payload,
     });
     input.activity(
       `hook.${input.event}`,
@@ -249,19 +257,14 @@ async function runOne(
       input.operationId,
       parseOptionalHookOutput(result.stdout),
     );
-    return;
+    return true;
   }
 
   if (hook.kind === "command-file") {
     try {
       const result = await runCommandHook(
         commandFileHook(hook.id, hook.filePath, input.event, input.workspace.path, input.config),
-        {
-          event: input.event,
-          repo: input.repo,
-          workspace: input.workspace,
-          operationId: input.operationId,
-        },
+        payload,
       );
       input.activity(
         `hook.${input.event}`,
@@ -283,7 +286,7 @@ async function runOne(
       );
       if (SH_BLOCKING_EVENTS.has(input.event)) throw error;
     }
-    return;
+    return true;
   }
 
   // agent-file — fire-and-forget after launch (createAgentSession resolves
@@ -292,11 +295,7 @@ async function runOne(
   // (frontmatter `blocking` is reserved); dispatcher rejections log
   // hook.<event>.failed and the runner continues.
   try {
-    await dispatchAgentFileHook(
-      hook,
-      { event: input.event, repo: input.repo, workspace: input.workspace, operationId: input.operationId },
-      input,
-    );
+    await dispatchAgentFileHook(hook, payload, input);
   } catch (error) {
     input.activity(
       `hook.${input.event}.failed`,
@@ -307,6 +306,7 @@ async function runOne(
       input.operationId,
     );
   }
+  return true;
 }
 
 async function runOneNotification(
@@ -321,7 +321,7 @@ async function runOneNotification(
     payload: unknown;
     dispatchAgentHook: DispatchAgentHook;
   },
-): Promise<void> {
+): Promise<boolean> {
   if (hook.kind === "command-config") {
     const result = await runCommandHook(commandHook(hook.hook, input.workspace.path, input.config), {
       event: input.event,
@@ -337,7 +337,7 @@ async function runOneNotification(
       input.operationId,
       parseOptionalHookOutput(result.stdout),
     );
-    return;
+    return true;
   }
 
   if (hook.kind === "command-file") {
@@ -354,7 +354,7 @@ async function runOneNotification(
       input.operationId,
       parseOptionalHookOutput(result.stdout),
     );
-    return;
+    return true;
   }
 
   // agent-file dispatch path (note: discovery rejects .agent under
@@ -365,6 +365,7 @@ async function runOneNotification(
     { event: input.event, ...asObject(input.payload), operationId: input.operationId },
     input,
   );
+  return true;
 }
 
 function describeHookId(hook: DiscoveredHook): string {
@@ -407,4 +408,20 @@ async function dispatchAgentFileHook(
     input.workspace.id,
     input.operationId,
   );
+}
+
+function workspaceHookPayload(input: {
+  event: HookEvent;
+  repo: Repo;
+  workspace: Workspace;
+  operationId: string | null;
+  payload?: unknown;
+}): Record<string, unknown> {
+  return {
+    ...asObject(input.payload),
+    event: input.event,
+    repo: input.repo,
+    workspace: input.workspace,
+    operationId: input.operationId,
+  };
 }

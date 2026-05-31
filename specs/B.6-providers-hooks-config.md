@@ -48,7 +48,7 @@ Rules:
 
 ## Hooks
 
-[~] 1. Hooks are the extension path for repo-specific behavior, configured either in citadel config (`config.hooks`) or as files tracked in the repo under `.citadel/hooks/<event>/<name>.{sh,agent}`.
+[~] 1. Hooks are the extension path for repo-specific behavior, configured either in citadel config (`config.hooks`) or as files tracked in the repo under `.citadel/hooks/<event>/<name>.{sh,agent,prompt}`.
 [ ] 2. Setup hooks are configured per repo.
 [ ] 3. Teardown hooks are configured per repo.
 [ ] 4. App/link discovery hooks are configured per repo.
@@ -56,9 +56,9 @@ Rules:
 [ ] 6. Hooks receive structured workspace/repo/provider context — payload shape is event-specific and validated before dispatch.
 [ ] 7. Hooks return structured JSON.
 [ ] 8. Hook output is validated before it appears in the UI.
-[ ] 9. Hook execution has explicit cwd/env policy, timeout, output bounds, and logs. For `.agent` hooks, the unit of execution is an agent session launch — the framework awaits session creation (including initial prompt delivery) but does not block on subsequent session output.
+[ ] 9. Hook execution has explicit cwd/env policy, timeout, output bounds, and logs. For `.agent` / `.prompt` hooks, the unit of execution is an agent session launch — the framework awaits session creation (including initial prompt delivery) but does not block on subsequent session output.
 [ ] 10. Hook diagnostics show configured hooks, last run, validation status, sample output shape, and errors.
-[ ] 11. Hooks may be implemented as agent prompts (`.agent` files). Agent hooks spawn a fresh isolated agent session in the workspace with the file body as the seed prompt; the session runs to completion independently and logs its own activity. `.agent` is not allowed under `agent.started/` to prevent infinite session-spawn loops.
+[ ] 11. Hooks may be implemented as agent prompts (`.agent` or `.prompt` files). Agent hooks spawn a fresh isolated agent session in the workspace with the file body as the seed prompt; the session runs to completion independently and logs its own activity. Agent-prompt hooks are not allowed under `agent.started/` to prevent infinite session-spawn loops.
 
 ## Config And Settings
 

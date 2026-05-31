@@ -5,7 +5,7 @@ Activate the /implement-task skill first.
 ## Acceptance Criteria
 
 - [ ] Hook files dropped into `.citadel/hooks/<event>/<name>.sh` are discovered automatically per workspace, with NO entry required in `config.hooks` or `repoDefaults.{setupHookIds,teardownHookIds,appHookIds,actionHookIds}`.
-- [ ] Hook files dropped into `.citadel/hooks/<event>/<name>.agent` are discovered automatically per workspace, parsed for optional frontmatter, body templated against the hook payload, and dispatched by spawning a fresh isolated agent session in the workspace with the rendered body as the seed prompt.
+- [ ] Hook files dropped into `.citadel/hooks/<event>/<name>.agent` or `.prompt` are discovered automatically per workspace, parsed for optional frontmatter, body templated against the hook payload, and dispatched by spawning a fresh isolated agent session in the workspace with the rendered body as the seed prompt.
 - [ ] `.sh` file hooks behave identically to today's config-defined command hooks: spawn with `cwd=<workspace.path>`, JSON payload on stdin, stdout parsed as `HookOutput`, activity logged.
 - [ ] Multiple files per event run in lexicographic filename order; config-defined hooks for the same event run first (preserving today's `setupHookIds` ordering), then file hooks.
 - [ ] `.citadel/hooks/deploy` continues to work unchanged — its `list`/`redeploy` contract is untouched. `deploy` is NOT a `HookEvent`, so event-folder discovery never iterates `.citadel/hooks/deploy/`. If someone creates that as a directory, its contents are silently ignored by the framework (the deploy file at `.citadel/hooks/deploy` would then fail `inspectHookFile`'s `isFile()` check and `resolveDeployHook` returns `"missing"` — same behavior as today).
@@ -13,11 +13,11 @@ Activate the /implement-task skill first.
 - [ ] `HookEventSchema` is extended with `pr.merge`, `merge.conflict.detected`, `review.requested`. Consumer PRs can land file hooks before their producers ship — the events validate via zod and are accepted by discovery.
 - [ ] File hook diagnostics surface in the same `HookDiagnostic` shape used by config hooks: validation status, last run, output summary, exit status (or session id for `.agent`).
 - [ ] `.sh` file that exists but is not executable produces a diagnostic ("exists but is not executable") and is skipped — same pattern as `resolveDeployHook`.
-- [ ] `.agent` file with malformed frontmatter, unknown frontmatter keys, reserved keys (`target`, `blocking`), invalid `displayName`, or non-existent `runtime` produces a diagnostic and is skipped without dispatching a session. The frontmatter schema is `.strict()` — unknown keys reject.
-- [ ] `.agent` files inside `.citadel/hooks/agent.started/` are rejected with a diagnostic (would cause infinite session-spawn loop). Only `.sh` is allowed under that event.
-- [ ] `.agent` template references to missing payload fields render as the literal `{{path}}` token (no crash, no error). Numeric path segments (`{{links.0.url}}`) are supported. Traversal uses `Object.hasOwn` per hop (no prototype walk).
-- [ ] `.agent` hooks return after the agent session is *launched*, defined as: the promise from `createAgentSession` has resolved with a session object — which per `packages/operations/src/create-agent-session.ts` means tmux session created AND first prompt delivered (`submitPrompt` returned `{ ok: true }`). The runner never blocks on subsequent session output.
-- [ ] `.agent` dispatch propagates the firing `operationId` so the session's activity events link back to the operation that triggered the hook.
+- [ ] Agent-prompt files (`.agent` / `.prompt`) with malformed frontmatter, unknown frontmatter keys, reserved keys (`target`, `blocking`), invalid `displayName`, or non-existent `runtime` produce a diagnostic and are skipped without dispatching a session. The frontmatter schema is `.strict()` — unknown keys reject.
+- [ ] Agent-prompt files inside `.citadel/hooks/agent.started/` are rejected with a diagnostic (would cause infinite session-spawn loop). Only `.sh` is allowed under that event.
+- [ ] Agent-prompt template references to missing payload fields render as the literal `{{path}}` token (no crash, no error). Numeric path segments (`{{links.0.url}}`) are supported. Traversal uses `Object.hasOwn` per hop (no prototype walk).
+- [ ] Agent-prompt hooks return after the agent session is *launched*, defined as: the promise from `createAgentSession` has resolved with a session object — which per `packages/operations/src/create-agent-session.ts` means tmux session created AND first prompt delivered (`submitPrompt` returned `{ ok: true }`). The runner never blocks on subsequent session output.
+- [ ] Agent-prompt dispatch propagates the firing `operationId` so the session's activity events link back to the operation that triggered the hook.
 - [ ] `make check` passes (typecheck, biome, vitest, coverage ≥90% on touched core/backend/shared modules including `packages/operations/src/index.ts` wiring, deps, build).
 
 ## Context and problem statement
@@ -26,7 +26,7 @@ Activate the /implement-task skill first.
 
 The lone exception is the **deploy hook**: a single executable file at `.citadel/hooks/deploy` discovered by `resolveDeployHook` with a bespoke `list`/`redeploy` subcommand contract. It demonstrates the file-based-tracked-in-repo pattern but is special-cased — every other hook type still flows through citadel's global config.
 
-**What needs to change.** Generalize file-based discovery so repos can ship hooks *tracked in the repo* (versioned alongside code, reviewable in PRs, no citadel-config touch) for every hook event. Add a second hook kind — `.agent` — that spawns an agent session instead of running a subprocess, so hooks can use MCP tools the bash hooks cannot reach (Slack MCP for Hootsuite deploy notifications, GitHub MCP for PR merge orchestration, etc.).
+**What needs to change.** Generalize file-based discovery so repos can ship hooks *tracked in the repo* (versioned alongside code, reviewable in PRs, no citadel-config touch) for every hook event. Add a second hook kind — `.agent` / `.prompt` — that spawns an agent session instead of running a subprocess, so hooks can use MCP tools the bash hooks cannot reach (Slack MCP for Hootsuite deploy notifications, GitHub MCP for PR merge orchestration, etc.).
 
 **Why.** Three parallel consumer features depend on this contract:
 
@@ -34,7 +34,7 @@ The lone exception is the **deploy hook**: a single executable file at `.citadel
 2. **fix-conflicts** (merge-conflict block): needs an `.agent` hook that, when conflicts are detected, dispatches an agent to resolve them.
 3. **Review system**: needs a `review.requested` hook firing site so repos can choose their review workflow.
 
-The framework must publish an explicit contract (event names, payload shapes, frontmatter spec, ordering, failure semantics) even though the producers for `pr.merge`/`merge.conflict.detected`/`review.requested` ship in those consumer PRs, not here.
+The framework must publish an explicit contract (event names, payload shapes, frontmatter spec, ordering, failure semantics). This branch now also wires the initial producers for `pr.merge`, `merge.conflict.detected`, and `review.requested` so dependent features have a real firing site to target.
 
 ## Spec alignment
 

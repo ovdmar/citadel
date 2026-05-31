@@ -32,6 +32,13 @@ export function registerWorkspaceExtraRoutes(input: {
 }) {
   const { app, store, emit, asyncRoute, operations, config } = input;
   let githubQuotaCache: { expiresAt: number; value: GitHubQuotaSummary } | null = null;
+  const resolveWorkspaceRepo = (workspaceId: string) => {
+    const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+    if (!workspace) return { ok: false as const, error: "workspace_not_found" as const };
+    const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+    if (!repo) return { ok: false as const, error: "repo_not_found" as const };
+    return { ok: true as const, repo, workspace };
+  };
 
   app.get(
     "/api/workspaces/:workspaceId/deployed-apps",
@@ -251,10 +258,22 @@ export function registerWorkspaceExtraRoutes(input: {
     asyncRoute(async (req: express.Request, res: express.Response) => {
       const workspaceId = req.params.workspaceId;
       if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
+      const resolvedWorkspace = resolveWorkspaceRepo(workspaceId);
+      if (!resolvedWorkspace.ok) return res.status(404).json({ error: resolvedWorkspace.error });
+      const { repo, workspace } = resolvedWorkspace;
+      const hookResult = await operations.runHookEvent({
+        event: "merge.conflict.detected",
+        repo,
+        workspace,
+        operationType: "merge.conflict.detected",
+        operationMessage: "Running merge-conflict hooks",
+        payload: { reason: "operator-requested", request: req.body ?? {} },
+      });
+      if (hookResult.ran > 0) {
+        emit("operation.updated", { operationId: hookResult.operationId });
+        emit("agent.updated", { workspaceId: workspace.id });
+        return res.status(202).json({ hooked: true, operationId: hookResult.operationId, promptSource: "hook" });
+      }
       // Require a non-shell agent runtime. The fix-conflicts prompt is
       // multi-line ("git pull origin main", "make check", "git push"); if it
       // were pasted into a bash/sh/zsh/fish tmux pane those would execute
@@ -313,6 +332,34 @@ export function registerWorkspaceExtraRoutes(input: {
       });
       emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
       res.status(202).json({ session, promptSource: resolved.source, diagnostic: resolved.diagnostic });
+    }),
+  );
+
+  app.post(
+    "/api/workspaces/:workspaceId/review-requested",
+    asyncRoute(async (req: express.Request, res: express.Response) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      const resolvedWorkspace = resolveWorkspaceRepo(workspaceId);
+      if (!resolvedWorkspace.ok) return res.status(404).json({ error: resolvedWorkspace.error });
+      const { repo, workspace } = resolvedWorkspace;
+      const body = (req.body ?? {}) as { reason?: unknown };
+      const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim() : "manual";
+      const hookResult = await operations.runHookEvent({
+        event: "review.requested",
+        repo,
+        workspace,
+        operationType: "review.requested",
+        operationMessage: "Running review-requested hooks",
+        payload: { reason, request: req.body ?? {} },
+      });
+      emit("operation.updated", { operationId: hookResult.operationId });
+      if (hookResult.ran === 0)
+        return res
+          .status(404)
+          .json({ hooked: false, operationId: hookResult.operationId, error: "review_hook_not_found" });
+      emit("agent.updated", { workspaceId: workspace.id });
+      res.status(202).json({ hooked: true, operationId: hookResult.operationId });
     }),
   );
 }

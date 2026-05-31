@@ -87,8 +87,8 @@ export const HookEventSchema = z.enum([
 
 export type HookEvent = z.infer<typeof HookEventSchema>;
 
-// Frontmatter for a file-based `.agent` hook. Parsed from the optional
-// `---`-fenced block at the top of a `.agent` file. `.strict()` rejects
+// Frontmatter for file-based agent-prompt hooks (`.agent` / `.prompt`). Parsed
+// from the optional `---`-fenced block at the top of the file. `.strict()` rejects
 // unknown keys (including reserved `target`, `blocking`, and `model`) with a
 // clear diagnostic — forward-compat: once a key is shipped, it's part of the
 // contract; once a name is rejected, it can be added later without breaking

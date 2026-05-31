@@ -67,7 +67,7 @@ export function discoverFileHooks(input: DiscoverFileHooksInput): DiscoverFileHo
   for (const entry of sorted) {
     if (!entry.isFile() && !entry.isSymbolicLink()) continue;
     const ext = path.extname(entry.name);
-    if (ext !== ".sh" && ext !== ".agent") continue;
+    if (ext !== ".sh" && ext !== ".agent" && ext !== ".prompt") continue;
 
     const filePath = path.join(eventDir, entry.name);
     const id = `file:${input.event}/${entry.name}`;
@@ -83,15 +83,16 @@ export function discoverFileHooks(input: DiscoverFileHooksInput): DiscoverFileHo
       continue;
     }
 
-    // .agent — extra constraint: `agent.started` is forbidden for .agent
-    // hooks. Dispatching a fresh session for a hook fired by session-start
-    // would loop. .sh under agent.started is fine (subprocess execution
-    // doesn't fire agent.started).
+    // Agent-prompt hooks — extra constraint: `agent.started` is forbidden.
+    // Dispatching a fresh session for a hook fired by session-start would
+    // loop. .sh under agent.started is fine (subprocess execution doesn't
+    // fire agent.started).
     if (input.event === "agent.started") {
       diagnostics.push({
         id,
         filePath,
-        error: ".agent hooks are not allowed under agent.started/ (would cause an infinite loop); use .sh instead",
+        error:
+          ".agent/.prompt hooks are not allowed under agent.started/ (would cause an infinite loop); use .sh instead",
       });
       continue;
     }
@@ -100,7 +101,7 @@ export function discoverFileHooks(input: DiscoverFileHooksInput): DiscoverFileHo
     try {
       raw = fs.readFileSync(filePath, "utf8");
     } catch (error) {
-      diagnostics.push({ id, filePath, error: `failed to read .agent hook: ${describeError(error)}` });
+      diagnostics.push({ id, filePath, error: `failed to read agent-prompt hook: ${describeError(error)}` });
       continue;
     }
 

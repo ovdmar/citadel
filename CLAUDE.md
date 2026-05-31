@@ -34,9 +34,9 @@ Hooks tracked in the repo live under `.citadel/hooks/`:
 
 - `.citadel/hooks/deploy` — the special-case deploy hook (a file). Implements the `list`/`redeploy` subcommand contract; see `packages/hooks/src/deploy.ts`. Untouched by the event-folder discovery below.
 - `.citadel/hooks/<event>/<name>.sh` — a bash hook that fires on the named event. Must be executable; receives JSON payload on stdin; stdout parsed as structured `HookOutput`.
-- `.citadel/hooks/<event>/<name>.agent` — an agent-prompt hook. Optional `---`-fenced frontmatter (`runtime`, `displayName`); body is `{{a.b.c}}`-templated against the payload, then sent as the seed prompt to a fresh agent session. `.agent` is NOT allowed under `agent.started/` (would loop). `model`/`target`/`blocking` are reserved frontmatter keys (strict-mode rejected) — pending end-to-end plumbing.
+- `.citadel/hooks/<event>/<name>.agent` or `.prompt` — an agent-prompt hook. Optional `---`-fenced frontmatter (`runtime`, `displayName`); body is `{{a.b.c}}`-templated against the payload, then sent as the seed prompt to a fresh agent session. Agent-prompt hooks are NOT allowed under `agent.started/` (would loop). `model`/`target`/`blocking` are reserved frontmatter keys (strict-mode rejected) — pending end-to-end plumbing.
 
-Per-event ordering: config-defined hooks run first (in the order listed in `repoDefaults.*HookIds`), then file hooks (lexicographic by filename). Multiple file hooks per event are fine; use a numeric prefix (`10-bootstrap.sh`, `20-notify.agent`) to control order.
+Per-event ordering: config-defined hooks run first (in the order listed in `repoDefaults.*HookIds`), then file hooks (lexicographic by filename). Multiple file hooks per event are fine; use a numeric prefix (`10-bootstrap.sh`, `20-notify.prompt`) to control order.
 
 **Security note:** files in `.citadel/hooks/` execute on every relevant event in every workspace. Review them in PRs like any other privileged code.
 

@@ -42,7 +42,7 @@ export type CreateAgentSessionDeps = {
     workspace: Workspace,
     operationId: string | null,
     payload: { repo: Repo; workspace: Workspace; session: AgentSession },
-  ) => Promise<void>;
+  ) => Promise<unknown>;
 };
 
 export async function createAgentSession(
