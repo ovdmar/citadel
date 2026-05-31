@@ -238,9 +238,9 @@ export function SettingsView() {
               <PageHead
                 title="Citadel Actions"
                 sub="Configurable prompt presets surfaced as buttons in the cockpit."
-                help="Each action stores a name + description + icon + prompt template at <dataDir>/citadel-actions.json. The built-in 'Refine scratchpad' action seeds on first read; it can be edited or reset to default but not deleted."
+                help="Each action stores a name + description + icon + preferred agent + prompt template at <dataDir>/citadel-actions.json. The built-in 'Refine scratchpad' action seeds on first read; it can be edited or reset to default but not deleted."
               />
-              <CitadelActionsPanel />
+              <CitadelActionsPanel runtimes={data?.runtimes ?? []} />
             </>
           ) : null}
           {restoreModalOpen ? <RestoreModal onClose={() => setRestoreModalOpen(false)} /> : null}
@@ -265,7 +265,7 @@ export function SettingsView() {
               <PageHead
                 title="Debug"
                 sub="Download a diagnostics bundle when sessions misbehave."
-                help="Citadel keeps a structured event log (.citadel/diagnostics.jsonl) covering tmux/ttyd lifecycle, status-monitor decisions, and boot-restore. The bundle includes that log plus a state snapshot and a 30-minute slice of the citadel.service systemd journal."
+                help="Citadel keeps a structured event log (.citadel/diagnostics.jsonl) covering tmux and terminal lifecycle, status-monitor decisions, and boot-restore. The bundle includes that log plus a state snapshot and a 30-minute slice of the citadel.service systemd journal."
               />
               <DebugPanel />
             </>

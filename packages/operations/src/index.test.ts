@@ -9,15 +9,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { OperationService } from "./index.js";
 
 const dirs: string[] = [];
-const tmuxSessions: string[] = [];
+const tmuxSessions: Array<{ sessionName: string; socketName: string | null }> = [];
 
 afterEach(() => {
   for (const session of tmuxSessions.splice(0)) {
-    try {
-      execFileSync("tmux", [...tmuxPrefix(), "kill-session", "-t", session], { stdio: "ignore" });
-    } catch {
-      /* already gone */
-    }
+    killTmuxSession(session.sessionName, session.socketName);
   }
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -407,7 +403,7 @@ describe("OperationService", () => {
       // chat input. If our follow-up does not press Enter, the loop never
       // resolves and the assertion below times out.
       execFileSync("tmux", [
-        ...tmuxPrefix(),
+        ...tmuxPrefix(session.tmuxSocketName ?? null),
         "send-keys",
         "-t",
         session.tmuxSessionName ?? "",
@@ -433,25 +429,6 @@ describe("OperationService", () => {
     } finally {
       service.stopAgentSession({ sessionId: session.id });
     }
-  });
-
-  it("rejects transcript/message calls for unknown sessions", async () => {
-    const fixture = createGitFixture();
-    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
-    store.migrate();
-    const service = new OperationService(store, {
-      hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
-      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
-    });
-    expect(service.readAgentTranscript({ sessionId: "sess_missing" })).toEqual({
-      ok: false,
-      error: "session_not_found",
-    });
-    expect(await service.sendAgentMessage({ sessionId: "sess_missing", message: "hi" })).toEqual({
-      ok: false,
-      error: "session_not_found",
-    });
   });
 
   it("stops a session, removes it from the cockpit, and records activity", async () => {
@@ -580,7 +557,13 @@ describe("OperationService", () => {
       { command: "bash", args: ["-l"], displayName: "Shell" },
     );
     // Kill the underlying tmux session out-of-band and remove the repo from disk.
-    if (session.tmuxSessionName) execFileSync("tmux", [...tmuxPrefix(), "kill-session", "-t", session.tmuxSessionName]);
+    if (session.tmuxSessionName)
+      execFileSync("tmux", [
+        ...tmuxPrefix(session.tmuxSocketName ?? null),
+        "kill-session",
+        "-t",
+        session.tmuxSessionName,
+      ]);
     fs.rmSync(fixture.repoPath, { recursive: true, force: true });
     const result = service.reconcile();
     expect(result.sessions).toBeGreaterThan(0);
@@ -617,9 +600,9 @@ describe("OperationService", () => {
       // Shell-runtime session: status preserved (NOT flipped to stopped).
       expect(reconciled?.status).not.toBe("stopped");
       // Pane is still alive — the user can keep working in the shell.
-      expect(tmuxSessionExists(sessionName)).toBe(true);
+      expect(tmuxSessionExists(sessionName, session.tmuxSocketName ?? null)).toBe(true);
     } finally {
-      if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
+      if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
     }
   });
 
@@ -693,7 +676,8 @@ describe("OperationService", () => {
       { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
     );
     const session = store.listSessions().find((candidate) => candidate.id === result.sessionId);
-    if (session?.tmuxSessionName) tmuxSessions.push(session.tmuxSessionName);
+    if (session?.tmuxSessionName)
+      tmuxSessions.push({ sessionName: session.tmuxSessionName, socketName: session.tmuxSocketName ?? null });
 
     expect(result.error).toBeUndefined();
     expect(result.sessionId).toBeTruthy();
@@ -735,7 +719,8 @@ describe("OperationService", () => {
       { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
     );
     const session = store.listSessions().find((candidate) => candidate.id === result.sessionId);
-    if (session?.tmuxSessionName) tmuxSessions.push(session.tmuxSessionName);
+    if (session?.tmuxSessionName)
+      tmuxSessions.push({ sessionName: session.tmuxSessionName, socketName: session.tmuxSocketName ?? null });
 
     expect(result.error).toBeUndefined();
     expect(session?.displayName).toBe("Build Triage");

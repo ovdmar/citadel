@@ -46,7 +46,7 @@
 [ ] 5. When a workspace is created with an associated default agent, the cockpit opens that agent automatically in a new session tab.
 [ ] 6. The selected session occupies the rest of the column height.
 [ ] 7. Terminal keyboard shortcuts must be passed through to the active terminal correctly.
-[ ] 8. Selecting a workspace in the navigator focuses that workspace's currently-active session terminal iframe. Because ttyd runs on a different origin (a separate port), the iframe element receives focus but xterm keyboard capture still requires one click inside the terminal pane — this is a documented cross-origin limitation, not a silent failure. If the workspace has no active session, focusing the workspace is a no-op (no error).
+[ ] 8. Selecting a workspace in the navigator focuses that workspace's currently-active xterm pane directly. If the workspace has no active session, focusing the workspace is a no-op (no error).
 [ ] 9. Closing the active agent session tab immediately focuses the LEFT-sibling tab (falling back to the right sibling if none) — no blank-grace window. Closing the only remaining tab leaves the active-session pointer untouched.
 [ ] 10. The Stage's `+` add-session button is disabled while `workspace.lifecycle === "creating"` — starting a session requires a ready worktree.
 
@@ -139,7 +139,7 @@ The cockpit's scratchpad opens as a **right-anchored overlay drawer** rendered a
 
 ### Citadel Actions
 
-[ ] 15. A "Citadel Actions" section in Settings exposes configurable action presets (name, description, icon, prompt template) stored at `<dataDir>/citadel-actions.json` and serialized through a daemon-side mutex with `updatedAt` stale-write protection. A built-in `refine-scratchpad` action seeds on first read; built-ins can be edited or reset to default but not deleted.
+[ ] 15. A "Citadel Actions" section in Settings exposes configurable action presets (name, description, icon, preferred agent runtime, prompt template) stored at `<dataDir>/citadel-actions.json` and serialized through a daemon-side mutex with `updatedAt` stale-write protection. A built-in `refine-scratchpad` action seeds on first read; built-ins can be edited or reset to default but not deleted.
 [ ] 16. A "Refine" button in the drawer header opens a modal pre-filled with the `refine-scratchpad` action's prompt template, the target repo (cockpit-active by default with override dropdown), and a "Save as default" option. Confirm launches an agent workspace named `refine-scratchpad-<timestamp>`. If the prompt does not mention `in-progress` (case-insensitive), the daemon returns a soft warning that the modal renders inline.
 
 ### Deep link

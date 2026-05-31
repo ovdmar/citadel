@@ -87,6 +87,7 @@ export function sessionFromRow(row: Record<string, unknown>): AgentSession {
     transport: asString(row, "transport") as AgentSession["transport"],
     tmuxSessionName: row.tmux_session_name ? asString(row, "tmux_session_name") : null,
     tmuxSessionId: row.tmux_session_id ? asString(row, "tmux_session_id") : null,
+    tmuxSocketName: row.tmux_socket_name ? asString(row, "tmux_socket_name") : null,
     // Fall back to the row id when tab_id is unset (older rows from before
     // migration 11, or in-memory fixtures that skip the migration). Treats
     // every legacy row as its own tab — matches pre-migration ordering.
