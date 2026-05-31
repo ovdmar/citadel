@@ -2,6 +2,7 @@ import type { AgentRuntime, ProviderHealth, Repo } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
+  AlarmClock,
   ArrowLeft,
   Bug,
   Cable,
@@ -20,6 +21,7 @@ import { useEffect, useState } from "react";
 import { api, queryClient } from "../api.js";
 import { useStateQuery } from "../app-state.js";
 import { mcpUrlFromOrigin } from "../lib/mcp-url.js";
+import { AutomationsPanel } from "../settings-automations.js";
 import { CitadelActionsPanel } from "../settings-citadel-actions.js";
 import { DebugPanel } from "../settings-debug.js";
 import { ProvidersPanel } from "../settings-providers.js";
@@ -32,6 +34,7 @@ type SectionId =
   | "overview"
   | "providers"
   | "agents"
+  | "automations"
   | "repositories"
   | "restore"
   | "actions"
@@ -59,6 +62,12 @@ const SECTIONS: Section[] = [
     label: "Agent runtimes",
     description: "CLIs Citadel can launch in a workspace.",
     icon: Server,
+  },
+  {
+    id: "automations",
+    label: "Automations",
+    description: "Rules that start agents on their own.",
+    icon: AlarmClock,
   },
   {
     id: "repositories",
@@ -191,6 +200,19 @@ export function SettingsView() {
               <AgentsPanel runtimes={data?.runtimes ?? []} />
             </>
           ) : null}
+          {section === "automations" ? (
+            <>
+              <PageHead
+                title="Automations"
+                sub="Rules that start agents on their own."
+                help="Fix-CI automation uses the primary agent when healthy, then the configured fallback. Scheduled agents keep their own cron/one-shot definitions."
+              />
+              <AutomationsPanel
+                runtimes={data?.runtimes ?? []}
+                scheduledAgentsCount={data?.scheduledAgents.length ?? 0}
+              />
+            </>
+          ) : null}
           {section === "repositories" ? (
             <>
               <PageHead
@@ -216,9 +238,9 @@ export function SettingsView() {
               <PageHead
                 title="Citadel Actions"
                 sub="Configurable prompt presets surfaced as buttons in the cockpit."
-                help="Each action stores a name + description + icon + prompt template at <dataDir>/citadel-actions.json. The built-in 'Refine scratchpad' action seeds on first read; it can be edited or reset to default but not deleted."
+                help="Each action stores a name + description + icon + preferred agent + prompt template at <dataDir>/citadel-actions.json. The built-in 'Refine scratchpad' action seeds on first read; it can be edited or reset to default but not deleted."
               />
-              <CitadelActionsPanel />
+              <CitadelActionsPanel runtimes={data?.runtimes ?? []} />
             </>
           ) : null}
           {restoreModalOpen ? <RestoreModal onClose={() => setRestoreModalOpen(false)} /> : null}

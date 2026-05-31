@@ -58,6 +58,8 @@ jobs:
       - name: Dump dev log on failure
         if: failure()
         run: |
+          echo "=== /tmp/citadel-playwright-daemon.log ==="
+          cat /tmp/citadel-playwright-daemon.log || echo "(no Playwright daemon log)"
           echo "=== /tmp/citadel-dev.log ==="
           cat /tmp/citadel-dev.log || echo "(no dev log)"
           echo "=== ss -tlnp ==="

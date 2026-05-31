@@ -7,7 +7,7 @@ import type {
   WorkspaceRecentCommits,
 } from "@citadel/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { RefreshCw, X } from "lucide-react";
+import { PanelRightClose, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 import { DeployedAppsPanel } from "./deployed-apps.js";
@@ -61,7 +61,7 @@ export function Inspector(props: {
           aria-label="Collapse inspector"
           title="Collapse inspector"
         >
-          <X size={12} />
+          <PanelRightClose size={14} />
         </button>
       </div>
       <div className="column-body">

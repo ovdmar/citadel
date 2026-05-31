@@ -1,15 +1,56 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import { themeFromArgJson } from "./ttyd-theme.js";
+import { ttydThemeFromJson } from "./ttyd-theme.js";
 import type { TtydEntry } from "./ttyd.js";
 
 const DEFAULT_BASE_PATH_PREFIX = "/terminals";
 
-function trimSlashes(value: string) {
-  return value.replace(/^\/+|\/+$/g, "");
+export function processAlive(pid: number): boolean {
+  if (!pid || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
-export function listListeningTtydsInRange(portBase: number, portMax: number): Map<number, number> {
+export function listeningPidForPort(port: number): number | null | undefined {
+  try {
+    const output = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const match = /^p(\d+)$/m.exec(output);
+    return match ? Number(match[1]) : null;
+  } catch (error) {
+    const status = (error as { status?: unknown }).status;
+    if (status === 1) return null;
+    return undefined;
+  }
+}
+
+export function listListeningPortsInRange(portBase: number, portMax: number): Set<number> {
+  const ports = new Set<number>();
+  let lsofOutput = "";
+  try {
+    lsofOutput = execFileSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return ports;
+  }
+  for (const line of lsofOutput.split("\n")) {
+    const match = /TCP .*:(\d+) \(LISTEN\)/.exec(line);
+    if (!match) continue;
+    const port = Number(match[1]);
+    if (port >= portBase && port <= portMax) ports.add(port);
+  }
+  return ports;
+}
+
+function listListeningTtydsInRange(portBase: number, portMax: number): Map<number, number> {
   const pidPort = new Map<number, number>();
   let lsofOutput = "";
   try {
@@ -32,6 +73,22 @@ export function listListeningTtydsInRange(portBase: number, portMax: number): Ma
     if (name === "ttyd" && Number.isFinite(pid) && port >= portBase && port <= portMax) pidPort.set(pid, port);
   }
   return pidPort;
+}
+
+export function killStaleTtydInRange(portBase: number, portMax: number) {
+  const pids = new Set(listListeningTtydsInRange(portBase, portMax).keys());
+  for (const pid of pids) {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      // ignore
+    }
+  }
+  return pids.size;
+}
+
+export function trimSlashes(value: string) {
+  return value.replace(/^\/+|\/+$/g, "");
 }
 
 /**
@@ -96,6 +153,7 @@ function readTtydEntryFromProc(pid: number, port: number, basePathPrefix: string
   const sessionRaw = sessionMatch?.[1];
   if (!sessionRaw) return null;
   const tmuxSession = sessionRaw.replace(/\\(.)/g, "$1");
+  const theme = ttydThemeFromJson(themeJson);
   let startedAt = new Date().toISOString();
   try {
     const stat = fs.statSync(`/proc/${pid}`);
@@ -106,15 +164,5 @@ function readTtydEntryFromProc(pid: number, port: number, basePathPrefix: string
   // tabId isn't recoverable from /proc — the ttyd command line doesn't carry
   // it. The adopt() caller resolves it from the DB via the optional
   // `resolveTabId` callback.
-  return {
-    key,
-    port,
-    pid,
-    basePath,
-    tmuxSession,
-    worktreePath: null,
-    startedAt,
-    theme: themeFromArgJson(themeJson),
-    tabId: null,
-  };
+  return { key, port, pid, basePath, tmuxSession, worktreePath: null, startedAt, theme, tabId: null };
 }

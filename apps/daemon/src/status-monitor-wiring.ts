@@ -104,11 +104,15 @@ export function buildStatusMonitorDeps(
     recoverRuntimeSessionId: (session, pane) => {
       if (session.runtimeId !== "codex") return null;
       if (!pane || pane.command !== "codex") return null;
+      const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
       const lastAttemptMs = runtimeSessionBackfillAttempts.get(session.id) ?? 0;
       const nowMs = Date.now();
       if (nowMs - lastAttemptMs < 30_000) return null;
       runtimeSessionBackfillAttempts.set(session.id, nowMs);
-      return discoverCodexSessionIdFromProcess({ rootPid: pane.pid });
+      return discoverCodexSessionIdFromProcess({
+        rootPid: pane.pid,
+        ...(workspace ? { workspacePath: workspace.path, sessionStartedAt: session.createdAt } : {}),
+      });
     },
     setRuntimeSessionId: (sessionId, runtimeSessionId) => {
       store.setSessionRuntimeSessionId(sessionId, runtimeSessionId);

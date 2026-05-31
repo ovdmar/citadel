@@ -424,7 +424,10 @@ export function createDaemonApp(input: {
     "/api/workspaces",
     asyncRoute(async (req, res) => {
       const input = CreateWorkspaceInputSchema.parse(req.body);
-      const result = await operations.createWorkspace(input);
+      const result = await operations.createWorkspace(input, {
+        deferProvisioning: true,
+        onWorkspaceUpdated: (payload) => emit("workspace.updated", payload),
+      });
       emit("workspace.updated", result);
       res.status(202).json(result);
     }),
@@ -573,13 +576,15 @@ export function createDaemonApp(input: {
   registerCitadelActionRoutes({ app, config, emit });
   backfillScratchpadOnStartup(config);
 
-  fsWatchers = createWorkspaceFsWatchers({
-    listWorkspaces: () => store.listWorkspaces(),
-    providerCache,
-    emit,
-  });
-  fsWatchers.reconcile();
-  server.on("close", () => fsWatchers?.close());
+  if (process.env.CITADEL_DISABLE_FS_WATCHERS !== "1") {
+    fsWatchers = createWorkspaceFsWatchers({
+      listWorkspaces: () => store.listWorkspaces(),
+      providerCache,
+      emit,
+    });
+    fsWatchers.reconcile();
+    server.on("close", () => fsWatchers?.close());
+  }
 
   registerWorkspaceDiffRoutes({ app, store, asyncRoute });
 

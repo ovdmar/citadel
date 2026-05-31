@@ -1,9 +1,17 @@
-import type { CitadelAction } from "@citadel/contracts";
+import type { AgentRuntime, CitadelAction } from "@citadel/contracts";
 import { Plus, RotateCcw, Sparkles, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
 
-export function CitadelActionsPanel() {
+type RuntimeChoice = {
+  id: string;
+  label: string;
+  command: string;
+  health: AgentRuntime["health"];
+  healthReason: string | null;
+};
+
+export function CitadelActionsPanel(props: { runtimes: AgentRuntime[] }) {
   const [actions, setActions] = useState<CitadelAction[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -73,6 +81,7 @@ export function CitadelActionsPanel() {
           description: draft.description,
           icon: draft.icon,
           promptTemplate: draft.promptTemplate,
+          runtimeId: draft.runtimeId,
           updatedAt: draft.updatedAt,
         }),
       });
@@ -135,6 +144,7 @@ export function CitadelActionsPanel() {
           description: "",
           icon: "",
           promptTemplate: "Describe what the agent should do here.",
+          runtimeId: preferredDefaultRuntimeId(props.runtimes),
         }),
       });
       setActions((current) => [...current, result.action]);
@@ -144,7 +154,7 @@ export function CitadelActionsPanel() {
     } finally {
       setSaving(false);
     }
-  }, []);
+  }, [props.runtimes]);
 
   if (loading) {
     return (
@@ -219,6 +229,11 @@ export function CitadelActionsPanel() {
                 placeholder="e.g. Wand2"
               />
             </div>
+            <RuntimeSelect
+              runtimes={props.runtimes}
+              value={draft.runtimeId}
+              onChange={(runtimeId) => editDraft((d) => ({ ...d, runtimeId }))}
+            />
             <div className="citadel-actions-editor-row citadel-actions-editor-prompt">
               <label htmlFor="citadel-action-prompt">Prompt template</label>
               <textarea
@@ -251,4 +266,72 @@ export function CitadelActionsPanel() {
       </div>
     </div>
   );
+}
+
+function RuntimeSelect(props: { runtimes: AgentRuntime[]; value: string; onChange: (runtimeId: string) => void }) {
+  const choices = ensureSelectedRuntimeChoice(buildRuntimeChoices(props.runtimes), props.value);
+  const selected = choices.find((choice) => choice.id === props.value);
+  return (
+    <div className="citadel-actions-editor-row">
+      <label htmlFor="citadel-action-runtime">Preferred agent</label>
+      <select
+        id="citadel-action-runtime"
+        className="set-select"
+        value={props.value}
+        onChange={(event) => props.onChange(event.currentTarget.value)}
+      >
+        {choices.map((choice) => (
+          <option key={choice.id} value={choice.id}>
+            {choice.label}
+          </option>
+        ))}
+      </select>
+      {selected ? (
+        <small className="set-page-help" style={{ marginTop: 6, display: "block" }}>
+          {runtimeChoiceLabel(selected)}
+        </small>
+      ) : null}
+    </div>
+  );
+}
+
+function preferredDefaultRuntimeId(runtimes: AgentRuntime[]): string {
+  const choices = buildRuntimeChoices(runtimes);
+  return choices.find((runtime) => runtime.id === "claude-code")?.id ?? choices[0]?.id ?? "claude-code";
+}
+
+function buildRuntimeChoices(runtimes: AgentRuntime[]): RuntimeChoice[] {
+  return runtimes
+    .filter((runtime) => runtime.id !== "shell" && !isShellCommand(runtime.command))
+    .map((runtime) => ({
+      id: runtime.id,
+      label: runtime.displayName,
+      command: runtime.command,
+      health: runtime.health,
+      healthReason: runtime.healthReason,
+    }));
+}
+
+function ensureSelectedRuntimeChoice(choices: RuntimeChoice[], selectedId: string): RuntimeChoice[] {
+  if (!selectedId || choices.some((choice) => choice.id === selectedId)) return choices;
+  return [
+    ...choices,
+    {
+      id: selectedId,
+      label: `${selectedId} (not configured)`,
+      command: "",
+      health: "unavailable",
+      healthReason: "Runtime is not configured.",
+    },
+  ];
+}
+
+function isShellCommand(command: string): boolean {
+  const name = command.split(/[\\/]/).pop() ?? command;
+  return ["bash", "sh", "zsh", "fish"].includes(name);
+}
+
+function runtimeChoiceLabel(choice: RuntimeChoice): string {
+  if (choice.health === "healthy") return choice.command;
+  return `${choice.health}: ${choice.healthReason ?? choice.command}`;
 }

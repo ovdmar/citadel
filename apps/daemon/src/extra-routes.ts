@@ -78,6 +78,24 @@ export function registerWorkspaceExtraRoutes(input: {
     res.json({ workspaces: store.listArchivedWorkspaces() });
   });
 
+  app.get(
+    "/api/workspaces/:workspaceId/removal-check",
+    asyncRoute(async (req: express.Request, res: express.Response) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      try {
+        const result = operations.checkWorkspaceRemoval({
+          workspaceId,
+          archiveOnly: req.query.archiveOnly === "true",
+        });
+        res.status(result.removable ? 200 : 409).json(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "workspace_removal_check_failed";
+        res.status(404).json({ error: message });
+      }
+    }),
+  );
+
   app.patch(
     "/api/workspaces/:workspaceId",
     asyncRoute(async (req: express.Request, res: express.Response) => {

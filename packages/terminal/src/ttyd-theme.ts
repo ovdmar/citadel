@@ -1,5 +1,31 @@
 export type TtydTheme = "light" | "dark";
 
+/**
+ * Build the `-t` ttyd client-option flags that paint xterm to match the
+ * cockpit theme. Palette is derived from the meshes-studio design system
+ * (warm beige + navy for light, deep navy + soft white for dark) so the
+ * terminal blends with the rest of the UI.
+ */
+export function ttydThemeArgs(theme: TtydTheme): string[] {
+  const palette = theme === "light" ? LIGHT_XTERM_THEME : DARK_XTERM_THEME;
+  return [
+    "-t",
+    `theme=${JSON.stringify(palette)}`,
+    "-t",
+    "fontFamily=ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+    // Auto-reconnect 3s after the websocket drops (laptop sleep, network
+    // blip). Without this, ttyd's xterm shows "Press any key to reconnect"
+    // and waits for a manual key press.
+    "-t",
+    "reconnect=3",
+  ];
+}
+
+export function ttydThemeFromJson(themeJson: string | null): TtydTheme {
+  if (themeJson?.includes(`"${LIGHT_XTERM_THEME.background}"`)) return "light";
+  return "dark";
+}
+
 // Palette matches the cockpit's warm-cream redesign so the terminal pane
 // reads as part of the surface, not a stark white island. Background tracks
 // --c-elev (the stage card colour); foreground tracks --c-fg-1. Ansi colour
@@ -59,30 +85,3 @@ const DARK_XTERM_THEME = {
   brightCyan: "#9ad0e8",
   brightWhite: "#fffaef",
 };
-
-/**
- * Build the `-t` ttyd client-option flags that paint xterm to match the
- * cockpit theme. Palette is derived from the meshes-studio design system
- * (warm beige + navy for light, deep navy + soft white for dark) so the
- * terminal blends with the rest of the UI.
- */
-export function ttydThemeArgs(theme: TtydTheme): string[] {
-  const palette = theme === "light" ? LIGHT_XTERM_THEME : DARK_XTERM_THEME;
-  return [
-    "-t",
-    `theme=${JSON.stringify(palette)}`,
-    "-t",
-    "fontFamily=ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-    // Auto-reconnect 3s after the websocket drops (laptop sleep, network
-    // blip). Without this, ttyd's xterm shows "Press any key to reconnect"
-    // and waits for a manual key press.
-    "-t",
-    "reconnect=3",
-  ];
-}
-
-export function themeFromArgJson(themeJson: string | null): TtydTheme {
-  // Theme: match by the unique light/dark background hex; default to dark.
-  if (themeJson?.includes(`"${LIGHT_XTERM_THEME.background}"`)) return "light";
-  return "dark";
-}

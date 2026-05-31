@@ -73,7 +73,12 @@ export async function launchAgentInSession(
   execFileSync("tmux", [...tmuxPrefix(), "send-keys", "-t", sessionName, cmd, "Enter"], { stdio: "ignore" });
   // Positive predicate against the comm-truncated runtime binary.
   const target = runtimeBinary.slice(0, COMM_TRUNCATION);
-  await waitForPaneCommand(sessionName, (cur) => cur === target, { timeoutMs: options.timeoutMs ?? 5000 });
+  const observed = await waitForPaneCommand(sessionName, (cur) => cur === target, {
+    timeoutMs: options.timeoutMs ?? 5000,
+  });
+  if (observed !== target) {
+    throw new Error(`runtime_not_ready: expected ${target}, observed ${observed || "none"}`);
+  }
 }
 
 // One-time sweep of leftover /tmp/citadel-agent-*.{live,exit} files from the

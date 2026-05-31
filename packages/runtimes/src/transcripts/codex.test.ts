@@ -182,9 +182,59 @@ describe("codex live-process session id discovery", () => {
     expect(child.pid).toBeTypeOf("number");
 
     const found = await waitFor(() =>
-      child.pid ? discoverCodexSessionIdFromProcess({ rootPid: child.pid, home }) : null,
+      child.pid ? discoverCodexSessionIdFromProcess({ rootPid: child.pid, home, workspacePath: "/tmp/ws" }) : null,
     );
     expect(found).toBe(uuid);
+  });
+
+  it("rejects open rollout files from a different workspace", async () => {
+    if (!fs.existsSync("/proc")) return;
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-codex-proc-home-"));
+    dirs.push(home);
+    const uuid = "019e706d-9798-7161-b54a-e827a3b6ff64";
+    const rolloutFile = path.join(
+      home,
+      ".codex",
+      "sessions",
+      "2026",
+      "05",
+      "28",
+      `rollout-2026-05-28T21-11-30-${uuid}.jsonl`,
+    );
+    writeRollout(rolloutFile, [
+      {
+        timestamp: "2026-05-28T21:11:30.123Z",
+        type: "session_meta",
+        payload: { id: uuid, cwd: "/tmp/other-ws", timestamp: "2026-05-28T21:11:30.123Z" },
+      },
+    ]);
+
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        "const fs = require('node:fs'); fs.openSync(process.argv[1], 'r'); setInterval(() => {}, 1000);",
+        rolloutFile,
+      ],
+      { stdio: "ignore" },
+    );
+    children.push(child);
+    expect(child.pid).toBeTypeOf("number");
+
+    const found = await waitFor(
+      () =>
+        child.pid
+          ? discoverCodexSessionIdFromProcess({
+              rootPid: child.pid,
+              home,
+              workspacePath: "/tmp/target-ws",
+              sessionStartedAt: "2026-05-28T21:11:29.000Z",
+            })
+          : null,
+      500,
+    );
+    expect(found).toBeNull();
   });
 });
 

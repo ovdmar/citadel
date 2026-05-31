@@ -1,12 +1,16 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import net from "node:net";
 import { tmuxPrefix } from "./index.js";
-import { listListeningTtydsInRange } from "./ttyd-discovery.js";
-import { ttydThemeArgs } from "./ttyd-theme.js";
-import type { TtydTheme } from "./ttyd-theme.js";
-
-export { discoverExistingTtyds } from "./ttyd-discovery.js";
+import {
+  killStaleTtydInRange,
+  listListeningPortsInRange,
+  listeningPidForPort,
+  processAlive,
+  trimSlashes,
+} from "./ttyd-process.js";
+import { type TtydTheme, ttydThemeArgs } from "./ttyd-theme.js";
 export type { TtydTheme } from "./ttyd-theme.js";
+export { discoverExistingTtyds } from "./ttyd-process.js";
 
 export type TtydEntry = {
   key: string;
@@ -701,65 +705,4 @@ async function waitForOwnedPort(port: number, pid: number, timeoutMs: number) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   return false;
-}
-
-function processAlive(pid: number): boolean {
-  if (!pid || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-function listeningPidForPort(port: number): number | null | undefined {
-  try {
-    const output = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const match = /^p(\d+)$/m.exec(output);
-    return match ? Number(match[1]) : null;
-  } catch (error) {
-    const status = (error as { status?: unknown }).status;
-    if (status === 1) return null;
-    return undefined;
-  }
-}
-
-function listListeningPortsInRange(portBase: number, portMax: number): Set<number> {
-  const ports = new Set<number>();
-  let lsofOutput = "";
-  try {
-    lsofOutput = execFileSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-  } catch {
-    return ports;
-  }
-  for (const line of lsofOutput.split("\n")) {
-    const match = /TCP .*:(\d+) \(LISTEN\)/.exec(line);
-    if (!match) continue;
-    const port = Number(match[1]);
-    if (port >= portBase && port <= portMax) ports.add(port);
-  }
-  return ports;
-}
-
-function killStaleTtydInRange(portBase: number, portMax: number) {
-  const pids = new Set(listListeningTtydsInRange(portBase, portMax).keys());
-  for (const pid of pids) {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // ignore
-    }
-  }
-  return pids.size;
-}
-
-function trimSlashes(value: string) {
-  return value.replace(/^\/+|\/+$/g, "");
 }

@@ -70,7 +70,10 @@ function makeConfig(): CitadelConfig {
   return {
     dataDir: "/tmp/fake",
     databasePath: "/tmp/fake/db",
-    providers: { github: { enabled: false, command: "gh" }, jira: { enabled: false, command: "jtk" } },
+    providers: {
+      github: { enabled: false, command: "gh" },
+      jira: { enabled: false, command: "jtk", autoTransitions: [] },
+    },
     runtimes: [{ id: "claude-code", displayName: "Claude Code", command: "claude", args: [] }],
     repoDefaults: { setupHookIds: [], teardownHookIds: [] },
     hooks: [],
@@ -217,6 +220,37 @@ describe("runAutoRecoveryTick (integration via in-memory store)", () => {
     deps.config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: [] }];
     await runAutoRecoveryTick(deps, new Date("2026-05-25T12:00:00.000Z"));
     expect(spawnCount).toBe(0);
+  });
+
+  it("uses the resolved healthy runtime when the daemon supplies one", async () => {
+    const store = makeStore();
+    seedRepoAndWorkspace(store, "ws_resolved_runtime");
+    const launches: Array<{ runtimeId: string }> = [];
+    const deps = makeDeps(store, async (input) => {
+      launches.push({ runtimeId: input.runtimeId });
+      return { id: "x" };
+    });
+    deps.resolveRuntimeId = () => "codex";
+
+    await runAutoRecoveryTick(deps, new Date("2026-05-25T12:00:00.000Z"));
+
+    expect(launches).toEqual([{ runtimeId: "codex" }]);
+  });
+
+  it("short-circuits before provider calls when no healthy automation runtime can be resolved", async () => {
+    const store = makeStore();
+    seedRepoAndWorkspace(store, "ws_no_healthy_runtime");
+    let providerCalls = 0;
+    const deps = makeDeps(store, async () => ({ id: "x" }));
+    deps.resolveRuntimeId = () => null;
+    deps.fetchVersionControl = async () => {
+      providerCalls += 1;
+      return FAILING_VC;
+    };
+
+    await runAutoRecoveryTick(deps, new Date("2026-05-25T12:00:00.000Z"));
+
+    expect(providerCalls).toBe(0);
   });
 
   it("skips workspaces with degraded provider data", async () => {

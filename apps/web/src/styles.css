@@ -16,7 +16,10 @@
  * --font-* tokens are exposed for any redesign-aware code that wants them
  * directly. */
 :root {
-  color-scheme: light dark;
+  /* Keep browser-rendered controls/system colors aligned with Citadel's
+   * default light palette. System dark mode is applied by the explicit dark
+   * rule below, not by letting native controls choose independently. */
+  color-scheme: light;
 
   /* Typography */
   --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
