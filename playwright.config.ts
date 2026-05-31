@@ -23,6 +23,9 @@ export default defineConfig({
   testDir: "e2e",
   timeout: 30_000,
   expect: { timeout: 10_000 },
+  // The suite shares one sandbox daemon/database. Keep projects serial so
+  // stateful scratchpad/config tests cannot race across browser profiles.
+  workers: 1,
   use: {
     baseURL: webBase,
     trace: "retain-on-failure",
