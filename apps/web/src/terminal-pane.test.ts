@@ -335,15 +335,6 @@ async function settle() {
   await Promise.resolve();
 }
 
-async function act(callback: () => void | Promise<void>) {
-  let result: void | Promise<void> | undefined;
-  flushSync(() => {
-    result = callback();
-  });
-  await result;
-  await settle();
-}
-
 function installLocalStorageMock() {
   const storage = new Map<string, string>();
   Object.defineProperty(window, "localStorage", {
