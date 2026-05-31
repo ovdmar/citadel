@@ -130,10 +130,10 @@ export function Stage(props: {
     }
   }, [activeSession, keepPending, props]);
 
-  // Keep a bounded LRU of TerminalPane instances alive across workspace/session
-  // switches once the user has opened them. This preserves fast returns for the
-  // most recent terminals without letting hidden xterm/WebSocket viewers grow
-  // without bound in the browser.
+  // Keep a bounded LRU of TerminalPane shells mounted across workspace/session
+  // switches once the user has opened them. Hidden panes are passed active=false
+  // so they do not keep xterm/WebSocket viewers alive and render background
+  // output on the same main thread as the active terminal input path.
   const [visitedIds, setVisitedIds] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     if (props.activeSessionId) initial.add(props.activeSessionId);
@@ -441,7 +441,7 @@ export function Stage(props: {
             key={session.id}
             className={session.id === activeSession?.session.id ? "terminal-active" : "terminal-hidden"}
           >
-            <TerminalPane session={session} />
+            <TerminalPane session={session} active={session.id === activeSession?.session.id} />
           </div>
         ))}
         {tabs.length === 0 ? (
