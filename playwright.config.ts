@@ -11,7 +11,8 @@ import { defineConfig, devices } from "@playwright/test";
 const daemonPort = process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012";
 const webPort = process.env.CITADEL_PLAYWRIGHT_WEB_PORT || "15174";
 const daemonLog = process.env.CITADEL_PLAYWRIGHT_DAEMON_LOG || "/tmp/citadel-playwright-daemon.log";
-const dataDir = process.env.CITADEL_PLAYWRIGHT_DATA_DIR || "/tmp/citadel-playwright-data";
+const dataDir =
+  process.env.CITADEL_DATA_DIR || process.env.CITADEL_PLAYWRIGHT_DATA_DIR || "/tmp/citadel-playwright-data";
 const configPath = `${dataDir}/citadel.config.json`;
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
