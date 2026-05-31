@@ -65,11 +65,16 @@ export async function launchAgentInSession(
   sessionName: string,
   runtimeBinary: string,
   argv: string[],
-  options: { timeoutMs?: number; socketName?: string | null } = {},
+  options: { timeoutMs?: number; socketName?: string | null; env?: Record<string, string | null | undefined> } = {},
 ): Promise<void> {
   if (!runtimeBinary) throw new Error("launchAgentInSession requires a runtimeBinary");
   await waitForTerminalIdle(sessionName, { timeoutMs: 1500, idleMs: 200, socketName: options.socketName ?? null });
-  const cmd = [COLOR_ENV_PREFIX, shellQuote(runtimeBinary), ...argv.map(shellQuote)].join(" ");
+  const cmd = [
+    COLOR_ENV_PREFIX,
+    ...envAssignments(options.env),
+    shellQuote(runtimeBinary),
+    ...argv.map(shellQuote),
+  ].join(" ");
   execFileSync("tmux", [...tmuxPrefix(options.socketName), "send-keys", "-t", sessionName, cmd, "Enter"], {
     stdio: "ignore",
   });
@@ -82,6 +87,17 @@ export async function launchAgentInSession(
   if (observed !== target) {
     throw new Error(`runtime_not_ready: expected ${target}, observed ${observed || "none"}`);
   }
+}
+
+function envAssignments(env: Record<string, string | null | undefined> | undefined): string[] {
+  if (!env) return [];
+  const out: string[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (value === null || value === undefined) continue;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`Invalid environment variable name: ${key}`);
+    out.push(shellQuote(`${key}=${value}`));
+  }
+  return out;
 }
 
 // One-time sweep of leftover /tmp/citadel-agent-*.{live,exit} files from the
