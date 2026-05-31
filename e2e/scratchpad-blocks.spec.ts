@@ -40,7 +40,7 @@ test.describe("scratchpad blocks", () => {
     if (testInfo.project.name === "desktop") {
       await page.getByRole("button", { name: "Show history" }).click();
       const history = page.locator(".scratchpad-history-list");
-      await expect(history.locator(".source-migrate")).toBeVisible();
+      await expect(history.locator(".source-migrate").first()).toBeVisible();
     } else {
       const list = await request.get(`${API_BASE}/api/scratchpad/history`);
       const body = (await list.json()) as { entries: Array<{ source: string }> };

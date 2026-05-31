@@ -22,9 +22,10 @@
 #
 # Safe to re-run. Talks to every daemon it can find by walking
 # /home/*/Workspace*/.citadel/dev.json + the systemd port (4010). Falls
-# back to the citadel.sqlite agent_sessions list when a daemon is
+# back to the citadel.sqlite workspace_sessions list when a daemon is
 # unreachable (best-effort — keys present in the DB are spared even if no
-# daemon is currently serving them).
+# daemon is currently serving them). Legacy pre-migration databases are read
+# from agent_sessions as a last-ditch fallback.
 #
 # Dry-run by default. Pass --apply to actually SIGTERM.
 
@@ -111,7 +112,11 @@ for db in /home/*/.local/share/citadel/citadel.sqlite; do
   while read -r key; do
     [[ -z "$key" ]] && continue
     OWNED_KEYS["$key"]=1
-  done < <(sqlite3 "$db" "SELECT id FROM agent_sessions" 2>/dev/null || true)
+  done < <(
+    sqlite3 "$db" "SELECT id FROM workspace_sessions" 2>/dev/null \
+      || sqlite3 "$db" "SELECT id FROM agent_sessions" 2>/dev/null \
+      || true
+  )
 done
 
 log "owned keys: ${#OWNED_KEYS[@]}  owned pid/port pairs: ${#OWNED_PID_PORT[@]}"

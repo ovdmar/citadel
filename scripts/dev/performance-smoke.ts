@@ -5,10 +5,13 @@ import path from "node:path";
 import { chromium } from "@playwright/test";
 import WebSocket from "ws";
 
-const apiBaseUrl = process.env.CITADEL_BASE_URL || "http://127.0.0.1:4010";
-const webBaseUrl = process.env.CITADEL_WEB_URL || apiBaseUrl;
+const defaultApiPort = process.env.CITADEL_PERFORMANCE_DAEMON_PORT || "14013";
+const defaultWebPort = process.env.CITADEL_PERFORMANCE_WEB_PORT || "15175";
+const apiBaseUrl = process.env.CITADEL_BASE_URL || `http://127.0.0.1:${defaultApiPort}`;
+const webBaseUrl = process.env.CITADEL_WEB_URL || `http://127.0.0.1:${defaultWebPort}`;
 const managedProcesses: ChildProcess[] = [];
 const managedDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-perf-runtime-"));
+const managedTmuxSocket = `citadel-perf-${process.pid}`;
 
 await ensureLocalServices();
 
@@ -93,6 +96,7 @@ async function ensureLocalServices() {
   const externalApi = Boolean(process.env.CITADEL_BASE_URL);
   const externalWeb = Boolean(process.env.CITADEL_WEB_URL);
   if (!externalApi && !(await canFetch(`${apiBaseUrl}/api/health`))) {
+    const apiPort = new URL(apiBaseUrl).port || defaultApiPort;
     managedProcesses.push(
       spawn("pnpm", ["--filter", "@citadel/daemon", "dev"], {
         cwd: process.cwd(),
@@ -100,15 +104,35 @@ async function ensureLocalServices() {
           ...process.env,
           CITADEL_DATA_DIR: managedDataDir,
           CITADEL_CONFIG: path.join(managedDataDir, "citadel.config.json"),
+          CITADEL_PORT: apiPort,
+          CITADEL_BIND_HOST: "127.0.0.1",
+          CITADEL_TMUX_SOCKET: managedTmuxSocket,
+          CITADEL_OWN_TMUX_SOCKET: "1",
+          CITADEL_DISABLE_BOOT_RESTORE: "1",
+          CITADEL_DISABLE_REAPER: "1",
+          CITADEL_DISABLE_STATUS_MONITOR: "1",
+          CITADEL_DISABLE_SCHEDULER: "1",
+          CITADEL_AUTO_RECOVERY_DISABLED: "1",
+          CITADEL_DISABLE_AUTO_RESUME: "1",
+          CITADEL_DISABLE_FS_WATCHERS: "1",
+          CITADEL_DISABLE_TERMINAL_REAPER: "1",
+          CITADEL_GH_SCHEDULER_DISABLED: "1",
+          CITADEL_MAIN_WATCHER_DISABLED: "1",
         },
         stdio: "ignore",
       }),
     );
   }
   if (!externalWeb && !(await canFetch(webBaseUrl))) {
+    const webPort = new URL(webBaseUrl).port || defaultWebPort;
     managedProcesses.push(
-      spawn("pnpm", ["--filter", "@citadel/web", "dev", "--", "--host", "127.0.0.1", "--port", "5173"], {
+      spawn("pnpm", ["--filter", "@citadel/web", "dev", "--", "--host", "127.0.0.1", "--port", webPort], {
         cwd: process.cwd(),
+        env: {
+          ...process.env,
+          CITADEL_DAEMON_URL: apiBaseUrl,
+          CITADEL_WEB_PORT: webPort,
+        },
         stdio: "ignore",
       }),
     );
@@ -169,10 +193,10 @@ async function createWorkspace(repoId: string, name: string) {
 }
 
 async function startSession(workspaceId: string, displayName: string) {
-  const response = await fetch(`${apiBaseUrl}/api/agent-sessions`, {
+  const response = await fetch(`${apiBaseUrl}/api/workspaces/${workspaceId}/terminal-sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ workspaceId, runtimeId: "shell", displayName }),
+    body: JSON.stringify({ displayName }),
   });
   if (!response.ok) throw new Error(`session create returned ${response.status}`);
   return ((await response.json()) as { session: { id: string } }).session;

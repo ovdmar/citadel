@@ -137,7 +137,7 @@ export async function createAgentSession(
       //
       // Tune the cold-start budget by runtime kind. Interactive TUIs (Claude
       // Code with MCP servers connecting, Codex) routinely take 8–15 s before
-      // they're ready to accept input. Shell runtimes paint a prompt in
+      // they're ready to accept input. Shell-like custom runtimes paint a prompt in
       // milliseconds and `read` is ready instantly; using the TUI budget there
       // makes every test session sit waiting for a 1 s silence threshold that
       // doesn't apply.

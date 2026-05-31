@@ -58,13 +58,13 @@ describe("buildStatusMonitorDeps — shell-first wiring", () => {
       makeConfig([
         { id: "claude-code", command: "claude" },
         { id: "codex", command: "codex" },
-        { id: "shell", command: "bash" },
+        { id: "bash-debug", command: "bash" },
       ]),
       recent,
     );
     expect(deps.runtimeBinaryFor("claude-code")).toBe("claude");
     expect(deps.runtimeBinaryFor("codex")).toBe("codex");
-    expect(deps.runtimeBinaryFor("shell")).toBe("bash");
+    expect(deps.runtimeBinaryFor("bash-debug")).toBe("bash");
     expect(deps.runtimeBinaryFor("unknown-runtime")).toBeNull();
   });
 

@@ -107,7 +107,7 @@ e2e:
 	pnpm e2e
 
 smoke:
-	pnpm smoke
+	CITADEL_BASE_URL="$${CITADEL_BASE_URL:-http://127.0.0.1:$(EFFECTIVE_PORT)}" pnpm smoke
 
 performance:
 	pnpm performance

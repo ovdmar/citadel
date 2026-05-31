@@ -113,8 +113,8 @@ describe("namespace operations", () => {
     const created = await service.createWorkspace({ repoId: repo.id, name: "ws-x", source: "scratch" });
     expect(store.listWorkspaces().find((entry) => entry.id === created.workspaceId)?.namespaceId).toBeNull();
     const session = await service.createAgentSession(
-      { workspaceId: created.workspaceId, runtimeId: "shell", namespaceId: namespace.id },
-      { command: "bash", args: ["-l"], displayName: "Shell" },
+      { workspaceId: created.workspaceId, runtimeId: "test-agent", namespaceId: namespace.id },
+      { command: "bash", args: ["-l"], displayName: "Test Agent" },
     );
     try {
       expect(session.workspaceId).toBe(created.workspaceId);

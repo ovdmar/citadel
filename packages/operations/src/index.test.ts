@@ -451,8 +451,8 @@ describe("OperationService", () => {
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "stop-target", source: "scratch" });
     const session = await service.createAgentSession(
-      { workspaceId: created.workspaceId, runtimeId: "shell" },
-      { command: "bash", args: ["-l"], displayName: "Shell" },
+      { workspaceId: created.workspaceId, runtimeId: "test-agent" },
+      { command: "bash", args: ["-l"], displayName: "Test Agent" },
     );
     expect(session.status).toBe("running");
     const result = service.stopAgentSession({ sessionId: session.id });
@@ -561,8 +561,8 @@ describe("OperationService", () => {
       source: "scratch",
     });
     const session = await service.createAgentSession(
-      { workspaceId: created.workspaceId, runtimeId: "shell" },
-      { command: "bash", args: ["-l"], displayName: "Shell" },
+      { workspaceId: created.workspaceId, runtimeId: "test-agent" },
+      { command: "bash", args: ["-l"], displayName: "Test Agent" },
     );
     // Kill the underlying tmux session out-of-band and remove the repo from disk.
     if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
@@ -577,13 +577,13 @@ describe("OperationService", () => {
   // Shell-first replacement of the legacy "reconcile flips to stopped" test.
   // The legacy assertion was: wrapper-`.live` sentinel removed → reconcile
   // flips status='stopped'. New behavior (shell-first lifecycle): the
-  // pane's foreground command IS the source of truth. For a `shell`
-  // runtime session, the pane PID is bash itself (no separate agent); the
-  // reconciler leaves it alone because the shell IS the runtime. The
+  // pane's foreground command IS the source of truth. For a shell-like custom
+  // agent runtime, the pane PID is bash itself (no separate agent); the
+  // reconciler leaves it alone because bash IS the runtime command. The
   // operator-visible "stopped" state is reserved for explicit Stop button
   // presses (which delete the row entirely). The new regression-pin tests
-  // for non-shell agent runtimes live in status-monitor.test.ts.
-  it("reconcile no longer mass-flips shell-runtime sessions to 'stopped' (shell-first invariant)", async () => {
+  // for non-shell-like agent runtimes live in status-monitor.test.ts.
+  it("reconcile no longer mass-flips shell-like custom agent runtimes to 'stopped'", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
@@ -595,8 +595,8 @@ describe("OperationService", () => {
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "agent-exit-target", source: "scratch" });
     const session = await service.createAgentSession(
-      { workspaceId: created.workspaceId, runtimeId: "shell" },
-      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+      { workspaceId: created.workspaceId, runtimeId: "test-agent" },
+      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Test Agent" },
     );
 
     try {
@@ -604,15 +604,15 @@ describe("OperationService", () => {
       const sessionName = session.tmuxSessionName as string;
       // Legacy sentinel removal is now a no-op — the wrapper is gone and
       // reconcile doesn't read /tmp sentinels at all (it reads the pane's
-      // foreground command via tmux). For a shell runtime session, the
-      // pane foreground IS bash, which is the runtime binary — reconcile
+      // foreground command via tmux). For a shell-like custom agent runtime,
+      // the pane foreground IS bash, which is the runtime binary — reconcile
       // leaves it alone.
       fs.rmSync(agentLiveSentinelPath(sessionName), { force: true });
 
       service.reconcile();
 
       const reconciled = store.listSessions().find((candidate) => candidate.id === session.id);
-      // Shell-runtime session: status preserved (NOT flipped to stopped).
+      // Shell-like custom agent runtime: status preserved (NOT flipped to stopped).
       expect(reconciled?.status).not.toBe("stopped");
       // Pane is still alive — the user can keep working in the shell.
       expect(tmuxSessionExists(sessionName)).toBe(true);
@@ -687,8 +687,8 @@ describe("OperationService", () => {
     const repo = service.registerRepo({ rootPath: fixture.repoPath, name: "launch-fixture" });
 
     const result = await service.launchAgent(
-      { repoName: "launch-fixture", prompt: "describe the repo in one sentence", runtimeId: "shell" },
-      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+      { repoName: "launch-fixture", prompt: "describe the repo in one sentence", runtimeId: "test-agent" },
+      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Test Agent" },
     );
     const session = store.listSessions().find((candidate) => candidate.id === result.sessionId);
     if (session?.tmuxSessionName) tmuxSessions.push(session.tmuxSessionName);
@@ -703,7 +703,7 @@ describe("OperationService", () => {
     expect(workspace?.lifecycle).toBe("ready");
     expect(workspace?.source).toBe("scratch");
     expect(workspace?.repoId).toBe(repo.id);
-    expect(session?.runtimeId).toBe("shell");
+    expect(session?.runtimeId).toBe("test-agent");
     expect(session?.workspaceId).toBe(result.workspaceId);
     // Display name is derived from the prompt's first ~40 chars when caller didn't pass one.
     expect(session?.displayName).toBe("describe the repo in one sentence");
@@ -725,12 +725,12 @@ describe("OperationService", () => {
       {
         repoId: repo.id,
         prompt: "investigate the failing build",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         namespaceId: namespace.id,
         workspaceName: "investigate-build",
         displayName: "Build Triage",
       },
-      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Test Agent" },
     );
     const session = store.listSessions().find((candidate) => candidate.id === result.sessionId);
     if (session?.tmuxSessionName) tmuxSessions.push(session.tmuxSessionName);
@@ -755,8 +755,8 @@ describe("OperationService", () => {
 
     await expect(
       service.launchAgent(
-        { repoName: "does-not-exist", prompt: "x", runtimeId: "shell" },
-        { command: "bash", args: [], displayName: "Shell" },
+        { repoName: "does-not-exist", prompt: "x", runtimeId: "test-agent" },
+        { command: "bash", args: [], displayName: "Test Agent" },
       ),
     ).rejects.toThrow(/Unknown repo/);
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);

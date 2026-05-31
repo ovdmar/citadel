@@ -1,5 +1,5 @@
 // Restore lost agent conversations. Sources its candidate list from the DB —
-// every agent_sessions row whose runtime emitted a UUID (claude-code via
+// every workspace_sessions row whose runtime emitted a UUID (claude-code via
 // --session-id, codex via discoverCodexSessionId, or backfilled from a
 // transcript scan) is potentially resumable. We surface as candidates the
 // workspaces whose most-recent session is stopped + has a recorded UUID,

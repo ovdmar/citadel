@@ -16,6 +16,9 @@ const dataDir =
   process.env.CITADEL_PLAYWRIGHT_DATA_DIR ||
   (process.env.CITADEL_TEST_ISOLATED === "1" ? process.env.CITADEL_DATA_DIR : undefined) ||
   "/tmp/citadel-playwright-data";
+const configPath =
+  process.env.CITADEL_PLAYWRIGHT_CONFIG ||
+  `${dataDir.replace(/\/+$/, "") || "/tmp/citadel-playwright-data"}/citadel.config.json`;
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
 const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}`).replace(
@@ -28,6 +31,10 @@ export default defineConfig({
   testDir: "e2e",
   timeout: 30_000,
   expect: { timeout: 10_000 },
+  // The suite intentionally runs one daemon for every project. Several specs
+  // exercise global notes/scratchpad state, so running projects concurrently
+  // creates false failures from cross-project writes.
+  workers: 1,
   use: {
     baseURL: webBase,
     trace: "retain-on-failure",
@@ -53,6 +60,7 @@ export default defineConfig({
       // orphans and kill the user's live terminals.
       command: [
         `CITADEL_DATA_DIR=${shellEnvValue(dataDir)}`,
+        `CITADEL_CONFIG=${shellEnvValue(configPath)}`,
         `CITADEL_PORT=${daemonPort}`,
         `CITADEL_TMUX_SOCKET=${tmuxSocket}`,
         "CITADEL_OWN_TMUX_SOCKET=1",

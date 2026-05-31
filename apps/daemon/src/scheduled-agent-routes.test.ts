@@ -49,7 +49,7 @@ describe("scheduled agent routes", () => {
           name: "Daily sweep",
           cron: "0 9 * * *",
           repoId: "repo_sched",
-          runtimeId: "shell",
+          runtimeId: "test-agent",
           workspaceStrategy: "existing",
           workspaceName: "sched-target",
         },
@@ -63,7 +63,7 @@ describe("scheduled agent routes", () => {
           name: "Bad",
           cron: "not-cron",
           repoId: "repo_sched",
-          runtimeId: "shell",
+          runtimeId: "test-agent",
           workspaceStrategy: "new",
           workspaceName: "bad",
         }),
@@ -100,7 +100,7 @@ describe("scheduled agent routes", () => {
         name: "Inflight delete",
         cron: "0 9 * * *",
         repoId: "repo_sched",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "existing",
         workspaceName: "sched-target",
       });
@@ -153,7 +153,7 @@ describe("scheduled agent routes", () => {
         name: "Runs",
         cron: "0 9 * * *",
         repoId: "repo_runs",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "existing",
         workspaceName: "runs-target",
       });
@@ -237,7 +237,7 @@ describe("scheduled agent routes", () => {
         name: "Skip envelope",
         cron: "0 9 * * *",
         repoId: "repo_run_envelope",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "existing",
         workspaceName: "skip-env",
         overlapPolicy: "skip",
@@ -266,7 +266,7 @@ describe("scheduled agent routes", () => {
         name: "Queue envelope",
         cron: "0 9 * * *",
         repoId: "repo_run_envelope",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "existing",
         workspaceName: "queue-env",
         overlapPolicy: "queue",
@@ -335,7 +335,7 @@ describe("scheduled agent routes", () => {
         name: "Q",
         cron: "0 9 * * *",
         repoId: "repo_q",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "existing",
         workspaceName: "q",
       });
@@ -366,7 +366,7 @@ function createFixture() {
     github: { enabled: false, command: "gh" },
     jira: { enabled: false, command: "jtk" },
   };
-  config.agentRuntimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
+  config.agentRuntimes = [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: ["-l"] }];
   const store = new SqliteStore(config.databasePath);
   store.migrate();
   return { config, configPath, store };

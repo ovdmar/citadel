@@ -89,7 +89,7 @@ describe("contract schemas", () => {
       updatedAt: timestamp,
     });
     expect(terminal.kind).toBe("terminal");
-    expect(WorkspaceSessionSchema.safeParse({ ...terminal, runtimeId: "shell" }).success).toBe(false);
+    expect(WorkspaceSessionSchema.safeParse({ ...terminal, runtimeId: "codex" }).success).toBe(false);
   });
 
   it("validates command inputs and provider/status contracts", () => {

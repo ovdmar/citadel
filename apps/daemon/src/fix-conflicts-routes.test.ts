@@ -78,7 +78,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
     // a script argument instead of a node option, so the fake agent stays
     // alive until test cleanup.
     fixture.config.agentRuntimes = [
-      { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
+      { id: "bash-debug", displayName: "Bash Debug", command: "bash", args: ["-l"] },
       {
         id: "claude-code",
         displayName: "Claude Code",
@@ -173,7 +173,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
     // agent TUI when promptArg is absent.
     const fixture = createFixture();
     fixture.config.agentRuntimes = [
-      { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
+      { id: "bash-debug", displayName: "Bash Debug", command: "bash", args: ["-l"] },
       // Mirror the real built-in: no promptArg. The raw-mode node process is
       // a non-shell stdin consumer that echoes bytes as they arrive, so
       // submitPrompt can verify the multiline paste without bash executing it.
@@ -237,13 +237,13 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
     }
   }, 30_000);
 
-  it("returns 404 runtime_not_found when the only configured runtime is shell", async () => {
+  it("returns 404 runtime_not_found when the only configured runtime is shell-like", async () => {
     const fixture = createFixture();
     const git = createGitRepo(fixture.config.dataDir);
     const now = new Date().toISOString();
     fixture.store.insertRepo({
       id: "repo_shell",
-      name: "Shell Repo",
+      name: "Bash Debug Repo",
       rootPath: git.repoPath,
       defaultBranch: "main",
       defaultRemote: "origin",
@@ -259,7 +259,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
     fixture.store.insertWorkspace({
       id: "ws_shell",
       repoId: "repo_shell",
-      name: "Shell Workspace",
+      name: "Bash Debug Workspace",
       path: git.repoPath,
       branch: "feature",
       baseBranch: "main",
@@ -279,7 +279,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    // createFixture defaults to a shell-only runtime list. Without a
+    // createFixture defaults to a shell-like test runtime list. Without a
     // non-shell runtime, fix-conflicts must refuse so the multi-line prompt
     // doesn't get pasted into a bash pane and executed as commands.
     const { server } = createDaemonApp(fixture);
@@ -298,12 +298,12 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
     }
   });
 
-  it("returns 400 runtime_must_be_agent when the request explicitly asks for the shell runtime", async () => {
+  it("returns 400 runtime_must_be_agent when the request explicitly asks for a shell-like runtime", async () => {
     const fixture = createFixture();
     const git = createGitRepo(fixture.config.dataDir);
     const now = new Date().toISOString();
     fixture.config.agentRuntimes = [
-      { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
+      { id: "bash-debug", displayName: "Bash Debug", command: "bash", args: ["-l"] },
       { id: "claude-code", displayName: "Claude Code", command: "echo", args: [] },
     ];
     fixture.store.insertRepo({
@@ -350,7 +350,7 @@ describe("POST /api/workspaces/:id/fix-conflicts", () => {
       const response = await fetch(`${baseUrl}/api/workspaces/ws_shellexp/fix-conflicts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ runtimeId: "shell" }),
+        body: JSON.stringify({ runtimeId: "bash-debug" }),
       });
       expect(response.status).toBe(400);
       const body = (await response.json()) as { error: string };

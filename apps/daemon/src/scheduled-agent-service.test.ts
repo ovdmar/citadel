@@ -23,7 +23,7 @@ describe("ScheduledAgentService", () => {
       name: "Daily",
       cron: "0 9 * * *",
       repoId: repo.id,
-      runtimeId: "shell",
+      runtimeId: "test-agent",
       workspaceStrategy: "existing",
       workspaceName: "daily",
     });
@@ -49,7 +49,7 @@ describe("ScheduledAgentService", () => {
     const repo = createRepo();
 
     const deps = {
-      config: { agentRuntimes: [{ id: "shell", displayName: "Shell", command: "bash", args: [] }] } as never,
+      config: { agentRuntimes: [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: [] }] } as never,
       store,
       operations: {} as never,
       ttyd: {} as never,
@@ -65,7 +65,7 @@ describe("ScheduledAgentService", () => {
         name: "From MCP",
         cron: "0 9 * * *",
         repoId: repo.id,
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "existing",
         workspaceName: "mcp",
       },
@@ -91,7 +91,7 @@ describe("ScheduledAgentService", () => {
     const repo = createRepo();
 
     const deps = {
-      config: { agentRuntimes: [{ id: "shell", displayName: "Shell", command: "bash", args: [] }] } as never,
+      config: { agentRuntimes: [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: [] }] } as never,
       store,
       operations: {} as never,
       ttyd: {} as never,
@@ -107,7 +107,7 @@ describe("ScheduledAgentService", () => {
         name: "MCP runs",
         cron: "0 9 * * *",
         repoId: repo.id,
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "existing",
         workspaceName: "mcp-runs",
       },
@@ -158,7 +158,7 @@ describe("ScheduledAgentService", () => {
     const { service, runner, store } = createService();
     const repo = createRepo();
     const deps = {
-      config: { agentRuntimes: [{ id: "shell", displayName: "Shell", command: "bash", args: [] }] } as never,
+      config: { agentRuntimes: [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: [] }] } as never,
       store,
       operations: {} as never,
       ttyd: {} as never,
@@ -180,7 +180,7 @@ describe("ScheduledAgentService", () => {
         name: "MCP skip",
         cron: "0 9 * * *",
         repoId: repo.id,
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "existing",
         workspaceName: "mcp-skip",
         overlapPolicy: "skip",
@@ -212,7 +212,7 @@ describe("ScheduledAgentService", () => {
         name: "MCP queue",
         cron: "0 9 * * *",
         repoId: repo.id,
-        runtimeId: "shell",
+        runtimeId: "test-agent",
         workspaceStrategy: "existing",
         workspaceName: "mcp-queue",
         overlapPolicy: "queue",
@@ -271,7 +271,7 @@ function createService() {
   const runner = new ScheduledAgentRunner({
     store,
     operations,
-    getRuntime: () => ({ id: "shell", displayName: "Shell", command: "bash", args: [] }),
+    getRuntime: () => ({ id: "test-agent", displayName: "Test Agent", command: "bash", args: [] }),
     dataDir: dir,
   });
   const service = new ScheduledAgentService(runner, (type, payload) => {

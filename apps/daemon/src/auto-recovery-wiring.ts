@@ -112,11 +112,15 @@ export function resolveAutoRecoveryRuntimeId(
   const ordered = uniqueRuntimeIds([configured.runtimeId, configured.fallbackRuntimeId]);
   const healthById = new Map(runtimeHealth.map((runtime) => [runtime.id, runtime]));
   for (const id of ordered) {
-    if (id === "shell") continue;
     const runtime = healthById.get(id);
-    if (runtime?.health === "healthy") return id;
+    if (runtime?.health === "healthy" && !isShellCommand(runtime.command)) return id;
   }
   return null;
+}
+
+function isShellCommand(command: string): boolean {
+  const binary = command.split(/[\\/]/).pop() ?? command;
+  return ["bash", "sh", "zsh", "fish"].includes(binary);
 }
 
 function uniqueRuntimeIds(ids: Array<string | null | undefined>): string[] {

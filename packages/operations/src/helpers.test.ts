@@ -132,7 +132,7 @@ function createFixture() {
     cron: "0 9 * * *",
     runAt: null,
     repoId: "repo_x",
-    runtimeId: "shell",
+    runtimeId: "test-agent",
     prompt: null,
     workspaceStrategy: "new",
     workspaceName: "x",

@@ -124,13 +124,13 @@ changed something in the cockpit if the cockpit has nothing to render.
 The seed is a checked-in, fully synthetic fixture (under `seeds/` in this
 repo): a tiny mock git repo and a small set of `INSERT`s. It is intentionally
 **not** sourced from the systemd long-term daemon's data — that would copy
-live `agent_sessions` rows that reference real tmux sessions, and the
+live `workspace_sessions` rows that reference real tmux sessions, and the
 worktree daemon booted on top would race the live daemon for ownership of
 those sessions, breaking the live cockpit.
 
 | Command | What it does |
 |---|---|
-| `make seed` | Materializes `<checkout>/.citadel/mock-repo/` (a git repo with two `feature/*` worktrees under `mock-worktrees/`) and inserts fixture rows into `<checkout>/.citadel/data/citadel.sqlite`: 1 namespace, 1 repo, 2 workspaces (one with a PR snapshot + Jira issue), 10 activity events, and a 3-block scratchpad. Idempotent. Touches **only** safe-to-seed tables — never `agent_sessions`, `background_sessions`, `operations`, or `scheduled_agents`. |
+| `make seed` | Materializes `<checkout>/.citadel/mock-repo/` (a git repo with two `feature/*` worktrees under `mock-worktrees/`) and inserts fixture rows into `<checkout>/.citadel/data/citadel.sqlite`: 1 namespace, 1 repo, 2 workspaces (one with a PR snapshot + Jira issue), 10 activity events, and a 3-block scratchpad. Idempotent. Touches **only** safe-to-seed tables — never `workspace_sessions`, `background_sessions`, `operations`, or `scheduled_agents`. |
 | `make seed-reset` | Stops this worktree's dev stack, removes the SQLite + mock repo + mock worktrees, and re-seeds from scratch. Use for a clean QA baseline. |
 
 `make deploy` auto-runs `make seed` if neither the mock repo nor the SQLite
@@ -149,7 +149,7 @@ make seed-reset && make deploy   # back to a clean QA baseline
 
 **What's NOT seeded, and why:**
 
-- No `agent_sessions` / `background_sessions` rows — those carry tmux
+- No `workspace_sessions` / `background_sessions` rows — those carry tmux
   session names that the daemon will try to attach to at boot, and any
   collision with the systemd long-term daemon's sessions would steal them
   away from the live cockpit.
