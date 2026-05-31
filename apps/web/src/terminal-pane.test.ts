@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
 import type { AgentSession } from "@citadel/contracts";
-import { act, createElement } from "react";
+import { createElement } from "react";
+import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -130,10 +131,8 @@ beforeEach(() => {
   });
 });
 
-afterEach(async () => {
-  await act(async () => {
-    for (const root of roots.splice(0)) root.unmount();
-  });
+afterEach(() => {
+  for (const root of roots.splice(0)) flushSync(() => root.unmount());
   vi.restoreAllMocks();
 });
 
@@ -180,7 +179,8 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const term = xtermMocks.FakeTerminal.instances[0];
     if (!ws || !term) throw new Error("terminal rig missing");
 
-    await act(async () => ws.open());
+    flushSync(() => ws.open());
+    await settle();
     ws.message(new TextEncoder().encode("snapshot").buffer);
     ws.message(new TextEncoder().encode("-chunk").buffer);
     term.emitData("abc");
@@ -196,7 +196,8 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const term = xtermMocks.FakeTerminal.instances[0];
     if (!ws || !term) throw new Error("terminal rig missing");
 
-    await act(async () => ws.open());
+    flushSync(() => ws.open());
+    await settle();
     term.emitData("\u0003");
     const commandPalette = term.emitKey(
       new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true, cancelable: true }),
@@ -221,7 +222,8 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const host = document.querySelector(".terminal-xterm-host");
     if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
 
-    await act(async () => ws.open());
+    flushSync(() => ws.open());
+    await settle();
     const event = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true });
     const downstream = vi.fn();
     host.addEventListener("keydown", downstream);
@@ -238,10 +240,8 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     await renderTerminal();
     expect(FakeWebSocket.instances).toHaveLength(1);
 
-    await act(async () => {
-      applyThemePreference("light");
-      await settle();
-    });
+    flushSync(() => applyThemePreference("light"));
+    await settle();
 
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
@@ -251,7 +251,8 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const ws = FakeWebSocket.instances[0];
     if (!ws) throw new Error("missing ws");
 
-    await act(async () => ws.closeFromServer(1006, "lost"));
+    flushSync(() => ws.closeFromServer(1006, "lost"));
+    await settle();
 
     expect(document.body.textContent).toContain("terminal_disconnected");
     expect(document.body.textContent).toContain("lost");
@@ -280,10 +281,8 @@ async function renderTerminal() {
   document.body.appendChild(rootElement);
   const root = createRoot(rootElement);
   roots.push(root);
-  await act(async () => {
-    root.render(createElement(TerminalPane, { session: sessionFixture() }));
-    await settle();
-  });
+  flushSync(() => root.render(createElement(TerminalPane, { session: sessionFixture() })));
+  await settle();
   return root;
 }
 
