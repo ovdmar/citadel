@@ -15,6 +15,7 @@ import {
   RemoteRefMissingError,
   WorkspaceNameTakenError,
   addWorktree,
+  branchRefExists,
   classifyWorktreeError,
   isUniqueWorkspaceNameViolation,
   isUniqueWorkspacePathViolation,
@@ -106,6 +107,7 @@ export async function createWorkspaceImpl(
   const wantsGenerated = callerName.length === 0;
   let workspace: Workspace | null = null;
   let lastTriedName = callerName;
+  let lastTriedBranch = "";
   let branch = "";
   let workspacePath = "";
   const maxAttempts = wantsGenerated ? 6 : 25;
@@ -114,6 +116,8 @@ export async function createWorkspaceImpl(
     const candidate = workspaceNameForAttempt(callerName, wantsGenerated, attempt);
     lastTriedName = candidate;
     branch = resolveWorkspaceBranch(input, newBranch, candidate, attempt, initialBranch);
+    lastTriedBranch = branch;
+    if (!existingBranch && branchRefExists(repo.rootPath, repo.defaultRemote, branch)) continue;
     workspacePath = path.join(repo.worktreeParent, branch);
     const draft: Workspace = {
       id: createId("ws"),
@@ -158,7 +162,13 @@ export async function createWorkspaceImpl(
     }
   }
   if (!workspace) {
-    // Defensive — the loop above either inserts or throws; this is unreachable.
+    deps.store.upsertOperation({
+      ...operation,
+      status: "failed",
+      progress: 100,
+      error: `workspace_branch_taken: ${lastTriedBranch}`,
+      updatedAt: nowIso(),
+    });
     throw new WorkspaceNameTakenError(repo.id, lastTriedName);
   }
   deps.logOp(
