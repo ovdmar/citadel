@@ -68,7 +68,7 @@ describe("createAgentSession session-id wiring", () => {
     }
   }, 15_000);
 
-  it("leaves runtimeSessionId null for runtimes without sessionIdArg (e.g. plain shell)", async () => {
+  it("leaves runtimeSessionId null for agent runtimes without sessionIdArg", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
@@ -76,14 +76,38 @@ describe("createAgentSession session-id wiring", () => {
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "sid-none", source: "scratch" });
 
+    const scriptPath = writeLongRunningNodeScript(fixture.dir, "sid-none-runtime.js");
     const session = await service.createAgentSession(
-      { workspaceId: created.workspaceId, runtimeId: "shell" },
-      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+      { workspaceId: created.workspaceId, runtimeId: "test-agent" },
+      { command: "node", args: [scriptPath], displayName: "Test Agent" },
     );
     try {
       expect(session.runtimeSessionId ?? null).toBeNull();
     } finally {
       service.stopAgentSession({ sessionId: session.id });
+    }
+  }, 15_000);
+
+  it("creates terminal sessions through the terminal profile without firing agent hooks", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = makeService(store);
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "terminal-create", source: "scratch" });
+
+    const session = await service.createTerminalSession({ workspaceId: created.workspaceId });
+    try {
+      expect(session.kind).toBe("terminal");
+      expect(session.runtimeId).toBeNull();
+      expect(store.listWorkspaceSessions(created.workspaceId).find((s) => s.id === session.id)).toMatchObject({
+        kind: "terminal",
+        runtimeId: null,
+      });
+      expect(store.listActivity(created.workspaceId).find((event) => event.type === "terminal.started")).toBeDefined();
+      expect(store.listActivity(created.workspaceId).find((event) => event.type === "agent.started")).toBeUndefined();
+    } finally {
+      service.stopWorkspaceSession({ sessionId: session.id });
     }
   }, 15_000);
 

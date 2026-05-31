@@ -322,7 +322,7 @@ export async function runStatusMonitorTick(
         reason: opts.source === "boot" ? "daemon_restart_indeterminate" : "tmux_missing",
       });
       monitorState.consecutiveShellTicks = 0;
-    } else if (pane && SHELL_BINARIES.has(pane.command) && session.runtimeId !== "shell") {
+    } else if (pane && SHELL_BINARIES.has(pane.command)) {
       if (activeElapsedTimer?.advanced) {
         monitorState.consecutiveShellTicks = 0;
         signals.push({ type: "pane_observation", observed: "running", reason: REASON_ELAPSED_TIMER });
@@ -338,7 +338,7 @@ export async function runStatusMonitorTick(
         }
       }
     } else {
-      // Agent foreground (or shell runtime with any tmux-alive). Reset the
+      // Agent foreground. Reset the
       // debounce counter so a future running→idle transition starts fresh.
       monitorState.consecutiveShellTicks = 0;
       if (activityChanged && tmuxActivityMs !== null) {

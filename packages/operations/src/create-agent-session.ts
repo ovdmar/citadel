@@ -1,5 +1,14 @@
 import { randomUUID } from "node:crypto";
-import type { ActivityEvent, AgentSession, CreateAgentSessionInput, Repo, Workspace } from "@citadel/contracts";
+import type {
+  ActivityEvent,
+  AgentSession,
+  CreateAgentSessionInput,
+  CreateTerminalSessionInput,
+  Repo,
+  TerminalProfile,
+  Workspace,
+  WorkspaceSession,
+} from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { discoverCodexSessionId } from "@citadel/runtimes";
@@ -35,6 +44,7 @@ export type RuntimeDescriptor = {
 
 export type CreateAgentSessionDeps = {
   store: SqliteStore;
+  terminal?: TerminalProfile | undefined;
   activity: (
     type: string,
     source: ActivityEvent["source"],
@@ -51,6 +61,8 @@ export type CreateAgentSessionDeps = {
     payload: { repo: Repo; workspace: Workspace; session: AgentSession },
   ) => Promise<void>;
 };
+
+const DEFAULT_TERMINAL_PROFILE: TerminalProfile = { displayName: "Terminal", command: "bash", args: ["-l"] };
 
 export async function createAgentSession(
   deps: CreateAgentSessionDeps,
@@ -100,15 +112,14 @@ export async function createAgentSession(
   //  3) submitPrompt (only when an initial prompt is provided) → paste +
   //     Enter into the runtime's TUI input.
   //
-  // For the `shell` runtime, step 2 is a no-op — the shell IS the runtime
-  // and is already foreground; calling launchAgentInSession with "bash"
-  // would re-launch bash inside the existing bash. Skip it.
-  const isShellRuntime = ["bash", "sh", "zsh", "fish"].includes(runtime.command);
+  // Shell-like commands are useful in tests and custom debugging runtimes.
+  // Skip re-launching a shell inside the terminal profile shell.
+  const isShellLikeCommand = ["bash", "sh", "zsh", "fish"].includes(runtime.command);
   let tmux: Awaited<ReturnType<typeof ensureTmuxSession>>;
   let runtimeLaunchStartedMs: number | null = null;
   try {
-    tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path });
-    if (!isShellRuntime) {
+    tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path, terminal: deps.terminal ?? DEFAULT_TERMINAL_PROFILE });
+    if (!isShellLikeCommand) {
       runtimeLaunchStartedMs =
         input.runtimeId === "codex"
           ? await withCodexLaunchLock(() => launchCodexWithRetry(sessionName, runtime.command, runtimeArgs))
@@ -128,7 +139,7 @@ export async function createAgentSession(
       // doesn't apply.
       const runtimeBinaryTruncated = runtime.command.slice(0, COMM_TRUNCATION);
       const submitted = await submitPrompt(sessionName, promptForKeys, {
-        ...(isShellRuntime
+        ...(isShellLikeCommand
           ? { waitForReadyMs: 1500, submitDelayMs: 800 }
           : {
               waitForReadyMs: 15000,
@@ -149,6 +160,7 @@ export async function createAgentSession(
   }
   const session: AgentSession = {
     id: createId("sess"),
+    kind: "agent",
     workspaceId: workspace.id,
     runtimeId: input.runtimeId,
     displayName: input.displayName || runtime.displayName,
@@ -210,6 +222,57 @@ export async function createAgentSession(
   );
   const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
   if (repo) await deps.runNotificationHooks("agent.started", repo, workspace, null, { repo, workspace, session });
+  return session;
+}
+
+export async function createTerminalSession(
+  deps: Pick<CreateAgentSessionDeps, "store" | "activity" | "terminal">,
+  input: CreateTerminalSessionInput,
+  options: { activitySource?: ActivityEvent["source"] } = {},
+): Promise<WorkspaceSession> {
+  const { store } = deps;
+  const workspace = store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+  if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+  const now = nowIso();
+  const terminal = deps.terminal ?? DEFAULT_TERMINAL_PROFILE;
+  const sessionName = `citadel_${workspace.id}_${createId("term").slice(-8)}`;
+  let tmux: Awaited<ReturnType<typeof ensureTmuxSession>>;
+  try {
+    tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path, terminal });
+  } catch (error) {
+    killTmuxSession(sessionName);
+    throw error;
+  }
+  const session: WorkspaceSession = {
+    id: createId("sess"),
+    kind: "terminal",
+    workspaceId: workspace.id,
+    runtimeId: null,
+    displayName: input.displayName || terminal.displayName,
+    status: "running",
+    statusReason: "launched",
+    lastStatusAt: now,
+    lastOutputAt: null,
+    endedAt: null,
+    exitCode: null,
+    transport: "disconnected",
+    tmuxSessionName: tmux.tmuxSessionName,
+    tmuxSessionId: tmux.tmuxSessionId,
+    tabId: createId("tab"),
+    runtimeSessionId: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  store.insertWorkspaceSession(session);
+  const activitySource = options.activitySource ?? "user";
+  deps.activity(
+    "terminal.started",
+    activitySource,
+    `Started ${session.displayName}`,
+    workspace.repoId,
+    workspace.id,
+    null,
+  );
   return session;
 }
 

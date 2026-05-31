@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { RuntimeConfig } from "@citadel/config";
+import type { AgentRuntimeConfig } from "@citadel/config";
 import type {
   BackgroundAgentSession,
   CreateScheduledAgentInput,
@@ -93,7 +93,7 @@ function formatRunStamp(date: Date) {
 export type ScheduledAgentDeps = {
   store: SqliteStore;
   operations: OperationService;
-  getRuntime: (runtimeId: string) => RuntimeConfig | undefined;
+  getRuntime: (runtimeId: string) => AgentRuntimeConfig | undefined;
   /** Absolute path where per-run log files live (`<dataDir>/scheduled-runs/...`). */
   dataDir: string;
   /** Injected so the runner doesn't import tmux/terminal. Step 4 wires this in. */

@@ -96,6 +96,7 @@ describe("SqliteStore", () => {
     });
     store.insertSession({
       id: "sess_srr",
+      kind: "agent",
       workspaceId: "ws_srr",
       runtimeId: "claude-code",
       displayName: "Claude Code",
@@ -174,6 +175,7 @@ describe("SqliteStore", () => {
     });
     store.insertSession({
       id: "sess_test",
+      kind: "agent",
       workspaceId: "ws_test",
       runtimeId: "claude-code",
       displayName: "Claude Code",
@@ -330,6 +332,7 @@ describe("SqliteStore", () => {
     store.insertWorkspace({ ...workspaceBase, id: "ws_delete", path: path.join(dir, "worktrees", "reusable") });
     store.insertSession({
       id: "sess_delete",
+      kind: "agent",
       workspaceId: "ws_delete",
       runtimeId: "claude-code",
       displayName: "Claude Code",

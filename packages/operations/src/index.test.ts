@@ -13,11 +13,7 @@ const tmuxSessions: string[] = [];
 
 afterEach(() => {
   for (const session of tmuxSessions.splice(0)) {
-    try {
-      execFileSync("tmux", ["kill-session", "-t", session], { stdio: "ignore" });
-    } catch {
-      /* already gone */
-    }
+    killTmuxSession(session);
   }
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -119,9 +115,10 @@ describe("OperationService", () => {
     const created = await service.createWorkspace({ repoId: repo.id, name: "Active Repo", source: "scratch" });
     store.insertSession({
       id: "sess_active",
+      kind: "agent",
       workspaceId: created.workspaceId,
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
       status: "running",
       statusReason: null,
       lastStatusAt: "2026-05-17T00:00:00.000Z",
@@ -393,26 +390,34 @@ describe("OperationService", () => {
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const created = await service.createWorkspace({ repoId: repo.id, name: "mcp-output", source: "scratch" });
-    // Use bash with `read` to verify Enter is actually submitted by sendAgentMessage.
+    const fakeAgentPath = path.join(fixture.dir, "fake-agent.js");
+    fs.writeFileSync(
+      fakeAgentPath,
+      [
+        "process.stdin.setEncoding('utf8');",
+        "let buf = '';",
+        "process.stdin.on('data', (chunk) => {",
+        "  buf += chunk;",
+        "  for (;;) {",
+        "    const idx = buf.indexOf('\\n');",
+        "    if (idx < 0) break;",
+        "    const line = buf.slice(0, idx);",
+        "    buf = buf.slice(idx + 1);",
+        "    process.stdout.write(`ECHO:${line}\\n`);",
+        "  }",
+        "});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+    );
     const session = await service.createAgentSession(
       {
         workspaceId: created.workspaceId,
-        runtimeId: "shell",
+        runtimeId: "fake-agent",
         prompt: undefined,
       },
-      { command: "bash", args: ["--noprofile", "--norc"], displayName: "Shell" },
+      { command: "node", args: [fakeAgentPath], displayName: "Fake Agent" },
     );
     try {
-      // Drive the session into a read loop the same way Claude Code waits for
-      // chat input. If our follow-up does not press Enter, the loop never
-      // resolves and the assertion below times out.
-      execFileSync("tmux", [
-        "send-keys",
-        "-t",
-        session.tmuxSessionName ?? "",
-        "while read line; do printf 'ECHO:%s\\n' \"$line\"; done",
-        "Enter",
-      ]);
       const sendResult = await service.sendAgentMessage({ sessionId: session.id, message: "hello world" });
       expect(sendResult).toMatchObject({ ok: true, sessionId: session.id });
       // Poll the transcript until we see the echoed line.
@@ -560,7 +565,7 @@ describe("OperationService", () => {
       { command: "bash", args: ["-l"], displayName: "Shell" },
     );
     // Kill the underlying tmux session out-of-band and remove the repo from disk.
-    if (session.tmuxSessionName) execFileSync("tmux", ["kill-session", "-t", session.tmuxSessionName]);
+    if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
     fs.rmSync(fixture.repoPath, { recursive: true, force: true });
     const result = service.reconcile();
     expect(result.sessions).toBeGreaterThan(0);

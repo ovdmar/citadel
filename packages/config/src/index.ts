@@ -220,7 +220,7 @@ export const CitadelConfigSchema = z
     agentRuntimes: z
       .array(AgentRuntimeConfigSchema)
       .default(() => BUILTIN_AGENT_RUNTIMES.map((r) => ({ ...r, args: [...r.args] }))),
-    terminal: TerminalProfileConfigSchema.default({ ...DEFAULT_TERMINAL_PROFILE }),
+    terminal: TerminalProfileConfigSchema.default({ ...DEFAULT_TERMINAL_PROFILE, args: [...DEFAULT_TERMINAL_PROFILE.args] }),
     usageProviders: z.array(UsageProviderConfigSchema).default([]),
     automations: AutomationConfigSchema,
     hooks: z.array(HookConfigSchema).default([]),

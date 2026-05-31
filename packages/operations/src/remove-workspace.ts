@@ -107,7 +107,7 @@ export async function removeWorkspaceImpl(
     return { operationId: operation.id, removed: false, archived: false, dirty, dirtySummary };
   }
 
-  const ownedSessions = deps.store.listSessions(workspace.id);
+  const ownedSessions = deps.store.listWorkspaceSessions(workspace.id);
   for (const session of ownedSessions) {
     if (session.tmuxSessionName && !input.archiveOnly) killTmuxSession(session.tmuxSessionName);
     // Always release the ttyd alongside workspace archive/full remove.
