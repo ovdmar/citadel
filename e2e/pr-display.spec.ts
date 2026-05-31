@@ -79,6 +79,7 @@ function createGitFixture() {
   run("git", ["add", "."], repoPath);
   run("git", ["commit", "-m", "initial"], repoPath);
   run("git", ["push", "origin", "HEAD:main"], repoPath);
+  run("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], repoPath);
   return { dir, repoPath, remotePath };
 }
 

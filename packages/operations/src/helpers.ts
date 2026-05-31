@@ -26,6 +26,7 @@ export function discoverDefaultBranch(rootPath: string) {
     const remoteHead = execFileSync("git", ["symbolic-ref", "refs/remotes/origin/HEAD"], {
       cwd: rootPath,
       encoding: "utf8",
+      stdio: "pipe",
     })
       .trim()
       .replace("refs/remotes/origin/", "");
@@ -372,7 +373,7 @@ export function reconcileStore(
   for (const session of store.listSessions()) {
     if (!session.tmuxSessionName) continue;
     if (["stopped", "failed", "unknown"].includes(session.status)) continue;
-    if (!tmuxSessionExists(session.tmuxSessionName)) {
+    if (!tmuxSessionExists(session.tmuxSessionName, session.tmuxSocketName ?? null)) {
       const workspaceExists = store.listWorkspaces().some((workspace) => workspace.id === session.workspaceId);
       if (!workspaceExists) {
         store.deleteSession(session.id);
@@ -403,7 +404,7 @@ export function reconcileStore(
     // For background sessions and the legacy raw-spawn path, the pane PID is
     // the command itself; absence of a shell foreground means the command
     // is still running → leave the row alone.
-    const pane = panePidProcess(session.tmuxSessionName);
+    const pane = panePidProcess(session.tmuxSessionName, session.tmuxSocketName ?? null);
     if (pane === null) {
       // tmux missing → handled by the workspace-membership branch above.
       // We re-checked here just to be paranoid; status-monitor's next tick
