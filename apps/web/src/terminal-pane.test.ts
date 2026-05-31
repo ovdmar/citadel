@@ -71,17 +71,6 @@ const xtermMocks = vi.hoisted(() => {
 vi.mock("@xterm/xterm", () => ({ Terminal: xtermMocks.FakeTerminal }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: xtermMocks.FakeFitAddon }));
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
-async function act(callback: () => void | Promise<void>) {
-  let result: void | Promise<void> = undefined;
-  flushSync(() => {
-    result = callback();
-  });
-  await result;
-  await settle();
-}
-
 class FakeWebSocket extends EventTarget {
   static CONNECTING = 0;
   static OPEN = 1;
@@ -187,7 +176,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await act(async () => {
+  await flushReact(() => {
     for (const root of roots.splice(0)) root.unmount();
   });
   vi.restoreAllMocks();
@@ -248,26 +237,23 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     roots.push(root);
     const session = sessionFixture();
 
-    await act(async () => {
+    await flushReact(() => {
       root.render(createElement(TerminalPane, { session, active: false }));
-      await settle();
     });
 
     expect(FakeWebSocket.instances).toHaveLength(0);
     expect(xtermMocks.FakeTerminal.instances).toHaveLength(0);
     expect(getTerminalHandle("sess_1")).toBeDefined();
 
-    await act(async () => {
+    await flushReact(() => {
       root.render(createElement(TerminalPane, { session, active: true }));
-      await settle();
     });
 
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(xtermMocks.FakeTerminal.instances).toHaveLength(1);
 
-    await act(async () => {
+    await flushReact(() => {
       root.render(createElement(TerminalPane, { session, active: false }));
-      await settle();
     });
 
     expect(FakeWebSocket.instances[0]?.readyState).toBe(FakeWebSocket.CLOSED);
@@ -280,7 +266,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const term = xtermMocks.FakeTerminal.instances[0];
     if (!ws || !term) throw new Error("terminal rig missing");
 
-    await act(async () => ws.open());
+    await flushReact(() => ws.open());
     flushAnimationFrames();
     ws.message(new TextEncoder().encode("snapshot").buffer);
     ws.message(new TextEncoder().encode("-chunk").buffer);
@@ -299,7 +285,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const observer = FakeResizeObserver.instances[0];
     if (!ws || !term || !fit || !observer) throw new Error("terminal rig missing");
 
-    await act(async () => ws.open());
+    await flushReact(() => ws.open());
     observer.trigger();
     window.dispatchEvent(new Event("resize"));
     observer.trigger();
@@ -337,7 +323,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const observer = FakeResizeObserver.instances[0];
     if (!ws || !term || !observer) throw new Error("terminal rig missing");
 
-    await act(async () => ws.open());
+    await flushReact(() => ws.open());
 
     const invalidDimensions: Array<[number, number]> = [
       [0, 24],
@@ -375,7 +361,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     flushAnimationFrames();
     expect(resizeMessages(ws)).toEqual([]);
 
-    await act(async () => ws.open());
+    await flushReact(() => ws.open());
     flushAnimationFrames();
 
     expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
@@ -385,18 +371,17 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const root = await renderTerminal();
     const first = FakeWebSocket.instances[0];
     if (!first) throw new Error("missing first ws");
-    await act(async () => first.open());
+    await flushReact(() => first.open());
     flushAnimationFrames();
     expect(resizeMessages(first)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
 
-    await act(async () => {
+    await flushReact(() => {
       getTerminalHandle("sess_1")?.reload();
-      await settle();
     });
 
     const second = FakeWebSocket.instances[1];
     if (!second) throw new Error("missing second ws");
-    await act(async () => second.open());
+    await flushReact(() => second.open());
     flushAnimationFrames();
 
     expect(resizeMessages(second)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
@@ -409,9 +394,9 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const observer = FakeResizeObserver.instances[0];
     if (!ws || !fit || !observer) throw new Error("terminal rig missing");
 
-    await act(async () => ws.open());
+    await flushReact(() => ws.open());
     observer.trigger();
-    await act(async () => root.unmount());
+    await flushReact(() => root.unmount());
     untrackRoot(root);
     flushAnimationFrames();
 
@@ -425,7 +410,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const term = xtermMocks.FakeTerminal.instances[0];
     if (!ws || !term) throw new Error("terminal rig missing");
 
-    await act(async () => root.unmount());
+    await flushReact(() => root.unmount());
     untrackRoot(root);
     ws.open();
     flushAnimationFrames();
@@ -444,7 +429,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const term = xtermMocks.FakeTerminal.instances[0];
     if (!ws || !term) throw new Error("terminal rig missing");
 
-    await act(async () => ws.open());
+    await flushReact(() => ws.open());
     term.emitData("\u0003");
     term.emitData("abc");
     const commandPalette = term.emitKey(
@@ -481,7 +466,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const host = document.querySelector(".terminal-xterm-host");
     if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
 
-    await act(async () => ws.open());
+    await flushReact(() => ws.open());
     const event = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true });
     const downstream = vi.fn();
     host.addEventListener("keydown", downstream);
@@ -497,13 +482,16 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     applyThemePreference("dark");
     await renderTerminal();
     expect(FakeWebSocket.instances).toHaveLength(1);
+    const term = xtermMocks.FakeTerminal.instances[0];
+    if (!term) throw new Error("terminal rig missing");
+    expect((term.options.theme as { background?: string }).background).toBe("#1a1814");
 
-    await act(async () => {
+    await flushReact(() => {
       applyThemePreference("light");
-      await settle();
     });
 
     expect(FakeWebSocket.instances).toHaveLength(1);
+    expect((term.options.theme as { background?: string }).background).toBe("#f5f1e8");
   });
 
   it("shows an actionable error when the WebSocket closes", async () => {
@@ -511,7 +499,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const ws = FakeWebSocket.instances[0];
     if (!ws) throw new Error("missing ws");
 
-    await act(async () => ws.closeFromServer(1006, "lost"));
+    await flushReact(() => ws.closeFromServer(1006, "lost"));
 
     expect(document.body.textContent).toContain("terminal_disconnected");
     expect(document.body.textContent).toContain("lost");
@@ -540,11 +528,15 @@ async function renderTerminal() {
   document.body.appendChild(rootElement);
   const root = createRoot(rootElement);
   roots.push(root);
-  await act(async () => {
+  await flushReact(() => {
     root.render(createElement(TerminalPane, { session: sessionFixture() }));
-    await settle();
   });
   return root;
+}
+
+async function flushReact(action: () => void) {
+  flushSync(action);
+  await settle();
 }
 
 async function settle() {
