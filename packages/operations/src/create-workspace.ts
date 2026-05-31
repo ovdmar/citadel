@@ -62,14 +62,15 @@ export type WorkspaceOpsDeps = {
     repo: Repo,
     workspace: Workspace,
     operationId: string,
-  ) => Promise<void>;
+  ) => Promise<unknown>;
   runNotificationHooks: (
     event: HookConfig["event"],
     repo: Repo,
     workspace: Workspace,
     operationId: string | null,
     payload: unknown,
-  ) => Promise<void>;
+  ) => Promise<unknown>;
+  onSessionStopped?: (sessionId: string) => void;
 };
 
 export type CreateWorkspaceOptions = {

@@ -75,6 +75,8 @@ const xtermMocks = vi.hoisted(() => {
 vi.mock("@xterm/xterm", () => ({ Terminal: xtermMocks.FakeTerminal }));
 vi.mock("@xterm/addon-fit", () => ({ FitAddon: xtermMocks.FakeFitAddon }));
 
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
 class FakeWebSocket extends EventTarget {
   static CONNECTING = 0;
   static OPEN = 1;
