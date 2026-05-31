@@ -1,5 +1,5 @@
 import type { APIRequestContext } from "@playwright/test";
-import { retryTransientApiError } from "./api.js";
+import { apiGet } from "./api-request.js";
 
 // Last line of defense against the e2e suite writing into a production install.
 //
@@ -19,7 +19,7 @@ export async function assertDaemonIsSandbox(request: APIRequestContext, apiBase:
     process.env.CITADEL_DATA_DIR ||
     process.env.CITADEL_PLAYWRIGHT_DATA_DIR ||
     "/tmp/citadel-playwright-data";
-  const res = await retryTransientApiError("GET /api/health", () => request.get(`${apiBase}/api/health`));
+  const res = await apiGet(request, `${apiBase}/api/health`);
   if (!res.ok()) {
     throw new Error(
       `[sandbox-guard] could not reach ${apiBase}/api/health (status ${res.status()}). Refusing to run destructive tests against an unknown daemon.`,

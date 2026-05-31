@@ -256,9 +256,7 @@ describe("tmux terminal gateway helpers", () => {
     pasteText(sessionName, "alpha\nbeta\n");
     sendKeys(sessionName, "\u0004");
 
-    const pastedPath = path.join(cwd, "pasted.txt");
-    await waitForFile(pastedPath, "alpha\nbeta\n");
-    expect(fs.readFileSync(pastedPath, "utf8")).toBe("alpha\nbeta\n");
+    await waitForFile(path.join(cwd, "pasted.txt"), "alpha\nbeta\n");
   });
 
   it("captures active alternate-screen output when an interactive program switches screens", async () => {

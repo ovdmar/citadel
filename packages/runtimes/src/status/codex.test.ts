@@ -48,13 +48,14 @@ describe("codexStatusAdapter", () => {
       ).toBe("idle");
     });
 
-    it("does not classify running-mid-stream.txt as running from activity alone", () => {
+    it("classifies running-mid-stream.txt as running when current turn output changes", () => {
+      observeStatus(state, ctx(load("idle"), { ticksSinceActivityChange: 2 }));
       expect(
         observeStatus(
           state,
           ctx(load("running-mid-stream"), { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 }),
         ),
-      ).toBeNull();
+      ).toBe("running");
     });
 
     it("classifies idle-post-turn-divider.txt as idle immediately on the divider (no null window)", () => {
@@ -134,7 +135,8 @@ describe("codexStatusAdapter", () => {
       ).toBe("idle");
     });
 
-    it("prompt text after a post-turn divider still reports idle, even with fresh pane activity", () => {
+    it("new assistant output after an old post-turn divider reports running", () => {
+      observeStatus(state, ctx(load("idle"), { ticksSinceActivityChange: 2 }));
       const pane = [
         "previous output",
         "─ Worked for 1m 12s ──────────────────────",
@@ -148,7 +150,23 @@ describe("codexStatusAdapter", () => {
       ].join("\n");
       expect(
         observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 })),
-      ).toBe("idle");
+      ).toBe("running");
+    });
+
+    it("typed prompt after an old post-turn divider does not report running before assistant output", () => {
+      observeStatus(state, ctx(load("idle"), { ticksSinceActivityChange: 2 }));
+      const pane = [
+        "previous output",
+        "─ Worked for 1m 12s ──────────────────────",
+        "",
+        "› Start another task.",
+        "",
+        "› Use /skills to list available skills",
+        "  gpt-5.5 default · ~/wherever",
+      ].join("\n");
+      expect(
+        observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 })),
+      ).toBeNull();
     });
 
     it("current-turn post divider after the latest prompt still reports idle immediately", () => {
@@ -233,10 +251,10 @@ describe("codexStatusAdapter", () => {
       ].join("\n");
       expect(
         observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 })),
-      ).toBe("idle");
+      ).toBeNull();
     });
 
-    it("answer text mentioning esc to interrupt after a completed turn stays idle", () => {
+    it("answer text mentioning esc to interrupt after a completed turn does not report running", () => {
       const pane = [
         "• You’re right. I fixed it so Codex no longer treats tmux activity as running.",
         "",
@@ -251,7 +269,7 @@ describe("codexStatusAdapter", () => {
       ].join("\n");
       expect(
         observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 })),
-      ).toBe("idle");
+      ).toBeNull();
     });
 
     it("stability of exactly 1 tick → null (not yet enough to call idle)", () => {

@@ -1,7 +1,7 @@
 // Helpers used by terminal session lifecycle wiring in apps/daemon/src/app.ts.
 // Extracted so app.ts stays under the 800-line file-size cap.
 
-import type { CitadelConfig } from "@citadel/config";
+import { type CitadelConfig, ensureCodexGoalsFeatureArgs } from "@citadel/config";
 import type { AgentSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { ensureTmuxSession, launchAgentInSession, panePidProcess } from "@citadel/terminal";
@@ -51,7 +51,7 @@ export function buildRespawnTmux(
       socketName: ctx.socketName,
     });
     if (!isShellCommand(ctx.runtime.command)) {
-      const argv = [...ctx.runtime.args];
+      const argv = ensureCodexGoalsFeatureArgs(session.runtimeId, ctx.runtime.args);
       if (session.runtimeSessionId && ctx.runtime.resumeArg) {
         argv.push(ctx.runtime.resumeArg, session.runtimeSessionId);
       }

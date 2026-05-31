@@ -93,6 +93,7 @@ export {
   CODEX_REASON_INTERRUPT,
   CODEX_REASON_SANDBOX_APPROVAL,
   CODEX_REASON_STABLE_TIMEOUT,
+  CODEX_REASON_TURN_OUTPUT_ACTIVITY,
   codexStatusAdapter,
 } from "./codex.js";
 export { REASON_ELAPSED_TIMER, observeActiveElapsedTimer } from "./elapsed-timer.js";
