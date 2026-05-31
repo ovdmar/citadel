@@ -189,6 +189,36 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(getTerminalHandle("sess_1")).toBeDefined();
   });
 
+  it("keeps retained hidden panes dormant until they become active", async () => {
+    const rootElement = document.createElement("div");
+    document.body.appendChild(rootElement);
+    const root = createRoot(rootElement);
+    roots.push(root);
+    const session = sessionFixture();
+
+    await flushReactUpdate(async () => {
+      root.render(createElement(TerminalPane, { session, active: false }));
+    });
+
+    expect(TerminalPaneWebSocketMock.instances).toHaveLength(0);
+    expect(xtermMocks.FakeTerminal.instances).toHaveLength(0);
+    expect(getTerminalHandle("sess_1")).toBeDefined();
+
+    await flushReactUpdate(async () => {
+      root.render(createElement(TerminalPane, { session, active: true }));
+    });
+
+    expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
+    expect(xtermMocks.FakeTerminal.instances).toHaveLength(1);
+
+    await flushReactUpdate(async () => {
+      root.render(createElement(TerminalPane, { session, active: false }));
+    });
+
+    expect(TerminalPaneWebSocketMock.instances[0]?.readyState).toBe(TerminalPaneWebSocketMock.CLOSED);
+    expect(xtermMocks.FakeTerminal.instances[0]?.dispose).toHaveBeenCalled();
+  });
+
   it("writes WebSocket output to xterm and sends input/resize over the same socket", async () => {
     await renderTerminal();
     const ws = TerminalPaneWebSocketMock.instances[0];
@@ -316,6 +346,9 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     applyThemePreference("dark");
     await renderTerminal();
     expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
+    const term = xtermMocks.FakeTerminal.instances[0];
+    if (!term) throw new Error("terminal rig missing");
+    expect((term.options.theme as { background?: string }).background).toBe("#1a1814");
 
     await flushReactUpdate(async () => {
       applyThemePreference("light");
@@ -323,6 +356,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     });
 
     expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
+    expect((term.options.theme as { background?: string }).background).toBe("#f5f1e8");
   });
 
   it("shows an actionable error when the WebSocket closes", async () => {

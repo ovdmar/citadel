@@ -10,8 +10,10 @@ import { defineConfig, devices } from "@playwright/test";
 const daemonPort = process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012";
 const webPort = process.env.CITADEL_PLAYWRIGHT_WEB_PORT || "15174";
 const daemonLog = process.env.CITADEL_PLAYWRIGHT_DAEMON_LOG || "/tmp/citadel-playwright-daemon.log";
-const dataDir = process.env.CITADEL_PLAYWRIGHT_DATA_DIR || "/tmp/citadel-playwright-data";
-const configPath = process.env.CITADEL_PLAYWRIGHT_CONFIG || `${dataDir}/citadel.config.json`;
+const dataDir =
+  process.env.CITADEL_PLAYWRIGHT_DATA_DIR || process.env.CITADEL_DATA_DIR || "/tmp/citadel-playwright-data";
+const configPath =
+  process.env.CITADEL_PLAYWRIGHT_CONFIG || process.env.CITADEL_CONFIG || `${dataDir}/citadel.config.json`;
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
 const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}`).replace(
@@ -20,6 +22,7 @@ const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playw
 );
 
 process.env.CITADEL_PLAYWRIGHT_DATA_DIR = dataDir;
+process.env.CITADEL_PLAYWRIGHT_CONFIG = configPath;
 
 export default defineConfig({
   testDir: "e2e",

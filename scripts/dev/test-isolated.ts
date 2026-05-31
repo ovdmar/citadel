@@ -35,6 +35,8 @@ if (mode === "e2e") {
   // Force a fresh daemon/web port pair outside the long-term daemon
   // (4010), worktree daemon (4110-4209), and worktree Vite (5210-5309)
   // ranges. Also isolate tmux so E2E never touches live agent panes.
+  env.CITADEL_PLAYWRIGHT_DATA_DIR = env.CITADEL_PLAYWRIGHT_DATA_DIR ?? dataDir;
+  env.CITADEL_PLAYWRIGHT_CONFIG = env.CITADEL_PLAYWRIGHT_CONFIG ?? configPath;
   env.CITADEL_PLAYWRIGHT_DAEMON_PORT = env.CITADEL_PLAYWRIGHT_DAEMON_PORT ?? randomPort(14020, 14199);
   env.CITADEL_PLAYWRIGHT_WEB_PORT = env.CITADEL_PLAYWRIGHT_WEB_PORT ?? randomPort(15180, 15399);
   env.CITADEL_PLAYWRIGHT_TMUX_SOCKET =

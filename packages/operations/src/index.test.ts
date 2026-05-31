@@ -779,7 +779,6 @@ function createGitFixture() {
   run("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"], repoPath);
   return { dir, repoPath };
 }
-
 function run(command: string, args: string[], cwd: string) {
   execFileSync(command, args, { cwd, stdio: "pipe" });
 }

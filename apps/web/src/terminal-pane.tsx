@@ -80,8 +80,9 @@ export function focusActiveTerminal(sessionId: string | null | undefined): void 
   handle.focusIframe();
 }
 
-export function TerminalPane(props: { session: AgentSession }) {
+export function TerminalPane(props: { session: AgentSession; active?: boolean }) {
   const sessionId = props.session.id;
+  const active = props.active ?? true;
   const theme = useResolvedTheme();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -118,6 +119,7 @@ export function TerminalPane(props: { session: AgentSession }) {
 
   useEffect(() => {
     void generation;
+    if (!active) return;
     const host = containerRef.current;
     if (!host) return;
     let disposed = false;
@@ -219,7 +221,7 @@ export function TerminalPane(props: { session: AgentSession }) {
       if (fitRef.current === fit) fitRef.current = null;
       if (wsRef.current === ws) wsRef.current = null;
     };
-  }, [sessionId, generation]);
+  }, [sessionId, generation, active]);
 
   // Publish the live URL + reload/focus/recover callbacks so nav selection and
   // tab actions can drive state owned by TerminalPane.
