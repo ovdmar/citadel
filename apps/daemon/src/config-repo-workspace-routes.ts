@@ -6,7 +6,7 @@ import type { OperationService } from "@citadel/operations";
 import { setGithubCommand, setJiraCommand } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import type express from "express";
-import type { ProviderCache, asyncRoute as AsyncRoute } from "./app-helpers.js";
+import type { asyncRoute as AsyncRoute, ProviderCache } from "./app-helpers.js";
 import { bustCacheByPrefixes } from "./workspace-fs-watcher.js";
 
 export function registerConfigRepoWorkspaceRoutes(input: {
