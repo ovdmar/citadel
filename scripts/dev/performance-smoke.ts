@@ -118,6 +118,9 @@ async function ensureLocalServices() {
         cwd: process.cwd(),
         env: {
           ...process.env,
+          // Do not let a Citadel-launched shell force worktree-mode path
+          // rewriting over this smoke test's managed sandbox paths.
+          CITADEL_WORKTREE: "",
           CITADEL_PORT: managedApiPort,
           CITADEL_DATA_DIR: managedDataDir,
           CITADEL_CONFIG: path.join(managedDataDir, "citadel.config.json"),

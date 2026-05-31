@@ -47,6 +47,11 @@ export default defineConfig({
       // boot orphan-reaper can mistake production tmux panes for sandbox
       // orphans and kill the user's live terminals.
       command: [
+        // Clear operator-shell overrides before setting the sandbox env below;
+        // otherwise a local run can bind the Playwright port while loading
+        // the production config/data dir.
+        "CITADEL_CONFIG=",
+        "CITADEL_WORKTREE=",
         `CITADEL_DATA_DIR=${dataDir}`,
         `CITADEL_PORT=${daemonPort}`,
         `CITADEL_TMUX_SOCKET=${tmuxSocket}`,
