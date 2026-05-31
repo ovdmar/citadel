@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
 import type { AgentSession } from "@citadel/contracts";
-import { act, createElement } from "react";
+import { createElement } from "react";
+import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -290,6 +291,15 @@ async function renderTerminal() {
 async function settle() {
   await Promise.resolve();
   await Promise.resolve();
+}
+
+async function act(callback: () => void | Promise<void>) {
+  let result: void | Promise<void> | undefined;
+  flushSync(() => {
+    result = callback();
+  });
+  await result;
+  await settle();
 }
 
 function installLocalStorageMock() {
