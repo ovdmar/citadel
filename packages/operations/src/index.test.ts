@@ -570,15 +570,6 @@ describe("OperationService", () => {
     expect(reconciledRepo).toBeUndefined();
   });
 
-  // Shell-first replacement of the legacy "reconcile flips to stopped" test.
-  // The legacy assertion was: wrapper-`.live` sentinel removed → reconcile
-  // flips status='stopped'. New behavior (shell-first lifecycle): the
-  // pane's foreground command IS the source of truth. For a `shell`
-  // runtime session, the pane PID is bash itself (no separate agent); the
-  // reconciler leaves it alone because the shell IS the runtime. The
-  // operator-visible "stopped" state is reserved for explicit Stop button
-  // presses (which delete the row entirely). The new regression-pin tests
-  // for non-shell agent runtimes live in status-monitor.test.ts.
   it("reconcile no longer mass-flips shell-runtime sessions to 'stopped' (shell-first invariant)", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
@@ -598,11 +589,7 @@ describe("OperationService", () => {
     try {
       expect(session.tmuxSessionName).toBeTruthy();
       const sessionName = session.tmuxSessionName as string;
-      // Legacy sentinel removal is now a no-op — the wrapper is gone and
-      // reconcile doesn't read /tmp sentinels at all (it reads the pane's
-      // foreground command via tmux). For a shell runtime session, the
-      // pane foreground IS bash, which is the runtime binary — reconcile
-      // leaves it alone.
+      // Legacy sentinel removal is now a no-op for shell-runtime sessions.
       fs.rmSync(agentLiveSentinelPath(sessionName), { force: true });
 
       service.reconcile();
