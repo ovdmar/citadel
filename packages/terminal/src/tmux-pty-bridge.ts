@@ -16,15 +16,30 @@ type TerminalSocketMessage = {
   data?: string;
 };
 
+type TerminalWebSocketOptions = {
+  maxBufferedBytes?: number;
+  /** Internal test hook for deterministic backpressure coverage. */
+  getBufferedAmount?: (ws: WebSocket) => number;
+};
+
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 const MAX_COLS = 400;
 const MAX_ROWS = 120;
+const DEFAULT_MAX_BUFFERED_BYTES = 16 * 1024 * 1024;
+const BACKPRESSURE_CLOSE_CODE = 1013;
+const BACKPRESSURE_CLOSE_REASON = "terminal_backpressure";
 
-export function attachTerminalWebSocket(server: http.Server, resolveSession: ResolveTerminalSession) {
+export function attachTerminalWebSocket(
+  server: http.Server,
+  resolveSession: ResolveTerminalSession,
+  options: TerminalWebSocketOptions = {},
+) {
   const wss = new WebSocketServer({ noServer: true });
   const ptys = new Set<IPty>();
   const clients = new Map<WebSocket, IPty>();
+  const maxBufferedBytes = normalizeMaxBufferedBytes(options.maxBufferedBytes);
+  const getBufferedAmount = options.getBufferedAmount ?? ((ws: WebSocket) => ws.bufferedAmount);
   let shuttingDown = false;
   const shutdownTerminalSockets = () => {
     if (shuttingDown) return;
@@ -77,12 +92,43 @@ export function attachTerminalWebSocket(server: http.Server, resolveSession: Res
           }
           ptys.add(pty);
           clients.set(ws, pty);
-          pty.onData((data) => {
-            if (ws.readyState === WebSocket.OPEN) ws.send(Buffer.from(data, "utf8"), { binary: true });
-          });
-          pty.onExit(({ exitCode, signal }) => {
+          let cleanedUp = false;
+          let dataDisposable: { dispose: () => void } | null = null;
+          let exitDisposable: { dispose: () => void } | null = null;
+          const cleanup = (killPty: boolean) => {
+            if (cleanedUp) return;
+            cleanedUp = true;
             ptys.delete(pty);
             clients.delete(ws);
+            dataDisposable?.dispose();
+            exitDisposable?.dispose();
+            if (killPty) closePty(pty);
+          };
+          const closeForBackpressure = () => {
+            cleanup(true);
+            if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+              ws.close(BACKPRESSURE_CLOSE_CODE, BACKPRESSURE_CLOSE_REASON);
+              const terminateTimer = setTimeout(() => {
+                if (ws.readyState !== WebSocket.CLOSED) ws.terminate();
+              }, 1000);
+              terminateTimer.unref();
+            } else if (ws.readyState !== WebSocket.CLOSED) {
+              ws.terminate();
+            }
+          };
+          dataDisposable = pty.onData((data) => {
+            if (ws.readyState !== WebSocket.OPEN || cleanedUp) return;
+            if (getBufferedAmount(ws) > maxBufferedBytes) {
+              closeForBackpressure();
+              return;
+            }
+            ws.send(Buffer.from(data, "utf8"), { binary: true }, (error) => {
+              if (error) cleanup(true);
+            });
+            if (getBufferedAmount(ws) > maxBufferedBytes) closeForBackpressure();
+          });
+          exitDisposable = pty.onExit(({ exitCode, signal }) => {
+            cleanup(false);
             if (ws.readyState === WebSocket.OPEN) {
               sendControl(ws, { type: "exit", data: signal ? `signal:${signal}` : `exit:${exitCode}` });
               ws.close(1000, "pty_exit");
@@ -113,14 +159,10 @@ export function attachTerminalWebSocket(server: http.Server, resolveSession: Res
             }
           });
           ws.on("close", () => {
-            ptys.delete(pty);
-            clients.delete(ws);
-            closePty(pty);
+            cleanup(true);
           });
           ws.on("error", () => {
-            ptys.delete(pty);
-            clients.delete(ws);
-            closePty(pty);
+            cleanup(true);
           });
         });
       })
@@ -129,6 +171,11 @@ export function attachTerminalWebSocket(server: http.Server, resolveSession: Res
         socket.destroy();
       });
   });
+}
+
+function normalizeMaxBufferedBytes(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return DEFAULT_MAX_BUFFERED_BYTES;
+  return Math.max(1024, Math.trunc(value));
 }
 
 export function attachTmuxPty(
