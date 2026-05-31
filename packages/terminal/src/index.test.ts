@@ -267,8 +267,9 @@ describe("tmux terminal gateway helpers", () => {
       cwd,
     });
 
-    sendKeys(sessionName, "trap 'echo INTERRUPTED' INT; sleep 10");
+    sendKeys(sessionName, "trap 'echo INTERRUPTED' INT; echo READY_FOR_INTERRUPT; sleep 10");
     sendKeys(sessionName, "\r");
+    await waitForCapture(sessionName, "READY_FOR_INTERRUPT");
     sendKeys(sessionName, "\u0003");
     await waitForCapture(sessionName, "INTERRUPTED");
 
