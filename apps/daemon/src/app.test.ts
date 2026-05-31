@@ -26,6 +26,14 @@ process.env.CITADEL_DISABLE_SCHEDULER = "1";
 process.env.CITADEL_DISABLE_TERMINAL_REAPER = "1";
 
 describe("createDaemonApp", () => {
+  it("keeps HTTP sockets alive across normal browser interaction gaps", async () => {
+    const fixture = createFixture();
+    const { server } = await createDaemonApp(fixture);
+
+    expect(server.keepAliveTimeout).toBe(120_000);
+    expect(server.headersTimeout).toBe(125_000);
+  });
+
   it("serves config, runtime, MCP, and error endpoints without starting the production listener", async () => {
     const fixture = createFixture();
     const { server } = await createDaemonApp(fixture);

@@ -11,7 +11,6 @@ import { useMemo, useRef } from "react";
 import { api } from "./api.js";
 
 export { RuntimeLauncher, WorkspaceForm } from "./workspace-forms.js";
-export { TerminalPane } from "./terminal-pane.js";
 
 // Single-workspace summary. Freshness is driven by the 60s batch poll, focus,
 // and SSE invalidation; placeholderData keeps workspace switches instant.

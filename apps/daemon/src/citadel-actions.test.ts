@@ -32,6 +32,7 @@ describe("citadel-actions storage", () => {
     expect(seeded?.id).toBe(BUILT_IN_REFINE_SCRATCHPAD.id);
     expect(seeded?.builtIn).toBe(true);
     expect(seeded?.promptTemplate).toBe(BUILT_IN_REFINE_SCRATCHPAD.promptTemplate);
+    expect(seeded?.runtimeId).toBe("claude-code");
     expect(seeded?.updatedAt).toMatch(/Z$/);
   });
 
@@ -50,21 +51,25 @@ describe("citadel-actions storage", () => {
     });
     expect(created.builtIn).toBe(false);
     expect(created.id).not.toBe(BUILT_IN_REFINE_SCRATCHPAD.id);
+    expect(created.runtimeId).toBe("claude-code");
     const list = await listCitadelActions(dataDir);
     expect(list.some((a) => a.id === created.id)).toBe(true);
   });
 
-  it("updates a built-in's prompt and persists", async () => {
+  it("updates a built-in's prompt and preferred runtime, then persists", async () => {
     const [seeded] = await listCitadelActions(dataDir);
     if (!seeded) throw new Error("expected seeded action");
     const updated = await updateCitadelAction(dataDir, seeded.id, {
       promptTemplate: "custom override prompt",
+      runtimeId: "codex",
       updatedAt: seeded.updatedAt,
     });
     expect(updated.promptTemplate).toBe("custom override prompt");
+    expect(updated.runtimeId).toBe("codex");
     expect(updated.updatedAt).not.toBe(seeded.updatedAt);
     const list = await listCitadelActions(dataDir);
     expect(list.find((a) => a.id === seeded.id)?.promptTemplate).toBe("custom override prompt");
+    expect(list.find((a) => a.id === seeded.id)?.runtimeId).toBe("codex");
   });
 
   it("rejects a stale PUT with StaleUpdatedAtError", async () => {
@@ -91,7 +96,34 @@ describe("citadel-actions storage", () => {
     });
     const reset = await resetCitadelAction(dataDir, seeded.id);
     expect(reset.promptTemplate).toBe(BUILT_IN_REFINE_SCRATCHPAD.promptTemplate);
+    expect(reset.runtimeId).toBe(BUILT_IN_REFINE_SCRATCHPAD.runtimeId);
     expect(reset.builtIn).toBe(true);
+  });
+
+  it("backfills the preferred runtime for existing action files", async () => {
+    const filePath = path.join(dataDir, "citadel-actions.json");
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        actions: [
+          {
+            id: BUILT_IN_REFINE_SCRATCHPAD.id,
+            name: BUILT_IN_REFINE_SCRATCHPAD.name,
+            description: BUILT_IN_REFINE_SCRATCHPAD.description,
+            icon: BUILT_IN_REFINE_SCRATCHPAD.icon,
+            promptTemplate: "old prompt",
+            builtIn: true,
+            updatedAt: "2026-05-29T00:00:00.000Z",
+          },
+        ],
+      }),
+    );
+
+    const [action] = await listCitadelActions(dataDir);
+
+    expect(action?.runtimeId).toBe("claude-code");
+    const stored = JSON.parse(fs.readFileSync(filePath, "utf8")) as { actions: Array<{ runtimeId?: string }> };
+    expect(stored.actions[0]?.runtimeId).toBe("claude-code");
   });
 
   it("cannot delete a built-in", async () => {

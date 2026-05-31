@@ -11,7 +11,7 @@ const SAMPLE: ScratchpadBlockSummary[] = [
   block("b", "audit the agent launcher tmux paste"),
   block("c", "fuzzy search across cockpit blocks"),
   block("d", "render <user_id> placeholders correctly"),
-  block("e", "ttyd cleanup storm — do NOT delete dirty worktrees"),
+  block("e", "terminal cleanup storm — do NOT delete dirty worktrees"),
 ];
 
 describe("fuzzySearchBlocks", () => {
@@ -39,7 +39,7 @@ describe("fuzzySearchBlocks", () => {
   });
 
   it("returns match indices for each hit", () => {
-    const results = fuzzySearchBlocks(SAMPLE, "ttyd");
+    const results = fuzzySearchBlocks(SAMPLE, "terminal");
     const target = results.find((r) => r.block.id === "e");
     expect(target).toBeDefined();
     const allIndices = target?.matches.flatMap((m) => m.indices) ?? [];
