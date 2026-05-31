@@ -16,6 +16,10 @@ const workspaceSwitchBudgetMs = readPositiveInt(
   process.env.CITADEL_PERF_WORKSPACE_SWITCH_MAX_MS,
   process.env.CI === "true" ? 1500 : 1000,
 );
+const webInitialLoadBudgetMs = readPositiveInt(
+  process.env.CITADEL_PERF_WEB_ADE_MAX_MS,
+  process.env.CI === "true" ? 2500 : 2000,
+);
 
 await ensureLocalServices();
 
@@ -66,7 +70,7 @@ try {
         .locator(`.terminal-active .terminal-xterm-host[aria-label="Terminal ${sessionName}"]`)
         .waitFor({ state: "visible" });
     };
-    await time("web_ade_visible", 2000, async () => {
+    await time("web_ade_visible", webInitialLoadBudgetMs, async () => {
       await page.goto(webBaseUrl);
       // The current cockpit identifies itself via the cit-brand "Citadel"
       // and the agent-stage main element rather than the old ADE copy.
