@@ -35,7 +35,7 @@ EFFECTIVE_WEB_PORT := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/nu
 # mock git repo materialized under $(WORKTREE_MOCK_REPO) plus synthetic rows
 # inserted into the worktree SQLite. It is intentionally isolated from the
 # systemd long-term daemon's prod data: seeding from prod would copy live
-# agent_sessions and the worktree daemon would race the live daemon for the
+# workspace_sessions and the worktree daemon would race the live daemon for the
 # same tmux sessions.
 WORKTREE_MOCK_REPO       := $(CURDIR)/.citadel/mock-repo
 WORKTREE_MOCK_WORKTREES  := $(CURDIR)/.citadel/mock-worktrees
@@ -271,7 +271,7 @@ logs:
 # either piece is already in place, that piece is skipped. `make deploy`
 # auto-runs this on a fresh worktree so the cockpit isn't empty.
 #
-# Why not snapshot from prod: prod data carries live agent_sessions rows that
+# Why not snapshot from prod: prod data carries live workspace_sessions rows that
 # reference tmux sessions owned by the systemd long-term daemon. A worktree
 # daemon booted on that data races/steals those sessions, breaking the live
 # cockpit. The seed here is fully synthetic and references only paths inside
