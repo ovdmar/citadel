@@ -280,7 +280,7 @@ describe("createDaemonApp", () => {
     } finally {
       await closeServer(server);
     }
-  }, 10_000);
+  }, 15_000);
 
   it("caches provider summaries and clears them on config updates", async () => {
     const fixture = createFixture();

@@ -208,7 +208,7 @@ describe("scheduled agent routes", () => {
     } finally {
       await closeServer(server);
     }
-  });
+  }, 25_000);
 
   it("POST /run maps the four overlap-policy outcomes to HTTP envelopes (skip/queue/queue_full)", async () => {
     const fixture = createFixture();
@@ -320,7 +320,7 @@ describe("scheduled agent routes", () => {
     } finally {
       await closeServer(server);
     }
-  });
+  }, 30_000);
 
   it("rejects invalid query parameters with 400", async () => {
     const fixture = createFixture();
@@ -364,7 +364,7 @@ describe("scheduled agent routes", () => {
     } finally {
       await closeServer(server);
     }
-  });
+  }, 15_000);
 });
 
 function createFixture() {

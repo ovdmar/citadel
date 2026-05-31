@@ -123,6 +123,11 @@ export function isUniqueWorkspaceNameViolation(error: unknown) {
   return /UNIQUE constraint failed: workspaces\.repo_id, workspaces\.name/i.test(error.message);
 }
 
+export function isUniqueWorkspacePathViolation(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  return /UNIQUE constraint failed: workspaces\.path/i.test(error.message);
+}
+
 export type WorktreeAddResult = { mode: "checkout" | "tracking" | "new-from-base"; startPoint?: string };
 
 // Attach a worktree at workspacePath. existingBranch (when set) is preferred:
