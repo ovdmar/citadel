@@ -4,6 +4,7 @@
 import { type CitadelConfig, ensureCodexGoalsFeatureArgs } from "@citadel/config";
 import type { AgentSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
+import { prepareCodexSqliteHomeForWorkspace } from "@citadel/runtimes";
 import { ensureTmuxSession, launchAgentInSession } from "@citadel/terminal";
 
 const SHELL_COMMANDS = ["bash", "sh", "zsh", "fish"] as const;
@@ -55,7 +56,17 @@ export function buildRespawnTmux(
       if (session.runtimeSessionId && ctx.runtime.resumeArg) {
         argv.push(ctx.runtime.resumeArg, session.runtimeSessionId);
       }
-      await launchAgentInSession(ctx.sessionName, ctx.runtime.command, argv, { socketName: ctx.socketName });
+      const codexSqliteHome =
+        session.runtimeId === "codex"
+          ? prepareCodexSqliteHomeForWorkspace({
+              workspaceId: session.workspaceId,
+              dataDir: config.dataDir,
+            })
+          : null;
+      await launchAgentInSession(ctx.sessionName, ctx.runtime.command, argv, {
+        socketName: ctx.socketName,
+        ...(codexSqliteHome ? { env: { CODEX_SQLITE_HOME: codexSqliteHome } } : {}),
+      });
     }
     return tmux;
   };

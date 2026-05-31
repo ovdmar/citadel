@@ -65,7 +65,7 @@ export interface MonitorTickDeps {
   deleteSession: (sessionId: string) => void;
   emit: (event: string, payload: unknown) => void;
   tmuxActivities: () => Map<string, number>;
-  paneCapture: (tmuxSessionName: string) => string;
+  paneCapture: (tmuxSessionName: string) => string | Promise<string>;
   // Shell-first lifecycle hook: foreground command of the pane (the
   // runtime binary when the agent is running, a shell when it isn't, null
   // when tmux is unreachable). Replaces the legacy `readSentinels` —
@@ -283,14 +283,14 @@ export async function runStatusMonitorTick(
     }
     let paneCaptureForObservation: string | null = null;
     let activeElapsedTimer: ActiveElapsedTimerProbe | null = null;
-    const capturePaneForObservation = () => {
+    const capturePaneForObservation = async () => {
       if (paneCaptureForObservation === null) {
-        paneCaptureForObservation = session.tmuxSessionName ? deps.paneCapture(session.tmuxSessionName) : "";
+        paneCaptureForObservation = session.tmuxSessionName ? await deps.paneCapture(session.tmuxSessionName) : "";
       }
       return paneCaptureForObservation;
     };
     if (tmuxAlive && pane && session.runtimeId !== "shell") {
-      activeElapsedTimer = observeActiveElapsedTimer(adapterState, capturePaneForObservation());
+      activeElapsedTimer = observeActiveElapsedTimer(adapterState, await capturePaneForObservation());
     }
 
     // First-pass lifecycle signals (deterministic). At most one applies.
@@ -367,7 +367,7 @@ export async function runStatusMonitorTick(
     if (liveBranch && tmuxAlive) {
       const observation = adapter.observe(
         adapterState,
-        buildContext(deps, session, monitorState, opts, activityChanged, paneCaptureForObservation, activeElapsedTimer),
+        buildContext(deps, monitorState, opts, activityChanged, await capturePaneForObservation(), activeElapsedTimer),
       );
       monitorState.hasObservedSinceBoot = true;
       if (observation !== null) {
@@ -449,15 +449,14 @@ export async function runStatusMonitorTick(
 
 function buildContext(
   deps: MonitorTickDeps,
-  session: AgentSession,
   monitorState: MonitorSessionState,
   opts: MonitorTickOptions,
   activityChanged: boolean,
-  paneCapture: string | null,
+  paneCapture: string,
   activeElapsedTimer: ActiveElapsedTimerProbe | null,
 ): ObservationContext {
   return {
-    paneCapture: paneCapture ?? (session.tmuxSessionName ? deps.paneCapture(session.tmuxSessionName) : ""),
+    paneCapture,
     tmuxActivityChangedSinceLastTick: activityChanged,
     ticksSinceActivityChange: monitorState.ticksSinceActivityChange,
     source: opts.source,
