@@ -12,13 +12,13 @@ const apiBaseUrl = process.env.CITADEL_BASE_URL || `http://127.0.0.1:${managedAp
 const webBaseUrl = process.env.CITADEL_WEB_URL || `http://127.0.0.1:${managedWebPort}`;
 const managedProcesses: ChildProcess[] = [];
 const managedDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-perf-runtime-"));
-const webVisibleBudgetMs = readPositiveInt(
-  process.env.CITADEL_PERF_WEB_VISIBLE_MAX_MS,
-  process.env.CI === "true" ? 2500 : 2000,
-);
 const workspaceSwitchBudgetMs = readPositiveInt(
   process.env.CITADEL_PERF_WORKSPACE_SWITCH_MAX_MS,
   process.env.CI === "true" ? 1500 : 1000,
+);
+const webInitialLoadBudgetMs = readPositiveInt(
+  process.env.CITADEL_PERF_WEB_ADE_MAX_MS,
+  process.env.CI === "true" ? 2500 : 2000,
 );
 
 await ensureLocalServices();
@@ -70,7 +70,7 @@ try {
         .locator(`.terminal-active .terminal-xterm-host[aria-label="Terminal ${sessionName}"]`)
         .waitFor({ state: "visible" });
     };
-    await time("web_ade_visible", webVisibleBudgetMs, async () => {
+    await time("web_ade_visible", webInitialLoadBudgetMs, async () => {
       await page.goto(webBaseUrl);
       // The current cockpit identifies itself via the cit-brand "Citadel"
       // and the agent-stage main element rather than the old ADE copy.

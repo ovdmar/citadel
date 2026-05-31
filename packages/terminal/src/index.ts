@@ -5,7 +5,13 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 export { submitPrompt } from "./submit-prompt.js";
-export { ensureTmuxExtendedKeys, tmuxPrefix, tmuxSocketNameForWorkspace } from "./tmux.js";
+export {
+  DEFAULT_TMUX_HISTORY_LIMIT,
+  ensureTmuxExtendedKeys,
+  tmuxHistoryLimit,
+  tmuxPrefix,
+  tmuxSocketNameForWorkspace,
+} from "./tmux.js";
 export type { TmuxSocketName } from "./tmux.js";
 import { ensureTmuxExtendedKeys, tmuxPrefix } from "./tmux.js";
 
@@ -479,6 +485,7 @@ export async function ensureCitadelTmuxRunning(): Promise<TmuxServerOwnership> {
 
 export {
   captureTmux,
+  captureTmuxAsync,
   captureTmuxSnapshot,
   captureTmuxVisibleScreen,
   captureTranscript,
