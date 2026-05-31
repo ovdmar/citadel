@@ -339,14 +339,16 @@ describe("TerminalPane xterm WebSocket renderer", () => {
 
     await act(async () => ws.open());
 
-    for (const [cols, rows] of [
+    const invalidDimensions: Array<[number, number]> = [
       [0, 24],
       [80, 0],
       [-1, 24],
       [80, -1],
       [Number.NaN, 24],
       [80, Number.POSITIVE_INFINITY],
-    ]) {
+    ];
+
+    for (const [cols, rows] of invalidDimensions) {
       term.cols = cols;
       term.rows = rows;
       observer.trigger();
