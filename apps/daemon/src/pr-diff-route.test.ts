@@ -7,8 +7,8 @@ import { createDaemonApp } from "./app.js";
 
 const dirs: string[] = [];
 
-afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+afterEach(async () => {
+  for (const dir of dirs.splice(0)) await removeFixtureDir(dir);
 });
 
 describe("PR diff route", () => {
@@ -70,3 +70,16 @@ describe("PR diff route", () => {
     }
   });
 });
+
+async function removeFixtureDir(dir: string) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!["ENOTEMPTY", "EBUSY", "EPERM"].includes(code ?? "") || attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+}
