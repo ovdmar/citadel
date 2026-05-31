@@ -118,7 +118,11 @@ export async function createAgentSession(
   let tmux: Awaited<ReturnType<typeof ensureTmuxSession>>;
   let runtimeLaunchStartedMs: number | null = null;
   try {
-    tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path, terminal: deps.terminal ?? DEFAULT_TERMINAL_PROFILE });
+    tmux = await ensureTmuxSession({
+      sessionName,
+      cwd: workspace.path,
+      terminal: deps.terminal ?? DEFAULT_TERMINAL_PROFILE,
+    });
     if (!isShellLikeCommand) {
       runtimeLaunchStartedMs =
         input.runtimeId === "codex"

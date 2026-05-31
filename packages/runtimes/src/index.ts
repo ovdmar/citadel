@@ -158,7 +158,10 @@ export function clearRuntimeHealthProbeCache() {
   runtimeHealthProbeCache.clear();
 }
 
-export function listRuntimeHealth(configured: AgentRuntimeConfig[], options: RuntimeHealthOptions = {}): AgentRuntime[] {
+export function listRuntimeHealth(
+  configured: AgentRuntimeConfig[],
+  options: RuntimeHealthOptions = {},
+): AgentRuntime[] {
   const checkCommandExists = options.commandExists ?? commandExists;
   const probeClaude =
     options.probeClaudeCode ?? ((runtime: AgentRuntimeConfig) => probeClaudeCodeHealth(runtime.command));

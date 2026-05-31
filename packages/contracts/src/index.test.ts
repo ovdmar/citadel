@@ -29,8 +29,8 @@ import {
   WorkspaceDiffSchema,
   WorkspaceReadinessSchema,
   WorkspaceRecentCommitsSchema,
-  WorkspaceSessionSchema,
   WorkspaceSchema,
+  WorkspaceSessionSchema,
 } from "./index.js";
 
 const timestamp = "2026-05-17T00:00:00.000Z";

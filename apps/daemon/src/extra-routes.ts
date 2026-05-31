@@ -133,17 +133,17 @@ export function registerWorkspaceExtraRoutes(input: {
   );
 
   const renameWorkspaceSession = asyncRoute(async (req: express.Request, res: express.Response) => {
-      const sessionId = req.params.sessionId;
-      if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
-      const patch = (req.body ?? {}) as Record<string, unknown>;
-      const displayName = typeof patch.displayName === "string" ? patch.displayName.trim() : "";
-      if (!displayName) return res.status(400).json({ error: "display_name_required" });
-      const session = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
-      if (!session) return res.status(404).json({ error: "session_not_found" });
-      store.updateWorkspaceSessionDisplayName(sessionId, displayName);
-      const updated = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
-      emit(session.kind === "agent" ? "agent.updated" : "terminal.updated", { sessionId });
-      res.json({ session: updated });
+    const sessionId = req.params.sessionId;
+    if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
+    const patch = (req.body ?? {}) as Record<string, unknown>;
+    const displayName = typeof patch.displayName === "string" ? patch.displayName.trim() : "";
+    if (!displayName) return res.status(400).json({ error: "display_name_required" });
+    const session = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
+    if (!session) return res.status(404).json({ error: "session_not_found" });
+    store.updateWorkspaceSessionDisplayName(sessionId, displayName);
+    const updated = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
+    emit(session.kind === "agent" ? "agent.updated" : "terminal.updated", { sessionId });
+    res.json({ session: updated });
   });
   app.patch("/api/workspace-sessions/:sessionId", renameWorkspaceSession);
   app.patch("/api/agent-sessions/:sessionId", renameWorkspaceSession);

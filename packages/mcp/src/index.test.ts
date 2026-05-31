@@ -113,8 +113,9 @@ describe("mcp helpers", () => {
         {
           id: "sess_test",
           workspaceId: "ws_test",
-          runtimeId: "shell",
-          displayName: "Shell",
+          kind: "agent",
+          runtimeId: "codex",
+          displayName: "Codex",
           status: "running",
           transport: "connected",
           tmuxSessionName: "citadel_test",
@@ -128,7 +129,7 @@ describe("mcp helpers", () => {
     expect(resource.sessions[0]).toEqual({
       id: "sess_test",
       workspaceId: "ws_test",
-      runtimeId: "shell",
+      runtimeId: "codex",
       status: "running",
       tmuxSessionName: "citadel_test",
     });
@@ -182,8 +183,9 @@ describe("mcp helpers", () => {
         {
           id: "sess_test",
           workspaceId: "ws_test",
-          runtimeId: "shell",
-          displayName: "Shell",
+          kind: "agent",
+          runtimeId: "codex",
+          displayName: "Codex",
           status: "running",
           transport: "connected",
           tmuxSessionName: "citadel_test",
@@ -238,22 +240,22 @@ describe("mcp helpers", () => {
       ],
       runtimes: [
         {
-          id: "shell",
-          displayName: "Shell",
-          command: "bash",
-          args: ["-l"],
+          id: "codex",
+          displayName: "Codex",
+          command: "codex",
+          args: [],
           health: "healthy",
           healthReason: null,
           capabilities: {
-            supportsPrompt: false,
-            supportsResume: false,
+            supportsPrompt: true,
+            supportsResume: true,
             supportsModelSelection: false,
             supportsTranscript: false,
-            supportsStatusDetection: false,
-            supportsNonInteractiveGoal: false,
+            supportsStatusDetection: true,
+            supportsNonInteractiveGoal: true,
             supportsShell: true,
             supportsUsage: false,
-            supportsTui: false,
+            supportsTui: true,
           },
         },
       ],
@@ -303,7 +305,7 @@ describe("mcp helpers", () => {
       error: "mutating_tool_requires_daemon",
     });
     expect(
-      callMcpTool({ name: "start_agent_session", arguments: { workspaceId: "ws_test", runtimeId: "shell" } }, context),
+      callMcpTool({ name: "start_agent_session", arguments: { workspaceId: "ws_test", runtimeId: "codex" } }, context),
     ).toEqual({
       error: "mutating_tool_requires_daemon",
     });

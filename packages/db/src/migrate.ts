@@ -310,9 +310,9 @@ export function runMigrations(
 }
 
 function tableExists(db: SqliteDatabase, tableName: string): boolean {
-  const row = db
-    .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-    .get(tableName) as { name: string } | undefined;
+  const row = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?").get(tableName) as
+    | { name: string }
+    | undefined;
   return row?.name === tableName;
 }
 
@@ -488,7 +488,9 @@ function assertExpectedAgentSessionDependencies(db: SqliteDatabase) {
     (row) => !(row.type === "table" && row.name === "agent_sessions" && row.tblName === "agent_sessions"),
   );
   if (unexpectedSqlRefs.length > 0) {
-    throw new Error(`Unexpected schema objects reference agent_sessions: ${unexpectedSqlRefs.map((r) => r.name).join(", ")}`);
+    throw new Error(
+      `Unexpected schema objects reference agent_sessions: ${unexpectedSqlRefs.map((r) => r.name).join(", ")}`,
+    );
   }
 
   const tables = db

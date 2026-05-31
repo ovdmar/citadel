@@ -1,10 +1,10 @@
 import type {
-  AgentSession,
   Repo,
   Workspace,
   WorkspaceCockpitSummary,
   WorkspaceDiff,
   WorkspaceRecentCommits,
+  WorkspaceSession,
 } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { PanelRightClose, Plus, RefreshCw } from "lucide-react";
@@ -21,7 +21,7 @@ type InspectorTab = "stats" | "diff";
 export function Inspector(props: {
   workspace: Workspace;
   repo: Repo | null;
-  sessions: AgentSession[];
+  sessions: WorkspaceSession[];
   summary: WorkspaceCockpitSummary | undefined;
   onCollapse: () => void;
 }) {

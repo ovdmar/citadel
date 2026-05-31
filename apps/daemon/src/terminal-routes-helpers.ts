@@ -76,7 +76,11 @@ export function buildRespawnTmux(
   return async (session) => {
     const ctx = resolveSessionContext(store, config, session);
     if (!ctx) return null;
-    const tmux = await ensureTmuxSession({ sessionName: ctx.sessionName, cwd: ctx.workspacePath, terminal: config.terminal });
+    const tmux = await ensureTmuxSession({
+      sessionName: ctx.sessionName,
+      cwd: ctx.workspacePath,
+      terminal: config.terminal,
+    });
     if (session.kind === "agent" && ctx.runtime && !isShellCommand(ctx.runtime.command)) {
       const argv = [...ctx.runtime.args];
       if (session.runtimeSessionId && ctx.runtime.resumeArg) {

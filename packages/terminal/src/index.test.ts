@@ -84,20 +84,35 @@ describe("tmux terminal gateway helpers", () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
     dirs.push(cwd);
     const sessionName = `citadel_extkeys_${Date.now().toString(36)}`;
-    sessions.push(sessionName);
-    await ensureTmuxSession({
-      sessionName,
-      cwd,
-    });
+    const socketName = `citadel-extkeys-${process.pid}-${Date.now().toString(36)}`;
+    const originalSocket = process.env.CITADEL_TMUX_SOCKET;
+    try {
+      process.env.CITADEL_TMUX_SOCKET = socketName;
+      await ensureTmuxSession({
+        sessionName,
+        cwd,
+      });
 
-    ensureTmuxExtendedKeys();
+      ensureTmuxExtendedKeys();
 
-    const extendedKeys = execTmux(["show-options", "-s", "-g", "extended-keys"]);
-    const terminalFeatures = execTmux(["show-options", "-s", "-g", "terminal-features"]);
-    const historyLimit = execTmux(["show-options", "-g", "history-limit"]);
-    expect(extendedKeys).toContain("extended-keys on");
-    expect(terminalFeatures).toMatch(/xterm\*.*extkeys/);
-    expect(historyLimit).toContain("history-limit 5000");
+      const extendedKeys = execTmux(["-L", socketName, "show-options", "-s", "-g", "extended-keys"]);
+      const terminalFeatures = execTmux(["-L", socketName, "show-options", "-s", "-g", "terminal-features"]);
+      const historyLimit = execTmux(["-L", socketName, "show-options", "-g", "history-limit"]);
+      expect(extendedKeys).toContain("extended-keys on");
+      expect(terminalFeatures).toMatch(/xterm\*.*extkeys/);
+      expect(historyLimit).toContain("history-limit 5000");
+    } finally {
+      if (originalSocket === undefined) {
+        Reflect.deleteProperty(process.env, "CITADEL_TMUX_SOCKET");
+      } else {
+        process.env.CITADEL_TMUX_SOCKET = originalSocket;
+      }
+      try {
+        execTmux(["-L", socketName, "kill-server"]);
+      } catch {
+        // The isolated tmux server may already be gone if setup failed.
+      }
+    }
   });
 
   it("submitPrompt pastes the prompt and presses Enter so the runtime actually executes it", async () => {

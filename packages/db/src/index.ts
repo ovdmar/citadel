@@ -360,7 +360,9 @@ export class SqliteStore {
   }
 
   listSessions(workspaceId?: string): AgentSession[] {
-    return this.listWorkspaceSessions(workspaceId).filter((session): session is AgentSession => session.kind === "agent");
+    return this.listWorkspaceSessions(workspaceId).filter(
+      (session): session is AgentSession => session.kind === "agent",
+    );
   }
 
   insertWorkspaceSession(session: WorkspaceSessionInput) {

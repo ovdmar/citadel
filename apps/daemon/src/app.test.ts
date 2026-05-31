@@ -115,9 +115,9 @@ describe("createDaemonApp", () => {
         agentRuntimes: [expect.objectContaining({ id: "test-agent" })],
       });
       expect(
-        await getJson<{ usage: { runtimeId: string; status: string } }>(`${baseUrl}/api/runtimes/shell/usage`),
+        await getJson<{ usage: { runtimeId: string; status: string } }>(`${baseUrl}/api/runtimes/test-agent/usage`),
       ).toMatchObject({
-        usage: { runtimeId: "shell", status: "unavailable" },
+        usage: { runtimeId: "test-agent", status: "unavailable" },
       });
       expect(await getJson<{ activity: unknown[] }>(`${baseUrl}/api/activity`)).toEqual({ activity: [] });
       expect(await getJson<{ activity: unknown[] }>(`${baseUrl}/api/mcp/resources/activity`)).toEqual({
@@ -339,8 +339,9 @@ describe("createDaemonApp", () => {
         return {
           id: "sess_mcp",
           workspaceId: input.workspaceId,
+          kind: "agent",
           runtimeId: input.runtimeId,
-          displayName: input.displayName ?? "MCP Shell",
+          displayName: input.displayName ?? "MCP Agent",
           status: "running",
           transport: "disconnected",
           tmuxSessionName: "citadel_mcp",
@@ -361,7 +362,7 @@ describe("createDaemonApp", () => {
           method: "tools/call",
           params: {
             name: "start_agent_session",
-            arguments: { workspaceId: "ws_test", runtimeId: "shell", displayName: "MCP Shell" },
+            arguments: { workspaceId: "ws_test", runtimeId: "test-agent", displayName: "MCP Agent" },
           },
         },
       );
@@ -654,7 +655,7 @@ describe("createDaemonApp", () => {
       expect(ready).toBe(true);
       const sessionResp = await postJson<{ session: { id: string } }>(`${baseUrl}/api/agent-sessions`, {
         workspaceId: workspaceResp.workspaceId,
-        runtimeId: "shell",
+        runtimeId: "test-agent",
       });
       const stop = await fetch(`${baseUrl}/api/agent-sessions/${sessionResp.session.id}`, { method: "DELETE" });
       expect(stop.status).toBe(202);
@@ -711,8 +712,8 @@ describe("createDaemonApp", () => {
     fixture.store.insertSession({
       id: "sess_remove",
       workspaceId: "ws_remove",
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "test-agent",
+      displayName: "Test Agent",
       status: "running",
       transport: "disconnected",
       tmuxSessionName: null,
