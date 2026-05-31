@@ -112,6 +112,10 @@ export async function sendAgentMessage(
   const optimistic = input.optimistic ?? true;
   const result = await submitPrompt(session.tmuxSessionName, input.message, {
     socketName: session.tmuxSocketName ?? null,
+    // Plain terminal sessions can be sitting in programs that do not echo
+    // input reliably. The shell/program itself is the runtime, so send the
+    // message without requiring a visual pre-submit echo.
+    skipVerification: session.runtimeId === "shell",
   });
   if (result.ok) {
     // We don't record the message here — the runtime's own transcript

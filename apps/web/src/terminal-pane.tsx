@@ -11,18 +11,23 @@ type TerminalError = {
   detail: string;
 };
 
-export type TerminalSocketMessage = {
-  type?: string;
-  data?: string;
-};
-
 const RUNBOOK_URL = "/docs/operations/terminal-runbook";
 const XTERM_FONT = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
 const SHIFT_ENTER_INPUT = "\n";
+const LINE_START_KEY = "C-a";
+const LINE_END_KEY = "C-e";
+const LINE_KILL_KEY = "C-u";
 const TERMINAL_SCROLLBACK_LINES = 20_000;
 const TERMINAL_AUTO_RETRY_LIMIT = 3;
 const TERMINAL_AUTO_RETRY_BACKOFF_MS = 5_000;
 const AUTO_RETRYABLE_TERMINAL_ERRORS = new Set(["terminal_disconnected", "terminal_socket_error"]);
+type TerminalPaneKey = typeof LINE_START_KEY | typeof LINE_END_KEY | typeof LINE_KILL_KEY;
+
+export type TerminalSocketMessage = {
+  type?: string;
+  data?: string;
+  key?: TerminalPaneKey;
+};
 
 /**
  * Per-session handle used by Stage tabs to drive a live terminal WebSocket.
@@ -165,8 +170,10 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
     const host = containerRef.current;
     if (!host) return;
     let disposed = false;
+    let resizeFrame: number | null = null;
+    let lastSentResize: { cols: number; rows: number } | null = null;
     const terminal = new Terminal({
-      allowTransparency: true,
+      allowTransparency: false,
       convertEol: false,
       cursorBlink: true,
       fontFamily: XTERM_FONT,
@@ -189,24 +196,39 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
       latestSelectionText = terminal.hasSelection() ? terminal.getSelection() : "";
     };
 
-    const sendResize = () => {
+    const runResize = () => {
+      if (disposed) return;
       try {
         fit.fit();
       } catch {
         return;
       }
+      const cols = terminal.cols;
+      const rows = terminal.rows;
+      if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) return;
+      if (lastSentResize?.cols === cols && lastSentResize.rows === rows) return;
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows }));
+        ws.send(JSON.stringify({ type: "resize", cols, rows }));
+        lastSentResize = { cols, rows };
       }
     };
+
+    const scheduleResize = () => {
+      if (disposed || resizeFrame !== null) return;
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null;
+        runResize();
+      });
+    };
+
     const resizeObserver =
       typeof ResizeObserver === "undefined"
         ? null
         : new ResizeObserver(() => {
-            sendResize();
+            scheduleResize();
           });
     resizeObserver?.observe(host);
-    window.addEventListener("resize", sendResize);
+    window.addEventListener("resize", scheduleResize);
     const nativeKeyHandler = (event: KeyboardEvent) => {
       if (!handleTerminalKeyEvent(event, terminal, sessionId, ws, host, latestSelectionText)) {
         event.preventDefault();
@@ -233,9 +255,10 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
       clearAutoRetryTimer();
       recordTerminalClientEvent(sessionId, "websocket.open");
       setConnectionState("attached");
-      sendResize();
+      scheduleResize();
     });
     ws.addEventListener("message", (event) => {
+      if (disposed) return;
       if (typeof event.data !== "string") {
         void writeTerminalBinary(event.data, terminal, decoderRef.current);
         return;
@@ -272,15 +295,19 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
       setError(nextError);
       scheduleAutoRetry(nextError.code);
     });
-    window.setTimeout(sendResize, 0);
+    window.setTimeout(scheduleResize, 0);
     return () => {
       disposed = true;
+      if (resizeFrame !== null) {
+        window.cancelAnimationFrame(resizeFrame);
+        resizeFrame = null;
+      }
       inputDisposable.dispose();
       selectionDisposable.dispose();
       resizeObserver?.disconnect();
       host.removeEventListener("keydown", nativeKeyHandler, true);
       document.removeEventListener("copy", nativeCopyHandler, true);
-      window.removeEventListener("resize", sendResize);
+      window.removeEventListener("resize", scheduleResize);
       ws.close();
       terminal.dispose();
       if (terminalRef.current === terminal) terminalRef.current = null;
@@ -389,29 +416,29 @@ function handleTerminalKeyEvent(
     sendTerminalControl(ws, { type: "input", data: SHIFT_ENTER_INPUT });
     return false;
   }
-  if (isMacPlatform()) {
-    if (key === "backspace" && event.metaKey && !event.ctrlKey && !event.altKey) {
-      sendTerminalInput(ws, "\u0015");
+  if (isLineKillShortcut(key, event)) {
+    sendTerminalKey(ws, LINE_KILL_KEY);
+    return false;
+  }
+  if (event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (key === "arrowleft" && !event.shiftKey) {
+      sendTerminalKey(ws, LINE_START_KEY);
       return false;
     }
-    if (key === "arrowleft" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-      sendTerminalInput(ws, "\u0001");
+    if (key === "arrowright" && !event.shiftKey) {
+      sendTerminalKey(ws, LINE_END_KEY);
       return false;
     }
-    if (key === "arrowright" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-      sendTerminalInput(ws, "\u0005");
-      return false;
-    }
-    if (key === "c" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+    if (key === "c" && !event.shiftKey) {
       if (copyableTerminalSelectionText(terminal, host, selectionSnapshot)) return true;
       sendTerminalInterrupt(ws, sessionId);
       return false;
     }
-    if (key === "v" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+    if (key === "v" && !event.shiftKey) {
       void pasteClipboardIntoTerminal(ws);
       return false;
     }
-    if (key === "a" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+    if (key === "a" && !event.shiftKey) {
       terminal.selectAll();
       return false;
     }
@@ -419,8 +446,18 @@ function handleTerminalKeyEvent(
   return true;
 }
 
+function isLineKillShortcut(key: string, event: KeyboardEvent): boolean {
+  if (key !== "backspace" || event.shiftKey || event.altKey) return false;
+  if (event.metaKey && !event.ctrlKey) return true;
+  return event.ctrlKey && !event.metaKey && !isApplePlatform();
+}
+
 function sendTerminalInput(ws: WebSocket, data: string): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
+}
+
+function sendTerminalKey(ws: WebSocket, key: TerminalPaneKey): void {
+  sendTerminalControl(ws, { type: "key", key });
 }
 
 function sendTerminalControl(ws: WebSocket, message: TerminalSocketMessage): void {
@@ -484,7 +521,7 @@ async function pasteClipboardIntoTerminal(ws: WebSocket): Promise<void> {
   if (text) sendTerminalInput(ws, text);
 }
 
-function isMacPlatform(): boolean {
+function isApplePlatform(): boolean {
   const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
   return /Mac|iPhone|iPad|iPod/.test(nav.userAgentData?.platform || navigator.platform || "");
 }
