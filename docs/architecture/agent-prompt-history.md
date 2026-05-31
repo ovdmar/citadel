@@ -50,7 +50,10 @@ followed by a closest-first-prompt-timestamp scoring pass.
 
 ### codex
 
-Transcripts live at `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<sessionId>.jsonl`.
+For Citadel-launched sessions, Codex runs with a workspace-scoped
+`CODEX_SQLITE_HOME`, while `CODEX_HOME` stays at the operator's global Codex
+home. Transcripts remain at
+`~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<sessionId>.jsonl`.
 Each file opens with a `session_meta` payload carrying `id`, `cwd`, and
 `timestamp`. User input arrives as `response_item` lines with
 `payload.role === "user"` and `content[].type === "input_text"`. We skip
