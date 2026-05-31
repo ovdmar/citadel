@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
 import type { AgentSession } from "@citadel/contracts";
-import { act, createElement } from "react";
+import { createElement } from "react";
+import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -62,9 +63,10 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await act(async () => {
+  flushSync(() => {
     for (const root of roots.splice(0)) root.unmount();
   });
+  await settle();
 });
 
 describe("focusActiveTerminal", () => {
@@ -84,10 +86,10 @@ describe("focusActiveTerminal", () => {
     const root = createRoot(rootElement);
     roots.push(root);
 
-    await act(async () => {
+    flushSync(() => {
       root.render(createElement(TerminalPane, { session: sessionFixture() }));
-      await settle();
     });
+    await settle();
 
     expect(getTerminalHandle("sess_1")).toBeDefined();
     expect(isRegisteredTerminalMessageSource(null, "sess_1")).toBe(true);
@@ -153,19 +155,19 @@ describe("TerminalPane theme handling", () => {
     const root = createRoot(rootElement);
     roots.push(root);
 
-    await act(async () => {
+    flushSync(() => {
       root.render(createElement(TerminalPane, { session: sessionFixture() }));
-      await settle();
     });
+    await settle();
 
     expect(apiMocks.api).toHaveBeenCalledTimes(1);
     expect(searchParam(apiCallPath(0), "theme")).toBe("dark");
     expect(searchParam(apiCallPath(0), "force")).toBeNull();
 
-    await act(async () => {
+    flushSync(() => {
       applyThemePreference("light");
-      await settle();
     });
+    await settle();
 
     expect(apiMocks.api).toHaveBeenCalledTimes(1);
   });
