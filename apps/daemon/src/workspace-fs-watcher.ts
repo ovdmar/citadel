@@ -21,8 +21,10 @@ const IGNORED_TOP_LEVEL = new Set([
 ]);
 const IGNORED_GIT_INTERNAL = new Set(["objects", "logs", "lfs", "hooks"]);
 const DEBOUNCE_MS = 350;
+const FALLBACK_POLL_MS = 500;
 
 type ProviderCache = Map<string, { expiresAt: number; value: unknown }>;
+type WatchHandle = { close: () => void };
 
 type WorkspaceFsWatcherDeps = {
   listWorkspaces: () => Workspace[];
@@ -50,9 +52,8 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
   // the *callback*, not the watch installation. With node_modules included
   // a single workspace can hold thousands of watches; tests churning files
   // in node_modules then flood the event loop with ignored callbacks and
-  // ttyd's WS keepalive starts missing pings (visible as the cockpit's
-  // Reconnecting/Reconnected overlay storm).
-  const watchers = new Map<string, fs.FSWatcher[]>();
+  // terminal WebSockets start missing timely reads/writes.
+  const watchers = new Map<string, WatchHandle[]>();
   const debounces = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingHeadBusts = new Set<string>();
   const failed = new Set<string>();
@@ -73,8 +74,8 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
     );
   };
 
-  const watchTree = (rootPath: string, callback: (rel: string) => void): fs.FSWatcher[] => {
-    const acc: fs.FSWatcher[] = [];
+  const watchTree = (rootPath: string, callback: (rel: string) => void): WatchHandle[] => {
+    const acc: WatchHandle[] = [];
     const walk = (absDir: string, relDir: string) => {
       if (relDir) {
         const parts = relDir.split(path.sep);
@@ -113,6 +114,22 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
     return acc;
   };
 
+  const pollTree = (rootPath: string, callback: (rel: string) => void): WatchHandle => {
+    let previous = snapshotTree(rootPath);
+    const timer = setInterval(() => {
+      const next = snapshotTree(rootPath);
+      for (const [rel, signature] of next) {
+        if (previous.get(rel) !== signature) callback(rel);
+      }
+      for (const rel of previous.keys()) {
+        if (!next.has(rel)) callback(rel);
+      }
+      previous = next;
+    }, FALLBACK_POLL_MS);
+    timer.unref?.();
+    return { close: () => clearInterval(timer) };
+  };
+
   const closeFor = (id: string) => {
     const ws = watchers.get(id);
     if (ws) for (const w of ws) w.close();
@@ -138,11 +155,11 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
       try {
         const set = watchTree(ws.path, onChange(id));
         if (set.length === 0) {
-          failed.add(id);
-          console.error(`[fs-watch] failed to install any watch for ${ws.path}`);
-          continue;
+          console.error(`[fs-watch] falling back to polling for ${ws.path}`);
+          watchers.set(id, [pollTree(ws.path, onChange(id))]);
+        } else {
+          watchers.set(id, set);
         }
-        watchers.set(id, set);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`[fs-watch] failed to watch ${ws.path}: ${message}`);
@@ -199,4 +216,35 @@ function isIgnored(rel: string): boolean {
     if (sub && IGNORED_GIT_INTERNAL.has(sub)) return true;
   }
   return false;
+}
+
+function snapshotTree(rootPath: string): Map<string, string> {
+  const snapshot = new Map<string, string>();
+  const walk = (absDir: string, relDir: string) => {
+    if (relDir && isIgnored(relDir)) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const rel = relDir ? path.join(relDir, entry.name) : entry.name;
+      if (isIgnored(rel)) continue;
+      const abs = path.join(absDir, entry.name);
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        walk(abs, rel);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      try {
+        const stat = fs.statSync(abs);
+        snapshot.set(rel, `${stat.mtimeMs}:${stat.size}`);
+      } catch {
+        // File disappeared while scanning; the next poll will reconcile it.
+      }
+    }
+  };
+  walk(rootPath, "");
+  return snapshot;
 }

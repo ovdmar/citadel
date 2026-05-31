@@ -202,7 +202,6 @@ server.listen(config.port, config.bindHost, () => {
         try {
           const summary = await reapOrphans({
             store,
-            ttyd: daemon.ttyd,
             diagnostics: daemon.diagnostics,
             reapTmuxSessions: shouldReapTmuxOrphans({
               daemonPort: config.port,
@@ -212,12 +211,11 @@ server.listen(config.port, config.bindHost, () => {
               allowSharedTmuxReaper: process.env.CITADEL_ALLOW_SHARED_TMUX_REAPER,
             }),
           });
-          if (summary.tmuxReaped.length > 0 || summary.ttydReleased.length > 0) {
-            console.log(`[orphan-reaper] tmux=${summary.tmuxReaped.length} ttyd=${summary.ttydReleased.length}`);
+          if (summary.tmuxReaped.length > 0) {
+            console.log(`[orphan-reaper] tmux=${summary.tmuxReaped.length}`);
           }
           daemon.diagnostics.log("reaper", "orphan.done", {
             tmuxReaped: summary.tmuxReaped,
-            ttydReleased: summary.ttydReleased,
           });
         } catch (error) {
           console.warn(`Orphan reaper failed: ${error instanceof Error ? error.message : String(error)}`);
