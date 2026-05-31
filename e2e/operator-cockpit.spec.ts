@@ -309,6 +309,70 @@ test("desktop primary terminal WebSocket streams a fresh shell session", async (
   }
 });
 
+test("desktop terminal surface is opaque and stable in the cockpit", async ({ page, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "terminal renderer coverage runs once against the desktop cockpit");
+  const fixture = createGitFixture();
+  let workspaceId: string | null = null;
+  try {
+    const repo = await registerRepo(request, fixture);
+    const workspaceName = `render-${Date.now().toString(36)}`;
+    workspaceId = (await createWorkspace(request, repo.id, workspaceName)).workspaceId;
+    await waitForWorkspace(request, workspaceId, "ready");
+    await startSession(request, workspaceId, "Render Shell");
+
+    await page.goto("/");
+    const navigator = page.locator("aside[aria-label='Navigator']");
+    await navigator.getByRole("button", { name: new RegExp(workspaceName, "i") }).click();
+    const sessionTab = page.getByRole("button", { name: "Switch to Render Shell" });
+    await expect(sessionTab).toBeVisible();
+    await sessionTab.click();
+
+    const terminalHost = page.locator('.terminal-active .terminal-xterm-host[aria-label="Terminal Render Shell"]');
+    await expect(terminalHost).toBeVisible();
+    await expect(terminalHost.locator(".xterm")).toBeVisible();
+    await expect(terminalHost.locator(".xterm-viewport")).toHaveCount(1);
+
+    const beforeBox = await terminalHost.boundingBox();
+    assertStableTerminalBox(beforeBox, "initial terminal host");
+    const viewport = page.viewportSize();
+    if (viewport) {
+      await page.setViewportSize({ width: viewport.width - 1, height: viewport.height });
+    }
+    await page.waitForTimeout(150);
+    const afterBox = await terminalHost.boundingBox();
+    assertStableTerminalBox(afterBox, "terminal host after viewport nudge");
+    if (!beforeBox || !afterBox) throw new Error("terminal host lost its bounding box");
+    expect(Math.abs(afterBox.width - beforeBox.width)).toBeLessThanOrEqual(8);
+    expect(Math.abs(afterBox.height - beforeBox.height)).toBeLessThanOrEqual(4);
+
+    const stageUnderlay = await page.locator(".stage-body").evaluate((element) => {
+      const before = getComputedStyle(element, "::before");
+      return { backgroundImage: before.backgroundImage, content: before.content };
+    });
+    expect(stageUnderlay.backgroundImage).toBe("none");
+    expect(["none", '""']).toContain(stageUnderlay.content);
+
+    const backgrounds = await terminalHost.evaluate((element) => {
+      const surface = element.closest(".terminal-surface");
+      const viewportElement = element.querySelector(".xterm-viewport");
+      if (!(surface instanceof HTMLElement) || !(viewportElement instanceof HTMLElement)) {
+        throw new Error("terminal surface or viewport missing");
+      }
+      return {
+        host: getComputedStyle(element).backgroundColor,
+        surface: getComputedStyle(surface).backgroundColor,
+        viewport: getComputedStyle(viewportElement).backgroundColor,
+      };
+    });
+    for (const [name, color] of Object.entries(backgrounds)) {
+      expect(isTransparentCssColor(color), `${name} background should be opaque, got ${color}`).toBe(false);
+    }
+  } finally {
+    if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
+    fs.rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
 async function centerPoint(locator: import("@playwright/test").Locator) {
   const box = await locator.boundingBox();
   if (!box) throw new Error("Expected locator to have a bounding box");
@@ -413,6 +477,16 @@ function parseTerminalSocketMessage(raw: RawData): { type: string; data?: string
   }
 }
 
+function assertStableTerminalBox(box: { width: number; height: number } | null, label: string) {
+  if (!box) throw new Error(`${label} has no bounding box`);
+  expect(box.width, `${label} width`).toBeGreaterThan(240);
+  expect(box.height, `${label} height`).toBeGreaterThan(180);
+}
+
+function isTransparentCssColor(color: string) {
+  return color === "transparent" || color === "rgba(0, 0, 0, 0)";
+}
+
 async function waitForWorkspace(request: APIRequestContext, workspaceId: string, lifecycle: string) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const response = await apiGet(request, `${API_BASE}/api/workspaces`);
@@ -425,14 +499,27 @@ async function waitForWorkspace(request: APIRequestContext, workspaceId: string,
 }
 
 async function registerRepo(request: APIRequestContext, fixture: ReturnType<typeof createGitFixture>, name?: string) {
-  const data = {
-    rootPath: fixture.repoPath,
-    name: name ?? `E2E ${Date.now().toString(36)}`,
+  const repoName = name ?? `E2E ${Date.now().toString(36)}`;
+  const rootPath = path.resolve(fixture.repoPath);
+  const repoData = {
+    rootPath,
+    name: repoName,
     worktreeParent: path.join(fixture.dir, "worktrees"),
   };
-  const repoResponse = await postRepoWithResetRetry(request, data);
-  expect(repoResponse.ok()).toBe(true);
-  return ((await repoResponse.json()) as { repo: { id: string } }).repo;
+
+  try {
+    const repoResponse = await postRepoWithResetRetry(request, repoData);
+    expect(repoResponse.ok()).toBe(true);
+    return ((await repoResponse.json()) as { repo: { id: string } }).repo;
+  } catch (error) {
+    const reposResponse = await apiGet(request, `${API_BASE}/api/repos`);
+    if (reposResponse.ok()) {
+      const body = (await reposResponse.json()) as { repos: Array<{ id: string; name: string; rootPath: string }> };
+      const repo = body.repos.find((candidate) => candidate.name === repoName && candidate.rootPath === rootPath);
+      if (repo) return { id: repo.id };
+    }
+    throw error;
+  }
 }
 
 async function postRepoWithResetRetry(

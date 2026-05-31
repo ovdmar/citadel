@@ -123,8 +123,10 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
     const host = containerRef.current;
     if (!host) return;
     let disposed = false;
+    let resizeFrame: number | null = null;
+    let lastSentResize: { cols: number; rows: number } | null = null;
     const terminal = new Terminal({
-      allowTransparency: true,
+      allowTransparency: false,
       convertEol: false,
       cursorBlink: true,
       fontFamily: XTERM_FONT,
@@ -147,24 +149,39 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
       latestSelectionText = terminal.hasSelection() ? terminal.getSelection() : "";
     };
 
-    const sendResize = () => {
+    const runResize = () => {
+      if (disposed) return;
       try {
         fit.fit();
       } catch {
         return;
       }
+      const cols = terminal.cols;
+      const rows = terminal.rows;
+      if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) return;
+      if (lastSentResize?.cols === cols && lastSentResize.rows === rows) return;
       if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: "resize", cols: terminal.cols, rows: terminal.rows }));
+        ws.send(JSON.stringify({ type: "resize", cols, rows }));
+        lastSentResize = { cols, rows };
       }
     };
+
+    const scheduleResize = () => {
+      if (disposed || resizeFrame !== null) return;
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null;
+        runResize();
+      });
+    };
+
     const resizeObserver =
       typeof ResizeObserver === "undefined"
         ? null
         : new ResizeObserver(() => {
-            sendResize();
+            scheduleResize();
           });
     resizeObserver?.observe(host);
-    window.addEventListener("resize", sendResize);
+    window.addEventListener("resize", scheduleResize);
     const nativeKeyHandler = (event: KeyboardEvent) => {
       if (!handleTerminalKeyEvent(event, terminal, sessionId, ws, host, latestSelectionText)) {
         event.preventDefault();
@@ -189,9 +206,10 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
       if (disposed) return;
       recordTerminalClientEvent(sessionId, "websocket.open");
       setConnectionState("attached");
-      sendResize();
+      scheduleResize();
     });
     ws.addEventListener("message", (event) => {
+      if (disposed) return;
       if (typeof event.data !== "string") {
         void writeTerminalBinary(event.data, terminal, decoderRef.current);
         return;
@@ -220,15 +238,19 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
       recordTerminalClientEvent(sessionId, "websocket.error");
       setError({ code: "terminal_socket_error", detail: "Terminal WebSocket failed." });
     });
-    window.setTimeout(sendResize, 0);
+    window.setTimeout(scheduleResize, 0);
     return () => {
       disposed = true;
+      if (resizeFrame !== null) {
+        window.cancelAnimationFrame(resizeFrame);
+        resizeFrame = null;
+      }
       inputDisposable.dispose();
       selectionDisposable.dispose();
       resizeObserver?.disconnect();
       host.removeEventListener("keydown", nativeKeyHandler, true);
       document.removeEventListener("copy", nativeCopyHandler, true);
-      window.removeEventListener("resize", sendResize);
+      window.removeEventListener("resize", scheduleResize);
       ws.close();
       terminal.dispose();
       if (terminalRef.current === terminal) terminalRef.current = null;
