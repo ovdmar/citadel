@@ -177,6 +177,39 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(getTerminalHandle("sess_1")).toBeDefined();
   });
 
+  it("keeps retained hidden panes dormant until they become active", async () => {
+    const rootElement = document.createElement("div");
+    document.body.appendChild(rootElement);
+    const root = createRoot(rootElement);
+    roots.push(root);
+    const session = sessionFixture();
+
+    await act(async () => {
+      root.render(createElement(TerminalPane, { session, active: false }));
+      await settle();
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(xtermMocks.FakeTerminal.instances).toHaveLength(0);
+    expect(getTerminalHandle("sess_1")).toBeDefined();
+
+    await act(async () => {
+      root.render(createElement(TerminalPane, { session, active: true }));
+      await settle();
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(xtermMocks.FakeTerminal.instances).toHaveLength(1);
+
+    await act(async () => {
+      root.render(createElement(TerminalPane, { session, active: false }));
+      await settle();
+    });
+
+    expect(FakeWebSocket.instances[0]?.readyState).toBe(FakeWebSocket.CLOSED);
+    expect(xtermMocks.FakeTerminal.instances[0]?.dispose).toHaveBeenCalled();
+  });
+
   it("writes WebSocket output to xterm and sends input/resize over the same socket", async () => {
     await renderTerminal();
     const ws = FakeWebSocket.instances[0];
