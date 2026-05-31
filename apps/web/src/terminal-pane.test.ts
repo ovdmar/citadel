@@ -68,19 +68,19 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: xtermMocks.FakeFitAddon }));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-class FakeWebSocket extends EventTarget {
+const FakeWebSocket = class TerminalPaneFakeWebSocket extends EventTarget {
   static CONNECTING = 0;
   static OPEN = 1;
   static CLOSING = 2;
   static CLOSED = 3;
-  static instances: FakeWebSocket[] = [];
-  readyState = FakeWebSocket.CONNECTING;
+  static instances: TerminalPaneFakeWebSocket[] = [];
+  readyState = TerminalPaneFakeWebSocket.CONNECTING;
   binaryType = "";
   sent: unknown[] = [];
 
   constructor(readonly url: string) {
     super();
-    FakeWebSocket.instances.push(this);
+    TerminalPaneFakeWebSocket.instances.push(this);
   }
 
   send(data: unknown) {
@@ -88,11 +88,11 @@ class FakeWebSocket extends EventTarget {
   }
 
   close() {
-    this.readyState = FakeWebSocket.CLOSED;
+    this.readyState = TerminalPaneFakeWebSocket.CLOSED;
   }
 
   open() {
-    this.readyState = FakeWebSocket.OPEN;
+    this.readyState = TerminalPaneFakeWebSocket.OPEN;
     this.dispatchEvent(new Event("open"));
   }
 
@@ -101,13 +101,13 @@ class FakeWebSocket extends EventTarget {
   }
 
   closeFromServer(code = 1006, reason = "") {
-    this.readyState = FakeWebSocket.CLOSED;
+    this.readyState = TerminalPaneFakeWebSocket.CLOSED;
     const event = new Event("close") as CloseEvent;
     Object.defineProperty(event, "code", { value: code });
     Object.defineProperty(event, "reason", { value: reason });
     this.dispatchEvent(event);
   }
-}
+};
 
 const roots: Root[] = [];
 
@@ -132,7 +132,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await act(async () => {
+  await flushReactUpdates(async () => {
     for (const root of roots.splice(0)) root.unmount();
   });
   vi.restoreAllMocks();
@@ -181,7 +181,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const term = xtermMocks.FakeTerminal.instances[0];
     if (!ws || !term) throw new Error("terminal rig missing");
 
-    await act(async () => ws.open());
+    await flushReactUpdates(async () => ws.open());
     ws.message(new TextEncoder().encode("snapshot").buffer);
     ws.message(new TextEncoder().encode("-chunk").buffer);
     term.emitData("abc");
@@ -197,7 +197,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const term = xtermMocks.FakeTerminal.instances[0];
     if (!ws || !term) throw new Error("terminal rig missing");
 
-    await act(async () => ws.open());
+    await flushReactUpdates(async () => ws.open());
     term.emitData("\u0003");
     const commandPalette = term.emitKey(
       new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true, cancelable: true }),
@@ -222,7 +222,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const host = document.querySelector(".terminal-xterm-host");
     if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
 
-    await act(async () => ws.open());
+    await flushReactUpdates(async () => ws.open());
     const event = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true });
     const downstream = vi.fn();
     host.addEventListener("keydown", downstream);
@@ -239,7 +239,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     await renderTerminal();
     expect(FakeWebSocket.instances).toHaveLength(1);
 
-    await act(async () => {
+    await flushReactUpdates(async () => {
       applyThemePreference("light");
       await settle();
     });
@@ -252,7 +252,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const ws = FakeWebSocket.instances[0];
     if (!ws) throw new Error("missing ws");
 
-    await act(async () => ws.closeFromServer(1006, "lost"));
+    await flushReactUpdates(async () => ws.closeFromServer(1006, "lost"));
 
     expect(document.body.textContent).toContain("terminal_disconnected");
     expect(document.body.textContent).toContain("lost");
@@ -281,7 +281,7 @@ async function renderTerminal() {
   document.body.appendChild(rootElement);
   const root = createRoot(rootElement);
   roots.push(root);
-  await act(() => {
+  await flushReactUpdates(() => {
     root.render(createElement(TerminalPane, { session: sessionFixture() }));
   });
   return root;
@@ -292,14 +292,14 @@ async function settle() {
   await Promise.resolve();
 }
 
-async function act(callback: () => void | Promise<void>) {
+const flushReactUpdates = async (callback: () => void | Promise<void>) => {
   let result: void | Promise<void> = undefined;
   flushSync(() => {
     result = callback();
   });
   await result;
   await settle();
-}
+};
 
 function installLocalStorageMock() {
   const storage = new Map<string, string>();
