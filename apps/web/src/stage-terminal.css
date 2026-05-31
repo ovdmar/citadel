@@ -376,18 +376,7 @@
   z-index: 0;
 }
 
-.stage-body::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  opacity: 0.025;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.6 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
-  z-index: 0;
-}
-
-/* Direct children sit above the grain ::before. Now that stage-body has its
- * own stacking context, this z-index is local and can't escape the box. */
+/* Stage contents stay inside the local stacking context established above. */
 .stage-body > * {
   position: relative;
   z-index: 1;
@@ -468,12 +457,25 @@
 }
 
 .terminal-surface {
+  --terminal-xterm-bg: #f5f1e8;
+
   position: relative;
   box-sizing: border-box;
   height: 100%;
   min-height: 0;
   padding: 4px 0 0 6px;
-  background: var(--c-elev);
+  background: var(--terminal-xterm-bg);
+}
+
+:root[data-theme="dark"] .terminal-surface,
+:root:not([data-theme="light"]) .terminal-surface {
+  --terminal-xterm-bg: #1a1814;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]):not([data-theme="light"]) .terminal-surface {
+    --terminal-xterm-bg: #f5f1e8;
+  }
 }
 
 .terminal-surface .xterm {
@@ -481,7 +483,7 @@
 }
 
 .terminal-surface .xterm-viewport {
-  background: transparent !important;
+  background: var(--terminal-xterm-bg) !important;
   scrollbar-width: thin;
 }
 
@@ -489,6 +491,7 @@
   width: 100%;
   height: 100%;
   min-height: 0;
+  background: var(--terminal-xterm-bg);
 }
 
 .terminal-xterm-host.terminal-xterm-obscured {
