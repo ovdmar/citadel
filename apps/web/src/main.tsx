@@ -24,9 +24,12 @@ import { ScratchpadView } from "./routes/scratchpad.js";
 import { SettingsView } from "./routes/settings.js";
 import { getScratchpadDrawerOpen, setScratchpadDrawerOpen, toggleScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { ScratchpadPanel } from "./scratchpad-panel.js";
+import { isRegisteredTerminalMessageSource } from "./terminal-pane.js";
+import { parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
 import { ToastProvider } from "./toast.js";
 import { installUiDiagnostics } from "./ui-diagnostics.js";
 import { applyThemePreference, readThemePreference } from "./use-resolved-theme.js";
+import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 import "./chrome.css";
 import "./stage-terminal.css";
@@ -53,7 +56,7 @@ import "./responsive.css";
 
 // Seed data-theme on <html> BEFORE React renders so any component that
 // reads it synchronously on first render (e.g. useResolvedTheme used by
-// TerminalPane to spawn ttyd with the matching xterm palette) doesn't
+// TerminalPane to initialize xterm with the matching palette) doesn't
 // race ThemeControls's useEffect that writes the attribute later.
 (() => {
   applyThemePreference(readThemePreference());
@@ -67,10 +70,10 @@ const rootRoute = createRootRoute({
 
 // Pathless layout route whose component renders the Cockpit unconditionally
 // plus an overlay slot for any child route. Every non-index route mounts as
-// a child here, so the Cockpit (and the TerminalPane iframes inside it) is
+// a child here, so the Cockpit (and the TerminalPane instances inside it) is
 // kept alive across navigations to Settings, Scratchpad, etc. Without this,
-// every route transition unmounted Cockpit → ttyd iframes were destroyed →
-// returning forced a fresh ttyd handshake (the user's "reloads first" gripe).
+// every route transition unmounted Cockpit, destroyed the live terminal panes,
+// and forced a fresh attach on return.
 const cockpitLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "cockpit-layout",
@@ -147,15 +150,27 @@ function Shell() {
   // Cockpit-specific shortcuts (cmd+k, c, ctrl+n) stay in Cockpit so they're
   // not triggered on other routes.
   useEffect(() => {
+    const toggleScratchpad = () => {
+      toggleScratchpadDrawer();
+      syncDrawerToUrl(getScratchpadDrawerOpen());
+    };
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        toggleScratchpadDrawer();
-        syncDrawerToUrl(getScratchpadDrawerOpen());
+        toggleScratchpad();
       }
     };
+    const onMessage = (event: MessageEvent) => {
+      const message = parseTerminalShortcutMessage(event);
+      if (!message || !isRegisteredTerminalMessageSource(event.source, message.sessionId)) return;
+      if (message.action === "scratchpad-toggle") toggleScratchpad();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("message", onMessage);
+    };
   }, []);
 
   return (

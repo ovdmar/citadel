@@ -55,7 +55,7 @@ function ensureLogParentDir(logFilePath: string) {
 }
 
 /** Background-session creator deps — injected so the operations package can keep
- *  the tmux + ttyd integration in a sibling module. The runner is happy to call
+ *  the tmux + browser-terminal integration in a sibling module. The runner is happy to call
  *  through this interface for testability. */
 export type BackgroundSessionCreator = (input: {
   cwd: string;

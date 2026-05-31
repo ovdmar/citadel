@@ -5,12 +5,20 @@ import type { SqliteStore } from "@citadel/db";
 import { discoverCodexSessionId } from "@citadel/runtimes";
 import {
   COMM_TRUNCATION,
+  captureTranscript,
   ensureTmuxSession,
   killTmuxSession,
   launchAgentInSession,
   panePidProcess,
   submitPrompt,
+  tmuxSocketNameForWorkspace,
 } from "@citadel/terminal";
+
+const CODEX_STATE_DB_LOCKED = /(?:database is locked|failed to initialize state runtime)/i;
+const CODEX_LAUNCH_MAX_ATTEMPTS = 5;
+const CODEX_LAUNCH_STABILITY_MS = 1200;
+
+let codexLaunchQueue: Promise<void> = Promise.resolve();
 
 export type RuntimeDescriptor = {
   command: string;
@@ -56,6 +64,7 @@ export async function createAgentSession(
   if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
   const now = nowIso();
   const sessionName = `citadel_${workspace.id}_${createId("agent").slice(-8)}`;
+  const tmuxSocketName = tmuxSocketNameForWorkspace(workspace.id);
   // Prefer runtime-native initial-prompt argv when available. Codex accepts
   // the prompt as a positional argument; Claude Code's interactive mode does
   // not, so for runtimes without argv support we paste once the TUI is ready.
@@ -100,10 +109,14 @@ export async function createAgentSession(
   let tmux: Awaited<ReturnType<typeof ensureTmuxSession>>;
   let runtimeLaunchStartedMs: number | null = null;
   try {
-    tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path });
+    tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path, socketName: tmuxSocketName });
     if (!isShellRuntime) {
-      runtimeLaunchStartedMs = Date.now();
-      await launchAgentInSession(sessionName, runtime.command, runtimeArgs);
+      runtimeLaunchStartedMs =
+        input.runtimeId === "codex"
+          ? await withCodexLaunchLock(() =>
+              launchCodexWithRetry(sessionName, tmuxSocketName, runtime.command, runtimeArgs),
+            )
+          : await launchRuntimeOnce(sessionName, tmuxSocketName, runtime.command, runtimeArgs);
     }
     if (promptForKeys) {
       // Treat the initial prompt as load-bearing: if submitPrompt couldn't
@@ -119,6 +132,7 @@ export async function createAgentSession(
       // doesn't apply.
       const runtimeBinaryTruncated = runtime.command.slice(0, COMM_TRUNCATION);
       const submitted = await submitPrompt(sessionName, promptForKeys, {
+        socketName: tmuxSocketName,
         ...(isShellRuntime
           ? { waitForReadyMs: 1500, submitDelayMs: 800 }
           : {
@@ -135,7 +149,7 @@ export async function createAgentSession(
       }
     }
   } catch (error) {
-    killTmuxSession(sessionName);
+    killTmuxSession(sessionName, tmuxSocketName);
     throw error;
   }
   const session: AgentSession = {
@@ -152,6 +166,7 @@ export async function createAgentSession(
     transport: "disconnected",
     tmuxSessionName: tmux.tmuxSessionName,
     tmuxSessionId: tmux.tmuxSessionId,
+    tmuxSocketName,
     // Restore paths pass the source row's tabId here so the new session lands
     // in the same tab slot. Cold-start spawns generate a fresh time-encoded
     // id — the cockpit sorts tabs by tabId, so first-spawn ordering is
@@ -169,7 +184,7 @@ export async function createAgentSession(
   // onto the row. Fire-and-forget: the user's create call returns
   // immediately; the status monitor can repair the row later if this misses.
   if (!runtimeSessionId && input.runtimeId === "codex") {
-    const paneRootPid = panePidProcess(sessionName)?.pid;
+    const paneRootPid = panePidProcess(sessionName, tmuxSocketName)?.pid;
     const spawnTimeMs = runtimeLaunchStartedMs ?? Date.now();
     void (async () => {
       try {
@@ -202,4 +217,85 @@ export async function createAgentSession(
   const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
   if (repo) await deps.runNotificationHooks("agent.started", repo, workspace, null, { repo, workspace, session });
   return session;
+}
+
+async function launchRuntimeOnce(
+  sessionName: string,
+  socketName: string | null,
+  command: string,
+  args: string[],
+): Promise<number> {
+  const startedAt = Date.now();
+  await launchAgentInSession(sessionName, command, args, { socketName });
+  return startedAt;
+}
+
+async function withCodexLaunchLock<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = codexLaunchQueue;
+  let release!: () => void;
+  codexLaunchQueue = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous.catch(() => undefined);
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+async function launchCodexWithRetry(
+  sessionName: string,
+  socketName: string | null,
+  command: string,
+  args: string[],
+): Promise<number> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= CODEX_LAUNCH_MAX_ATTEMPTS; attempt += 1) {
+    const startedAt = Date.now();
+    try {
+      await launchAgentInSession(sessionName, command, args, { socketName });
+      if (await runtimeStayedForeground(sessionName, socketName, command, CODEX_LAUNCH_STABILITY_MS)) return startedAt;
+
+      const error = new Error(
+        `codex_runtime_exited_during_startup: foreground=${panePidProcess(sessionName, socketName)?.command ?? "missing"}`,
+      );
+      if (!codexPaneShowsStateDbLock(sessionName, socketName) || attempt === CODEX_LAUNCH_MAX_ATTEMPTS) throw error;
+      lastError = error;
+    } catch (error) {
+      if (!codexPaneShowsStateDbLock(sessionName, socketName) || attempt === CODEX_LAUNCH_MAX_ATTEMPTS) throw error;
+      lastError = error;
+    }
+    await sleep(codexRetryDelayMs(attempt));
+  }
+  throw lastError instanceof Error ? lastError : new Error("codex_launch_failed");
+}
+
+async function runtimeStayedForeground(
+  sessionName: string,
+  socketName: string | null,
+  command: string,
+  durationMs: number,
+): Promise<boolean> {
+  const target = command.slice(0, COMM_TRUNCATION);
+  const deadline = Date.now() + durationMs;
+  while (Date.now() < deadline) {
+    if (panePidProcess(sessionName, socketName)?.command !== target) return false;
+    await sleep(100);
+  }
+  return true;
+}
+
+function codexPaneShowsStateDbLock(sessionName: string, socketName: string | null): boolean {
+  const transcript = captureTranscript(sessionName, { lines: 80, maxChars: 8000, socketName });
+  return transcript.ok && CODEX_STATE_DB_LOCKED.test(transcript.text);
+}
+
+function codexRetryDelayMs(attempt: number): number {
+  const base = Math.min(4000, 500 * 2 ** Math.max(0, attempt - 1));
+  return base + Math.floor(Math.random() * 250);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
