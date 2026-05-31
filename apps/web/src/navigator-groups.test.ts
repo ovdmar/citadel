@@ -1,6 +1,12 @@
 import type { Operation, Repo, Workspace } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
-import { SECTION_ORDER, buildGroupTree, collectGroupPaths } from "./navigator-groups.js";
+import {
+  SECTION_ORDER,
+  buildGroupTree,
+  collectGroupPaths,
+  findGroupPathForWorkspace,
+  flattenWorkspaceOrder,
+} from "./navigator-groups.js";
 
 const ts = "2026-01-01T00:00:00.000Z";
 
@@ -138,5 +144,60 @@ describe("collectGroupPaths", () => {
     expect(paths.has("repo=alpha")).toBe(true);
     expect(paths.has("repo=alpha/status=dirty")).toBe(true);
     expect(paths.has("repo=alpha/status=idle")).toBe(true);
+  });
+});
+
+describe("flattenWorkspaceOrder", () => {
+  const repoA = makeRepo("r-a", "alpha");
+  const repoB = makeRepo("r-b", "bravo");
+  const repos = [repoA, repoB];
+
+  it("returns an empty list for an empty tree (grouping = none)", () => {
+    expect(flattenWorkspaceOrder([])).toEqual([]);
+  });
+
+  it("walks leaves in depth-first tree order, regardless of collapse state", () => {
+    const ws = [makeWorkspace("w1", "r-a"), makeWorkspace("w2", "r-b"), makeWorkspace("w3", "r-a")];
+    const tree = buildGroupTree(ws, repos, [], [], ["repo"]);
+    // Repo grouping orders by repo name (alpha, bravo). Within each leaf,
+    // workspaces appear in their input order.
+    expect(flattenWorkspaceOrder(tree)).toEqual(["w1", "w3", "w2"]);
+  });
+
+  it("walks nested groups depth-first (repo → status)", () => {
+    const dirty = makeWorkspace("w-dirty", "r-a", { dirty: true });
+    const idle = makeWorkspace("w-idle", "r-a");
+    const otherIdle = makeWorkspace("w-bravo-idle", "r-b");
+    const tree = buildGroupTree([idle, dirty, otherIdle], repos, [], [], ["repo", "status"]);
+    // Within repo=alpha: status order is dirty before idle (per SECTION_ORDER).
+    expect(flattenWorkspaceOrder(tree)).toEqual(["w-dirty", "w-idle", "w-bravo-idle"]);
+  });
+});
+
+describe("findGroupPathForWorkspace", () => {
+  const repoA = makeRepo("r-a", "alpha");
+  const repoB = makeRepo("r-b", "bravo");
+  const repos = [repoA, repoB];
+
+  it("returns null when the tree is empty (grouping = none)", () => {
+    expect(findGroupPathForWorkspace([], "w1")).toBeNull();
+  });
+
+  it("returns null when the workspace is not found in the tree", () => {
+    const tree = buildGroupTree([makeWorkspace("w1", "r-a")], repos, [], [], ["repo"]);
+    expect(findGroupPathForWorkspace(tree, "missing")).toBeNull();
+  });
+
+  it("returns the leaf path containing the workspace (single-level grouping)", () => {
+    const tree = buildGroupTree([makeWorkspace("w1", "r-a"), makeWorkspace("w2", "r-b")], repos, [], [], ["repo"]);
+    expect(findGroupPathForWorkspace(tree, "w2")).toBe("repo=bravo");
+  });
+
+  it("returns the deepest enclosing leaf path (two-level grouping)", () => {
+    const dirty = makeWorkspace("w-dirty", "r-a", { dirty: true });
+    const idle = makeWorkspace("w-idle", "r-a");
+    const tree = buildGroupTree([dirty, idle], repos, [], [], ["repo", "status"]);
+    expect(findGroupPathForWorkspace(tree, "w-dirty")).toBe("repo=alpha/status=dirty");
+    expect(findGroupPathForWorkspace(tree, "w-idle")).toBe("repo=alpha/status=idle");
   });
 });

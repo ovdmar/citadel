@@ -79,7 +79,8 @@ export function closeServer(server: http.Server) {
 
 export async function getJson<T>(url: string) {
   const response = await fetch(url);
-  expect(response.ok).toBe(true);
+  const text = await response.clone().text();
+  expect(response.ok, text).toBe(true);
   return response.json() as Promise<T>;
 }
 

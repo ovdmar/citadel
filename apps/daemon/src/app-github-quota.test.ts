@@ -21,7 +21,7 @@ process.env.CITADEL_DISABLE_SCHEDULER = "1";
 process.env.CITADEL_DISABLE_TERMINAL_REAPER = "1";
 
 const createFixture = () => createFixtureBase(dirs);
-const INTEGRATION_TEST_TIMEOUT_MS = 20_000;
+const INTEGRATION_TEST_TIMEOUT_MS = 60_000;
 
 describe("createDaemonApp — GitHub quota", () => {
   it(

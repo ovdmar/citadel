@@ -31,6 +31,18 @@
 [ ] 13. Icon-only controls expose a native tooltip (title) and accessible label that describes their action or target.
 [ ] 14. Top-layer modals and overlays (command palette, create workspace, add repo) are centred both horizontally and vertically in the viewport; backdrop dismissal and `Esc` close them.
 
+## Keyboard Shortcuts
+
+[x] 1. Global cockpit shortcuts:
+   - `Cmd/Ctrl+K` — opens the command palette.
+   - `Ctrl+N` (mac only; Linux/Windows browsers reserve it for "new browser window") and plain `c` (when no editable target is focused) — opens the new-workspace modal.
+   - `Ctrl+1`…`Ctrl+9`, `Ctrl+0` — jump to the Nth workspace in the Navigator's in-tree visible order (0 = 10th). If the workspace is inside a collapsed group, the group auto-expands. On Chrome/Edge/Firefox on Windows and Linux, `Ctrl+1..9` is browser-reserved (switches browser tabs) — these shortcuts work reliably only on macOS or inside a PWA/desktop wrapper.
+   - `Cmd+Shift+1`…`Cmd+Shift+9` — jump to the Nth session in the active workspace's Center Stage tab strip, ordered by session `createdAt` ascending.
+   - `Cmd+T` — spawn a new bare Terminal session in the active workspace. Browser-reserved in normal tab mode on every major desktop browser; works in Safari "Add to Dock" standalone PWAs and dedicated wrappers (Electron/Tauri). Chrome PWA window mode does NOT free it on macOS in current builds.
+   - `Cmd+E` — spawn a new agent session in the active workspace using the workspace's default agent runtime (currently resolved as: prefer `claude-code` if healthy, else first healthy non-`shell` runtime). Collides benignly with Chrome/Safari "Use Selection for Find" on macOS — the cockpit handler `preventDefault`s before the browser acts, since `Cmd+E` is a renderer-level editing shortcut, not a window-management shortcut.
+   - `Escape` — closes the top-most open overlay (command palette, modal, dialog).
+[x] 2. When focus is inside the in-process xterm terminal, the terminal pane forwards the chords above to the cockpit instead of consuming them locally. `Escape` is forwarded ONLY when at least one cockpit overlay is open (the terminal pane reads a ref-count exposed by the cockpit); otherwise xterm receives `Escape` unmodified so vim/Claude Code work normally. All other keystrokes pass through to xterm as today.
+
 ## Dashboard
 
 [ ] 1. Dashboard groups workspaces by the same operator-facing workspace section/status used by workspace cards, not derived labels such as dirty.
@@ -40,12 +52,12 @@
 ## Center Stage Sessions
 
 [ ] 1. The center column shows the workspace's sessions/chats as tabs along the top.
-[ ] 2. A plus button next to the tabs adds a new session: pick a plain `Terminal` or one of the configured agent runtimes. The button is rendered immediately to the right of the last tab (not pushed to the far edge), and the button + menu sit outside the horizontally scrollable tab strip so the menu is never clipped.
+[ ] 2. A plus button next to the tabs adds a new session: pick a plain `Terminal` or one of the configured agent runtimes. The button is rendered immediately to the right of the last tab (not pushed to the far edge), and the button + menu sit outside the horizontally scrollable tab strip so the menu is never clipped. Keyboard equivalents are `Cmd+T` (Terminal) and `Cmd+E` (default agent runtime); the menu item next to each runtime displays the chord.
 [ ] 3. Selecting `Terminal` creates an empty shell session in the workspace worktree.
 [ ] 4. Each session tab has an editable title. Default titles are the agent runtime display name or `Terminal`.
 [ ] 5. When a workspace is created with an associated default agent, the cockpit opens that agent automatically in a new session tab.
 [ ] 6. The selected session occupies the rest of the column height.
-[ ] 7. Terminal keyboard shortcuts must be passed through to the active terminal correctly.
+[x] 7. Terminal keyboard shortcuts pass through to the active terminal by default. The terminal pane intercepts a small, named allow-list of cockpit shortcuts (see §Keyboard Shortcuts) before xterm consumes them and posts the same terminal shortcut message path used by the cockpit; everything else is delivered to xterm/tmux unchanged.
 [ ] 8. Selecting a workspace in the navigator focuses that workspace's currently-active xterm pane directly. If the workspace has no active session, focusing the workspace is a no-op (no error).
 [ ] 9. Closing the active agent session tab immediately focuses the LEFT-sibling tab (falling back to the right sibling if none) — no blank-grace window. Closing the only remaining tab leaves the active-session pointer untouched.
 [ ] 10. The Stage's `+` add-session button is disabled while `workspace.lifecycle === "creating"` — starting a session requires a ready worktree.

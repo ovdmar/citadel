@@ -3,6 +3,7 @@ import { Link } from "@tanstack/react-router";
 import { ArrowRight, ClipboardList, GitBranch, GitPullRequest, Search, Settings } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatLabel } from "./labels.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 
 export type CommandPaletteProps = {
   workspaces: Workspace[];
@@ -32,6 +33,7 @@ export function CommandPalette(props: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [focused, setFocused] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  useOverlayPresent();
 
   useEffect(() => {
     inputRef.current?.focus();

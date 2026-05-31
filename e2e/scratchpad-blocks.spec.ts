@@ -43,11 +43,21 @@ test.describe("scratchpad blocks", () => {
     request,
   }, testInfo) => {
     // Seed legacy content via byte-faithful PUT.
-    await apiPut(request, `${API_BASE}/api/scratchpad`, { data: { content: "first idea\n\nsecond idea\n" } });
+    const seedResponse = await apiPut(request, `${API_BASE}/api/scratchpad`, {
+      data: { content: "first idea\n\nsecond idea\n" },
+    });
+    expect(seedResponse.ok()).toBe(true);
+
+    // Drive the first-read migration through the API before rendering. The
+    // panel loads metadata and blocks in parallel, so forcing the migration
+    // here keeps this test about display/history instead of a first-reader race.
+    const migratedResponse = await apiGet(request, `${API_BASE}/api/scratchpad/blocks`);
+    expect(migratedResponse.ok()).toBe(true);
+    const migrated = (await migratedResponse.json()) as { blocks: Array<{ text: string }> };
+    expect(migrated.blocks.map((block) => block.text)).toEqual(["first idea", "second idea"]);
 
     await page.goto("/scratchpad");
 
-    // GET blocks (server-side migration runs) — UI fetches /api/scratchpad/blocks.
     const blockList = page.locator(".scratchpad-block-list");
     await expect(blockList).toBeVisible();
     await expect(blockList.getByText("first idea")).toBeVisible();
