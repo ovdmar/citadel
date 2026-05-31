@@ -134,6 +134,36 @@ test("settings sidebar exposes all configured sections", async ({ page }, testIn
   await page.screenshot({ path: `docs/campaigns/screenshot-${testInfo.project.name}-settings.png`, fullPage: true });
 });
 
+test("desktop route overlays cover retained cockpit tabs", async ({ page, request }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "z-index regression is covered once on desktop");
+  const fixture = createGitFixture();
+  let workspaceId: string | null = null;
+  try {
+    const repo = await registerRepo(request, fixture);
+    workspaceId = (await createWorkspace(request, repo.id, `overlay-${Date.now().toString(36)}`)).workspaceId;
+    await waitForWorkspace(request, workspaceId, "ready");
+    await startSession(request, workspaceId, "Overlay Shell");
+
+    await page.goto(`/?workspace=${workspaceId}`);
+    const tab = page.locator(".stage-tab").filter({ hasText: "Overlay Shell" }).first();
+    await expect(tab).toBeVisible();
+    const point = await centerPoint(tab);
+
+    await page.goto("/settings");
+    await expect(page.locator(".set-app")).toBeVisible();
+    await expectTopLayerAtPoint(page, point, { inside: ".set-app", outside: ".stage-tabbar" });
+
+    await page.goto("/");
+    await expect(tab).toBeVisible();
+    await page.keyboard.press("ControlOrMeta+Shift+s");
+    await expect(page.locator(".scratchpad-drawer")).toBeVisible();
+    await expectTopLayerAtPoint(page, point, { inside: ".scratchpad-drawer", outside: ".stage-tabbar" });
+  } finally {
+    if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`).catch(() => {});
+    fs.rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
 test("dialogs render near viewport center on desktop and tablet", async ({ page, request }, testInfo) => {
   // Mobile collapses the navigator into a column switcher and reorders some
   // controls behind a tap; the centering math itself is identical on every
@@ -279,6 +309,39 @@ test("desktop primary terminal WebSocket streams a fresh shell session", async (
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
+
+async function centerPoint(locator: import("@playwright/test").Locator) {
+  const box = await locator.boundingBox();
+  if (!box) throw new Error("Expected locator to have a bounding box");
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+async function expectTopLayerAtPoint(
+  page: import("@playwright/test").Page,
+  point: { x: number; y: number },
+  selectors: { inside: string; outside: string },
+) {
+  const hit = await page.evaluate(
+    ({ x, y, inside, outside }) => {
+      const element = document.elementFromPoint(x, y);
+      return {
+        tag: element?.tagName ?? null,
+        className: element instanceof HTMLElement ? element.className : null,
+        inside: Boolean(element?.closest(inside)),
+        outside: Boolean(element?.closest(outside)),
+      };
+    },
+    { ...point, ...selectors },
+  );
+  expect(
+    hit.outside,
+    `Expected top element at (${point.x}, ${point.y}) not to be inside ${selectors.outside}; got ${JSON.stringify(hit)}`,
+  ).toBe(false);
+  expect(
+    hit.inside,
+    `Expected top element at (${point.x}, ${point.y}) to be inside ${selectors.inside}; got ${JSON.stringify(hit)}`,
+  ).toBe(true);
+}
 
 async function openTerminalSocket(sessionId: string) {
   const ws = new WebSocket(`${API_BASE.replace(/^http/, "ws")}/terminal/${encodeURIComponent(sessionId)}`);
