@@ -41,7 +41,7 @@
 ## Performance
 
 [~] 1. Citadel feels instant with 10-12 active workspaces across 2-3 repositories and remains usable at large operator loads (target: 50 workspaces with 3-5 agent sessions each) without pre-spawning one terminal renderer process per session.
-[~] 2. Workspace switching remains responsive with long terminal buffers. The cockpit's terminal path reuses browser xterm.js panes over daemon WebSockets and disposable node-pty tmux attach viewers instead of forcing iframe or renderer-process startup on every cache miss.
+[~] 2. Workspace switching remains responsive with long terminal buffers. The cockpit's terminal path reuses browser xterm.js panes over daemon WebSockets and disposable node-pty tmux attach viewers instead of forcing iframe or renderer-process startup on every cache miss. Terminal renderer stability includes opaque xterm surfaces and coalesced/de-duped active-pane resize controls so repaint or layout churn does not make the terminal unreadable.
 [ ] 3. Provider summaries load independently from the main workspace shell.
 [ ] 4. Slow provider commands appear as stale/degraded states.
 [ ] 5. Terminal scrollback is bounded or virtualized. The tmux server enforces a global `history-limit` (default 5000 lines per pane) so a forgotten session can't grow per-pane scrollback without bound.
@@ -56,7 +56,7 @@
 [ ] 4. E2E covers add repository and remove repository flows.
 [ ] 5. E2E covers create workspace and remove workspace flows.
 [ ] 6. E2E covers workspace cockpit readiness.
-[ ] 7. E2E covers terminal smoke.
+[ ] 7. E2E covers terminal smoke, including both WebSocket transport behavior and cockpit renderer stability for the active xterm surface.
 [ ] 8. E2E covers provider degraded state.
 [ ] 9. E2E covers hook app/action output.
 [ ] 10. E2E covers desktop and mobile layout.
