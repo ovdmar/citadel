@@ -24,6 +24,8 @@ type BuiltinRuntime = {
   supportsModelSelection?: boolean;
 };
 
+export const CODEX_GOALS_FEATURE_ARGS = ["--enable", "goals"] as const;
+
 const BUILTIN_RUNTIMES: BuiltinRuntime[] = [
   {
     id: "claude-code",
@@ -47,9 +49,11 @@ const BUILTIN_RUNTIMES: BuiltinRuntime[] = [
     // `--yolo` (alias for `--dangerously-bypass-approvals-and-sandbox`) is a
     // global flag — codex accepts it before the `resume` subcommand, so the
     // same default works for both launch (`codex --yolo`) and resume
-    // (`codex --yolo resume <uuid>`). Operators can clear it via Settings →
-    // Runtimes if they want approval prompts back.
-    args: ["--yolo"],
+    // (`codex --yolo resume <uuid>`). `--enable goals` turns on Codex's
+    // experimental goals feature for every Citadel-launched Codex session.
+    // Operators can still clear `--yolo` via Settings -> Runtimes if they
+    // want approval prompts back; Citadel keeps the goals flag enabled.
+    args: ensureCodexGoalsFeatureArgs("codex", ["--yolo"]),
     // `codex resume <uuid>` is a subcommand (not a flag), but the daemon's
     // resume splice is `[resumeArg, <uuid>]` either way — passing "resume"
     // here yields the right argv. No `sessionIdArg`: codex auto-generates the
@@ -411,9 +415,9 @@ export function loadConfig(configPath = defaultConfigPath()): CitadelConfig {
         : undefined;
     const merged: Record<string, unknown> = { ...defaults, ...rawWithoutPaths };
     if (cleanedScratchpad !== undefined) merged.scratchpad = cleanedScratchpad;
-    return backfillBuiltinRuntimes(CitadelConfigSchema.parse(merged));
+    return normalizeRuntimeDefaults(backfillBuiltinRuntimes(CitadelConfigSchema.parse(merged)));
   }
-  return backfillBuiltinRuntimes(CitadelConfigSchema.parse({ ...defaults, ...(raw ?? {}) }));
+  return normalizeRuntimeDefaults(backfillBuiltinRuntimes(CitadelConfigSchema.parse({ ...defaults, ...(raw ?? {}) })));
 }
 
 // Heal user-saved runtime entries whose on-disk shape predates newer schema
@@ -441,18 +445,84 @@ function backfillBuiltinRuntimes(config: CitadelConfig): CitadelConfig {
   return mutated ? { ...config, runtimes } : config;
 }
 
+function normalizeRuntimeDefaults(config: CitadelConfig): CitadelConfig {
+  let mutated = false;
+  const runtimes = config.runtimes.map((runtime) => {
+    const args = ensureCodexGoalsFeatureArgs(runtime.id, runtime.args);
+    if (sameStringArray(args, runtime.args)) return runtime;
+    mutated = true;
+    return { ...runtime, args };
+  });
+  return mutated ? { ...config, runtimes } : config;
+}
+
+export function ensureCodexGoalsFeatureArgs(runtimeId: string, args: readonly string[]): string[] {
+  const current = [...args];
+  if (runtimeId !== "codex" || hasCodexGoalsFeatureEnabled(current)) return current;
+  return [...current, ...CODEX_GOALS_FEATURE_ARGS];
+}
+
+function hasCodexGoalsFeatureEnabled(args: readonly string[]): boolean {
+  let enabled: boolean | null = null;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--enable" && args[index + 1] === "goals") {
+      enabled = true;
+      index += 1;
+      continue;
+    }
+    if (arg === "--disable" && args[index + 1] === "goals") {
+      enabled = false;
+      index += 1;
+      continue;
+    }
+    if (arg === "--enable=goals") {
+      enabled = true;
+      continue;
+    }
+    if (arg === "--disable=goals") {
+      enabled = false;
+      continue;
+    }
+    if (arg === "-c" || arg === "--config") {
+      const state = goalsFeatureConfigState(args[index + 1]);
+      if (state !== null) enabled = state;
+      index += 1;
+      continue;
+    }
+    if (arg?.startsWith("--config=")) {
+      const state = goalsFeatureConfigState(arg.slice("--config=".length));
+      if (state !== null) enabled = state;
+    }
+  }
+  return enabled === true;
+}
+
+function goalsFeatureConfigState(value: string | undefined): boolean | null {
+  if (typeof value !== "string") return null;
+  const match = /^\s*features\.goals\s*=\s*(true|false)\s*$/i.exec(value);
+  if (!match?.[1]) return null;
+  return match[1].toLowerCase() === "true";
+}
+
+function sameStringArray(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
 export function saveConfig(config: CitadelConfig, configPath = defaultConfigPath()) {
-  const parsed = CitadelConfigSchema.parse(config);
+  const parsed = normalizeRuntimeDefaults(CitadelConfigSchema.parse(config));
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
   return parsed;
 }
 
 export function mergeConfigPatch(current: CitadelConfig, patch: unknown) {
-  return CitadelConfigSchema.parse({
-    ...current,
-    ...(typeof patch === "object" && patch !== null ? patch : {}),
-  });
+  return normalizeRuntimeDefaults(
+    CitadelConfigSchema.parse({
+      ...current,
+      ...(typeof patch === "object" && patch !== null ? patch : {}),
+    }),
+  );
 }
 
 function validateHookReferences(

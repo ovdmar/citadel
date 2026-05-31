@@ -32,7 +32,7 @@ describe("loadConfig", () => {
     expect(config.version).toBe(1);
     expect(config.mcp.enabled).toBe(true);
     expect(config.runtimes.map((runtime) => runtime.id)).toContain("shell");
-    expect(config.runtimes.find((runtime) => runtime.id === "codex")?.args).toEqual(["--yolo"]);
+    expect(config.runtimes.find((runtime) => runtime.id === "codex")?.args).toEqual(["--yolo", "--enable", "goals"]);
     expect(config.usageProviders).toEqual([]);
     expect(config.automations.fixCi).toMatchObject({
       enabled: true,
@@ -304,6 +304,53 @@ describe("loadConfig", () => {
 
     const custom = config.runtimes.find((r) => r.id === "custom");
     expect(custom?.resumeArg).toBeUndefined();
+  });
+
+  it("keeps Codex goals enabled across stale config loads and settings patches", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-config-"));
+    dirs.push(dir);
+    const configPath = path.join(dir, "citadel.config.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        dataDir: dir,
+        databasePath: path.join(dir, "citadel.sqlite"),
+        runtimes: [{ id: "codex", displayName: "Codex", command: "codex", args: ["--yolo"] }],
+      }),
+    );
+
+    const config = loadConfig(configPath);
+    expect(config.runtimes.find((runtime) => runtime.id === "codex")?.args).toEqual(["--yolo", "--enable", "goals"]);
+
+    const patched = mergeConfigPatch(config, {
+      runtimes: [{ id: "codex", displayName: "Codex", command: "codex", args: [] }],
+    });
+    expect(patched.runtimes.find((runtime) => runtime.id === "codex")?.args).toEqual(["--enable", "goals"]);
+
+    const alreadyEnabled = mergeConfigPatch(config, {
+      runtimes: [{ id: "codex", displayName: "Codex", command: "codex", args: ["--enable=goals"] }],
+    });
+    expect(alreadyEnabled.runtimes.find((runtime) => runtime.id === "codex")?.args).toEqual(["--enable=goals"]);
+
+    const disabledLater = mergeConfigPatch(config, {
+      runtimes: [
+        {
+          id: "codex",
+          displayName: "Codex",
+          command: "codex",
+          args: ["--enable", "goals", "--config", "features.goals=false"],
+        },
+      ],
+    });
+    expect(disabledLater.runtimes.find((runtime) => runtime.id === "codex")?.args).toEqual([
+      "--enable",
+      "goals",
+      "--config",
+      "features.goals=false",
+      "--enable",
+      "goals",
+    ]);
   });
 
   it("in prod mode (no CITADEL_WORKTREE), honors dataDir/databasePath persisted in the config file", () => {

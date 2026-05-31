@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+import { apiGet, apiPut } from "./helpers/api-request.js";
+import { assertDaemonIsSandbox } from "./helpers/sandbox-guard.js";
 
 // Provider-cache + reload-affordance smoke tests. These exercise the
 // user-visible pieces of the provider-data-caching PR end-to-end:
@@ -15,8 +17,12 @@ import { expect, test } from "@playwright/test";
 const API_BASE =
   process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012"}`;
 
+test.beforeAll(async ({ request }) => {
+  await assertDaemonIsSandbox(request, API_BASE);
+});
+
 test("GET /api/workspaces/pr-state returns a cache-only snapshot", async ({ request }) => {
-  const response = await request.get(`${API_BASE}/api/workspaces/pr-state`);
+  const response = await apiGet(request, `${API_BASE}/api/workspaces/pr-state`);
   expect(response.ok()).toBe(true);
   const body = (await response.json()) as { workspacePrState: Record<string, unknown> };
   expect(body).toHaveProperty("workspacePrState");
@@ -28,11 +34,11 @@ test("usage indicator renders a reload button when usage data is unavailable", a
   // Enable showUsageInTopBar so the indicator is visible. The CI test daemon
   // has no real runtime binaries on PATH, so usage will be unavailable —
   // exactly the path that produces the reload button.
-  const configResp = await request.get(`${API_BASE}/api/config`);
+  const configResp = await apiGet(request, `${API_BASE}/api/config`);
   const configBody = (await configResp.json()) as { config: { runtimes: Array<{ id: string }> } };
   const runtimeId = configBody.config.runtimes.find((r) => r.id !== "shell")?.id;
   test.skip(!runtimeId, "no non-shell runtime configured in the test daemon");
-  await request.put(`${API_BASE}/api/config`, {
+  await apiPut(request, `${API_BASE}/api/config`, {
     data: {
       runtimes: configBody.config.runtimes.map((r) => (r.id === runtimeId ? { ...r, showUsageInTopBar: true } : r)),
     },
@@ -45,11 +51,11 @@ test("usage indicator renders a reload button when usage data is unavailable", a
 
 test("clicking the usage reload button triggers a refresh request", async ({ page, request }, testInfo) => {
   test.skip(testInfo.project.name === "mobile", "top-bar usage pill is desktop/tablet only");
-  const configResp = await request.get(`${API_BASE}/api/config`);
+  const configResp = await apiGet(request, `${API_BASE}/api/config`);
   const configBody = (await configResp.json()) as { config: { runtimes: Array<{ id: string }> } };
   const runtimeId = configBody.config.runtimes.find((r) => r.id !== "shell")?.id;
   test.skip(!runtimeId, "no non-shell runtime configured in the test daemon");
-  await request.put(`${API_BASE}/api/config`, {
+  await apiPut(request, `${API_BASE}/api/config`, {
     data: {
       runtimes: configBody.config.runtimes.map((r) => (r.id === runtimeId ? { ...r, showUsageInTopBar: true } : r)),
     },
