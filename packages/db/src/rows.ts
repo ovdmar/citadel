@@ -1,6 +1,5 @@
 import type {
   ActivityEvent,
-  AgentSession,
   BackgroundAgentSession,
   HookOutput,
   Operation,
@@ -9,6 +8,7 @@ import type {
   ScheduledAgent,
   ScheduledAgentRun,
   Workspace,
+  WorkspaceSession,
 } from "@citadel/contracts";
 
 export function asString(row: Record<string, unknown>, key: string) {
@@ -69,13 +69,14 @@ export function workspaceFromRow(row: Record<string, unknown>): Workspace {
   };
 }
 
-export function sessionFromRow(row: Record<string, unknown>): AgentSession {
-  return {
+export function sessionFromRow(row: Record<string, unknown>): WorkspaceSession {
+  const kind = asString(row, "kind") === "terminal" ? "terminal" : "agent";
+  const base = {
     id: asString(row, "id"),
+    kind,
     workspaceId: asString(row, "workspace_id"),
-    runtimeId: asString(row, "runtime_id"),
     displayName: asString(row, "display_name"),
-    status: asString(row, "status") as AgentSession["status"],
+    status: asString(row, "status") as WorkspaceSession["status"],
     statusReason: row.status_reason ? asString(row, "status_reason") : null,
     statusReasonAt: row.status_reason_at ? asString(row, "status_reason_at") : null,
     // `||` (not `??`) is deliberate: asString() returns "" for null DB columns,
@@ -84,7 +85,7 @@ export function sessionFromRow(row: Record<string, unknown>): AgentSession {
     lastOutputAt: row.last_output_at ? asString(row, "last_output_at") : null,
     endedAt: row.ended_at ? asString(row, "ended_at") : null,
     exitCode: row.exit_code === null || row.exit_code === undefined ? null : Number(row.exit_code),
-    transport: asString(row, "transport") as AgentSession["transport"],
+    transport: asString(row, "transport") as WorkspaceSession["transport"],
     tmuxSessionName: row.tmux_session_name ? asString(row, "tmux_session_name") : null,
     tmuxSessionId: row.tmux_session_id ? asString(row, "tmux_session_id") : null,
     // Fall back to the row id when tab_id is unset (older rows from before
@@ -103,6 +104,9 @@ export function sessionFromRow(row: Record<string, unknown>): AgentSession {
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
   };
+  return kind === "terminal"
+    ? { ...base, kind, runtimeId: null }
+    : { ...base, kind, runtimeId: asString(row, "runtime_id") };
 }
 
 export function operationFromRow(row: Record<string, unknown>): Operation {

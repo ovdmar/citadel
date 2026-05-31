@@ -7,6 +7,10 @@
 
 type SqliteDatabase = {
   exec(sql: string): void;
+  prepare(sql: string): {
+    all(...params: unknown[]): unknown[];
+    get(...params: unknown[]): unknown;
+  };
 };
 
 // Highest schema_migrations version known to this code path. Bump alongside
@@ -14,12 +18,18 @@ type SqliteDatabase = {
 // the new version below. Consumed by the doctor's database-schema check so
 // `make doctor` can flag an installed daemon whose code is newer than the
 // database it's been given.
-export const CURRENT_SCHEMA_VERSION = 8;
+export const CURRENT_SCHEMA_VERSION = 13;
 
 export function runMigrations(
   db: SqliteDatabase,
   ensureColumn: (table: string, column: string, definition: string) => void,
 ) {
+  const hasLegacyAgentSessions = tableExists(db, "agent_sessions");
+  const hasWorkspaceSessions = tableExists(db, "workspace_sessions");
+  const sessionBaselineTableSql =
+    hasLegacyAgentSessions && !hasWorkspaceSessions
+      ? legacyAgentSessionsTableSql()
+      : workspaceSessionsTableSql("workspace_sessions");
   db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
@@ -61,23 +71,7 @@ export function runMigrations(
       archived_at TEXT,
       UNIQUE(repo_id, name)
     );
-    CREATE TABLE IF NOT EXISTS agent_sessions (
-      id TEXT PRIMARY KEY,
-      workspace_id TEXT NOT NULL REFERENCES workspaces(id),
-      runtime_id TEXT NOT NULL,
-      display_name TEXT NOT NULL,
-      status TEXT NOT NULL,
-      status_reason TEXT,
-      last_status_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
-      last_output_at TEXT,
-      ended_at TEXT,
-      exit_code INTEGER,
-      transport TEXT NOT NULL,
-      tmux_session_name TEXT,
-      tmux_session_id TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
+    ${sessionBaselineTableSql}
     CREATE TABLE IF NOT EXISTS operations (
       id TEXT PRIMARY KEY,
       type TEXT NOT NULL,
@@ -111,26 +105,27 @@ export function runMigrations(
   ensureColumn("workspaces", "issue_url", "TEXT");
   ensureColumn("workspaces", "slack_thread_url", "TEXT");
   ensureColumn("workspaces", "kind", "TEXT NOT NULL DEFAULT 'worktree'");
+  const sessionTable = tableExists(db, "agent_sessions") ? "agent_sessions" : "workspace_sessions";
   ensureColumn("repos", "deploy_hook_command", "TEXT");
   // Agent-status migration (canonical enum + tracking fields). All additive;
   // status remaps are idempotent. Wrapped in a transaction so a crash mid-
   // migration leaves rows untouched. See specs/B.3 for canonical values.
-  ensureColumn("agent_sessions", "status_reason", "TEXT");
-  ensureColumn("agent_sessions", "last_status_at", "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z'");
-  ensureColumn("agent_sessions", "last_output_at", "TEXT");
-  ensureColumn("agent_sessions", "ended_at", "TEXT");
-  ensureColumn("agent_sessions", "exit_code", "INTEGER");
+  ensureColumn(sessionTable, "status_reason", "TEXT");
+  ensureColumn(sessionTable, "last_status_at", "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z'");
+  ensureColumn(sessionTable, "last_output_at", "TEXT");
+  ensureColumn(sessionTable, "ended_at", "TEXT");
+  ensureColumn(sessionTable, "exit_code", "INTEGER");
   db.exec("BEGIN IMMEDIATE");
   try {
-    db.exec("UPDATE agent_sessions SET last_status_at = updated_at WHERE last_status_at = '1970-01-01T00:00:00.000Z'");
+    db.exec(`UPDATE ${sessionTable} SET last_status_at = updated_at WHERE last_status_at = '1970-01-01T00:00:00.000Z'`);
     db.exec(
-      "UPDATE agent_sessions SET status = 'running', status_reason = 'migrated_from_waiting' WHERE status = 'waiting'",
+      `UPDATE ${sessionTable} SET status = 'running', status_reason = 'migrated_from_waiting' WHERE status = 'waiting'`,
     );
     db.exec(
-      "UPDATE agent_sessions SET status = 'unknown', status_reason = 'migrated_from_orphaned' WHERE status = 'orphaned'",
+      `UPDATE ${sessionTable} SET status = 'unknown', status_reason = 'migrated_from_orphaned' WHERE status = 'orphaned'`,
     );
     db.exec(
-      "UPDATE agent_sessions SET status_reason = 'migrated_legacy_idle' WHERE status = 'idle' AND status_reason IS NULL",
+      `UPDATE ${sessionTable} SET status_reason = 'migrated_legacy_idle' WHERE status = 'idle' AND status_reason IS NULL`,
     );
     db.exec("COMMIT");
   } catch (err) {
@@ -222,14 +217,14 @@ export function runMigrations(
   // --session-id, codex's thread_id, etc.). Nullable for legacy rows and for
   // runtimes without a session ID. Read on respawn to pass --resume so the
   // conversation survives daemon/machine restarts.
-  ensureColumn("agent_sessions", "runtime_session_id", "TEXT");
+  ensureColumn(sessionTable, "runtime_session_id", "TEXT");
   // Auto-resume bookkeeping. attempts counts consecutive auto-resume sends
   // (for exponential backoff); next_resume_at is the scheduled time of the
   // next attempt (NULL = unscheduled); last_resume_from_rate_limit_at is the
   // wall clock of the most recent send. See packages/operations/auto-resume.
-  ensureColumn("agent_sessions", "rate_limit_resume_attempts", "INTEGER NOT NULL DEFAULT 0");
-  ensureColumn("agent_sessions", "next_resume_at", "TEXT");
-  ensureColumn("agent_sessions", "last_resume_from_rate_limit_at", "TEXT");
+  ensureColumn(sessionTable, "rate_limit_resume_attempts", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(sessionTable, "next_resume_at", "TEXT");
+  ensureColumn(sessionTable, "last_resume_from_rate_limit_at", "TEXT");
   db.exec(`
     INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
       (8, 'agent-sessions-auto-resume-backoff', datetime('now'));
@@ -257,7 +252,7 @@ export function runMigrations(
   // every benign sub-status flip from runtime adapters and is therefore not
   // a reliable clock for the auto-clear. Additive nullable column; existing
   // rows get NULL.
-  ensureColumn("agent_sessions", "status_reason_at", "TEXT");
+  ensureColumn(sessionTable, "status_reason_at", "TEXT");
   db.exec(`
     INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
       (10, 'agent-sessions-status-reason-at', datetime('now'));
@@ -270,10 +265,10 @@ export function runMigrations(
   // with their own primary id — that keeps current ordering identical since
   // both id and tab_id are time-encoded with the same generator. Wrapped in
   // a transaction so a crash mid-migration leaves rows untouched.
-  ensureColumn("agent_sessions", "tab_id", "TEXT");
+  ensureColumn(sessionTable, "tab_id", "TEXT");
   db.exec(`
     BEGIN;
-    UPDATE agent_sessions SET tab_id = id WHERE tab_id IS NULL OR tab_id = '';
+    UPDATE ${sessionTable} SET tab_id = id WHERE tab_id IS NULL OR tab_id = '';
     INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
       (11, 'agent-sessions-tab-id', datetime('now'));
     COMMIT;
@@ -296,11 +291,11 @@ export function runMigrations(
   // created_at. Works on every SQLite version (no window-function dep).
   db.exec(`
     BEGIN;
-    DELETE FROM agent_sessions
+    DELETE FROM ${sessionTable}
     WHERE rowid IN (
       SELECT a.rowid
-      FROM agent_sessions a
-      JOIN agent_sessions b
+      FROM ${sessionTable} a
+      JOIN ${sessionTable} b
         ON a.workspace_id = b.workspace_id
        AND a.runtime_session_id = b.runtime_session_id
        AND b.created_at > a.created_at
@@ -310,4 +305,203 @@ export function runMigrations(
       (12, 'agent-sessions-dedup-restore-cruft', datetime('now'));
     COMMIT;
   `);
+
+  migrateWorkspaceSessions(db);
+}
+
+function tableExists(db: SqliteDatabase, tableName: string): boolean {
+  const row = db
+    .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
+    .get(tableName) as { name: string } | undefined;
+  return row?.name === tableName;
+}
+
+function legacyAgentSessionsTableSql() {
+  return `
+    CREATE TABLE IF NOT EXISTS agent_sessions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+      runtime_id TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      status_reason TEXT,
+      last_status_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
+      last_output_at TEXT,
+      ended_at TEXT,
+      exit_code INTEGER,
+      transport TEXT NOT NULL,
+      tmux_session_name TEXT,
+      tmux_session_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );`;
+}
+
+function workspaceSessionsTableSql(tableName: string) {
+  return `
+    CREATE TABLE IF NOT EXISTS ${tableName} (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+      kind TEXT NOT NULL DEFAULT 'agent',
+      runtime_id TEXT,
+      display_name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      status_reason TEXT,
+      status_reason_at TEXT,
+      last_status_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
+      last_output_at TEXT,
+      ended_at TEXT,
+      exit_code INTEGER,
+      transport TEXT NOT NULL,
+      tmux_session_name TEXT,
+      tmux_session_id TEXT,
+      tab_id TEXT,
+      runtime_session_id TEXT,
+      rate_limit_resume_attempts INTEGER NOT NULL DEFAULT 0,
+      next_resume_at TEXT,
+      last_resume_from_rate_limit_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      CHECK (
+        (kind = 'agent' AND runtime_id IS NOT NULL)
+        OR (kind = 'terminal' AND runtime_id IS NULL)
+      )
+    );`;
+}
+
+function migrateWorkspaceSessions(db: SqliteDatabase) {
+  if (!tableExists(db, "agent_sessions")) {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_workspace_sessions_workspace ON workspace_sessions(workspace_id);
+      CREATE INDEX IF NOT EXISTS idx_workspace_sessions_runtime_session ON workspace_sessions(runtime_session_id);
+      CREATE INDEX IF NOT EXISTS idx_workspace_sessions_status ON workspace_sessions(status);
+      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+        (13, 'workspace-sessions-agent-terminal-split', datetime('now'));
+    `);
+    return;
+  }
+  if (tableExists(db, "workspace_sessions")) {
+    throw new Error("Unexpected schema state: both agent_sessions and workspace_sessions exist before migration 13");
+  }
+  assertExpectedAgentSessionDependencies(db);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const before = countRows(db, "agent_sessions");
+    db.exec(`
+      CREATE TABLE workspace_sessions_new (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+        kind TEXT NOT NULL,
+        runtime_id TEXT,
+        display_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        status_reason TEXT,
+        status_reason_at TEXT,
+        last_status_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
+        last_output_at TEXT,
+        ended_at TEXT,
+        exit_code INTEGER,
+        transport TEXT NOT NULL,
+        tmux_session_name TEXT,
+        tmux_session_id TEXT,
+        tab_id TEXT,
+        runtime_session_id TEXT,
+        rate_limit_resume_attempts INTEGER NOT NULL DEFAULT 0,
+        next_resume_at TEXT,
+        last_resume_from_rate_limit_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        CHECK (
+          (kind = 'agent' AND runtime_id IS NOT NULL)
+          OR (kind = 'terminal' AND runtime_id IS NULL)
+        )
+      );
+      INSERT INTO workspace_sessions_new (
+        id, workspace_id, kind, runtime_id, display_name, status, status_reason, status_reason_at,
+        last_status_at, last_output_at, ended_at, exit_code, transport, tmux_session_name, tmux_session_id,
+        tab_id, runtime_session_id, rate_limit_resume_attempts, next_resume_at, last_resume_from_rate_limit_at,
+        created_at, updated_at
+      )
+      SELECT
+        id,
+        workspace_id,
+        CASE WHEN runtime_id = 'shell' THEN 'terminal' ELSE 'agent' END AS kind,
+        CASE WHEN runtime_id = 'shell' THEN NULL ELSE runtime_id END AS runtime_id,
+        display_name,
+        status,
+        status_reason,
+        status_reason_at,
+        last_status_at,
+        last_output_at,
+        ended_at,
+        exit_code,
+        transport,
+        tmux_session_name,
+        tmux_session_id,
+        tab_id,
+        runtime_session_id,
+        rate_limit_resume_attempts,
+        next_resume_at,
+        last_resume_from_rate_limit_at,
+        created_at,
+        updated_at
+      FROM agent_sessions;
+    `);
+    const after = countRows(db, "workspace_sessions_new");
+    if (after !== before) {
+      throw new Error(`workspace_sessions migration row-count mismatch: copied ${after} of ${before} rows`);
+    }
+    db.exec(`
+      DROP TABLE agent_sessions;
+      ALTER TABLE workspace_sessions_new RENAME TO workspace_sessions;
+      CREATE INDEX IF NOT EXISTS idx_workspace_sessions_workspace ON workspace_sessions(workspace_id);
+      CREATE INDEX IF NOT EXISTS idx_workspace_sessions_runtime_session ON workspace_sessions(runtime_session_id);
+      CREATE INDEX IF NOT EXISTS idx_workspace_sessions_status ON workspace_sessions(status);
+    `);
+    const violations = db.prepare("PRAGMA foreign_key_check").all();
+    if (violations.length > 0) {
+      throw new Error(`workspace_sessions migration produced foreign-key violations: ${JSON.stringify(violations)}`);
+    }
+    db.exec(`
+      INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+        (13, 'workspace-sessions-agent-terminal-split', datetime('now'));
+      COMMIT;
+    `);
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function countRows(db: SqliteDatabase, tableName: string): number {
+  const row = db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get() as { count: number };
+  return Number(row.count);
+}
+
+function assertExpectedAgentSessionDependencies(db: SqliteDatabase) {
+  const schemaRefs = db
+    .prepare(
+      "SELECT type, name, tbl_name AS tblName, sql FROM sqlite_schema WHERE sql LIKE '%agent_sessions%' ORDER BY type, name",
+    )
+    .all() as Array<{ type: string; name: string; tblName: string; sql: string | null }>;
+  const unexpectedSqlRefs = schemaRefs.filter(
+    (row) => !(row.type === "table" && row.name === "agent_sessions" && row.tblName === "agent_sessions"),
+  );
+  if (unexpectedSqlRefs.length > 0) {
+    throw new Error(`Unexpected schema objects reference agent_sessions: ${unexpectedSqlRefs.map((r) => r.name).join(", ")}`);
+  }
+
+  const tables = db
+    .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+    .all() as Array<{ name: string }>;
+  const foreignKeyRefs: string[] = [];
+  for (const table of tables) {
+    const fks = db.prepare(`PRAGMA foreign_key_list(${table.name})`).all() as Array<{ table: string }>;
+    if (table.name !== "agent_sessions" && fks.some((fk) => fk.table === "agent_sessions")) {
+      foreignKeyRefs.push(table.name);
+    }
+  }
+  if (foreignKeyRefs.length > 0) {
+    throw new Error(`Unexpected foreign keys reference agent_sessions: ${foreignKeyRefs.join(", ")}`);
+  }
 }

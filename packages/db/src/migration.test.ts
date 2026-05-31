@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
-import { SqliteStore } from "./index.js";
+import { CURRENT_SCHEMA_VERSION, SqliteStore } from "./index.js";
 
 const dirs: string[] = [];
 
@@ -21,29 +21,93 @@ function makeTempPath(): string {
 // re-opens the database through SqliteStore so the migration runs against the
 // existing row. The migration's data-backfill UPDATE statements are
 // idempotent — they'll run every boot, but only touch matching rows.
-function seedLegacySession(dbPath: string, opts: { id: string; legacyStatus: "waiting" | "orphaned" | "idle" }) {
-  // First, open a vanilla SqliteStore so the table exists. It'll create
-  // empty schema_migrations. We DON'T insert via store.insertSession here
-  // (signature requires new fields); we go around it with raw SQL so we
-  // can write any legacy status value.
+function seedLegacySession(
+  dbPath: string,
+  opts: {
+    id: string;
+    legacyStatus: "waiting" | "orphaned" | "idle" | "running";
+    runtimeId?: string;
+    lastStatusAt?: string;
+    updatedAt?: string;
+  },
+) {
+  // Build a version-12-shaped database directly so migration 13 has a real
+  // legacy agent_sessions table to rebuild.
   const store = new SqliteStore(dbPath);
-  store.migrate();
-  // Now reach into the database and write the legacy row directly. The
-  // ALTER ADD COLUMN statements have already run, so the new columns exist
-  // but the data-backfill UPDATE statements are idempotent and will run
-  // again on the next store construction.
   const db = (store as unknown as { database: DatabaseSync }).database;
+  db.exec(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE schema_migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      applied_at TEXT NOT NULL
+    );
+    CREATE TABLE repos (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      root_path TEXT NOT NULL UNIQUE,
+      default_branch TEXT NOT NULL,
+      default_remote TEXT NOT NULL,
+      worktree_parent TEXT NOT NULL,
+      setup_hook_ids TEXT NOT NULL,
+      teardown_hook_ids TEXT NOT NULL,
+      provider_ids TEXT NOT NULL,
+      deploy_hook_command TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT
+    );
+    CREATE TABLE workspaces (
+      id TEXT PRIMARY KEY,
+      repo_id TEXT NOT NULL REFERENCES repos(id),
+      name TEXT NOT NULL,
+      path TEXT NOT NULL UNIQUE,
+      branch TEXT NOT NULL,
+      base_branch TEXT NOT NULL,
+      source TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'worktree',
+      pr_url TEXT,
+      issue_key TEXT,
+      issue_title TEXT,
+      section TEXT NOT NULL,
+      pinned INTEGER NOT NULL,
+      lifecycle TEXT NOT NULL,
+      dirty INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT,
+      UNIQUE(repo_id, name)
+    );
+    CREATE TABLE agent_sessions (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+      runtime_id TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      status_reason TEXT,
+      last_status_at TEXT NOT NULL DEFAULT '1970-01-01T00:00:00.000Z',
+      last_output_at TEXT,
+      ended_at TEXT,
+      exit_code INTEGER,
+      transport TEXT NOT NULL,
+      tmux_session_name TEXT,
+      tmux_session_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
   // Seed parent rows in FK order: repos → workspaces → agent_sessions.
   db.exec(`INSERT INTO repos (id, name, root_path, default_branch, default_remote, worktree_parent, setup_hook_ids, teardown_hook_ids, provider_ids, deploy_hook_command, created_at, updated_at, archived_at)
     VALUES ('repo_test', 'r', '/tmp/r', 'main', 'origin', '/tmp/w', '[]', '[]', '[]', NULL, '${new Date().toISOString()}', '${new Date().toISOString()}', NULL)
     ON CONFLICT(id) DO NOTHING`);
-  db.exec(`INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, kind, pr_url, issue_key, issue_title, slack_thread_url, section, pinned, lifecycle, dirty, created_at, updated_at, archived_at)
-    VALUES ('ws_test', 'repo_test', 'ws', '/tmp/ws', 'main', 'main', 'scratch', 'worktree', NULL, NULL, NULL, NULL, 'backlog', 0, 'ready', 0, '${new Date().toISOString()}', '${new Date().toISOString()}', NULL)
+  db.exec(`INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, kind, pr_url, issue_key, issue_title, section, pinned, lifecycle, dirty, created_at, updated_at, archived_at)
+    VALUES ('ws_test', 'repo_test', 'ws', '/tmp/ws', 'main', 'main', 'scratch', 'worktree', NULL, NULL, NULL, 'backlog', 0, 'ready', 0, '${new Date().toISOString()}', '${new Date().toISOString()}', NULL)
     ON CONFLICT(id) DO NOTHING`);
   db.exec(
     `INSERT INTO agent_sessions (id, workspace_id, runtime_id, display_name, status, status_reason, last_status_at, last_output_at, ended_at, exit_code, transport, tmux_session_name, tmux_session_id, created_at, updated_at)
-     VALUES ('${opts.id}', 'ws_test', 'claude-code', 'test', '${opts.legacyStatus}', NULL, '2026-05-17T00:00:00.000Z', NULL, NULL, NULL, 'disconnected', 'citadel_test', '$1', '2026-05-17T00:00:00.000Z', '2026-05-17T00:00:00.000Z')`,
+     VALUES ('${opts.id}', 'ws_test', '${opts.runtimeId ?? "claude-code"}', 'test', '${opts.legacyStatus}', NULL, '${opts.lastStatusAt ?? "2026-05-17T00:00:00.000Z"}', NULL, NULL, NULL, 'disconnected', 'citadel_test', '$1', '2026-05-17T00:00:00.000Z', '${opts.updatedAt ?? "2026-05-17T00:00:00.000Z"}')`,
   );
+  store.close();
 }
 
 describe("agent-status migration", () => {
@@ -81,24 +145,15 @@ describe("agent-status migration", () => {
 
   it("backfills last_status_at = updated_at on rows with placeholder default", () => {
     const dbPath = makeTempPath();
+    seedLegacySession(dbPath, {
+      id: "sess_pre",
+      legacyStatus: "running",
+      lastStatusAt: "1970-01-01T00:00:00.000Z",
+      updatedAt: "2026-05-20T14:30:00.000Z",
+    });
     const store = new SqliteStore(dbPath);
     store.migrate();
-    const db = (store as unknown as { database: DatabaseSync }).database;
-    db.exec(`INSERT INTO repos (id, name, root_path, default_branch, default_remote, worktree_parent, setup_hook_ids, teardown_hook_ids, provider_ids, deploy_hook_command, created_at, updated_at, archived_at)
-      VALUES ('repo_test', 'r', '/tmp/r', 'main', 'origin', '/tmp/w', '[]', '[]', '[]', NULL, '${new Date().toISOString()}', '${new Date().toISOString()}', NULL)
-      ON CONFLICT(id) DO NOTHING`);
-    db.exec(`INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, kind, pr_url, issue_key, issue_title, slack_thread_url, section, pinned, lifecycle, dirty, created_at, updated_at, archived_at)
-      VALUES ('ws_test', 'repo_test', 'ws', '/tmp/ws', 'main', 'main', 'scratch', 'worktree', NULL, NULL, NULL, NULL, 'backlog', 0, 'ready', 0, '${new Date().toISOString()}', '${new Date().toISOString()}', NULL)
-      ON CONFLICT(id) DO NOTHING`);
-    // Insert with the placeholder default value to simulate a pre-backfill row.
-    db.exec(
-      `INSERT INTO agent_sessions (id, workspace_id, runtime_id, display_name, status, status_reason, last_status_at, transport, tmux_session_name, tmux_session_id, created_at, updated_at)
-       VALUES ('sess_pre', 'ws_test', 'claude-code', 't', 'running', NULL, '1970-01-01T00:00:00.000Z', 'disconnected', 'citadel_test', '$1', '2026-05-20T12:00:00.000Z', '2026-05-20T14:30:00.000Z')`,
-    );
-    // Re-open to trigger another migration pass (idempotent backfill).
-    const store2 = new SqliteStore(dbPath);
-    store2.migrate();
-    const row = store2.listSessions().find((s) => s.id === "sess_pre");
+    const row = store.listSessions().find((s) => s.id === "sess_pre");
     expect(row?.lastStatusAt).toBe("2026-05-20T14:30:00.000Z");
   });
 
@@ -124,13 +179,66 @@ describe("agent-status migration", () => {
   });
 });
 
+describe("workspace_sessions migration (version 13)", () => {
+  it("renames agent_sessions, converts shell rows to terminal sessions, and records version 13", () => {
+    const dbPath = makeTempPath();
+    seedLegacySession(dbPath, { id: "sess_shell", legacyStatus: "idle", runtimeId: "shell" });
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    expect(CURRENT_SCHEMA_VERSION).toBe(13);
+    expect(db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'agent_sessions'").get()).toBe(
+      undefined,
+    );
+    expect(
+      db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'workspace_sessions'").get(),
+    ).toMatchObject({ name: "workspace_sessions" });
+    expect(store.listWorkspaceSessions().find((s) => s.id === "sess_shell")).toMatchObject({
+      kind: "terminal",
+      runtimeId: null,
+    });
+    expect(db.prepare("SELECT name FROM schema_migrations WHERE version = 13").get()).toMatchObject({
+      name: "workspace-sessions-agent-terminal-split",
+    });
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+
+  it("enforces the workspace-session kind/runtime CHECK constraint", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    db.exec(`INSERT INTO repos (id, name, root_path, default_branch, default_remote, worktree_parent, setup_hook_ids, teardown_hook_ids, provider_ids, deploy_hook_command, created_at, updated_at, archived_at)
+      VALUES ('repo_check', 'r', '/tmp/check-r', 'main', 'origin', '/tmp/w', '[]', '[]', '[]', NULL, '2026-05-17T00:00:00.000Z', '2026-05-17T00:00:00.000Z', NULL)`);
+    db.exec(`INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, kind, pr_url, issue_key, issue_title, issue_url, slack_thread_url, section, pinned, lifecycle, dirty, created_at, updated_at, archived_at)
+      VALUES ('ws_check', 'repo_check', 'ws', '/tmp/check-ws', 'main', 'main', 'scratch', 'worktree', NULL, NULL, NULL, NULL, NULL, 'backlog', 0, 'ready', 0, '2026-05-17T00:00:00.000Z', '2026-05-17T00:00:00.000Z', NULL)`);
+    expect(() =>
+      db.exec(`INSERT INTO workspace_sessions (
+        id, workspace_id, kind, runtime_id, display_name, status, transport, created_at, updated_at
+      ) VALUES ('bad_terminal', 'ws_check', 'terminal', 'shell', 'Terminal', 'running', 'connected', '2026-05-17T00:00:00.000Z', '2026-05-17T00:00:00.000Z')`),
+    ).toThrow();
+  });
+
+  it("fails migration when an unexpected schema object still depends on agent_sessions", () => {
+    const dbPath = makeTempPath();
+    seedLegacySession(dbPath, { id: "sess_dep", legacyStatus: "idle" });
+    const rawStore = new SqliteStore(dbPath);
+    const db = (rawStore as unknown as { database: DatabaseSync }).database;
+    db.exec("CREATE VIEW legacy_agent_session_ids AS SELECT id FROM agent_sessions");
+    rawStore.close();
+
+    const store = new SqliteStore(dbPath);
+    expect(() => store.migrate()).toThrow(/Unexpected schema objects reference agent_sessions/);
+  });
+});
+
 describe("auto-resume migration (version 8)", () => {
   it("adds rate_limit_resume_attempts (NOT NULL DEFAULT 0), next_resume_at, and last_resume_from_rate_limit_at columns", () => {
     const dbPath = makeTempPath();
     const store = new SqliteStore(dbPath);
     store.migrate();
     const db = (store as unknown as { database: DatabaseSync }).database;
-    const cols = db.prepare("PRAGMA table_info(agent_sessions)").all() as Array<{
+    const cols = db.prepare("PRAGMA table_info(workspace_sessions)").all() as Array<{
       name: string;
       type: string;
       notnull: number;

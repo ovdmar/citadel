@@ -47,10 +47,11 @@ describe("SqliteStore", () => {
       { version: 10 },
       { version: 11 },
       { version: 12 },
+      { version: 13 },
     ]);
   });
 
-  it("round-trips agent_sessions.status_reason_at via updateSessionStatus", () => {
+  it("round-trips workspace_sessions.status_reason_at via updateSessionStatus", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-db-"));
     dirs.push(dir);
     const store = new SqliteStore(path.join(dir, "test.sqlite"));
@@ -96,8 +97,8 @@ describe("SqliteStore", () => {
     store.insertSession({
       id: "sess_srr",
       workspaceId: "ws_srr",
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
       status: "running",
       statusReason: null,
       lastStatusAt: "2026-05-26T00:00:00.000Z",
@@ -174,8 +175,8 @@ describe("SqliteStore", () => {
     store.insertSession({
       id: "sess_test",
       workspaceId: "ws_test",
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
       status: "running",
       statusReason: null,
       lastStatusAt: "2026-05-17T00:02:00.000Z",
@@ -249,6 +250,28 @@ describe("SqliteStore", () => {
       },
     ]);
     expect(store.listSessions("ws_test")).toMatchObject([{ id: "sess_test", transport: "connected" }]);
+    store.insertWorkspaceSession({
+      id: "sess_terminal",
+      kind: "terminal",
+      workspaceId: "ws_test",
+      runtimeId: null,
+      displayName: "Terminal",
+      status: "running",
+      statusReason: null,
+      lastStatusAt: "2026-05-17T00:02:00.000Z",
+      lastOutputAt: null,
+      endedAt: null,
+      exitCode: null,
+      transport: "connected",
+      tmuxSessionName: "citadel_terminal",
+      tmuxSessionId: "$2",
+      createdAt: "2026-05-17T00:02:00.000Z",
+      updatedAt: "2026-05-17T00:02:00.000Z",
+    });
+    expect(store.listWorkspaceSessions("ws_test").find((s) => s.id === "sess_terminal")).toMatchObject({
+      kind: "terminal",
+      runtimeId: null,
+    });
     expect(store.listOperations()).toMatchObject([{ id: "op_test", status: "succeeded", progress: 100 }]);
     expect(store.listActivity("ws_test")).toMatchObject([
       { id: "evt_test", source: "system", hookOutput: { links: [{ label: "Preview" }] } },
@@ -308,8 +331,8 @@ describe("SqliteStore", () => {
     store.insertSession({
       id: "sess_delete",
       workspaceId: "ws_delete",
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
       status: "running",
       transport: "disconnected",
       tmuxSessionName: null,
@@ -421,7 +444,7 @@ describe("SqliteStore", () => {
       cron: "0 9 * * *",
       runAt: null,
       repoId: "repo_sched",
-      runtimeId: "shell",
+      runtimeId: "claude-code",
       prompt: null,
       workspaceStrategy: "new" as const,
       workspaceName: "recur",
@@ -525,7 +548,7 @@ describe("SqliteStore", () => {
       cron: "* * * * *",
       runAt: null,
       repoId: "repo_runs",
-      runtimeId: "shell",
+      runtimeId: "codex",
       prompt: null,
       workspaceStrategy: "new",
       workspaceName: "runs",
@@ -687,7 +710,7 @@ describe("SqliteStore", () => {
       cron: "0 * * * *",
       runAt: null,
       repoId: "repo_cascade",
-      runtimeId: "shell",
+      runtimeId: "claude-code",
       prompt: null,
       workspaceStrategy: "new",
       workspaceName: "casc",
