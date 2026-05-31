@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { apiGet, apiPut } from "./helpers/api-request.js";
 import { assertDaemonIsSandbox } from "./helpers/sandbox-guard.js";
 import { acquireSharedStateLock } from "./helpers/shared-state-lock.js";
 
@@ -17,13 +18,13 @@ test.describe("scratchpad drawer", () => {
   });
 
   test.beforeEach(async ({ request }) => {
-    await request.put(`${API_BASE}/api/config`, { data: { scratchpad: {} } });
-    await request.put(`${API_BASE}/api/scratchpad`, { data: { content: "" } });
+    await apiPut(request, `${API_BASE}/api/config`, { data: { scratchpad: {} } });
+    await apiPut(request, `${API_BASE}/api/scratchpad`, { data: { content: "" } });
   });
 
   test.afterEach(async ({ request }) => {
-    await request.put(`${API_BASE}/api/scratchpad`, { data: { content: "" } });
-    await request.put(`${API_BASE}/api/config`, { data: { scratchpad: {} } });
+    await apiPut(request, `${API_BASE}/api/scratchpad`, { data: { content: "" } });
+    await apiPut(request, `${API_BASE}/api/config`, { data: { scratchpad: {} } });
   });
 
   test.afterAll(() => {
@@ -65,7 +66,7 @@ test.describe("scratchpad drawer", () => {
     const rendered = page.locator(".scratchpad-block-rendered").first();
     await expect(rendered).toContainText("<user_id>");
     // Round-trip via API: stored markdown matches the composer input.
-    const list = await request.get(`${API_BASE}/api/scratchpad/blocks`);
+    const list = await apiGet(request, `${API_BASE}/api/scratchpad/blocks`);
     const body = (await list.json()) as { blocks: Array<{ text: string }> };
     expect(body.blocks.some((b) => b.text.includes("<user_id>"))).toBe(true);
   });

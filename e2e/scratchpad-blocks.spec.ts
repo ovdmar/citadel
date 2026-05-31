@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { apiGet, apiPost, apiPut } from "./helpers/api-request.js";
 import { assertDaemonIsSandbox } from "./helpers/sandbox-guard.js";
 import { acquireSharedStateLock } from "./helpers/shared-state-lock.js";
 
@@ -22,14 +23,14 @@ test.describe("scratchpad blocks", () => {
   });
 
   test.beforeEach(async ({ request }) => {
-    await request.put(`${API_BASE}/api/config`, { data: { scratchpad: {} } });
+    await apiPut(request, `${API_BASE}/api/config`, { data: { scratchpad: {} } });
     // Reset to a known stub before each test so prior fixtures don't carry over.
-    await request.put(`${API_BASE}/api/scratchpad`, { data: { content: "" } });
+    await apiPut(request, `${API_BASE}/api/scratchpad`, { data: { content: "" } });
   });
 
   test.afterEach(async ({ request }) => {
-    await request.put(`${API_BASE}/api/scratchpad`, { data: { content: "" } });
-    await request.put(`${API_BASE}/api/config`, { data: { scratchpad: {} } });
+    await apiPut(request, `${API_BASE}/api/scratchpad`, { data: { content: "" } });
+    await apiPut(request, `${API_BASE}/api/config`, { data: { scratchpad: {} } });
   });
 
   test.afterAll(() => {
@@ -42,7 +43,7 @@ test.describe("scratchpad blocks", () => {
     request,
   }, testInfo) => {
     // Seed legacy content via byte-faithful PUT.
-    await request.put(`${API_BASE}/api/scratchpad`, { data: { content: "first idea\n\nsecond idea\n" } });
+    await apiPut(request, `${API_BASE}/api/scratchpad`, { data: { content: "first idea\n\nsecond idea\n" } });
 
     await page.goto("/scratchpad");
 
@@ -60,7 +61,7 @@ test.describe("scratchpad blocks", () => {
       const history = page.locator(".scratchpad-history-list");
       await expect(history.locator(".source-migrate").first()).toBeVisible();
     } else {
-      const list = await request.get(`${API_BASE}/api/scratchpad/history`);
+      const list = await apiGet(request, `${API_BASE}/api/scratchpad/history`);
       const body = (await list.json()) as { entries: Array<{ source: string }> };
       expect(body.entries.map((e) => e.source)).toContain("migrate-to-blocks");
     }
@@ -78,14 +79,14 @@ test.describe("scratchpad blocks", () => {
     await expect(composer).toHaveValue("");
 
     // Confirm via the API that exactly one block exists.
-    const list = await request.get(`${API_BASE}/api/scratchpad/blocks`);
+    const list = await apiGet(request, `${API_BASE}/api/scratchpad/blocks`);
     const body = (await list.json()) as { blocks: Array<{ text: string }> };
     expect(body.blocks.map((b) => b.text)).toEqual(["composer note"]);
   });
 
   test("clicking a block enters edit mode and Cmd-Enter saves", async ({ page, request }) => {
     // Seed one block via the API so we have a target.
-    await request.post(`${API_BASE}/api/scratchpad/blocks`, { data: { text: "original" } });
+    await apiPost(request, `${API_BASE}/api/scratchpad/blocks`, { data: { text: "original" } });
     await page.goto("/scratchpad");
 
     const block = page.locator(".scratchpad-block").first();
@@ -111,13 +112,13 @@ test.describe("scratchpad blocks", () => {
     // focus from the composer without closing the drawer or navigating.
     await page.locator(".scratchpad-drawer-title").click();
     await expect(page.locator(".scratchpad-block-list").getByText("blur should save this")).toBeVisible();
-    const list = await request.get(`${API_BASE}/api/scratchpad/blocks`);
+    const list = await apiGet(request, `${API_BASE}/api/scratchpad/blocks`);
     const body = (await list.json()) as { blocks: Array<{ text: string }> };
     expect(body.blocks.map((b) => b.text)).toContain("blur should save this");
   });
 
   test("editing a block to empty deletes it", async ({ page, request }) => {
-    await request.post(`${API_BASE}/api/scratchpad/blocks`, { data: { text: "delete me via empty edit" } });
+    await apiPost(request, `${API_BASE}/api/scratchpad/blocks`, { data: { text: "delete me via empty edit" } });
     await page.goto("/scratchpad");
     const block = page.locator(".scratchpad-block").first();
     await block.click();
@@ -127,7 +128,7 @@ test.describe("scratchpad blocks", () => {
     await expect(page.getByText("delete me via empty edit")).toHaveCount(0);
     await expect
       .poll(async () => {
-        const list = await request.get(`${API_BASE}/api/scratchpad/blocks`);
+        const list = await apiGet(request, `${API_BASE}/api/scratchpad/blocks`);
         const body = (await list.json()) as { blocks: unknown[] };
         return body.blocks.length;
       })
@@ -135,7 +136,7 @@ test.describe("scratchpad blocks", () => {
   });
 
   test("hover-delete removes a block; undo restores it", async ({ page, request }) => {
-    await request.post(`${API_BASE}/api/scratchpad/blocks`, { data: { text: "block to delete" } });
+    await apiPost(request, `${API_BASE}/api/scratchpad/blocks`, { data: { text: "block to delete" } });
     await page.goto("/scratchpad");
     const block = page.locator(".scratchpad-block").first();
     await block.hover();

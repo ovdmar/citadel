@@ -1,3 +1,4 @@
+import { ensureCodexGoalsFeatureArgs } from "@citadel/config";
 import type { ActivityEvent, BackgroundAgentSession } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
@@ -45,7 +46,7 @@ export async function createBackgroundAgentSession(
   // Embed prompt as a CLI arg if the runtime supports it (claude-code, codex);
   // otherwise paste it into the pane once tmux is ready. Mirrors
   // createAgentSession's logic.
-  const runtimeArgs = [...input.runtime.args];
+  const runtimeArgs = ensureCodexGoalsFeatureArgs(input.runtimeId, input.runtime.args);
   let promptForKeys: string | null = null;
   if (input.prompt?.length) {
     if (input.runtime.promptArg) runtimeArgs.push(input.runtime.promptArg, input.prompt);
