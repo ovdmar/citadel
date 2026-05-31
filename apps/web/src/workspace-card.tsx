@@ -6,7 +6,7 @@ import type {
   Workspace,
   WorkspaceDirtySummary,
 } from "@citadel/contracts";
-import { sessionNeedsAttention } from "@citadel/core";
+import { type LifecycleTone, deriveWorkspaceLifecycleTone } from "@citadel/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -34,30 +34,30 @@ export type WorkspaceCardData = {
 export type PrTone = "missing" | "pending" | "passing" | "failing" | "merged" | "conflicting";
 export type ApprovalTone = "none" | "pending" | "changes" | "approved";
 
-export type WorkspaceAgentTone = "attention" | "rate_limited" | "running" | "idle";
-
-// Aggregates the per-agent statuses for a workspace into one tone for the
-// status dot. Priority: attention > rate_limited > running > idle. Shell
-// sessions are excluded — they're plain terminals, not agents. usage_limited
-// (account-wide cap, waits for a known reset) collapses into the same blue
-// `rate_limited` tone since both mean "stalled, will recover".
-export function deriveWorkspaceAgentTone(sessions: AgentSession[]): WorkspaceAgentTone {
-  const agentSessions = sessions.filter((s) => s.runtimeId !== "shell");
-  if (agentSessions.some((s) => s.status === "waiting_for_input" || sessionNeedsAttention(s))) return "attention";
-  if (agentSessions.some((s) => s.status === "rate_limited" || s.status === "usage_limited")) return "rate_limited";
-  if (agentSessions.some((s) => s.status === "starting" || s.status === "running")) return "running";
-  return "idle";
+export function lifecycleToneClass(tone: LifecycleTone): string {
+  switch (tone) {
+    case "never-started":
+      return "cit-pulse-idle";
+    case "running":
+      return "cit-pulse-run";
+    case "done":
+      return "cit-pulse-done";
+    case "attention":
+      return "cit-pulse-bad";
+  }
 }
 
-// Maps the aggregated tone to the shared `cit-pulse-*` class used across
-// the cockpit (bottom-bar "auto mode" pill, navigator "Running" stat,
-// inspector deploy/runtime pulses). Keeps workspace-card chrome visually
-// consistent with the rest of the app.
-function citPulseClass(tone: WorkspaceAgentTone): string {
-  if (tone === "attention") return "cit-pulse-bad";
-  if (tone === "rate_limited") return "cit-pulse-info";
-  if (tone === "running") return "cit-pulse-run";
-  return "cit-pulse-idle";
+function lifecycleToneAriaSuffix(tone: LifecycleTone): string {
+  switch (tone) {
+    case "attention":
+      return ", agent needs attention";
+    case "running":
+      return ", agent running";
+    case "done":
+      return ", agent done";
+    case "never-started":
+      return ", agent never started";
+  }
 }
 
 export type WorkspaceReorderProps = {
@@ -88,9 +88,8 @@ export function WorkspaceCard(
   const titleDisplay = workspaceDisplayTitle(workspace);
   const prTone = pullRequest ? prToneFor(pullRequest) : "missing";
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
-  const agentTone = deriveWorkspaceAgentTone(props.sessions);
-  const agentToneSuffix =
-    agentTone === "attention" ? ", agent needs attention" : agentTone === "running" ? ", agent running" : "";
+  const lifecycleTone = deriveWorkspaceLifecycleTone({ sessions: props.sessions, pullRequest: pullRequest ?? null });
+  const agentToneSuffix = lifecycleToneAriaSuffix(lifecycleTone);
   const additions = pullRequest?.additions ?? null;
   const deletions = pullRequest?.deletions ?? null;
   const hasDiff = additions !== null || deletions !== null;
@@ -258,7 +257,7 @@ export function WorkspaceCard(
                 <strong> has overflow: hidden for title-truncation, which
                 would clip the cit-pulse-run ripple animation's left edge. */}
             <span
-              className={`cit-pulse cit-pulse-sm ${citPulseClass(agentTone)} workspace-status-dot`}
+              className={`cit-pulse cit-pulse-sm ${lifecycleToneClass(lifecycleTone)} workspace-status-dot`}
               aria-hidden="true"
             />
             {editing ? (

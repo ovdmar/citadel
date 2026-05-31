@@ -165,6 +165,7 @@ afterEach(async () => {
   await flushReactUpdate(async () => {
     for (const root of roots.splice(0)) root.unmount();
   });
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -363,6 +364,50 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     );
   });
 
+  it("maps command-style line editing to pane key events without relying on daemon platform", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    if (!ws || !term) throw new Error("terminal rig missing");
+
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "Linux x86_64" });
+    await flushReactUpdate(async () => ws.open());
+
+    const killed = term.emitKey(
+      new KeyboardEvent("keydown", { key: "Backspace", metaKey: true, bubbles: true, cancelable: true }),
+    );
+    const home = term.emitKey(
+      new KeyboardEvent("keydown", { key: "ArrowLeft", metaKey: true, bubbles: true, cancelable: true }),
+    );
+    const end = term.emitKey(
+      new KeyboardEvent("keydown", { key: "ArrowRight", metaKey: true, bubbles: true, cancelable: true }),
+    );
+
+    expect(killed).toBe(false);
+    expect(home).toBe(false);
+    expect(end).toBe(false);
+    expect(ws.sent).toContain(JSON.stringify({ type: "key", key: "C-u" }));
+    expect(ws.sent).toContain(JSON.stringify({ type: "key", key: "C-a" }));
+    expect(ws.sent).toContain(JSON.stringify({ type: "key", key: "C-e" }));
+  });
+
+  it("uses Ctrl+Backspace as the non-Apple line-kill shortcut", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    if (!ws || !term) throw new Error("terminal rig missing");
+
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "Win32" });
+    await flushReactUpdate(async () => ws.open());
+
+    const killed = term.emitKey(
+      new KeyboardEvent("keydown", { key: "Backspace", ctrlKey: true, bubbles: true, cancelable: true }),
+    );
+
+    expect(killed).toBe(false);
+    expect(ws.sent).toContain(JSON.stringify({ type: "key", key: "C-u" }));
+  });
+
   it("lets macOS Cmd+C with an xterm selection reach the browser copy event", async () => {
     await renderTerminal();
     const ws = TerminalPaneWebSocketMock.instances[0];
@@ -529,6 +574,46 @@ describe("TerminalPane xterm WebSocket renderer", () => {
 
     expect(document.body.textContent).toContain("terminal_disconnected");
     expect(document.body.textContent).toContain("lost");
+    expect((document.querySelector("button") as HTMLButtonElement | null)?.disabled).toBe(false);
+  });
+
+  it("auto-retries disconnected terminal sockets up to three times with 5s backoff", async () => {
+    vi.useFakeTimers();
+    await renderTerminal();
+
+    await flushReactUpdate(() => TerminalPaneWebSocketMock.instances[0]?.closeFromServer(1006, "lost"));
+    expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
+
+    await flushReactUpdate(() => {
+      vi.advanceTimersByTime(4_999);
+    });
+    expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
+
+    await flushReactUpdate(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(TerminalPaneWebSocketMock.instances).toHaveLength(2);
+
+    await flushReactUpdate(() => TerminalPaneWebSocketMock.instances[1]?.closeFromServer(1006, "still lost"));
+    await flushReactUpdate(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(TerminalPaneWebSocketMock.instances).toHaveLength(3);
+
+    await flushReactUpdate(() => TerminalPaneWebSocketMock.instances[2]?.closeFromServer(1006, "still lost"));
+    await flushReactUpdate(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(TerminalPaneWebSocketMock.instances).toHaveLength(4);
+
+    await flushReactUpdate(() => TerminalPaneWebSocketMock.instances[3]?.closeFromServer(1006, "exhausted"));
+    await flushReactUpdate(() => {
+      vi.advanceTimersByTime(10_000);
+    });
+
+    expect(TerminalPaneWebSocketMock.instances).toHaveLength(4);
+    expect(document.body.textContent).toContain("terminal_disconnected");
+    expect(document.body.textContent).toContain("exhausted");
   });
 });
 

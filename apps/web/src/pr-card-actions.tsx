@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { GitMerge, GitPullRequest, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { api, queryClient } from "./api.js";
+import { markWorkspacePrMergedInQueryCache } from "./cockpit-tools.js";
 import type { PrTone } from "./workspace-card.js";
 
 // Decides which (single) action button belongs in the PR card's bottom-right
@@ -72,9 +73,16 @@ function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
     queryFn: () => api<{ providerHealth: ProviderHealth[] }>("/api/health"),
     refetchInterval: 60_000,
   });
-  const ghHealthy = providerHealth.data?.providerHealth.find((entry) => entry.id === "github-gh")?.status === "healthy";
+  const ghProvider = providerHealth.data?.providerHealth.find((entry) => entry.id === "github-gh") ?? null;
+  const ghHealthy = ghProvider?.status === "healthy";
   const canMerge = pr.mergeable === "mergeable" && allowed.length > 0 && ghHealthy === true;
   const merge = useMutation({
+    onMutate: async () => {
+      await Promise.all([
+        queryClient.cancelQueries({ queryKey: ["workspace-cockpit", workspace.id] }),
+        queryClient.cancelQueries({ queryKey: ["workspaces-pr-batch"] }),
+      ]);
+    },
     mutationFn: (strategy: PrMergeStrategy) =>
       api(`/api/workspaces/${workspace.id}/pr-merge`, {
         method: "POST",
@@ -82,34 +90,40 @@ function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
       }),
     onSuccess: () => {
       setOpen(false);
-      queryClient.invalidateQueries({ queryKey: ["workspace-cockpit", workspace.id] });
-      queryClient.invalidateQueries({ queryKey: ["workspaces-pr-batch"] });
+      markWorkspacePrMergedInQueryCache(queryClient, workspace.id, pr.number);
     },
   });
-  const disabledReason =
-    ghHealthy === false
-      ? "GitHub CLI unavailable"
-      : pr.mergeable !== "mergeable"
-        ? "PR is not mergeable (unknown state — refresh to recheck)"
-        : allowed.length === 0
-          ? "Repository allows no merge strategies via gh"
-          : null;
+  const disabledReason = mergeDisabledReason({
+    allowedMergeStrategies: allowed,
+    ghProvider,
+    healthQueryError: providerHealth.isError,
+    healthQueryLoading: providerHealth.isLoading,
+    mergeable: pr.mergeable,
+    mergePending: merge.isPending,
+  });
+  const buttonTitle = disabledReason ?? `Merge PR #${pr.number}`;
   return (
     <div className="pr-card-action pr-card-action--merge">
-      <button
-        type="button"
-        className="pr-card-btn pr-card-btn-merge"
-        onClick={(event) => {
-          event.stopPropagation();
-          if (canMerge) setOpen((value) => !value);
-        }}
-        disabled={!canMerge || merge.isPending}
-        aria-disabled={!canMerge}
-        title={disabledReason ?? `Merge PR #${pr.number}`}
+      <span
+        className={`pr-card-action-tooltip ${disabledReason ? "is-disabled" : ""}`}
+        title={buttonTitle}
+        aria-label={buttonTitle}
       >
-        {merge.isPending ? <Loader2 size={11} className="spin" /> : <GitMerge size={11} />}
-        <span>{merge.isPending ? "Merging…" : "Merge"}</span>
-      </button>
+        <button
+          type="button"
+          className="pr-card-btn pr-card-btn-merge"
+          onClick={(event) => {
+            event.stopPropagation();
+            if (canMerge) setOpen((value) => !value);
+          }}
+          disabled={!canMerge || merge.isPending}
+          aria-disabled={!canMerge || merge.isPending}
+          title={buttonTitle}
+        >
+          {merge.isPending ? <Loader2 size={11} className="spin" /> : <GitMerge size={11} />}
+          <span>{merge.isPending ? "Merging…" : "Merge"}</span>
+        </button>
+      </span>
       {open && canMerge ? (
         <div className="pr-card-merge-menu" role="menu">
           {allowed.map((strategy) => (
@@ -131,4 +145,26 @@ function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
       ) : null}
     </div>
   );
+}
+
+export function mergeDisabledReason(input: {
+  allowedMergeStrategies: readonly PrMergeStrategy[];
+  ghProvider: ProviderHealth | null;
+  healthQueryError: boolean;
+  healthQueryLoading: boolean;
+  mergeable: PullRequestSummary["mergeable"];
+  mergePending: boolean;
+}): string | null {
+  if (input.mergePending) return "Merge in progress";
+  if (input.mergeable === "conflicting") return "PR has merge conflicts with the base branch";
+  if (input.mergeable === "unknown") return "PR mergeability is unknown; refresh to recheck";
+  if (input.allowedMergeStrategies.length === 0) return "Repository allows no merge strategies via gh";
+  if (input.ghProvider?.status !== "healthy") {
+    if (input.ghProvider?.reason) return `GitHub CLI unavailable: ${input.ghProvider.reason}`;
+    if (input.ghProvider) return "GitHub CLI unavailable";
+    if (input.healthQueryError) return "Unable to check GitHub CLI availability";
+    if (input.healthQueryLoading) return "Checking GitHub CLI availability";
+    return "GitHub CLI health is unknown";
+  }
+  return null;
 }

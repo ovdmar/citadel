@@ -1,6 +1,7 @@
 import type {
   CiProviderSummary,
   HookEvent,
+  PullRequestSummary,
   Repo,
   VersionControlSummary,
   Workspace,
@@ -19,7 +20,12 @@ import {
 import type express from "express";
 import { ZodError } from "zod";
 import { buildVersionControlProviderDeps, decorateWithCooldown } from "./gh-quota-wiring.js";
-import { bustGlobalPrEntry, globalPrCacheKeyForWorkspace } from "./global-pr-cache.js";
+import {
+  bustGlobalPrEntry,
+  globalPrCacheKey,
+  globalPrCacheKeyForWorkspace,
+  writeGlobalPrSummary,
+} from "./global-pr-cache.js";
 import { bustCacheByPrefixes } from "./workspace-fs-watcher.js";
 
 type ProviderCollectors = {
@@ -36,6 +42,8 @@ type AsyncRoute = (
 type CachedProvider = <T>(key: string, load: () => T | Promise<T>, ttlMs?: number) => Promise<T>;
 
 type ProviderCache = Map<string, { expiresAt: number; value: unknown }>;
+
+const VC_PROVIDER_CACHE_TTL_MS = 90_000;
 
 type HookEventRunner = {
   runHookEvent(input: {
@@ -90,7 +98,7 @@ export function registerPrRoutes(input: {
       const versionControl: VersionControlSummary = await cachedProvider(
         `vc:${repo.id}:${repo.updatedAt}`,
         () => providers.collectGitHubVersionControlSummary(repo.rootPath, providerDepsForRepo(repo.id)),
-        90_000,
+        VC_PROVIDER_CACHE_TTL_MS,
       );
       res.json({ versionControl: decorateWithCooldown(versionControl) });
     }),
@@ -195,7 +203,7 @@ export function registerPrRoutes(input: {
       const versionControl: VersionControlSummary = await cachedProvider(
         `vc:${workspace.id}:${workspace.updatedAt}`,
         () => providers.collectGitHubVersionControlSummary(workspace.path, providerDepsForRepo(repo.id)),
-        90_000,
+        VC_PROVIDER_CACHE_TTL_MS,
       );
       res.json({ versionControl: decorateWithCooldown(versionControl) });
     }),
@@ -220,10 +228,11 @@ export function registerPrRoutes(input: {
       const summary = await cachedProvider(
         `vc:${workspace.id}:${workspace.updatedAt}`,
         () => providers.collectGitHubVersionControlSummary(workspace.path, providerDepsForRepo(repo.id)),
-        90_000,
+        VC_PROVIDER_CACHE_TTL_MS,
       );
-      const number = summary.pullRequest?.number;
-      if (typeof number !== "number")
+      const pr = summary.pullRequest;
+      const number = pr?.number;
+      if (!pr || typeof number !== "number")
         return res.status(409).json({ ok: false, reason: "no_pr", detail: "Workspace has no open PR" });
       const hookResult = operations
         ? await operations.runHookEvent({
@@ -253,18 +262,55 @@ export function registerPrRoutes(input: {
       const result = await mergePr({ rootPath: workspace.path, number, strategy: parsed.strategy });
       const nameWithOwner = resolveRepoFullName(repo.id);
       if (result.ok) {
+        const mergedPr = markPullRequestMerged(pr);
+        const checkedAt = new Date().toISOString();
+        const mergedVersionControl: VersionControlSummary = {
+          ...summary,
+          pullRequest: mergedPr,
+          checkedAt,
+        };
+        providerCache.set(`vc:${workspace.id}:${workspace.updatedAt}`, {
+          expiresAt: Date.now() + VC_PROVIDER_CACHE_TTL_MS,
+          value: mergedVersionControl,
+        });
+        if (nameWithOwner) writeGlobalPrSummary(providerCache, globalPrCacheKey(nameWithOwner, number), mergedPr);
+        store.updateWorkspacePrSnapshot(workspace.id, {
+          prNumber: number,
+          prState: "merged",
+          lastFetchAt: checkedAt,
+          lastChecksGreenAt: allChecksGreen(mergedPr) ? checkedAt : null,
+          lastHeadSha: mergedPr.headSha ?? null,
+          lastMergeStateStatus: mergedPr.mergeStateStatus ?? null,
+        });
         bustCacheByPrefixes(
           providerCache,
-          [`vc:${workspace.id}`, `ci:${repo.id}`, nameWithOwner ? `ci:${nameWithOwner}` : null].filter(
-            Boolean,
-          ) as string[],
+          [`ci:${repo.id}`, nameWithOwner ? `ci:${nameWithOwner}` : null].filter(Boolean) as string[],
         );
-        if (nameWithOwner) bustGlobalPrEntry(providerCache, nameWithOwner, number);
       } else if (nameWithOwner && isMergeStrategyCacheFailure(result.reason, result.detail)) {
         providerCache.delete(`gh-repo-merge-strategies:${nameWithOwner}`);
       }
       res.status(result.ok ? 200 : 409).json(result);
     }),
+  );
+}
+
+function markPullRequestMerged(pr: PullRequestSummary): PullRequestSummary {
+  return {
+    ...pr,
+    state: "MERGED",
+    mergeable: "unknown",
+    allowedMergeStrategies: [],
+    mergeStateStatus: null,
+  };
+}
+
+function allChecksGreen(pr: PullRequestSummary): boolean {
+  return (
+    pr.checks.length > 0 &&
+    pr.checks.every((check) => {
+      const conclusion = (check.conclusion ?? "").toLowerCase();
+      return conclusion === "success" || conclusion === "neutral" || conclusion === "skipped";
+    })
   );
 }
 

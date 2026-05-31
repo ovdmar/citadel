@@ -1,4 +1,5 @@
 import type { AgentSession, Namespace, Operation, PullRequestSummary, Repo, Workspace } from "@citadel/contracts";
+import { type LifecycleTone, deriveWorkspaceLifecycleTone } from "@citadel/core";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
@@ -33,10 +34,28 @@ import {
 } from "./navigator-groups.js";
 import { applyLocalOrder, loadOrder, pruneOrder, saveOrder, spliceIntoOrder } from "./navigator-order.js";
 import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
-import { WorkspaceCard } from "./workspace-card.js";
+import { WorkspaceCard, lifecycleToneClass } from "./workspace-card.js";
 
 function runningCount(sessions: AgentSession[]): number {
   return sessions.filter((session) => session.status === "running").length;
+}
+
+export function aggregateNavigatorTone(
+  workspaces: Workspace[],
+  sessions: AgentSession[],
+  prByWorkspaceId?: Map<string, PullRequestSummary | null>,
+): LifecycleTone {
+  let aggregate: LifecycleTone = "never-started";
+  for (const workspace of workspaces) {
+    const tone = deriveWorkspaceLifecycleTone({
+      sessions: sessions.filter((session) => session.workspaceId === workspace.id),
+      pullRequest: prByWorkspaceId?.get(workspace.id) ?? null,
+    });
+    if (tone === "attention") return "attention";
+    if (tone === "running") aggregate = "running";
+    else if (tone === "done" && aggregate === "never-started") aggregate = "done";
+  }
+  return aggregate;
 }
 
 export function Navigator(props: {
@@ -140,6 +159,8 @@ export function Navigator(props: {
     [props.workspaces, props.repos, props.sessions, props.operations, treeGrouping, props.namespaces],
   );
   const historyCount = props.operations.length;
+  const navigatorTone = aggregateNavigatorTone(props.workspaces, props.sessions, props.prByWorkspaceId);
+  const running = runningCount(props.sessions);
 
   // Prune collapsed entries whose group no longer exists, so localStorage doesn't accumulate
   // orphans across repo/workspace renames or deletions. Skip when grouping is off or the tree
@@ -354,11 +375,8 @@ export function Navigator(props: {
           <div className="nav-foot-stat">
             <div className="nav-foot-stat-label">Running</div>
             <div className="nav-foot-stat-val">
-              <span
-                className={`cit-pulse cit-pulse-sm ${runningCount(props.sessions) ? "cit-pulse-run" : "cit-pulse-idle"}`}
-                aria-hidden
-              />
-              {runningCount(props.sessions)}
+              <span className={`cit-pulse cit-pulse-sm ${lifecycleToneClass(navigatorTone)}`} aria-hidden />
+              {running}
             </div>
           </div>
         </div>
