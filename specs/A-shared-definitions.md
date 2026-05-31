@@ -20,7 +20,7 @@
 [ ] 3. Agent session — a durable agent/runtime session attached to a workspace.
 [ ] 4. Runtime adapter — a CLI agent integration such as Claude, Codex, Pi, or another configured shell-backed agent.
 [ ] 5. Provider — an integration that normalizes external system data into Citadel contracts.
-[ ] 6. Hook — a repo-scoped extension command that returns structured data or executes structured actions.
+[ ] 6. Hook — a repo-scoped extension command or agent prompt that returns structured data or executes structured actions.
 [ ] 7. Operation — a tracked long-running or side-effectful action with status, progress, logs, and activity.
 [ ] 8. Readiness — Citadel's operator-facing summary of what needs attention and why.
 [ ] 9. Link — a navigation target related to a repo, workspace, provider, application, issue, PR, or operation.
