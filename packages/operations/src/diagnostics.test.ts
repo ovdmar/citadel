@@ -6,7 +6,7 @@ import { createDiagnosticsLogger, noopDiagnosticsLogger } from "./diagnostics.js
 
 const dirs: string[] = [];
 afterEach(() => {
-  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 function tmp(): string {

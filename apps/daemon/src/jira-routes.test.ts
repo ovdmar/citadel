@@ -20,7 +20,7 @@ describe("registerJiraRoutes", () => {
   it("GET /api/integrations/jira/search returns IssueSearchResponse from the provider", async () => {
     const fixture = createFixture();
     let observed: string | null = "<unset>";
-    const { server } = createDaemonApp({
+    const { server } = await createDaemonApp({
       ...fixture,
       providers: {
         searchJiraIssues: async (query) => {
@@ -51,7 +51,7 @@ describe("registerJiraRoutes", () => {
   it("GET /api/integrations/jira/search with no q forwards null (recent-default path)", async () => {
     const fixture = createFixture();
     let observed: string | null | undefined;
-    const { server } = createDaemonApp({
+    const { server } = await createDaemonApp({
       ...fixture,
       providers: {
         searchJiraIssues: async (query) => {
@@ -74,7 +74,7 @@ describe("registerJiraRoutes", () => {
 
   it("GET /api/integrations/jira/search returns 200 with a degraded payload when the provider fails", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp({
+    const { server } = await createDaemonApp({
       ...fixture,
       providers: {
         searchJiraIssues: async () => ({
@@ -159,7 +159,7 @@ describe("registerJiraRoutes", () => {
       checkedAt: now,
     };
     let transitionCalls = 0;
-    const { server } = createDaemonApp({
+    const { server } = await createDaemonApp({
       ...fixture,
       providers: {
         collectJiraIssueSummary: async () => summary,
@@ -237,7 +237,7 @@ describe("registerJiraRoutes", () => {
       archivedAt: null,
     });
     let transitionCalls = 0;
-    const { server } = createDaemonApp({
+    const { server } = await createDaemonApp({
       ...fixture,
       providers: {
         transitionJiraIssue: async (input) => {
@@ -325,7 +325,7 @@ describe("registerJiraRoutes", () => {
       archivedAt: null,
     });
     const transitionInputs: Array<{ issueKey: string; transition: string }> = [];
-    const { server } = createDaemonApp({
+    const { server } = await createDaemonApp({
       ...fixture,
       providers: {
         collectJiraIssueSummary: async (key) => ({
@@ -422,7 +422,7 @@ describe("registerJiraRoutes", () => {
     });
 
     let observed: { issueKey: string; transition: string } | null = null;
-    const { server } = createDaemonApp({
+    const { server } = await createDaemonApp({
       ...fixture,
       providers: {
         transitionJiraIssue: async (input) => {

@@ -16,7 +16,7 @@ import {
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
@@ -26,7 +26,7 @@ const createFixture = () => createScratchpadFixture(dirs);
 describe("scratchpad HTTP + MCP routes", () => {
   it("round-trips content via GET and PUT /api/scratchpad", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const initial = await getJson<{ content: string; updatedAt: string }>(`${baseUrl}/api/scratchpad`);
@@ -51,7 +51,7 @@ describe("scratchpad HTTP + MCP routes", () => {
     // back-to-back PUTs, the final disk state must match the final body —
     // catches regressions where an out-of-order write would clobber the latest.
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const bodies = ["one", "two", "three", "four", "five"];
@@ -69,7 +69,7 @@ describe("scratchpad HTTP + MCP routes", () => {
 
   it("rejects PUT bodies that try to spoof a non-ui source", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const response = await fetch(`${baseUrl}/api/scratchpad`, {
@@ -87,7 +87,7 @@ describe("scratchpad HTTP + MCP routes", () => {
 
   it("exposes scratchpad history and supports restore", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       await putJson(`${baseUrl}/api/scratchpad`, { content: "first" });
@@ -174,7 +174,7 @@ describe("scratchpad HTTP + MCP routes", () => {
     const fixture = createFixture();
     const spPath = path.join(fixture.config.dataDir, "scratchpad.md");
     fs.writeFileSync(spPath, "pre-existing notes");
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const list = await getJson<{ entries: Array<{ source: string; preview: string }> }>(
@@ -187,7 +187,7 @@ describe("scratchpad HTTP + MCP routes", () => {
       await closeServer(server);
     }
 
-    const { server: server2 } = createDaemonApp(fixture);
+    const { server: server2 } = await createDaemonApp(fixture);
     const baseUrl2 = await listen(server2);
     try {
       const list = await getJson<{ entries: unknown[] }>(`${baseUrl2}/api/scratchpad/history`);
@@ -199,7 +199,7 @@ describe("scratchpad HTTP + MCP routes", () => {
 
   it("rejects oversize PUT bodies", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const tooLarge = "x".repeat(1_000_001);
@@ -216,7 +216,7 @@ describe("scratchpad HTTP + MCP routes", () => {
 
   it("exposes read_scratchpad and write_scratchpad through MCP", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const list = await postJson<{ result: { tools: Array<{ name: string }> } }>(`${baseUrl}/api/mcp/rpc`, {
@@ -302,7 +302,7 @@ describe("scratchpad HTTP + MCP routes", () => {
 
   it("emits scratchpad.history.updated on every mutation path", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     const listener = await openHistorySseListener(baseUrl);
     try {
@@ -338,7 +338,7 @@ describe("scratchpad HTTP + MCP routes", () => {
 describe("configurable notes location — HTTP + MCP routes", () => {
   it("GET /api/scratchpad includes the absolute path field, matching effectiveNotesPath(config)", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const body = await getJson<{ content: string; updatedAt: string; path: string }>(`${baseUrl}/api/scratchpad`);
@@ -353,7 +353,7 @@ describe("configurable notes location — HTTP + MCP routes", () => {
 
   it("honors scratchpad.path set via PUT /api/config mid-session, without daemon restart", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const customNotes = path.join(fixture.config.dataDir, "synced", "custom-notes.md");
@@ -375,7 +375,7 @@ describe("configurable notes location — HTTP + MCP routes", () => {
 
   it("PUT /api/scratchpad and block routes do NOT include path in their response (narrow internal type preserved)", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const putBody = await putJson<Record<string, unknown>>(`${baseUrl}/api/scratchpad`, { content: "x" });
@@ -396,7 +396,7 @@ describe("configurable notes location — HTTP + MCP routes", () => {
 
   it("read_scratchpad MCP dispatch returns { content, updatedAt, path }", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const result = await postJson<{
@@ -418,7 +418,7 @@ describe("configurable notes location — HTTP + MCP routes", () => {
 
   it("inspect_status MCP response includes scratchpad.path", async () => {
     const fixture = createFixture();
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const result = await postJson<{

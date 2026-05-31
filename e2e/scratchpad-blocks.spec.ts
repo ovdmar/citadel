@@ -134,7 +134,12 @@ test.describe("scratchpad blocks", () => {
     await block.click();
     const textarea = block.locator("textarea");
     await textarea.fill("");
-    await textarea.press("ControlOrMeta+Enter");
+    await Promise.all([
+      page.waitForResponse(
+        (response) => response.url().includes("/api/scratchpad/blocks/") && response.request().method() === "DELETE",
+      ),
+      textarea.press("ControlOrMeta+Enter"),
+    ]);
     await expect(page.getByText("delete me via empty edit")).toHaveCount(0);
     await expect
       .poll(async () => {

@@ -8,7 +8,7 @@ import { createDaemonApp } from "./app.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("recent-commits route", () => {
@@ -60,7 +60,7 @@ describe("recent-commits route", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const notFound = await fetch(`${baseUrl}/api/workspaces/ws_missing/recent-commits`);

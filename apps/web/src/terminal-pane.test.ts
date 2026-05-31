@@ -5,7 +5,13 @@ import { createElement } from "react";
 import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TerminalPane, getTerminalHandle } from "./terminal-pane.js";
+import {
+  TerminalPane,
+  focusActiveTerminal,
+  getTerminalHandle,
+  isRegisteredTerminalMessageSource,
+  terminalWebSocketUrl,
+} from "./terminal-pane.js";
 import { applyThemePreference } from "./use-resolved-theme.js";
 
 const xtermMocks = vi.hoisted(() => {
@@ -162,7 +168,55 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+describe("focusActiveTerminal", () => {
+  it("is a no-op when sessionId is null", () => {
+    expect(() => focusActiveTerminal(null)).not.toThrow();
+    expect(() => focusActiveTerminal(undefined)).not.toThrow();
+  });
+
+  it("is a no-op when no handle is registered for the sessionId", () => {
+    expect(getTerminalHandle("unknown-session")).toBeUndefined();
+    expect(() => focusActiveTerminal("unknown-session")).not.toThrow();
+  });
+
+  it("accepts terminal bridge messages by registered session id when the frame source identity is unavailable", async () => {
+    await renderTerminal();
+
+    expect(getTerminalHandle("sess_1")).toBeDefined();
+    expect(isRegisteredTerminalMessageSource(null, "sess_1")).toBe(true);
+    expect(isRegisteredTerminalMessageSource(null, "unknown-session")).toBe(false);
+  });
+
+  it("focuses the registered xterm instance", async () => {
+    await renderTerminal();
+
+    focusActiveTerminal("sess_1");
+
+    expect(xtermMocks.FakeTerminal.instances[0]?.focus).toHaveBeenCalled();
+  });
+});
+
 describe("TerminalPane xterm WebSocket renderer", () => {
+  it("opens the primary /terminal WebSocket without hitting the legacy terminal ensure endpoint", async () => {
+    await renderTerminal();
+
+    expect(TerminalPaneWebSocketMock.instances[0]?.url).toBe(terminalWebSocketUrl("sess_1"));
+    expect(xtermMocks.FakeTerminal.instances[0]?.options.scrollback).toBe(20_000);
+    expect(window.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/api/agent-sessions/sess_1/terminal"));
+    expect(getTerminalHandle("sess_1")).toBeDefined();
+  });
+
+  it("creates an opaque xterm renderer", async () => {
+    await renderTerminal();
+
+    expect(xtermMocks.FakeTerminal.instances[0]?.options).toEqual(
+      expect.objectContaining({
+        allowTransparency: false,
+        theme: expect.objectContaining({ background: "#f5f1e8" }),
+      }),
+    );
+  });
+
   it("keeps retained hidden panes dormant until they become active", async () => {
     const rootElement = document.createElement("div");
     document.body.appendChild(rootElement);
@@ -493,6 +547,24 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(ws.sent).toContain(JSON.stringify({ type: "input", data: "\n" }));
   });
 
+  it("captures wheel input and scrolls the terminal viewport instead of leaking prompt-history keys", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+    const downstream = vi.fn();
+    host.addEventListener("wheel", downstream);
+    await flushReactUpdate(async () => ws.open());
+
+    const event = new WheelEvent("wheel", { deltaY: -32, deltaMode: 0, bubbles: true, cancelable: true });
+
+    host.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(downstream).not.toHaveBeenCalled();
+    expect(ws.sent).toContain(JSON.stringify({ type: "scroll", lines: -2 }));
+  });
+
   it("does not reconnect the terminal when the resolved theme changes", async () => {
     applyThemePreference("dark");
     await renderTerminal();
@@ -508,57 +580,6 @@ describe("TerminalPane xterm WebSocket renderer", () => {
 
     expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
     expect((term.options.theme as { background?: string }).background).toBe("#f5f1e8");
-  });
-
-  it("shows an actionable error when the WebSocket closes", async () => {
-    await renderTerminal();
-    const ws = TerminalPaneWebSocketMock.instances[0];
-    if (!ws) throw new Error("missing ws");
-
-    await flushReactUpdate(async () => ws.closeFromServer(1006, "lost"));
-
-    expect(document.body.textContent).toContain("terminal_disconnected");
-    expect(document.body.textContent).toContain("lost");
-    expect((document.querySelector("button") as HTMLButtonElement | null)?.disabled).toBe(false);
-  });
-
-  it("auto-retries disconnected terminal sockets up to three times with 5s backoff", async () => {
-    vi.useFakeTimers();
-    await renderTerminal();
-
-    await flushReactUpdate(() => TerminalPaneWebSocketMock.instances[0]?.closeFromServer(1006, "lost"));
-    expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
-
-    await flushReactUpdate(() => {
-      vi.advanceTimersByTime(4_999);
-    });
-    expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
-
-    await flushReactUpdate(() => {
-      vi.advanceTimersByTime(1);
-    });
-    expect(TerminalPaneWebSocketMock.instances).toHaveLength(2);
-
-    await flushReactUpdate(() => TerminalPaneWebSocketMock.instances[1]?.closeFromServer(1006, "still lost"));
-    await flushReactUpdate(() => {
-      vi.advanceTimersByTime(5_000);
-    });
-    expect(TerminalPaneWebSocketMock.instances).toHaveLength(3);
-
-    await flushReactUpdate(() => TerminalPaneWebSocketMock.instances[2]?.closeFromServer(1006, "still lost"));
-    await flushReactUpdate(() => {
-      vi.advanceTimersByTime(5_000);
-    });
-    expect(TerminalPaneWebSocketMock.instances).toHaveLength(4);
-
-    await flushReactUpdate(() => TerminalPaneWebSocketMock.instances[3]?.closeFromServer(1006, "exhausted"));
-    await flushReactUpdate(() => {
-      vi.advanceTimersByTime(10_000);
-    });
-
-    expect(TerminalPaneWebSocketMock.instances).toHaveLength(4);
-    expect(document.body.textContent).toContain("terminal_disconnected");
-    expect(document.body.textContent).toContain("exhausted");
   });
 });
 

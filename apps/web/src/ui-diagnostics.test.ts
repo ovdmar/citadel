@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installUiDiagnostics, resetUiDiagnosticsForTests } from "./ui-diagnostics.js";
 
 describe("installUiDiagnostics", () => {
@@ -11,6 +11,10 @@ describe("installUiDiagnostics", () => {
       vi.fn(() => Promise.resolve(new Response(null, { status: 204 }))),
     );
     Object.defineProperty(navigator, "sendBeacon", { configurable: true, value: undefined });
+  });
+
+  afterEach(() => {
+    resetUiDiagnosticsForTests();
   });
 
   it("posts page lifecycle events to daemon diagnostics", async () => {
@@ -34,7 +38,19 @@ describe("installUiDiagnostics", () => {
       }),
     );
     const body = JSON.parse(String((fetch as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[1]?.body));
-    expect(body).toMatchObject({ event: "page.pagehide", persisted: true });
+    expect(body).toMatchObject({ event: "page.pagehide", persisted: true, focused: expect.any(Boolean) });
+  });
+
+  it("posts focus and blur changes so the daemon can pause background usage refresh", () => {
+    installUiDiagnostics();
+
+    window.dispatchEvent(new Event("focus"));
+    let body = JSON.parse(String((fetch as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[1]?.body));
+    expect(body).toMatchObject({ event: "page.focus", focused: expect.any(Boolean) });
+
+    window.dispatchEvent(new Event("blur"));
+    body = JSON.parse(String((fetch as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[1]?.body));
+    expect(body).toMatchObject({ event: "page.blur", focused: expect.any(Boolean) });
   });
 });
 

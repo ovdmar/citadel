@@ -83,7 +83,7 @@ const store = new SqliteStore(config.databasePath);
 store.migrate();
 const operations = new OperationService(store, config);
 operations.reconcile();
-const daemon = createDaemonApp({ config, configPath, store, operations });
+const daemon = await createDaemonApp({ config, configPath, store, operations });
 const { server } = daemon;
 const keepAliveTimeoutMs = parsePositiveInt(process.env.CITADEL_HTTP_KEEP_ALIVE_TIMEOUT_MS, server.keepAliveTimeout);
 server.keepAliveTimeout = keepAliveTimeoutMs;

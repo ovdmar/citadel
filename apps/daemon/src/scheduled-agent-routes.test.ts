@@ -10,8 +10,8 @@ import { createDaemonApp } from "./app.js";
 
 const dirs: string[] = [];
 
-afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+afterEach(async () => {
+  for (const dir of dirs.splice(0)) await removeFixtureDir(dir);
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
@@ -37,7 +37,7 @@ describe("scheduled agent routes", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const empty = await getJson<{ scheduledAgents: unknown[] }>(`${baseUrl}/api/scheduled-agents`);
@@ -146,7 +146,7 @@ describe("scheduled agent routes", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const created = await postJson<{ scheduledAgent: { id: string } }>(`${baseUrl}/api/scheduled-agents`, {
@@ -229,7 +229,7 @@ describe("scheduled agent routes", () => {
       updatedAt: now,
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       // Skip-policy agent: in-flight run + POST /run → 409.
@@ -328,7 +328,7 @@ describe("scheduled agent routes", () => {
       updatedAt: new Date().toISOString(),
       archivedAt: null,
     });
-    const { server } = createDaemonApp(fixture);
+    const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
       const created = await postJson<{ scheduledAgent: { id: string } }>(`${baseUrl}/api/scheduled-agents`, {
@@ -369,7 +369,7 @@ function createFixture() {
   config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
   const store = new SqliteStore(config.databasePath);
   store.migrate();
-  return { config, configPath, store };
+  return { config, configPath, store, enableRefreshJob: false };
 }
 
 function createGitRepo(dir: string) {
@@ -416,4 +416,17 @@ async function postJson<T>(url: string, body: unknown) {
   const text = await response.clone().text();
   expect(response.ok, text).toBe(true);
   return response.json() as Promise<T>;
+}
+
+async function removeFixtureDir(dir: string) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!["ENOTEMPTY", "EBUSY", "EPERM"].includes(code ?? "") || attempt === 4) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
 }

@@ -70,10 +70,11 @@ export function workspaceFromRow(row: Record<string, unknown>): Workspace {
 }
 
 export function sessionFromRow(row: Record<string, unknown>): AgentSession {
+  const runtimeId = row.runtime_id ? asString(row, "runtime_id") : row.kind === "terminal" ? "shell" : "";
   return {
     id: asString(row, "id"),
     workspaceId: asString(row, "workspace_id"),
-    runtimeId: asString(row, "runtime_id"),
+    runtimeId,
     displayName: asString(row, "display_name"),
     status: asString(row, "status") as AgentSession["status"],
     statusReason: row.status_reason ? asString(row, "status_reason") : null,

@@ -43,7 +43,8 @@ export function readGlobalPrSummary(cache: ProviderCache, key: GlobalPrCacheKey)
 
 export function writeGlobalPrSummary(cache: ProviderCache, key: GlobalPrCacheKey, summary: PullRequestSummary): void {
   const ttlMs = classifyTtlMs(summary);
-  cache.set(key, { expiresAt: Date.now() + ttlMs, value: summary });
+  const now = Date.now();
+  cache.set(key, { expiresAt: now + ttlMs, value: summary, cachedAt: now });
 }
 
 export function bustGlobalPrEntry(cache: ProviderCache, nameWithOwner: string, prNumber: number): void {

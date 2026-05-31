@@ -23,6 +23,7 @@ type TerminalSocketMessage = {
   rows?: number;
   data?: string;
   key?: string;
+  lines?: number;
 };
 
 const DEFAULT_COLS = 80;
@@ -33,6 +34,7 @@ const DEFAULT_MAX_BUFFERED_BYTES = 16 * 1024 * 1024;
 const BACKPRESSURE_CLOSE_CODE = 1013;
 const BACKPRESSURE_CLOSE_REASON = "terminal_backpressure";
 const ALLOWED_TERMINAL_KEYS = new Set(["C-a", "C-e", "C-u"]);
+const MAX_SCROLL_LINES = 200;
 
 export function attachTerminalWebSocket(
   server: http.Server,
@@ -178,6 +180,9 @@ export function attachTerminalWebSocket(
                   data: error instanceof Error ? error.message : "key_failed",
                 });
               }
+            } else if (message.type === "scroll" && typeof message.lines === "number") {
+              const lines = normalizeScrollLines(message.lines);
+              if (lines !== null) scrollTmuxPane(tmuxTarget.sessionName, lines, tmuxTarget.socketName);
             }
           });
           ws.on("close", () => {
@@ -285,4 +290,46 @@ function sendTmuxKey(sessionName: string, key: string, socketName?: string | nul
   execFileSync("tmux", [...tmuxPrefix(socketName), "send-keys", "-t", sessionName, key], {
     stdio: "ignore",
   });
+}
+
+function normalizeScrollLines(lines: number): number | null {
+  if (!Number.isFinite(lines)) return null;
+  const truncated = Math.trunc(lines);
+  if (truncated === 0) return null;
+  return Math.max(-MAX_SCROLL_LINES, Math.min(MAX_SCROLL_LINES, truncated));
+}
+
+function scrollTmuxPane(sessionName: string, lines: number, socketName?: string | null): void {
+  const count = String(Math.abs(lines));
+  try {
+    if (lines < 0 && !tmuxPaneInMode(sessionName, socketName)) {
+      execFileSync("tmux", [...tmuxPrefix(socketName), "copy-mode", "-e", "-t", sessionName], { stdio: "ignore" });
+    }
+    if (lines > 0 && !tmuxPaneInMode(sessionName, socketName)) return;
+    execFileSync(
+      "tmux",
+      [
+        ...tmuxPrefix(socketName),
+        "send-keys",
+        "-t",
+        sessionName,
+        "-X",
+        "-N",
+        count,
+        lines < 0 ? "scroll-up" : "scroll-down",
+      ],
+      { stdio: "ignore" },
+    );
+  } catch {
+    // Scroll is best-effort UI state. Never turn a wheel event into a terminal error overlay.
+  }
+}
+
+function tmuxPaneInMode(sessionName: string, socketName?: string | null): boolean {
+  return (
+    execFileSync("tmux", [...tmuxPrefix(socketName), "display-message", "-p", "-t", sessionName, "#{pane_in_mode}"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim() === "1"
+  );
 }

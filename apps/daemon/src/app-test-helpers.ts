@@ -25,7 +25,9 @@ export function createFixture(dirs: string[]) {
   config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
   const store = new SqliteStore(config.databasePath);
   store.migrate();
-  return { config, configPath, store };
+  // Tests opt out of the background refresh job — they don't want a 15s tick
+  // (or the implied gh/jtk subprocesses) firing during their test runtime.
+  return { config, configPath, store, enableRefreshJob: false };
 }
 
 export function createGitRepo(dir: string) {

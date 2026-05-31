@@ -63,7 +63,12 @@ test.describe("notes location", () => {
     await expect(input).toBeVisible();
     await input.fill(tmpNotes);
 
-    await page.getByRole("button", { name: /^save$/i }).click();
+    await Promise.all([
+      page.waitForResponse(
+        (response) => response.url().endsWith("/api/config") && response.request().method() === "PUT",
+      ),
+      page.getByRole("button", { name: /^save$/i }).click(),
+    ]);
 
     // Reload — the field round-trips through PUT /api/config.
     await page.reload();
@@ -110,7 +115,20 @@ test.describe("notes location", () => {
 
     // Clear and save.
     await input.fill("");
-    await page.getByRole("button", { name: /^save$/i }).click();
+    await Promise.all([
+      page.waitForResponse(
+        (response) => response.url().endsWith("/api/config") && response.request().method() === "PUT",
+      ),
+      page.getByRole("button", { name: /^save$/i }).click(),
+    ]);
+
+    await expect
+      .poll(async () => {
+        const response = await apiGet(request, `${API_BASE}/api/config`);
+        const body = (await response.json()) as { config: { scratchpad?: { path?: string } } };
+        return body.config.scratchpad?.path ?? "";
+      })
+      .toBe("");
 
     await page.reload();
     await page.getByRole("button", { name: "Notes" }).click();

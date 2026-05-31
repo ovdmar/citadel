@@ -6,7 +6,7 @@ import { createDaemonApp } from "./app.js";
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 process.env.CITADEL_DISABLE_REAPER = "1";
@@ -17,7 +17,7 @@ it("rejects Playwright e2e-marked traffic unless the run id matches", async () =
   const previous = process.env.CITADEL_E2E_RUN_ID;
   try {
     Reflect.deleteProperty(process.env, "CITADEL_E2E_RUN_ID");
-    const prod = createDaemonApp(createFixtureBase(dirs));
+    const prod = await createDaemonApp(createFixtureBase(dirs));
     const prodBaseUrl = await listen(prod.server);
     try {
       const response = await fetch(`${prodBaseUrl}/api/health`, {
@@ -31,7 +31,7 @@ it("rejects Playwright e2e-marked traffic unless the run id matches", async () =
 
     process.env.CITADEL_E2E_RUN_ID = "run-a";
     const e2eFixture = createFixtureBase(dirs);
-    const e2e = createDaemonApp(e2eFixture);
+    const e2e = await createDaemonApp(e2eFixture);
     const e2eBaseUrl = await listen(e2e.server);
     try {
       const wrongRun = await fetch(`${e2eBaseUrl}/api/health`, {

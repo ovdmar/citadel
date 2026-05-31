@@ -1,6 +1,6 @@
 import type { AgentRuntime, RuntimeUsageSummary } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
-import { resolveUsagePillState, selectTopBarUsageRuntimes } from "./usage-indicator.js";
+import { resolveUsagePillState, selectTopBarUsageRuntimes, usagePillNeedsReload } from "./usage-indicator.js";
 
 function runtime(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
   return {
@@ -60,6 +60,36 @@ describe("top-bar usage runtime selection", () => {
     );
 
     expect(selected).toEqual([]);
+  });
+});
+
+describe("usagePillNeedsReload", () => {
+  it("returns true when summary is undefined", () => {
+    expect(usagePillNeedsReload(undefined)).toBe(true);
+  });
+
+  it("returns true when status is degraded", () => {
+    expect(usagePillNeedsReload(usage({ status: "degraded", reason: "auth required" }))).toBe(true);
+  });
+
+  it("returns true when status is unavailable", () => {
+    expect(usagePillNeedsReload(usage({ status: "unavailable" }))).toBe(true);
+  });
+
+  it("returns true when categories are empty even on a healthy summary", () => {
+    expect(usagePillNeedsReload(usage({ status: "healthy", reason: null, categories: [] }))).toBe(true);
+  });
+
+  it("returns false on a healthy summary with at least one category", () => {
+    expect(
+      usagePillNeedsReload(
+        usage({
+          status: "healthy",
+          reason: null,
+          categories: [{ label: "Prompts", percentUsed: 12, reset: null, section: null }],
+        }),
+      ),
+    ).toBe(false);
   });
 });
 
