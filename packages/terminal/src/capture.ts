@@ -1,9 +1,12 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 
 import { shellQuote, tmuxPrefix, tmuxSessionExists } from "./index.js";
+
+const execFileAsync = promisify(execFile);
 
 export function captureTmux(sessionName: string, lines = 200, socketName?: string | null) {
   try {
@@ -15,6 +18,22 @@ export function captureTmux(sessionName: string, lines = 200, socketName?: strin
         maxBuffer: 1024 * 1024,
       },
     );
+  } catch (error) {
+    return error instanceof Error ? error.message : "tmux capture failed";
+  }
+}
+
+export async function captureTmuxAsync(sessionName: string, lines = 200, socketName?: string | null): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync(
+      "tmux",
+      [...tmuxPrefix(socketName), "capture-pane", "-p", "-S", `-${lines}`, "-t", sessionName],
+      {
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024,
+      },
+    );
+    return stdout;
   } catch (error) {
     return error instanceof Error ? error.message : "tmux capture failed";
   }
