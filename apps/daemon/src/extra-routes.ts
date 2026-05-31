@@ -177,24 +177,34 @@ export function registerWorkspaceExtraRoutes(input: {
   app.get(
     "/api/integrations/github/search",
     asyncRoute(async (req: express.Request, res: express.Response) => {
-      const query = typeof req.query.q === "string" ? req.query.q : "";
+      const query = typeof req.query.q === "string" ? req.query.q.trim() : "";
       if (!query) return res.json({ results: [] });
       try {
-        const { execFile: execFileCb } = await import("node:child_process");
-        const { promisify } = await import("node:util");
-        const exec = promisify(execFileCb);
-        const { stdout } = await exec(
-          "gh",
-          ["search", "repos", query, "--limit", "8", "--json", "fullName,url,description"],
+        const { stdout } = await execFileAsync(
+          config.providers.github.command ?? "gh",
+          ["api", "--method", "GET", "search/repositories", "-f", `q=${query}`, "-f", "per_page=8"],
           { timeout: 10_000 },
         );
-        const parsed = JSON.parse(stdout) as Array<{ fullName: string; url: string; description?: string }>;
+        const parsed = JSON.parse(stdout) as {
+          items?: Array<{
+            full_name?: unknown;
+            html_url?: unknown;
+            description?: unknown;
+            default_branch?: unknown;
+          } | null>;
+        };
         res.json({
-          results: parsed.map((entry) => ({
-            name: entry.fullName,
-            url: entry.url,
-            description: entry.description ?? undefined,
-          })),
+          results: (parsed.items ?? []).flatMap((entry) => {
+            if (!entry || typeof entry.full_name !== "string" || typeof entry.html_url !== "string") return [];
+            return [
+              {
+                name: entry.full_name,
+                url: entry.html_url,
+                description: typeof entry.description === "string" ? entry.description : undefined,
+                defaultBranch: typeof entry.default_branch === "string" ? entry.default_branch : undefined,
+              },
+            ];
+          }),
         });
       } catch (error) {
         res.status(200).json({ results: [], error: error instanceof Error ? error.message : "gh_search_failed" });
@@ -223,10 +233,9 @@ export function registerWorkspaceExtraRoutes(input: {
         return res.json({ rootPath, cloned: false });
       }
       try {
-        const { execFile: execFileCb } = await import("node:child_process");
-        const { promisify } = await import("node:util");
-        const exec = promisify(execFileCb);
-        await exec("gh", ["repo", "clone", url, rootPath], { timeout: 120_000 });
+        await execFileAsync(config.providers.github.command ?? "gh", ["repo", "clone", url, rootPath], {
+          timeout: 120_000,
+        });
         res.json({ rootPath, cloned: true });
       } catch (error) {
         res.status(200).json({

@@ -59,6 +59,13 @@ import {
   runWorkspaceAction as runWorkspaceActionImpl,
 } from "./workspace-apps.js";
 
+export function defaultWorktreeParent(rootPathInput: string, dataDir?: string): string {
+  const rootPath = path.resolve(rootPathInput);
+  const repoDir = path.basename(rootPath);
+  if (dataDir) return path.join(dataDir, "worktrees", repoDir);
+  return path.join(path.dirname(rootPath), `${repoDir}-worktrees`);
+}
+
 export class OperationService {
   constructor(
     private readonly store: SqliteStore,
@@ -86,7 +93,7 @@ export class OperationService {
       rootPath,
       defaultBranch: discoverDefaultBranch(rootPath),
       defaultRemote: "origin",
-      worktreeParent: input.worktreeParent || path.join(path.dirname(rootPath), `${path.basename(rootPath)}-worktrees`),
+      worktreeParent: input.worktreeParent || defaultWorktreeParent(rootPath, this.config?.dataDir),
       setupHookIds: this.config?.repoDefaults.setupHookIds ?? [],
       teardownHookIds: this.config?.repoDefaults.teardownHookIds ?? [],
       providerIds: ["github-gh", "jira-jtk"],
