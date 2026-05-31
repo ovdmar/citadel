@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { AgentSession } from "@citadel/contracts";
+import type { TerminalSession } from "@citadel/contracts";
 import { createElement } from "react";
 import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
@@ -246,11 +246,12 @@ function installLocalStorageMock() {
   });
 }
 
-function sessionFixture(): AgentSession {
+function sessionFixture(): TerminalSession {
   return {
     id: "sess_1",
     workspaceId: "ws_1",
-    runtimeId: "shell",
+    kind: "terminal",
+    runtimeId: null,
     displayName: "Terminal",
     status: "idle",
     transport: "connected",

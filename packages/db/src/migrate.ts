@@ -18,6 +18,13 @@ type SqliteDatabase = {
 
 type SessionTableName = "agent_sessions" | "workspace_sessions";
 
+// Highest schema_migrations version known to this code path. Bump alongside
+// the corresponding `INSERT OR IGNORE INTO schema_migrations` that introduces
+// the new version below. Consumed by the doctor's database-schema check so
+// `make doctor` can flag an installed daemon whose code is newer than the
+// database it's been given.
+export const CURRENT_SCHEMA_VERSION = 15;
+
 function tmuxSocketBase(): string {
   const configured = process.env.CITADEL_TMUX_SOCKET?.trim();
   return configured && configured.length > 0 ? configured : "citadel";

@@ -1,4 +1,4 @@
-import type { AgentSession, Operation, Workspace } from "@citadel/contracts";
+import type { Operation, Workspace, WorkspaceSession } from "@citadel/contracts";
 import { sessionNeedsAttention } from "@citadel/core";
 
 export type WorkspaceAttention = {
@@ -18,12 +18,12 @@ export type WorkspaceAttention = {
 // time the summary refetched or focus moved.
 export function readinessForWorkspace(
   workspace: Workspace,
-  input: { sessions: AgentSession[]; operations: Operation[] },
+  input: { sessions: WorkspaceSession[]; operations: Operation[] },
 ): WorkspaceAttention {
   const failedOperation = input.operations.some((operation) => operation.status === "failed");
   const runningOperation = input.operations.some((operation) => ["queued", "running"].includes(operation.status));
   const activeAgentSession = input.sessions.some(
-    (session) => session.runtimeId !== "shell" && ["starting", "running"].includes(session.status),
+    (session) => session.kind === "agent" && ["starting", "running"].includes(session.status),
   );
   const failedSession = input.sessions.some(sessionNeedsAttention);
   if (workspace.lifecycle === "failed" || failedOperation || failedSession) {
@@ -48,10 +48,10 @@ export function readinessSection(state: string) {
   return "idle";
 }
 
-export function nextAction(workspace: Workspace, sessions: AgentSession[]) {
+export function nextAction(workspace: Workspace, sessions: WorkspaceSession[]) {
   if (workspace.lifecycle === "creating") return "Workspace is being created. Watch the operation status bar.";
   if (workspace.lifecycle === "failed") return "Inspect setup output and provider warnings before retrying.";
-  if (!sessions.length) return "Start an agent or shell runtime to begin work in this workspace.";
+  if (!sessions.length) return "Start an agent or terminal to begin work in this workspace.";
   if (workspace.dirty) return "Review the diff, run checks, then prepare the PR or archive safely.";
   return "Continue from the active terminal session or open the diff for the next review pass.";
 }

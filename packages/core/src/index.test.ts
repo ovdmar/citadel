@@ -1,4 +1,4 @@
-import type { AgentSession, PullRequestSummary } from "@citadel/contracts";
+import type { AgentSession, PullRequestSummary, TerminalSession } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
 import { sessionNeedsAttention } from "./index.js";
 
@@ -63,6 +63,24 @@ function makeAgent(overrides: Partial<AgentSession> = {}): AgentSession {
     createdAt: "2026-05-26T00:00:00.000Z",
     updatedAt: "2026-05-26T00:00:00.000Z",
     ...overrides,
+    kind: "agent",
+  };
+}
+
+function makeTerminal(overrides: Partial<TerminalSession> = {}): TerminalSession {
+  return {
+    id: "term_x",
+    workspaceId: "ws_x",
+    displayName: "Terminal",
+    status: "running",
+    transport: "connected",
+    tmuxSessionName: "citadel_term",
+    tmuxSessionId: "$2",
+    createdAt: "2026-05-26T00:00:00.000Z",
+    updatedAt: "2026-05-26T00:00:00.000Z",
+    ...overrides,
+    kind: "terminal",
+    runtimeId: null,
   };
 }
 
@@ -138,9 +156,10 @@ describe("workspace state summary", () => {
       sessions: [
         {
           id: "sess_test",
+          kind: "terminal",
           workspaceId: "ws_test",
-          runtimeId: "shell",
-          displayName: "Shell",
+          runtimeId: null,
+          displayName: "Terminal",
           status: "running",
           transport: "connected",
           tmuxSessionName: "citadel_test",
@@ -187,9 +206,10 @@ describe("workspace state summary", () => {
         sessions: [
           {
             id: "sess_failed",
+            kind: "agent",
             workspaceId: "ws_test",
-            runtimeId: "shell",
-            displayName: "Shell",
+            runtimeId: "claude-code",
+            displayName: "Claude Code",
             status: "failed",
             transport: "disconnected",
             tmuxSessionName: null,
@@ -208,9 +228,10 @@ describe("workspace state summary", () => {
         sessions: [
           {
             id: "sess_running",
+            kind: "agent",
             workspaceId: "ws_test",
-            runtimeId: "shell",
-            displayName: "Shell",
+            runtimeId: "codex",
+            displayName: "Codex",
             status: "running",
             transport: "connected",
             tmuxSessionName: "citadel_test",
@@ -222,6 +243,28 @@ describe("workspace state summary", () => {
         providerHealth: [],
       }).suggestedSection,
     ).toBe("in-progress");
+
+    expect(
+      summarizeWorkspaceState({
+        workspace,
+        sessions: [
+          {
+            id: "sess_terminal",
+            kind: "terminal",
+            workspaceId: "ws_test",
+            runtimeId: null,
+            displayName: "Terminal",
+            status: "running",
+            transport: "connected",
+            tmuxSessionName: "citadel_terminal",
+            tmuxSessionId: "$2",
+            createdAt: "2026-05-17T00:00:00.000Z",
+            updatedAt: "2026-05-17T00:00:00.000Z",
+          },
+        ],
+        providerHealth: [],
+      }).suggestedSection,
+    ).toBe("backlog");
 
     expect(
       summarizeWorkspaceState({
@@ -318,10 +361,10 @@ describe("deriveWorkspaceLifecycleTone", () => {
     expect(deriveWorkspaceLifecycleTone({ sessions: [] })).toBe("never-started");
   });
 
-  it("never-started when only shell sessions are present", () => {
+  it("never-started when only terminal sessions are present", () => {
     expect(
       deriveWorkspaceLifecycleTone({
-        sessions: [makeAgent({ runtimeId: "shell", status: "running" })],
+        sessions: [makeTerminal({ status: "running" })],
       }),
     ).toBe("never-started");
   });

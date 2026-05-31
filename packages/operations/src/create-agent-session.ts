@@ -4,9 +4,12 @@ import type {
   ActivityEvent,
   AgentSession,
   CreateAgentSessionInput,
+  CreateTerminalSessionInput,
   JiraAutoTransitionEvent,
   Repo,
+  TerminalProfile,
   Workspace,
+  WorkspaceSession,
 } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
@@ -48,6 +51,7 @@ export type RuntimeDescriptor = {
 
 export type CreateAgentSessionDeps = {
   store: SqliteStore;
+  terminal?: TerminalProfile | undefined;
   dataDir?: string;
   activity: (
     type: string,
@@ -76,6 +80,8 @@ export type CreateAgentSessionDeps = {
       ) => Promise<void>)
     | null;
 };
+
+const DEFAULT_TERMINAL_PROFILE: TerminalProfile = { displayName: "Terminal", command: "bash", args: ["-l"] };
 
 export async function createAgentSession(
   deps: CreateAgentSessionDeps,
@@ -141,7 +147,12 @@ export async function createAgentSession(
   let tmux: Awaited<ReturnType<typeof ensureTmuxSession>>;
   let runtimeLaunchStartedMs: number | null = null;
   try {
-    tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path, socketName: tmuxSocketName });
+    tmux = await ensureTmuxSession({
+      sessionName,
+      cwd: workspace.path,
+      socketName: tmuxSocketName,
+      terminal: deps.terminal ?? DEFAULT_TERMINAL_PROFILE,
+    });
     if (!isShellRuntime) {
       const exitHint: AgentExitHint = { runtimeId: input.runtimeId, runtimeSessionId };
       const launchOptions: RuntimeLaunchOptions = { exitHint };
@@ -161,7 +172,7 @@ export async function createAgentSession(
       //
       // Tune the cold-start budget by runtime kind. Interactive TUIs (Claude
       // Code with MCP servers connecting, Codex) routinely take 8–15 s before
-      // they're ready to accept input. Shell runtimes paint a prompt in
+      // they're ready to accept input. Shell-like custom runtimes paint a prompt in
       // milliseconds and `read` is ready instantly; using the TUI budget there
       // makes every test session sit waiting for a 1 s silence threshold that
       // doesn't apply.
@@ -189,6 +200,7 @@ export async function createAgentSession(
   }
   const session: AgentSession = {
     id: createId("sess"),
+    kind: "agent",
     workspaceId: workspace.id,
     runtimeId: input.runtimeId,
     displayName: input.displayName || runtime.displayName,
@@ -270,6 +282,59 @@ export async function createAgentSession(
       }
     }
   }
+  return session;
+}
+
+export async function createTerminalSession(
+  deps: Pick<CreateAgentSessionDeps, "store" | "activity" | "terminal">,
+  input: CreateTerminalSessionInput,
+  options: { activitySource?: ActivityEvent["source"] } = {},
+): Promise<WorkspaceSession> {
+  const { store } = deps;
+  const workspace = store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+  if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+  const now = nowIso();
+  const terminal = deps.terminal ?? DEFAULT_TERMINAL_PROFILE;
+  const sessionName = `citadel_${workspace.id}_${createId("term").slice(-8)}`;
+  const tmuxSocketName = tmuxSocketNameForWorkspace(workspace.id);
+  let tmux: Awaited<ReturnType<typeof ensureTmuxSession>>;
+  try {
+    tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path, terminal, socketName: tmuxSocketName });
+  } catch (error) {
+    killTmuxSession(sessionName, tmuxSocketName);
+    throw error;
+  }
+  const session: WorkspaceSession = {
+    id: createId("sess"),
+    kind: "terminal",
+    workspaceId: workspace.id,
+    runtimeId: null,
+    displayName: input.displayName || terminal.displayName,
+    status: "running",
+    statusReason: "launched",
+    lastStatusAt: now,
+    lastOutputAt: null,
+    endedAt: null,
+    exitCode: null,
+    transport: "disconnected",
+    tmuxSessionName: tmux.tmuxSessionName,
+    tmuxSessionId: tmux.tmuxSessionId,
+    tmuxSocketName,
+    tabId: createId("tab"),
+    runtimeSessionId: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+  store.insertWorkspaceSession(session);
+  const activitySource = options.activitySource ?? "user";
+  deps.activity(
+    "terminal.started",
+    activitySource,
+    `Started ${session.displayName}`,
+    workspace.repoId,
+    workspace.id,
+    null,
+  );
   return session;
 }
 

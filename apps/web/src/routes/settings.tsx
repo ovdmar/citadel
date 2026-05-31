@@ -13,6 +13,7 @@ import {
   History,
   Server,
   Sparkles,
+  Stethoscope,
   Workflow,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -22,6 +23,7 @@ import { mcpUrlFromOrigin } from "../lib/mcp-url.js";
 import { AutomationsPanel } from "../settings-automations.js";
 import { CitadelActionsPanel } from "../settings-citadel-actions.js";
 import { DebugPanel } from "../settings-debug.js";
+import { DiagnosticsPanel } from "../settings-diagnostics.js";
 import { ProvidersPanel } from "../settings-providers.js";
 import { RepositoriesPanel } from "../settings-repositories.js";
 import { RestoreModal, RestorePanelBody } from "../settings-restore.js";
@@ -37,6 +39,7 @@ type SectionId =
   | "restore"
   | "actions"
   | "mcp"
+  | "diagnostics"
   | "notes"
   | "debug";
 
@@ -86,6 +89,12 @@ const SECTIONS: Section[] = [
     icon: Sparkles,
   },
   { id: "mcp", label: "MCP", description: "Model Context Protocol servers Citadel exposes to agents.", icon: Workflow },
+  {
+    id: "diagnostics",
+    label: "Diagnostics",
+    description: "Is everything configured? Runs the same checks as `make doctor`.",
+    icon: Stethoscope,
+  },
   {
     id: "notes",
     label: "Notes",
@@ -173,7 +182,7 @@ export function SettingsView() {
           {section === "overview" ? (
             <Overview
               providerHealth={data?.providerHealth ?? []}
-              runtimes={data?.runtimes ?? []}
+              runtimes={data?.agentRuntimes ?? []}
               repos={data?.repos ?? []}
               mcpEnabled={Boolean(data?.mcp.enabled)}
               onNavigate={(id) => {
@@ -195,7 +204,7 @@ export function SettingsView() {
                 sub="CLIs Citadel can launch in a workspace."
                 help="Built-in runtimes are first-class presets Citadel knows by name (and tests via PATH/auth). Custom runtimes are any extra command you want to expose to workspaces — they live in the same list."
               />
-              <AgentsPanel runtimes={data?.runtimes ?? []} />
+              <AgentsPanel runtimes={data?.agentRuntimes ?? []} />
             </>
           ) : null}
           {section === "automations" ? (
@@ -206,7 +215,7 @@ export function SettingsView() {
                 help="Fix-CI automation uses the primary agent when healthy, then the configured fallback. Scheduled agents keep their own cron/one-shot definitions."
               />
               <AutomationsPanel
-                runtimes={data?.runtimes ?? []}
+                runtimes={data?.agentRuntimes ?? []}
                 scheduledAgentsCount={data?.scheduledAgents.length ?? 0}
               />
             </>
@@ -238,7 +247,7 @@ export function SettingsView() {
                 sub="Configurable prompt presets surfaced as buttons in the cockpit."
                 help="Each action stores a name + description + icon + preferred agent + prompt template at <dataDir>/citadel-actions.json. The built-in 'Refine scratchpad' action seeds on first read; it can be edited or reset to default but not deleted."
               />
-              <CitadelActionsPanel runtimes={data?.runtimes ?? []} />
+              <CitadelActionsPanel runtimes={data?.agentRuntimes ?? []} />
             </>
           ) : null}
           {restoreModalOpen ? <RestoreModal onClose={() => setRestoreModalOpen(false)} /> : null}
@@ -246,6 +255,12 @@ export function SettingsView() {
             <>
               <PageHead title="MCP servers" sub="Model Context Protocol servers Citadel exposes to agents." />
               <McpSection mcpEnabled={Boolean(data?.mcp.enabled)} />
+            </>
+          ) : null}
+          {section === "diagnostics" ? (
+            <>
+              <PageHead title="Diagnostics" sub="Is everything configured? Same checks as `make doctor`." />
+              <DiagnosticsPanel />
             </>
           ) : null}
           {section === "notes" ? (

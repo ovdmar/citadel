@@ -158,7 +158,7 @@ export async function resumeRateLimitedSessions(deps: {
   const resumed: string[] = [];
   const skipped: Array<{ sessionId: string; reason: string }> = [];
   const healthyRuntimeIds = new Set(
-    listRuntimeHealth(deps.config.runtimes)
+    listRuntimeHealth(deps.config.agentRuntimes)
       .filter((runtime) => runtime.health === "healthy")
       .map((runtime) => runtime.id),
   );
@@ -259,7 +259,7 @@ function usageLimitReady(session: AgentSession, now: Date): boolean {
 
 function healthySessions(sessions: AgentSession[], config: CitadelConfig): AgentSession[] {
   const healthyRuntimeIds = new Set(
-    listRuntimeHealth(config.runtimes)
+    listRuntimeHealth(config.agentRuntimes)
       .filter((runtime) => runtime.health === "healthy")
       .map((runtime) => runtime.id),
   );
@@ -275,11 +275,15 @@ function chooseSchedulingTarget(
   const limitedWorkspaceId = store
     .listSessions()
     .find((session) => session.status === "usage_limited" || session.status === "rate_limited")?.workspaceId;
+  const limitedRuntimeId = store
+    .listSessions()
+    .find((session) => session.status === "usage_limited" || session.status === "rate_limited")?.runtimeId;
   const workspace = limitedWorkspaceId
     ? workspaces.find((candidate) => candidate.id === limitedWorkspaceId)
     : undefined;
   const repo = (workspace ? repos.find((candidate) => candidate.id === workspace.repoId) : undefined) ?? repos[0];
-  const runtime = config.runtimes.find((candidate) => candidate.id === "shell") ?? config.runtimes[0];
+  const healthyRuntimes = listRuntimeHealth(config.agentRuntimes).filter((runtime) => runtime.health === "healthy");
+  const runtime = healthyRuntimes.find((candidate) => candidate.id === limitedRuntimeId) ?? healthyRuntimes[0];
   if (!repo || !runtime) return null;
   return { repoId: repo.id, runtimeId: runtime.id, cwd: repo.rootPath };
 }

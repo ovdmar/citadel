@@ -1,4 +1,4 @@
-import type { AgentSession, Operation, Repo, Workspace } from "@citadel/contracts";
+import type { Operation, Repo, Workspace, WorkspaceSession } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { ExternalLink, FolderGit2, FolderPlus, Search, Settings as SettingsIcon, Trash2 } from "lucide-react";
@@ -99,7 +99,7 @@ export function RepositoriesPanel(props: { state: StateResponse | undefined }) {
 function RepoCard(props: {
   repo: Repo;
   workspaces: Workspace[];
-  sessions: AgentSession[];
+  sessions: WorkspaceSession[];
   operations: Operation[];
 }) {
   const [confirming, setConfirming] = useState(false);

@@ -15,11 +15,11 @@ function config(overrides: Partial<CitadelConfig["automations"]["fixCi"]> = {}):
       github: { enabled: false, command: "gh" },
       jira: { enabled: false, command: "jtk", autoTransitions: [] },
     },
-    runtimes: [
+    agentRuntimes: [
       { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] },
       { id: "codex", displayName: "Codex", command: "codex", args: [] },
-      { id: "shell", displayName: "Shell", command: "bash", args: ["-l"] },
     ],
+    terminal: { displayName: "Terminal", command: "bash", args: ["-l"] },
     usageProviders: [],
     automations: { fixCi: { ...DEFAULT_FIX_CI_AUTOMATION, ...overrides } },
     repoDefaults: { setupHookIds: [], teardownHookIds: [], appHookIds: [], actionHookIds: [] },
@@ -36,11 +36,11 @@ function config(overrides: Partial<CitadelConfig["automations"]["fixCi"]> = {}):
   };
 }
 
-function runtime(id: string, health: AgentRuntime["health"]): AgentRuntime {
+function runtime(id: string, health: AgentRuntime["health"], command = id): AgentRuntime {
   return {
     id,
     displayName: id,
-    command: id,
+    command,
     args: [],
     health,
     healthReason: health === "healthy" ? null : `${id} unavailable`,
@@ -84,5 +84,14 @@ describe("resolveAutoRecoveryRuntimeId", () => {
         runtime("codex", "healthy"),
       ]),
     ).toBeNull();
+  });
+
+  it("skips healthy shell-like runtimes and falls back to an actual agent runtime", () => {
+    expect(
+      resolveAutoRecoveryRuntimeId(config({ runtimeId: "bash-debug", fallbackRuntimeId: "codex" }), [
+        runtime("bash-debug", "healthy", "/usr/bin/bash"),
+        runtime("codex", "healthy", "codex"),
+      ]),
+    ).toBe("codex");
   });
 });

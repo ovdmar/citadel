@@ -1,4 +1,4 @@
-import type { AgentSession, PullRequestSummary, Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
+import type { PullRequestSummary, Workspace, WorkspaceRecentCommits, WorkspaceSession } from "@citadel/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { ChevronsLeft, ChevronsRight, Search as SearchIcon, Settings as SettingsIcon } from "lucide-react";
@@ -195,7 +195,7 @@ export function Cockpit() {
   const [shortcutError, setShortcutError] = useState<string | null>(null);
   const spawnSession = useMutation({
     mutationFn: (input: { workspaceId: string; runtimeId: string; displayName: string }) =>
-      api<{ session: AgentSession }>("/api/agent-sessions", {
+      api<{ session: WorkspaceSession }>("/api/agent-sessions", {
         method: "POST",
         body: JSON.stringify(input),
       }),
@@ -206,6 +206,21 @@ export function Cockpit() {
     },
     onError: (error) => {
       setShortcutError(error instanceof Error ? error.message : "Failed to start session");
+    },
+  });
+  const spawnTerminalSession = useMutation({
+    mutationFn: (input: { workspaceId: string; displayName: string }) =>
+      api<{ session: WorkspaceSession }>(`/api/workspaces/${input.workspaceId}/terminal-sessions`, {
+        method: "POST",
+        body: JSON.stringify({ displayName: input.displayName }),
+      }),
+    onSuccess: ({ session }) => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      setActiveSessionByWorkspace((current) => ({ ...current, [session.workspaceId]: session.id }));
+      setMobileView("stage");
+    },
+    onError: (error) => {
+      setShortcutError(error instanceof Error ? error.message : "Failed to start terminal");
     },
   });
 
@@ -220,14 +235,14 @@ export function Cockpit() {
     flatWorkspaceIds,
     activeWorkspace,
     activeWorkspaceSessions,
-    runtimes: data?.runtimes ?? [],
+    runtimes: data?.agentRuntimes ?? [],
     navTree,
   });
   handlerStateRef.current = {
     flatWorkspaceIds,
     activeWorkspace,
     activeWorkspaceSessions,
-    runtimes: data?.runtimes ?? [],
+    runtimes: data?.agentRuntimes ?? [],
     navTree,
   };
 
@@ -261,11 +276,7 @@ export function Cockpit() {
           return;
         case "spawn-terminal":
           preventDefault?.();
-          spawnSession.mutate({
-            workspaceId: action.workspaceId,
-            runtimeId: "shell",
-            displayName: "Terminal",
-          });
+          spawnTerminalSession.mutate({ workspaceId: action.workspaceId, displayName: "Terminal" });
           return;
         case "spawn-agent":
           preventDefault?.();
@@ -330,7 +341,7 @@ export function Cockpit() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("message", onMessage);
     };
-  }, [setActiveSessionByWorkspace, setActiveWorkspaceId, spawnSession]);
+  }, [setActiveSessionByWorkspace, setActiveWorkspaceId, spawnSession, spawnTerminalSession]);
 
   const focusWorkspace = (workspace: Workspace) => {
     setActiveWorkspaceId(workspace.id);
@@ -394,7 +405,7 @@ export function Cockpit() {
         onSearch={() => setCommandOpen(true)}
         activeWorkspace={activeWorkspace}
         repo={selectedRepo}
-        runtimes={data?.runtimes ?? []}
+        runtimes={data?.agentRuntimes ?? []}
       />
       <GhCooldownBanner summaries={stickySummaries} />
       <RestoreBanner bootRestore={data?.bootRestore ?? null} />
@@ -446,7 +457,7 @@ export function Cockpit() {
               operations={data?.operations ?? []}
               prByWorkspaceId={prByWorkspaceId}
               activeWorkspaceId={activeWorkspace?.id ?? ""}
-              runtimes={data?.runtimes ?? []}
+              runtimes={data?.agentRuntimes ?? []}
               namespaces={data?.namespaces ?? []}
               lastRepoId={lastRepoId || undefined}
               createWorkspaceOpen={createWorkspaceOpen}
@@ -473,7 +484,8 @@ export function Cockpit() {
               workspace={activeWorkspace}
               sessions={activeWorkspaceSessions}
               allSessions={allSessions}
-              runtimes={data?.runtimes ?? []}
+              runtimes={data?.agentRuntimes ?? []}
+              terminal={data?.terminal ?? { displayName: "Terminal", command: "bash", args: ["-l"] }}
               activeSessionId={activeSessionId}
               onActiveSession={(sessionId) => {
                 setActiveSessionByWorkspace((current) => ({ ...current, [activeWorkspace.id]: sessionId }));
@@ -548,7 +560,7 @@ export function Cockpit() {
 function CollapsedLeftRail(props: {
   workspaces: Workspace[];
   activeWorkspaceId: string;
-  sessions: import("@citadel/contracts").AgentSession[];
+  sessions: WorkspaceSession[];
   onExpand: () => void;
   onPickWorkspace: (workspace: Workspace) => void;
 }) {
@@ -662,8 +674,8 @@ function TopBar(props: {
 
 function BottomBar(props: {
   activeWorkspace: Workspace | null;
-  activeSession: import("@citadel/contracts").AgentSession | null;
-  sessions: import("@citadel/contracts").AgentSession[];
+  activeSession: WorkspaceSession | null;
+  sessions: WorkspaceSession[];
 }) {
   const [now, setNow] = useState(() => formatClock(new Date()));
   useEffect(() => {
@@ -671,9 +683,10 @@ function BottomBar(props: {
     return () => window.clearInterval(id);
   }, []);
 
-  const shellCount = props.sessions.filter((session) => session.runtimeId === "shell").length;
+  const terminalCount = props.sessions.filter((session) => session.kind === "terminal").length;
   const autoMode = props.sessions.some(
-    (s) => s.status === "running" || s.status === "starting" || s.status === "waiting_for_input",
+    (s) =>
+      s.kind === "agent" && (s.status === "running" || s.status === "starting" || s.status === "waiting_for_input"),
   );
 
   // Read the head commit of the active workspace so the status bar mirrors the
@@ -697,7 +710,7 @@ function BottomBar(props: {
         </span>
         <span className="cit-bb-divider" aria-hidden="true" />
         <span className="cit-bb-item">
-          <span className="cit-bb-mono">{shellCount}</span> {shellCount === 1 ? "shell" : "shells"}
+          <span className="cit-bb-mono">{terminalCount}</span> {terminalCount === 1 ? "terminal" : "terminals"}
         </span>
         <span className="cit-bb-divider" aria-hidden="true" />
         <span className="cit-bb-item cit-bb-muted">

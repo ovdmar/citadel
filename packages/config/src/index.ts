@@ -1,3 +1,4 @@
+import { X509Certificate } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,12 +14,12 @@ export type { DevState } from "./dev-state.js";
 export { HookEventSchema } from "@citadel/contracts";
 export type { HookEvent } from "@citadel/contracts";
 
-// Built-in defaults for the runtimes Citadel ships with. Held as a constant so
+// Built-in defaults for the agent runtimes Citadel ships with. Held as a constant so
 // we can both seed the schema's default (fresh install) AND backfill missing
 // fields onto user-saved configs (existing installs whose `citadel.config.json`
 // was written before newer fields like `resumeArg`/`sessionIdArg` existed —
 // without backfill those installs silently lose resume support).
-type BuiltinRuntime = {
+type BuiltinAgentRuntime = {
   id: string;
   displayName: string;
   command: string;
@@ -33,7 +34,7 @@ type BuiltinRuntime = {
 
 export const CODEX_GOALS_FEATURE_ARGS = ["--enable", "goals"] as const;
 
-const BUILTIN_RUNTIMES: BuiltinRuntime[] = [
+const BUILTIN_AGENT_RUNTIMES: BuiltinAgentRuntime[] = [
   {
     id: "claude-code",
     displayName: "Claude Code",
@@ -58,7 +59,7 @@ const BUILTIN_RUNTIMES: BuiltinRuntime[] = [
     // same default works for both launch (`codex --yolo`) and resume
     // (`codex --yolo resume <uuid>`). `--enable goals` turns on Codex's
     // experimental goals feature for every Citadel-launched Codex session.
-    // Operators can still clear `--yolo` via Settings -> Runtimes if they
+    // Operators can still clear `--yolo` via Settings -> Agents if they
     // want approval prompts back; Citadel keeps the goals flag enabled.
     args: ensureCodexGoalsFeatureArgs("codex", ["--yolo"]),
     // `codex resume <uuid>` is a subcommand (not a flag), but the daemon's
@@ -78,10 +79,15 @@ const BUILTIN_RUNTIMES: BuiltinRuntime[] = [
     supportsPrompt: true,
   },
   { id: "pi", displayName: "Pi", command: "pi", args: [] },
-  { id: "shell", displayName: "Shell", command: "bash", args: ["-l"], supportsPrompt: true },
 ];
 
-export const RuntimeConfigSchema = z.object({
+const DEFAULT_TERMINAL_PROFILE = {
+  displayName: "Terminal",
+  command: "bash",
+  args: ["-l"],
+} as const;
+
+export const AgentRuntimeConfigSchema = z.object({
   id: z.string().min(1),
   displayName: z.string().min(1),
   command: z.string().min(1),
@@ -106,6 +112,12 @@ export const RuntimeConfigSchema = z.object({
   // category sits inside a section, else just `<label>`. Stale keys (provider
   // renamed a row) silently fall back to the first available category.
   topBarCategoryKey: z.string().min(1).max(200).optional(),
+});
+
+export const TerminalProfileConfigSchema = z.object({
+  displayName: z.string().min(1).default(DEFAULT_TERMINAL_PROFILE.displayName),
+  command: z.string().min(1).default(DEFAULT_TERMINAL_PROFILE.command),
+  args: z.array(z.string()).default([...DEFAULT_TERMINAL_PROFILE.args]),
 });
 
 export const UsageProviderConfigSchema = z.object({
@@ -183,6 +195,22 @@ export const CitadelConfigSchema = z
     databasePath: z.string().min(1),
     bindHost: z.string().default("127.0.0.1"),
     port: z.number().int().min(1).max(65535).default(4010),
+    // Optional inline TLS. Both paths must be absolute; both files must exist
+    // and be non-zero bytes; the cert must not be expired. Runtime validation
+    // (file existence, expiry) lives in validateTlsAssets() — the zod refines
+    // stay pure (path-shape only) so the schema has no filesystem side effects.
+    tls: z
+      .object({
+        certPath: z
+          .string()
+          .min(1)
+          .refine((p) => path.isAbsolute(p), "TLS certPath must be absolute"),
+        keyPath: z
+          .string()
+          .min(1)
+          .refine((p) => path.isAbsolute(p), "TLS keyPath must be absolute"),
+      })
+      .optional(),
     mcp: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
     providers: z
       .object({
@@ -211,7 +239,13 @@ export const CitadelConfigSchema = z
         github: { enabled: true, command: "gh" },
         jira: { enabled: true, command: "jtk" },
       }),
-    runtimes: z.array(RuntimeConfigSchema).default(() => BUILTIN_RUNTIMES.map((r) => ({ ...r, args: [...r.args] }))),
+    agentRuntimes: z
+      .array(AgentRuntimeConfigSchema)
+      .default(() => BUILTIN_AGENT_RUNTIMES.map((r) => ({ ...r, args: [...r.args] }))),
+    terminal: TerminalProfileConfigSchema.default({
+      ...DEFAULT_TERMINAL_PROFILE,
+      args: [...DEFAULT_TERMINAL_PROFILE.args],
+    }),
     usageProviders: z.array(UsageProviderConfigSchema).default([]),
     automations: AutomationConfigSchema,
     hooks: z.array(HookConfigSchema).default([]),
@@ -319,7 +353,8 @@ export const CitadelConfigSchema = z
   });
 
 export type CitadelConfig = z.infer<typeof CitadelConfigSchema>;
-export type RuntimeConfig = z.infer<typeof RuntimeConfigSchema>;
+export type AgentRuntimeConfig = z.infer<typeof AgentRuntimeConfigSchema>;
+export type TerminalProfileConfig = z.infer<typeof TerminalProfileConfigSchema>;
 export type UsageProviderConfig = z.infer<typeof UsageProviderConfigSchema>;
 export type AutomationConfig = z.infer<typeof AutomationConfigSchema>;
 export type FixCiAutomationConfig = z.infer<typeof FixCiAutomationConfigSchema>;
@@ -400,7 +435,7 @@ export function loadConfig(configPath = defaultConfigPath()): CitadelConfig {
   };
   if (!fs.existsSync(configPath)) {
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    const parsed = CitadelConfigSchema.parse(defaults);
+    const parsed = backfillBuiltinAgentRuntimes(CitadelConfigSchema.parse(defaults));
     fs.writeFileSync(configPath, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
     return parsed;
   }
@@ -429,26 +464,117 @@ export function loadConfig(configPath = defaultConfigPath()): CitadelConfig {
         : undefined;
     const merged: Record<string, unknown> = { ...defaults, ...rawWithoutPaths };
     if (cleanedScratchpad !== undefined) merged.scratchpad = cleanedScratchpad;
-    return normalizeRuntimeDefaults(backfillBuiltinRuntimes(CitadelConfigSchema.parse(merged)));
+    return parseAndMaybeMigrateConfig(merged, configPath);
   }
-  return normalizeRuntimeDefaults(backfillBuiltinRuntimes(CitadelConfigSchema.parse({ ...defaults, ...(raw ?? {}) })));
+  return parseAndMaybeMigrateConfig({ ...defaults, ...(raw ?? {}) }, configPath);
 }
 
-// Heal user-saved runtime entries whose on-disk shape predates newer schema
+function parseAndMaybeMigrateConfig(raw: Record<string, unknown>, configPath: string): CitadelConfig {
+  const migration = migrateLegacyRuntimes(raw);
+  const parsed = normalizeRuntimeDefaults(backfillBuiltinAgentRuntimes(CitadelConfigSchema.parse(migration.raw)));
+  if (migration.didMigrate) {
+    warnLegacyRuntimeMigration(configPath, migration);
+    writeCanonicalConfigAfterMigration(parsed, configPath);
+  }
+  return parsed;
+}
+
+type LegacyRuntimeMigration = {
+  raw: Record<string, unknown>;
+  didMigrate: boolean;
+  droppedShellLikeNames: string[];
+  terminalSourceName: string | null;
+};
+
+function migrateLegacyRuntimes(raw: Record<string, unknown>): LegacyRuntimeMigration {
+  if ("agentRuntimes" in raw || !Array.isArray(raw.runtimes)) {
+    return { raw, didMigrate: false, droppedShellLikeNames: [], terminalSourceName: null };
+  }
+
+  const legacyRuntimes: AgentRuntimeConfig[] = [];
+  for (const entry of raw.runtimes) {
+    const parsed = AgentRuntimeConfigSchema.safeParse(entry);
+    if (parsed.success) legacyRuntimes.push(parsed.data);
+  }
+  const shellLike = legacyRuntimes.filter(isShellLikeRuntime);
+  const terminalSource = shellLike.find((runtime) => runtime.id === "shell") ?? shellLike[0] ?? null;
+  const shellLikeIds = new Set(shellLike.map((runtime) => runtime.id));
+  const agentRuntimes = legacyRuntimes.filter((runtime) => !shellLikeIds.has(runtime.id));
+  const terminal = terminalSource
+    ? TerminalProfileConfigSchema.parse({
+        displayName: terminalSource.displayName || DEFAULT_TERMINAL_PROFILE.displayName,
+        command: terminalSource.command,
+        args: terminalSource.args,
+      })
+    : TerminalProfileConfigSchema.parse(DEFAULT_TERMINAL_PROFILE);
+  const { runtimes: _legacyRuntimes, ...withoutLegacy } = raw;
+  return {
+    raw: {
+      ...withoutLegacy,
+      agentRuntimes,
+      terminal,
+    },
+    didMigrate: true,
+    droppedShellLikeNames: shellLike
+      .filter((runtime) => runtime.id !== terminalSource?.id)
+      .map((runtime) => `${runtime.displayName} (${runtime.id})`),
+    terminalSourceName: terminalSource ? `${terminalSource.displayName} (${terminalSource.id})` : null,
+  };
+}
+
+function isShellLikeRuntime(runtime: AgentRuntimeConfig): boolean {
+  if (runtime.id === "shell") return true;
+  const command = path.basename(runtime.command);
+  return new Set(["bash", "sh", "zsh", "fish", "nu", "pwsh", "powershell"]).has(command);
+}
+
+function warnLegacyRuntimeMigration(configPath: string, migration: LegacyRuntimeMigration) {
+  const terminalDetail = migration.terminalSourceName
+    ? `terminal profile migrated from ${migration.terminalSourceName}`
+    : "terminal profile set to the default bash login shell";
+  const dropped = migration.droppedShellLikeNames.length
+    ? ` Dropped legacy shell-like entries from agentRuntimes: ${migration.droppedShellLikeNames.join(", ")}.`
+    : "";
+  console.warn(
+    `[citadel-config] Migrated legacy runtimes in ${configPath} to agentRuntimes + terminal; ${terminalDetail}.${dropped}`,
+  );
+}
+
+function writeCanonicalConfigAfterMigration(config: CitadelConfig, configPath: string) {
+  const backupPath = `${configPath}.legacy-runtimes.bak`;
+  try {
+    if (!fs.existsSync(backupPath) && fs.existsSync(configPath)) {
+      fs.copyFileSync(configPath, backupPath);
+      fs.chmodSync(backupPath, 0o600);
+    }
+    const tmpPath = `${configPath}.tmp`;
+    fs.writeFileSync(tmpPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+    fs.chmodSync(tmpPath, 0o600);
+    fs.renameSync(tmpPath, configPath);
+  } catch (error) {
+    console.warn(
+      `[citadel-config] Could not write canonical config to ${configPath}; using migrated config in memory only: ${
+        (error as Error).message
+      }`,
+    );
+  }
+}
+
+// Heal user-saved agent runtime entries whose on-disk shape predates newer schema
 // fields (resumeArg, sessionIdArg, supportsResume, etc.). User overrides win;
 // only fields the user didn't set get filled in from the built-in by id.
-// Unknown ids are left untouched — those are custom runtimes the user added.
-function backfillBuiltinRuntimes(config: CitadelConfig): CitadelConfig {
-  const byId = new Map(BUILTIN_RUNTIMES.map((r) => [r.id, r] as const));
+// Unknown ids are left untouched — those are custom agent runtimes the user added.
+function backfillBuiltinAgentRuntimes(config: CitadelConfig): CitadelConfig {
+  const byId = new Map(BUILTIN_AGENT_RUNTIMES.map((r) => [r.id, r] as const));
   let mutated = false;
-  const runtimes = config.runtimes.map((runtime) => {
+  const agentRuntimes = config.agentRuntimes.map((runtime) => {
     const builtin = byId.get(runtime.id);
     if (!builtin) return runtime;
     const merged: Record<string, unknown> = { ...builtin };
     for (const [key, value] of Object.entries(runtime)) {
       if (value !== undefined) merged[key] = value;
     }
-    const next = RuntimeConfigSchema.parse(merged);
+    const next = AgentRuntimeConfigSchema.parse(merged);
     if (
       Object.keys(next).some((k) => (next as Record<string, unknown>)[k] !== (runtime as Record<string, unknown>)[k])
     ) {
@@ -456,18 +582,18 @@ function backfillBuiltinRuntimes(config: CitadelConfig): CitadelConfig {
     }
     return next;
   });
-  return mutated ? { ...config, runtimes } : config;
+  return mutated ? { ...config, agentRuntimes } : config;
 }
 
 function normalizeRuntimeDefaults(config: CitadelConfig): CitadelConfig {
   let mutated = false;
-  const runtimes = config.runtimes.map((runtime) => {
+  const agentRuntimes = config.agentRuntimes.map((runtime) => {
     const args = ensureCodexGoalsFeatureArgs(runtime.id, runtime.args);
     if (sameStringArray(args, runtime.args)) return runtime;
     mutated = true;
     return { ...runtime, args };
   });
-  return mutated ? { ...config, runtimes } : config;
+  return mutated ? { ...config, agentRuntimes } : config;
 }
 
 export function ensureCodexGoalsFeatureArgs(runtimeId: string, args: readonly string[]): string[] {
@@ -524,7 +650,7 @@ function sameStringArray(a: readonly string[], b: readonly string[]): boolean {
 }
 
 export function saveConfig(config: CitadelConfig, configPath = defaultConfigPath()) {
-  const parsed = normalizeRuntimeDefaults(CitadelConfigSchema.parse(config));
+  const parsed = normalizeRuntimeDefaults(backfillBuiltinAgentRuntimes(CitadelConfigSchema.parse(config)));
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, `${JSON.stringify(parsed, null, 2)}\n`, { mode: 0o600 });
   return parsed;
@@ -532,10 +658,12 @@ export function saveConfig(config: CitadelConfig, configPath = defaultConfigPath
 
 export function mergeConfigPatch(current: CitadelConfig, patch: unknown) {
   return normalizeRuntimeDefaults(
-    CitadelConfigSchema.parse({
-      ...current,
-      ...(typeof patch === "object" && patch !== null ? patch : {}),
-    }),
+    backfillBuiltinAgentRuntimes(
+      CitadelConfigSchema.parse({
+        ...current,
+        ...(typeof patch === "object" && patch !== null ? patch : {}),
+      }),
+    ),
   );
 }
 
@@ -564,4 +692,48 @@ function validateHookReferences(
       });
     }
   });
+}
+
+// Runtime TLS-asset validator. Run by the daemon at boot AFTER zod-parsing.
+// Refuses if cert/key files don't exist, are empty, or the cert is expired.
+// Returns a "validation result" rather than throwing so callers can decide
+// whether to fail-fast (daemon boot) or surface as a doctor check.
+export type TlsAssetValidationResult = { ok: true; notBefore: Date; notAfter: Date } | { ok: false; reason: string };
+
+export function validateTlsAssets(config: Pick<CitadelConfig, "tls">): TlsAssetValidationResult | null {
+  if (!config.tls) return null;
+  const { certPath, keyPath } = config.tls;
+  let certStat: fs.Stats;
+  try {
+    certStat = fs.statSync(certPath);
+  } catch {
+    return { ok: false, reason: `TLS cert not found at ${certPath}` };
+  }
+  if (!certStat.isFile() || certStat.size === 0) {
+    return { ok: false, reason: `TLS cert at ${certPath} is empty or not a regular file` };
+  }
+  try {
+    const keyStat = fs.statSync(keyPath);
+    if (!keyStat.isFile() || keyStat.size === 0) {
+      return { ok: false, reason: `TLS key at ${keyPath} is empty or not a regular file` };
+    }
+  } catch {
+    return { ok: false, reason: `TLS key not found at ${keyPath}` };
+  }
+  try {
+    const pem = fs.readFileSync(certPath);
+    const cert = new X509Certificate(pem);
+    const now = Date.now();
+    const notAfter = new Date(cert.validTo);
+    const notBefore = new Date(cert.validFrom);
+    if (Number.isNaN(notAfter.getTime())) {
+      return { ok: false, reason: `TLS cert at ${certPath}: unparseable validTo` };
+    }
+    if (notAfter.getTime() < now) {
+      return { ok: false, reason: `TLS cert at ${certPath} expired on ${notAfter.toISOString()}` };
+    }
+    return { ok: true, notBefore, notAfter };
+  } catch (err) {
+    return { ok: false, reason: `TLS cert at ${certPath} could not be parsed: ${(err as Error).message}` };
+  }
 }

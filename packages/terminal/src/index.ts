@@ -43,6 +43,10 @@ const execFileAsync = promisify(execFile);
 export type TerminalSessionRequest = {
   sessionName: string;
   cwd: string;
+  terminal?: {
+    command: string;
+    args?: string[];
+  };
   socketName?: string | null;
 };
 
@@ -50,6 +54,7 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
   const exists = tmuxSessionExists(input.sessionName, input.socketName);
   const freshlyCreated = !exists;
   if (!exists) {
+    const terminal = input.terminal ?? { command: "bash", args: ["-l"] };
     // Shell-first: the pane PID is `bash -l`. The agent, if there is one, is
     // launched into this shell via send-keys (see launchAgentInSession). The
     // -e flags propagate the colour-env tokens the legacy wrapper used to set
@@ -73,8 +78,8 @@ export async function ensureTmuxSession(input: TerminalSessionRequest) {
         "FORCE_COLOR=1",
         "-e",
         "CLICOLOR_FORCE=1",
-        "bash",
-        "-l",
+        terminal.command,
+        ...(terminal.args ?? []),
       ],
       {
         timeout: 10000,

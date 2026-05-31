@@ -1,6 +1,6 @@
 # Citadel v2 Architecture
 
-Citadel v2 is a local-first Linux daemon and operator web UI for managing repositories, workspaces, tmux-backed agent runtimes, providers, hooks, MCP, and operational activity. The core model is agent/workflow neutral. OpenClaw is not a core dependency; any future OpenClaw usage must happen as an external consumer through Citadel MCP, API, hooks, or provider surfaces.
+Citadel v2 is a local-first Linux daemon and operator web UI for managing repositories, workspaces, workspace sessions, agent runtimes, a terminal profile, providers, hooks, MCP, and operational activity. The core model is agent/workflow neutral. OpenClaw is not a core dependency; any future OpenClaw usage must happen as an external consumer through Citadel MCP, API, hooks, or provider surfaces.
 
 ## Package Boundaries
 
@@ -24,11 +24,11 @@ Static checks enforce that core does not import implementation packages and that
 
 ## Domain Model
 
-Core entities are repositories, workspaces, agent sessions, runtimes, providers, operations, hooks, activity events, sections, and MCP resources. Repositories and workspaces use generated stable IDs; path/name are metadata, not identity. Workspace lifecycle states are `creating`, `ready`, `failed`, `removing`, `archived`, and `removed`. Agent session process states are separate from browser terminal transport states.
+Core entities are repositories, workspaces, workspace sessions, agent runtimes, the terminal profile, providers, operations, hooks, activity events, sections, and MCP resources. Repositories and workspaces use generated stable IDs; path/name are metadata, not identity. Workspace lifecycle states are `creating`, `ready`, `failed`, `removing`, `archived`, and `removed`. Agent session process states are separate from browser terminal transport states.
 
 ## Persistence And Config
 
-SQLite is the mutable state baseline. The database owns repos, workspaces, operations, activity, agent sessions, provider health snapshots, sections, UI preferences, and runtime state. The config file owns static defaults, providers, adapters, hooks, repo defaults, and command policy. Migrations are forward-only for v2; rollback is backup/restore.
+SQLite is the mutable state baseline. The database owns repos, workspaces, operations, activity, workspace sessions, provider health snapshots, sections, UI preferences, and runtime state. The config file owns static defaults, providers, agent runtimes, the terminal profile, hooks, repo defaults, and command policy. Migrations are forward-only for v2; rollback is backup/restore.
 
 ## Operations And Events
 
@@ -38,7 +38,7 @@ Long-running work returns operation IDs and runs through the operation service. 
 
 Providers are capability-first: version control, pull request/review, CI/checks, issue tracker, agent runtime, runtime usage, and notification/hook. GitHub through `gh` and Jira through `jtk` are bundled implementations, not domain concepts. Provider-backed actions are disabled or marked unavailable when health is degraded. Hooks use JSON input/output; command hooks run with bounded output, timeouts, cwd/env policy, and operation logging. Successful hooks may return bounded `links`, `actions`, and `metadata`; Citadel persists that output on activity events so workspace surfaces can show preview/deploy/docs links without hardcoded workflow assumptions.
 
-## Terminal Runtime
+## Workspace Session Terminal
 
 Shell-backed agent runtimes always launch through tmux. Citadel persists tmux session name/id and owns browser attach/reconnect through `packages/terminal`. The browser uses xterm.js for terminal rendering. REST/SSE carry state; WebSocket carries terminal I/O. Each browser attach creates a disposable node-pty `tmux attach-session` viewer, so interactive CLIs receive real PTY semantics while the durable tmux session survives browser refreshes and daemon viewer churn.
 

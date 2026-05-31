@@ -59,6 +59,7 @@ function bootstrap(runtimeId = "claude-code") {
   });
   store.insertSession({
     id: "sess_h",
+    kind: "agent",
     workspaceId: "ws_h",
     runtimeId,
     displayName: "Agent",

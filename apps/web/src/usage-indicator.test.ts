@@ -55,8 +55,8 @@ describe("top-bar usage runtime selection", () => {
 
   it("still excludes runtimes without usage support", () => {
     const selected = selectTopBarUsageRuntimes(
-      [runtime({ id: "shell", capabilities: { ...runtime().capabilities, supportsUsage: false } })],
-      [{ id: "shell", showUsageInTopBar: true }],
+      [runtime({ id: "aider", capabilities: { ...runtime().capabilities, supportsUsage: false } })],
+      [{ id: "aider", showUsageInTopBar: true }],
     );
 
     expect(selected).toEqual([]);

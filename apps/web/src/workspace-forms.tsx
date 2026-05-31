@@ -17,7 +17,7 @@ export function WorkspaceForm(props: { repo: Repo; runtimes?: AgentRuntime[] }) 
   const [existingBranch, setExistingBranch] = useState("");
   const [task, setTask] = useState("");
   const runtimes = props.runtimes ?? [];
-  const healthyRuntimes = runtimes.filter((runtime) => runtime.health === "healthy" && runtime.id !== "shell");
+  const healthyRuntimes = runtimes.filter((runtime) => runtime.health === "healthy");
   const [runtimeId, setRuntimeId] = useState<string>(healthyRuntimes[0]?.id ?? "");
   useEffect(() => {
     if (!runtimeId && healthyRuntimes[0]) {
@@ -199,7 +199,7 @@ export function WorkspaceForm(props: { repo: Repo; runtimes?: AgentRuntime[] }) 
 }
 
 export function RuntimeLauncher(props: { workspace: Workspace; runtimes: AgentRuntime[] }) {
-  const [runtimeId, setRuntimeId] = useState(props.runtimes[0]?.id ?? "shell");
+  const [runtimeId, setRuntimeId] = useState(props.runtimes[0]?.id ?? "");
   const [prompt, setPrompt] = useState("");
   const startSession = useMutation({
     mutationFn: (input: { runtimeId: string; prompt?: string; displayName?: string }) =>
@@ -217,21 +217,28 @@ export function RuntimeLauncher(props: { workspace: Workspace; runtimes: AgentRu
       queryClient.invalidateQueries({ queryKey: ["state"] });
     },
   });
+  const startTerminal = useMutation({
+    mutationFn: () =>
+      api(`/api/workspaces/${encodeURIComponent(props.workspace.id)}/terminal-sessions`, { method: "POST" }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+    },
+  });
   const runtime = useMemo(
     () => props.runtimes.find((candidate) => candidate.id === runtimeId),
     [props.runtimes, runtimeId],
   );
-  const shellRuntime = props.runtimes.find((candidate) => candidate.id === "shell");
   return (
     <div className="runtime-launcher">
       <select value={runtimeId} onChange={(event) => setRuntimeId(event.target.value)}>
+        {props.runtimes.length === 0 ? <option value="">No agent runtimes</option> : null}
         {props.runtimes.map((candidate) => (
           <option key={candidate.id} value={candidate.id}>
             {candidate.displayName} - {candidate.health}
           </option>
         ))}
       </select>
-      {runtime && runtime.id !== "shell" ? (
+      {runtime ? (
         <textarea
           className="runtime-prompt"
           placeholder="Initial task for the agent (optional)"
@@ -246,19 +253,17 @@ export function RuntimeLauncher(props: { workspace: Workspace; runtimes: AgentRu
           disabled={!runtime || runtime.health !== "healthy" || startSession.isPending}
           onClick={() => startSession.mutate(prompt.trim() ? { runtimeId, prompt: prompt.trim() } : { runtimeId })}
         >
-          <Play size={15} /> Start {runtime?.id === "shell" ? "shell" : "agent"}
+          <Play size={15} /> Start agent
         </Button>
-        {shellRuntime && runtime?.id !== "shell" ? (
-          <Button
-            type="button"
-            variant="secondary"
-            disabled={shellRuntime.health !== "healthy" || startSession.isPending}
-            onClick={() => startSession.mutate({ runtimeId: shellRuntime.id, displayName: "Shell" })}
-            title="Open a plain workspace terminal without launching an agent"
-          >
-            Open shell
-          </Button>
-        ) : null}
+        <Button
+          type="button"
+          variant="secondary"
+          disabled={startTerminal.isPending}
+          onClick={() => startTerminal.mutate()}
+          title="Open a plain workspace terminal without launching an agent"
+        >
+          Open terminal
+        </Button>
       </div>
       {runtime?.healthReason ? <p>{runtime.healthReason}</p> : null}
     </div>

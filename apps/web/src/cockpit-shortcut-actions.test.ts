@@ -1,4 +1,4 @@
-import type { AgentRuntime, AgentSession, Workspace } from "@citadel/contracts";
+import type { AgentRuntime, Workspace, WorkspaceSession } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
 import { type ShortcutDeps, resolveShortcutAction } from "./cockpit-shortcut-actions.js";
 import type { GroupNode } from "./navigator-groups.js";
@@ -32,26 +32,25 @@ function makeWorkspace(id: string): Workspace {
   };
 }
 
-function makeSession(id: string, workspaceId: string): AgentSession {
+function makeSession(id: string, workspaceId: string): WorkspaceSession {
   return {
     id,
     workspaceId,
-    runtimeId: "shell",
+    kind: "terminal",
+    runtimeId: null,
     displayName: id,
     status: "idle",
     statusReason: null,
+    transport: "connected",
     tmuxSessionName: "tmux",
     tmuxSessionId: "$0",
-    cwd: "/wt",
     createdAt: ts,
     updatedAt: ts,
     lastStatusAt: ts,
     lastOutputAt: ts,
     endedAt: null,
     exitCode: null,
-    pendingPrompt: null,
-    capabilities: { tui: false },
-  } as unknown as AgentSession;
+  };
 }
 
 function makeRuntime(id: string, healthy = true): AgentRuntime {
@@ -188,20 +187,19 @@ describe("resolveShortcutAction", () => {
     });
   });
 
-  it("spawn-agent falls back to the first healthy non-shell runtime", () => {
+  it("spawn-agent falls back to the first healthy runtime", () => {
     const ws = makeWorkspace("w1");
-    const shell = makeRuntime("shell");
     const codex = makeRuntime("codex");
-    const deps = baseDeps({ activeWorkspace: ws, runtimes: [shell, codex] });
+    const deps = baseDeps({ activeWorkspace: ws, runtimes: [codex, makeRuntime("cursor-agent")] });
     expect(resolveShortcutAction(match("spawn-agent"), deps)).toMatchObject({
       type: "spawn-agent",
       runtimeId: "codex",
     });
   });
 
-  it("spawn-agent returns spawn-agent-no-runtime when only shell is healthy", () => {
+  it("spawn-agent returns spawn-agent-no-runtime when no agent runtime is healthy", () => {
     const ws = makeWorkspace("w1");
-    const deps = baseDeps({ activeWorkspace: ws, runtimes: [makeRuntime("shell")] });
+    const deps = baseDeps({ activeWorkspace: ws, runtimes: [makeRuntime("codex", false)] });
     expect(resolveShortcutAction(match("spawn-agent"), deps)).toEqual({
       type: "spawn-agent-no-runtime",
     });

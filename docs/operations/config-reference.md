@@ -25,20 +25,20 @@ Bundled provider toggles:
 
 GitHub provider features use the local `gh` CLI when enabled. Jira provider features use the local `jtk` CLI when enabled. If a provider CLI is missing or unhealthy, Citadel reports the provider as degraded or unavailable and disables provider-backed actions in the cockpit. Worktree deploys started by `make deploy` disable automated GitHub polling by default (`CITADEL_AUTOMATED_GH=0`); set `CITADEL_ENABLE_WORKTREE_GH_AUTOMATION=1` before `make deploy` to opt one worktree back in. The long-term systemd install sets `CITADEL_AUTOMATED_GH=1`.
 
-## Runtimes
+## Agent Runtimes And Terminal
 
-Runtimes are shell-backed command adapters launched through tmux:
+Agent runtimes are prompt-driven command adapters launched through tmux:
 
 ```json
 {
-  "runtimes": [
-    { "id": "codex", "displayName": "Codex", "command": "codex", "args": ["--yolo", "--enable", "goals"] },
-    { "id": "shell", "displayName": "Shell", "command": "bash", "args": ["-l"] }
-  ]
+  "agentRuntimes": [
+    { "id": "codex", "displayName": "Codex", "command": "codex", "args": ["--yolo", "--enable", "goals"] }
+  ],
+  "terminal": { "displayName": "Terminal", "command": "bash", "args": ["-l"] }
 }
 ```
 
-Built-in defaults include `claude-code`, `codex`, `cursor-agent`, `pi`, and `shell`. Codex defaults to `--yolo` so interactive launches use the CLI's no-approval/no-sandbox mode; edit or clear that runtime arg in Settings to change approvals. Citadel keeps `--enable goals` on the Codex runtime so all Citadel-launched Codex sessions use the experimental goals feature. Runtime health is derived from command availability. Agent sessions persist tmux session name/id for reconnect.
+Built-in agent defaults include `claude-code`, `codex`, `cursor-agent`, and `pi`. Plain shell is the singular `terminal` profile, not an agent runtime. Codex defaults to `--yolo` so interactive launches use the CLI's no-approval/no-sandbox mode; edit or clear the runtime args in Settings to change that. Citadel keeps `--enable goals` on the Codex runtime so all Citadel-launched Codex sessions use the experimental goals feature. Agent runtime health is derived from command availability. Workspace sessions persist tmux session name/id for reconnect.
 
 Citadel launches Codex with a workspace-scoped `CODEX_SQLITE_HOME` under
 `${dataDir}/codex-sqlite/<workspaceId>`. User auth/config and transcript/history
@@ -212,13 +212,13 @@ Resources:
 - `citadel://provider-health`
 - `citadel://activity`
 
-Tools include read-only state inspection (including `read_agent_output`, which returns the latest tmux pane content for a specific agent session, bounded by `lines` and `maxChars`) plus daemon-handled workspace creation, agent launch, follow-up agent messaging (`send_agent_message`), metadata archive, and workspace link listing. See [runbook.md](./runbook.md) for curl examples.
+Tools include read-only state inspection (including `read_agent_output`, which returns the latest tmux pane content for a specific agent session, bounded by `lines` and `maxChars`) plus daemon-handled workspace creation, agent launch, follow-up agent messaging (`send_agent_message`), metadata archive, and workspace link listing. MCP is agent-only: terminal workspace sessions are not listed, launched, read, or messaged through MCP. See [runbook.md](./runbook.md) for curl examples.
 
 For interactive runtimes like Claude Code, an initial `prompt` passed to `start_agent_session` and every `send_agent_message` are delivered into the tmux pane via paste-buffer + Enter, so the prompt is actually submitted to the agent and not just left in the input box. Citadel ships `claude-code` without `promptArg` for this reason — `-p` is Claude Code's non-interactive print mode, which exits after responding and is not what an interactive Citadel session needs.
 
 ## Terminal Renderer
 
-Shell-backed sessions are tmux sessions. The cockpit's interactive renderer is an in-process xterm.js pane connected to the daemon WebSocket at `/terminal/:sessionId`. The daemon bridges that socket to the matching tmux session with node-pty running `tmux attach-session`, so normal workspace and agent switching does not spawn one renderer process per session and interactive TUIs get real PTY behavior.
+Workspace sessions are tmux sessions. Agent sessions use the configured terminal profile as their base shell before Citadel sends the agent runtime command. Terminal sessions run only the terminal profile. The cockpit's interactive renderer is an in-process xterm.js pane connected to the daemon WebSocket at `/terminal/:sessionId`. The daemon bridges that socket to the matching tmux session with node-pty running `tmux attach-session`, so normal workspace and session switching does not spawn one renderer process per session and interactive TUIs get real PTY behavior.
 
 Environment variables:
 

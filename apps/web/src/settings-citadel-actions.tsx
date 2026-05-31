@@ -301,15 +301,13 @@ function preferredDefaultRuntimeId(runtimes: AgentRuntime[]): string {
 }
 
 function buildRuntimeChoices(runtimes: AgentRuntime[]): RuntimeChoice[] {
-  return runtimes
-    .filter((runtime) => runtime.id !== "shell" && !isShellCommand(runtime.command))
-    .map((runtime) => ({
-      id: runtime.id,
-      label: runtime.displayName,
-      command: runtime.command,
-      health: runtime.health,
-      healthReason: runtime.healthReason,
-    }));
+  return runtimes.map((runtime) => ({
+    id: runtime.id,
+    label: runtime.displayName,
+    command: runtime.command,
+    health: runtime.health,
+    healthReason: runtime.healthReason,
+  }));
 }
 
 function ensureSelectedRuntimeChoice(choices: RuntimeChoice[], selectedId: string): RuntimeChoice[] {
@@ -324,11 +322,6 @@ function ensureSelectedRuntimeChoice(choices: RuntimeChoice[], selectedId: strin
       healthReason: "Runtime is not configured.",
     },
   ];
-}
-
-function isShellCommand(command: string): boolean {
-  const name = command.split(/[\\/]/).pop() ?? command;
-  return ["bash", "sh", "zsh", "fish"].includes(name);
 }
 
 function runtimeChoiceLabel(choice: RuntimeChoice): string {

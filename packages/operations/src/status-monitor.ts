@@ -175,8 +175,8 @@ export async function runStatusMonitorTick(
   deps: MonitorTickDeps,
   opts: MonitorTickOptions,
 ): Promise<MonitorTickResult> {
-  // Include shell-runtime sessions so the auto-clear path can run on them
-  // too; the per-session derivation below treats them specially.
+  // Terminal tabs are no longer passed into the agent monitor; status-based
+  // terminal rows are filtered out defensively for old fixtures.
   const sessions = deps.listSessions().filter((s) => !TERMINAL_STATUSES.has(s.status));
   if (sessions.length === 0) return { sessionsTouched: 0, deletedSessions: 0 };
 
@@ -344,7 +344,7 @@ export async function runStatusMonitorTick(
         reason: opts.source === "boot" ? "daemon_restart_indeterminate" : "tmux_missing",
       });
       monitorState.consecutiveShellTicks = 0;
-    } else if (pane && SHELL_BINARIES.has(pane.command) && session.runtimeId !== "shell") {
+    } else if (pane && SHELL_BINARIES.has(pane.command)) {
       if (activeElapsedTimer?.advanced) {
         monitorState.consecutiveShellTicks = 0;
         signals.push({ type: "pane_observation", observed: "running", reason: REASON_ELAPSED_TIMER });
@@ -360,7 +360,7 @@ export async function runStatusMonitorTick(
         }
       }
     } else {
-      // Agent foreground (or shell runtime with any tmux-alive). Reset the
+      // Agent foreground. Reset the
       // debounce counter so a future running→idle transition starts fresh.
       monitorState.consecutiveShellTicks = 0;
       if (activityChanged && tmuxActivityMs !== null) {

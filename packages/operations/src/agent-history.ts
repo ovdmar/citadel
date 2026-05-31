@@ -13,7 +13,7 @@ export type AgentHistoryResult = {
   prompts: AgentPrompt[];
 };
 
-export type AgentHistoryErrorResult = { ok: false; error: "session_not_found" };
+export type AgentHistoryErrorResult = { ok: false; error: "session_not_found" | "session_not_agent" };
 
 const DEFAULT_LIMIT = 200;
 const MAX_LIMIT = 2000;
@@ -31,8 +31,9 @@ export function readAgentHistory(
   store: SqliteStore,
   input: { sessionId: string; limit?: number; maxChars?: number },
 ): AgentHistoryResult | AgentHistoryErrorResult {
-  const session = store.listSessions().find((candidate) => candidate.id === input.sessionId);
+  const session = store.listWorkspaceSessions().find((candidate) => candidate.id === input.sessionId);
   if (!session) return { ok: false, error: "session_not_found" };
+  if (session.kind !== "agent") return { ok: false, error: "session_not_agent" };
   const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
   const all: AgentPrompt[] = workspace
     ? getUserPromptsForSession({
@@ -78,8 +79,9 @@ export function getSessionPromptSummary(
   store: SqliteStore,
   sessionId: string,
 ): { initialPrompt: string | null; messageCount: number } {
-  const session = store.listSessions().find((candidate) => candidate.id === sessionId);
+  const session = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
   if (!session) return { initialPrompt: null, messageCount: 0 };
+  if (session.kind !== "agent") return { initialPrompt: null, messageCount: 0 };
   const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
   if (!workspace) return { initialPrompt: null, messageCount: 0 };
   const prompts = getUserPromptsForSession({

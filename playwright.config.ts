@@ -78,11 +78,10 @@ export default defineConfig({
         // Clear operator-shell worktree mode before setting sandbox env below;
         // otherwise a local run can override /tmp e2e paths with worktree paths.
         "CITADEL_WORKTREE=",
-        `CITADEL_DATA_DIR=${dataDir}`,
-        `CITADEL_CONFIG=${configPath}`,
+        `CITADEL_DATA_DIR=${shellEnvValue(dataDir)}`,
+        `CITADEL_CONFIG=${shellEnvValue(configPath)}`,
         `CITADEL_PORT=${daemonPort}`,
         `CITADEL_TMUX_SOCKET=${tmuxSocket}`,
-        "CITADEL_WORKTREE=0",
         `CITADEL_E2E_RUN_ID=${e2eRunId}`,
         "CITADEL_OWN_TMUX_SOCKET=1",
         "CITADEL_DISABLE_BOOT_RESTORE=1",
@@ -114,3 +113,7 @@ export default defineConfig({
     },
   ],
 });
+
+function shellEnvValue(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}

@@ -1,4 +1,4 @@
-import type { AgentSession } from "@citadel/contracts";
+import type { WorkspaceSession } from "@citadel/contracts";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -93,7 +93,7 @@ export function focusActiveTerminal(sessionId: string | null | undefined): void 
   handle.focusIframe();
 }
 
-export function TerminalPane(props: { session: AgentSession; active?: boolean }) {
+export function TerminalPane(props: { session: WorkspaceSession; active?: boolean }) {
   const sessionId = props.session.id;
   const active = props.active ?? true;
   const theme = useResolvedTheme();

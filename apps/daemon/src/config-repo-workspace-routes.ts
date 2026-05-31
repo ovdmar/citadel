@@ -170,7 +170,7 @@ export function registerConfigRepoWorkspaceRoutes(input: {
     }),
   );
 
-  app.get("/api/runtimes", (_req, res) => {
-    res.json({ runtimes: listRuntimeHealth(config.runtimes) });
+  app.get("/api/agent-runtimes", (_req, res) => {
+    res.json({ agentRuntimes: listRuntimeHealth(config.agentRuntimes) });
   });
 }

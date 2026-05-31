@@ -5,10 +5,10 @@ SHELL := /bin/bash
 #   1. Local iteration: `make deploy` (HMR foreground) or `make serve` (built,
 #      detached). Both bind to a derived port, write to a worktree-local data
 #      dir, and never touch the systemd-supervised long-term service.
-#   2. Long-term devbox install: `make install` (re)writes the user-systemd
-#      unit `citadel.service` to point at $(CURDIR) and brings it up. This is
-#      what you run once per machine — and again whenever you want to swap the
-#      long-running daemon to a different checkout.
+#   2. Long-term devbox install: `make install` resolves the requested install
+#      ref (latest release by default), (re)writes the user-systemd unit
+#      `citadel.service` to point at $(CURDIR), brings it up, and runs doctor.
+#      `make upgrade` is the same path under an operator-friendly verb.
 
 # Worktree-derived ports. cksum-mod-100 is deterministic per absolute path, so
 # `make deploy` from the same worktree always lands on the same ports. The
@@ -35,12 +35,12 @@ EFFECTIVE_WEB_PORT := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/nu
 # mock git repo materialized under $(WORKTREE_MOCK_REPO) plus synthetic rows
 # inserted into the worktree SQLite. It is intentionally isolated from the
 # systemd long-term daemon's prod data: seeding from prod would copy live
-# agent_sessions and the worktree daemon would race the live daemon for the
+# workspace_sessions and the worktree daemon would race the live daemon for the
 # same tmux sessions.
 WORKTREE_MOCK_REPO       := $(CURDIR)/.citadel/mock-repo
 WORKTREE_MOCK_WORKTREES  := $(CURDIR)/.citadel/mock-worktrees
 
-.PHONY: help setup deploy install tmux-service build check typecheck lint test coverage e2e smoke performance clean stop logs seed seed-reset
+.PHONY: help setup deploy install upgrade doctor tmux-service build check typecheck lint test coverage e2e smoke performance clean stop logs seed seed-reset
 
 help:
 	@echo "Citadel — scoped to: $(CURDIR)"
@@ -53,6 +53,13 @@ help:
 	@echo "                   vite, both watching for changes. Used by the cockpit's Redeploy chip."
 	@echo "                     cockpit → http://localhost:$(EFFECTIVE_WEB_PORT) (vite, HMR)"
 	@echo "                     daemon  → http://localhost:$(EFFECTIVE_PORT)"
+	@echo ""
+	@echo "Distribution:"
+	@echo "  make install           Install/reinstall the latest released version."
+	@echo "  make upgrade           Upgrade/reinstall to the latest released version."
+	@echo "  make install REF=main  Install from latest origin/main instead of a release."
+	@echo "  make upgrade REF=v0.3.0  Pin the install to an exact annotated release tag."
+	@echo "  make doctor            Verify that everything is configured (binaries, daemon, config, hooks)."
 	@echo ""
 	@echo "Lifecycle:"
 	@echo "  make setup        pnpm install"
@@ -100,7 +107,7 @@ e2e:
 	pnpm e2e
 
 smoke:
-	pnpm smoke
+	CITADEL_BASE_URL="$${CITADEL_BASE_URL:-http://127.0.0.1:$(EFFECTIVE_PORT)}" pnpm smoke
 
 performance:
 	pnpm performance
@@ -210,16 +217,26 @@ deploy:
 		tail -n 40 $(WORKTREE_LOG); \
 		exit 1
 
-# `make install` is for users (or your devbox). Writes a user-systemd unit
-# pointing at THIS checkout and brings it up. Idempotent: re-run after a
-# `git pull` on the long-term checkout, or to swap the supervised daemon to a
-# different checkout entirely. Does NOT touch any worktree-local `deploy` stack.
+# `make install` is for users (or your devbox). Resolves the install ref
+# (latest release by default, REF=main for origin/main, REF=vX.Y.Z for an
+# exact release), writes a user-systemd unit pointing at THIS checkout, brings
+# it up, and runs doctor. Does NOT touch any worktree-local `deploy` stack.
 #
 # Critically: `make install` never restarts citadel-tmux.service. tmux is the
 # substrate every live agent session lives in; restarting it kills them all.
 # Apply tmux-unit changes via `make tmux-service` instead.
 install:
-	@bash scripts/install-systemd.sh
+	@bash scripts/install/upgrade.sh $(if $(REF),REF=$(REF))
+
+# Dedicated upgrade verb. Same end-state as `make install`, but with a
+# named entry point that operators recognise + REF= pinning.
+upgrade:
+	@bash scripts/install/upgrade.sh $(if $(REF),REF=$(REF))
+
+# Verify everything is configured. Outputs a human-readable table by
+# default; pass `make doctor --json` to get machine-readable JSON.
+doctor:
+	@pnpm exec tsx scripts/doctor/run.ts $(filter-out $@,$(MAKECMDGOALS))
 
 # `make tmux-service` is the destructive sibling: (re)starts
 # citadel-tmux.service, killing every live tmux session on the citadel
@@ -254,7 +271,7 @@ logs:
 # either piece is already in place, that piece is skipped. `make deploy`
 # auto-runs this on a fresh worktree so the cockpit isn't empty.
 #
-# Why not snapshot from prod: prod data carries live agent_sessions rows that
+# Why not snapshot from prod: prod data carries live workspace_sessions rows that
 # reference tmux sessions owned by the systemd long-term daemon. A worktree
 # daemon booted on that data races/steals those sessions, breaking the live
 # cockpit. The seed here is fully synthetic and references only paths inside

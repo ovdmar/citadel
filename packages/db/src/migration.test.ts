@@ -504,7 +504,11 @@ describe("workspace_sessions migration (version 15)", () => {
       kind: "terminal",
       runtime_id: null,
     });
-    expect(store.listSessions().find((s) => s.id === "sess_terminal")?.runtimeId).toBe("shell");
+    expect(store.listSessions().find((s) => s.id === "sess_terminal")).toBeUndefined();
+    expect(store.listWorkspaceSessions().find((s) => s.id === "sess_terminal")).toMatchObject({
+      kind: "terminal",
+      runtimeId: null,
+    });
   });
 
   it("repairs already-migrated workspace_sessions schemas that are missing tmux_socket_name", () => {

@@ -2,13 +2,17 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import type { ActivityEvent, AgentSession, CreateAgentSessionInput, CreateNamespaceInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
+import type { ActivityEvent, AgentSession, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
 import * as agentHistory from "./agent-history.js";
 import * as agentMessages from "./agent-messages.js";
-import { type RuntimeDescriptor, createAgentSession as createAgentSessionImpl } from "./create-agent-session.js";
+import {
+  type RuntimeDescriptor,
+  createAgentSession as createAgentSessionImpl,
+  createTerminalSession as createTerminalSessionImpl,
+} from "./create-agent-session.js";
 import { type CreateWorkspaceOptions, type WorkspaceOpsDeps, createWorkspaceImpl } from "./create-workspace.js";
 import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 import * as namespaceOps from "./namespaces.js";
@@ -75,7 +79,8 @@ export class OperationService {
         actionHookIds?: string[];
       };
       commandPolicy: CitadelConfig["commandPolicy"];
-      runtimes?: CitadelConfig["runtimes"];
+      terminal?: CitadelConfig["terminal"];
+      agentRuntimes?: CitadelConfig["agentRuntimes"];
     },
     private readonly runAutoTransitionsDep: RunAutoTransitionsDep | null = null,
   ) {}
@@ -111,6 +116,7 @@ export class OperationService {
     return createAgentSessionImpl(
       {
         store: this.store,
+        terminal: this.config?.terminal,
         ...(this.config?.dataDir ? { dataDir: this.config.dataDir } : {}),
         activity: (...args) => this.activity(...args),
         runNotificationHooks: (event, repo, workspace, operationId, payload) =>
@@ -119,6 +125,26 @@ export class OperationService {
       },
       input,
       runtime,
+      options,
+    );
+  };
+
+  createTerminalSession = (
+    input: CreateTerminalSessionInput,
+    options: { activitySource?: ActivityEvent["source"] } = {},
+  ) => {
+    if (input.namespaceId) {
+      const ws = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+      if (ws && input.namespaceId !== ws.namespaceId)
+        this.assignWorkspaceToNamespace({ workspaceId: ws.id, namespaceId: input.namespaceId });
+    }
+    return createTerminalSessionImpl(
+      {
+        store: this.store,
+        terminal: this.config?.terminal,
+        activity: (...args) => this.activity(...args),
+      },
+      input,
       options,
     );
   };
@@ -145,13 +171,21 @@ export class OperationService {
   getSessionPromptSummary = (sessionId: string) => agentHistory.getSessionPromptSummary(this.store, sessionId);
 
   stopAgentSession(input: { sessionId: string }) {
-    const session = this.store.listSessions().find((candidate) => candidate.id === input.sessionId);
+    const session = this.store.listWorkspaceSessions().find((candidate) => candidate.id === input.sessionId);
+    if (!session) return { stopped: false, reason: "session_not_found" as const };
+    if (session.kind !== "agent") return { stopped: false, reason: "session_not_agent" as const };
+    return this.stopWorkspaceSession(input);
+  }
+
+  stopWorkspaceSession(input: { sessionId: string }) {
+    const session = this.store.listWorkspaceSessions().find((candidate) => candidate.id === input.sessionId);
     if (!session) return { stopped: false, reason: "session_not_found" as const };
     if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
-    this.store.deleteSession(session.id);
+    this.store.deleteWorkspaceSession(session.id);
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
+    const activityType = session.kind === "agent" ? "agent.stopped" : "terminal.stopped";
     this.activity(
-      "agent.stopped",
+      activityType,
       "user",
       `Stopped ${session.displayName}`,
       workspace?.repoId ?? null,
@@ -216,7 +250,7 @@ export class OperationService {
     if (!repo) throw new Error(`Unknown repo: ${input.repoId}`);
     const workspaces = this.store.listWorkspaces(repo.id);
     const sessions = this.store
-      .listSessions()
+      .listWorkspaceSessions()
       .filter((session) => workspaces.some((workspace) => workspace.id === session.workspaceId));
     const activeSessions = sessions.filter((session) =>
       ["starting", "running", "waiting_for_input", "rate_limited", "usage_limited", "idle"].includes(session.status),
@@ -554,3 +588,8 @@ export class OperationService {
     };
   }
 }
+
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+export { runDoctorChecks } from "./doctor.js";
+// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
+export type { DeployHookStatus, DoctorConfig, DoctorDeps, DoctorProviderProbe, DoctorProviderStatus, DoctorRepo } from "./doctor.js";

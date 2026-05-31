@@ -35,11 +35,11 @@ vi.mock("@citadel/runtimes", () => ({
 const fakeStore = { listSessions: () => [], updateSessionRateLimitResume: () => {} } as unknown as SqliteStore;
 const fakeOps = { sendAgentMessage: async () => ({ ok: true }) } as unknown as OperationService;
 const fakeConfig = {
-  runtimes: [
+  agentRuntimes: [
     { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] },
     { id: "codex", displayName: "Codex", command: "codex", args: [] },
   ],
-} satisfies Pick<CitadelConfig, "runtimes">;
+} satisfies Pick<CitadelConfig, "agentRuntimes">;
 
 const originalEnv = { ...process.env };
 
@@ -198,5 +198,6 @@ function session(over: Partial<AgentSession>): AgentSession {
     createdAt: "2026-05-25T10:00:00.000Z",
     updatedAt: "2026-05-25T11:00:00.000Z",
     ...over,
+    kind: "agent",
   } satisfies AgentSession;
 }

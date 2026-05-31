@@ -78,16 +78,14 @@ function mostRecent(...values: Array<string | null | undefined>): string | null 
   return best;
 }
 
-// Resolve the auto-recovery runtime for a workspace: pick the first
-// non-shell runtime configured. Operators that configure only a shell
-// runtime opt out of auto-recovery — there's no agent to ping.
+// Resolve the auto-recovery runtime for a workspace: pick a configured agent runtime.
 function pickRuntime(config: CitadelConfig): string | null {
   const configured = config.automations?.fixCi;
-  const runtimeIds = new Set(config.runtimes.map((candidate) => candidate.id));
+  const runtimeIds = new Set(config.agentRuntimes.map((candidate) => candidate.id));
   for (const id of [configured?.runtimeId, configured?.fallbackRuntimeId ?? undefined]) {
-    if (id && id !== "shell" && runtimeIds.has(id)) return id;
+    if (id && runtimeIds.has(id)) return id;
   }
-  const runtime = config.runtimes.find((candidate) => candidate.id !== "shell");
+  const runtime = config.agentRuntimes[0];
   return runtime?.id ?? null;
 }
 

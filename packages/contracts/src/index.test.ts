@@ -9,6 +9,7 @@ import {
   CreateAgentSessionInputSchema,
   CreateRepoInputSchema,
   CreateScheduledAgentInputSchema,
+  CreateTerminalSessionInputSchema,
   CreateWorkspaceInputSchema,
   HookEventSchema,
   HookOutputSchema,
@@ -28,12 +29,14 @@ import {
   RuntimeUsageSummarySchema,
   ScheduledAgentRunSchema,
   ScheduledAgentSchema,
+  TerminalProfileSchema,
   UpdateScheduledAgentInputSchema,
   VersionControlSummarySchema,
   WorkspaceDiffSchema,
   WorkspaceReadinessSchema,
   WorkspaceRecentCommitsSchema,
   WorkspaceSchema,
+  WorkspaceSessionSchema,
 } from "./index.js";
 
 const timestamp = "2026-05-17T00:00:00.000Z";
@@ -62,9 +65,10 @@ describe("contract schemas", () => {
     });
     const session = AgentSessionSchema.parse({
       id: "sess_test",
+      kind: "agent",
       workspaceId: workspace.id,
-      runtimeId: "shell",
-      displayName: "Shell",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
       status: "running",
       transport: "connected",
       tmuxSessionName: "citadel_test",
@@ -75,13 +79,30 @@ describe("contract schemas", () => {
 
     expect(repo.defaultBranch).toBe("main");
     expect(workspace.section).toBe("backlog");
-    expect(session.runtimeId).toBe("shell");
+    expect(session.kind).toBe("agent");
+    expect(session.runtimeId).toBe("claude-code");
+    const terminal = WorkspaceSessionSchema.parse({
+      id: "sess_terminal",
+      kind: "terminal",
+      workspaceId: workspace.id,
+      runtimeId: null,
+      displayName: "Terminal",
+      status: "running",
+      transport: "connected",
+      tmuxSessionName: "citadel_terminal",
+      tmuxSessionId: "$2",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    expect(terminal.kind).toBe("terminal");
+    expect(WorkspaceSessionSchema.safeParse({ ...terminal, runtimeId: "codex" }).success).toBe(false);
   });
 
   it("validates command inputs and provider/status contracts", () => {
     expect(CreateRepoInputSchema.parse({ rootPath: "/tmp/repo" }).rootPath).toBe("/tmp/repo");
     expect(CreateWorkspaceInputSchema.parse({ repoId: "repo_test", name: "Work" }).source).toBe("scratch");
-    expect(CreateAgentSessionInputSchema.parse({ workspaceId: "ws_test", runtimeId: "shell" }).runtimeId).toBe("shell");
+    expect(CreateAgentSessionInputSchema.parse({ workspaceId: "ws_test", runtimeId: "codex" }).runtimeId).toBe("codex");
+    expect(CreateTerminalSessionInputSchema.parse({ workspaceId: "ws_test" }).workspaceId).toBe("ws_test");
 
     expect(
       ProviderHealthSchema.parse({
@@ -116,9 +137,9 @@ describe("contract schemas", () => {
     ).toBe("workspace.updated");
     expect(
       AgentRuntimeSchema.parse({
-        id: "shell",
-        displayName: "Shell",
-        command: "bash",
+        id: "codex",
+        displayName: "Codex",
+        command: "codex",
         health: "healthy",
         capabilities: {
           supportsPrompt: true,
@@ -132,6 +153,9 @@ describe("contract schemas", () => {
         },
       }).args,
     ).toEqual([]);
+    expect(TerminalProfileSchema.parse({ displayName: "Terminal", command: "bash", args: ["-l"] }).args).toEqual([
+      "-l",
+    ]);
     expect(WorkspaceDiffSchema.parse({ workspaceId: "ws_test", clean: true, files: [], truncated: false }).clean).toBe(
       true,
     );
@@ -317,7 +341,7 @@ describe("contract schemas", () => {
     const base = {
       name: "Sweep",
       repoId: "repo_test",
-      runtimeId: "shell",
+      runtimeId: "claude-code",
       workspaceStrategy: "new" as const,
       workspaceName: "sweep",
     };
@@ -362,7 +386,7 @@ describe("contract schemas", () => {
       name: "BG",
       cron: "0 9 * * *",
       repoId: "repo_test",
-      runtimeId: "shell",
+      runtimeId: "codex",
       workspaceStrategy: "new" as const,
       workspaceName: "bg-prefix",
     };
@@ -407,7 +431,7 @@ describe("contract schemas", () => {
       name: "Daily",
       cron: "0 9 * * *",
       repoId: "repo_test",
-      runtimeId: "shell",
+      runtimeId: "claude-code",
       workspaceStrategy: "new",
       workspaceName: "daily",
       createdAt: timestamp,

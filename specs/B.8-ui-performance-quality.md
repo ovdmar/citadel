@@ -10,7 +10,7 @@
 [~] 2. Settings is secondary to the cockpit.
 [ ] 3. The UI is calm, dense, premium, and operational.
 [ ] 4. shadcn-style components are used where they improve consistency and speed.
-[~] 5. The UI has theme support. The theme selector is a single cycling button with three states (Light / Dark / System); System resolves via `prefers-color-scheme`. Toggling the cockpit theme re-themes every open terminal in place — no full reload, no confirm prompt — by respawning each ttyd instance with the new palette (theme is baked at ttyd boot). Respawns are staggered to avoid spawn-storm regressions, rapid toggles coalesce via a sequence token, and OS-driven theme flips on the System setting follow the same code path. Theme propagation into `ttyd.ensure()` is a hard invariant: `theme` is a required argument and the daemon route always sources it from the disk-backed `ThemePrefStore`; there is no silent dark fallback inside the terminal manager.
+[~] 5. The UI has theme support. The theme selector is a single cycling button with three states (Light / Dark / System); System resolves via `prefers-color-scheme`. Toggling the cockpit theme re-themes every open terminal in place through the xterm renderer — no full reload, no confirm prompt, and no terminal-session restart. Rapid toggles coalesce through React state, and OS-driven theme flips on the System setting follow the same code path.
 [ ] 6. Workspace rows are compact and scannable.
 [ ] 7. Status language is concrete and operator-facing.
 [ ] 8. Primary actions, secondary actions, links, statuses, and metadata have distinct visual treatment.

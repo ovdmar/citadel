@@ -21,7 +21,7 @@ Default SQLite database: `~/.local/share/citadel/citadel.sqlite`
 
 Set `CITADEL_DATA_DIR` or `CITADEL_CONFIG` to override local paths.
 
-See [config-reference.md](./config-reference.md) for providers, runtimes, usage providers, hooks, MCP resources/tools, and terminal gateway behavior.
+See [config-reference.md](./config-reference.md) for providers, agent runtimes, the terminal profile, usage providers, hooks, MCP resources/tools, and terminal gateway behavior.
 
 ## Verification
 
@@ -47,12 +47,12 @@ curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-Mutating tools are handled by the daemon. `create_workspace`, `start_agent_session`, `send_agent_message`, and `archive_workspace` use normalized Citadel concepts:
+Mutating tools are handled by the daemon. `create_workspace`, `start_agent_session`, `send_agent_message`, and `archive_workspace` use normalized Citadel concepts. MCP is agent-only; it does not launch or list terminal workspace sessions.
 
 ```bash
 curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
   -H 'content-type: application/json' \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"start_agent_session","arguments":{"workspaceId":"ws_example","runtimeId":"shell","displayName":"Shell"}}}'
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"start_agent_session","arguments":{"workspaceId":"ws_example","runtimeId":"claude-code","displayName":"Investigate flaky CI"}}}'
 ```
 
 ### Reading agent output and sending follow-ups
@@ -63,7 +63,7 @@ curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_agent_sessions","arguments":{}}}'
 
-# Read the latest terminal output (transcript) of a specific session,
+# Read the latest terminal output (transcript) of a specific agent session,
 # bounded by lines and maxChars so the response stays small.
 curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
   -H 'content-type: application/json' \
@@ -98,7 +98,7 @@ Interactive terminals in the cockpit use Citadel's xterm.js WebSocket renderer. 
 - The cockpit opens `ws(s)://<host>/terminal/<sessionId>` for the renderer. No terminal iframe or external renderer process is created for normal workspace switching.
 - Input/output bytes move as binary WebSocket frames. JSON control messages are reserved for resize and error/exit notifications.
 - Closing or refreshing the browser pane kills only the disposable viewer process; the tmux session and agent continue.
-- Stopping a Citadel session (`DELETE /api/agent-sessions/:id`) kills the durable tmux session.
+- Stopping a workspace session (`DELETE /api/workspace-sessions/:id`) kills the durable tmux session.
 - The terminal reaper periodically detaches orphaned tmux clients whose owning viewer process is gone.
 
 **Diagnostics:**

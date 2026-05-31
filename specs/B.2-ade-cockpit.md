@@ -52,9 +52,9 @@
 ## Center Stage Sessions
 
 [ ] 1. The center column shows the workspace's sessions/chats as tabs along the top.
-[ ] 2. A plus button next to the tabs adds a new session: pick a plain `Terminal` or one of the configured agent runtimes. The button is rendered immediately to the right of the last tab (not pushed to the far edge), and the button + menu sit outside the horizontally scrollable tab strip so the menu is never clipped. Keyboard equivalents are `Cmd+T` (Terminal) and `Cmd+E` (default agent runtime); the menu item next to each runtime displays the chord.
-[ ] 3. Selecting `Terminal` creates an empty shell session in the workspace worktree.
-[ ] 4. Each session tab has an editable title. Default titles are the agent runtime display name or `Terminal`.
+[ ] 2. A plus button next to the tabs adds a new workspace session: pick the configured `Terminal` profile or one of the configured agent runtimes. The button is rendered immediately to the right of the last tab (not pushed to the far edge), and the button + menu sit outside the horizontally scrollable tab strip so the menu is never clipped. Keyboard equivalents are `Cmd+T` (Terminal) and `Cmd+E` (default agent runtime); the menu item next to each runtime displays the chord.
+[ ] 3. Selecting `Terminal` calls the terminal-session REST endpoint and creates a `kind: "terminal"` workspace session in the workspace worktree.
+[ ] 4. Selecting an agent runtime calls the agent-session REST endpoint and creates a `kind: "agent"` workspace session. Each session tab has an editable title. Default titles are the agent runtime display name or `Terminal`.
 [ ] 5. When a workspace is created with an associated default agent, the cockpit opens that agent automatically in a new session tab.
 [ ] 6. The selected session occupies the rest of the column height.
 [x] 7. Terminal keyboard shortcuts pass through to the active terminal by default. The terminal pane intercepts a small, named allow-list of cockpit shortcuts (see §Keyboard Shortcuts) before xterm consumes them and posts the same terminal shortcut message path used by the cockpit; everything else is delivered to xterm/tmux unchanged.

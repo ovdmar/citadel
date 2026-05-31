@@ -1,4 +1,4 @@
-import type { AgentSession, Namespace, Operation, PullRequestSummary, Repo, Workspace } from "@citadel/contracts";
+import type { Namespace, Operation, PullRequestSummary, Repo, Workspace, WorkspaceSession } from "@citadel/contracts";
 import { type LifecycleTone, deriveWorkspaceLifecycleTone } from "@citadel/core";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
@@ -36,13 +36,13 @@ import { applyLocalOrder, loadOrder, pruneOrder, saveOrder, spliceIntoOrder } fr
 import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { WorkspaceCard, lifecycleToneClass } from "./workspace-card.js";
 
-function runningCount(sessions: AgentSession[]): number {
-  return sessions.filter((session) => session.status === "running").length;
+function runningCount(sessions: WorkspaceSession[]): number {
+  return sessions.filter((session) => session.kind === "agent" && session.status === "running").length;
 }
 
 export function aggregateNavigatorTone(
   workspaces: Workspace[],
-  sessions: AgentSession[],
+  sessions: WorkspaceSession[],
   prByWorkspaceId?: Map<string, PullRequestSummary | null>,
 ): LifecycleTone {
   let aggregate: LifecycleTone = "never-started";
@@ -61,7 +61,7 @@ export function aggregateNavigatorTone(
 export function Navigator(props: {
   repos: Repo[];
   workspaces: Workspace[];
-  sessions: AgentSession[];
+  sessions: WorkspaceSession[];
   operations: Operation[];
   prByWorkspaceId: Map<string, PullRequestSummary | null>;
   activeWorkspaceId: string;

@@ -1,4 +1,4 @@
-import type { AgentSession } from "@citadel/contracts";
+import type { TerminalSession } from "@citadel/contracts";
 import { flushSync } from "react-dom";
 import type { Root } from "react-dom/client";
 import { vi } from "vitest";
@@ -155,13 +155,14 @@ export function selectTextInside(host: HTMLElement, text: string) {
   selection?.addRange(range);
 }
 
-export function sessionFixture(): AgentSession {
+export function sessionFixture(): TerminalSession {
   return {
     id: "sess_1",
     workspaceId: "ws_1",
-    runtimeId: "shell",
+    kind: "terminal",
+    runtimeId: null,
     displayName: "Terminal",
-    status: "idle",
+    status: "running",
     transport: "connected",
     tmuxSessionName: "citadel_sess_1",
     tmuxSessionId: "tmux_1",

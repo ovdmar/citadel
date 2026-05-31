@@ -1,4 +1,4 @@
-import type { RuntimeConfig } from "@citadel/config";
+import type { AgentRuntimeConfig } from "@citadel/config";
 import type { AgentSession, Repo, Workspace } from "@citadel/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { buildDispatchAgentHookDeps, defaultPromptRuntimeId, dispatchAgentHook } from "./dispatch-agent-hook.js";
@@ -7,7 +7,7 @@ const fakeWorkspace = { id: "ws_test", path: "/tmp/ws", repoId: "repo_test" } as
 const fakeRepo = { id: "repo_test", name: "repo" } as unknown as Repo;
 const fakeSession = { id: "agent_session_xyz" } as unknown as AgentSession;
 
-const claudeRuntime: RuntimeConfig = {
+const claudeRuntime: AgentRuntimeConfig = {
   id: "claude-code",
   displayName: "Claude Code",
   command: "claude",
@@ -15,7 +15,7 @@ const claudeRuntime: RuntimeConfig = {
   supportsPrompt: true,
 };
 
-const codexRuntime: RuntimeConfig = {
+const codexRuntime: AgentRuntimeConfig = {
   id: "codex",
   displayName: "Codex",
   command: "codex",
@@ -23,9 +23,9 @@ const codexRuntime: RuntimeConfig = {
   supportsPrompt: true,
 };
 
-const shellRuntime: RuntimeConfig = {
-  id: "shell",
-  displayName: "Shell",
+const bashRuntime: AgentRuntimeConfig = {
+  id: "bash-debug",
+  displayName: "Bash Debug",
   command: "bash",
   args: ["-l"],
 };
@@ -72,10 +72,10 @@ describe("dispatchAgentHook", () => {
 
   it("falls back to the first supportsPrompt runtime when frontmatter omits runtime", async () => {
     const createAgentSession = vi.fn().mockResolvedValue(fakeSession);
-    // shell first but doesn't support prompt; codex second is the first
+    // bash first but doesn't support prompt; codex second is the first
     // supports-prompt runtime — that's the chosen default.
     await dispatchAgentHook(
-      { runtimes: [shellRuntime, codexRuntime, claudeRuntime], createAgentSession },
+      { runtimes: [bashRuntime, codexRuntime, claudeRuntime], createAgentSession },
       {
         workspace: fakeWorkspace,
         repo: fakeRepo,
@@ -169,19 +169,19 @@ describe("dispatchAgentHook — failure modes", () => {
 describe("buildDispatchAgentHookDeps", () => {
   const stubCreateAgentSession = vi.fn().mockResolvedValue(fakeSession);
 
-  it("falls back to [] when config is undefined (no crash on .runtimes.find)", () => {
+  it("falls back to [] when config is undefined (no crash on .agentRuntimes.find)", () => {
     const deps = buildDispatchAgentHookDeps(undefined, stubCreateAgentSession);
     expect(deps.runtimes).toEqual([]);
     expect(deps.createAgentSession).toBe(stubCreateAgentSession);
   });
 
-  it("falls back to [] when config exists but runtimes field is omitted", () => {
+  it("falls back to [] when config exists but agentRuntimes field is omitted", () => {
     const deps = buildDispatchAgentHookDeps({}, stubCreateAgentSession);
     expect(deps.runtimes).toEqual([]);
   });
 
   it("threads the configured runtimes through unchanged", () => {
-    const deps = buildDispatchAgentHookDeps({ runtimes: [claudeRuntime, codexRuntime] }, stubCreateAgentSession);
+    const deps = buildDispatchAgentHookDeps({ agentRuntimes: [claudeRuntime, codexRuntime] }, stubCreateAgentSession);
     expect(deps.runtimes).toEqual([claudeRuntime, codexRuntime]);
   });
 
@@ -189,7 +189,7 @@ describe("buildDispatchAgentHookDeps", () => {
     // Closes the operations/index.ts wiring gap: this is the exact shape
     // OperationService passes to dispatchAgentHookImpl.
     const createAgentSession = vi.fn().mockResolvedValue(fakeSession);
-    const deps = buildDispatchAgentHookDeps({ runtimes: [claudeRuntime] }, createAgentSession);
+    const deps = buildDispatchAgentHookDeps({ agentRuntimes: [claudeRuntime] }, createAgentSession);
     const result = await dispatchAgentHook(deps, {
       workspace: fakeWorkspace,
       repo: fakeRepo,
@@ -205,11 +205,11 @@ describe("buildDispatchAgentHookDeps", () => {
 
 describe("defaultPromptRuntimeId", () => {
   it("returns the first supportsPrompt runtime", () => {
-    expect(defaultPromptRuntimeId([shellRuntime, codexRuntime, claudeRuntime])).toBe("codex");
+    expect(defaultPromptRuntimeId([bashRuntime, codexRuntime, claudeRuntime])).toBe("codex");
   });
 
   it("falls back to 'claude-code' when no runtime supports prompt", () => {
-    expect(defaultPromptRuntimeId([shellRuntime])).toBe("claude-code");
+    expect(defaultPromptRuntimeId([bashRuntime])).toBe("claude-code");
   });
 
   it("falls back to 'claude-code' when the list is empty", () => {

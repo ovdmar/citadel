@@ -65,6 +65,7 @@ function session(overrides: Partial<AgentSession> = {}): AgentSession {
     createdAt: "2026-05-26T00:00:00.000Z",
     updatedAt: "2026-05-26T00:00:00.000Z",
     ...overrides,
+    kind: "agent",
   };
 }
 
@@ -74,7 +75,9 @@ function deps() {
     updateSessionStatus: vi.fn(),
   };
   const config = {
-    runtimes: [
+    dataDir: "/tmp/citadel-test",
+    terminal: { displayName: "Terminal", command: "bash", args: ["-l"] },
+    agentRuntimes: [
       {
         id: "claude-code",
         command: "claude",

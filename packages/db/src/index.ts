@@ -9,19 +9,14 @@ import type {
   Operation,
   OperationLogEntry,
   Repo,
-  ScheduledAgent,
   Workspace,
+  WorkspaceSession,
 } from "@citadel/contracts";
 import { runMigrations } from "./migrate.js";
+
+export { CURRENT_SCHEMA_VERSION } from "./migrate.js";
 import * as namespaces from "./namespaces.js";
-import {
-  activityFromRow,
-  operationFromRow,
-  repoFromRow,
-  scheduledAgentFromRow,
-  sessionFromRow,
-  workspaceFromRow,
-} from "./rows.js";
+import { activityFromRow, operationFromRow, repoFromRow, sessionFromRow, workspaceFromRow } from "./rows.js";
 import {
   type WorkspacePrSnapshot,
   getWorkspacePrSnapshot,
@@ -38,17 +33,13 @@ export type SqliteDatabase = {
   prepare(sql: string): SqliteStatement;
   close(): void;
 };
+type LegacyAgentSessionInput = Omit<AgentSession, "kind"> & { kind?: "agent" };
+type WorkspaceSessionInput = WorkspaceSession | LegacyAgentSessionInput;
 export type SqliteStatement = {
   all(...params: unknown[]): unknown[];
   get(...params: unknown[]): unknown;
   run(...params: unknown[]): { changes: number };
 };
-
-// Sentinel cron written for one-shot rows. Must never match a real minute:
-// dom=31 + mon=2 with dow wild yields cronMatches() === false for every date
-// (Feb has no 31st). Earlier "0 0 31 2 0" was unsafe because dom/dow
-// non-wild use OR semantics and would fire every Sunday in February.
-const ONE_SHOT_CRON_PLACEHOLDER = "0 0 31 2 *";
 
 let DatabaseSyncCtor: DatabaseSyncCtor | null = null;
 function loadDatabaseSync(): DatabaseSyncCtor {
@@ -276,7 +267,7 @@ export class SqliteStore {
       .run(lifecycle, dirty ? 1 : 0, now, now, workspaceId);
   }
 
-  // Hard-delete a workspace row and its agent sessions. Used when a worktree
+  // Hard-delete a workspace row and its workspace sessions. Used when a worktree
   // was actually removed from disk so the (repo_id, name) UNIQUE slot can be
   // reused immediately — archiveWorkspace leaves the row in place and would
   // block recreation under the same name.
@@ -360,7 +351,7 @@ export class SqliteStore {
       .run(now, now, repoId);
   }
 
-  listSessions(workspaceId?: string): AgentSession[] {
+  listWorkspaceSessions(workspaceId?: string): WorkspaceSession[] {
     const stmt = workspaceId
       ? this.database.prepare("SELECT * FROM workspace_sessions WHERE workspace_id = ? ORDER BY updated_at DESC")
       : this.database.prepare("SELECT * FROM workspace_sessions ORDER BY updated_at DESC");
@@ -368,8 +359,14 @@ export class SqliteStore {
     return rows.map(sessionFromRow);
   }
 
-  insertSession(session: AgentSession) {
-    const isTerminalSession = session.runtimeId === "shell";
+  listSessions(workspaceId?: string): AgentSession[] {
+    return this.listWorkspaceSessions(workspaceId).filter(
+      (session): session is AgentSession => session.kind === "agent",
+    );
+  }
+
+  insertWorkspaceSession(session: WorkspaceSessionInput) {
+    const kind = session.kind ?? "agent";
     this.database
       .prepare(
         `INSERT INTO workspace_sessions (id, workspace_id, kind, runtime_id, display_name, status, status_reason,
@@ -383,8 +380,8 @@ export class SqliteStore {
       .run(
         session.id,
         session.workspaceId,
-        isTerminalSession ? "terminal" : "agent",
-        isTerminalSession ? null : session.runtimeId,
+        kind,
+        session.runtimeId,
         session.displayName,
         session.status,
         session.statusReason ?? null,
@@ -414,9 +411,13 @@ export class SqliteStore {
       );
   }
 
+  insertSession(session: LegacyAgentSessionInput) {
+    this.insertWorkspaceSession(session);
+  }
+
   // Write the runtime-native session UUID onto an existing row. Used by the
   // backfill / Settings-restore flow to link a pre-existing on-disk transcript
-  // (e.g. Claude Code's <uuid>.jsonl) to an agent_session row so the next
+  // (e.g. Claude Code's <uuid>.jsonl) to a workspace_session row so the next
   // respawn picks it up via --resume.
   setSessionRuntimeSessionId(sessionId: string, runtimeSessionId: string | null) {
     this.database
@@ -509,14 +510,22 @@ export class SqliteStore {
     this.database.prepare(`UPDATE workspace_sessions SET ${sets.join(", ")} WHERE id = ?`).run(...values);
   }
 
-  updateSessionDisplayName(sessionId: string, displayName: string) {
+  updateWorkspaceSessionDisplayName(sessionId: string, displayName: string) {
     this.database
       .prepare("UPDATE workspace_sessions SET display_name = ?, updated_at = ? WHERE id = ?")
       .run(displayName, new Date().toISOString(), sessionId);
   }
 
-  deleteSession(sessionId: string) {
+  updateSessionDisplayName(sessionId: string, displayName: string) {
+    this.updateWorkspaceSessionDisplayName(sessionId, displayName);
+  }
+
+  deleteWorkspaceSession(sessionId: string) {
     this.database.prepare("DELETE FROM workspace_sessions WHERE id = ?").run(sessionId);
+  }
+
+  deleteSession(sessionId: string) {
+    this.deleteWorkspaceSession(sessionId);
   }
 
   upsertOperation(operation: Operation) {
@@ -562,6 +571,20 @@ export class SqliteStore {
     return rows.map(operationFromRow);
   }
 
+  // Used by the doctor to surface the daemon's current schema_migrations
+  // version. Cheap query (single bounded scan); the doctor short-circuits to
+  // skipped when the table is missing.
+  listSchemaMigrations(): Array<{ version: number; name: string; appliedAt: string }> {
+    try {
+      const rows = this.database
+        .prepare("SELECT version, name, applied_at FROM schema_migrations ORDER BY version ASC")
+        .all() as Array<{ version: number; name: string; applied_at: string }>;
+      return rows.map((r) => ({ version: r.version, name: r.name, appliedAt: r.applied_at }));
+    } catch {
+      return [];
+    }
+  }
+
   findOperation(operationId: string): Operation | null {
     const row = this.database.prepare("SELECT * FROM operations WHERE id = ?").get(operationId);
     if (!row) return null;
@@ -596,192 +619,6 @@ export class SqliteStore {
     return rows.map(activityFromRow);
   }
 
-  listScheduledAgents(): ScheduledAgent[] {
-    const rows = this.database.prepare("SELECT * FROM scheduled_agents ORDER BY created_at DESC").all() as Array<
-      Record<string, unknown>
-    >;
-    return rows.map(scheduledAgentFromRow);
-  }
-
-  findScheduledAgent(id: string): ScheduledAgent | null {
-    const row = this.database.prepare("SELECT * FROM scheduled_agents WHERE id = ?").get(id);
-    if (!row) return null;
-    return scheduledAgentFromRow(row as Record<string, unknown>);
-  }
-
-  insertScheduledAgent(agent: ScheduledAgent) {
-    // cron is NOT NULL at the DB level. One-shot rows store a sentinel that
-    // never matches a real minute so the recurring tick is a no-op for them.
-    const cronColumn = agent.cron ?? ONE_SHOT_CRON_PLACEHOLDER;
-    this.database
-      .prepare(
-        `INSERT INTO scheduled_agents (id, name, description, cron, schedule_type, run_at, repo_id, runtime_id, prompt,
-          workspace_strategy, workspace_name, base_branch, run_mode, background_cwd, overlap_policy,
-          enabled, last_run_at, last_run_status,
-          last_run_message, last_workspace_id, last_session_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        agent.id,
-        agent.name,
-        agent.description ?? null,
-        cronColumn,
-        agent.scheduleType,
-        agent.runAt ?? null,
-        agent.repoId,
-        agent.runtimeId,
-        agent.prompt ?? null,
-        agent.workspaceStrategy,
-        agent.workspaceName,
-        agent.baseBranch ?? null,
-        agent.runMode,
-        agent.backgroundCwd ?? null,
-        agent.overlapPolicy,
-        agent.enabled ? 1 : 0,
-        agent.lastRunAt ?? null,
-        agent.lastRunStatus,
-        agent.lastRunMessage ?? null,
-        agent.lastWorkspaceId ?? null,
-        agent.lastSessionId ?? null,
-        agent.createdAt,
-        agent.updatedAt,
-      );
-  }
-
-  updateScheduledAgent(
-    id: string,
-    patch: Partial<
-      Pick<
-        ScheduledAgent,
-        | "name"
-        | "description"
-        | "scheduleType"
-        | "cron"
-        | "runAt"
-        | "repoId"
-        | "runtimeId"
-        | "prompt"
-        | "workspaceStrategy"
-        | "workspaceName"
-        | "baseBranch"
-        | "runMode"
-        | "backgroundCwd"
-        | "overlapPolicy"
-        | "enabled"
-      >
-    >,
-  ): ScheduledAgent | null {
-    const existing = this.findScheduledAgent(id);
-    if (!existing) return null;
-    const next: ScheduledAgent = {
-      ...existing,
-      ...patch,
-      description: patch.description !== undefined ? patch.description : existing.description,
-      prompt: patch.prompt !== undefined ? patch.prompt : existing.prompt,
-      baseBranch: patch.baseBranch !== undefined ? patch.baseBranch : existing.baseBranch,
-      runAt: patch.runAt !== undefined ? patch.runAt : existing.runAt,
-      cron: patch.cron !== undefined ? patch.cron : existing.cron,
-      backgroundCwd: patch.backgroundCwd !== undefined ? patch.backgroundCwd : existing.backgroundCwd,
-      updatedAt: new Date().toISOString(),
-    };
-    const cronColumn = next.cron ?? ONE_SHOT_CRON_PLACEHOLDER;
-    this.database
-      .prepare(
-        `UPDATE scheduled_agents SET name = ?, description = ?, cron = ?, schedule_type = ?, run_at = ?,
-          repo_id = ?, runtime_id = ?, prompt = ?, workspace_strategy = ?, workspace_name = ?,
-          base_branch = ?, run_mode = ?, background_cwd = ?, overlap_policy = ?, enabled = ?, updated_at = ?
-          WHERE id = ?`,
-      )
-      .run(
-        next.name,
-        next.description ?? null,
-        cronColumn,
-        next.scheduleType,
-        next.runAt ?? null,
-        next.repoId,
-        next.runtimeId,
-        next.prompt ?? null,
-        next.workspaceStrategy,
-        next.workspaceName,
-        next.baseBranch ?? null,
-        next.runMode,
-        next.backgroundCwd ?? null,
-        next.overlapPolicy,
-        next.enabled ? 1 : 0,
-        next.updatedAt,
-        id,
-      );
-    return next;
-  }
-
-  recordScheduledAgentRun(
-    id: string,
-    update: {
-      lastRunAt: string;
-      lastRunStatus: ScheduledAgent["lastRunStatus"];
-      lastRunMessage?: string | null;
-      lastWorkspaceId?: string | null;
-      lastSessionId?: string | null;
-    },
-  ): ScheduledAgent | null {
-    const existing = this.findScheduledAgent(id);
-    if (!existing) return null;
-    const next: ScheduledAgent = {
-      ...existing,
-      lastRunAt: update.lastRunAt,
-      lastRunStatus: update.lastRunStatus,
-      lastRunMessage: update.lastRunMessage !== undefined ? update.lastRunMessage : existing.lastRunMessage,
-      lastWorkspaceId: update.lastWorkspaceId !== undefined ? update.lastWorkspaceId : existing.lastWorkspaceId,
-      lastSessionId: update.lastSessionId !== undefined ? update.lastSessionId : existing.lastSessionId,
-      updatedAt: new Date().toISOString(),
-    };
-    this.database
-      .prepare(
-        `UPDATE scheduled_agents SET last_run_at = ?, last_run_status = ?, last_run_message = ?,
-          last_workspace_id = ?, last_session_id = ?, updated_at = ? WHERE id = ?`,
-      )
-      .run(
-        next.lastRunAt,
-        next.lastRunStatus,
-        next.lastRunMessage ?? null,
-        next.lastWorkspaceId ?? null,
-        next.lastSessionId ?? null,
-        next.updatedAt,
-        id,
-      );
-    return next;
-  }
-
-  deleteScheduledAgent(id: string) {
-    this.database.prepare("DELETE FROM scheduled_agents WHERE id = ?").run(id);
-  }
-
-  /**
-   * Reset the run tracking on a scheduled agent without recording a new run.
-   * Used when the user PATCHes a one-shot's schedule and we need the tick
-   * guard to treat the agent as un-fired again.
-   */
-  resetScheduledAgentRun(id: string): ScheduledAgent | null {
-    const existing = this.findScheduledAgent(id);
-    if (!existing) return null;
-    const next: ScheduledAgent = {
-      ...existing,
-      lastRunAt: null,
-      lastRunStatus: "never",
-      lastRunMessage: null,
-      lastWorkspaceId: null,
-      lastSessionId: null,
-      updatedAt: new Date().toISOString(),
-    };
-    this.database
-      .prepare(
-        `UPDATE scheduled_agents SET last_run_at = NULL, last_run_status = 'never', last_run_message = NULL,
-          last_workspace_id = NULL, last_session_id = NULL, updated_at = ? WHERE id = ?`,
-      )
-      .run(next.updatedAt, id);
-    return next;
-  }
-
   private ensureColumn(table: string, column: string, definition: string) {
     const cols = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (!cols.some((entry) => entry.name === column)) {
@@ -789,6 +626,9 @@ export class SqliteStore {
     }
   }
 }
+import { scheduledAgentStoreMethods } from "./scheduled-agent-store.js";
+Object.assign(SqliteStore.prototype, scheduledAgentStoreMethods);
+
 // Attach the scheduled_agent_runs and background_sessions methods to
 // SqliteStore.prototype. The implementations live in scheduled-run-store.ts
 // (kept separate to stay under the per-file line budget); the type

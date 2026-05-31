@@ -18,7 +18,7 @@ vi.mock("@citadel/terminal", () => ({
 
 function fakeStore(sessionNames: string[] = []): SqliteStore {
   return {
-    listSessions: () => sessionNames.map((tmuxSessionName) => ({ tmuxSessionName })),
+    listWorkspaceSessions: () => sessionNames.map((tmuxSessionName) => ({ tmuxSessionName })),
   } as unknown as SqliteStore;
 }
 

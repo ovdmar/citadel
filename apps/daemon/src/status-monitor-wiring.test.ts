@@ -27,7 +27,7 @@ describe("buildStatusMonitorDeps — shell-first wiring", () => {
     fs.rmSync(tmpDbDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 
-  function makeConfig(runtimes: Array<{ id: string; command: string }>): CitadelConfig {
+  function makeConfig(agentRuntimes: Array<{ id: string; command: string }>): CitadelConfig {
     return {
       version: 1,
       dataDir: tmpDbDir,
@@ -39,7 +39,8 @@ describe("buildStatusMonitorDeps — shell-first wiring", () => {
         github: { enabled: false, command: "gh" },
         jira: { enabled: false, command: "jtk", autoTransitions: [] },
       },
-      runtimes: runtimes.map((r) => ({ ...r, args: [], displayName: r.id })),
+      agentRuntimes: agentRuntimes.map((r) => ({ ...r, args: [], displayName: r.id })),
+      terminal: { displayName: "Terminal", command: "bash", args: ["-l"] },
     } as unknown as CitadelConfig;
   }
 
@@ -57,13 +58,13 @@ describe("buildStatusMonitorDeps — shell-first wiring", () => {
       makeConfig([
         { id: "claude-code", command: "claude" },
         { id: "codex", command: "codex" },
-        { id: "shell", command: "bash" },
+        { id: "bash-debug", command: "bash" },
       ]),
       recent,
     );
     expect(deps.runtimeBinaryFor("claude-code")).toBe("claude");
     expect(deps.runtimeBinaryFor("codex")).toBe("codex");
-    expect(deps.runtimeBinaryFor("shell")).toBe("bash");
+    expect(deps.runtimeBinaryFor("bash-debug")).toBe("bash");
     expect(deps.runtimeBinaryFor("unknown-runtime")).toBeNull();
   });
 

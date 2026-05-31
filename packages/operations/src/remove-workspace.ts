@@ -149,7 +149,7 @@ export async function removeWorkspaceImpl(
     }
   }
 
-  const ownedSessions = deps.store.listSessions(workspace.id);
+  const ownedSessions = deps.store.listWorkspaceSessions(workspace.id);
   for (const session of ownedSessions) {
     if (session.tmuxSessionName && !input.archiveOnly)
       killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);

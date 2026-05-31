@@ -1,5 +1,5 @@
 // Restore lost agent conversations. Sources its candidate list from the DB —
-// every agent_sessions row whose runtime emitted a UUID (claude-code via
+// every workspace_sessions row whose runtime emitted a UUID (claude-code via
 // --session-id, codex via discoverCodexSessionId, or backfilled from a
 // transcript scan) is potentially resumable. We surface as candidates the
 // workspaces whose most-recent session is stopped + has a recorded UUID,
@@ -90,7 +90,7 @@ export function registerRestoreRoutes(app: express.Express, deps: Deps) {
       const live = sessions.find((s) => s.runtimeSessionId === candidate.runtimeSessionId && isLive(s));
       if (live) return res.status(409).json({ error: "session_already_live", sessionId: live.id });
 
-      const runtime = config.runtimes.find((r) => r.id === candidate.runtimeId);
+      const runtime = config.agentRuntimes.find((r) => r.id === candidate.runtimeId);
       if (!runtime) return res.status(404).json({ error: "runtime_not_found", runtimeId: candidate.runtimeId });
       if (!runtime.resumeArg) {
         return res.status(400).json({ error: "runtime_does_not_support_resume", runtimeId: candidate.runtimeId });

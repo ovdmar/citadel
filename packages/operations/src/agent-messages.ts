@@ -24,6 +24,7 @@ export type TranscriptResult = {
 
 export type TranscriptErrorResult =
   | { ok: false; error: "session_not_found" }
+  | { ok: false; error: "session_not_agent" }
   | { ok: false; error: "session_has_no_terminal" }
   | ({ ok: false; error: string } & {
       sessionId: string;
@@ -58,8 +59,9 @@ export function readAgentTranscript(
   store: SqliteStore,
   input: { sessionId: string; lines?: number; maxChars?: number },
 ): TranscriptResult | TranscriptErrorResult {
-  const session = store.listSessions().find((candidate) => candidate.id === input.sessionId);
+  const session = store.listWorkspaceSessions().find((candidate) => candidate.id === input.sessionId);
   if (!session) return { ok: false, error: "session_not_found" };
+  if (session.kind !== "agent") return { ok: false, error: "session_not_agent" };
   if (!session.tmuxSessionName) return { ok: false, error: "session_has_no_terminal" };
   const captureOptions: { lines?: number; maxChars?: number; socketName?: string | null } = {
     socketName: session.tmuxSocketName ?? null,
@@ -82,8 +84,9 @@ export async function sendAgentMessage(
   store: SqliteStore,
   input: { sessionId: string; message: string; source?: SendMessageSource; optimistic?: boolean },
 ): Promise<SendMessageResult> {
-  const session = store.listSessions().find((candidate) => candidate.id === input.sessionId);
+  const session = store.listWorkspaceSessions().find((candidate) => candidate.id === input.sessionId);
   if (!session) return { ok: false, error: "session_not_found" };
+  if (session.kind !== "agent") return { ok: false, error: "session_not_agent" };
   if (!session.tmuxSessionName) return { ok: false, error: "session_has_no_terminal" };
   if (!acceptingStates.has(session.status)) {
     return { ok: false, sessionId: session.id, status: session.status, error: "session_not_accepting_input" };
@@ -94,14 +97,11 @@ export async function sendAgentMessage(
   // just exited would still read as "running" but the foreground is bash,
   // and a paste here would land in the shell prompt instead of the TUI.
   //
-  // EXCEPTION: for the `shell` runtime (Plain Terminal), bash IS the
-  // runtime — a shell foreground is the normal state, not "agent stopped".
-  // Skip the check there.
   const pane = panePidProcess(session.tmuxSessionName, session.tmuxSocketName ?? null);
   if (pane === null) {
     return { ok: false, sessionId: session.id, status: session.status, error: "session_has_no_terminal" };
   }
-  if (session.runtimeId !== "shell" && SHELL_BINARIES.has(pane.command)) {
+  if (SHELL_BINARIES.has(pane.command)) {
     return { ok: false, sessionId: session.id, status: session.status, error: "session_not_accepting_input" };
   }
   const source: SendMessageSource = input.source ?? "user";

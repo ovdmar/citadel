@@ -85,7 +85,7 @@ export function registerMcpRoutes(
                   typeof request.params?.protocolVersion === "string" && request.params.protocolVersion === "2024-11-05"
                     ? request.params.protocolVersion
                     : "2024-11-05",
-                serverInfo: { name: "citadel", version: "0.2.0" },
+                serverInfo: { name: "citadel", version: "0.3.0" },
                 capabilities: { resources: {}, tools: {} },
               }),
             );

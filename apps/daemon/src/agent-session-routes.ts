@@ -1,5 +1,5 @@
 import type { CitadelConfig } from "@citadel/config";
-import { CreateAgentSessionInputSchema } from "@citadel/contracts";
+import { CreateAgentSessionInputSchema, CreateTerminalSessionInputSchema } from "@citadel/contracts";
 import type { OperationService } from "@citadel/operations";
 import type express from "express";
 
@@ -26,7 +26,7 @@ export function registerAgentSessionRoutes(app: express.Express, deps: Deps) {
     "/api/agent-sessions",
     asyncRoute(async (req, res) => {
       const input = CreateAgentSessionInputSchema.parse(req.body);
-      const runtime = config.runtimes.find((candidate) => candidate.id === input.runtimeId);
+      const runtime = config.agentRuntimes.find((candidate) => candidate.id === input.runtimeId);
       if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
       const session = await operations.createAgentSession(input, {
         command: runtime.command,
@@ -41,6 +41,18 @@ export function registerAgentSessionRoutes(app: express.Express, deps: Deps) {
     }),
   );
 
+  app.post(
+    "/api/workspaces/:workspaceId/terminal-sessions",
+    asyncRoute(async (req, res) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      const input = CreateTerminalSessionInputSchema.parse({ ...(req.body ?? {}), workspaceId });
+      const session = await operations.createTerminalSession(input);
+      emit("terminal.updated", { workspaceId: session.workspaceId, sessionId: session.id });
+      res.status(202).json({ session });
+    }),
+  );
+
   app.delete(
     "/api/agent-sessions/:sessionId",
     asyncRoute(async (req, res) => {
@@ -49,6 +61,18 @@ export function registerAgentSessionRoutes(app: express.Express, deps: Deps) {
       const result = operations.stopAgentSession({ sessionId });
       if (!result.stopped) return res.status(404).json(result);
       emit("agent.updated", { sessionId });
+      res.status(202).json(result);
+    }),
+  );
+
+  app.delete(
+    "/api/workspace-sessions/:sessionId",
+    asyncRoute(async (req, res) => {
+      const sessionId = req.params.sessionId;
+      if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
+      const result = operations.stopWorkspaceSession({ sessionId });
+      if (!result.stopped) return res.status(404).json(result);
+      emit("workspace-session.updated", { sessionId });
       res.status(202).json(result);
     }),
   );

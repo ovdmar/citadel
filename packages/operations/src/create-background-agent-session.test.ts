@@ -40,8 +40,8 @@ describe("createBackgroundAgentSession", () => {
       { store, activity: () => {} },
       {
         cwd: "/tmp/bg-test",
-        runtimeId: "shell",
-        runtime: { command: "bash", args: ["-lc", "true"], displayName: "Shell", promptArg: null },
+        runtimeId: "test-agent",
+        runtime: { command: "bash", args: ["-lc", "true"], displayName: "Test Agent", promptArg: null },
         scheduledAgentId: "sched_x",
         logFilePath: "/tmp/bg-test/run.log",
       },
@@ -64,8 +64,8 @@ describe("createBackgroundAgentSession", () => {
         { store, activity: () => {} },
         {
           cwd: "/tmp/bg-fail",
-          runtimeId: "shell",
-          runtime: { command: "bash", args: [], displayName: "Shell", promptArg: null },
+          runtimeId: "test-agent",
+          runtime: { command: "bash", args: [], displayName: "Test Agent", promptArg: null },
           scheduledAgentId: "sched_pipe_fail",
           logFilePath: "/tmp/bg-fail/run.log",
         },
@@ -91,8 +91,8 @@ describe("createBackgroundAgentSession", () => {
         { store, activity: () => {} },
         {
           cwd: "/tmp/bg-fail-insert",
-          runtimeId: "shell",
-          runtime: { command: "bash", args: [], displayName: "Shell", promptArg: null },
+          runtimeId: "test-agent",
+          runtime: { command: "bash", args: [], displayName: "Test Agent", promptArg: null },
           scheduledAgentId: "sched_insert_fail",
           logFilePath: "/tmp/bg-fail-insert/run.log",
         },
@@ -128,8 +128,8 @@ describe("createBackgroundAgentSession", () => {
       { store, activity: () => {} },
       {
         cwd: "/tmp/bg-paste",
-        runtimeId: "shell",
-        runtime: { command: "bash", args: [], displayName: "Shell", promptArg: null },
+        runtimeId: "test-agent",
+        runtime: { command: "bash", args: [], displayName: "Test Agent", promptArg: null },
         prompt: "echo hi",
         scheduledAgentId: "sched_paste",
         logFilePath: "/tmp/bg-paste/run.log",

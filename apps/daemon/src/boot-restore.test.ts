@@ -219,7 +219,7 @@ describe("runBootRestore", () => {
     const { config, store } = fixture();
     // Wipe runtimes so the lookup fails for our claude-code candidate;
     // the loop should mark it failed and continue.
-    config.runtimes = [];
+    config.agentRuntimes = [];
     insertLiveSession(store, { id: "sess_a", uuid: "uuid-aaaa", ageMs: 5 * 60_000 });
     insertLiveSession(store, { id: "sess_b", uuid: "uuid-bbbb", ageMs: 5 * 60_000 });
     const spawned: Array<{ workspaceId: string; resumeRuntimeSessionId: string | null; tabId: string | null }> = [];

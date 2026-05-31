@@ -215,10 +215,10 @@ async function createWorkspace(repoId: string, name: string) {
 }
 
 async function startSession(workspaceId: string, displayName: string) {
-  const response = await fetch(`${apiBaseUrl}/api/agent-sessions`, {
+  const response = await fetch(`${apiBaseUrl}/api/workspaces/${workspaceId}/terminal-sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ workspaceId, runtimeId: "shell", displayName }),
+    body: JSON.stringify({ displayName }),
   });
   if (!response.ok) throw new Error(`session create returned ${response.status}`);
   return ((await response.json()) as { session: { id: string } }).session;

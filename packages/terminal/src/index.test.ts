@@ -142,26 +142,41 @@ describe("tmux terminal gateway helpers", () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
     dirs.push(cwd);
     const sessionName = `citadel_extkeys_${Date.now().toString(36)}`;
-    sessions.push(sessionName);
-    await ensureTmuxSession({
-      sessionName,
-      cwd,
-    });
+    const socketName = `citadel-extkeys-${process.pid}-${Date.now().toString(36)}`;
+    const originalSocket = process.env.CITADEL_TMUX_SOCKET;
+    try {
+      process.env.CITADEL_TMUX_SOCKET = socketName;
+      await ensureTmuxSession({
+        sessionName,
+        cwd,
+      });
 
-    ensureTmuxExtendedKeys();
+      ensureTmuxExtendedKeys();
 
-    const extendedKeys = execTmux(["show-options", "-s", "-g", "extended-keys"]);
-    const extendedKeysFormat = maybeExecTmux(["show-options", "-s", "-g", "extended-keys-format"]);
-    const terminalFeatures = execTmux(["show-options", "-s", "-g", "terminal-features"]);
-    const historyLimit = execTmux(["show-options", "-g", "history-limit"]);
-    const mouse = execTmux(["show-options", "-g", "mouse"]);
-    const clipboard = execTmux(["show-options", "-g", "set-clipboard"]);
-    expect(extendedKeys).toContain("extended-keys on");
-    if (extendedKeysFormat) expect(extendedKeysFormat).toContain("extended-keys-format csi-u");
-    expect(terminalFeatures).toMatch(/xterm\*.*extkeys/);
-    expect(historyLimit).toContain(`history-limit ${tmuxHistoryLimit()}`);
-    expect(mouse).toContain("mouse off");
-    expect(clipboard).toContain("set-clipboard on");
+      const extendedKeys = execTmux(["show-options", "-s", "-g", "extended-keys"]);
+      const extendedKeysFormat = maybeExecTmux(["show-options", "-s", "-g", "extended-keys-format"]);
+      const terminalFeatures = execTmux(["show-options", "-s", "-g", "terminal-features"]);
+      const historyLimit = execTmux(["show-options", "-g", "history-limit"]);
+      const mouse = execTmux(["show-options", "-g", "mouse"]);
+      const clipboard = execTmux(["show-options", "-g", "set-clipboard"]);
+      expect(extendedKeys).toContain("extended-keys on");
+      if (extendedKeysFormat) expect(extendedKeysFormat).toContain("extended-keys-format csi-u");
+      expect(terminalFeatures).toMatch(/xterm\*.*extkeys/);
+      expect(historyLimit).toContain(`history-limit ${tmuxHistoryLimit()}`);
+      expect(mouse).toContain("mouse off");
+      expect(clipboard).toContain("set-clipboard on");
+    } finally {
+      if (originalSocket === undefined) {
+        Reflect.deleteProperty(process.env, "CITADEL_TMUX_SOCKET");
+      } else {
+        process.env.CITADEL_TMUX_SOCKET = originalSocket;
+      }
+      try {
+        execTmux(["-L", socketName, "kill-server"]);
+      } catch {
+        // The isolated tmux server may already be gone if setup failed.
+      }
+    }
   });
 
   it("submitPrompt pastes the prompt and presses Enter so the runtime actually executes it", async () => {
@@ -504,14 +519,6 @@ describe("tmux terminal gateway helpers", () => {
     await waitForClose(ws);
     expect(tmuxSessionExists(sessionName)).toBe(true);
   }, 15000);
-
-  // Regression test for the Ctrl+C-leaves-unusable-terminal complaint.
-  // We stand in for a real agent with a loop that traps SIGINT and exits 0,
-  // so we can "kill" it via Ctrl+C the way a user would Ctrl+C Claude Code.
-  // After it dies, the pane must drop back to an interactive login shell
-  // rooted at the workspace cwd, and the sentinel that gates session status
-  // detection must be cleared.
-
   it("keeps WebSocket output isolated across sessions and supports reconnect scrollback", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
     dirs.push(cwd);

@@ -49,19 +49,19 @@
 ## Persistence And Config
 
 [~] 1. SQLite is the mutable local state baseline.
-[ ] 2. SQLite owns repositories, workspaces, operations, activity, sessions, provider health snapshots, UI preferences, and runtime state.
-[ ] 3. Config files own static defaults, providers, runtimes, hooks, repo defaults, and command policy.
+[ ] 2. SQLite owns repositories, workspaces, operations, activity, workspace sessions, provider health snapshots, UI preferences, and runtime state.
+[ ] 3. Config files own static defaults, providers, agent runtimes, the terminal profile, hooks, repo defaults, and command policy.
 [ ] 4. Migrations are forward-only for the initial local-first baseline.
 [ ] 5. Backup/restore is the rollback strategy for local data.
 
 ## Terminal And Runtime Stack
 
-[~] 1. Agent runtimes launch through tmux.
+[~] 1. Agent runtimes launch through tmux using the configured terminal profile as the base shell.
 [~] 2. Citadel persists tmux session identity.
 [~] 3. Browser attach/reconnect is owned by packages/terminal: the xterm/WebSocket bridge uses node-pty `tmux attach-session` at `/terminal/:sessionId`.
 [~] 4. Browser terminal traffic is scoped by session ID through `/terminal/:sessionId` WebSocket upgrades; there is no daemon-managed per-session terminal renderer process or secondary proxy route.
 [~] 5. The cockpit shows an explicit, actionable error (`session_not_found`, `tmux_session_missing`, `terminal_unavailable`, `spawn_failed`) when a terminal cannot be served — never a blank black surface.
-[ ] 6. Runtime adapters live behind capability-based contracts.
+[ ] 6. Agent runtime adapters live behind capability-based contracts.
 [ ] 7. Runtime health is visible before session start.
 [~] 8. Trade-offs of using xterm.js over node-pty/tmux attach are accepted: Citadel owns the bridge, but preserves real PTY semantics while avoiding per-session external renderer processes for normal navigation.
 
@@ -107,6 +107,25 @@
 [ ] 3. Package lifecycle scripts are reviewed before dependency adoption.
 [ ] 4. Existing stack choices are extended before introducing parallel frameworks.
 [ ] 5. Framework swaps require explicit product/architecture approval.
+
+## Distribution
+
+[ ] 1. Citadel ships as a versioned source checkout, not a published binary or package — the systemd unit references `apps/daemon/dist/index.js` directly out of the install root.
+[ ] 2. Versions are pinned via annotated git tags shaped `v<major>.<minor>.<patch>`. Lightweight tags, arbitrary branches, and SHAs are not valid install targets.
+[ ] 3. `make install` and `make upgrade` default to the latest stable annotated `vX.Y.Z` tag advertised by `origin`, sorted numerically and ignoring malformed/prerelease tags. Default resolution requires network access and never trusts local-only tags.
+[ ] 4. `make install REF=main` and `make upgrade REF=main` fetch and check out exactly `origin/main` for development/bootstrap installs. `make install REF=vX.Y.Z` and `make upgrade REF=vX.Y.Z` install the exact annotated tag, using a local annotated tag only when the best-effort origin tag fetch fails. Any other `REF` is rejected.
+[ ] 4a. `make install` is self-contained after `git clone`: resolve ref, run `pnpm install --frozen-lockfile`, build, write systemd units, restart, then verify with `make doctor`. `make upgrade` is the same behavior with clearer operator wording.
+[ ] 5. Both install and upgrade refuse to run from a checkout whose path differs from the `WorkingDirectory=` line of the installed `~/.config/systemd/user/citadel.service`.
+[ ] 6. Each tag pushed to GitHub triggers `.github/workflows/release.yml`, which runs `make check` *before* `gh release create`. A failing check blocks release publication; the operator deletes the tag (`git push --delete origin v<x.y.z>`) and re-cuts after fixing.
+[ ] 7. `CHANGELOG.md` is reverse-chronological; each release lists what changed plus a "Known gaps" section for deferred items.
+
+## HTTP And HTTPS
+
+[ ] 1. The daemon binds plain HTTP on `127.0.0.1` by default. This is the supported, encouraged configuration for local-first use.
+[ ] 2. Operators can opt into HTTPS by setting `config.tls = { certPath, keyPath }`. Both paths must be absolute, both files must exist and be non-zero bytes, and the cert must not be expired. Validation runs at daemon boot — misconfiguration causes a fail-fast exit, not a runtime crash.
+[ ] 3. Citadel is *not* a reverse-proxy replacement. HTTPS is in-process and intended for operators who explicitly bind a non-loopback host (LAN exposure, Tailscale, etc.) or want to test TLS locally via mkcert.
+[ ] 4. The doctor and the boot log warn when `bindHost` is non-loopback AND `config.tls` is absent — never the inverse (mkcert + 127.0.0.1 is a normal pattern).
+[ ] 5. WebSocket transports (terminal proxy, diagnostic gateway) function identically over `wss://` when TLS is active.
 
 ---
 

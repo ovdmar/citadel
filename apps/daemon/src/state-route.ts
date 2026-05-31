@@ -25,7 +25,7 @@ export function registerStateRoute(input: {
     asyncRoute(async (_req, res) => {
       const repos = store.listRepos();
       const workspaces = store.listWorkspaces();
-      const sessions = store.listSessions();
+      const sessions = store.listWorkspaceSessions();
       const providerHealth = await cachedProviderHealth();
       res.json({
         repos,
@@ -34,7 +34,8 @@ export function registerStateRoute(input: {
         operations: store.listOperations(),
         activity: store.listActivity(),
         providerHealth,
-        runtimes: listRuntimeHealth(config.runtimes),
+        agentRuntimes: listRuntimeHealth(config.agentRuntimes),
+        terminal: config.terminal,
         mcp: mcpStatus(config.mcp.enabled),
         scheduledAgents: scheduledAgents.list(),
         namespaces: store.listNamespaces(),

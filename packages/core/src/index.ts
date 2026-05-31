@@ -6,6 +6,7 @@ import type {
   PullRequestSummary,
   Repo,
   Workspace,
+  WorkspaceSession,
 } from "@citadel/contracts";
 
 export type { PullRequestSummary } from "@citadel/contracts";
@@ -18,7 +19,7 @@ export function nowIso() {
 // per-agent stage tab dot, and the navigator running-stat dot. See
 // specs/B.3 item 14 for the canonical mapping.
 //
-//  - never-started: workspace has no non-shell agent sessions (workspace-only).
+//  - never-started: workspace has no agent sessions (workspace-only).
 //  - running:       agent is actively starting or running.
 //  - done:          agent has finished cleanly (or via operator-initiated
 //                   Ctrl-C / SIGTERM) and the workspace's PR (if any) has no
@@ -85,7 +86,7 @@ function prNeedsAttention(pr: PullRequestSummary): boolean {
 }
 
 // Aggregate workspace tone. Order:
-//   1. Filter out shell (plain-terminal) sessions.
+//   1. Filter out plain terminal sessions.
 //   2. No agents remaining → never-started.
 //   3. Take the priority max of per-agent tones under
 //      attention > running > done.
@@ -95,10 +96,10 @@ function prNeedsAttention(pr: PullRequestSummary): boolean {
 //      Locked by the matching test in this file — do not weaken without
 //      updating the spec and that test together.
 export function deriveWorkspaceLifecycleTone(input: {
-  sessions: AgentSession[];
+  sessions: WorkspaceSession[];
   pullRequest?: PullRequestSummary | null;
 }): LifecycleTone {
-  const agentSessions = input.sessions.filter((s) => s.runtimeId !== "shell");
+  const agentSessions = input.sessions.filter((s): s is AgentSession => s.kind === "agent");
   if (agentSessions.length === 0) return "never-started";
   let aggregate: LifecycleTone = "done";
   for (const session of agentSessions) {
@@ -195,11 +196,12 @@ export function assertUniqueWorkspaceName(workspaces: Workspace[], repoId: strin
 
 export function summarizeWorkspaceState(input: {
   workspace: Workspace;
-  sessions: AgentSession[];
+  sessions: WorkspaceSession[];
   providerHealth: ProviderHealth[];
 }) {
-  const activeSession = input.sessions.some((session) => session.status === "running");
-  const failedSession = input.sessions.some(sessionNeedsAttention);
+  const agentSessions = input.sessions.filter((session): session is AgentSession => session.kind === "agent");
+  const activeSession = agentSessions.some((session) => session.status === "running");
+  const failedSession = agentSessions.some(sessionNeedsAttention);
   const degradedProvider = input.providerHealth.some((provider) => provider.status !== "healthy");
   const suggestedSection = input.workspace.pinned
     ? input.workspace.section
@@ -217,6 +219,7 @@ export function summarizeWorkspaceState(input: {
   return { suggestedSection, reasons };
 }
 
+export { groupChecksByKind, statusLabel, summarizeDoctor } from "./doctor.js";
 export { FUNNY_ADJECTIVES, FUNNY_ANIMALS, generateFunnyName } from "./funny-name.js";
 export {
   type FuzzyBlockMatch,

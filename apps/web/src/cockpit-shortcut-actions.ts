@@ -1,4 +1,4 @@
-import type { AgentRuntime, AgentSession, Workspace } from "@citadel/contracts";
+import type { AgentRuntime, Workspace, WorkspaceSession } from "@citadel/contracts";
 import type { GroupNode } from "./navigator-groups.js";
 import { findGroupPathForWorkspace } from "./navigator-groups.js";
 import { defaultAgentRuntimeId } from "./runtime-defaults.js";
@@ -22,7 +22,7 @@ type ShortcutAction =
 export type ShortcutDeps = {
   flatWorkspaceIds: ReadonlyArray<string>;
   activeWorkspace: Workspace | null;
-  activeWorkspaceSessions: ReadonlyArray<AgentSession>;
+  activeWorkspaceSessions: ReadonlyArray<WorkspaceSession>;
   runtimes: ReadonlyArray<AgentRuntime>;
   navTree: ReadonlyArray<GroupNode>;
 };

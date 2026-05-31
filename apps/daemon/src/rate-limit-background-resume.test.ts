@@ -26,7 +26,8 @@ function config(): CitadelConfig {
       github: { enabled: true, command: "gh" },
       jira: { enabled: true, command: "jtk", autoTransitions: [] },
     },
-    runtimes: [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"], supportsPrompt: true }],
+    agentRuntimes: [{ id: "codex", displayName: "Codex", command: "bash", args: [], supportsPrompt: true }],
+    terminal: { displayName: "Terminal", command: "bash", args: ["-l"] },
     usageProviders: [],
     automations: {
       fixCi: {
@@ -55,9 +56,10 @@ function config(): CitadelConfig {
 function session(over: Partial<AgentSession>): AgentSession {
   return {
     id: "sess_1",
+    kind: "agent",
     workspaceId: "ws_1",
-    runtimeId: "shell",
-    displayName: "Shell",
+    runtimeId: "codex",
+    displayName: "Codex",
     status: "usage_limited",
     statusReason: "pane:usage_limited:reset=2026-05-25T12:30:00.000Z",
     statusReasonAt: null,
@@ -133,7 +135,7 @@ function scheduledAgent(over: Partial<ScheduledAgent> = {}): ScheduledAgent {
     cron: null,
     runAt: "2026-05-25T12:31:00.000Z",
     repoId: "repo_1",
-    runtimeId: "shell",
+    runtimeId: "codex",
     prompt: "node --input-type=module -e ''",
     workspaceStrategy: "new",
     workspaceName: "(background)",
@@ -211,7 +213,7 @@ describe("rate-limit background resume scheduling", () => {
         description: RATE_LIMIT_BACKGROUND_RESUME_MARKER,
         scheduleType: "once",
         runAt: "2026-05-25T12:31:00.000Z",
-        runtimeId: "shell",
+        runtimeId: "codex",
         runMode: "background",
         backgroundCwd: "/repo",
         overlapPolicy: "skip",
@@ -265,7 +267,7 @@ describe("rate-limit background resume scheduling", () => {
     expect(service.create).not.toHaveBeenCalled();
   });
 
-  it("builds a shell prompt that calls the local internal resume endpoint", () => {
+  it("builds a prompt that calls the local internal resume endpoint", () => {
     expect(buildRateLimitBackgroundResumePrompt("http://127.0.0.1:4010")).toContain(
       "http://127.0.0.1:4010/api/internal/rate-limit-auto-resume",
     );

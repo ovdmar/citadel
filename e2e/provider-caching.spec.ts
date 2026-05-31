@@ -35,12 +35,14 @@ test("usage indicator renders a reload button when usage data is unavailable", a
   // has no real runtime binaries on PATH, so usage will be unavailable —
   // exactly the path that produces the reload button.
   const configResp = await apiGet(request, `${API_BASE}/api/config`);
-  const configBody = (await configResp.json()) as { config: { runtimes: Array<{ id: string }> } };
-  const runtimeId = configBody.config.runtimes.find((r) => r.id !== "shell")?.id;
-  test.skip(!runtimeId, "no non-shell runtime configured in the test daemon");
+  const configBody = (await configResp.json()) as { config: { agentRuntimes: Array<{ id: string }> } };
+  const runtimeId = configBody.config.agentRuntimes[0]?.id;
+  test.skip(!runtimeId, "no agent runtime configured in the test daemon");
   await apiPut(request, `${API_BASE}/api/config`, {
     data: {
-      runtimes: configBody.config.runtimes.map((r) => (r.id === runtimeId ? { ...r, showUsageInTopBar: true } : r)),
+      agentRuntimes: configBody.config.agentRuntimes.map((r) =>
+        r.id === runtimeId ? { ...r, showUsageInTopBar: true } : r,
+      ),
     },
   });
   await page.goto("/");
@@ -52,12 +54,14 @@ test("usage indicator renders a reload button when usage data is unavailable", a
 test("clicking the usage reload button triggers a refresh request", async ({ page, request }, testInfo) => {
   test.skip(testInfo.project.name === "mobile", "top-bar usage pill is desktop/tablet only");
   const configResp = await apiGet(request, `${API_BASE}/api/config`);
-  const configBody = (await configResp.json()) as { config: { runtimes: Array<{ id: string }> } };
-  const runtimeId = configBody.config.runtimes.find((r) => r.id !== "shell")?.id;
-  test.skip(!runtimeId, "no non-shell runtime configured in the test daemon");
+  const configBody = (await configResp.json()) as { config: { agentRuntimes: Array<{ id: string }> } };
+  const runtimeId = configBody.config.agentRuntimes[0]?.id;
+  test.skip(!runtimeId, "no agent runtime configured in the test daemon");
   await apiPut(request, `${API_BASE}/api/config`, {
     data: {
-      runtimes: configBody.config.runtimes.map((r) => (r.id === runtimeId ? { ...r, showUsageInTopBar: true } : r)),
+      agentRuntimes: configBody.config.agentRuntimes.map((r) =>
+        r.id === runtimeId ? { ...r, showUsageInTopBar: true } : r,
+      ),
     },
   });
 

@@ -22,7 +22,8 @@ export function createFixture(dirs: string[]) {
     github: { enabled: false, command: "gh" },
     jira: { enabled: false, command: "jtk", autoTransitions: [] },
   };
-  config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
+  config.agentRuntimes = [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: ["-l"] }];
+  config.terminal = { displayName: "Terminal", command: "bash", args: ["-l"] };
   const store = new SqliteStore(config.databasePath);
   store.migrate();
   // Tests opt out of the background refresh job — they don't want a 15s tick

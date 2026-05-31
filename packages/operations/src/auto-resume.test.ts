@@ -39,6 +39,7 @@ function session(over: Partial<AgentSession>): AgentSession {
     createdAt: "2026-05-25T10:00:00.000Z",
     updatedAt: "2026-05-25T11:00:00.000Z",
     ...over,
+    kind: "agent",
   } satisfies AgentSession;
 }
 

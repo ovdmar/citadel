@@ -256,7 +256,7 @@ test("desktop session stop endpoint removes the session", async ({ request }, te
     workspaceId = (await createWorkspace(request, repo.id, `stop-${Date.now().toString(36)}`)).workspaceId;
     await waitForWorkspace(request, workspaceId, "ready");
     const session = await startSession(request, workspaceId, "Stop Shell");
-    const stop = await apiDelete(request, `${API_BASE}/api/agent-sessions/${session.id}`);
+    const stop = await apiDelete(request, `${API_BASE}/api/workspace-sessions/${session.id}`);
     expect(stop.ok()).toBe(true);
     const state = await apiGet(request, `${API_BASE}/api/state`);
     const body = (await state.json()) as { sessions: Array<{ id: string }> };
@@ -553,8 +553,8 @@ async function createWorkspace(request: APIRequestContext, repoId: string, name:
 }
 
 async function startSession(request: APIRequestContext, workspaceId: string, displayName: string) {
-  const sessionResponse = await apiPost(request, `${API_BASE}/api/agent-sessions`, {
-    data: { workspaceId, runtimeId: "shell", displayName },
+  const sessionResponse = await request.post(`${API_BASE}/api/workspaces/${workspaceId}/terminal-sessions`, {
+    data: { displayName },
   });
   expect(sessionResponse.ok()).toBe(true);
   return ((await sessionResponse.json()) as { session: { id: string } }).session;

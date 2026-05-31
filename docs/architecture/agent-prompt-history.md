@@ -83,7 +83,7 @@ cursor-agent sessions; a follow-up will fill in the parser. See #17.
 
 ## What this PR explicitly does NOT do
 
-- No persistence of prompts in `agent_sessions_prompts` or any sibling table.
+- No persistence of prompts in `workspace_session_prompts` or any sibling table.
   The earlier draft of this feature had a DB-write intercept on
   `send_agent_message`; that path was removed in favor of trusting the
   runtime transcript as authoritative.

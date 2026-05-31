@@ -1,5 +1,6 @@
 import fs from "node:fs";
-import http from "node:http";
+import type http from "node:http";
+import type https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CitadelConfig } from "@citadel/config";
@@ -33,6 +34,7 @@ import { createWorkspaceCockpitSummaryBuilder, registerCockpitSummaryRoute } fro
 import { registerConfigRepoWorkspaceRoutes } from "./config-repo-workspace-routes.js";
 import { callDaemonMcpTool, readMcpResource } from "./daemon-mcp-tool.js";
 import { registerDiagnosticsRoutes } from "./diagnostics-routes.js";
+import { registerDoctorRoutes } from "./doctor-routes.js";
 import { E2E_RUN_ID_HEADER, e2eHealthFields, e2eRunIdMismatch } from "./e2e-guard.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { AUTOMATED_GH_DISABLED_REASON, automatedGhEnabled } from "./gh-automation.js";
@@ -50,9 +52,11 @@ import { workspaceAppHookSample } from "./readiness.js";
 import { registerRepoDiscoveryRoutes } from "./repo-discovery-routes.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
+import { registerScaffoldHookRoutes } from "./scaffold-hook-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { backfillScratchpadOnStartup } from "./scratchpad.js";
+import { createDaemonServer } from "./server-factory.js";
 import { attachSseClientErrorHandler, writeSseEvent } from "./sse-broadcast.js";
 import { registerStateRoute } from "./state-route.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
@@ -64,9 +68,12 @@ import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
 import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
 import { registerWorkspacesPrStateRoute } from "./workspaces-pr-state-route.js";
 
+type AnyServer = http.Server | https.Server;
+
 export type DaemonApp = {
   app: express.Express;
-  server: http.Server;
+  server: AnyServer;
+  protocol: "http" | "https";
   emit: (type: string, payload: unknown) => void;
   diagnostics: DiagnosticsLogger;
 };
@@ -107,7 +114,7 @@ export async function createDaemonApp(input: {
     ...input.providers,
   };
   const app = express();
-  const server = http.createServer(app);
+  const { server, protocol } = createDaemonServer(app, config);
   // The daemon owns several legitimate close hooks (provider cache flush,
   // schedulers, status monitors, terminal cleanup). Keep Node from reporting
   // these as listener leaks in integration tests and diagnostics-heavy boots.
@@ -298,6 +305,8 @@ export async function createDaemonApp(input: {
   registerJiraRoutes({ app, asyncRoute, store, providers, providerCache, emit, cachedProvider: cachedProviderSwr });
 
   registerRuntimeUsageRoutes({ app, config, asyncRoute, providerCache, cachedProvider });
+  registerDoctorRoutes({ app, config, store, asyncRoute, collectProviderHealth: cachedProviderHealth });
+  registerScaffoldHookRoutes({ app, config, store, operations, asyncRoute });
   registerPrRoutes({
     app,
     store,
@@ -455,7 +464,7 @@ export async function createDaemonApp(input: {
             collectJiraIssueSummary: (issueKey) => providers.collectJiraIssueSummary(issueKey),
             collectRuntimeUsage: (provider) =>
               import("@citadel/providers").then((mod) => mod.collectRuntimeUsage(provider)),
-            listRuntimeHealth: () => listRuntimeHealth(config.runtimes),
+            listRuntimeHealth: () => listRuntimeHealth(config.agentRuntimes),
           },
           hasFocusedWindow: () => uiActivity.hasFocusedWindow(),
         })
@@ -523,7 +532,7 @@ export async function createDaemonApp(input: {
   attachTerminalWebSocket(
     server,
     async (sessionId) => {
-      const session = store.listSessions().find((candidate) => candidate.id === sessionId);
+      const session = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
       if (!session) return null;
       if (session.tmuxSessionName && tmuxSessionExists(session.tmuxSessionName, session.tmuxSocketName ?? null)) {
         return { sessionName: session.tmuxSessionName, socketName: session.tmuxSocketName ?? null };
@@ -580,13 +589,13 @@ export async function createDaemonApp(input: {
   const terminalReaper = startTerminalReaper({
     listSocketNames: () => {
       const sockets = new Set<string | null>([null]);
-      for (const session of store.listSessions()) sockets.add(session.tmuxSocketName ?? null);
+      for (const session of store.listWorkspaceSessions()) sockets.add(session.tmuxSocketName ?? null);
       return sockets;
     },
   });
   server.on("close", () => terminalReaper.stop());
 
-  return { app, server, emit, diagnostics };
+  return { app, server, protocol, emit, diagnostics };
   function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderValue(providerCache, key, load, ttlMs);
   }

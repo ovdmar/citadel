@@ -16,7 +16,7 @@ type Tab = "upcoming" | "history";
 // for "Schedule again" from a past one-shot row).
 export function ScheduledAgentsPanel(props: { state: StateResponse | undefined }) {
   const repos = props.state?.repos ?? [];
-  const runtimes = props.state?.runtimes ?? [];
+  const runtimes = props.state?.agentRuntimes ?? [];
   const scheduledAgents = props.state?.scheduledAgents ?? [];
   const workspaces = props.state?.workspaces ?? [];
 

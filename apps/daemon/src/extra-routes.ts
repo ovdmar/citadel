@@ -163,22 +163,21 @@ export function registerWorkspaceExtraRoutes(input: {
     }),
   );
 
-  app.patch(
-    "/api/agent-sessions/:sessionId",
-    asyncRoute(async (req: express.Request, res: express.Response) => {
-      const sessionId = req.params.sessionId;
-      if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
-      const patch = (req.body ?? {}) as Record<string, unknown>;
-      const displayName = typeof patch.displayName === "string" ? patch.displayName.trim() : "";
-      if (!displayName) return res.status(400).json({ error: "display_name_required" });
-      const session = store.listSessions().find((candidate) => candidate.id === sessionId);
-      if (!session) return res.status(404).json({ error: "session_not_found" });
-      store.updateSessionDisplayName(sessionId, displayName);
-      const updated = store.listSessions().find((candidate) => candidate.id === sessionId);
-      emit("agent.updated", { sessionId });
-      res.json({ session: updated });
-    }),
-  );
+  const renameWorkspaceSession = asyncRoute(async (req: express.Request, res: express.Response) => {
+    const sessionId = req.params.sessionId;
+    if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
+    const patch = (req.body ?? {}) as Record<string, unknown>;
+    const displayName = typeof patch.displayName === "string" ? patch.displayName.trim() : "";
+    if (!displayName) return res.status(400).json({ error: "display_name_required" });
+    const session = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
+    if (!session) return res.status(404).json({ error: "session_not_found" });
+    store.updateWorkspaceSessionDisplayName(sessionId, displayName);
+    const updated = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
+    emit(session.kind === "agent" ? "agent.updated" : "terminal.updated", { sessionId });
+    res.json({ session: updated });
+  });
+  app.patch("/api/workspace-sessions/:sessionId", renameWorkspaceSession);
+  app.patch("/api/agent-sessions/:sessionId", renameWorkspaceSession);
 
   // GitHub search/clone helpers used by the AddRepo modal. Both require gh to be
   // available and authenticated; failures surface as structured errors so the UI
@@ -311,8 +310,7 @@ export function registerWorkspaceExtraRoutes(input: {
       // multi-line ("git pull origin main", "make check", "git push"); if it
       // were pasted into a bash/sh/zsh/fish tmux pane those would execute
       // line-by-line as shell commands. The invariant is "the runtime is an
-      // agent TUI, not a shell" — checked against the runtime's `command`
-      // (id !== "shell" is too narrow — any id can point at command:"bash").
+      // agent TUI, not a plain shell" — checked against the runtime's command.
       // We do NOT require runtime.promptArg: the canonical claude-code
       // runtime intentionally omits it (Claude's `-p` is non-interactive
       // print mode), and createAgentSession pastes the prompt into the TUI
@@ -321,11 +319,10 @@ export function registerWorkspaceExtraRoutes(input: {
       const isShellCommand = (cmd: string) => ["bash", "sh", "zsh", "fish"].includes(cmd);
       const requestedRuntimeId = typeof req.body?.runtimeId === "string" ? req.body.runtimeId : undefined;
       const runtime = requestedRuntimeId
-        ? config.runtimes.find((candidate) => candidate.id === requestedRuntimeId)
-        : config.runtimes.find((candidate) => candidate.id !== "shell" && !isShellCommand(candidate.command));
+        ? config.agentRuntimes.find((candidate) => candidate.id === requestedRuntimeId)
+        : config.agentRuntimes.find((candidate) => !isShellCommand(candidate.command));
       if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
-      if (runtime.id === "shell" || isShellCommand(runtime.command))
-        return res.status(400).json({ error: "runtime_must_be_agent" });
+      if (isShellCommand(runtime.command)) return res.status(400).json({ error: "runtime_must_be_agent" });
       const resolved = await resolveFixConflictsPrompt({
         workspacePath: workspace.path,
         workspaceId: workspace.id,

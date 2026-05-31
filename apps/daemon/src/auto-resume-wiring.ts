@@ -17,7 +17,7 @@ import { listRuntimeHealth } from "@citadel/runtimes";
 export function startDaemonAutoResumeLoop(
   store: SqliteStore,
   operations: OperationService,
-  config?: Pick<CitadelConfig, "runtimes">,
+  config?: Pick<CitadelConfig, "agentRuntimes">,
 ): AutoResumeLoopHandle | null {
   if (process.env.CITADEL_DISABLE_AUTO_RESUME === "1") return null;
   const intervalEnv = Number(process.env.CITADEL_AUTO_RESUME_INTERVAL_MS);
@@ -38,7 +38,9 @@ export function startDaemonAutoResumeLoop(
       isAccountRateLimited: () => {
         const sessions = store.listSessions();
         if (!config) return deriveAccountUsageLimit(sessions, new Date());
-        const healthByRuntimeId = new Map(listRuntimeHealth(config.runtimes).map((runtime) => [runtime.id, runtime]));
+        const healthByRuntimeId = new Map(
+          listRuntimeHealth(config.agentRuntimes).map((runtime) => [runtime.id, runtime]),
+        );
         return deriveAccountUsageLimit(
           sessions.filter((session) => healthByRuntimeId.get(session.runtimeId)?.health === "healthy"),
           new Date(),
@@ -56,7 +58,7 @@ export function startDaemonAutoResumeLoop(
   );
 }
 
-function isRuntimeHealthy(config: Pick<CitadelConfig, "runtimes"> | undefined, runtimeId: string): boolean {
+function isRuntimeHealthy(config: Pick<CitadelConfig, "agentRuntimes"> | undefined, runtimeId: string): boolean {
   if (!config) return true;
-  return listRuntimeHealth(config.runtimes).find((runtime) => runtime.id === runtimeId)?.health === "healthy";
+  return listRuntimeHealth(config.agentRuntimes).find((runtime) => runtime.id === runtimeId)?.health === "healthy";
 }

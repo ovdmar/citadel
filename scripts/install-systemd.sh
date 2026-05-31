@@ -13,14 +13,20 @@
 #
 # Defaults auto-detected; override via env (CITADEL_NODE_BIN,
 # CITADEL_SHELL_BIN, OPENCLAW_ROOT, CITADEL_CONFIG, CITADEL_TMUX_SOCKET, etc.).
+# Release/main ref resolution is handled by scripts/install/upgrade.sh, which
+# is what the Makefile install and upgrade targets call before this script.
 
 set -euo pipefail
 
 ROOT="${CITADEL_INSTALL_ROOT:-$(pwd)}"
-if [[ ! -d "$ROOT/apps/daemon" ]]; then
-  echo "✗ $ROOT does not look like a Citadel checkout (missing apps/daemon)" >&2
-  exit 2
-fi
+
+# Shared refusal guards live in scripts/install/install-guards.sh so the
+# upgrade verb can apply the exact same checks before delegating here.
+# shellcheck source=./install/install-guards.sh
+source "$(dirname -- "${BASH_SOURCE[0]}")/install/install-guards.sh"
+
+citadel_require_checkout "$ROOT"
+citadel_require_working_directory_match "$ROOT"
 
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT_PATH="$UNIT_DIR/citadel.service"
@@ -225,3 +231,6 @@ if [[ "$TMUX_ORPHAN_WARNED" == "1" ]]; then
 fi
 echo "✓ citadel.service active"
 systemctl --user status citadel.service --no-pager | head -8 || true
+
+echo "→ make doctor"
+( cd "$ROOT" && make doctor )

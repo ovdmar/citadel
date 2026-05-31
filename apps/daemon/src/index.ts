@@ -84,7 +84,21 @@ store.migrate();
 const operations = new OperationService(store, config);
 operations.reconcile();
 const daemon = await createDaemonApp({ config, configPath, store, operations });
-const { server } = daemon;
+const { server, protocol } = daemon;
+
+// Boot-time inverse warning: binding a non-loopback host without TLS is the
+// configuration combination that exposes Citadel to the LAN in cleartext.
+// The doctor surfaces this too (config.bind-host-tls); we double-print here
+// so it lands in `journalctl -u citadel.service` for operators who don't
+// look at the cockpit.
+{
+  const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
+  if (!LOOPBACK.has(config.bindHost) && !config.tls) {
+    console.warn(
+      `[citadel] WARNING: bindHost=${config.bindHost} is non-loopback but TLS is not configured. Set config.tls={certPath,keyPath} or bind 127.0.0.1.`,
+    );
+  }
+}
 const keepAliveTimeoutMs = parsePositiveInt(process.env.CITADEL_HTTP_KEEP_ALIVE_TIMEOUT_MS, server.keepAliveTimeout);
 server.keepAliveTimeout = keepAliveTimeoutMs;
 server.headersTimeout = Math.max(server.headersTimeout, keepAliveTimeoutMs + 1000);
@@ -131,7 +145,7 @@ server.on("error", (error: NodeJS.ErrnoException) => {
 });
 
 server.listen(config.port, config.bindHost, () => {
-  console.log(`Citadel daemon listening on http://${config.bindHost}:${config.port}`);
+  console.log(`Citadel daemon listening on ${protocol}://${config.bindHost}:${config.port}`);
   console.log(`  data dir: ${config.dataDir}`);
   if (isWorktreeDaemon && worktreeRoot) {
     console.log(`  worktree: ${worktreeRoot}`);

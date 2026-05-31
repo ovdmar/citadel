@@ -1,10 +1,10 @@
 import type {
-  AgentSession,
   Namespace,
   Operation,
   PullRequestSummary,
   Workspace,
   WorkspaceDirtySummary,
+  WorkspaceSession,
 } from "@citadel/contracts";
 import { type LifecycleTone, deriveWorkspaceLifecycleTone } from "@citadel/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -20,7 +20,7 @@ import "./workspace-status-dot.css";
 
 export type WorkspaceCardData = {
   workspace: Workspace;
-  sessions: AgentSession[];
+  sessions: WorkspaceSession[];
   operation?: Operation | null;
   pullRequest?: PullRequestSummary | null;
   approval?: ApprovalTone;

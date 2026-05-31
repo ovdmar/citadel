@@ -300,7 +300,7 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
     const entry = summary.entries[i];
     if (!entry) continue;
     try {
-      const runtime = deps.config.runtimes.find((r) => r.id === candidate.runtimeId);
+      const runtime = deps.config.agentRuntimes.find((r) => r.id === candidate.runtimeId);
       if (!runtime) {
         entry.error = `runtime_not_found:${candidate.runtimeId}`;
         continue;

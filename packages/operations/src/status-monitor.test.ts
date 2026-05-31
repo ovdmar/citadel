@@ -36,6 +36,7 @@ function makeSession(over: Partial<AgentSession> = {}): AgentSession {
     createdAt: "2026-05-26T18:59:00.000Z",
     updatedAt: "2026-05-26T18:59:00.000Z",
     ...over,
+    kind: "agent",
   };
 }
 
@@ -269,14 +270,14 @@ describe("shell-first per-runtime status derivation", () => {
     expect(updates).toHaveLength(0);
   });
 
-  it("shell-runtime session with shell foreground stays running (NOT idle — for plain terminals the shell IS the runtime)", async () => {
+  it("shell-like custom agent runtime with shell foreground stays running", async () => {
     const { deps, updates } = makeDeps({
-      sessions: [makeSession({ id: "sess_term", runtimeId: "shell" })],
+      sessions: [makeSession({ id: "sess_term", runtimeId: "test-agent" })],
       panePidProcess: new Map([["citadel_test_1", { command: "bash", pid: 100 }]]),
-      runtimeBinaries: new Map([["shell", "bash"]]),
+      runtimeBinaries: new Map([["test-agent", "bash"]]),
     });
     await runStatusMonitorTick(deps, { source: "tick" });
-    // Shell-runtime sessions should not flip to idle when foreground is bash.
+    // A shell-like custom agent runtime should not flip to idle when foreground is bash.
     expect(updates).toHaveLength(0);
   });
 

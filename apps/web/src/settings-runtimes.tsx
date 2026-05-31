@@ -1,4 +1,4 @@
-import type { AgentRuntime, RuntimeUsageSummary } from "@citadel/contracts";
+import type { AgentRuntime, RuntimeUsageSummary, TerminalProfile } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Plus, RefreshCw, Save, Search, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -20,33 +20,25 @@ type RuntimeConfig = {
   topBarCategoryKey?: string;
 };
 
-type ConfigResponse = { config: { runtimes: RuntimeConfig[] } };
+type ConfigResponse = { config: { agentRuntimes: RuntimeConfig[]; terminal: TerminalProfile } };
+type RuntimeSettingsDraft = { agentRuntimes: RuntimeConfig[]; terminal: TerminalProfile };
 
-const PLATFORM_AGENTS: Record<string, { label: string; blurb: string; kind: "agent" | "terminal" }> = {
+const PLATFORM_AGENTS: Record<string, { label: string; blurb: string }> = {
   "claude-code": {
     label: "Claude Code",
     blurb: "Anthropic's official CLI. Primary long-running coding agent.",
-    kind: "agent",
   },
   codex: {
     label: "Codex",
     blurb: "OpenAI Codex CLI. Prompt-driven coding agent.",
-    kind: "agent",
   },
   "cursor-agent": {
     label: "Cursor Agent",
     blurb: "Cursor's headless agent runtime. Prompt-driven and non-interactive friendly.",
-    kind: "agent",
   },
   pi: {
     label: "Pi",
     blurb: "Inflection Pi runtime. Prompt-driven conversational agent.",
-    kind: "agent",
-  },
-  shell: {
-    label: "Plain Terminal",
-    blurb: "Useful when you need a TTY but should not count as agent work.",
-    kind: "terminal",
   },
 };
 
@@ -58,18 +50,24 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
     queryFn: () => api<ConfigResponse>("/api/config"),
   });
   const [drafts, setDrafts] = useState<RuntimeConfig[]>([]);
+  const [terminalDraft, setTerminalDraft] = useState<TerminalProfile>({
+    displayName: "Terminal",
+    command: "bash",
+    args: ["-l"],
+  });
   const [query, setQuery] = useState("");
   const [showAdd, setShowAdd] = useState(false);
 
   useEffect(() => {
-    if (configQuery.data?.config.runtimes) setDrafts(configQuery.data.config.runtimes);
-  }, [configQuery.data?.config.runtimes]);
+    if (configQuery.data?.config.agentRuntimes) setDrafts(configQuery.data.config.agentRuntimes);
+    if (configQuery.data?.config.terminal) setTerminalDraft(configQuery.data.config.terminal);
+  }, [configQuery.data?.config.agentRuntimes, configQuery.data?.config.terminal]);
 
   const save = useMutation({
-    mutationFn: (runtimes: RuntimeConfig[]) =>
+    mutationFn: (draft: RuntimeSettingsDraft) =>
       api("/api/config", {
         method: "PUT",
-        body: JSON.stringify({ runtimes }),
+        body: JSON.stringify(draft),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["config"] });
@@ -83,14 +81,17 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
   const updateDraftAndPersist = (id: string, patch: Partial<RuntimeConfig>) => {
     const next = drafts.map((runtime) => (runtime.id === id ? { ...runtime, ...patch } : runtime));
     setDrafts(next);
-    save.mutate(next);
+    save.mutate({ agentRuntimes: next, terminal: terminalDraft });
+  };
+  const updateTerminal = (patch: Partial<TerminalProfile>) => {
+    setTerminalDraft((current) => ({ ...current, ...patch }));
   };
   const removeDraft = (id: string) => setDrafts((current) => current.filter((runtime) => runtime.id !== id));
   const addCustom = (entry: { id: string; displayName: string; command: string; args: string[] }) => {
     if (drafts.some((runtime) => runtime.id === entry.id)) return;
     const next: RuntimeConfig[] = [...drafts, { ...entry, supportsPrompt: true }];
     setDrafts(next);
-    save.mutate(next);
+    save.mutate({ agentRuntimes: next, terminal: terminalDraft });
     setShowAdd(false);
   };
 
@@ -108,10 +109,14 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
   );
 
   const healthyCount = props.runtimes.filter((runtime) => runtime.health === "healthy").length;
-  const dirty = JSON.stringify(drafts) !== JSON.stringify(configQuery.data?.config.runtimes ?? []);
+  const dirty =
+    JSON.stringify(drafts) !== JSON.stringify(configQuery.data?.config.agentRuntimes ?? []) ||
+    JSON.stringify(terminalDraft) !== JSON.stringify(configQuery.data?.config.terminal ?? null);
 
   return (
     <>
+      <TerminalProfilePanel terminal={terminalDraft} onUpdate={updateTerminal} />
+
       <div className="set-repo-toolbar">
         <div className="set-repo-search">
           <Search size={13} />
@@ -135,7 +140,7 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
       </div>
 
       <div className="set-section-head" style={{ padding: "4px 4px 8px" }}>
-        <span className="set-section-eyebrow">All runtimes</span>
+        <span className="set-section-eyebrow">Agent runtimes</span>
         <span className="set-section-count">
           {filtered.length}
           {filtered.length !== rows.length ? ` / ${rows.length}` : ""} · {healthyCount} healthy
@@ -173,7 +178,7 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
         <button
           type="button"
           className="set-btn set-btn-primary"
-          onClick={() => save.mutate(drafts)}
+          onClick={() => save.mutate({ agentRuntimes: drafts, terminal: terminalDraft })}
           disabled={save.isPending || !dirty}
         >
           <Save size={13} /> Save changes
@@ -192,7 +197,6 @@ type AgentRowData = {
   id: string;
   label: string;
   desc: string;
-  kind: "agent" | "terminal";
   isBuiltIn: boolean;
   health: "healthy" | "degraded" | "unavailable" | "unknown";
   healthReason: string | null;
@@ -208,7 +212,6 @@ function buildRow(id: string, runtime: AgentRuntime | undefined, draft: RuntimeC
     id,
     label: platformMeta?.label ?? draft?.displayName ?? runtime?.displayName ?? id,
     desc: platformMeta?.blurb ?? (draft ? "Custom runtime added in settings." : "Configured runtime."),
-    kind: platformMeta?.kind ?? (runtime?.capabilities.supportsPrompt === false ? "terminal" : "agent"),
     isBuiltIn: PLATFORM_IDS.includes(id),
     health: runtime?.health ?? "unknown",
     healthReason: runtime?.healthReason ?? null,
@@ -238,7 +241,6 @@ function AgentCard(props: {
           <span className={`set-pill ${row.isBuiltIn ? "set-pill-mute" : "set-pill-supported"}`}>
             {row.isBuiltIn ? "built-in" : "custom"}
           </span>
-          {row.kind === "terminal" ? <span className="set-pill set-pill-mute">terminal</span> : null}
         </div>
         <span className={`set-pill ${healthPillClass(row.health)}`} title={row.healthReason ?? undefined}>
           {healthPillLabel(row.health)}
@@ -301,6 +303,57 @@ function AgentCard(props: {
           </button>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function TerminalProfilePanel(props: {
+  terminal: TerminalProfile;
+  onUpdate: (patch: Partial<TerminalProfile>) => void;
+}) {
+  return (
+    <div className="set-card set-section" style={{ marginBottom: 16 }}>
+      <div className="set-section-head">
+        <span className="set-section-eyebrow">Terminal</span>
+        <span className="set-pill set-pill-mute">workspace tabs</span>
+      </div>
+      <div className="set-section-sub">
+        The plain workspace terminal launched from the cockpit. It is separate from agent runtimes.
+      </div>
+      <div className="set-form-grid">
+        <label className="set-form-col">
+          <span className="set-field-label">Display name</span>
+          <input
+            className="set-input"
+            value={props.terminal.displayName}
+            onChange={(event) => props.onUpdate({ displayName: event.target.value })}
+          />
+        </label>
+        <label className="set-form-col">
+          <span className="set-field-label">Command</span>
+          <input
+            className="set-input is-mono"
+            value={props.terminal.command}
+            onChange={(event) => props.onUpdate({ command: event.target.value })}
+          />
+        </label>
+        <label className="set-form-col">
+          <span className="set-field-label">Args</span>
+          <input
+            className="set-input is-mono"
+            value={props.terminal.args.join(" ")}
+            placeholder="(none)"
+            onChange={(event) =>
+              props.onUpdate({
+                args: event.target.value
+                  .split(/\s+/)
+                  .map((part) => part.trim())
+                  .filter(Boolean),
+              })
+            }
+          />
+        </label>
+      </div>
     </div>
   );
 }

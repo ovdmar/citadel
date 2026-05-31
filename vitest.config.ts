@@ -11,7 +11,7 @@ export default defineConfig({
     ],
   },
   test: {
-    include: ["packages/*/src/**/*.test.ts", "apps/*/src/**/*.test.ts"],
+    include: ["packages/*/src/**/*.test.ts", "apps/*/src/**/*.test.ts", "scripts/**/*.test.ts"],
     exclude: ["**/node_modules/**", "e2e/**", "**/dist/**", "**/coverage/**"],
     setupFiles: ["./vitest.setup.ts"],
     pool: "forks",

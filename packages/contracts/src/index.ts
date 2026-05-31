@@ -96,10 +96,15 @@ export const AgentRuntimeSchema = z.object({
   capabilities: RuntimeCapabilitySchema,
 });
 
-export const AgentSessionSchema = z.object({
+export const TerminalProfileSchema = z.object({
+  displayName: z.string().min(1),
+  command: z.string().min(1),
+  args: z.array(z.string()).default([]),
+});
+
+const WorkspaceSessionBaseSchema = z.object({
   id: IdSchema,
   workspaceId: IdSchema,
-  runtimeId: IdSchema,
   displayName: z.string(),
   status: AgentSessionStatusSchema,
   // Status-tracking fields written by the DB layer; optional at the TS level
@@ -148,6 +153,18 @@ export const AgentSessionSchema = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
 });
+
+export const AgentSessionSchema = WorkspaceSessionBaseSchema.extend({
+  kind: z.literal("agent"),
+  runtimeId: IdSchema,
+});
+
+export const TerminalSessionSchema = WorkspaceSessionBaseSchema.extend({
+  kind: z.literal("terminal"),
+  runtimeId: z.null(),
+});
+
+export const WorkspaceSessionSchema = z.discriminatedUnion("kind", [AgentSessionSchema, TerminalSessionSchema]);
 
 export const ProviderHealthSchema = z.object({
   id: IdSchema,
@@ -503,6 +520,12 @@ export const CreateAgentSessionInputSchema = z.object({
   tabId: z.string().optional(),
 });
 
+export const CreateTerminalSessionInputSchema = z.object({
+  workspaceId: IdSchema,
+  displayName: z.string().min(1).optional(),
+  namespaceId: IdSchema.optional(),
+});
+
 // High-level one-shot launcher used by MCP orchestrators: create a workspace
 // and start an agent session in it in a single call. Either `repoId` (an
 // internal id) or `repoName` (the configured repo display name) must be
@@ -573,9 +596,12 @@ export const WorkspaceRecentCommitsSchema = z.object({
 
 export type Repo = z.infer<typeof RepoSchema>;
 export type Workspace = z.infer<typeof WorkspaceSchema>;
+export type WorkspaceSession = z.infer<typeof WorkspaceSessionSchema>;
 export type AgentSession = z.infer<typeof AgentSessionSchema>;
+export type TerminalSession = z.infer<typeof TerminalSessionSchema>;
 export type AgentPrompt = z.infer<typeof AgentPromptSchema>;
 export type AgentRuntime = z.infer<typeof AgentRuntimeSchema>;
+export type TerminalProfile = z.infer<typeof TerminalProfileSchema>;
 export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 export type CheckSummary = z.infer<typeof CheckSummarySchema>;
 export type CiRunSummary = z.infer<typeof CiRunSummarySchema>;
@@ -620,6 +646,7 @@ export type CreateRepoInput = z.infer<typeof CreateRepoInputSchema>;
 export type { WorkspaceDirtySummary } from "./workspace-dirty.js";
 export type CreateWorkspaceInput = z.infer<typeof CreateWorkspaceInputSchema>;
 export type CreateAgentSessionInput = z.infer<typeof CreateAgentSessionInputSchema>;
+export type CreateTerminalSessionInput = z.infer<typeof CreateTerminalSessionInputSchema>;
 export type LaunchAgentInput = z.infer<typeof LaunchAgentInputSchema>;
 export type TransitionIssueInput = z.infer<typeof TransitionIssueInputSchema>;
 export type {

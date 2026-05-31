@@ -123,7 +123,7 @@ describe("agent message MCP + REST routes", () => {
         method: "tools/call",
         params: {
           name: "launch_agent",
-          arguments: { repoName: "fixture-repo", prompt: "do the thing", runtimeId: "shell" },
+          arguments: { repoName: "fixture-repo", prompt: "do the thing", runtimeId: "test-agent" },
         },
       });
       expect(launch.result.structuredContent).toMatchObject({
@@ -135,7 +135,7 @@ describe("agent message MCP + REST routes", () => {
       expect(launches[0]?.input).toMatchObject({
         repoName: "fixture-repo",
         prompt: "do the thing",
-        runtimeId: "shell",
+        runtimeId: "test-agent",
       });
       expect(launches[0]?.runtime.command).toBe("bash");
     } finally {
@@ -160,7 +160,7 @@ describe("agent message MCP + REST routes", () => {
           jsonrpc: "2.0",
           id: "bad",
           method: "tools/call",
-          params: { name: "launch_agent", arguments: { prompt: "x", runtimeId: "shell" } },
+          params: { name: "launch_agent", arguments: { prompt: "x", runtimeId: "test-agent" } },
         }),
       });
       const body = (await response.json()) as { error?: { message: string }; result?: { isError?: boolean } };
@@ -478,7 +478,7 @@ function createFixture() {
     github: { enabled: false, command: "gh" },
     jira: { enabled: false, command: "jtk", autoTransitions: [] },
   };
-  config.runtimes = [{ id: "shell", displayName: "Shell", command: "bash", args: ["-l"] }];
+  config.agentRuntimes = [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: ["-l"] }];
   const store = new SqliteStore(config.databasePath);
   store.migrate();
   return { config, configPath, store, enableRefreshJob: false };

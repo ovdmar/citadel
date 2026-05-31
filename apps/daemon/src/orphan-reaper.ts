@@ -32,7 +32,7 @@ export async function reapOrphans(deps: {
   // status=terminated rows still have the original tmuxSessionName recorded.
   const referencedTmuxNames = new Set<string>();
   const referencedSockets = new Set<string | null>();
-  for (const session of deps.store.listSessions()) {
+  for (const session of deps.store.listWorkspaceSessions()) {
     if (session.tmuxSessionName) {
       referencedTmuxNames.add(session.tmuxSessionName);
       referencedSockets.add(session.tmuxSocketName ?? null);

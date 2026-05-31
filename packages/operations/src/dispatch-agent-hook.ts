@@ -7,7 +7,7 @@
 // Used by OperationService.dispatchAgentHook (in ./index.ts) and exercised
 // directly by ./dispatch-agent-hook.test.ts.
 
-import type { RuntimeConfig } from "@citadel/config";
+import type { AgentRuntimeConfig } from "@citadel/config";
 import type { AgentSession, CreateAgentSessionInput, HookEvent, Repo, Workspace } from "@citadel/contracts";
 
 type RuntimeDescriptor = {
@@ -31,7 +31,7 @@ type DispatchAgentHookInput = {
 };
 
 type DispatchAgentHookDeps = {
-  runtimes: RuntimeConfig[];
+  runtimes: AgentRuntimeConfig[];
   createAgentSession: (input: CreateAgentSessionInput, runtime: RuntimeDescriptor) => Promise<AgentSession>;
 };
 
@@ -66,7 +66,7 @@ export async function dispatchAgentHook(
 }
 
 // Exported for unit tests; not part of the package public API.
-export function defaultPromptRuntimeId(runtimes: RuntimeConfig[]): string {
+export function defaultPromptRuntimeId(runtimes: AgentRuntimeConfig[]): string {
   const candidate = runtimes.find((runtime) => runtime.supportsPrompt);
   return candidate?.id ?? DEFAULT_FALLBACK_RUNTIME_ID;
 }
@@ -75,8 +75,8 @@ export function defaultPromptRuntimeId(runtimes: RuntimeConfig[]): string {
 // fallback-when-runtimes-undefined behavior (and the createAgentSession
 // binding) can be unit-tested without spinning real sqlite/tmux.
 export function buildDispatchAgentHookDeps(
-  config: { runtimes?: RuntimeConfig[] } | undefined,
+  config: { agentRuntimes?: AgentRuntimeConfig[] } | undefined,
   createAgentSession: (input: CreateAgentSessionInput, runtime: RuntimeDescriptor) => Promise<AgentSession>,
 ): DispatchAgentHookDeps {
-  return { runtimes: config?.runtimes ?? [], createAgentSession };
+  return { runtimes: config?.agentRuntimes ?? [], createAgentSession };
 }
