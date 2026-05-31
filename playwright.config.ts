@@ -99,11 +99,11 @@ export default defineConfig({
         // E2E writes screenshot artifacts under docs/campaigns. Run the
         // built daemon, not tsx watch/source mode, so CI cannot restart the
         // API server between tests and surface transient ECONNRESETs.
-        'sh -c \'rm -f "$CITADEL_PLAYWRIGHT_DAEMON_LOG"; case "$CITADEL_DATA_DIR" in /tmp/citadel-playwright-*|/tmp/citadel-test-*) rm -rf "$CITADEL_DATA_DIR" ;; *) echo "Refusing to clean non-Playwright data dir: $CITADEL_DATA_DIR" >&2; exit 2 ;; esac; pnpm --filter @citadel/daemon build >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG" 2>&1 || exit $?; exec node apps/daemon/dist/index.js >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG" 2>&1\'',
+        'sh -c \'rm -f "$CITADEL_PLAYWRIGHT_DAEMON_LOG"; case "$CITADEL_DATA_DIR" in /tmp/citadel-playwright-*|/tmp/citadel-test-*) rm -rf "$CITADEL_DATA_DIR" ;; *) echo "[playwright-daemon] refusing to wipe unexpected CITADEL_DATA_DIR=$CITADEL_DATA_DIR" >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG"; echo "Refusing to clean non-Playwright data dir: $CITADEL_DATA_DIR" >&2; exit 2 ;; esac; mkdir -p "$CITADEL_DATA_DIR"; pnpm --filter @citadel/daemon... build >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG" 2>&1 || exit $?; exec node apps/daemon/dist/index.js >>"$CITADEL_PLAYWRIGHT_DAEMON_LOG" 2>&1\'',
       ].join(" "),
       url: `${daemonBase}/api/health`,
       reuseExistingServer: false,
-      timeout: 30_000,
+      timeout: 120_000,
     },
     {
       command: `CITADEL_DAEMON_URL=${daemonBase} CITADEL_WEB_PORT=${webPort} CITADEL_E2E_RUN_ID=${e2eRunId} sh -c 'cd apps/web && exec node node_modules/vite/bin/vite.js --host 0.0.0.0'`,

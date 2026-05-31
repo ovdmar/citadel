@@ -37,7 +37,7 @@ describe("buildStatusMonitorDeps — shell-first wiring", () => {
       mcp: { enabled: false },
       providers: {
         github: { enabled: false, command: "gh" },
-        jira: { enabled: false, command: "jtk" },
+        jira: { enabled: false, command: "jtk", autoTransitions: [] },
       },
       agentRuntimes: agentRuntimes.map((r) => ({ ...r, args: [], displayName: r.id })),
       terminal: { displayName: "Terminal", command: "bash", args: ["-l"] },

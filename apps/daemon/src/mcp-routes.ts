@@ -120,6 +120,7 @@ export function registerMcpRoutes(
             return res.json(rpcError(request.id, -32601, "method_not_found"));
         }
       } catch (error) {
+        if (error instanceof ZodError) throw error;
         if (isNotification) return res.status(202).end();
         if (error instanceof ZodError) {
           return res.status(400).json({

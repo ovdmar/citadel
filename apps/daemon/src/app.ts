@@ -4,7 +4,7 @@ import type https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CitadelConfig } from "@citadel/config";
-import { type AppEvent, HookActionSchema, TransitionIssueInputSchema } from "@citadel/contracts";
+import { type AppEvent, HookActionSchema } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { mcpStatus } from "@citadel/mcp";
 import { type DiagnosticsLogger, OperationService, createDiagnosticsLogger } from "@citadel/operations";
@@ -15,6 +15,7 @@ import {
   collectGitHubVersionControlSummary,
   collectJiraIssueSummary,
   collectProviderHealth,
+  searchJiraIssues,
   setGithubCommand,
   setJiraCommand,
   transitionJiraIssue,
@@ -25,7 +26,7 @@ import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
-import { asyncRoute, cachedProviderValue, cachedProviderWithStaleFallback } from "./app-helpers.js";
+import { asyncRoute, cachedProviderValue, cachedProviderWithStaleFallback, parsePositiveInt } from "./app-helpers.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
@@ -38,12 +39,15 @@ import { E2E_RUN_ID_HEADER, e2eHealthFields, e2eRunIdMismatch } from "./e2e-guar
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { AUTOMATED_GH_DISABLED_REASON, automatedGhEnabled } from "./gh-automation.js";
 import { type GhQuotaWiringWithDetach, resolveRepoFullNameFromWorkspaces, wireGhQuota } from "./gh-quota-wiring.js";
+import { wireJiraAutoTransitions } from "./jira-auto-transitions.js";
+import { registerJiraRoutes } from "./jira-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
 import { registerNamespaceRoutes } from "./namespace-routes.js";
 import { registerPrDiffRoute } from "./pr-diff-route.js";
 import { registerPrRoutes } from "./pr-routes.js";
-import { createProviderCache, issueCacheKey } from "./provider-cache.js";
+import { createProviderCache } from "./provider-cache.js";
 import { startProviderRefreshJob } from "./provider-refresh-job.js";
+import { wireRateLimitBackgroundResume } from "./rate-limit-background-resume.js";
 import { workspaceAppHookSample } from "./readiness.js";
 import { registerRepoDiscoveryRoutes } from "./repo-discovery-routes.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
@@ -53,6 +57,7 @@ import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
 import { registerScratchpadRoutes } from "./scratchpad-routes.js";
 import { backfillScratchpadOnStartup } from "./scratchpad.js";
 import { createDaemonServer } from "./server-factory.js";
+import { attachSseClientErrorHandler, writeSseEvent } from "./sse-broadcast.js";
 import { registerStateRoute } from "./state-route.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
@@ -79,6 +84,7 @@ type ProviderCollectors = {
   collectGitHubCiRunLog: typeof collectGitHubCiRunLog;
   collectJiraIssueSummary: typeof collectJiraIssueSummary;
   transitionJiraIssue: typeof transitionJiraIssue;
+  searchJiraIssues: typeof searchJiraIssues;
 };
 
 export async function createDaemonApp(input: {
@@ -94,15 +100,17 @@ export async function createDaemonApp(input: {
   enableRefreshJob?: boolean;
 }): Promise<DaemonApp> {
   const { config, configPath, store } = input;
+  // Identity token for this daemon process — watchdogs use strict inequality.
+  const daemonStartedAt = new Date().toISOString();
   setGithubCommand(config.providers.github.command);
   setJiraCommand(config.providers.jira.command);
-  const operations = input.operations ?? new OperationService(store, config);
   const providers: ProviderCollectors = {
     collectGitHubVersionControlSummary,
     collectGitHubCiRuns,
     collectGitHubCiRunLog,
     collectJiraIssueSummary,
     transitionJiraIssue,
+    searchJiraIssues,
     ...input.providers,
   };
   const app = express();
@@ -111,12 +119,13 @@ export async function createDaemonApp(input: {
   // schedulers, status monitors, terminal cleanup). Keep Node from reporting
   // these as listener leaks in integration tests and diagnostics-heavy boots.
   server.setMaxListeners(24);
-  // Node's 5s default keep-alive timeout is short enough for Playwright's
-  // APIRequestContext to race a reused idle socket on slower CI runs, surfacing
-  // as ECONNRESET even though the daemon is healthy. Keep browser/API
-  // connections alive for a normal interaction gap instead.
-  server.keepAliveTimeout = 120_000;
-  server.headersTimeout = 125_000;
+  // Playwright's API client can reuse daemon sockets across long browser-only
+  // stretches of the e2e suite. Node's 5s default keep-alive timeout can close
+  // those sockets just as the next request starts on slower CI runners, which
+  // surfaces as a transient ECONNRESET instead of an application response.
+  const keepAliveTimeoutMs = parsePositiveInt(process.env.CITADEL_HTTP_KEEP_ALIVE_TIMEOUT_MS, 120_000);
+  server.keepAliveTimeout = keepAliveTimeoutMs;
+  server.headersTimeout = Math.max(server.headersTimeout, keepAliveTimeoutMs + 5_000);
   const sseClients = new Set<express.Response>();
   const providerCache = createProviderCache({
     dataDir: config.dataDir,
@@ -130,6 +139,17 @@ export async function createDaemonApp(input: {
   // post-restart request can hit warm cache. The load() is bounded by a 500ms
   // hard timeout — slow disks degrade to an empty cache but never block boot.
   await providerCache.load();
+  // Construct the Jira auto-transition callback ONCE so the same identity
+  // reaches OperationService (for agent.started + archive/remove) and
+  // registerWorkspaceExtraRoutes (for workspace.issue_attached).
+  const runAutoTransitions = wireJiraAutoTransitions({
+    config,
+    providers,
+    store,
+    emit: (type, payload) => emit(type, payload),
+    providerCache,
+  });
+  const operations = input.operations ?? new OperationService(store, config, runAutoTransitions);
   // Always-on structured diagnostics. Writes JSONL to <dataDir>/diagnostics.jsonl
   // (rotated at 50 MB) and keeps the last 1000 events in memory for the
   // Settings → Debug panel + the /api/diagnostics/bundle.tar.gz download.
@@ -146,6 +166,9 @@ export async function createDaemonApp(input: {
   });
   const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
   const ghQuota: GhQuotaWiringWithDetach = wireGhQuota({ sseClients, store, resolveRepoFullName });
+  const detachSseClient = (client: express.Response) => {
+    if (sseClients.delete(client)) ghQuota.onViewerDetached();
+  };
   const ghAutomationEnabled = automatedGhEnabled();
   server.on("close", () => ghQuota.stop());
   const gatedVcDeps = {
@@ -175,7 +198,7 @@ export async function createDaemonApp(input: {
       source: "daemon",
       payload,
     };
-    for (const client of sseClients) client.write(`event: ${type}\ndata: ${JSON.stringify(event)}\n\n`);
+    writeSseEvent(sseClients, type, event, detachSseClient, diagnostics);
     if (fsWatchers && (type === "workspace.updated" || type === "state.reconciled" || type === "repo.updated")) {
       fsWatchers.reconcile();
     }
@@ -236,20 +259,8 @@ export async function createDaemonApp(input: {
     statusMonitor?.invalidatePaneCapture(sessionId);
     res.status(204).end();
   });
-  registerRepoDiscoveryRoutes({ app, config, asyncRoute });
 
-  app.get(
-    "/api/workspaces/:workspaceId/issue-summary",
-    asyncRoute(async (req, res) => {
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
-      const issueTracker = await cachedProviderSwr(issueCacheKey(workspace.issueKey), () =>
-        providers.collectJiraIssueSummary(workspace.issueKey ?? ""),
-      );
-      res.json({ issueTracker });
-    }),
-  );
+  registerRepoDiscoveryRoutes({ app, config, asyncRoute });
 
   const buildWorkspaceCockpitSummary = createWorkspaceCockpitSummaryBuilder({
     store,
@@ -291,23 +302,7 @@ export async function createDaemonApp(input: {
     }),
   );
 
-  app.post(
-    "/api/workspaces/:workspaceId/issue-transition",
-    asyncRoute(async (req, res) => {
-      const workspace = store.listWorkspaces().find((candidate) => candidate.id === req.params.workspaceId);
-      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      if (!workspace.issueKey) return res.status(404).json({ error: "workspace_issue_not_found" });
-      const input = TransitionIssueInputSchema.parse(req.body);
-      const result = await providers.transitionJiraIssue({
-        issueKey: workspace.issueKey,
-        transition: input.transition,
-        fields: input.fields,
-      });
-      providerCache.delete(`issue:${workspace.issueKey}`);
-      emit("provider.issue_transition", { workspaceId: workspace.id, issueKey: workspace.issueKey, result });
-      res.status(result.status === "healthy" ? 202 : 424).json({ result });
-    }),
-  );
+  registerJiraRoutes({ app, asyncRoute, store, providers, providerCache, emit, cachedProvider: cachedProviderSwr });
 
   registerRuntimeUsageRoutes({ app, config, asyncRoute, providerCache, cachedProvider });
   registerDoctorRoutes({ app, config, store, asyncRoute, collectProviderHealth: cachedProviderHealth });
@@ -369,31 +364,6 @@ export async function createDaemonApp(input: {
     res.json({ operation });
   });
 
-  app.patch(
-    "/api/repos/:repoId",
-    asyncRoute(async (req, res) => {
-      const repoId = String(req.params.repoId);
-      const patch = req.body ?? {};
-      const allowed: Record<string, unknown> = {};
-      if (typeof patch.name === "string" && patch.name.length) allowed.name = patch.name;
-      if (typeof patch.worktreeParent === "string" && patch.worktreeParent.length)
-        allowed.worktreeParent = patch.worktreeParent;
-      if (Array.isArray(patch.setupHookIds))
-        allowed.setupHookIds = patch.setupHookIds.filter((id: unknown) => typeof id === "string");
-      if (Array.isArray(patch.teardownHookIds))
-        allowed.teardownHookIds = patch.teardownHookIds.filter((id: unknown) => typeof id === "string");
-      if (Array.isArray(patch.providerIds))
-        allowed.providerIds = patch.providerIds.filter((id: unknown) => typeof id === "string");
-      if (typeof patch.deployHookCommand === "string")
-        allowed.deployHookCommand = patch.deployHookCommand.trim() || null;
-      else if (patch.deployHookCommand === null) allowed.deployHookCommand = null;
-      const next = store.updateRepo(repoId, allowed);
-      if (!next) return res.status(404).json({ error: "repo_not_found" });
-      emit("repo.updated", { repoId: next.id, repo: next });
-      res.json({ repo: next });
-    }),
-  );
-
   registerPrDiffRoute({ app, store, providerCache, asyncRoute });
 
   app.post(
@@ -411,18 +381,6 @@ export async function createDaemonApp(input: {
       ].filter(Boolean) as string[];
       bustCacheByPrefixes(providerCache, prefixes);
       emit("workspace.refreshed", { workspaceId: workspace.id });
-      res.json({ refreshed: prefixes });
-    }),
-  );
-
-  app.post(
-    "/api/repos/:repoId/refresh",
-    asyncRoute(async (req, res) => {
-      const repo = store.listRepos().find((candidate) => candidate.id === req.params.repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const prefixes = [`vc:${repo.id}`, `ci:${repo.id}`];
-      bustCacheByPrefixes(providerCache, prefixes);
-      emit("repo.refreshed", { repoId: repo.id });
       res.json({ refreshed: prefixes });
     }),
   );
@@ -467,7 +425,7 @@ export async function createDaemonApp(input: {
   // Extracted route registrations live here (post-scheduledAgents init) so the
   // /api/state handler can close over a fully-initialized runner. app.ts hit
   // the 800-line size gate, hence the extraction.
-  registerStateRoute({ app, store, config, scheduledAgents, cachedProviderHealth, asyncRoute });
+  registerStateRoute({ app, store, config, scheduledAgents, daemonStartedAt, cachedProviderHealth, asyncRoute });
   registerWorkspacesPrStateRoute({ app, store, providerCache, asyncRoute });
   // Boot-sweep: close any 'running' run rows that were in flight when the
   // daemon last died, sync the denormalized lastRunStatus cache on the
@@ -487,7 +445,8 @@ export async function createDaemonApp(input: {
     readMcpResource: (uri) => readMcpResource(store, config, uri),
   });
 
-  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, config });
+  registerWorkspaceExtraRoutes({ app, store, emit, asyncRoute, operations, runAutoTransitions, config });
+  wireRateLimitBackgroundResume(app, server, { store, operations, config, asyncRoute, emit, scheduledAgentService });
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit, store, operations, providerHealth: cachedProviderHealth });
   registerCitadelActionRoutes({ app, config, emit });
@@ -539,14 +498,11 @@ export async function createDaemonApp(input: {
       Connection: "keep-alive",
     });
     sseClients.add(res);
-    // Fire AFTER the add so hasViewers() in the wiring sees the new state.
-    // 0→1 transition triggers scheduler.invalidateNotDue() so the next FE
-    // poll fetches fresh instead of waiting for the cadence window.
+    attachSseClientErrorHandler(res, detachSseClient, diagnostics);
     ghQuota.onViewerAttached();
     res.write(`event: ready\ndata: ${JSON.stringify({ ok: true })}\n\n`);
     req.on("close", () => {
-      sseClients.delete(res);
-      ghQuota.onViewerDetached(); // stamps lastDetachAt iff this was the last viewer
+      detachSseClient(res);
     });
   });
 
@@ -640,7 +596,6 @@ export async function createDaemonApp(input: {
   server.on("close", () => terminalReaper.stop());
 
   return { app, server, protocol, emit, diagnostics };
-
   function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderValue(providerCache, key, load, ttlMs);
   }

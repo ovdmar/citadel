@@ -15,10 +15,11 @@ export function registerStateRoute(input: {
   store: SqliteStore;
   config: CitadelConfig;
   scheduledAgents: ScheduledAgentRunner;
+  daemonStartedAt: string;
   cachedProviderHealth: () => Promise<ProviderHealth[]>;
   asyncRoute: typeof AsyncRoute;
 }): void {
-  const { app, store, config, scheduledAgents, cachedProviderHealth, asyncRoute } = input;
+  const { app, store, config, scheduledAgents, daemonStartedAt, cachedProviderHealth, asyncRoute } = input;
   app.get(
     "/api/state",
     asyncRoute(async (_req, res) => {
@@ -38,6 +39,7 @@ export function registerStateRoute(input: {
         mcp: mcpStatus(config.mcp.enabled),
         scheduledAgents: scheduledAgents.list(),
         namespaces: store.listNamespaces(),
+        daemonStartedAt,
         bootRestore: getBootRestoreSummary(),
       });
     }),

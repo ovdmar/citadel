@@ -1,6 +1,15 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
+const contractsSrc = fileURLToPath(new URL("./packages/contracts/src", import.meta.url));
+
 export default defineConfig({
+  resolve: {
+    alias: [
+      { find: /^@citadel\/contracts$/, replacement: `${contractsSrc}/index.ts` },
+      { find: /^@citadel\/contracts\/(.+)$/, replacement: `${contractsSrc}/$1.ts` },
+    ],
+  },
   test: {
     include: ["packages/*/src/**/*.test.ts", "apps/*/src/**/*.test.ts", "scripts/**/*.test.ts"],
     exclude: ["**/node_modules/**", "e2e/**", "**/dist/**", "**/coverage/**"],

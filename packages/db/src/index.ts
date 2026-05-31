@@ -626,13 +626,14 @@ export class SqliteStore {
     }
   }
 }
-
 import { scheduledAgentStoreMethods } from "./scheduled-agent-store.js";
 Object.assign(SqliteStore.prototype, scheduledAgentStoreMethods);
 
-// Attach the scheduled-agent companion methods to SqliteStore.prototype. The
-// implementations live in sibling files (kept separate to stay under the
-// per-file line budget); the type declarations there augment this class via
-// `declare module`.
+// Attach the scheduled_agent_runs and background_sessions methods to
+// SqliteStore.prototype. The implementations live in scheduled-run-store.ts
+// (kept separate to stay under the per-file line budget); the type
+// declarations there augment this class via `declare module`. We can't do
+// the assignment inside scheduled-run-store.ts itself because ES module
+// hoisting would run it before this class declaration completes.
 import { scheduledRunStoreMethods } from "./scheduled-run-store.js";
 Object.assign(SqliteStore.prototype, scheduledRunStoreMethods);

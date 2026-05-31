@@ -5,6 +5,15 @@ import type express from "express";
 import { buildDiagnosticsSnapshot, streamDiagnosticsBundle } from "./diagnostics-bundle.js";
 import type { UiActivityTracker } from "./ui-activity.js";
 
+function clippedString(value: unknown, fallback: string, max: number): string {
+  if (typeof value !== "string") return fallback;
+  return value.length > max ? value.slice(0, max) : value;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 export function registerDiagnosticsRoutes(input: {
   app: express.Express;
   store: SqliteStore;
@@ -52,13 +61,4 @@ export function registerDiagnosticsRoutes(input: {
       }
     }
   });
-}
-
-function clippedString(value: unknown, fallback: string, max: number): string {
-  if (typeof value !== "string") return fallback;
-  return value.length > max ? value.slice(0, max) : value;
-}
-
-function finiteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

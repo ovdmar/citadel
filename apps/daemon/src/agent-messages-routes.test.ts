@@ -476,7 +476,7 @@ function createFixture() {
   config.databasePath = path.join(dir, "citadel.sqlite");
   config.providers = {
     github: { enabled: false, command: "gh" },
-    jira: { enabled: false, command: "jtk" },
+    jira: { enabled: false, command: "jtk", autoTransitions: [] },
   };
   config.agentRuntimes = [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: ["-l"] }];
   const store = new SqliteStore(config.databasePath);

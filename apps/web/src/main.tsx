@@ -36,6 +36,7 @@ import "./stage-terminal.css";
 import "./cockpit-extras.css";
 import "./pr-card-actions.css";
 import "./inspector-stats.css";
+import "./jira-picker.css";
 import "./inspector-checks.css";
 import "./inspector-deploy.css";
 import "./inspector-meta.css";
@@ -104,6 +105,11 @@ const operationsRoute = createRoute({
   getParentRoute: () => cockpitLayoutRoute,
   path: "/operations",
   component: OperationsView,
+  // Surfaces deep-links from elsewhere in the cockpit (e.g. the redeploy
+  // chip's "View log" link) — `?id=<operationId>` selects the matching row.
+  validateSearch: (search: Record<string, unknown>) => ({
+    id: typeof search.id === "string" ? search.id : undefined,
+  }),
 });
 
 const onboardingRoute = createRoute({

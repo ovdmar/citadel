@@ -8,7 +8,8 @@
   "exports": {
     ".": "./dist/index.js",
     "./pr-routes": "./dist/pr-routes.js",
-    "./doctor": "./dist/doctor.js"
+    "./doctor": "./dist/doctor.js",
+    "./shortcuts": "./dist/shortcuts.js"
   },
   "dependencies": {
     "zod": "^3.24.1"

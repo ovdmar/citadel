@@ -5,6 +5,7 @@ import type {
   AgentSession,
   CreateAgentSessionInput,
   CreateTerminalSessionInput,
+  JiraAutoTransitionEvent,
   Repo,
   TerminalProfile,
   Workspace,
@@ -67,6 +68,17 @@ export type CreateAgentSessionDeps = {
     operationId: string | null,
     payload: { repo: Repo; workspace: Workspace; session: AgentSession },
   ) => Promise<unknown>;
+  // Optional — daemon constructs this via createJiraAutoTransitions. Null
+  // when no Jira provider is wired (e.g., in unit tests that don't
+  // exercise the integration). Failures inside are swallowed; never throw.
+  runAutoTransitions?:
+    | ((
+        event: JiraAutoTransitionEvent,
+        repo: Repo,
+        workspace: Workspace,
+        payload: { repo: Repo; workspace: Workspace; session: AgentSession },
+      ) => Promise<void>)
+    | null;
 };
 
 const DEFAULT_TERMINAL_PROFILE: TerminalProfile = { displayName: "Terminal", command: "bash", args: ["-l"] };
@@ -253,12 +265,23 @@ export async function createAgentSession(
     launchedFromOperation,
   );
   const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-  if (repo)
+  if (repo) {
     await deps.runNotificationHooks("agent.started", repo, workspace, launchedFromOperation, {
       repo,
       workspace,
       session,
     });
+    // Auto-transitions never block session start — the callback wraps its
+    // own try/catch but be paranoid here too in case a bad injection
+    // throws synchronously before the callback's wrapper runs.
+    if (deps.runAutoTransitions) {
+      try {
+        await deps.runAutoTransitions("agent.started", repo, workspace, { repo, workspace, session });
+      } catch {
+        // Already logged inside the callback via activity events.
+      }
+    }
+  }
   return session;
 }
 

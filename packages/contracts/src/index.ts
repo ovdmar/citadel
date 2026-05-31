@@ -300,34 +300,16 @@ export const VersionControlSummarySchema = z.object({
   cooldownUntil: z.string().nullable().optional(),
 });
 
-export const IssueTransitionSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  toStatus: z.string(),
-});
-
-export const IssueTrackerSummarySchema = z.object({
-  providerId: z.string(),
-  status: ProviderStatusSchema,
-  reason: z.string().nullable(),
-  key: z.string(),
-  summary: z.string().nullable(),
-  issueStatus: z.string().nullable(),
-  assignee: z.string().nullable(),
-  updated: z.string().nullable(),
-  url: z.string().nullable(),
-  transitions: z.array(IssueTransitionSchema),
-  checkedAt: z.string(),
-});
-
-export const IssueTransitionActionResultSchema = z.object({
-  providerId: z.string(),
-  status: ProviderStatusSchema,
-  reason: z.string().nullable(),
-  key: z.string(),
-  transition: z.string(),
-  checkedAt: z.string(),
-});
+export {
+  IssueSearchResponseSchema,
+  IssueSearchResultSchema,
+  IssueTrackerSummarySchema,
+  IssueTransitionActionResultSchema,
+  IssueTransitionSchema,
+  JiraAutoTransitionEventSchema,
+  JiraAutoTransitionSchema,
+} from "./jira.js";
+import { IssueTrackerSummarySchema } from "./jira.js";
 
 export const OperationLogEntrySchema = z.object({
   level: z.enum(["info", "warn", "error"]).default("info"),
@@ -632,9 +614,15 @@ export type PullRequestSummary = z.infer<typeof PullRequestSummarySchema>;
 export type PrReviewer = z.infer<typeof PrReviewerSchema>;
 export type PrReviewerState = z.infer<typeof PrReviewerStateSchema>;
 export type VersionControlSummary = z.infer<typeof VersionControlSummarySchema>;
-export type IssueTransition = z.infer<typeof IssueTransitionSchema>;
-export type IssueTrackerSummary = z.infer<typeof IssueTrackerSummarySchema>;
-export type IssueTransitionActionResult = z.infer<typeof IssueTransitionActionResultSchema>;
+export type {
+  IssueSearchResponse,
+  IssueSearchResult,
+  IssueTrackerSummary,
+  IssueTransition,
+  IssueTransitionActionResult,
+  JiraAutoTransition,
+  JiraAutoTransitionEvent,
+} from "./jira.js";
 export type Operation = z.infer<typeof OperationSchema>;
 export type OperationLogEntry = z.infer<typeof OperationLogEntrySchema>;
 export type GitStatusSummary = z.infer<typeof GitStatusSummarySchema>;
@@ -678,8 +666,8 @@ export type { ScratchpadSnapshot, ReadScratchpadResult, ScratchpadHistorySource,
 export { HookEventSchema, AgentHookFrontmatterSchema } from "./hooks.js";
 export type { HookEvent, AgentHookFrontmatter } from "./hooks.js";
 export * from "./citadel-actions.js";
+export * from "./teardown.js";
 export * from "./shortcuts.js";
-
 export type ApiError = { error: string; detail?: string; fieldErrors?: Record<string, string[]> };
 export * from "./scheduled-agents.js";
 export type { WorkspacePrStateEntry, WorkspacesPrStateResponse } from "./workspaces-pr-state.js";

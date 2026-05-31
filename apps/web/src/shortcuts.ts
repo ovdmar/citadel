@@ -1,7 +1,7 @@
-import { SHORTCUT_CHORDS, type ShortcutChord, type ShortcutId } from "@citadel/contracts";
+import { SHORTCUT_CHORDS, type ShortcutChord, type ShortcutId } from "@citadel/contracts/shortcuts";
 
-export type { ShortcutChord, ShortcutId } from "@citadel/contracts";
-export { FORWARDABLE_CHORDS, FORWARDABLE_SHORTCUT_IDS, SHORTCUT_CHORDS } from "@citadel/contracts";
+export type { ShortcutChord, ShortcutId } from "@citadel/contracts/shortcuts";
+export { FORWARDABLE_CHORDS, FORWARDABLE_SHORTCUT_IDS, SHORTCUT_CHORDS } from "@citadel/contracts/shortcuts";
 
 export type ShortcutMatch = {
   id: ShortcutId;

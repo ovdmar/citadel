@@ -1,4 +1,4 @@
-import { FORWARDABLE_CHORDS, SHORTCUT_CHORDS } from "@citadel/contracts";
+import { FORWARDABLE_CHORDS, SHORTCUT_CHORDS } from "@citadel/contracts/shortcuts";
 import { describe, expect, it } from "vitest";
 import { type ShortcutMatch, matchShortcut } from "./shortcuts.js";
 

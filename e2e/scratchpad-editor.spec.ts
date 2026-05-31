@@ -1,12 +1,35 @@
 import { expect, test } from "@playwright/test";
 import { apiGet, apiPut } from "./helpers/api-request.js";
+import { assertDaemonIsSandbox } from "./helpers/sandbox-guard.js";
+import { acquireSharedStateLock } from "./helpers/shared-state-lock.js";
 
 const API_BASE =
   process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012"}`;
 
 test.describe("scratchpad drawer", () => {
+  test.setTimeout(300_000);
+
+  let releaseSharedState: (() => void) | null = null;
+
+  test.beforeAll(async ({ request }, testInfo) => {
+    testInfo.setTimeout(300_000);
+    await assertDaemonIsSandbox(request, API_BASE);
+    releaseSharedState = await acquireSharedStateLock("scratchpad", testInfo.titlePath.join(" > "));
+  });
+
   test.beforeEach(async ({ request }) => {
+    await apiPut(request, `${API_BASE}/api/config`, { data: { scratchpad: {} } });
     await apiPut(request, `${API_BASE}/api/scratchpad`, { data: { content: "" } });
+  });
+
+  test.afterEach(async ({ request }) => {
+    await apiPut(request, `${API_BASE}/api/scratchpad`, { data: { content: "" } });
+    await apiPut(request, `${API_BASE}/api/config`, { data: { scratchpad: {} } });
+  });
+
+  test.afterAll(() => {
+    releaseSharedState?.();
+    releaseSharedState = null;
   });
 
   test("opens via /scratchpad deep-link with the cockpit underneath", async ({ page }) => {

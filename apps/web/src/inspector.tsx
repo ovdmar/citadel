@@ -6,12 +6,14 @@ import type {
   WorkspaceRecentCommits,
   WorkspaceSession,
 } from "@citadel/contracts";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { PanelRightClose, Plus, RefreshCw } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { PanelRightClose, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, queryClient } from "./api.js";
+import { api } from "./api.js";
 import { DeployedAppsPanel } from "./deployed-apps.js";
 import { InspectorPrSection } from "./inspector-pr.js";
+import { aggregateReviewerCounts } from "./inspector-reviewers.js";
+import { IssueAttachSlot } from "./jira-picker.js";
 
 // Re-export so existing consumers (incl. inspector.test.ts) keep working.
 export { aggregateReviewerCounts } from "./inspector-reviewers.js";
@@ -109,6 +111,7 @@ function StatsTab(props: {
         issueTitle={issueTitle}
         issueStatus={issueStatus}
         issueUrl={issueUrl}
+        transitions={props.summary?.issueTracker?.transitions ?? []}
       />
 
       <div className="inspector-body">
@@ -188,138 +191,6 @@ function StatsTab(props: {
   );
 }
 
-function IssueAttachSlot(props: {
-  workspaceId: string;
-  issueKey: string | null;
-  issueTitle: string | null;
-  issueStatus: string | null;
-  issueUrl: string | null;
-}) {
-  const [open, setOpen] = useState(false);
-  const [keyDraft, setKeyDraft] = useState("");
-  const [urlDraft, setUrlDraft] = useState("");
-  const keyInputRef = useRef<HTMLInputElement | null>(null);
-  useEffect(() => {
-    if (open) keyInputRef.current?.focus();
-  }, [open]);
-
-  const attach = useMutation({
-    mutationFn: (input: { issueKey: string; issueUrl: string | null }) =>
-      api(`/api/workspaces/${props.workspaceId}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          issueKey: input.issueKey,
-          issueUrl: input.issueUrl,
-          issueTitle: null,
-        }),
-      }),
-    onSuccess: () => {
-      setOpen(false);
-      setKeyDraft("");
-      setUrlDraft("");
-      queryClient.invalidateQueries({ queryKey: ["state"] });
-    },
-  });
-
-  if (props.issueKey) {
-    return (
-      <div className="inspector-attach">
-        <a
-          className="cit-jira"
-          href={props.issueUrl ?? undefined}
-          target="_blank"
-          rel="noreferrer"
-          title={`Open ${props.issueKey}${props.issueTitle ? `: ${props.issueTitle}` : ""}`}
-        >
-          <span className="cit-jira-icon" aria-hidden>
-            <svg viewBox="0 0 16 16" width="14" height="14" role="img" aria-label="Issue tracker">
-              <title>Issue tracker</title>
-              <rect x="1.5" y="1.5" width="13" height="13" rx="2.5" fill="oklch(50% 0.16 250)" />
-              <path
-                d="M5 8.2l2 2 4-4"
-                fill="none"
-                stroke="#fff"
-                strokeWidth="1.6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </span>
-          <span className="cit-jira-text">
-            <span className="cit-jira-key">{props.issueKey}</span>
-            {props.issueTitle ? <span className="cit-jira-title">{props.issueTitle}</span> : null}
-          </span>
-          <span
-            className={`cit-jira-status cit-jira-status--${props.issueStatus ? jiraStatusTone(props.issueStatus) : "unknown"}`}
-            title={props.issueStatus ? `Issue status: ${props.issueStatus}` : "Status not synced"}
-          >
-            {props.issueStatus ?? "—"}
-          </span>
-        </a>
-      </div>
-    );
-  }
-
-  return (
-    <>
-      <div className="inspector-attach">
-        <button
-          type="button"
-          className="cit-jira cit-jira--empty"
-          onClick={() => setOpen((value) => !value)}
-          aria-expanded={open}
-          title="Attach a Jira ticket to this workspace"
-        >
-          <span className="cit-jira-empty-mark" aria-hidden>
-            <Plus size={11} />
-          </span>
-          <span className="cit-jira-empty-text">
-            <span className="cit-jira-empty-title">Attach Jira ticket</span>
-            <span className="cit-jira-empty-hint">link an issue to this workspace</span>
-          </span>
-        </button>
-      </div>
-      {open ? (
-        <form
-          className="cit-jira-attach-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const key = keyDraft.trim();
-            if (!key) return;
-            attach.mutate({ issueKey: key, issueUrl: urlDraft.trim() || null });
-          }}
-        >
-          <label>
-            Issue key
-            <input
-              ref={keyInputRef}
-              value={keyDraft}
-              onChange={(event) => setKeyDraft(event.target.value)}
-              placeholder="ABC-123"
-            />
-          </label>
-          <label>
-            Issue URL (optional)
-            <input
-              value={urlDraft}
-              onChange={(event) => setUrlDraft(event.target.value)}
-              placeholder="https://jira.example/browse/ABC-123"
-            />
-          </label>
-          <div className="cit-jira-attach-actions">
-            <button type="button" onClick={() => setOpen(false)} disabled={attach.isPending}>
-              Cancel
-            </button>
-            <button type="submit" data-primary disabled={!keyDraft.trim() || attach.isPending}>
-              {attach.isPending ? "Attaching…" : "Attach"}
-            </button>
-          </div>
-        </form>
-      ) : null}
-    </>
-  );
-}
-
 export function shortenRelative(value: string) {
   if (!value) return "";
   // git's "ago" strings (e.g. "3 minutes ago") read better trimmed in the chip.
@@ -334,14 +205,10 @@ export function shortenRelative(value: string) {
     .replace(/(\d+) seconds?/, "$1s");
 }
 
-function jiraStatusTone(status: string): "todo" | "progress" | "review" | "done" | "blocked" {
-  const s = status.toLowerCase();
-  if (s.includes("done") || s.includes("closed") || s.includes("resolved")) return "done";
-  if (s.includes("review")) return "review";
-  if (s.includes("progress") || s.includes("doing")) return "progress";
-  if (s.includes("block")) return "blocked";
-  return "todo";
-}
+// CheckSummaryIcon + summarizeChecks moved to inspector-pr.js during the
+// PR-section extraction on main. jiraStatusTone moved to jira-picker.tsx
+// during the picker extraction on this branch. Neither belongs here
+// anymore.
 
 function sumDiffLines(diff: WorkspaceDiff | undefined, prefix: "+" | "-"): number {
   if (!diff) return 0;

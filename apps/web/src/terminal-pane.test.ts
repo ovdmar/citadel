@@ -1,10 +1,21 @@
 // @vitest-environment happy-dom
 
-import type { TerminalSession } from "@citadel/contracts";
 import { createElement } from "react";
-import { flushSync } from "react-dom";
-import { type Root, createRoot } from "react-dom/client";
+import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  FakeResizeObserver,
+  FakeWebSocket as TerminalPaneWebSocketMock,
+  clipboardDataMock,
+  decodeBinarySent,
+  flushReact as flushReactUpdate,
+  installAnimationFrameMock,
+  installLocalStorageMock,
+  roots,
+  selectTextInside,
+  sessionFixture,
+  settle,
+} from "./terminal-pane-test-utils.js";
 import {
   TerminalPane,
   focusActiveTerminal,
@@ -81,58 +92,6 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: xtermMocks.FakeFitAddon }));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-class TerminalPaneWebSocketMock extends EventTarget {
-  static CONNECTING = 0;
-  static OPEN = 1;
-  static CLOSING = 2;
-  static CLOSED = 3;
-  static instances: TerminalPaneWebSocketMock[] = [];
-  readyState = TerminalPaneWebSocketMock.CONNECTING;
-  binaryType = "";
-  sent: unknown[] = [];
-
-  constructor(readonly url: string) {
-    super();
-    TerminalPaneWebSocketMock.instances.push(this);
-  }
-
-  send(data: unknown) {
-    this.sent.push(data);
-  }
-
-  close() {
-    this.readyState = TerminalPaneWebSocketMock.CLOSED;
-  }
-
-  open() {
-    this.readyState = TerminalPaneWebSocketMock.OPEN;
-    this.dispatchEvent(new Event("open"));
-  }
-
-  message(data: unknown) {
-    this.dispatchEvent(new MessageEvent("message", { data }));
-  }
-
-  closeFromServer(code = 1006, reason = "") {
-    this.readyState = TerminalPaneWebSocketMock.CLOSED;
-    const event = new Event("close") as CloseEvent;
-    Object.defineProperty(event, "code", { value: code });
-    Object.defineProperty(event, "reason", { value: reason });
-    this.dispatchEvent(event);
-  }
-}
-
-const roots: Root[] = [];
-
-async function flushReactUpdate(callback: () => void | Promise<void>): Promise<void> {
-  let result: void | Promise<void> = undefined;
-  flushSync(() => {
-    result = callback();
-  });
-  await result;
-  await settle();
-}
-
 beforeEach(() => {
   document.body.innerHTML = "";
   document.documentElement.removeAttribute("data-theme");
@@ -141,6 +100,7 @@ beforeEach(() => {
   xtermMocks.FakeTerminal.instances = [];
   xtermMocks.FakeFitAddon.instances = [];
   TerminalPaneWebSocketMock.instances = [];
+  FakeResizeObserver.instances = [];
   vi.spyOn(window, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
   Object.defineProperty(globalThis, "WebSocket", {
     configurable: true,
@@ -148,6 +108,12 @@ beforeEach(() => {
     value: TerminalPaneWebSocketMock,
   });
   Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    configurable: true,
+    writable: true,
+    value: FakeResizeObserver,
+  });
+  installAnimationFrameMock();
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     writable: true,
@@ -593,60 +559,4 @@ async function renderTerminal() {
     await settle();
   });
   return root;
-}
-
-async function settle() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
-function installLocalStorageMock() {
-  const storage = new Map<string, string>();
-  Object.defineProperty(window, "localStorage", {
-    configurable: true,
-    value: {
-      getItem: (key: string) => storage.get(key) ?? null,
-      setItem: (key: string, value: string) => storage.set(key, String(value)),
-      removeItem: (key: string) => storage.delete(key),
-      clear: () => storage.clear(),
-    },
-  });
-}
-
-function decodeBinarySent(sent: unknown[]): string[] {
-  return sent
-    .filter((item): item is Uint8Array => item instanceof Uint8Array)
-    .map((item) => new TextDecoder().decode(item));
-}
-
-function clipboardDataMock() {
-  return {
-    setData: vi.fn(),
-  };
-}
-
-function selectTextInside(host: HTMLElement, text: string) {
-  const node = document.createTextNode(text);
-  host.appendChild(node);
-  const range = document.createRange();
-  range.selectNodeContents(node);
-  const selection = document.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-}
-
-function sessionFixture(): TerminalSession {
-  return {
-    id: "sess_1",
-    workspaceId: "ws_1",
-    kind: "terminal",
-    runtimeId: null,
-    displayName: "Terminal",
-    status: "idle",
-    transport: "connected",
-    tmuxSessionName: "citadel_sess_1",
-    tmuxSessionId: "tmux_1",
-    createdAt: "2026-05-28T00:00:00.000Z",
-    updatedAt: "2026-05-28T00:00:00.000Z",
-  };
 }

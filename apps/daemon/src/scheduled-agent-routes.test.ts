@@ -295,7 +295,19 @@ describe("scheduled agent routes", () => {
 
       // Saturate the queue and verify 429 queue_full.
       for (let i = 0; i < 9; i += 1) {
-        await fetch(`${baseUrl}/api/scheduled-agents/${queueAgent.scheduledAgent.id}/run`, { method: "POST" });
+        fixture.store.insertScheduledAgentRun({
+          id: `queued_full_${i}`,
+          scheduledAgentId: queueAgent.scheduledAgent.id,
+          status: "queued",
+          enqueuedAt: now,
+          startedAt: null,
+          endedAt: null,
+          message: null,
+          workspaceId: null,
+          sessionId: null,
+          backgroundSessionId: null,
+          logFilePath: null,
+        });
       }
       const fullResp = await fetch(`${baseUrl}/api/scheduled-agents/${queueAgent.scheduledAgent.id}/run`, {
         method: "POST",
@@ -364,7 +376,7 @@ function createFixture() {
   config.databasePath = path.join(dir, "citadel.sqlite");
   config.providers = {
     github: { enabled: false, command: "gh" },
-    jira: { enabled: false, command: "jtk" },
+    jira: { enabled: false, command: "jtk", autoTransitions: [] },
   };
   config.agentRuntimes = [{ id: "test-agent", displayName: "Test Agent", command: "bash", args: ["-l"] }];
   const store = new SqliteStore(config.databasePath);

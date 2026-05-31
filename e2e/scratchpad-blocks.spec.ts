@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { apiGet, apiPost, apiPut } from "./helpers/api-request.js";
 import { assertDaemonIsSandbox } from "./helpers/sandbox-guard.js";
+import { acquireSharedStateLock } from "./helpers/shared-state-lock.js";
 
 const API_BASE =
   process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012"}`;
@@ -9,15 +10,32 @@ const API_BASE =
 // daemon HTTP, then verify the cockpit migrates it on first read and surfaces
 // the `migrate-to-blocks` history entry.
 test.describe("scratchpad blocks", () => {
-  test.beforeAll(async ({ request }) => {
+  test.setTimeout(300_000);
+
+  let releaseSharedState: (() => void) | null = null;
+
+  test.beforeAll(async ({ request }, testInfo) => {
+    testInfo.setTimeout(300_000);
     // Defense in depth against the prod-clobbering bug: refuse to run if the
     // daemon we're about to PUT empty content into is not a sandbox install.
     await assertDaemonIsSandbox(request, API_BASE);
+    releaseSharedState = await acquireSharedStateLock("scratchpad", testInfo.titlePath.join(" > "));
   });
 
   test.beforeEach(async ({ request }) => {
+    await apiPut(request, `${API_BASE}/api/config`, { data: { scratchpad: {} } });
     // Reset to a known stub before each test so prior fixtures don't carry over.
     await apiPut(request, `${API_BASE}/api/scratchpad`, { data: { content: "" } });
+  });
+
+  test.afterEach(async ({ request }) => {
+    await apiPut(request, `${API_BASE}/api/scratchpad`, { data: { content: "" } });
+    await apiPut(request, `${API_BASE}/api/config`, { data: { scratchpad: {} } });
+  });
+
+  test.afterAll(() => {
+    releaseSharedState?.();
+    releaseSharedState = null;
   });
 
   test("migrates legacy content on first read and shows migrate-to-blocks in history", async ({

@@ -2,8 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import type { ActivityEvent, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
-import { createId, nowIso, repoDisplayName } from "@citadel/core";
+import type { ActivityEvent, AgentSession, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
+import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
 import * as agentHistory from "./agent-history.js";
@@ -16,6 +16,7 @@ import {
 import { type CreateWorkspaceOptions, type WorkspaceOpsDeps, createWorkspaceImpl } from "./create-workspace.js";
 import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 import * as namespaceOps from "./namespaces.js";
+import { registerRepo as registerRepoImpl } from "./register-repo.js";
 import { checkWorkspaceRemovalImpl, removeWorkspaceImpl } from "./remove-workspace.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
 export type { LaunchAgentResult } from "./launch-agent.js";
@@ -39,13 +40,7 @@ export { parseUsageLimitResetFromReason, deriveAccountUsageLimit, type AccountRa
 export { DEFAULT_AUTO_RESUME_INTERVAL_MS, startAutoResumeLoop, type AutoResumeDeps, type AutoResumeLoopHandle } from "./auto-resume.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import { type DeployOpsDeps, listDeployedApps as listDeployedAppsImpl, redeployApp as redeployAppImpl } from "./deploy.js";
-import {
-  cancelOperationInStore,
-  discoverDefaultBranch,
-  listHookDiagnostics,
-  reconcileStore,
-  tryRunGit,
-} from "./helpers.js";
+import { cancelOperationInStore, listHookDiagnostics, reconcileStore, tryRunGit } from "./helpers.js";
 
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export { BranchInUseByWorktreeError, RemoteRefMissingError, WorkspaceInUseError, WorkspaceNameTakenError } from "./helpers.js";
@@ -53,6 +48,16 @@ import { buildDispatchAgentHookDeps, dispatchAgentHook as dispatchAgentHookImpl 
 import { type DispatchAgentHook, runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import { type WorkspaceAppsDeps, discoverWorkspaceApps as discoverWorkspaceAppsImpl, runWorkspaceAction as runWorkspaceActionImpl } from "./workspace-apps.js";
+
+// Daemon-constructed callback that fires lifecycle-event-driven Jira
+// transitions. Optional — when not wired (e.g., unit tests that don't
+// involve Jira), all auto-transition paths short-circuit.
+export type RunAutoTransitionsDep = (
+  event: JiraAutoTransitionEvent,
+  repo: Repo,
+  workspace: Workspace,
+  payload: { repo: Repo; workspace: Workspace; session?: AgentSession },
+) => Promise<void>;
 
 export function defaultWorktreeParent(rootPathInput: string, dataDir?: string): string {
   const rootPath = path.resolve(rootPathInput);
@@ -77,64 +82,22 @@ export class OperationService {
       terminal?: CitadelConfig["terminal"];
       agentRuntimes?: CitadelConfig["agentRuntimes"];
     },
+    private readonly runAutoTransitionsDep: RunAutoTransitionsDep | null = null,
   ) {}
 
   registerRepo(input: { rootPath: string; name?: string | undefined; worktreeParent?: string | undefined }) {
-    const now = nowIso();
-    const rootPath = path.resolve(input.rootPath);
-    if (!fs.existsSync(path.join(rootPath, ".git"))) throw new Error(`Not a git repository: ${rootPath}`);
-    const repo: Repo = {
-      id: createId("repo"),
-      name: input.name || repoDisplayName(rootPath),
-      rootPath,
-      defaultBranch: discoverDefaultBranch(rootPath),
-      defaultRemote: "origin",
-      worktreeParent: input.worktreeParent || defaultWorktreeParent(rootPath, this.config?.dataDir),
-      setupHookIds: this.config?.repoDefaults.setupHookIds ?? [],
-      teardownHookIds: this.config?.repoDefaults.teardownHookIds ?? [],
-      providerIds: ["github-gh", "jira-jtk"],
-      deployHookCommand: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-    };
-    this.store.insertRepo(repo);
-    this.activity("repo.registered", "user", `Registered ${repo.name}`, repo.id, null, null);
-    const rootWorkspace: Workspace = {
-      id: createId("ws"),
-      repoId: repo.id,
-      name: "main",
-      path: repo.rootPath,
-      branch: repo.defaultBranch,
-      baseBranch: repo.defaultBranch,
-      source: "imported",
-      kind: "root",
-      prUrl: null,
-      issueKey: null,
-      issueTitle: null,
-      issueUrl: null,
-      slackThreadUrl: null,
-      section: "backlog",
-      pinned: true,
-      lifecycle: "ready",
-      dirty: false,
-      namespaceId: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-    };
-    try {
-      this.store.insertWorkspace(rootWorkspace);
-      this.activity(
-        "workspace.root.created",
-        "system",
-        `Linked root workspace for ${repo.name}`,
-        repo.id,
-        rootWorkspace.id,
-        null,
-      );
-    } catch {} // root already present (re-register or migration backfill)
-    return repo;
+    const repoDefaults = this.config?.repoDefaults;
+    return registerRepoImpl(
+      {
+        store: this.store,
+        ...(repoDefaults ? { repoDefaults } : {}),
+        activity: (...args) => this.activity(...args),
+      },
+      {
+        ...input,
+        worktreeParent: input.worktreeParent || defaultWorktreeParent(input.rootPath, this.config?.dataDir),
+      },
+    );
   }
 
   createWorkspace = (input: CreateWorkspaceInput, options?: CreateWorkspaceOptions) =>
@@ -158,6 +121,7 @@ export class OperationService {
         activity: (...args) => this.activity(...args),
         runNotificationHooks: (event, repo, workspace, operationId, payload) =>
           this.runNotificationHooks(event, repo, workspace, operationId, payload),
+        runAutoTransitions: this.runAutoTransitionsDep,
       },
       input,
       runtime,
@@ -551,6 +515,13 @@ export class OperationService {
     this.store.appendOperationLog(operationId, { level, message, at: nowIso() });
   }
 
+  // Reads the current row before upsert so streamed log lines (appended via
+  // appendOperationLog) aren't clobbered by the INSERT-OR-REPLACE pattern.
+  private finalizeOperation(operationId: string, patch: Partial<Operation>) {
+    const current = this.store.findOperation(operationId);
+    if (current) this.store.upsertOperation({ ...current, ...patch, updatedAt: nowIso() });
+  }
+
   private activity(
     type: string,
     source: ActivityEvent["source"],
@@ -613,6 +584,7 @@ export class OperationService {
       activity: (...args) => this.activity(...args),
       runWorkspaceHooks: (...args) => this.runWorkspaceHooks(...args),
       runNotificationHooks: (...args) => this.runNotificationHooks(...args),
+      runAutoTransitions: this.runAutoTransitionsDep,
     };
   }
 }
