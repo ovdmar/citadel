@@ -793,7 +793,6 @@ export function createDaemonApp(input: {
   server.on("close", () => terminalReaper.stop());
 
   return { app, server, emit, diagnostics };
-
   function cachedProvider<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderValue(providerCache, key, load, ttlMs);
   }
