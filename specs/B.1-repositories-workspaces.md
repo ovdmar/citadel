@@ -25,7 +25,7 @@
 [ ] 7. A successfully added repository appears immediately in the repository/workspace navigator.
 [ ] 8. A failed add repository flow shows the exact validation issue and keeps entered values editable.
 [ ] 9. The add repository entry point is the small icon button next to the *Workspaces* header in the navigator.
-[ ] 10. The add repository overlay supports three input modes: local filesystem path, GitHub repo URL, and GitHub repo search (via `gh repo list`/`gh search repos` when the GitHub provider is healthy).
+[ ] 10. The add repository overlay supports three input modes: local filesystem path, GitHub repo URL, and GitHub repo search (via `gh api --method GET search/repositories` when the GitHub provider is healthy).
 [ ] 11. When the chosen repository is not yet cloned locally, the overlay clones it under `~/Workspace/<repo>` (or the configured workspace root) before registering it with Citadel.
 [ ] 12. The clone step runs as an operation with progress and explicit failure surface.
 

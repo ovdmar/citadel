@@ -216,7 +216,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     {
       name: "register_repo",
       description:
-        "Register an existing local git repository with Citadel so it appears in list_repos and can host workspaces. Provide the absolute rootPath of a directory containing a .git folder. Optionally override the display name and worktreeParent (defaults to <repo>-worktrees next to the repo). Also creates the non-removable root workspace pointing at the repo working copy. Returns { repo }.",
+        "Register an existing local git repository with Citadel so it appears in list_repos and can host workspaces. Provide the absolute rootPath of a directory containing a .git folder. Optionally override the display name and worktreeParent (defaults to Citadel's dataDir/worktrees/<repo>). Also creates the non-removable root workspace pointing at the repo working copy. Returns { repo }.",
       inputSchema: {
         type: "object",
         required: ["rootPath"],
