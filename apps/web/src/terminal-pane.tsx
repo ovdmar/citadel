@@ -19,6 +19,7 @@ export type TerminalSocketMessage = {
 const RUNBOOK_URL = "/docs/operations/terminal-runbook";
 const XTERM_FONT = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
 const SHIFT_ENTER_INPUT = "\n";
+const TERMINAL_SCROLLBACK_LINES = 20_000;
 
 /**
  * Per-session handle used by Stage tabs to drive a live terminal WebSocket.
@@ -127,7 +128,7 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
       cursorBlink: true,
       fontFamily: XTERM_FONT,
       fontSize: 13,
-      scrollback: 5000,
+      scrollback: TERMINAL_SCROLLBACK_LINES,
       theme: xtermTheme(themeRef.current),
     });
     const fit = new FitAddon();
@@ -364,6 +365,8 @@ async function writeTerminalBinary(data: unknown, terminal: Terminal, decoder: T
 function copyTerminalSelection(terminal: Terminal): void {
   const selection = terminal.getSelection();
   if (!selection) return;
+  if (copyWithBrowserCopyCommand(selection)) return;
+  if (copyWithTextareaFallback(selection)) return;
   void navigator.clipboard?.writeText(selection).catch(() => undefined);
 }
 
@@ -373,7 +376,52 @@ async function pasteClipboardIntoTerminal(ws: WebSocket): Promise<void> {
 }
 
 function isMacPlatform(): boolean {
-  return /Mac|iPhone|iPad|iPod/.test(navigator.platform || "");
+  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+  return /Mac|iPhone|iPad|iPod/.test(nav.userAgentData?.platform || navigator.platform || "");
+}
+
+function copyWithBrowserCopyCommand(text: string): boolean {
+  if (typeof document.execCommand !== "function") return false;
+  let wroteClipboardData = false;
+  const onCopy = (event: ClipboardEvent) => {
+    if (!event.clipboardData) return;
+    event.clipboardData.setData("text/plain", text);
+    wroteClipboardData = true;
+    event.preventDefault();
+  };
+  document.addEventListener("copy", onCopy);
+  try {
+    return document.execCommand("copy") && wroteClipboardData;
+  } catch {
+    return false;
+  } finally {
+    document.removeEventListener("copy", onCopy);
+  }
+}
+
+function copyWithTextareaFallback(text: string): boolean {
+  if (typeof document.execCommand !== "function") return false;
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  textarea.style.width = "1px";
+  textarea.style.height = "1px";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, text.length);
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    textarea.remove();
+    active?.focus({ preventScroll: true });
+  }
 }
 
 export function parseTerminalSocketMessage(raw: unknown): TerminalSocketMessage | null {
