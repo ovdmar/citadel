@@ -141,6 +141,10 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
     terminal.open(host);
     setConnectionState("connecting");
     setError(null);
+    let latestSelectionText = "";
+    const updateSelectionSnapshot = () => {
+      latestSelectionText = terminal.hasSelection() ? terminal.getSelection() : "";
+    };
 
     const sendResize = () => {
       try {
@@ -161,13 +165,20 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
     resizeObserver?.observe(host);
     window.addEventListener("resize", sendResize);
     const nativeKeyHandler = (event: KeyboardEvent) => {
-      if (!handleTerminalKeyEvent(event, terminal, sessionId, ws)) {
+      if (!handleTerminalKeyEvent(event, terminal, sessionId, ws, latestSelectionText)) {
         event.preventDefault();
         event.stopImmediatePropagation();
       }
     };
+    const nativeCopyHandler = (event: ClipboardEvent) => {
+      copyTerminalSelection(event, terminal, latestSelectionText);
+    };
+    const selectionDisposable = terminal.onSelectionChange(updateSelectionSnapshot);
     host.addEventListener("keydown", nativeKeyHandler, true);
-    terminal.attachCustomKeyEventHandler((event) => handleTerminalKeyEvent(event, terminal, sessionId, ws));
+    host.addEventListener("copy", nativeCopyHandler, true);
+    terminal.attachCustomKeyEventHandler((event) =>
+      handleTerminalKeyEvent(event, terminal, sessionId, ws, latestSelectionText),
+    );
     const inputDisposable = terminal.onData((data) => {
       if (data.includes("\u0003")) recordTerminalUserAction(sessionId, "ctrl_c");
       if (ws.readyState === WebSocket.OPEN) ws.send(encoderRef.current.encode(data));
@@ -211,8 +222,10 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
     return () => {
       disposed = true;
       inputDisposable.dispose();
+      selectionDisposable.dispose();
       resizeObserver?.disconnect();
       host.removeEventListener("keydown", nativeKeyHandler, true);
+      host.removeEventListener("copy", nativeCopyHandler, true);
       window.removeEventListener("resize", sendResize);
       ws.close();
       terminal.dispose();
@@ -296,7 +309,13 @@ function guidanceFor(code: string) {
   }
 }
 
-function handleTerminalKeyEvent(event: KeyboardEvent, terminal: Terminal, sessionId: string, ws: WebSocket): boolean {
+function handleTerminalKeyEvent(
+  event: KeyboardEvent,
+  terminal: Terminal,
+  sessionId: string,
+  ws: WebSocket,
+  selectionSnapshot = "",
+): boolean {
   if (event.type !== "keydown" || event.isComposing) return true;
   const key = event.key.toLowerCase();
   if (key === "k" && (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey) {
@@ -329,7 +348,8 @@ function handleTerminalKeyEvent(event: KeyboardEvent, terminal: Terminal, sessio
       return false;
     }
     if (key === "c" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-      copyTerminalSelection(terminal);
+      if (terminalSelectionText(terminal, selectionSnapshot)) return true;
+      sendTerminalInterrupt(ws, sessionId);
       return false;
     }
     if (key === "v" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
@@ -352,6 +372,11 @@ function sendTerminalControl(ws: WebSocket, message: TerminalSocketMessage): voi
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
 }
 
+function sendTerminalInterrupt(ws: WebSocket, sessionId: string): void {
+  recordTerminalUserAction(sessionId, "ctrl_c");
+  sendTerminalInput(ws, "\u0003");
+}
+
 async function writeTerminalBinary(data: unknown, terminal: Terminal, decoder: TextDecoder): Promise<void> {
   if (data instanceof ArrayBuffer) {
     terminal.write(decoder.decode(data));
@@ -362,12 +387,18 @@ async function writeTerminalBinary(data: unknown, terminal: Terminal, decoder: T
   }
 }
 
-function copyTerminalSelection(terminal: Terminal): void {
+function copyTerminalSelection(event: ClipboardEvent, terminal: Terminal, selectionSnapshot: string): void {
+  const selection = terminalSelectionText(terminal, selectionSnapshot);
+  if (!selection || !event.clipboardData) return;
+  event.clipboardData.setData("text/plain", selection);
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}
+
+function terminalSelectionText(terminal: Terminal, selectionSnapshot: string): string {
   const selection = terminal.getSelection();
-  if (!selection) return;
-  if (copyWithBrowserCopyCommand(selection)) return;
-  if (copyWithTextareaFallback(selection)) return;
-  void navigator.clipboard?.writeText(selection).catch(() => undefined);
+  if (selection) return selection;
+  return terminal.hasSelection() ? selectionSnapshot : "";
 }
 
 async function pasteClipboardIntoTerminal(ws: WebSocket): Promise<void> {
@@ -378,50 +409,6 @@ async function pasteClipboardIntoTerminal(ws: WebSocket): Promise<void> {
 function isMacPlatform(): boolean {
   const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
   return /Mac|iPhone|iPad|iPod/.test(nav.userAgentData?.platform || navigator.platform || "");
-}
-
-function copyWithBrowserCopyCommand(text: string): boolean {
-  if (typeof document.execCommand !== "function") return false;
-  let wroteClipboardData = false;
-  const onCopy = (event: ClipboardEvent) => {
-    if (!event.clipboardData) return;
-    event.clipboardData.setData("text/plain", text);
-    wroteClipboardData = true;
-    event.preventDefault();
-  };
-  document.addEventListener("copy", onCopy);
-  try {
-    return document.execCommand("copy") && wroteClipboardData;
-  } catch {
-    return false;
-  } finally {
-    document.removeEventListener("copy", onCopy);
-  }
-}
-
-function copyWithTextareaFallback(text: string): boolean {
-  if (typeof document.execCommand !== "function") return false;
-  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "");
-  textarea.style.position = "fixed";
-  textarea.style.left = "-9999px";
-  textarea.style.top = "0";
-  textarea.style.width = "1px";
-  textarea.style.height = "1px";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  textarea.setSelectionRange(0, text.length);
-  try {
-    return document.execCommand("copy");
-  } catch {
-    return false;
-  } finally {
-    textarea.remove();
-    active?.focus({ preventScroll: true });
-  }
 }
 
 export function parseTerminalSocketMessage(raw: unknown): TerminalSocketMessage | null {
