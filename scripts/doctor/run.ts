@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { loadConfig } from "@citadel/config";
-import type { DoctorReport } from "@citadel/contracts/doctor";
+import type { DoctorCheckKind, DoctorReport } from "@citadel/contracts/doctor";
 import { groupChecksByKind, statusLabel, summarizeDoctor } from "@citadel/core";
 import { DEPLOY_HOOK_RELATIVE_PATH } from "@citadel/hooks";
 import { type DeployHookStatus, type DoctorDeps, runDoctorChecks } from "@citadel/operations";
@@ -71,10 +71,9 @@ async function cliDeps(): Promise<DoctorDeps> {
         return {
           available,
           citadel: (await isActive("citadel.service")) ? "ok" : "fail",
-          tmux: (await isActive("citadel-tmux.service")) ? "ok" : "fail",
         };
       } catch {
-        return { available: false, citadel: "skipped", tmux: "skipped" };
+        return { available: false, citadel: "skipped" };
       }
     },
     collectProviderHealth: async () => [], // CLI: provider health comes from the daemon's report below.
@@ -175,6 +174,8 @@ async function main() {
       bindHost: config.bindHost,
       port: config.port,
       providers: config.providers,
+      agentRuntimes: config.agentRuntimes,
+      terminal: config.terminal,
       tls: config.tls,
     },
     mode: "cli",
@@ -183,11 +184,15 @@ async function main() {
 
   // Merge in the daemon's report (per-repo hooks, schema, providers) when reachable.
   const daemonReport = await fetchDaemonReport(cliReport.bindUrl);
+  const DAEMON_OWNED_CHECK_KINDS = new Set<DoctorCheckKind>(["database", "repo-hooks", "provider"]);
   const merged: DoctorReport = (() => {
     if (!daemonReport) return cliReport;
-    const seen = new Set(cliReport.checks.map((c) => c.id));
-    const extra = daemonReport.checks.filter((c) => !seen.has(c.id));
-    const checks = [...cliReport.checks, ...extra];
+    const daemonById = new Map(daemonReport.checks.map((c) => [c.id, c] as const));
+    const cliIds = new Set(cliReport.checks.map((c) => c.id));
+    const checks = cliReport.checks.map((c) =>
+      DAEMON_OWNED_CHECK_KINDS.has(c.kind) ? (daemonById.get(c.id) ?? c) : c,
+    );
+    checks.push(...daemonReport.checks.filter((c) => !cliIds.has(c.id)));
     return {
       ...cliReport,
       checks,

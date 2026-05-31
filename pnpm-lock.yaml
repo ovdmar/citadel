@@ -8,9 +8,24 @@ importers:
 
   .:
     dependencies:
+      '@citadel/config':
+        specifier: workspace:*
+        version: link:packages/config
+      '@citadel/contracts':
+        specifier: workspace:*
+        version: link:packages/contracts
+      '@citadel/core':
+        specifier: workspace:*
+        version: link:packages/core
       '@citadel/db':
         specifier: workspace:*
         version: link:packages/db
+      '@citadel/hooks':
+        specifier: workspace:*
+        version: link:packages/hooks
+      '@citadel/operations':
+        specifier: workspace:*
+        version: link:packages/operations
       '@tanstack/react-query':
         specifier: ^5.90.10
         version: 5.100.10(react@19.2.6)

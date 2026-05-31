@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
-# Install or refresh the systemd --user units `citadel-tmux.service` and
-# `citadel.service` to supervise the Citadel daemon out of the current
-# checkout (CITADEL_INSTALL_ROOT, default $(pwd)). Idempotent.
+# Install or refresh the systemd --user unit `citadel.service` to supervise
+# the Citadel daemon out of the current checkout (CITADEL_INSTALL_ROOT,
+# default $(pwd)). Idempotent.
 #
-# Layered lifecycle:
-#   citadel-tmux.service  — long-lived tmux server. Survives daemon restarts.
-#                           This script never restarts it: tmux is sacred,
-#                           every live agent session lives inside it.
-#                           To apply unit changes, run `make tmux-service`.
-#   citadel.service       — the daemon. Always restarted by this script so the
-#                           freshly-built dist/ is picked up.
+# Citadel uses one tmux server per workspace. Those servers are created on
+# demand via socket names derived from CITADEL_TMUX_SOCKET and are not
+# supervised by a separate citadel-tmux.service unit.
 #
 # Defaults auto-detected; override via env (CITADEL_NODE_BIN,
 # CITADEL_SHELL_BIN, OPENCLAW_ROOT, CITADEL_CONFIG, CITADEL_TMUX_SOCKET, etc.).
@@ -30,11 +26,9 @@ citadel_require_working_directory_match "$ROOT"
 
 UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 UNIT_PATH="$UNIT_DIR/citadel.service"
-TMUX_UNIT_PATH="$UNIT_DIR/citadel-tmux.service"
 mkdir -p "$UNIT_DIR"
 
 TMUX_SOCK="${CITADEL_TMUX_SOCKET:-citadel}"
-TMUX_BIN_PATH="${TMUX_BIN_PATH:-$(command -v tmux || echo /usr/bin/tmux)}"
 
 NODE_BIN="${CITADEL_NODE_BIN:-$(command -v node || true)}"
 if [[ -z "$NODE_BIN" ]]; then
@@ -46,52 +40,13 @@ OPENCLAW_ROOT="${OPENCLAW_ROOT:-$HOME/.openclaw}"
 CITADEL_CONFIG_PATH="${CITADEL_CONFIG:-$HOME/.local/share/citadel/citadel.config.json}"
 SERVICE_PATH="${CITADEL_SERVICE_PATH:-/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin}"
 
-echo "→ Writing citadel-tmux.service (tmux server, socket=$TMUX_SOCK)"
-TMUX_UNIT_TMP="$(mktemp)"
-{
-  echo "[Unit]"
-  echo "Description=Citadel tmux server (DESTRUCTIVE TO STOP — every live agent pane lives in it; use scripts/restart-tmux-service.sh)"
-  # Block accidental `systemctl --user stop|restart citadel-tmux.service`.
-  # Stopping this server SIGKILLs every claude/codex/cursor pane attached to
-  # it — irreversible session loss for the operator. The intended path for
-  # applying unit changes is scripts/restart-tmux-service.sh, which bypasses
-  # systemd by `tmux kill-server`-ing the actual process and then `start`-ing
-  # the unit fresh (RefuseManualStop blocks `stop`/`restart`, not `start`).
-  # NB: this directive lives in [Unit], not [Service].
-  echo "RefuseManualStop=true"
-  echo ""
-  echo "[Service]"
-  # `tmux -L $SOCK -D` runs the server in the foreground (no daemonise) and
-  # turns the exit-empty option off — the server stays up with zero sessions.
-  # systemd tracks the actual server PID. Restart only on abnormal exits so an
-  # orphan server already holding the socket does not trigger a restart loop.
-  echo "Type=simple"
-  echo "Environment=PATH=$SERVICE_PATH"
-  echo "ExecStart=$TMUX_BIN_PATH -L $TMUX_SOCK -D"
-  echo "Restart=on-abnormal"
-  echo "RestartSec=2"
-  echo ""
-  echo "[Install]"
-  echo "WantedBy=default.target"
-} > "$TMUX_UNIT_TMP"
-
-TMUX_UNIT_CHANGED=false
-if ! cmp -s "$TMUX_UNIT_TMP" "$TMUX_UNIT_PATH" 2>/dev/null; then
-  TMUX_UNIT_CHANGED=true
-  mv "$TMUX_UNIT_TMP" "$TMUX_UNIT_PATH"
-  echo "  ↳ citadel-tmux.service content changed (apply with: make tmux-service)"
-else
-  rm -f "$TMUX_UNIT_TMP"
-  echo "  ↳ citadel-tmux.service unchanged"
-fi
-
 echo "→ Writing citadel.service → $ROOT"
 CITADEL_UNIT_TMP="$(mktemp)"
 {
   echo "[Unit]"
   echo "Description=Citadel local operator cockpit"
-  echo "After=network-online.target citadel-tmux.service"
-  echo "Wants=network-online.target citadel-tmux.service"
+  echo "After=network-online.target"
+  echo "Wants=network-online.target"
   echo ""
   echo "[Service]"
   echo "Type=simple"
@@ -106,16 +61,15 @@ CITADEL_UNIT_TMP="$(mktemp)"
   echo "Environment=OPENCLAW_ROOT=$OPENCLAW_ROOT"
   echo "Environment=CITADEL_OPENCLAW_STATUS_TIMEOUT_MS=15000"
   echo "Environment=CITADEL_SHELL_BIN=$SHELL_BIN"
-  # Routes every tmux invocation to citadel-tmux.service's server.
+  # Base socket prefix; workspace sessions use <base>-ws-<workspaceId>.
   echo "Environment=CITADEL_TMUX_SOCKET=$TMUX_SOCK"
   echo "Environment=PATH=$SERVICE_PATH"
   echo "ExecStart=$NODE_BIN $ROOT/apps/daemon/dist/index.js"
   echo "Restart=always"
   echo "RestartSec=3"
-  # Kill daemon child processes on restart so disposable node-pty viewer
-  # clients do not survive as orphans. Durable sessions live in the separate
-  # citadel-tmux.service unit and are not part of this control group.
-  echo "KillMode=control-group"
+  # Workspace tmux servers are child processes of the daemon's tmux commands
+  # and must survive daemon restarts; terminal reaper cleans up stale clients.
+  echo "KillMode=process"
   echo ""
   echo "[Install]"
   echo "WantedBy=default.target"
@@ -131,89 +85,12 @@ else
   echo "  ↳ citadel.service unchanged"
 fi
 
-if $TMUX_UNIT_CHANGED || $CITADEL_UNIT_CHANGED; then
+if $CITADEL_UNIT_CHANGED; then
   systemctl --user daemon-reload
 fi
 
-systemctl --user enable citadel-tmux.service citadel.service >/dev/null 2>&1 || true
-
-tmux_socket_owner_pid() {
-  local socket_path="${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$TMUX_SOCK"
-  if [[ ! -S "$socket_path" ]]; then
-    return 1
-  fi
-
-  local pid=""
-  if command -v fuser >/dev/null 2>&1; then
-    pid="$(fuser "$socket_path" 2>/dev/null | awk '{ print $1 }' || true)"
-  fi
-  if [[ -z "$pid" ]]; then
-    pid="$("$TMUX_BIN_PATH" -L "$TMUX_SOCK" display-message -p "#{pid}" 2>/dev/null || true)"
-  fi
-  if [[ -z "$pid" ]]; then
-    return 1
-  fi
-  echo "$pid"
-}
-
-tmux_service_main_pid() {
-  local pid
-  pid="$(systemctl --user show -p MainPID --value citadel-tmux.service 2>/dev/null || true)"
-  if [[ "$pid" =~ ^[0-9]+$ ]] && [[ "$pid" != "0" ]]; then
-    echo "$pid"
-  fi
-}
-
-warn_orphan_tmux() {
-  local pid="$1"
-  local session_count
-  session_count="$({ "$TMUX_BIN_PATH" -L "$TMUX_SOCK" list-sessions 2>/dev/null || true; } | wc -l | tr -d ' ')"
-  echo "! citadel-tmux.service is not supervising socket=$TMUX_SOCK; it is already owned by tmux pid=$pid ($session_count live sessions)"
-  echo "  ↳ leaving live tmux sessions untouched"
-  echo "  ↳ run 'make tmux-service' to reconcile into systemd ownership (destructive)"
-  TMUX_ORPHAN_WARNED=1
-}
-
-# Start citadel-tmux.service only when it's not already up. This script never
-# *restarts* it — every agent session lives in that server, so a restart is a
-# destructive act the user must initiate explicitly via `make tmux-service`.
-# If an unsupervised tmux server already owns the socket, keep installing the
-# daemon but do not try to steal or kill the socket here.
-TMUX_ORPHAN_WARNED=0
-TMUX_OWNER_PID="$(tmux_socket_owner_pid || true)"
-TMUX_SERVICE_PID="$(tmux_service_main_pid)"
-if [[ -n "$TMUX_OWNER_PID" && "$TMUX_OWNER_PID" != "$TMUX_SERVICE_PID" ]]; then
-  warn_orphan_tmux "$TMUX_OWNER_PID"
-elif [[ -z "$TMUX_OWNER_PID" ]]; then
-  echo "→ start citadel-tmux.service"
-  systemctl --user start citadel-tmux.service
-  sleep 0.4
-  TMUX_OWNER_PID="$(tmux_socket_owner_pid || true)"
-  TMUX_SERVICE_PID="$(tmux_service_main_pid)"
-  if [[ -n "$TMUX_OWNER_PID" && "$TMUX_OWNER_PID" != "$TMUX_SERVICE_PID" ]]; then
-    warn_orphan_tmux "$TMUX_OWNER_PID"
-  elif [[ -z "$TMUX_OWNER_PID" || "$TMUX_OWNER_PID" != "$TMUX_SERVICE_PID" ]]; then
-    echo "✗ citadel-tmux.service failed to start"
-    systemctl --user status citadel-tmux.service --no-pager | head -20
-    exit 1
-  fi
-fi
-TMUX_OWNER_PID="$(tmux_socket_owner_pid || true)"
-TMUX_SERVICE_PID="$(tmux_service_main_pid)"
-if [[ -n "$TMUX_OWNER_PID" && "$TMUX_OWNER_PID" == "$TMUX_SERVICE_PID" ]]; then
-  echo "✓ citadel-tmux.service active (socket=$TMUX_SOCK)"
-else
-  if [[ "$TMUX_ORPHAN_WARNED" != "1" ]]; then
-    if TMUX_ORPHAN_PID="$(tmux_socket_owner_pid)"; then
-      warn_orphan_tmux "$TMUX_ORPHAN_PID"
-    else
-      echo "✗ citadel-tmux.service is not active and no tmux server owns socket=$TMUX_SOCK"
-      systemctl --user status citadel-tmux.service --no-pager | head -20
-      exit 1
-    fi
-  fi
-  echo "! continuing with existing unsupervised tmux server (socket=$TMUX_SOCK)"
-fi
+systemctl --user enable citadel.service >/dev/null 2>&1 || true
+systemctl --user disable citadel-tmux.service >/dev/null 2>&1 || true
 
 echo "→ pnpm build (so the supervised process has a fresh dist)"
 ( cd "$ROOT" && pnpm build )
@@ -225,9 +102,6 @@ if ! systemctl --user is-active --quiet citadel.service; then
   echo "✗ citadel.service failed to start"
   systemctl --user status citadel.service --no-pager | head -20
   exit 1
-fi
-if [[ "$TMUX_ORPHAN_WARNED" == "1" ]]; then
-  systemctl --user reset-failed citadel-tmux.service 2>/dev/null || true
 fi
 echo "✓ citadel.service active"
 systemctl --user status citadel.service --no-pager | head -8 || true

@@ -35,14 +35,12 @@ const LIVE_STATUSES: ReadonlyArray<string> = [
   "usage_limited",
 ];
 
-// systemd starts citadel.service with Wants/After=citadel-tmux.service, but
-// "After" only orders the *start command*, not socket readiness. Empirically
-// the daemon can beat tmux to readiness by a few hundred ms, in which case
-// listAllTmuxSessions() returns null on the first call — and the original
-// reconcile path treated that as "skip", leaving every DB row pinned in
-// `running` until status-monitor caught up minutes later. Retry briefly so
-// the common race resolves itself without a user-visible "0 sessions
-// restored" outcome.
+// Workspace tmux servers are created on demand by tmux. During boot or after
+// a daemon restart, the first listAllTmuxSessions() call can still race socket
+// readiness and return null — and the original reconcile path treated that as
+// "skip", leaving every DB row pinned in `running` until status-monitor caught
+// up minutes later. Retry briefly so the common race resolves itself without a
+// user-visible "0 sessions restored" outcome.
 async function awaitTmuxSessions(
   probe: () => Set<string> | null,
   timeoutMs: number,
@@ -202,9 +200,8 @@ export type BootRestoreDeps = {
   // matches the pre-fix behaviour so tests that don't care still pass.
   hasTmuxSession?: (name: string) => boolean;
   // How long to keep retrying the tmux probe before giving up. Production
-  // default covers the systemd startup race (citadel.service can outrun
-  // citadel-tmux.service's socket readiness by a few hundred ms). Tests pass
-  // 0 to short-circuit since their stubs are deterministic.
+  // default covers workspace tmux socket readiness races. Tests pass 0 to
+  // short-circuit since their stubs are deterministic.
   tmuxReadinessTimeoutMs?: number;
   // Optional diagnostics sink — same structural shape as the global
   // DiagnosticsLogger. boot-restore emits one event per flip decision so the

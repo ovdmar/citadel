@@ -109,7 +109,7 @@ export function defaultDoctorDeps(input: {
     inspectDeployHook: inspectDeployHookFile,
     listSystemdServices: async () => {
       // Daemon mode — skip.
-      return { available: false, citadel: "skipped", tmux: "skipped" };
+      return { available: false, citadel: "skipped" };
     },
     collectProviderHealth: async (): Promise<DoctorProviderProbe[]> => {
       const rows = await input.collectProviderHealth();

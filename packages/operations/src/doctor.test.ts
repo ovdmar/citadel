@@ -34,7 +34,7 @@ function depsWithDefaults(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
     expectedSchemaVersion: 1,
     listRepos: () => [],
     inspectDeployHook: () => "missing",
-    listSystemdServices: async () => ({ available: false, citadel: "skipped", tmux: "skipped" }),
+    listSystemdServices: async () => ({ available: false, citadel: "skipped" }),
     collectProviderHealth: async () => [
       { provider: "github", status: "healthy", refreshedAt: new Date().toISOString(), refreshAge: 0 },
       { provider: "jira", status: "healthy", refreshedAt: new Date().toISOString(), refreshAge: 0 },
@@ -137,6 +137,20 @@ describe("runDoctorChecks — daemon reachability", () => {
   });
 });
 
+describe("runDoctorChecks — systemd services", () => {
+  it("checks citadel.service without requiring a separate citadel-tmux.service", async () => {
+    const report = await runDoctorChecks({
+      config: fakeConfig(),
+      mode: "cli",
+      deps: depsWithDefaults({
+        listSystemdServices: async () => ({ available: true, citadel: "ok" }),
+      }),
+    });
+    expect(report.checks.find((c) => c.id === "service.citadel")?.status).toBe("ok");
+    expect(report.checks.find((c) => c.id === "service.citadel-tmux")).toBeUndefined();
+  });
+});
+
 describe("runDoctorChecks — provider warn-vs-fail contract", () => {
   it("unconfigured provider (binary missing) → warn with hint", async () => {
     const report = await runDoctorChecks({
@@ -177,6 +191,37 @@ describe("runDoctorChecks — provider warn-vs-fail contract", () => {
     });
     const gh = report.checks.find((c) => c.id === "provider.github");
     expect(gh?.status).toBe("ok");
+  });
+
+  it("maps daemon provider IDs onto config provider IDs", async () => {
+    const report = await runDoctorChecks({
+      config: fakeConfig(),
+      mode: "daemon",
+      deps: depsWithDefaults({
+        collectProviderHealth: async () => [
+          { provider: "github-gh", status: "healthy" },
+          { provider: "jira-jtk", status: "healthy" },
+        ],
+      }),
+    });
+    expect(report.checks.find((c) => c.id === "provider.github")?.status).toBe("ok");
+    expect(report.checks.find((c) => c.id === "provider.jira")?.status).toBe("ok");
+  });
+
+  it("does not treat skipped daemon binary checks as missing provider commands", async () => {
+    const report = await runDoctorChecks({
+      config: fakeConfig(),
+      mode: "daemon",
+      deps: depsWithDefaults({
+        which: async () => null,
+        collectProviderHealth: async () => [
+          { provider: "github-gh", status: "healthy" },
+          { provider: "jira-jtk", status: "healthy" },
+        ],
+      }),
+    });
+    expect(report.checks.find((c) => c.id === "provider.github")?.status).toBe("ok");
+    expect(report.checks.find((c) => c.id === "provider.jira")?.status).toBe("ok");
   });
 
   it("disabled provider → warn (unconfigured)", async () => {

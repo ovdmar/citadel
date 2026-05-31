@@ -65,9 +65,6 @@ help:
 	@echo "  make setup        pnpm install"
 	@echo "  make stop         Stop this worktree's deploy stack"
 	@echo "  make logs         Tail the deploy stack's combined log (daemon + vite)"
-	@echo "  make tmux-service Restart citadel-tmux.service (DESTRUCTIVE — kills live tmux sessions;"
-	@echo "                    boot-restore resumes them via claude --resume). Use only to apply"
-	@echo "                    tmux-unit changes or recover from an orphan tmux server."
 	@echo ""
 	@echo "Seeding (so a fresh worktree cockpit isn't empty):"
 	@echo "  make seed         Materialize the checked-in mock repo + insert fixture rows into"
@@ -222,9 +219,6 @@ deploy:
 # exact release), writes a user-systemd unit pointing at THIS checkout, brings
 # it up, and runs doctor. Does NOT touch any worktree-local `deploy` stack.
 #
-# Critically: `make install` never restarts citadel-tmux.service. tmux is the
-# substrate every live agent session lives in; restarting it kills them all.
-# Apply tmux-unit changes via `make tmux-service` instead.
 install:
 	@bash scripts/install/upgrade.sh $(if $(REF),REF=$(REF))
 
@@ -238,12 +232,10 @@ upgrade:
 doctor:
 	@pnpm exec tsx scripts/doctor/run.ts $(filter-out $@,$(MAKECMDGOALS))
 
-# `make tmux-service` is the destructive sibling: (re)starts
-# citadel-tmux.service, killing every live tmux session on the citadel
-# socket. Used to apply tmux-unit changes or recover from an orphan-server
-# condition. Boot-restore resumes recoverable agents via `claude --resume`.
+# Legacy no-op. Citadel now uses one tmux server per workspace, created on
+# demand by tmux, so there is no separate citadel-tmux.service to maintain.
 tmux-service:
-	@bash scripts/restart-tmux-service.sh
+	@echo "citadel-tmux.service is deprecated; workspace tmux servers are created on demand."
 
 # `make stop` kills the detached `deploy` stack (daemon + vite, single pgid).
 # Doesn't touch the systemd unit (use `systemctl --user stop citadel.service`).

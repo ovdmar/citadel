@@ -3,11 +3,10 @@
 // Background: nothing in the steady-state codepaths leaks tmux sessions.
 // Crashes (daemon SEGV, kill -9, OOM-kill) bypass that path and leave behind
 // tmux sessions whose DB row was never updated. The 2026-05-27 incident
-// accumulated 162 such tmux sessions across two failure modes (broken
-// citadel-tmux unit + repeated install retries).
+// accumulated 162 such tmux sessions across install/restart failure modes.
 //
 // What we reap:
-//   - tmux sessions on the citadel socket whose name no DB row references
+//   - tmux sessions on known workspace sockets whose name no DB row references
 //     (or whose only references are non-live statuses like `terminated`).
 // We do NOT touch sessions whose name matches a DB row in any state — even
 // `terminated` rows might still be reachable from Settings → Restore until
@@ -45,8 +44,11 @@ export async function reapOrphans(deps: {
   if (deps.reapTmuxSessions === false) {
     deps.diagnostics?.log("reaper", "tmux.skipped", { reason: "unsafe-shared-socket" });
   } else {
-    const sockets = referencedSockets.size > 0 ? referencedSockets : new Set<string | null>([null]);
-    for (const socketName of sockets) {
+    if (referencedSockets.size === 0) {
+      deps.diagnostics?.log("reaper", "tmux.skipped", { reason: "no-known-workspace-sockets" });
+      return summary;
+    }
+    for (const socketName of referencedSockets) {
       const liveTmuxNames = listAllTmuxSessions(socketName);
       if (liveTmuxNames === null) {
         deps.diagnostics?.log("reaper", "tmux.unreachable", {

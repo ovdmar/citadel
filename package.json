@@ -30,7 +30,12 @@
     "seed": "tsx scripts/dev/seed.ts"
   },
   "dependencies": {
+    "@citadel/config": "workspace:*",
+    "@citadel/contracts": "workspace:*",
+    "@citadel/core": "workspace:*",
     "@citadel/db": "workspace:*",
+    "@citadel/hooks": "workspace:*",
+    "@citadel/operations": "workspace:*",
     "@tanstack/react-query": "^5.90.10",
     "@tanstack/react-router": "^1.132.0",
     "@xterm/addon-fit": "^0.10.0",

@@ -49,13 +49,12 @@ export type DoctorDeps = {
   /** Resolve <workspacePath>/.citadel/hooks/deploy executability. */
   inspectDeployHook: (workspacePath: string) => DeployHookStatus;
   /**
-   * systemd --user query. `available: false` short-circuits both
-   * service checks to `skipped` (dev-worktree, non-systemd hosts).
+   * systemd --user query. `available: false` short-circuits service checks
+   * to `skipped` (dev-worktree, non-systemd hosts).
    */
   listSystemdServices: () => Promise<{
     available: boolean;
     citadel: DoctorCheckStatus;
-    tmux: DoctorCheckStatus;
   }>;
   /** Provider-health snapshot used to distinguish unreachable from unconfigured. */
   collectProviderHealth: () => Promise<DoctorProviderProbe[]>;
@@ -211,7 +210,7 @@ async function checkProviders(
   >) {
     const binaryPresent = binariesAvailable.get(settings.command) ?? null;
     const enabled = settings.enabled;
-    const status = byId.get(id) ?? "unknown";
+    const status = providerStatusForConfigId(id, byId);
     if (!enabled || binaryPresent === false) {
       const reason = !enabled ? "provider disabled in config" : `command "${settings.command}" not found in PATH`;
       checks.push({
@@ -244,6 +243,20 @@ async function checkProviders(
     });
   }
   return checks;
+}
+
+function providerStatusForConfigId(id: string, byId: Map<string, DoctorProviderStatus>): DoctorProviderStatus {
+  const exact = byId.get(id);
+  if (exact) return exact;
+  const aliases: Record<string, string[]> = {
+    github: ["github-gh"],
+    jira: ["jira-jtk"],
+  };
+  for (const alias of aliases[id] ?? []) {
+    const status = byId.get(alias);
+    if (status) return status;
+  }
+  return "unknown";
 }
 
 function checkBindHostTls(config: DoctorConfig): DoctorCheck {
@@ -334,19 +347,9 @@ async function checkSystemd(deps: DoctorDeps): Promise<DoctorCheck[]> {
         status: "skipped",
         detail: "systemd --user not available (worktree dev mode)",
       },
-      {
-        id: "service.citadel-tmux",
-        kind: "service",
-        label: "citadel-tmux.service",
-        status: "skipped",
-        detail: "systemd --user not available (worktree dev mode)",
-      },
     ];
   }
-  return [
-    { id: "service.citadel", kind: "service", label: "citadel.service", status: services.citadel },
-    { id: "service.citadel-tmux", kind: "service", label: "citadel-tmux.service", status: services.tmux },
-  ];
+  return [{ id: "service.citadel", kind: "service", label: "citadel.service", status: services.citadel }];
 }
 
 export async function runDoctorChecks(input: {
@@ -362,7 +365,11 @@ export async function runDoctorChecks(input: {
   const binariesAvailable = new Map<string, boolean>();
   for (const c of binaryChecks) {
     const bin = c.id.replace(/^binary\./, "");
-    binariesAvailable.set(bin, c.status === "ok");
+    if (c.status === "ok") {
+      binariesAvailable.set(bin, true);
+    } else if (c.status === "fail" || (c.status === "warn" && c.detail === "not found in PATH")) {
+      binariesAvailable.set(bin, false);
+    }
   }
 
   if (mode === "cli") {
