@@ -365,9 +365,13 @@ export function normalizeCiRunList(output: string) {
 }
 
 export {
+  buildJiraSearchJql,
   collectJiraIssueSummary,
   parseJiraIssueOutput,
+  parseJiraSearchOutput,
   parseJiraTransitionsOutput,
+  resolveJiraTransitionByTargetStatus,
+  searchJiraIssues,
   setJiraCommand,
   transitionJiraIssue,
 } from "./jira.js";

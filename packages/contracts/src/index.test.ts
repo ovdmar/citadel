@@ -12,8 +12,12 @@ import {
   CreateWorkspaceInputSchema,
   HookEventSchema,
   HookOutputSchema,
+  IssueSearchResponseSchema,
+  IssueSearchResultSchema,
   IssueTrackerSummarySchema,
   IssueTransitionActionResultSchema,
+  JiraAutoTransitionEventSchema,
+  JiraAutoTransitionSchema,
   OperationSchema,
   PrMergeStateStatusSchema,
   PrReviewerSchema,
@@ -258,6 +262,55 @@ describe("contract schemas", () => {
         checkedAt: timestamp,
       }).transition,
     ).toBe("31");
+  });
+
+  it("validates the Jira picker search-result and search-response shapes", () => {
+    expect(
+      IssueSearchResultSchema.parse({
+        key: "MS-1",
+        summary: "Pick me",
+        status: "In Progress",
+        url: "https://jira.example/browse/MS-1",
+        updated: timestamp,
+      }).key,
+    ).toBe("MS-1");
+    // `key` is the only required field — every other field tolerates null,
+    // matching jtk's loose output (older jtk omits `updated`, statuses can
+    // be empty during transitions).
+    expect(
+      IssueSearchResultSchema.parse({ key: "MS-2", summary: null, status: null, url: null, updated: null }).summary,
+    ).toBeNull();
+    expect(IssueSearchResultSchema.safeParse({ key: "" }).success).toBe(false);
+
+    const response = IssueSearchResponseSchema.parse({
+      status: "healthy",
+      reason: null,
+      results: [{ key: "MS-1", summary: "Pick me", status: "In Progress", url: null, updated: timestamp }],
+    });
+    expect(response.results).toHaveLength(1);
+
+    // Degraded responses carry an empty results array + a reason — the
+    // picker UI distinguishes "search failed" from "search returned no
+    // matches".
+    expect(IssueSearchResponseSchema.parse({ status: "degraded", reason: "jtk not found", results: [] }).status).toBe(
+      "degraded",
+    );
+  });
+
+  it("rejects auto-transition events outside the supported enum", () => {
+    expect(JiraAutoTransitionEventSchema.safeParse("agent.started").success).toBe(true);
+    expect(JiraAutoTransitionEventSchema.safeParse("workspace.issue_attached").success).toBe(true);
+    expect(JiraAutoTransitionEventSchema.safeParse("workspace.archived").success).toBe(true);
+    expect(JiraAutoTransitionEventSchema.safeParse("workspace.removed").success).toBe(true);
+    // Deliberately excluded — fires before any issue can be attached.
+    expect(JiraAutoTransitionEventSchema.safeParse("workspace.created").success).toBe(false);
+    // Deliberately excluded — multi-fire, would burst Jira.
+    expect(JiraAutoTransitionEventSchema.safeParse("workspace.updated").success).toBe(false);
+
+    expect(JiraAutoTransitionSchema.parse({ event: "agent.started", transition: "In Progress" }).transition).toBe(
+      "In Progress",
+    );
+    expect(JiraAutoTransitionSchema.safeParse({ event: "agent.started", transition: "" }).success).toBe(false);
   });
 
   it("requires cron for recurring scheduled agents and runAt for one-shots", () => {

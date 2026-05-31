@@ -72,7 +72,6 @@ describe("OperationService", () => {
 
     expect(archived).toMatchObject({ removed: false, archived: true, dirty: true });
     expect(fs.existsSync(workspace?.path ?? "")).toBe(true);
-    // The auto-created root workspace stays; only the worktree workspace is archived.
     expect(store.listWorkspaces().filter((w) => w.kind !== "root")).toHaveLength(0);
   });
 
@@ -91,7 +90,6 @@ describe("OperationService", () => {
 
     const removed = await service.removeRepo({ repoId: repo.id });
 
-    // archivedWorkspaces includes both the auto-created root and the explicit worktree.
     expect(removed).toMatchObject({ removed: true, archivedWorkspaces: 2, cleanupWorktrees: false });
     expect(store.listRepos()).toEqual([]);
     expect(store.listWorkspaces()).toEqual([]);
@@ -674,7 +672,6 @@ describe("OperationService", () => {
     expect(workspace?.repoId).toBe(repo.id);
     expect(session?.runtimeId).toBe("shell");
     expect(session?.workspaceId).toBe(result.workspaceId);
-    // Display name is derived from the prompt's first ~40 chars when caller didn't pass one.
     expect(session?.displayName).toBe("describe the repo in one sentence");
   });
 

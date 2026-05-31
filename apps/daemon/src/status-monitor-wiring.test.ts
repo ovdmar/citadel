@@ -37,7 +37,7 @@ describe("buildStatusMonitorDeps — shell-first wiring", () => {
       mcp: { enabled: false },
       providers: {
         github: { enabled: false, command: "gh" },
-        jira: { enabled: false, command: "jtk" },
+        jira: { enabled: false, command: "jtk", autoTransitions: [] },
       },
       runtimes: runtimes.map((r) => ({ ...r, args: [], displayName: r.id })),
     } as unknown as CitadelConfig;

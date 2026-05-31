@@ -5,6 +5,15 @@ import type express from "express";
 import { buildDiagnosticsSnapshot, streamDiagnosticsBundle } from "./diagnostics-bundle.js";
 import type { UiActivityTracker } from "./ui-activity.js";
 
+function clippedString(value: unknown, fallback: string, max: number): string {
+  if (typeof value !== "string") return fallback;
+  return value.length > max ? value.slice(0, max) : value;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 export function registerDiagnosticsRoutes(input: {
   app: express.Express;
   store: SqliteStore;
@@ -16,6 +25,7 @@ export function registerDiagnosticsRoutes(input: {
   app.get("/api/diagnostics/snapshot", (_req, res) => {
     res.json(buildDiagnosticsSnapshot({ store, diagnostics, config }));
   });
+
   app.post("/api/diagnostics/client-event", (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>;
     uiActivity?.recordClientEvent(body);
@@ -35,6 +45,7 @@ export function registerDiagnosticsRoutes(input: {
     });
     res.status(204).end();
   });
+
   app.get("/api/diagnostics/bundle.tar.gz", async (_req, res) => {
     try {
       await streamDiagnosticsBundle(res, { store, diagnostics, config });
@@ -50,13 +61,4 @@ export function registerDiagnosticsRoutes(input: {
       }
     }
   });
-}
-
-function clippedString(value: unknown, fallback: string, max: number): string {
-  if (typeof value !== "string") return fallback;
-  return value.length > max ? value.slice(0, max) : value;
-}
-
-function finiteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }

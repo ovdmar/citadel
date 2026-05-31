@@ -601,7 +601,7 @@ describe("tmux terminal gateway helpers", () => {
       ],
     });
     pipeBackgroundSessionToLog(sessionName, logPath);
-    fs.writeFileSync(triggerPath, "go");
+    fs.writeFileSync(triggerPath, "go\n");
     await waitFor(() => fs.existsSync(logPath) && fs.statSync(logPath).size >= 1024, 5000);
     expect(fs.statSync(logPath).size).toBeGreaterThanOrEqual(1024);
     // stopBackgroundSessionPipe must not throw even if pane is dead.

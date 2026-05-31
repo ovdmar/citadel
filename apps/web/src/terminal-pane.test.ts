@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import * as React from "react";
+import { createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -24,8 +24,6 @@ import {
   terminalWebSocketUrl,
 } from "./terminal-pane.js";
 import { applyThemePreference } from "./use-resolved-theme.js";
-
-const { createElement } = React;
 
 const xtermMocks = vi.hoisted(() => {
   class FakeTerminal {

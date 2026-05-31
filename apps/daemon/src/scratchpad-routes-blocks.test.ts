@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDaemonApp } from "./app.js";
+import { serializeBlocks } from "./scratchpad-blocks.js";
 import {
   closeServer,
   createScratchpadFixture,
@@ -408,9 +409,14 @@ describe("scratchpad block routes + MCP block tools", () => {
     const { server } = await createDaemonApp(fixture);
     const baseUrl = await listen(server);
     try {
-      for (let i = 0; i < 55; i++) {
-        await postJson(`${baseUrl}/api/scratchpad/blocks`, { text: `note ${i} scratchpad item` });
-      }
+      await putJson(`${baseUrl}/api/scratchpad`, {
+        content: serializeBlocks(
+          Array.from({ length: 55 }, (_, i) => ({
+            id: `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`,
+            text: `note ${i} scratchpad item`,
+          })),
+        ),
+      });
       const search = await getJson<{ matches: unknown[] }>(
         `${baseUrl}/api/scratchpad/blocks/search?q=scratchpad&limit=9999`,
       );

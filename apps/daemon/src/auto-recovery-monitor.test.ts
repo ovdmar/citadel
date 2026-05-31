@@ -70,7 +70,10 @@ function makeConfig(): CitadelConfig {
   return {
     dataDir: "/tmp/fake",
     databasePath: "/tmp/fake/db",
-    providers: { github: { enabled: false, command: "gh" }, jira: { enabled: false, command: "jtk" } },
+    providers: {
+      github: { enabled: false, command: "gh" },
+      jira: { enabled: false, command: "jtk", autoTransitions: [] },
+    },
     runtimes: [{ id: "claude-code", displayName: "Claude Code", command: "claude", args: [] }],
     repoDefaults: { setupHookIds: [], teardownHookIds: [] },
     hooks: [],

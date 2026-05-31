@@ -1,4 +1,4 @@
-import type { APIRequestContext } from "@playwright/test";
+import type { APIRequestContext, APIResponse } from "@playwright/test";
 import { apiGet } from "./api-request.js";
 
 // Last line of defense against the e2e suite writing into a production install.
@@ -16,13 +16,14 @@ import { apiGet } from "./api-request.js";
 export async function assertDaemonIsSandbox(request: APIRequestContext, apiBase: string): Promise<void> {
   const expectedPrefix =
     process.env.CITADEL_PLAYWRIGHT_SANDBOX_PREFIX ||
+    process.env.CITADEL_DATA_DIR ||
     process.env.CITADEL_PLAYWRIGHT_DATA_DIR ||
     "/tmp/citadel-playwright-data";
   const expectedRunId = process.env.CITADEL_PLAYWRIGHT_RUN_ID;
   if (!expectedRunId) {
     throw new Error("[sandbox-guard] missing CITADEL_PLAYWRIGHT_RUN_ID. Refusing to run destructive e2e tests.");
   }
-  const res = await apiGet(request, `${apiBase}/api/health`);
+  const res = await getHealthWithTransientRetry(request, apiBase);
   if (!res.ok()) {
     const detail = await res.text().catch(() => "");
     throw new Error(
@@ -44,4 +45,24 @@ export async function assertDaemonIsSandbox(request: APIRequestContext, apiBase:
       `[sandbox-guard] daemon at ${apiBase} reports databasePath=${dbPath ?? "<missing>"}, which is not under ${expectedPrefix}. Refusing to run — this would overwrite real user data (see incident 2026-05-27: e2e suite clobbered ~/.local/share/citadel/scratchpad.md). If this is intentional, set CITADEL_PLAYWRIGHT_SANDBOX_PREFIX to a prefix that matches the target daemon's data dir.`,
     );
   }
+}
+
+async function getHealthWithTransientRetry(request: APIRequestContext, apiBase: string): Promise<APIResponse> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await apiGet(request, `${apiBase}/api/health`);
+    } catch (error) {
+      if (!isTransientConnectionError(error) || attempt === 2) {
+        throw error;
+      }
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
+function isTransientConnectionError(error: unknown): boolean {
+  return error instanceof Error && /ECONNRESET|socket hang up|ETIMEDOUT/i.test(error.message);
 }
