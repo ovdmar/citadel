@@ -14,8 +14,9 @@ import {
   Settings2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AddRepoModal } from "./add-repo-modal.js";
 import { api, queryClient } from "./api.js";
-import { AddRepoModal, CreateWorkspaceModal, GroupByMenu, type GroupKey } from "./modals.js";
+import { CreateWorkspaceModal, GroupByMenu, type GroupKey } from "./modals.js";
 import {
   type GroupNode,
   type GroupableKey,

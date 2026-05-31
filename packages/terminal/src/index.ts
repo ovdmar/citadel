@@ -541,8 +541,13 @@ export function resizePane(sessionName: string, cols: number, rows: number, sock
 }
 
 export function killTmuxSession(sessionName: string, socketName?: string | null) {
-  if (tmuxSessionExists(sessionName, socketName)) {
-    execFileSync("tmux", [...tmuxPrefix(socketName), "kill-session", "-t", sessionName]);
+  try {
+    if (tmuxSessionExists(sessionName, socketName)) {
+      execFileSync("tmux", [...tmuxPrefix(socketName), "kill-session", "-t", sessionName]);
+    }
+  } catch {
+    // The server/session can disappear between has-session and kill-session.
+    // Cleanup callers should still remove sentinels and continue.
   }
   try {
     fs.rmSync(agentLiveSentinelPath(sessionName), { force: true });
