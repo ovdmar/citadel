@@ -3,7 +3,7 @@ import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import type { ActivityEvent, CreateAgentSessionInput, CreateNamespaceInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
-import { createId, nowIso, repoDisplayName, workspaceBranchName } from "@citadel/core";
+import { createId, nowIso, repoDisplayName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
 import * as agentHistory from "./agent-history.js";
@@ -18,8 +18,13 @@ export type { LaunchAgentResult } from "./launch-agent.js";
 export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
 export type { AgentHistoryResult, AgentHistoryErrorResult } from "./agent-history.js";
 export * from "./status.js";
-// biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-export { ScheduledAgentRunner, parseCronExpression, cronMatches, nextCronRun, describeCron } from "./scheduled-agents.js";
+export {
+  ScheduledAgentRunner,
+  parseCronExpression,
+  cronMatches,
+  nextCronRun,
+  describeCron,
+} from "./scheduled-agents.js";
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";

@@ -132,10 +132,9 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  flushSync(() => {
+  await flushReact(() => {
     for (const root of roots.splice(0)) root.unmount();
   });
-  await settle();
   vi.restoreAllMocks();
 });
 
@@ -183,26 +182,23 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     roots.push(root);
     const session = sessionFixture();
 
-    await act(async () => {
+    await flushReact(() => {
       root.render(createElement(TerminalPane, { session, active: false }));
-      await settle();
     });
 
     expect(FakeWebSocket.instances).toHaveLength(0);
     expect(xtermMocks.FakeTerminal.instances).toHaveLength(0);
     expect(getTerminalHandle("sess_1")).toBeDefined();
 
-    await act(async () => {
+    await flushReact(() => {
       root.render(createElement(TerminalPane, { session, active: true }));
-      await settle();
     });
 
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(xtermMocks.FakeTerminal.instances).toHaveLength(1);
 
-    await act(async () => {
+    await flushReact(() => {
       root.render(createElement(TerminalPane, { session, active: false }));
-      await settle();
     });
 
     expect(FakeWebSocket.instances[0]?.readyState).toBe(FakeWebSocket.CLOSED);
@@ -215,7 +211,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const term = xtermMocks.FakeTerminal.instances[0];
     if (!ws || !term) throw new Error("terminal rig missing");
 
-    await act(async () => ws.open());
+    await flushReact(() => ws.open());
     ws.message(new TextEncoder().encode("snapshot").buffer);
     ws.message(new TextEncoder().encode("-chunk").buffer);
     term.emitData("abc");
@@ -231,7 +227,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const term = xtermMocks.FakeTerminal.instances[0];
     if (!ws || !term) throw new Error("terminal rig missing");
 
-    await act(async () => ws.open());
+    await flushReact(() => ws.open());
     term.emitData("\u0003");
     const commandPalette = term.emitKey(
       new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true, cancelable: true }),
@@ -256,7 +252,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const host = document.querySelector(".terminal-xterm-host");
     if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
 
-    await act(async () => ws.open());
+    await flushReact(() => ws.open());
     const event = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true });
     const downstream = vi.fn();
     host.addEventListener("keydown", downstream);
@@ -272,10 +268,16 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     applyThemePreference("dark");
     await renderTerminal();
     expect(FakeWebSocket.instances).toHaveLength(1);
+    const term = xtermMocks.FakeTerminal.instances[0];
+    if (!term) throw new Error("terminal rig missing");
+    expect((term.options.theme as { background?: string }).background).toBe("#1a1814");
 
-    await act(async () => applyThemePreference("light"));
+    await flushReact(() => {
+      applyThemePreference("light");
+    });
 
     expect(FakeWebSocket.instances).toHaveLength(1);
+    expect((term.options.theme as { background?: string }).background).toBe("#f5f1e8");
   });
 
   it("shows an actionable error when the WebSocket closes", async () => {
@@ -283,7 +285,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const ws = FakeWebSocket.instances[0];
     if (!ws) throw new Error("missing ws");
 
-    await act(async () => ws.closeFromServer(1006, "lost"));
+    await flushReact(() => ws.closeFromServer(1006, "lost"));
 
     expect(document.body.textContent).toContain("terminal_disconnected");
     expect(document.body.textContent).toContain("lost");
@@ -312,19 +314,14 @@ async function renderTerminal() {
   document.body.appendChild(rootElement);
   const root = createRoot(rootElement);
   roots.push(root);
-  flushSync(() => {
+  await flushReact(() => {
     root.render(createElement(TerminalPane, { session: sessionFixture() }));
   });
-  await settle();
   return root;
 }
 
-async function act(callback: () => void | Promise<void>) {
-  let result: void | Promise<void> = undefined;
-  flushSync(() => {
-    result = callback();
-  });
-  await result;
+async function flushReact(action: () => void) {
+  flushSync(action);
   await settle();
 }
 
