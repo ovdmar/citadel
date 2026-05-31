@@ -23,17 +23,17 @@ export function pipePaneLogPath(sessionName: string): string {
 // Returns { scanned, removed }. A missing directory is treated as no-op
 // (zeros). Per-file errors (ENOENT race against another sweep, EPERM on a
 // foreign file in $TMPDIR) are swallowed; we still count the scan attempt.
-export function sweepPtyLogs(maxAgeMs: number): { scanned: number; removed: number } {
+export function sweepPtyLogs(maxAgeMs: number, dir = PIPE_PANE_LOG_DIR): { scanned: number; removed: number } {
   let entries: string[];
   try {
-    entries = fs.readdirSync(PIPE_PANE_LOG_DIR);
+    entries = fs.readdirSync(dir);
   } catch {
     return { scanned: 0, removed: 0 };
   }
   const cutoff = Date.now() - maxAgeMs;
   let removed = 0;
   for (const entry of entries) {
-    const filePath = path.join(PIPE_PANE_LOG_DIR, entry);
+    const filePath = path.join(dir, entry);
     try {
       const stat = fs.statSync(filePath);
       if (!stat.isFile()) continue;

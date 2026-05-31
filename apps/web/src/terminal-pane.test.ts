@@ -82,19 +82,19 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: xtermMocks.FakeFitAddon }));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-class FakeWebSocket extends EventTarget {
+const FakeWebSocket = class TerminalPaneFakeWebSocket extends EventTarget {
   static CONNECTING = 0;
   static OPEN = 1;
   static CLOSING = 2;
   static CLOSED = 3;
-  static instances: FakeWebSocket[] = [];
-  readyState = FakeWebSocket.CONNECTING;
+  static instances: TerminalPaneFakeWebSocket[] = [];
+  readyState = TerminalPaneFakeWebSocket.CONNECTING;
   binaryType = "";
   sent: unknown[] = [];
 
   constructor(readonly url: string) {
     super();
-    FakeWebSocket.instances.push(this);
+    TerminalPaneFakeWebSocket.instances.push(this);
   }
 
   send(data: unknown) {
@@ -102,11 +102,11 @@ class FakeWebSocket extends EventTarget {
   }
 
   close() {
-    this.readyState = FakeWebSocket.CLOSED;
+    this.readyState = TerminalPaneFakeWebSocket.CLOSED;
   }
 
   open() {
-    this.readyState = FakeWebSocket.OPEN;
+    this.readyState = TerminalPaneFakeWebSocket.OPEN;
     this.dispatchEvent(new Event("open"));
   }
 
@@ -115,13 +115,13 @@ class FakeWebSocket extends EventTarget {
   }
 
   closeFromServer(code = 1006, reason = "") {
-    this.readyState = FakeWebSocket.CLOSED;
+    this.readyState = TerminalPaneFakeWebSocket.CLOSED;
     const event = new Event("close") as CloseEvent;
     Object.defineProperty(event, "code", { value: code });
     Object.defineProperty(event, "reason", { value: reason });
     this.dispatchEvent(event);
   }
-}
+};
 
 const roots: Root[] = [];
 const frameCallbacks = new Map<number, FrameRequestCallback>();
@@ -668,15 +668,19 @@ async function renderTerminal() {
   return root;
 }
 
-async function flushReact(action: () => void) {
-  flushSync(action);
-  await settle();
-}
-
 async function settle() {
   await Promise.resolve();
   await Promise.resolve();
 }
+
+const flushReact = async (callback: () => void | Promise<void>) => {
+  let result: void | Promise<void> = undefined;
+  flushSync(() => {
+    result = callback();
+  });
+  await result;
+  await settle();
+};
 
 function installLocalStorageMock() {
   const storage = new Map<string, string>();
