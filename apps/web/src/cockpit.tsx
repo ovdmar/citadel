@@ -90,10 +90,16 @@ export function Cockpit() {
   // state instantly on workspace switch (otherwise the 10s `gh pr view`
   // round-trip leaves the PR section blank for several seconds).
   const batchPrSummary = useAllWorkspacesPrSummary(data?.workspaces ?? []);
-  const stickySummaries = useStickyWorkspaceSummaries(data?.workspaces ?? [], batchPrSummary.data);
+  const { summaries: stickySummaries, rememberSummary } = useStickyWorkspaceSummaries(
+    data?.workspaces ?? [],
+    batchPrSummary.data,
+  );
   const placeholderSummary = activeWorkspace ? stickySummaries.get(activeWorkspace.id) : undefined;
   const cockpitSummary = useWorkspaceCockpitSummary(activeWorkspace, placeholderSummary);
   const prStateQuery = useWorkspacesPrState();
+  useEffect(() => {
+    if (cockpitSummary.data) rememberSummary(cockpitSummary.data);
+  }, [cockpitSummary.data, rememberSummary]);
   useEffect(() => {
     invalidateActiveWorkspaceFromBatch(queryClient, activeWorkspace?.id, batchPrSummary.dataUpdatedAt);
   }, [activeWorkspace?.id, batchPrSummary.dataUpdatedAt, queryClient]);
@@ -112,8 +118,10 @@ export function Cockpit() {
   // Feed the active workspace result back into the sticky cache by recomputing
   // the PR map from all sources. Cache-only pr-state gives the navigator an
   // instant warm snapshot after daemon restart; the sticky batch cache keeps
-  // richer PR-display data stable through transient GitHub failures; the
-  // active query is preferred for the selected workspace.
+  // richer PR-display data stable through transient GitHub failures. The
+  // active query is preferred for the selected workspace only when it is
+  // healthy; degraded reads are non-authoritative and should not erase the
+  // last-known navbar PR/check tone.
   const prByWorkspaceId = useMemo(() => {
     const map = new Map<string, PullRequestSummary | null>();
     for (const [workspaceId, entry] of Object.entries(prStateQuery.data?.workspacePrState ?? {})) {
@@ -122,7 +130,7 @@ export function Cockpit() {
     for (const [workspaceId, pullRequest] of prMapFromSummaries(stickySummaries)) {
       map.set(workspaceId, pullRequest);
     }
-    if (cockpitSummary.data) {
+    if (cockpitSummary.data?.versionControl.status === "healthy") {
       map.set(cockpitSummary.data.workspaceId, cockpitSummary.data.versionControl.pullRequest ?? null);
     }
     return map;
