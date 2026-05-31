@@ -24,7 +24,7 @@
 [ ] 6. The center column always takes the remaining horizontal space.
 [ ] 7. The application shell never page-scrolls. Each column owns its own scroll context.
 [ ] 8. Terminal scrollback stays inside the terminal renderer, not the column scroll.
-[ ] 9. A slim top bar contains the product mark on the left, a centered search input that opens the command palette via click or Cmd+K, and the settings entry on the right. The product mark appears exactly once across the chrome — the navigator does not duplicate it.
+[ ] 9. A slim top bar contains the product mark on the left, a centered search input that opens the command palette via click or Cmd+K, and the settings entry on the right. The product mark appears exactly once across the chrome — the navigator does not duplicate it. The settings entry sits next to a single cycling theme button (Light → Dark → System → Light) whose icon reflects the current state and whose aria-label names current + next mode.
 [ ] 10. Resizable widths and collapse state persist locally between sessions.
 [ ] 11. No bottom status bar is rendered in the cockpit; operations, MCP, and activity counts are surfaced from their dedicated panels and command-palette navigation only.
 [ ] 12. The left navigator devotes its entire vertical space below primary nav to the workspaces list, which scrolls independently when content exceeds the column height.

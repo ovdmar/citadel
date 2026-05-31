@@ -345,6 +345,39 @@ describe("tmux terminal gateway helpers", () => {
     }
   }, 15000);
 
+  it("closes the disposable WebSocket viewer when browser-side backpressure grows too large", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
+    dirs.push(cwd);
+    const sessionName = `citadel_ws_backpressure_${Date.now().toString(36)}`;
+    sessions.push(sessionName);
+    await ensureTmuxSession({
+      sessionName,
+      cwd,
+    });
+    const server = http.createServer();
+    attachTerminalWebSocket(server, (id) => (id === "backpressure" ? sessionName : null), {
+      maxBufferedBytes: 1024,
+      getBufferedAmount: () => 2048,
+    });
+    await listen(server);
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP test server address");
+      const ws = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/backpressure`);
+      await waitForOpen(ws);
+
+      sendKeys(sessionName, "printf backpressure-trigger");
+      sendKeys(sessionName, "\r");
+
+      const close = await waitForCloseInfo(ws);
+      expect(close.code).toBe(1013);
+      expect(close.reason).toBe("terminal_backpressure");
+      expect(tmuxSessionExists(sessionName)).toBe(true);
+    } finally {
+      await closeServer(server);
+    }
+  }, 15000);
+
   it("sends WebSocket input control messages as literal pane input", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
     dirs.push(cwd);
@@ -612,6 +645,28 @@ function waitForClose(ws: WebSocket) {
     const onClose = () => {
       cleanup();
       resolve();
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      ws.off("close", onClose);
+    };
+    ws.once("close", onClose);
+  });
+}
+
+function waitForCloseInfo(ws: WebSocket) {
+  return new Promise<{ code: number; reason: string }>((resolve, reject) => {
+    if (ws.readyState === WebSocket.CLOSED) {
+      resolve({ code: 1005, reason: "" });
+      return;
+    }
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("Timed out waiting for WebSocket close"));
+    }, 10000);
+    const onClose = (code: number, reason: Buffer) => {
+      cleanup();
+      resolve({ code, reason: reason.toString("utf8") });
     };
     const cleanup = () => {
       clearTimeout(timeout);
