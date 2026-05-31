@@ -149,6 +149,52 @@ Successful hooks may print structured output:
 }
 ```
 
+### Deploy hook
+
+The deploy hook surfaces the workspace's deployed apps in the cockpit (the "Local deploys" panel) and runs the redeploy when the operator clicks the chip. Citadel resolves it from two sources, in this priority:
+
+1. **File** — an executable at `.citadel/hooks/<repo>/deploy` inside the workspace (`.citadel/hooks/deploy` relative to the worktree root). Useful when the script ships with the repo itself.
+2. **Repo config** — `repo.deployHookCommand` declared per-repository in Citadel settings. Useful when the hook is operator-owned.
+
+If both are present, the file wins; the repo config becomes the fallback when the file is missing or not executable. A non-executable file surfaces a diagnostic note in the cockpit (so a missing `chmod +x` is loud, not silent).
+
+Contract (subcommands and structured I/O):
+
+- `<hook> list` → stdout `{"apps":[{"name":string,"url":string}]}`. Must complete in ≤10s, no side effects.
+- `<hook> redeploy [name]` → (re)starts the named app, or all apps if no name. stdout/stderr stream back to the cockpit operation log.
+
+Environment provided by Citadel: `CITADEL_WORKSPACE_ID`, `CITADEL_WORKSPACE_PATH`, `CITADEL_WORKSPACE_BRANCH`, `CITADEL_REPO_ID`. The hook is spawned with `cwd = $CITADEL_WORKSPACE_PATH`.
+
+The cockpit's deploy chip shows a spinner while the redeploy runs. If the redeploy hook restarts the daemon itself (as Citadel's own dev stack does — `make deploy` kills its own pgid), the cockpit keeps the spinner alive via a watchdog that polls `/api/state` until a newer `daemonStartedAt` token appears. Click-to-spinner latency is bounded to 1.5s even if the daemon is slow to answer the pre-fetch.
+
+### Teardown hook
+
+Teardown hooks run when a workspace is removed (not archived — archiving keeps the worktree on disk and skips both teardown paths). Like deploy, Citadel resolves teardown from two sources and runs both when both are present:
+
+1. **File** — an executable at `.citadel/hooks/teardown` inside the workspace. Runs FIRST.
+2. **Configured** — referenced from `repo.teardownHookIds` and declared in the top-level `hooks: [...]` list with `event: "workspace.teardown"`. Runs SECOND (after the file hook returns).
+
+Ordering matters: file teardown runs before the configured hooks, and BOTH run before the tmux session kill / worktree prune / DB delete. A hook failure leaves the workspace state untouched (no tmux/worktree/DB damage) unless the operator passes the explicit force flag — in which case the failure is logged as a warning and cleanup proceeds.
+
+Contract:
+
+- `<hook>` (no subcommand) — runs once when the workspace is being removed. Exit 0 = success. Exit non-zero = failure.
+- Environment provided: same vars as deploy (`CITADEL_WORKSPACE_ID`, `CITADEL_WORKSPACE_PATH`, `CITADEL_WORKSPACE_BRANCH`, `CITADEL_REPO_ID`). `cwd = $CITADEL_WORKSPACE_PATH`.
+- Timeout: `commandPolicy.hookTimeoutMs` (default 120000). On timeout, Citadel SIGKILLs the hook's process group.
+- stdout/stderr stream to the operation log under a `[teardown]` prefix.
+
+Operator-visible failure semantics (3-state):
+
+| State | `force` | Outcome |
+|---|---|---|
+| Hook absent | any | Skip file-teardown; continue with configured hooks (if any), then cleanup. |
+| Hook fails | `false` | Operation marked failed (`error = "file teardown failed: <tail>"` or `"configured teardown failed: <message>"`). Activity emits `workspace.teardown.file.failed` and `workspace.remove.blocked`. No tmux/worktree/DB state touched. |
+| Hook fails | `true` | Warning log line (`[teardown] ... continuing because force=true`), cleanup proceeds. |
+
+**Anti-pattern: don't kill the daemon you're talking to.** A teardown hook that runs `make stop` (or otherwise kills the daemon currently executing the remove operation) will sever the HTTP connection mid-flight. The hook ran, but Citadel never gets to finish the cleanup — the workspace ends up half-removed (DB still tracks it, worktree still on disk). Citadel ships no `.citadel/hooks/teardown` for itself for exactly this reason; write a teardown hook only when it can run cleanly without taking down the daemon that's handling the removal.
+
+`TeardownHookResolution` (in `@citadel/contracts`) covers only the file-based discovery path. Configured hooks are resolved separately by the hooks runner; both paths are invoked in `removeWorkspace`.
+
 Citadel persists this output on activity events, renders links/actions in the cockpit, and exposes them through MCP `list_workspace_links`.
 
 ## MCP

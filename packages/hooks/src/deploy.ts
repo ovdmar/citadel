@@ -1,5 +1,4 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import {
@@ -9,6 +8,7 @@ import {
   type DeployedApp,
   type DeployedAppStatus,
 } from "@citadel/contracts";
+import { buildHookEnv, inspectHookFile, notExecutableNote } from "./file-hook-shared.js";
 
 // The deploy hook contract:
 //
@@ -41,30 +41,12 @@ export function resolveDeployHook(input: ResolveDeployHookInput): DeployHookReso
   const cmd = (input.repoDeployCommand ?? "").trim();
   // Surface a diagnostic so users discover the missing chmod +x instead of
   // silently seeing the empty-state panel.
-  const skipNote =
-    status === "exists-not-executable" ? `${filePath} exists but is not executable (run: chmod +x ${filePath})` : null;
+  const skipNote = status === "exists-not-executable" ? notExecutableNote(filePath) : null;
   if (cmd.length) {
     const note = skipNote ? `${skipNote}; using repo-config fallback` : null;
     return { source: "repo-config", filePath: null, command: cmd, note };
   }
   return { source: "none", filePath: null, command: null, note: skipNote };
-}
-
-type HookFileStatus = "executable" | "exists-not-executable" | "missing";
-
-function inspectHookFile(filePath: string): HookFileStatus {
-  try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile()) return "missing";
-    try {
-      fs.accessSync(filePath, fs.constants.X_OK);
-      return "executable";
-    } catch {
-      return "exists-not-executable";
-    }
-  } catch {
-    return "missing";
-  }
 }
 
 function spawnDeployHook(
@@ -93,13 +75,7 @@ function spawnDeployHook(
 }
 
 export function deployHookEnv(input: DeployHookEnv): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    CITADEL_WORKSPACE_ID: input.workspaceId,
-    CITADEL_WORKSPACE_PATH: input.workspacePath,
-    CITADEL_WORKSPACE_BRANCH: input.workspaceBranch,
-    CITADEL_REPO_ID: input.repoId,
-  };
+  return buildHookEnv(input);
 }
 
 export type RunDeployListResult = {

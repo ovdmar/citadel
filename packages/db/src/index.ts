@@ -789,7 +789,6 @@ export class SqliteStore {
     }
   }
 }
-
 // Attach the scheduled_agent_runs and background_sessions methods to
 // SqliteStore.prototype. The implementations live in scheduled-run-store.ts
 // (kept separate to stay under the per-file line budget); the type

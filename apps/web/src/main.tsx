@@ -105,6 +105,11 @@ const operationsRoute = createRoute({
   getParentRoute: () => cockpitLayoutRoute,
   path: "/operations",
   component: OperationsView,
+  // Surfaces deep-links from elsewhere in the cockpit (e.g. the redeploy
+  // chip's "View log" link) — `?id=<operationId>` selects the matching row.
+  validateSearch: (search: Record<string, unknown>) => ({
+    id: typeof search.id === "string" ? search.id : undefined,
+  }),
 });
 
 const onboardingRoute = createRoute({

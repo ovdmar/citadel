@@ -7,6 +7,7 @@ import { nowIso } from "@citadel/core";
 import { killTmuxSession } from "@citadel/terminal";
 import type { WorkspaceOpsDeps } from "./create-workspace.js";
 import { cleanupWorktree, workspaceDirtySummary, workspaceIsDirty } from "./helpers.js";
+import { runTeardownPhase } from "./remove-workspace-helpers.js";
 
 export type RemoveWorkspaceInput = { workspaceId: string; force?: boolean; archiveOnly?: boolean };
 
@@ -82,15 +83,17 @@ export async function removeWorkspaceImpl(
     10,
     "Checking workspace status",
   );
+  const finalizeOperation = (patch: Partial<typeof operation>) => {
+    const current = deps.store.findOperation(operation.id) ?? operation;
+    deps.store.upsertOperation({ ...current, ...patch, updatedAt: nowIso() });
+  };
   const dirty = workspaceIsDirty(workspace.path);
   if (dirty && !input.force && !input.archiveOnly) {
     deps.store.updateWorkspaceLifecycle(workspace.id, "ready", true);
-    deps.store.upsertOperation({
-      ...operation,
+    finalizeOperation({
       status: "failed",
       progress: 100,
       error: "Workspace has uncommitted changes. Use metadata archive or explicit force cleanup.",
-      updatedAt: nowIso(),
     });
     deps.activity(
       "workspace.remove.blocked",
@@ -107,6 +110,45 @@ export async function removeWorkspaceImpl(
     return { operationId: operation.id, removed: false, archived: false, dirty, dirtySummary };
   }
 
+  // archiveOnly preserves the worktree, so skip both file and configured
+  // teardown. Otherwise: file teardown -> configured teardown -> tmux -> prune.
+  // A failed hook leaves state untouched unless force=true.
+  const worktreeMissing = !input.archiveOnly && !fs.existsSync(workspace.path);
+  if (!input.archiveOnly && !worktreeMissing) {
+    const hookTimeoutMs = deps.config?.commandPolicy.hookTimeoutMs;
+    const teardownOutcome = await runTeardownPhase({
+      workspace,
+      repo,
+      operation,
+      force: input.force === true,
+      ...(hookTimeoutMs !== undefined ? { hookTimeoutMs } : {}),
+      deps: {
+        exists: fs.existsSync,
+        logOp: deps.logOp,
+        activity: deps.activity,
+        runConfiguredTeardown: async () => {
+          await deps.runWorkspaceHooks("workspace.teardown", repo.teardownHookIds, repo, workspace, operation.id);
+        },
+      },
+    });
+    if (teardownOutcome.kind === "blocked") {
+      finalizeOperation({
+        status: "failed",
+        progress: 100,
+        error: teardownOutcome.error,
+      });
+      deps.activity(
+        "workspace.remove.blocked",
+        "system",
+        teardownOutcome.activityMessage,
+        workspace.repoId,
+        workspace.id,
+        operation.id,
+      );
+      return { operationId: operation.id, removed: false, archived: false, dirty };
+    }
+  }
+
   const ownedSessions = deps.store.listSessions(workspace.id);
   for (const session of ownedSessions) {
     if (session.tmuxSessionName && !input.archiveOnly)
@@ -114,37 +156,6 @@ export async function removeWorkspaceImpl(
   }
   if (ownedSessions.length && !input.archiveOnly) {
     deps.logOp(operation.id, "info", `Killed ${ownedSessions.length} tmux session(s) attached to workspace`);
-  }
-
-  const worktreeMissing = !input.archiveOnly && !fs.existsSync(workspace.path);
-  if (!input.archiveOnly && !worktreeMissing) {
-    try {
-      deps.logOp(
-        operation.id,
-        "info",
-        `Running ${repo.teardownHookIds.length} teardown hook(s): ${repo.teardownHookIds.join(", ") || "(none)"}`,
-      );
-      await deps.runWorkspaceHooks("workspace.teardown", repo.teardownHookIds, repo, workspace, operation.id);
-    } catch (error) {
-      if (!input.force) {
-        deps.store.upsertOperation({
-          ...operation,
-          status: "failed",
-          progress: 100,
-          error: error instanceof Error ? error.message : "workspace_teardown_failed",
-          updatedAt: nowIso(),
-        });
-        deps.activity(
-          "workspace.remove.blocked",
-          "system",
-          `Removal blocked because teardown failed for ${workspace.name}`,
-          workspace.repoId,
-          workspace.id,
-          operation.id,
-        );
-        return { operationId: operation.id, removed: false, archived: false, dirty };
-      }
-    }
   }
 
   if (!input.archiveOnly) {
@@ -159,12 +170,10 @@ export async function removeWorkspaceImpl(
     deps.store.deleteWorkspace(workspace.id);
     deps.logOp(operation.id, "info", `Deleted workspace ${workspace.name} (name slot freed)`);
   }
-  deps.store.upsertOperation({
-    ...operation,
+  finalizeOperation({
     status: "succeeded",
     progress: 100,
     message: input.archiveOnly ? "Workspace metadata archived" : "Workspace removed",
-    updatedAt: nowIso(),
   });
   deps.activity(
     input.archiveOnly ? "workspace.archived" : "workspace.removed",

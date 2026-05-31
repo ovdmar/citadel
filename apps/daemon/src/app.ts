@@ -25,7 +25,7 @@ import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
-import { asyncRoute, cachedProviderValue, cachedProviderWithStaleFallback } from "./app-helpers.js";
+import { asyncRoute, cachedProviderValue, cachedProviderWithStaleFallback, parsePositiveInt } from "./app-helpers.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
@@ -93,6 +93,8 @@ export async function createDaemonApp(input: {
   enableRefreshJob?: boolean;
 }): Promise<DaemonApp> {
   const { config, configPath, store } = input;
+  // Identity token for this daemon process — watchdogs use strict inequality.
+  const daemonStartedAt = new Date().toISOString();
   setGithubCommand(config.providers.github.command);
   setJiraCommand(config.providers.jira.command);
   const providers: ProviderCollectors = {
@@ -110,12 +112,13 @@ export async function createDaemonApp(input: {
   // schedulers, status monitors, terminal cleanup). Keep Node from reporting
   // these as listener leaks in integration tests and diagnostics-heavy boots.
   server.setMaxListeners(24);
-  // Node's 5s default keep-alive timeout is short enough for Playwright's
-  // APIRequestContext to race a reused idle socket on slower CI runs, surfacing
-  // as ECONNRESET even though the daemon is healthy. Keep browser/API
-  // connections alive for a normal interaction gap instead.
-  server.keepAliveTimeout = 120_000;
-  server.headersTimeout = 125_000;
+  // Playwright's API client can reuse daemon sockets across long browser-only
+  // stretches of the e2e suite. Node's 5s default keep-alive timeout can close
+  // those sockets just as the next request starts on slower CI runners, which
+  // surfaces as a transient ECONNRESET instead of an application response.
+  const keepAliveTimeoutMs = parsePositiveInt(process.env.CITADEL_HTTP_KEEP_ALIVE_TIMEOUT_MS, 120_000);
+  server.keepAliveTimeout = keepAliveTimeoutMs;
+  server.headersTimeout = Math.max(server.headersTimeout, keepAliveTimeoutMs + 5_000);
   const sseClients = new Set<express.Response>();
   const providerCache = createProviderCache({
     dataDir: config.dataDir,
@@ -352,31 +355,6 @@ export async function createDaemonApp(input: {
     res.json({ operation });
   });
 
-  app.patch(
-    "/api/repos/:repoId",
-    asyncRoute(async (req, res) => {
-      const repoId = String(req.params.repoId);
-      const patch = req.body ?? {};
-      const allowed: Record<string, unknown> = {};
-      if (typeof patch.name === "string" && patch.name.length) allowed.name = patch.name;
-      if (typeof patch.worktreeParent === "string" && patch.worktreeParent.length)
-        allowed.worktreeParent = patch.worktreeParent;
-      if (Array.isArray(patch.setupHookIds))
-        allowed.setupHookIds = patch.setupHookIds.filter((id: unknown) => typeof id === "string");
-      if (Array.isArray(patch.teardownHookIds))
-        allowed.teardownHookIds = patch.teardownHookIds.filter((id: unknown) => typeof id === "string");
-      if (Array.isArray(patch.providerIds))
-        allowed.providerIds = patch.providerIds.filter((id: unknown) => typeof id === "string");
-      if (typeof patch.deployHookCommand === "string")
-        allowed.deployHookCommand = patch.deployHookCommand.trim() || null;
-      else if (patch.deployHookCommand === null) allowed.deployHookCommand = null;
-      const next = store.updateRepo(repoId, allowed);
-      if (!next) return res.status(404).json({ error: "repo_not_found" });
-      emit("repo.updated", { repoId: next.id, repo: next });
-      res.json({ repo: next });
-    }),
-  );
-
   registerPrDiffRoute({ app, store, providerCache, asyncRoute });
 
   app.post(
@@ -394,18 +372,6 @@ export async function createDaemonApp(input: {
       ].filter(Boolean) as string[];
       bustCacheByPrefixes(providerCache, prefixes);
       emit("workspace.refreshed", { workspaceId: workspace.id });
-      res.json({ refreshed: prefixes });
-    }),
-  );
-
-  app.post(
-    "/api/repos/:repoId/refresh",
-    asyncRoute(async (req, res) => {
-      const repo = store.listRepos().find((candidate) => candidate.id === req.params.repoId);
-      if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const prefixes = [`vc:${repo.id}`, `ci:${repo.id}`];
-      bustCacheByPrefixes(providerCache, prefixes);
-      emit("repo.refreshed", { repoId: repo.id });
       res.json({ refreshed: prefixes });
     }),
   );
@@ -450,7 +416,7 @@ export async function createDaemonApp(input: {
   // Extracted route registrations live here (post-scheduledAgents init) so the
   // /api/state handler can close over a fully-initialized runner. app.ts hit
   // the 800-line size gate, hence the extraction.
-  registerStateRoute({ app, store, config, scheduledAgents, cachedProviderHealth, asyncRoute });
+  registerStateRoute({ app, store, config, scheduledAgents, daemonStartedAt, cachedProviderHealth, asyncRoute });
   registerWorkspacesPrStateRoute({ app, store, providerCache, asyncRoute });
   // Boot-sweep: close any 'running' run rows that were in flight when the
   // daemon last died, sync the denormalized lastRunStatus cache on the

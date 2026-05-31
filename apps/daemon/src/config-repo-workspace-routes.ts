@@ -6,11 +6,8 @@ import type { OperationService } from "@citadel/operations";
 import { setGithubCommand, setJiraCommand } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import type express from "express";
-import type { asyncRoute as AsyncRoute } from "./app-helpers.js";
-
-type ProviderCacheInvalidator = {
-  clear: () => void;
-};
+import type { ProviderCache, asyncRoute as AsyncRoute } from "./app-helpers.js";
+import { bustCacheByPrefixes } from "./workspace-fs-watcher.js";
 
 export function registerConfigRepoWorkspaceRoutes(input: {
   app: express.Express;
@@ -18,7 +15,7 @@ export function registerConfigRepoWorkspaceRoutes(input: {
   configPath: string;
   store: SqliteStore;
   operations: OperationService;
-  providerCache: ProviderCacheInvalidator;
+  providerCache: ProviderCache;
   emit: (type: string, payload: unknown) => void;
   asyncRoute: typeof AsyncRoute;
 }): void {
@@ -76,6 +73,31 @@ export function registerConfigRepoWorkspaceRoutes(input: {
     }),
   );
 
+  app.patch(
+    "/api/repos/:repoId",
+    asyncRoute(async (req, res) => {
+      const repoId = String(req.params.repoId);
+      const patch = req.body ?? {};
+      const allowed: Record<string, unknown> = {};
+      if (typeof patch.name === "string" && patch.name.length) allowed.name = patch.name;
+      if (typeof patch.worktreeParent === "string" && patch.worktreeParent.length)
+        allowed.worktreeParent = patch.worktreeParent;
+      if (Array.isArray(patch.setupHookIds))
+        allowed.setupHookIds = patch.setupHookIds.filter((id: unknown) => typeof id === "string");
+      if (Array.isArray(patch.teardownHookIds))
+        allowed.teardownHookIds = patch.teardownHookIds.filter((id: unknown) => typeof id === "string");
+      if (Array.isArray(patch.providerIds))
+        allowed.providerIds = patch.providerIds.filter((id: unknown) => typeof id === "string");
+      if (typeof patch.deployHookCommand === "string")
+        allowed.deployHookCommand = patch.deployHookCommand.trim() || null;
+      else if (patch.deployHookCommand === null) allowed.deployHookCommand = null;
+      const next = store.updateRepo(repoId, allowed);
+      if (!next) return res.status(404).json({ error: "repo_not_found" });
+      emit("repo.updated", { repoId: next.id, repo: next });
+      res.json({ repo: next });
+    }),
+  );
+
   app.get("/api/workspaces", (_req, res) => {
     res.json({ workspaces: store.listWorkspaces() });
   });
@@ -120,6 +142,18 @@ export function registerConfigRepoWorkspaceRoutes(input: {
           error: error instanceof Error ? error.message : "git_branches_failed",
         });
       }
+    }),
+  );
+
+  app.post(
+    "/api/repos/:repoId/refresh",
+    asyncRoute(async (req, res) => {
+      const repo = store.listRepos().find((candidate) => candidate.id === req.params.repoId);
+      if (!repo) return res.status(404).json({ error: "repo_not_found" });
+      const prefixes = [`vc:${repo.id}`, `ci:${repo.id}`];
+      bustCacheByPrefixes(providerCache, prefixes);
+      emit("repo.refreshed", { repoId: repo.id });
+      res.json({ refreshed: prefixes });
     }),
   );
 

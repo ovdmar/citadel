@@ -1,12 +1,13 @@
 import type { Operation, Repo, Workspace } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useSearch } from "@tanstack/react-router";
 import { ArrowLeft, Ban, RefreshCcw, Repeat } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "../api.js";
 import { useStateQuery } from "../app-state.js";
 import { Button } from "../components/ui/button.js";
 import { formatLabel } from "../labels.js";
+import { operationHighlightStatus } from "./operations-helpers.js";
 
 type FilterStatus = "all" | "running" | "succeeded" | "failed" | "cancelled";
 
@@ -15,6 +16,9 @@ export function OperationsView() {
   const operations = state.data?.operations ?? [];
   const repos = state.data?.repos ?? [];
   const workspaces = state.data?.workspaces ?? [];
+  const search = (useSearch({ strict: false }) ?? {}) as { id?: string };
+  const highlightId = search.id;
+  const highlightStatus = operationHighlightStatus(operations, highlightId);
 
   const [filter, setFilter] = useState<FilterStatus>("all");
   const [typeFilter, setTypeFilter] = useState("");
@@ -87,12 +91,21 @@ export function OperationsView() {
           </select>
         </label>
       </div>
+      {highlightStatus === "missing" ? (
+        <div className="empty compact">Operation {highlightId} not found (it may have been purged).</div>
+      ) : null}
       {filtered.length === 0 ? (
         <div className="empty">No operations match the current filter.</div>
       ) : (
         <div className="operations-list">
           {filtered.map((operation) => (
-            <OperationRow key={operation.id} operation={operation} repos={repos} workspaces={workspaces} />
+            <OperationRow
+              key={operation.id}
+              operation={operation}
+              repos={repos}
+              workspaces={workspaces}
+              highlighted={operation.id === highlightId}
+            />
           ))}
         </div>
       )}
@@ -100,8 +113,14 @@ export function OperationsView() {
   );
 }
 
-function OperationRow(props: { operation: Operation; repos: Repo[]; workspaces: Workspace[] }) {
-  const { operation, repos, workspaces } = props;
+function OperationRow(props: {
+  operation: Operation;
+  repos: Repo[];
+  workspaces: Workspace[];
+  highlighted?: boolean;
+}) {
+  const { operation, repos, workspaces, highlighted } = props;
+  const rowRef = useRef<HTMLDetailsElement>(null);
   const repo = operation.repoId ? repos.find((candidate) => candidate.id === operation.repoId) : null;
   const workspace = operation.workspaceId
     ? workspaces.find((candidate) => candidate.id === operation.workspaceId)
@@ -115,11 +134,28 @@ function OperationRow(props: { operation: Operation; repos: Repo[]; workspaces: 
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
 
+  // Scroll the highlighted row into view and open its details panel.
+  // Each OperationRow is keyed by operation.id in the list, so when
+  // search.id changes, the previously-highlighted row's `highlighted` prop
+  // flips off and the newly-matched row's flips on — re-triggering this
+  // effect for the new id without needing operation.id in the dep array.
+  useEffect(() => {
+    if (!highlighted) return;
+    const node = rowRef.current;
+    if (!node) return;
+    node.open = true;
+    node.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [highlighted]);
+
   const duration = computeDuration(operation);
   const lastLog = operation.logs[operation.logs.length - 1];
 
   return (
-    <details className={`operation-row status-${operation.status}`} data-testid={`operation-${operation.id}`}>
+    <details
+      ref={rowRef}
+      className={`operation-row status-${operation.status}${highlighted ? " highlighted" : ""}`}
+      data-testid={`operation-${operation.id}`}
+    >
       <summary>
         <strong>{prettyOperationType(operation.type)}</strong>
         <span className={`status status-${operation.status}`}>{formatLabel(operation.status)}</span>

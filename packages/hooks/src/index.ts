@@ -18,6 +18,13 @@ export type {
   RunDeployListResult,
   RunDeployRedeployResult,
 } from "./deploy.js";
+export { TEARDOWN_HOOK_RELATIVE_PATH, resolveTeardownHook, runTeardownHook } from "./teardown.js";
+export type {
+  ResolveTeardownHookInput,
+  RunTeardownHookResult,
+  TeardownHookEnv,
+  TeardownStreamHandler,
+} from "./teardown.js";
 export {
   FIX_CONFLICTS_DEFAULT_PROMPT,
   FIX_CONFLICTS_HOOK_RELATIVE_PATH,

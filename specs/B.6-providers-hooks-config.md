@@ -60,7 +60,7 @@ Issue-tracker providers may declare auto-transitions that fire on lifecycle even
 
 [~] 1. Hooks are the extension path for repo-specific behavior, configured either in citadel config (`config.hooks`) or as files tracked in the repo under `.citadel/hooks/<event>/<name>.{sh,agent,prompt}`.
 [ ] 2. Setup hooks are configured per repo.
-[ ] 3. Teardown hooks are configured per repo.
+[~] 3. Teardown hooks can be configured per repo (`repo.teardownHookIds`) and/or shipped as an executable `.citadel/hooks/teardown`; when both are present, the file hook runs first, then the configured hooks (this is dual execution, not dual-discovery-with-fallback as deploy uses).
 [ ] 4. App/link discovery hooks are configured per repo.
 [ ] 5. Action hooks are configured per repo.
 [ ] 6. Hooks receive structured workspace/repo/provider context — payload shape is event-specific and validated before dispatch.

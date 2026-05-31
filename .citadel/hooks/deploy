@@ -106,6 +106,8 @@ case "${1:-}" in
     fi
     cd "$WORKTREE"
     echo "→ Delegating to 'make deploy' (worktree=${WORKTREE})"
+    # NOTE: `make deploy` restarts BOTH the daemon (tsx watch) and vite under
+    # one pgid, so this hook is a "redeploy everything" — not just the UI.
     # `make deploy` is the canonical dev command for both terminals and this
     # hook. It's detached HMR: stops the previous pgid, starts daemon (tsx
     # watch) + vite under one process group, polls the daemon's /api/state

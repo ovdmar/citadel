@@ -639,8 +639,8 @@ export type { ScratchpadSnapshot, ReadScratchpadResult, ScratchpadHistorySource,
 export { HookEventSchema, AgentHookFrontmatterSchema } from "./hooks.js";
 export type { HookEvent, AgentHookFrontmatter } from "./hooks.js";
 export * from "./citadel-actions.js";
+export * from "./teardown.js";
 export * from "./shortcuts.js";
-
 export type ApiError = { error: string; detail?: string; fieldErrors?: Record<string, string[]> };
 export * from "./scheduled-agents.js";
 export type { WorkspacePrStateEntry, WorkspacesPrStateResponse } from "./workspaces-pr-state.js";
