@@ -1,0 +1,245 @@
+import { execFileSync } from "node:child_process";
+import type http from "node:http";
+import { type IPty, spawn } from "node-pty";
+import { WebSocket, WebSocketServer } from "ws";
+import { ensureTmuxExtendedKeys, tmuxPrefix } from "./tmux.js";
+
+export type TerminalPtyTarget = { sessionName: string; socketName?: string | null };
+type ResolveTerminalSession = (
+  id: string,
+) => TerminalPtyTarget | string | null | Promise<TerminalPtyTarget | string | null>;
+
+type TerminalSocketMessage = {
+  type?: string;
+  cols?: number;
+  rows?: number;
+  data?: string;
+};
+
+type TerminalWebSocketOptions = {
+  maxBufferedBytes?: number;
+  /** Internal test hook for deterministic backpressure coverage. */
+  getBufferedAmount?: (ws: WebSocket) => number;
+};
+
+const DEFAULT_COLS = 80;
+const DEFAULT_ROWS = 24;
+const MAX_COLS = 400;
+const MAX_ROWS = 120;
+const DEFAULT_MAX_BUFFERED_BYTES = 16 * 1024 * 1024;
+const BACKPRESSURE_CLOSE_CODE = 1013;
+const BACKPRESSURE_CLOSE_REASON = "terminal_backpressure";
+
+export function attachTerminalWebSocket(
+  server: http.Server,
+  resolveSession: ResolveTerminalSession,
+  options: TerminalWebSocketOptions = {},
+) {
+  const wss = new WebSocketServer({ noServer: true });
+  const ptys = new Set<IPty>();
+  const clients = new Map<WebSocket, IPty>();
+  const maxBufferedBytes = normalizeMaxBufferedBytes(options.maxBufferedBytes);
+  const getBufferedAmount = options.getBufferedAmount ?? ((ws: WebSocket) => ws.bufferedAmount);
+  let shuttingDown = false;
+  const shutdownTerminalSockets = () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    for (const [ws, pty] of clients) {
+      closePty(pty);
+      if (
+        ws.readyState === WebSocket.CONNECTING ||
+        ws.readyState === WebSocket.OPEN ||
+        ws.readyState === WebSocket.CLOSING
+      ) {
+        ws.terminate();
+      }
+    }
+    for (const pty of ptys) closePty(pty);
+    for (const ws of wss.clients) ws.terminate();
+    ptys.clear();
+    clients.clear();
+    wss.close();
+  };
+  const originalClose = server.close.bind(server);
+  server.close = ((callback?: (err?: Error) => void) => {
+    shutdownTerminalSockets();
+    return originalClose(callback);
+  }) as typeof server.close;
+  server.on("close", shutdownTerminalSockets);
+  server.on("upgrade", (request, socket, head) => {
+    const url = new URL(request.url || "", "http://127.0.0.1");
+    if (!url.pathname.startsWith("/terminal/")) return;
+    const sessionId = decodeURIComponent(url.pathname.replace("/terminal/", ""));
+    void Promise.resolve(resolveSession(sessionId))
+      .then((resolved) => {
+        const tmuxTarget = normalizeTarget(resolved);
+        if (!tmuxTarget) {
+          socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          let pty: IPty;
+          try {
+            pty = attachTmuxPty(tmuxTarget.sessionName, DEFAULT_COLS, DEFAULT_ROWS, tmuxTarget.socketName);
+          } catch (error) {
+            sendControl(ws, {
+              type: "error",
+              data: error instanceof Error ? error.message : "spawn_failed",
+            });
+            ws.close(1011, "spawn_failed");
+            return;
+          }
+          ptys.add(pty);
+          clients.set(ws, pty);
+          let cleanedUp = false;
+          let dataDisposable: { dispose: () => void } | null = null;
+          let exitDisposable: { dispose: () => void } | null = null;
+          const cleanup = (killPty: boolean) => {
+            if (cleanedUp) return;
+            cleanedUp = true;
+            ptys.delete(pty);
+            clients.delete(ws);
+            dataDisposable?.dispose();
+            exitDisposable?.dispose();
+            if (killPty) closePty(pty);
+          };
+          const closeForBackpressure = () => {
+            cleanup(true);
+            if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+              ws.close(BACKPRESSURE_CLOSE_CODE, BACKPRESSURE_CLOSE_REASON);
+              const terminateTimer = setTimeout(() => {
+                if (ws.readyState !== WebSocket.CLOSED) ws.terminate();
+              }, 1000);
+              terminateTimer.unref();
+            } else if (ws.readyState !== WebSocket.CLOSED) {
+              ws.terminate();
+            }
+          };
+          dataDisposable = pty.onData((data) => {
+            if (ws.readyState !== WebSocket.OPEN || cleanedUp) return;
+            if (getBufferedAmount(ws) > maxBufferedBytes) {
+              closeForBackpressure();
+              return;
+            }
+            ws.send(Buffer.from(data, "utf8"), { binary: true }, (error) => {
+              if (error) cleanup(true);
+            });
+            if (getBufferedAmount(ws) > maxBufferedBytes) closeForBackpressure();
+          });
+          exitDisposable = pty.onExit(({ exitCode, signal }) => {
+            cleanup(false);
+            if (ws.readyState === WebSocket.OPEN) {
+              sendControl(ws, { type: "exit", data: signal ? `signal:${signal}` : `exit:${exitCode}` });
+              ws.close(1000, "pty_exit");
+            }
+          });
+          ws.on("message", (raw, isBinary) => {
+            if (isBinary) {
+              pty.write(raw.toString("utf8"));
+              return;
+            }
+            const message = parseTerminalSocketMessage(raw.toString());
+            if (!message) {
+              sendControl(ws, { type: "error", data: "invalid_message" });
+              return;
+            }
+            if (message.type === "resize" && typeof message.cols === "number" && typeof message.rows === "number") {
+              const { cols, rows } = clampSize(message.cols, message.rows);
+              pty.resize(cols, rows);
+            } else if (message.type === "input" && typeof message.data === "string") {
+              try {
+                sendTmuxLiteralInput(tmuxTarget.sessionName, message.data, tmuxTarget.socketName);
+              } catch (error) {
+                sendControl(ws, {
+                  type: "error",
+                  data: error instanceof Error ? error.message : "input_failed",
+                });
+              }
+            }
+          });
+          ws.on("close", () => {
+            cleanup(true);
+          });
+          ws.on("error", () => {
+            cleanup(true);
+          });
+        });
+      })
+      .catch(() => {
+        socket.write("HTTP/1.1 500 Internal Server Error\r\n\r\n");
+        socket.destroy();
+      });
+  });
+}
+
+function normalizeMaxBufferedBytes(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return DEFAULT_MAX_BUFFERED_BYTES;
+  return Math.max(1024, Math.trunc(value));
+}
+
+export function attachTmuxPty(
+  sessionName: string,
+  cols = DEFAULT_COLS,
+  rows = DEFAULT_ROWS,
+  socketName?: string | null,
+): IPty {
+  ensureTmuxExtendedKeys(socketName);
+  const size = clampSize(cols, rows);
+  return spawn("tmux", [...tmuxPrefix(socketName), "attach-session", "-t", sessionName], {
+    name: "xterm-256color",
+    cols: size.cols,
+    rows: size.rows,
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      TERM: "xterm-256color",
+      COLORTERM: "truecolor",
+      FORCE_COLOR: "1",
+      CLICOLOR_FORCE: "1",
+    },
+  });
+}
+
+function normalizeTarget(target: TerminalPtyTarget | string | null): TerminalPtyTarget | null {
+  if (!target) return null;
+  return typeof target === "string" ? { sessionName: target } : target;
+}
+
+export function parseTerminalSocketMessage(raw: string): TerminalSocketMessage | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    const message = parsed as TerminalSocketMessage;
+    if (typeof message.type !== "string") return null;
+    return message;
+  } catch {
+    return null;
+  }
+}
+
+export function clampSize(cols: number, rows: number): { cols: number; rows: number } {
+  return {
+    cols: Math.min(MAX_COLS, Math.max(20, Math.trunc(cols))),
+    rows: Math.min(MAX_ROWS, Math.max(5, Math.trunc(rows))),
+  };
+}
+
+function sendControl(ws: WebSocket, message: { type: string; data: string }): void {
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+}
+
+function closePty(pty: IPty): void {
+  try {
+    pty.kill("SIGHUP");
+  } catch {
+    /* already closed */
+  }
+}
+
+function sendTmuxLiteralInput(sessionName: string, data: string, socketName?: string | null): void {
+  if (data.length === 0) return;
+  execFileSync("tmux", [...tmuxPrefix(socketName), "send-keys", "-l", "-t", sessionName, data], {
+    stdio: "ignore",
+  });
+}

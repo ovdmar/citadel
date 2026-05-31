@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { type APIRequestContext, expect, test } from "@playwright/test";
+import WebSocket, { type RawData } from "ws";
+import { apiDelete, apiGet, apiPost } from "./helpers/api-request.js";
 
 // These tests target the current ADE cockpit shell. They were rewritten in the
 // 2026-05-22 feedback round when the older spec drifted from the redesigned UI
@@ -54,7 +56,7 @@ test("cockpit lists registered workspaces in the navigator", async ({ page, requ
     await expect(navigator.locator(".workspace-card.active").filter({ hasText: secondName })).toBeVisible();
   } finally {
     for (const workspaceId of workspaceIds) {
-      await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
+      await apiDelete(request, `${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
     }
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
@@ -78,7 +80,7 @@ test("mobile cockpit toggles between navigator/stage/inspector", async ({ page, 
     // The inspector is empty until a workspace is focused — at minimum the aria-labelled aside must render.
     await expect(page.locator("aside[aria-label='Inspector']")).toBeVisible();
   } finally {
-    if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
+    if (workspaceId) await apiDelete(request, `${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
@@ -111,7 +113,7 @@ test("desktop repo settings page renders identity and provider toggles", async (
     await expect(page.getByRole("heading", { name: "Actions" })).toBeVisible();
     await page.getByRole("button", { name: "Save providers" }).click();
   } finally {
-    if (repoId) await request.delete(`${API_BASE}/api/repos/${repoId}?force=true`).catch(() => {});
+    if (repoId) await apiDelete(request, `${API_BASE}/api/repos/${repoId}?force=true`).catch(() => {});
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
@@ -208,7 +210,7 @@ test("dialogs render near viewport center on desktop and tablet", async ({ page,
     await page.locator(".drop-workspace-backdrop").click({ position: { x: 5, y: 5 } });
   } finally {
     for (const workspaceId of workspaceIds) {
-      await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`).catch(() => {});
+      await apiDelete(request, `${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`).catch(() => {});
     }
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
@@ -223,14 +225,14 @@ test("desktop session stop endpoint removes the session", async ({ request }, te
     workspaceId = (await createWorkspace(request, repo.id, `stop-${Date.now().toString(36)}`)).workspaceId;
     await waitForWorkspace(request, workspaceId, "ready");
     const session = await startSession(request, workspaceId, "Stop Shell");
-    const stop = await request.delete(`${API_BASE}/api/agent-sessions/${session.id}`);
+    const stop = await apiDelete(request, `${API_BASE}/api/agent-sessions/${session.id}`);
     expect(stop.ok()).toBe(true);
-    const state = await request.get(`${API_BASE}/api/state`);
+    const state = await apiGet(request, `${API_BASE}/api/state`);
     const body = (await state.json()) as { sessions: Array<{ id: string }> };
     // Stop is destructive: the session is deleted from the cockpit, not merely marked stopped.
     expect(body.sessions.find((entry) => entry.id === session.id)).toBeUndefined();
   } finally {
-    if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
+    if (workspaceId) await apiDelete(request, `${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
@@ -243,9 +245,9 @@ test("desktop reconcile endpoint cleans orphan repos", async ({ request }, testI
     const repo = await registerRepo(request, fixture);
     repoId = repo.id;
     fs.rmSync(fixture.repoPath, { recursive: true, force: true });
-    const response = await request.post(`${API_BASE}/api/reconcile`);
+    const response = await apiPost(request, `${API_BASE}/api/reconcile`);
     expect(response.ok()).toBe(true);
-    const state = await request.get(`${API_BASE}/api/state`);
+    const state = await apiGet(request, `${API_BASE}/api/state`);
     const body = (await state.json()) as { repos: Array<{ id: string }> };
     expect(body.repos.find((entry) => entry.id === repoId)).toBeUndefined();
   } finally {
@@ -253,37 +255,104 @@ test("desktop reconcile endpoint cleans orphan repos", async ({ request }, testI
   }
 });
 
-test("desktop terminal endpoint returns a ttyd proxy URL for a fresh session", async ({ request }, testInfo) => {
-  test.skip(testInfo.project.name !== "desktop", "terminal smoke runs once against the shared local daemon");
+test("desktop primary terminal WebSocket streams a fresh shell session", async ({ request }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "primary terminal smoke runs once against the shared local daemon");
   const fixture = createGitFixture();
   let workspaceId: string | null = null;
   try {
     const repo = await registerRepo(request, fixture);
     workspaceId = (await createWorkspace(request, repo.id, `e2e-${Date.now().toString(36)}`)).workspaceId;
     await waitForWorkspace(request, workspaceId, "ready");
-    const session = await startSession(request, workspaceId, "E2E Shell");
-
-    // Citadel hands the ttyd-backed terminal URL out via this endpoint. If ttyd
-    // is unavailable (e.g. binary missing on the CI runner) we accept 503 and
-    // skip the rest — the smoke still proves the daemon wiring is intact.
-    const response = await request.post(`${API_BASE}/api/agent-sessions/${session.id}/terminal`);
-    if (response.status() === 503) {
-      test.info().annotations.push({ type: "skip-reason", description: "ttyd unavailable on runner" });
-      return;
+    const session = await startSession(request, workspaceId, "Primary WS Shell");
+    const marker = `primary-ws-${Date.now().toString(36)}`;
+    const ws = await openTerminalSocket(session.id);
+    try {
+      const output = waitForTerminalOutput(ws, marker);
+      ws.send(Buffer.from(`printf '${marker}\\n'\r`, "utf8"));
+      await output;
+    } finally {
+      ws.close();
     }
-    expect(response.ok()).toBe(true);
-    const body = (await response.json()) as { terminal: { url: string; port: number } };
-    expect(body.terminal.url).toMatch(/^\/terminals\//);
-    expect(body.terminal.port).toBeGreaterThan(0);
   } finally {
-    if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
+    if (workspaceId) await apiDelete(request, `${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
     fs.rmSync(fixture.dir, { recursive: true, force: true });
   }
 });
 
+async function openTerminalSocket(sessionId: string) {
+  const ws = new WebSocket(`${API_BASE.replace(/^http/, "ws")}/terminal/${encodeURIComponent(sessionId)}`);
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timed out opening terminal WebSocket for ${sessionId}`)), 5000);
+    ws.once("open", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    ws.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+  });
+  return ws;
+}
+
+function waitForTerminalOutput(ws: WebSocket, expected: string) {
+  return new Promise<void>((resolve, reject) => {
+    let buffered = "";
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Timed out waiting for terminal output ${expected}`));
+    }, 10_000);
+    const onMessage = (raw: RawData, isBinary: boolean) => {
+      if (isBinary) {
+        buffered += raw.toString();
+        if (buffered.includes(expected)) {
+          cleanup();
+          resolve();
+        }
+        return;
+      }
+      const message = parseTerminalSocketMessage(raw);
+      if (!message) return;
+      if (message.type === "error" || message.type === "exit") {
+        cleanup();
+        reject(new Error(`Terminal bridge returned ${message.type}: ${message.data ?? ""}`));
+      }
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error("Terminal WebSocket closed before expected output arrived"));
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      ws.off("message", onMessage);
+      ws.off("close", onClose);
+      ws.off("error", onError);
+    };
+    ws.on("message", onMessage);
+    ws.once("close", onClose);
+    ws.once("error", onError);
+  });
+}
+
+function parseTerminalSocketMessage(raw: RawData): { type: string; data?: string } | null {
+  try {
+    const parsed = JSON.parse(raw.toString()) as unknown;
+    if (!parsed || typeof parsed !== "object") return null;
+    const message = parsed as { type?: unknown; data?: unknown };
+    if (typeof message.type !== "string") return null;
+    return { type: message.type, data: typeof message.data === "string" ? message.data : undefined };
+  } catch {
+    return null;
+  }
+}
+
 async function waitForWorkspace(request: APIRequestContext, workspaceId: string, lifecycle: string) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const response = await request.get(`${API_BASE}/api/workspaces`);
+    const response = await apiGet(request, `${API_BASE}/api/workspaces`);
     const body = (await response.json()) as { workspaces: Array<{ id: string; lifecycle: string }> };
     const workspace = body.workspaces.find((candidate) => candidate.id === workspaceId);
     if (workspace?.lifecycle === lifecycle) return;
@@ -293,7 +362,7 @@ async function waitForWorkspace(request: APIRequestContext, workspaceId: string,
 }
 
 async function registerRepo(request: APIRequestContext, fixture: ReturnType<typeof createGitFixture>, name?: string) {
-  const repoResponse = await request.post(`${API_BASE}/api/repos`, {
+  const repoResponse = await apiPost(request, `${API_BASE}/api/repos`, {
     data: {
       rootPath: fixture.repoPath,
       name: name ?? `E2E ${Date.now().toString(36)}`,
@@ -305,7 +374,7 @@ async function registerRepo(request: APIRequestContext, fixture: ReturnType<type
 }
 
 async function createWorkspace(request: APIRequestContext, repoId: string, name: string) {
-  const workspaceResponse = await request.post(`${API_BASE}/api/workspaces`, {
+  const workspaceResponse = await apiPost(request, `${API_BASE}/api/workspaces`, {
     data: { repoId, name, source: "scratch" },
   });
   expect(workspaceResponse.ok()).toBe(true);
@@ -313,7 +382,7 @@ async function createWorkspace(request: APIRequestContext, repoId: string, name:
 }
 
 async function startSession(request: APIRequestContext, workspaceId: string, displayName: string) {
-  const sessionResponse = await request.post(`${API_BASE}/api/agent-sessions`, {
+  const sessionResponse = await apiPost(request, `${API_BASE}/api/agent-sessions`, {
     data: { workspaceId, runtimeId: "shell", displayName },
   });
   expect(sessionResponse.ok()).toBe(true);

@@ -10,13 +10,13 @@
 [~] 2. Settings is secondary to the cockpit.
 [ ] 3. The UI is calm, dense, premium, and operational.
 [ ] 4. shadcn-style components are used where they improve consistency and speed.
-[ ] 5. The UI has theme support.
+[~] 5. The UI has theme support. The theme selector is a single cycling button with three states (Light / Dark / System); System resolves via `prefers-color-scheme`. Toggling the cockpit theme re-themes every open terminal in place — no full reload, no confirm prompt — by respawning each ttyd instance with the new palette (theme is baked at ttyd boot). Respawns are staggered to avoid spawn-storm regressions, rapid toggles coalesce via a sequence token, and OS-driven theme flips on the System setting follow the same code path. Theme propagation into `ttyd.ensure()` is a hard invariant: `theme` is a required argument and the daemon route always sources it from the disk-backed `ThemePrefStore`; there is no silent dark fallback inside the terminal manager.
 [ ] 6. Workspace rows are compact and scannable.
 [ ] 7. Status language is concrete and operator-facing.
 [ ] 8. Primary actions, secondary actions, links, statuses, and metadata have distinct visual treatment.
 [ ] 9. Desktop key views have screenshot review before release.
 [ ] 10. Mobile key views have screenshot review before release.
-[~] 11. Mobile supports monitoring and light actions. The mobile shell stays fixed at the viewport (`100dvh`); the mobile switcher chooses Navigator/Stage/Inspector; the Stage column owns its own scroll and the ttyd iframe receives a definite height so it never collapses or page-scrolls.
+[~] 11. Mobile supports monitoring and light actions. The mobile shell stays fixed at the viewport (`100dvh`); the mobile switcher chooses Navigator/Stage/Inspector; the Stage column owns its own scroll and the xterm host receives a definite height so it never collapses or page-scrolls.
 [ ] 12. The default theme is a dark-blue v1-inspired palette: deep navy/slate background, lighter slate panels, cyan/sky accent for selection and primary actions.
 [ ] 13. The three-column cockpit shell has independently resizable side columns with drag handles between columns.
 [ ] 14. The three-column cockpit shell has independently collapsible side columns; the collapse control sits at the top-right of the left navigator and the top-left of the right inspector.
@@ -40,12 +40,12 @@
 
 ## Performance
 
-[ ] 1. Citadel feels instant with 10-12 active workspaces across 2-3 repositories.
-[ ] 2. Workspace switching remains responsive with long terminal buffers.
+[~] 1. Citadel feels instant with 10-12 active workspaces across 2-3 repositories and remains usable at large operator loads (target: 50 workspaces with 3-5 agent sessions each) without pre-spawning one terminal renderer process per session.
+[~] 2. Workspace switching remains responsive with long terminal buffers. The cockpit's terminal path reuses browser xterm.js panes over daemon WebSockets and disposable node-pty tmux attach viewers instead of forcing iframe or renderer-process startup on every cache miss.
 [ ] 3. Provider summaries load independently from the main workspace shell.
 [ ] 4. Slow provider commands appear as stale/degraded states.
 [ ] 5. Terminal scrollback is bounded or virtualized. The tmux server enforces a global `history-limit` (default 5000 lines per pane) so a forgotten session can't grow per-pane scrollback without bound.
-[ ] 6. Normal navigation transfers only the terminal data needed for the active view.
+[~] 6. Normal navigation transfers only the terminal data needed for mounted views: tmux's current visible state on attach plus live PTY output while the pane is mounted.
 [ ] 7. Main happy paths have performance smoke coverage.
 
 ## Release Quality
@@ -69,7 +69,7 @@
 [~] 2. Vitest tests must allocate temporary directories via `fs.mkdtempSync(path.join(os.tmpdir(), ...))` instead of relying on the default `CITADEL_DATA_DIR`.
 [~] 3. Playwright tests must run against a daemon started with an isolated `CITADEL_DATA_DIR` and ports that cannot collide with the operator's dev daemon (4010) or web (5175).
 [~] 4. Citadel provides `pnpm test:isolated` and `pnpm e2e:isolated` wrappers (see `scripts/dev/test-isolated.ts`). They allocate a fresh `CITADEL_DATA_DIR` under `os.tmpdir()`, randomise Playwright ports out of the dev range, and clean up after the run unless `CITADEL_TEST_KEEP=1`.
-[ ] 5. **Future:** a containerised e2e runner that pins Node, pnpm, `gh`, `git`, and `ttyd` versions for fully reproducible CI. For now, the isolated scripts above are the documented entry point.
+[ ] 5. **Future:** a containerised e2e runner that pins Node, pnpm, `gh`, `git`, and tmux versions for fully reproducible CI. For now, the isolated scripts above are the documented entry point.
 
 ---
 

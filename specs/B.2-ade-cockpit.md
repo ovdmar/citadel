@@ -24,7 +24,7 @@
 [ ] 6. The center column always takes the remaining horizontal space.
 [ ] 7. The application shell never page-scrolls. Each column owns its own scroll context.
 [ ] 8. Terminal scrollback stays inside the terminal renderer, not the column scroll.
-[ ] 9. A slim top bar contains the product mark on the left, a centered search input that opens the command palette via click or Cmd+K, and the settings entry on the right. The product mark appears exactly once across the chrome — the navigator does not duplicate it.
+[ ] 9. A slim top bar contains the product mark on the left, a centered search input that opens the command palette via click or Cmd+K, and the settings entry on the right. The product mark appears exactly once across the chrome — the navigator does not duplicate it. The settings entry sits next to a single cycling theme button (Light → Dark → System → Light) whose icon reflects the current state and whose aria-label names current + next mode.
 [ ] 10. Resizable widths and collapse state persist locally between sessions.
 [ ] 11. No bottom status bar is rendered in the cockpit; operations, MCP, and activity counts are surfaced from their dedicated panels and command-palette navigation only.
 [ ] 12. The left navigator devotes its entire vertical space below primary nav to the workspaces list, which scrolls independently when content exceeds the column height.
@@ -46,7 +46,7 @@
 [ ] 5. When a workspace is created with an associated default agent, the cockpit opens that agent automatically in a new session tab.
 [ ] 6. The selected session occupies the rest of the column height.
 [ ] 7. Terminal keyboard shortcuts must be passed through to the active terminal correctly.
-[ ] 8. Selecting a workspace in the navigator focuses that workspace's currently-active session terminal iframe. Because ttyd runs on a different origin (a separate port), the iframe element receives focus but xterm keyboard capture still requires one click inside the terminal pane — this is a documented cross-origin limitation, not a silent failure. If the workspace has no active session, focusing the workspace is a no-op (no error).
+[ ] 8. Selecting a workspace in the navigator focuses that workspace's currently-active xterm pane directly. If the workspace has no active session, focusing the workspace is a no-op (no error).
 [ ] 9. Closing the active agent session tab immediately focuses the LEFT-sibling tab (falling back to the right sibling if none) — no blank-grace window. Closing the only remaining tab leaves the active-session pointer untouched.
 [ ] 10. The Stage's `+` add-session button is disabled while `workspace.lifecycle === "creating"` — starting a session requires a ready worktree.
 

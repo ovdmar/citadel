@@ -21,6 +21,7 @@ const IGNORED_TOP_LEVEL = new Set([
 ]);
 const IGNORED_GIT_INTERNAL = new Set(["objects", "logs", "lfs", "hooks"]);
 const DEBOUNCE_MS = 350;
+const POLL_MS = 250;
 
 type ProviderCache = Map<string, { expiresAt: number; value: unknown }>;
 
@@ -50,9 +51,9 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
   // the *callback*, not the watch installation. With node_modules included
   // a single workspace can hold thousands of watches; tests churning files
   // in node_modules then flood the event loop with ignored callbacks and
-  // ttyd's WS keepalive starts missing pings (visible as the cockpit's
-  // Reconnecting/Reconnected overlay storm).
+  // terminal WebSockets start missing timely reads/writes.
   const watchers = new Map<string, fs.FSWatcher[]>();
+  const pollers = new Map<string, ReturnType<typeof setInterval>>();
   const debounces = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingHeadBusts = new Set<string>();
   const failed = new Set<string>();
@@ -113,10 +114,32 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
     return acc;
   };
 
+  const pollTree = (rootPath: string, callback: (rel: string) => void): ReturnType<typeof setInterval> | null => {
+    const initial = snapshotTree(rootPath);
+    if (!initial) return null;
+    let previous: Map<string, string> = initial;
+    const interval = setInterval(() => {
+      const next = snapshotTree(rootPath);
+      if (!next) return;
+      for (const [rel, stamp] of next) {
+        if (previous.get(rel) !== stamp) callback(rel);
+      }
+      for (const rel of previous.keys()) {
+        if (!next.has(rel)) callback(rel);
+      }
+      previous = next;
+    }, POLL_MS);
+    interval.unref?.();
+    return interval;
+  };
+
   const closeFor = (id: string) => {
     const ws = watchers.get(id);
     if (ws) for (const w of ws) w.close();
     watchers.delete(id);
+    const poller = pollers.get(id);
+    if (poller) clearInterval(poller);
+    pollers.delete(id);
     const d = debounces.get(id);
     if (d) clearTimeout(d);
     debounces.delete(id);
@@ -138,6 +161,13 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
       try {
         const set = watchTree(ws.path, onChange(id));
         if (set.length === 0) {
+          const poller = pollTree(ws.path, onChange(id));
+          if (poller) {
+            pollers.set(id, poller);
+            watchers.set(id, []);
+            console.warn(`[fs-watch] falling back to polling for ${ws.path}`);
+            continue;
+          }
           failed.add(id);
           console.error(`[fs-watch] failed to install any watch for ${ws.path}`);
           continue;
@@ -154,6 +184,8 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
   const close = () => {
     for (const set of watchers.values()) for (const w of set) w.close();
     watchers.clear();
+    for (const poller of pollers.values()) clearInterval(poller);
+    pollers.clear();
     for (const d of debounces.values()) clearTimeout(d);
     debounces.clear();
     failed.clear();
@@ -186,6 +218,37 @@ function bustWorkspaceGlobalPrCache(deps: WorkspaceFsWatcherDeps, workspaceId: s
 function isGitHeadRef(rel: string): boolean {
   const parts = rel.split(path.sep);
   return rel === path.join(".git", "HEAD") || (parts[0] === ".git" && parts[1] === "refs" && parts[2] === "heads");
+}
+
+function snapshotTree(rootPath: string): Map<string, string> | null {
+  const snapshot = new Map<string, string>();
+  const walk = (absDir: string, relDir: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const rel = relDir ? path.join(relDir, entry.name) : entry.name;
+      if (isIgnored(rel)) continue;
+      const abs = path.join(absDir, entry.name);
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        walk(abs, rel);
+        continue;
+      }
+      if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+      try {
+        const stat = fs.statSync(abs);
+        snapshot.set(rel, `${stat.mtimeMs}:${stat.size}`);
+      } catch {
+        // File disappeared between readdir and stat; next poll will reconcile.
+      }
+    }
+  };
+  if (!fs.existsSync(rootPath)) return null;
+  walk(rootPath, "");
+  return snapshot;
 }
 
 function isIgnored(rel: string): boolean {
