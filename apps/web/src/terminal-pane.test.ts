@@ -747,7 +747,7 @@ function decodeBinarySent(sent: unknown[]): string[] {
     .map((item) => new TextDecoder().decode(item));
 }
 
-function resizeMessages(ws: FakeWebSocket): Array<{ type: string; cols: number; rows: number }> {
+function resizeMessages(ws: InstanceType<typeof FakeWebSocket>): Array<{ type: string; cols: number; rows: number }> {
   return ws.sent
     .filter((item): item is string => typeof item === "string")
     .map((item) => parseJsonObject(item))

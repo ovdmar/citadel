@@ -35,10 +35,6 @@ export default defineConfig({
   workers: 1,
   timeout: 45_000,
   expect: { timeout: 10_000 },
-  // The e2e suite shares one sandbox daemon and SQLite database. Keep CI
-  // deterministic even on high-core runners; local developers can still opt
-  // into parallelism by running without CI=true or passing --workers.
-  workers: process.env.CI ? 1 : undefined,
   use: {
     baseURL: webBase,
     trace: "retain-on-failure",
