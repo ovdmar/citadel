@@ -22,6 +22,7 @@ type TerminalSocketMessage = {
   cols?: number;
   rows?: number;
   data?: string;
+  key?: string;
 };
 
 const DEFAULT_COLS = 80;
@@ -31,6 +32,7 @@ const MAX_ROWS = 120;
 const DEFAULT_MAX_BUFFERED_BYTES = 16 * 1024 * 1024;
 const BACKPRESSURE_CLOSE_CODE = 1013;
 const BACKPRESSURE_CLOSE_REASON = "terminal_backpressure";
+const ALLOWED_TERMINAL_KEYS = new Set(["C-a", "C-e", "C-u"]);
 
 export function attachTerminalWebSocket(
   server: http.Server,
@@ -163,6 +165,19 @@ export function attachTerminalWebSocket(
                   data: error instanceof Error ? error.message : "input_failed",
                 });
               }
+            } else if (message.type === "key" && typeof message.key === "string") {
+              if (!ALLOWED_TERMINAL_KEYS.has(message.key)) {
+                sendControl(ws, { type: "error", data: "invalid_key" });
+                return;
+              }
+              try {
+                sendTmuxKey(tmuxTarget.sessionName, message.key, tmuxTarget.socketName);
+              } catch (error) {
+                sendControl(ws, {
+                  type: "error",
+                  data: error instanceof Error ? error.message : "key_failed",
+                });
+              }
             }
           });
           ws.on("close", () => {
@@ -262,6 +277,12 @@ function closePty(pty: IPty): void {
 function sendTmuxLiteralInput(sessionName: string, data: string, socketName?: string | null): void {
   if (data.length === 0) return;
   execFileSync("tmux", [...tmuxPrefix(socketName), "send-keys", "-l", "-t", sessionName, data], {
+    stdio: "ignore",
+  });
+}
+
+function sendTmuxKey(sessionName: string, key: string, socketName?: string | null): void {
+  execFileSync("tmux", [...tmuxPrefix(socketName), "send-keys", "-t", sessionName, key], {
     stdio: "ignore",
   });
 }

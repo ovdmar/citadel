@@ -173,6 +173,18 @@ export function remoteBranchExists(cwd: string, remote: string, branch: string) 
   }
 }
 
+export function branchRefExists(cwd: string, remote: string, branch: string) {
+  try {
+    execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
+      cwd,
+      stdio: "pipe",
+    });
+    return true;
+  } catch {
+    return remoteBranchExists(cwd, remote, branch);
+  }
+}
+
 export function workspaceIsDirty(workspacePath: string) {
   if (!fs.existsSync(workspacePath)) return false;
   const output = execFileSync("git", ["status", "--porcelain=v1"], {
