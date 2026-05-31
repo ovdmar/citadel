@@ -138,7 +138,7 @@ describe("tmux terminal gateway helpers", () => {
     expect(captureTmux(sessionName, 20, socketA)).toContain("socket-a");
   });
 
-  it("enables tmux extended keys for modified terminal shortcuts", async () => {
+  it("enables tmux extended keys without forcing tmux mouse mode over browser selection", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
     dirs.push(cwd);
     const sessionName = `citadel_extkeys_${Date.now().toString(36)}`;
@@ -160,7 +160,7 @@ describe("tmux terminal gateway helpers", () => {
     if (extendedKeysFormat) expect(extendedKeysFormat).toContain("extended-keys-format csi-u");
     expect(terminalFeatures).toMatch(/xterm\*.*extkeys/);
     expect(historyLimit).toContain(`history-limit ${tmuxHistoryLimit()}`);
-    expect(mouse).toContain("mouse on");
+    expect(mouse).toContain("mouse off");
     expect(clipboard).toContain("set-clipboard on");
   });
 

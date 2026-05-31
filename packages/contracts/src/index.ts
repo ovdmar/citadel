@@ -332,62 +332,20 @@ export const GitStatusSummarySchema = z.object({
   checkedAt: z.string(),
 });
 
-export const HookLinkSchema = z.object({
-  label: z.string().min(1).max(80),
-  url: z.string().url(),
-  kind: z.enum(["preview", "deploy", "docs", "external"]).default("external"),
-});
-
-export const HookApplicationSchema = z.object({
-  id: IdSchema,
-  label: z.string().min(1).max(80),
-  kind: z.enum(["preview", "deployment", "service", "docs", "external"]).default("service"),
-  url: z.string().url().nullable().default(null),
-  environment: z.string().max(80).nullable().default(null),
-  status: z.enum(["healthy", "degraded", "unavailable", "unknown"]).default("unknown"),
-  version: z.string().max(120).nullable().default(null),
-  commit: z.string().max(80).nullable().default(null),
-  updatedAt: z.string().nullable().default(null),
-  metadata: z.record(z.unknown()).default({}),
-});
-
-export const HookActionSchema = z.object({
-  id: IdSchema,
-  label: z.string().min(1).max(80),
-  description: z.string().max(200).nullable().default(null),
-  url: z.string().url().nullable().default(null),
-  kind: z.enum(["redeploy", "restart", "logs", "open", "custom"]).optional(),
-  safety: z.enum(["safe", "confirm", "destructive"]).optional(),
-  executable: z.boolean().optional(),
-  hookId: z.string().nullable().optional(),
-  metadata: z.record(z.unknown()).optional(),
-});
-
-export const HookOutputSchema = z
-  .object({
-    applications: z.array(HookApplicationSchema).max(30).optional(),
-    links: z.array(HookLinkSchema).max(20).default([]),
-    actions: z.array(HookActionSchema).max(20).default([]),
-    metadata: z.record(z.unknown()).default({}),
-  })
-  .default({ links: [], actions: [], metadata: {} });
-
-export const HookDiagnosticSchema = z.object({
-  hookId: z.string(),
-  event: z.string(),
-  command: z.string(),
-  args: z.array(z.string()).default([]),
-  cwd: z.string().nullable().default(null),
-  blocking: z.boolean(),
-  enabled: z.boolean(),
-  validationStatus: z.enum(["valid", "invalid"]),
-  validationErrors: z.array(z.string()).default([]),
-  lastRunAt: z.string().nullable().default(null),
-  durationMs: z.number().int().nullable().default(null),
-  exitStatus: z.number().int().nullable().default(null),
-  outputSummary: z.string().nullable().default(null),
-  structuredPayload: HookOutputSchema.nullable().default(null),
-});
+export {
+  HookActionSchema,
+  HookApplicationSchema,
+  HookDiagnosticSchema,
+  HookLinkSchema,
+  HookOutputSchema,
+} from "./hooks.js";
+import {
+  HookActionSchema,
+  HookApplicationSchema,
+  HookDiagnosticSchema,
+  HookLinkSchema,
+  HookOutputSchema,
+} from "./hooks.js";
 
 export const DeployedAppStatusSchema = z.enum(["deployed", "stopped", "unknown"]);
 
@@ -529,6 +487,10 @@ export const CreateAgentSessionInputSchema = z.object({
   displayName: z.string().min(1).optional(),
   prompt: z.string().optional(),
   namespaceId: IdSchema.optional(),
+  // operationId lets hook-dispatched sessions link their activity back to the
+  // firing operation. Always optional — user-launched sessions don't have a
+  // parent operation, and existing callers must keep working unchanged.
+  operationId: z.string().optional(),
   // When set, the spawn uses `--resume <uuid>` (via the runtime's resumeArg)
   // instead of generating a fresh UUID via `--session-id`. The runtime
   // session's transcript on disk must exist; the caller is responsible for
@@ -674,6 +636,8 @@ export type WorkspaceRecentCommits = z.infer<typeof WorkspaceRecentCommitsSchema
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export type { ScratchpadSnapshot, ReadScratchpadResult, ScratchpadHistorySource, ScratchpadHistoryEntry, ScratchpadHistorySummary, ScratchpadBlock, ScratchpadBlockSummary, ScratchpadBlockPosition } from "./scratchpad.js";
 
+export { HookEventSchema, AgentHookFrontmatterSchema } from "./hooks.js";
+export type { HookEvent, AgentHookFrontmatter } from "./hooks.js";
 export * from "./citadel-actions.js";
 
 export type ApiError = { error: string; detail?: string; fieldErrors?: Record<string, string[]> };

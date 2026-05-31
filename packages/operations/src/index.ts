@@ -2,13 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import type { ActivityEvent, AgentSession, CreateAgentSessionInput, CreateNamespaceInput, CreateWorkspaceInput, HookAction, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
+import type { ActivityEvent, AgentSession, CreateAgentSessionInput, CreateNamespaceInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
 import { createId, nowIso, repoDisplayName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
 import * as agentHistory from "./agent-history.js";
 import * as agentMessages from "./agent-messages.js";
-import { createAgentSession as createAgentSessionImpl } from "./create-agent-session.js";
+import { type RuntimeDescriptor, createAgentSession as createAgentSessionImpl } from "./create-agent-session.js";
 import { type CreateWorkspaceOptions, type WorkspaceOpsDeps, createWorkspaceImpl } from "./create-workspace.js";
 import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 import * as namespaceOps from "./namespaces.js";
@@ -51,7 +51,8 @@ import {
 
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export { BranchInUseByWorktreeError, RemoteRefMissingError, WorkspaceInUseError, WorkspaceNameTakenError } from "./helpers.js";
-import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
+import { buildDispatchAgentHookDeps, dispatchAgentHook as dispatchAgentHookImpl } from "./dispatch-agent-hook.js";
+import { type DispatchAgentHook, runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
 import {
   type WorkspaceAppsDeps,
   discoverWorkspaceApps as discoverWorkspaceAppsImpl,
@@ -88,6 +89,7 @@ export class OperationService {
         actionHookIds?: string[];
       };
       commandPolicy: CitadelConfig["commandPolicy"];
+      runtimes?: CitadelConfig["runtimes"];
     },
     private readonly runAutoTransitionsDep: RunAutoTransitionsDep | null = null,
   ) {}
@@ -155,14 +157,7 @@ export class OperationService {
 
   createAgentSession = (
     input: CreateAgentSessionInput,
-    runtime: {
-      command: string;
-      args: string[];
-      displayName: string;
-      promptArg?: string | null;
-      sessionIdArg?: string | null;
-      resumeArg?: string | null;
-    },
+    runtime: RuntimeDescriptor,
     options: { activitySource?: ActivityEvent["source"] } = {},
   ) => {
     if (input.namespaceId) {
@@ -185,17 +180,7 @@ export class OperationService {
     );
   };
 
-  launchAgent = (
-    input: LaunchAgentInput,
-    runtime: {
-      command: string;
-      args: string[];
-      displayName: string;
-      promptArg?: string | null;
-      sessionIdArg?: string | null;
-      resumeArg?: string | null;
-    },
-  ) =>
+  launchAgent = (input: LaunchAgentInput, runtime: RuntimeDescriptor) =>
     launchAgentImpl(
       {
         store: this.store,
@@ -482,6 +467,54 @@ export class OperationService {
       hookTimeoutMs: this.config?.commandPolicy.hookTimeoutMs ?? 120000,
     });
 
+  async runHookEvent(input: {
+    event: HookEvent;
+    repo: Repo;
+    workspace: Workspace;
+    payload?: unknown;
+    hookIds?: string[] | null;
+    operationType?: string;
+    operationMessage?: string;
+  }): Promise<{ operationId: string; ran: number }> {
+    const operation = this.operation(
+      input.operationType ?? `hook.${input.event}`,
+      "running",
+      input.repo.id,
+      input.workspace.id,
+      10,
+      input.operationMessage ?? `Running ${input.event} hooks`,
+    );
+    try {
+      const result = await this.runWorkspaceHooks(
+        input.event,
+        input.hookIds ?? null,
+        input.repo,
+        input.workspace,
+        operation.id,
+        input.payload,
+      );
+      this.store.upsertOperation({
+        ...operation,
+        status: "succeeded",
+        progress: 100,
+        message: result.ran ? `Ran ${result.ran} ${input.event} hook(s)` : `No ${input.event} hooks found`,
+        updatedAt: nowIso(),
+      });
+      return { operationId: operation.id, ran: result.ran };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : `hook_${input.event}_failed`;
+      this.logOp(operation.id, "error", `${input.event} hook failed: ${errorMessage}`);
+      this.store.upsertOperation({
+        ...operation,
+        status: "failed",
+        progress: 100,
+        error: errorMessage,
+        updatedAt: nowIso(),
+      });
+      throw error;
+    }
+  }
+
   private operation(
     type: string,
     status: Operation["status"],
@@ -536,39 +569,33 @@ export class OperationService {
     });
   }
 
+  private hooksDeps() {
+    return {
+      config: this.config,
+      activity: (...args: Parameters<typeof this.activity>) => this.activity(...args),
+      dispatchAgentHook: this.dispatchAgentHook,
+    };
+  }
+
   private runWorkspaceHooks = (
-    event: HookConfig["event"],
-    hookIds: string[],
+    event: HookEvent,
+    hookIds: string[] | null,
     repo: Repo,
     workspace: Workspace,
-    operationId: string,
-  ) =>
-    runWorkspaceHooks({
-      config: this.config,
-      activity: (...args) => this.activity(...args),
-      event,
-      hookIds,
-      repo,
-      workspace,
-      operationId,
-    });
+    operationId: string | null,
+    payload?: unknown,
+  ) => runWorkspaceHooks({ ...this.hooksDeps(), event, hookIds, repo, workspace, operationId, payload });
 
   private runNotificationHooks = (
-    event: HookConfig["event"],
+    event: HookEvent,
     repo: Repo,
     workspace: Workspace,
     operationId: string | null,
     payload: unknown,
-  ) =>
-    runNotificationHooks({
-      config: this.config,
-      activity: (...args) => this.activity(...args),
-      event,
-      repo,
-      workspace,
-      operationId,
-      payload,
-    });
+  ) => runNotificationHooks({ ...this.hooksDeps(), event, repo, workspace, operationId, payload });
+
+  private dispatchAgentHook: DispatchAgentHook = (input) =>
+    dispatchAgentHookImpl(buildDispatchAgentHookDeps(this.config, this.createAgentSession), input);
 
   // Binds the class's private helpers as deps for the extracted
   // create-workspace / remove-workspace modules. Built once per call so

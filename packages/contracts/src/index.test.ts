@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AgentHookFrontmatterSchema,
   AgentRuntimeSchema,
   AgentSessionSchema,
   AppEventSchema,
@@ -9,6 +10,7 @@ import {
   CreateRepoInputSchema,
   CreateScheduledAgentInputSchema,
   CreateWorkspaceInputSchema,
+  HookEventSchema,
   HookOutputSchema,
   IssueSearchResponseSchema,
   IssueSearchResultSchema,
@@ -634,5 +636,89 @@ describe("contract schemas", () => {
         freshness: { checkedAt: timestamp, stale: false, degraded: false },
       }).state,
     ).toBe("pr-conflicts");
+  });
+});
+
+describe("HookEventSchema", () => {
+  it("accepts all canonical hook events including the new framework events", () => {
+    const events = [
+      "workspace.setup",
+      "workspace.teardown",
+      "workspace.apps",
+      "workspace.action",
+      "workspace.created",
+      "workspace.archived",
+      "workspace.removed",
+      "agent.started",
+      "pr.merge",
+      "merge.conflict.detected",
+      "review.requested",
+    ];
+    for (const event of events) {
+      expect(HookEventSchema.parse(event)).toBe(event);
+    }
+  });
+
+  it("rejects 'deploy' — deploy is a file-name convention, not a hook event", () => {
+    expect(() => HookEventSchema.parse("deploy")).toThrow();
+  });
+
+  it("rejects unknown event names", () => {
+    expect(() => HookEventSchema.parse("not.a.real.event")).toThrow();
+  });
+});
+
+describe("AgentHookFrontmatterSchema", () => {
+  it("accepts empty frontmatter (all fields optional)", () => {
+    expect(AgentHookFrontmatterSchema.parse({})).toEqual({});
+  });
+
+  it("accepts runtime and displayName", () => {
+    expect(AgentHookFrontmatterSchema.parse({ runtime: "claude-code", displayName: "Hootsuite: notify" })).toEqual({
+      runtime: "claude-code",
+      displayName: "Hootsuite: notify",
+    });
+  });
+
+  it("rejects reserved key 'model' (CreateAgentSessionInput has no model field yet; would be silently dropped)", () => {
+    expect(() => AgentHookFrontmatterSchema.parse({ model: "opus" })).toThrow();
+  });
+
+  it("rejects reserved key 'target' (strict mode catches unknown keys)", () => {
+    expect(() => AgentHookFrontmatterSchema.parse({ target: "fresh" })).toThrow();
+  });
+
+  it("rejects reserved key 'blocking'", () => {
+    expect(() => AgentHookFrontmatterSchema.parse({ blocking: true })).toThrow();
+  });
+
+  it("rejects unknown keys (forward-compat: contract is closed)", () => {
+    expect(() => AgentHookFrontmatterSchema.parse({ foo: "bar" })).toThrow();
+  });
+
+  it("rejects displayName with invalid charset", () => {
+    expect(() => AgentHookFrontmatterSchema.parse({ displayName: "no/slashes" })).toThrow();
+    expect(() => AgentHookFrontmatterSchema.parse({ displayName: "no\ttabs" })).toThrow();
+  });
+
+  it("rejects displayName longer than 80 chars", () => {
+    expect(() => AgentHookFrontmatterSchema.parse({ displayName: "x".repeat(81) })).toThrow();
+  });
+});
+
+describe("CreateAgentSessionInputSchema.operationId", () => {
+  it("accepts a session input without operationId (backcompat)", () => {
+    expect(() =>
+      CreateAgentSessionInputSchema.parse({ workspaceId: "ws_test", runtimeId: "claude-code" }),
+    ).not.toThrow();
+  });
+
+  it("accepts an optional operationId so hook-dispatched sessions can link to the firing op", () => {
+    const parsed = CreateAgentSessionInputSchema.parse({
+      workspaceId: "ws_test",
+      runtimeId: "claude-code",
+      operationId: "op_abc123",
+    });
+    expect(parsed.operationId).toBe("op_abc123");
   });
 });

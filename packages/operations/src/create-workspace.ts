@@ -68,14 +68,14 @@ export type WorkspaceOpsDeps = {
     repo: Repo,
     workspace: Workspace,
     operationId: string,
-  ) => Promise<void>;
+  ) => Promise<unknown>;
   runNotificationHooks: (
     event: HookConfig["event"],
     repo: Repo,
     workspace: Workspace,
     operationId: string | null,
     payload: unknown,
-  ) => Promise<void>;
+  ) => Promise<unknown>;
   runAutoTransitions?:
     | ((
         event: JiraAutoTransitionEvent,
@@ -84,6 +84,7 @@ export type WorkspaceOpsDeps = {
         payload: { repo: Repo; workspace: Workspace },
       ) => Promise<void>)
     | null;
+  onSessionStopped?: (sessionId: string) => void;
 };
 
 export type CreateWorkspaceOptions = {

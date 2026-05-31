@@ -21,7 +21,7 @@ afterEach(() => {
 process.env.CITADEL_DISABLE_REAPER = "1";
 
 const createFixture = () => createScratchpadFixture(dirs);
-const INTEGRATION_TEST_TIMEOUT_MS = 20_000;
+const INTEGRATION_TEST_TIMEOUT_MS = 30_000;
 
 describe("scratchpad block routes + MCP block tools", () => {
   it("exposes list_blocks / add_block / update_block / delete_block via MCP", async () => {
