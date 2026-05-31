@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import {
+  DEFAULT_TMUX_HISTORY_LIMIT,
   agentLiveSentinelPath,
   attachTerminalWebSocket,
   captureTmux,
@@ -25,6 +26,7 @@ import {
   shellQuote,
   stopBackgroundSessionPipe,
   submitPrompt,
+  tmuxHistoryLimit,
   tmuxPrefix,
   tmuxSessionExists,
 } from "./index.js";
@@ -62,6 +64,25 @@ describe("tmux terminal gateway helpers", () => {
     expect(parseTerminalSocketMessage("{nope")).toBeNull();
     expect(parseTerminalSocketMessage(JSON.stringify({ data: "missing-type" }))).toBeNull();
     expect(clampTerminalPtySize(1000, 1)).toEqual({ cols: 400, rows: 5 });
+  });
+
+  it("parses the configurable tmux history limit with bounded defaults", () => {
+    const previous = process.env.CITADEL_TMUX_HISTORY_LIMIT;
+    try {
+      Reflect.deleteProperty(process.env, "CITADEL_TMUX_HISTORY_LIMIT");
+      expect(tmuxHistoryLimit()).toBe(DEFAULT_TMUX_HISTORY_LIMIT);
+      process.env.CITADEL_TMUX_HISTORY_LIMIT = "25000";
+      expect(tmuxHistoryLimit()).toBe(25_000);
+      process.env.CITADEL_TMUX_HISTORY_LIMIT = "42";
+      expect(tmuxHistoryLimit()).toBe(1_000);
+      process.env.CITADEL_TMUX_HISTORY_LIMIT = "200000";
+      expect(tmuxHistoryLimit()).toBe(100_000);
+      process.env.CITADEL_TMUX_HISTORY_LIMIT = "invalid";
+      expect(tmuxHistoryLimit()).toBe(DEFAULT_TMUX_HISTORY_LIMIT);
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, "CITADEL_TMUX_HISTORY_LIMIT");
+      else process.env.CITADEL_TMUX_HISTORY_LIMIT = previous;
+    }
   });
 
   it("creates durable sessions, sends input, captures output, resizes, and cleans up", async () => {
@@ -138,7 +159,7 @@ describe("tmux terminal gateway helpers", () => {
     expect(extendedKeys).toContain("extended-keys on");
     if (extendedKeysFormat) expect(extendedKeysFormat).toContain("extended-keys-format csi-u");
     expect(terminalFeatures).toMatch(/xterm\*.*extkeys/);
-    expect(historyLimit).toContain("history-limit 5000");
+    expect(historyLimit).toContain(`history-limit ${tmuxHistoryLimit()}`);
     expect(mouse).toContain("mouse on");
     expect(clipboard).toContain("set-clipboard on");
   });
