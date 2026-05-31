@@ -27,6 +27,11 @@ import { lastNonEmptyLine } from "./index.js";
 //   - The model status line (`gpt-5.5 …`) and the tmux status bar live below
 //     the spinner, so the bottom-most non-empty line is NOT a useful anchor
 //     for running detection. Only the sandbox footer is bottom-anchored.
+//   - Codex account usage-limit banner → usage_limited with reset timestamp.
+//     Empirical line:
+//       `■ You've hit your usage limit. Visit ... or try again at 3:00 PM.`
+//     The reset time is local to the daemon host, matching Codex's /status
+//     usage panel reset strings.
 //
 // Documented limitations:
 //   - Codex has Bash run_in_background and Task (subagents) but doesn't
@@ -56,8 +61,13 @@ const MODEL_STATUS_LINE_REGEX = /^\s*gpt-[^\s]+\s+.+\s+·\s+.+$/;
 const USER_PROMPT_LINE_REGEX = /^›\s+\S/;
 const SANDBOX_CHOICE_LINE_REGEX = /^›\s+\d+\./;
 const ASSISTANT_OUTPUT_LINE_REGEX = /^•\s+\S/;
+const CODEX_USAGE_LIMIT_LINE_REGEX = /\bYou['’]ve hit your usage limit\b/i;
+const CODEX_USAGE_LIMIT_BARE_LINE_REGEX = /^You['’]ve hit your usage limit\b/i;
+const CODEX_USAGE_LIMIT_RESET_REGEX =
+  /\btry again\s+(?:(today|tomorrow)\s+)?(?:at|after)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i;
 
 const ACTIVE_SCAN_LINES = 30;
+const LIMIT_SCAN_LINES = 40;
 
 const IDLE_STABLE_TICKS = 2;
 
@@ -70,6 +80,26 @@ export const CODEX_REASON_TURN_OUTPUT_ACTIVITY = "pane:codex:turn_output_activit
 function bottomLines(paneCapture: string, n: number): string[] {
   const lines = paneCapture.split("\n");
   return lines.slice(Math.max(0, lines.length - n));
+}
+
+// Exported for tests and for parity with claude-code's usage-limit parser.
+export function parseCodexUsageLimitReset(text: string, now: Date): string | null {
+  const m = CODEX_USAGE_LIMIT_RESET_REGEX.exec(text);
+  if (!m) return null;
+  const [, relativeDay, hhRaw, mmRaw, meridiemRaw] = m;
+  if (!hhRaw || !meridiemRaw) return null;
+
+  const hour12 = Number.parseInt(hhRaw, 10);
+  const minute = mmRaw ? Number.parseInt(mmRaw, 10) : 0;
+  if (!Number.isFinite(hour12) || !Number.isFinite(minute)) return null;
+  if (hour12 < 1 || hour12 > 12 || minute < 0 || minute > 59) return null;
+
+  let hour = hour12 % 12;
+  if (meridiemRaw.toLowerCase() === "pm") hour += 12;
+
+  const candidate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, minute, 0, 0);
+  if (relativeDay?.toLowerCase() === "tomorrow") candidate.setDate(candidate.getDate() + 1);
+  return Number.isNaN(candidate.getTime()) ? null : candidate.toISOString();
 }
 
 function hasActiveInterruptMarker(paneCapture: string): boolean {
@@ -112,6 +142,44 @@ function isRealUserPromptLine(line: string): boolean {
   if (trimmed === HINT_LINE) return false;
   if (SANDBOX_CHOICE_LINE_REGEX.test(trimmed)) return false;
   return USER_PROMPT_LINE_REGEX.test(trimmed);
+}
+
+function isCodexUsageLimitBannerLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!CODEX_USAGE_LIMIT_LINE_REGEX.test(trimmed)) return false;
+  if (isRealUserPromptLine(trimmed)) return false;
+  if (ASSISTANT_OUTPUT_LINE_REGEX.test(trimmed)) return false;
+  // Codex currently prefixes runtime error banners with `■`. Accept a bare
+  // banner too so the detector survives minor glyph churn, but reject prompt
+  // and assistant lines above first.
+  return trimmed.startsWith("■") || CODEX_USAGE_LIMIT_BARE_LINE_REGEX.test(trimmed);
+}
+
+function detectCodexUsageLimitBanner(paneCapture: string, now: Date): { resetAt: string | null } | null {
+  const lines = bottomLines(paneCapture, LIMIT_SCAN_LINES);
+  let usageIdx = -1;
+  let usageText: string | null = null;
+  let latestPromptIdx = -1;
+  let latestAssistantOutputIdx = -1;
+  let latestPostTurnIdx = -1;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    if (isRealUserPromptLine(line)) latestPromptIdx = i;
+    if (ASSISTANT_OUTPUT_LINE_REGEX.test(line.trim())) latestAssistantOutputIdx = i;
+    if (POST_TURN_DIVIDER_REGEX.test(line)) latestPostTurnIdx = i;
+    if (isCodexUsageLimitBannerLine(line)) {
+      usageIdx = i;
+      // The long banner can wrap before the reset phrase in narrower panes.
+      usageText = [line, lines[i + 1] ?? "", lines[i + 2] ?? ""].join(" ");
+    }
+  }
+
+  if (usageIdx === -1 || usageText === null) return null;
+  const newerCompletedOrStreamingTurn =
+    latestPromptIdx > usageIdx && (latestAssistantOutputIdx > latestPromptIdx || latestPostTurnIdx > latestPromptIdx);
+  if (newerCompletedOrStreamingTurn) return null;
+  return { resetAt: parseCodexUsageLimitReset(usageText, now) };
 }
 
 function latestCodexTurnSnapshot(paneCapture: string): CodexTurnSnapshot | null {
@@ -204,14 +272,26 @@ export const codexStatusAdapter: RuntimeStatusAdapter = {
       return { observed: "waiting_for_input", reason: CODEX_REASON_SANDBOX_APPROVAL };
     }
 
-    // Priority 3: post-turn divider visible → idle. Positive signal for the
+    // Priority 3: account usage-limit banner. This is a stalled post-turn
+    // state with a reset horizon, so it feeds the same usage_limited reason
+    // format used by claude-code.
+    const usageLimit = detectCodexUsageLimitBanner(ctx.paneCapture, (ctx.now ?? (() => new Date()))());
+    if (usageLimit !== null) {
+      const reason =
+        usageLimit.resetAt !== null
+          ? `pane:usage_limited:reset=${usageLimit.resetAt}`
+          : "pane:usage_limited:reset=unknown";
+      return { observed: "usage_limited", reason };
+    }
+
+    // Priority 4: post-turn divider visible → idle. Positive signal for the
     // turn-just-finished case so we don't flicker through `null` waiting for
     // the activity counter to stabilize.
     if (latestTurn.latest?.hasPostTurnDivider) {
       return { observed: "idle", reason: CODEX_REASON_CURRENT_TURN_DIVIDER };
     }
 
-    // Priority 4: current assistant turn output changed while tmux activity
+    // Priority 5: current assistant turn output changed while tmux activity
     // advanced. This is narrower than "tmux activity means running": prompt
     // edits and idle TUI repaints do not change a previously observed
     // assistant-output turn fingerprint.
@@ -227,7 +307,7 @@ export const codexStatusAdapter: RuntimeStatusAdapter = {
       return null;
     }
 
-    // Priority 5: stable for ≥ IDLE_STABLE_TICKS — idle.
+    // Priority 6: stable for ≥ IDLE_STABLE_TICKS — idle.
     // Boot suppression: never emit idle on the very first post-boot tick. If
     // the daemon restarted while codex was working, the in-memory state has
     // no prior activity reference and we'd misclassify.

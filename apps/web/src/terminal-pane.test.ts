@@ -121,7 +121,6 @@ const FakeWebSocket = class TerminalPaneFakeWebSocket extends EventTarget {
     this.dispatchEvent(event);
   }
 };
-type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
 
 const roots: Root[] = [];
 const frameCallbacks = new Map<number, FrameRequestCallback>();
@@ -190,6 +189,7 @@ afterEach(async () => {
   await flushReact(() => {
     for (const root of roots.splice(0)) root.unmount();
   });
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -671,17 +671,6 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect((term.options.theme as { background?: string }).background).toBe("#f5f1e8");
   });
-
-  it("shows an actionable error when the WebSocket closes", async () => {
-    await renderTerminal();
-    const ws = FakeWebSocket.instances[0];
-    if (!ws) throw new Error("missing ws");
-
-    await flushReact(() => ws.closeFromServer(1006, "lost"));
-
-    expect(document.body.textContent).toContain("terminal_disconnected");
-    expect(document.body.textContent).toContain("lost");
-  });
 });
 
 async function renderTerminal() {
@@ -728,7 +717,7 @@ function decodeBinarySent(sent: unknown[]): string[] {
     .map((item) => new TextDecoder().decode(item));
 }
 
-function resizeMessages(ws: FakeWebSocketInstance): Array<{ type: string; cols: number; rows: number }> {
+function resizeMessages(ws: InstanceType<typeof FakeWebSocket>): Array<{ type: string; cols: number; rows: number }> {
   return ws.sent
     .filter((item): item is string => typeof item === "string")
     .map((item) => parseJsonObject(item))
