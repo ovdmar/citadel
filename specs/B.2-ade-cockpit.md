@@ -40,9 +40,9 @@
 ## Center Stage Sessions
 
 [ ] 1. The center column shows the workspace's sessions/chats as tabs along the top.
-[ ] 2. A plus button next to the tabs adds a new session: pick a plain `Terminal` or one of the configured agent runtimes. The button is rendered immediately to the right of the last tab (not pushed to the far edge), and the button + menu sit outside the horizontally scrollable tab strip so the menu is never clipped.
-[ ] 3. Selecting `Terminal` creates an empty shell session in the workspace worktree.
-[ ] 4. Each session tab has an editable title. Default titles are the agent runtime display name or `Terminal`.
+[ ] 2. A plus button next to the tabs adds a new workspace session: pick the configured `Terminal` profile or one of the configured agent runtimes. The button is rendered immediately to the right of the last tab (not pushed to the far edge), and the button + menu sit outside the horizontally scrollable tab strip so the menu is never clipped.
+[ ] 3. Selecting `Terminal` calls the terminal-session REST endpoint and creates a `kind: "terminal"` workspace session in the workspace worktree.
+[ ] 4. Selecting an agent runtime calls the agent-session REST endpoint and creates a `kind: "agent"` workspace session. Each session tab has an editable title. Default titles are the agent runtime display name or `Terminal`.
 [ ] 5. When a workspace is created with an associated default agent, the cockpit opens that agent automatically in a new session tab.
 [ ] 6. The selected session occupies the rest of the column height.
 [ ] 7. Terminal keyboard shortcuts must be passed through to the active terminal correctly.

@@ -25,20 +25,20 @@ Bundled provider toggles:
 
 GitHub provider features use the local `gh` CLI when enabled. Jira provider features use the local `jtk` CLI when enabled. If a provider CLI is missing or unhealthy, Citadel reports the provider as degraded or unavailable and disables provider-backed actions in the cockpit. Worktree deploys started by `make deploy` disable automated GitHub polling by default (`CITADEL_AUTOMATED_GH=0`); set `CITADEL_ENABLE_WORKTREE_GH_AUTOMATION=1` before `make deploy` to opt one worktree back in. The long-term systemd install sets `CITADEL_AUTOMATED_GH=1`.
 
-## Runtimes
+## Agent Runtimes And Terminal
 
-Runtimes are shell-backed command adapters launched through tmux:
+Agent runtimes are prompt-driven command adapters launched through tmux:
 
 ```json
 {
-  "runtimes": [
-    { "id": "codex", "displayName": "Codex", "command": "codex", "args": ["--yolo"] },
-    { "id": "shell", "displayName": "Shell", "command": "bash", "args": ["-l"] }
-  ]
+  "agentRuntimes": [
+    { "id": "codex", "displayName": "Codex", "command": "codex", "args": ["--yolo"] }
+  ],
+  "terminal": { "displayName": "Terminal", "command": "bash", "args": ["-l"] }
 }
 ```
 
-Built-in defaults include `claude-code`, `codex`, `cursor-agent`, `pi`, and `shell`. Codex defaults to `--yolo` so interactive launches use the CLI's no-approval/no-sandbox mode; edit or clear the runtime args in Settings to change that. Runtime health is derived from command availability. Agent sessions persist tmux session name/id for reconnect.
+Built-in agent defaults include `claude-code`, `codex`, `cursor-agent`, and `pi`. Plain shell is the singular `terminal` profile, not an agent runtime. Codex defaults to `--yolo` so interactive launches use the CLI's no-approval/no-sandbox mode; edit or clear the runtime args in Settings to change that. Agent runtime health is derived from command availability. Workspace sessions persist tmux session name/id for reconnect.
 
 ## Runtime Usage Providers
 
@@ -160,13 +160,13 @@ Resources:
 - `citadel://provider-health`
 - `citadel://activity`
 
-Tools include read-only state inspection (including `read_agent_output`, which returns the latest tmux pane content for a specific agent session, bounded by `lines` and `maxChars`) plus daemon-handled workspace creation, agent launch, follow-up agent messaging (`send_agent_message`), metadata archive, and workspace link listing. See [runbook.md](./runbook.md) for curl examples.
+Tools include read-only state inspection (including `read_agent_output`, which returns the latest tmux pane content for a specific agent session, bounded by `lines` and `maxChars`) plus daemon-handled workspace creation, agent launch, follow-up agent messaging (`send_agent_message`), metadata archive, and workspace link listing. MCP is agent-only: terminal workspace sessions are not listed, launched, read, or messaged through MCP. See [runbook.md](./runbook.md) for curl examples.
 
 For interactive runtimes like Claude Code, an initial `prompt` passed to `start_agent_session` and every `send_agent_message` are delivered into the tmux pane via paste-buffer + Enter, so the prompt is actually submitted to the agent and not just left in the input box. Citadel ships `claude-code` without `promptArg` for this reason — `-p` is Claude Code's non-interactive print mode, which exits after responding and is not what an interactive Citadel session needs.
 
 ## Terminal Renderer (ttyd)
 
-Shell-backed sessions are tmux sessions. The cockpit's interactive renderer is `ttyd`, run as a per-session child process and reverse-proxied through the daemon at `/terminals/:sessionId/*`.
+Workspace sessions are tmux sessions. Agent sessions use the configured terminal profile as their base shell before Citadel sends the agent runtime command. Terminal sessions run only the terminal profile. The cockpit's interactive renderer is `ttyd`, run as a per-session child process and reverse-proxied through the daemon at `/terminals/:sessionId/*`.
 
 Environment variables:
 
@@ -176,8 +176,8 @@ Environment variables:
 
 Lifecycle:
 
-- A ttyd process is spawned the first time the cockpit hits `POST /api/agent-sessions/:sessionId/terminal`. ttyd is launched with `-W --check-origin=false -i 127.0.0.1 -b /terminals/<sessionId>` and runs `bash -lc 'tmux attach -t <session>'`.
-- Stopping a session releases its ttyd. `DELETE /api/agent-sessions/:id/terminal` releases without stopping tmux.
+- A ttyd process is spawned the first time the cockpit hits the session terminal proxy endpoint. ttyd is launched with `-W --check-origin=false -i 127.0.0.1 -b /terminals/<sessionId>` and runs `bash -lc 'tmux attach -t <session>'`.
+- Stopping a workspace session releases its ttyd. Releasing the terminal proxy alone leaves tmux running.
 - On daemon startup, stale `ttyd` processes that listen inside the configured port range are reaped.
 
 ## Diagnostic Terminal Gateway

@@ -21,7 +21,7 @@ Default SQLite database: `~/.local/share/citadel/citadel.sqlite`
 
 Set `CITADEL_DATA_DIR` or `CITADEL_CONFIG` to override local paths.
 
-See [config-reference.md](./config-reference.md) for providers, runtimes, usage providers, hooks, MCP resources/tools, and terminal gateway behavior.
+See [config-reference.md](./config-reference.md) for providers, agent runtimes, the terminal profile, usage providers, hooks, MCP resources/tools, and terminal gateway behavior.
 
 ## Verification
 
@@ -47,12 +47,12 @@ curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
-Mutating tools are handled by the daemon. `create_workspace`, `start_agent_session`, `send_agent_message`, and `archive_workspace` use normalized Citadel concepts:
+Mutating tools are handled by the daemon. `create_workspace`, `start_agent_session`, `send_agent_message`, and `archive_workspace` use normalized Citadel concepts. MCP is agent-only; it does not launch or list terminal workspace sessions.
 
 ```bash
 curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
   -H 'content-type: application/json' \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"start_agent_session","arguments":{"workspaceId":"ws_example","runtimeId":"shell","displayName":"Shell"}}}'
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"start_agent_session","arguments":{"workspaceId":"ws_example","runtimeId":"claude-code","displayName":"Investigate flaky CI"}}}'
 ```
 
 ### Reading agent output and sending follow-ups
@@ -63,7 +63,7 @@ curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_agent_sessions","arguments":{}}}'
 
-# Read the latest terminal output (transcript) of a specific session,
+# Read the latest terminal output (transcript) of a specific agent session,
 # bounded by lines and maxChars so the response stays small.
 curl -sS -X POST http://127.0.0.1:4337/api/mcp/rpc \
   -H 'content-type: application/json' \
@@ -95,10 +95,10 @@ Interactive terminals in the cockpit are rendered by per-session `ttyd` processe
 **Required tools:** `tmux`, `ttyd`. The daemon resolves `ttyd` via `TTYD_BIN` (default `/home/linuxbrew/.linuxbrew/bin/ttyd`).
 
 **How it works:**
-- The cockpit calls `POST /api/agent-sessions/:sessionId/terminal` to ensure a ttyd is running for that session. The daemon allocates a free TCP port in `CITADEL_TTYD_PORT_BASE..CITADEL_TTYD_PORT_MAX`; when unset, each daemon gets a deterministic 200-port slot starting at `7721 + 200 * ((daemonPort - 4010) mod 11)` (11 disjoint slices in `7721..9920`). It binds ttyd to `127.0.0.1:<port>` with `-b /terminals/<sessionId>` so it knows its proxied base path, and runs `bash -lc 'tmux attach -t <session>'` inside.
+- The cockpit calls the workspace-session terminal proxy endpoint to ensure a ttyd is running for that session. The daemon allocates a free TCP port in `CITADEL_TTYD_PORT_BASE..CITADEL_TTYD_PORT_MAX`; when unset, each daemon gets a deterministic 200-port slot starting at `7721 + 200 * ((daemonPort - 4010) mod 11)` (11 disjoint slices in `7721..9920`). It binds ttyd to `127.0.0.1:<port>` with `-b /terminals/<sessionId>` so it knows its proxied base path, and runs `bash -lc 'tmux attach -t <session>'` inside.
 - The daemon proxies all HTTP and WebSocket traffic at `/terminals/:sessionId/*` to the matching ttyd. The cockpit renders `<iframe src="/terminals/:sessionId/">`.
 - On daemon startup, any orphaned `ttyd` listening inside the configured port range is reaped (via `lsof -nP -iTCP -sTCP:LISTEN`).
-- Stopping a Citadel session (`DELETE /api/agent-sessions/:id`) releases its ttyd. `DELETE /api/agent-sessions/:id/terminal` releases the ttyd without stopping the tmux session.
+- Stopping a workspace session releases its ttyd. Releasing the ttyd for a session does not stop the tmux session.
 
 **Diagnostics:**
 

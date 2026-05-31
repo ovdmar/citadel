@@ -19,9 +19,10 @@ The daemon binds `127.0.0.1` by default for local-first use. See [docs/operation
 ## Install (long-term)
 
 ```bash
-make install                          # install/refresh systemd --user unit pointing at this checkout
-make upgrade                          # update to latest commit of the current branch
-make upgrade REF=v0.3.0               # pin to an annotated tag
+make install                          # install latest released tag and refresh systemd --user units
+make upgrade                          # reinstall/upgrade to latest released tag
+make install REF=main                 # development install from latest origin/main
+make upgrade REF=v0.3.0               # install a specific annotated release tag
 make doctor                           # verify everything is configured
 ```
 

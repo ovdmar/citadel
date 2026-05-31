@@ -60,7 +60,7 @@
 [ ] 7. The navigator is the primary left-side operating surface.
 [ ] 8. Workspace rows are slim (two lines): left agent state icon, first line workspace title, second line branch name in lighter monospace.
 [ ] 9. Workspace title is editable inline. Default is the worktree name; when an issue is attached the default is `<issue-key> · <issue-title> · <workspace-name>`.
-[ ] 10. The agent state icon shows a spinner while an *agent* session (any runtime except the plain `shell` terminal) is starting or actively running, and a static icon when only plain terminals or no sessions are running.
+[ ] 10. The agent state icon shows a spinner while a workspace session with `kind: "agent"` is starting or actively running, and a static icon when only terminal sessions or no sessions are running.
 [ ] 11. The navigator exposes a group-by overlay with checkboxes for `Repository` and `Status`. Both are reorderable to control grouping order. Default: both on, Repository first.
 [ ] 12. Group-by preferences persist locally.
 [ ] 13. Workspace rows are manually reorderable within their group via drag-and-drop. The order is persisted locally (per-browser localStorage, no server sync). Explicit user order overrides the default sort. Reorder is intra-group only — cross-group drops are no-ops in v1.

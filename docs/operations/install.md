@@ -25,16 +25,21 @@ Recommended (warn-only — Citadel still works without them):
 
 `make doctor` validates all of the above.
 
-## First-time install (HEAD of current branch)
+## First-time install (latest release)
 
 ```bash
 git clone git@github.com:ovdmar/citadel.git
 cd citadel
-make setup
 make install
 ```
 
-`make install` writes a systemd `--user` unit (`citadel.service`) plus a separate tmux server unit (`citadel-tmux.service`), enables them, builds `apps/daemon`, and brings them up. It is idempotent — re-running on the same checkout safely refreshes the unit and restarts the daemon.
+`make install` resolves the latest stable annotated release tag from `origin`, checks it out, runs `pnpm install --frozen-lockfile`, writes a systemd `--user` unit (`citadel.service`) plus a separate tmux server unit (`citadel-tmux.service`), builds `apps/daemon`, and brings them up. It is idempotent: re-running on the same checkout safely refreshes the unit and restarts the daemon.
+
+To install from the development branch instead of the latest release, be explicit:
+
+```bash
+make install REF=main
+```
 
 Verify:
 
@@ -46,25 +51,30 @@ Expected: top-line `ok` or `degraded` (degraded is fine if `gh` / `jtk` aren't i
 
 ## Pin to a tagged version
 
-Citadel uses annotated git tags shaped `v<major>.<minor>.<patch>` (e.g. `v0.3.0`). Lightweight tags, branches, and SHAs are not valid pin targets — `make upgrade` and the `CITADEL_INSTALL_REF` env var both refuse them.
+Citadel uses annotated git tags shaped `v<major>.<minor>.<patch>` (e.g. `v0.3.0`). Lightweight tags, arbitrary branches, SHAs, malformed tags, and prerelease tags are not valid install targets. `REF=main` is the only branch override.
 
 ```bash
-CITADEL_INSTALL_REF=v0.3.0 make install
+make install REF=v0.3.0
 ```
 
-The script `git fetch --tags`, validates the REF, refuses if your working tree is dirty, then checks out the tag, runs `pnpm install --frozen-lockfile`, rebuilds, and restarts the service.
+The script fetches origin tags best-effort, validates that the requested tag is annotated, refuses if your working tree is dirty, checks out the tag, runs `pnpm install --frozen-lockfile`, rebuilds, restarts the service, and runs doctor. If the origin tag fetch fails, an already-present local annotated tag may be used for exact-tag installs only.
 
 ## Upgrade
 
 ```bash
-# Upgrade to the latest commit on the current branch (no REF)
+# Upgrade to the latest released tag (no REF)
 make upgrade
 
 # Upgrade to a specific annotated tag
 make upgrade REF=v0.3.1
+
+# Upgrade/install from latest origin/main explicitly
+make upgrade REF=main
 ```
 
-`make upgrade` is a thin verb on top of `scripts/upgrade.sh`. It validates the REF (when given), refuses to run from a worktree whose path differs from the installed `citadel.service`'s `WorkingDirectory=`, refuses dirty trees when pinning, then delegates to `scripts/install-systemd.sh`.
+`make upgrade` is a clarity verb for the same idempotent path as `make install`. With no `REF`, it requires network access and selects the highest stable annotated `vX.Y.Z` tag from `origin` using numeric semver ordering (`v0.10.0` > `v0.9.9`). It refuses local-only release tags on the default path. With `REF=main`, it fetches `origin/main` and checks out exactly that object. With `REF=vX.Y.Z`, it installs that exact annotated tag.
+
+Install and upgrade both refuse dirty checkouts before any ref movement or reinstall. They also refuse to run from a worktree whose path differs from the installed `citadel.service`'s `WorkingDirectory=`.
 
 After upgrade, the daemon restart is asynchronous — `systemctl restart` returns before the daemon is listening. **Use `make doctor` to verify**, not `curl /api/health` (doctor retries 5×1s; raw curl can race the restart). Document this so operators don't read transient failures as breakage.
 
@@ -93,6 +103,8 @@ The doctor checks:
 
 - **Required binaries** (node, pnpm, tmux, ttyd, bash, git, sqlite3, jq) — missing → `fail`.
 - **Recommended binaries** (gh, jtk) — missing → `warn`.
+- **Agent runtimes** — missing configured agent runtime commands produce per-runtime `warn`; zero executable agent runtimes produces an aggregate `fail`.
+- **Terminal profile** — missing terminal command produces `fail`.
 - **Config** — exists, parses, zod-validates. TLS cert (if configured) loads, is non-empty, and is not expired. Warns when < 7 days from expiry.
 - **Systemd services** — `citadel.service` and `citadel-tmux.service` active. `skipped` if systemd is not the install path (e.g. dev worktree).
 - **Daemon reachability** — `GET <bindHost>:<port>/api/health` with 5×1s retry. Reports `protocol: http | https` and the bind URL.
@@ -148,7 +160,8 @@ For dev / worktree iteration, see [worktree-development.md](./worktree-developme
 | Symptom | Likely cause |
 |---|---|
 | `make doctor` reports `daemon unreachable` immediately after `make upgrade` | Race with async systemctl restart; rerun `make doctor` (it retries) |
-| `make upgrade REF=...` refuses with "ref must match v<x>.<y>.<z>" | REF is not an annotated semver tag |
+| `make upgrade REF=...` refuses with "ref must be main or v<x>.<y>.<z>" | REF is not `main` or an annotated stable semver tag |
+| `make install` cannot find a release tag | No stable annotated `vX.Y.Z` tag exists on origin; create/push a release tag or use `REF=main` |
 | `make upgrade` refuses with "working directory mismatch" | You're not in the checkout the systemd unit points at |
 | Cockpit URL won't load over HTTPS | Cert not in your system trust store; re-run `mkcert -install` |
 | Cockpit returns 404 for routes you just added | You're hitting `:4010` (systemd long-term) instead of your worktree's `:5210-5309` (vite HMR) |

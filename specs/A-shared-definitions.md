@@ -17,14 +17,16 @@
 
 [ ] 1. Repository — a configured source repository with stable identity, provider settings, hooks, and workspace defaults.
 [ ] 2. Workspace — a tracked git worktree inside a repository, with stable identity independent of path/name.
-[ ] 3. Agent session — a durable agent/runtime session attached to a workspace.
-[ ] 4. Runtime adapter — a CLI agent integration such as Claude, Codex, Pi, or another configured shell-backed agent.
-[ ] 5. Provider — an integration that normalizes external system data into Citadel contracts.
-[ ] 6. Hook — a repo-scoped extension command that returns structured data or executes structured actions.
-[ ] 7. Operation — a tracked long-running or side-effectful action with status, progress, logs, and activity.
-[ ] 8. Readiness — Citadel's operator-facing summary of what needs attention and why.
-[ ] 9. Link — a navigation target related to a repo, workspace, provider, application, issue, PR, or operation.
-[ ] 10. Action — an explicit command the operator can trigger through Citadel.
+[ ] 3. Workspace session — a durable tab/session attached to a workspace. Workspace sessions are either agent sessions or terminal sessions.
+[ ] 4. Agent session — a workspace session with `kind: "agent"` launched by an agent runtime.
+[ ] 5. Agent runtime — a prompt-driven CLI agent integration such as Claude Code, Codex, Cursor Agent, Pi, or another configured adapter.
+[ ] 6. Terminal profile — the singular shell-backed terminal launcher used for plain terminal tabs and as the base shell for shell-first agent launch. It is not an agent runtime.
+[ ] 7. Provider — an integration that normalizes external system data into Citadel contracts.
+[ ] 8. Hook — a repo-scoped extension command that returns structured data or executes structured actions.
+[ ] 9. Operation — a tracked long-running or side-effectful action with status, progress, logs, and activity.
+[ ] 10. Readiness — Citadel's operator-facing summary of what needs attention and why.
+[ ] 11. Link — a navigation target related to a repo, workspace, provider, application, issue, PR, or operation.
+[ ] 12. Action — an explicit command the operator can trigger through Citadel.
 
 ## Status Legend
 
@@ -34,4 +36,4 @@
 
 ---
 
-keywords: citadel, ade, cockpit, repository, workspace, agent session, runtime, provider, hook, operation, readiness
+keywords: citadel, ade, cockpit, repository, workspace, workspace session, agent session, agent runtime, terminal profile, provider, hook, operation, readiness
