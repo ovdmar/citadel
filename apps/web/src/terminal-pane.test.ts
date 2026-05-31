@@ -8,6 +8,7 @@ import {
   FakeWebSocket as TerminalPaneWebSocketMock,
   clipboardDataMock,
   decodeBinarySent,
+  flushAnimationFrames,
   flushReact as flushReactUpdate,
   installAnimationFrameMock,
   installLocalStorageMock,
@@ -525,10 +526,26 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const event = new WheelEvent("wheel", { deltaY: -32, deltaMode: 0, bubbles: true, cancelable: true });
 
     host.dispatchEvent(event);
+    await nextAnimationFrame();
 
     expect(event.defaultPrevented).toBe(true);
     expect(downstream).not.toHaveBeenCalled();
     expect(ws.sent).toContain(JSON.stringify({ type: "scroll", lines: -2 }));
+  });
+
+  it("coalesces trackpad wheel deltas into one scroll message per frame", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+    await flushReactUpdate(async () => ws.open());
+
+    host.dispatchEvent(new WheelEvent("wheel", { deltaY: -8, deltaMode: 0, bubbles: true, cancelable: true }));
+    host.dispatchEvent(new WheelEvent("wheel", { deltaY: -8, deltaMode: 0, bubbles: true, cancelable: true }));
+
+    expect(scrollMessages(ws)).toEqual([]);
+    await nextAnimationFrame();
+    expect(scrollMessages(ws)).toEqual([{ type: "scroll", lines: -1 }]);
   });
 
   it("does not reconnect the terminal when the resolved theme changes", async () => {
@@ -559,4 +576,18 @@ async function renderTerminal() {
     await settle();
   });
   return root;
+}
+
+async function nextAnimationFrame() {
+  flushAnimationFrames();
+  await settle();
+}
+
+function scrollMessages(ws: InstanceType<typeof TerminalPaneWebSocketMock>): Array<{ type: string; lines: number }> {
+  return ws.sent
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => JSON.parse(item) as { type?: string; lines?: unknown })
+    .filter(
+      (item): item is { type: string; lines: number } => item.type === "scroll" && typeof item.lines === "number",
+    );
 }

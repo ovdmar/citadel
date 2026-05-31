@@ -21,6 +21,8 @@ const LINE_END_KEY = "C-e";
 const LINE_KILL_KEY = "C-u";
 const TERMINAL_SCROLLBACK_LINES = 20_000;
 const TERMINAL_WHEEL_PIXELS_PER_LINE = 16;
+const TERMINAL_SMOOTH_SCROLL_DURATION_MS = 80;
+const TERMINAL_MAX_SCROLL_LINES_PER_MESSAGE = 200;
 const TERMINAL_AUTO_RETRY_LIMIT = 3;
 const TERMINAL_AUTO_RETRY_BACKOFF_MS = 5_000;
 const AUTO_RETRYABLE_TERMINAL_ERRORS = new Set(["terminal_disconnected", "terminal_socket_error"]);
@@ -175,7 +177,9 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     if (!host) return;
     let disposed = false;
     let resizeFrame: number | null = null;
+    let wheelFrame: number | null = null;
     let wheelRemainder = 0;
+    let pendingWheelLines = 0;
     let lastSentResize: { cols: number; rows: number } | null = null;
     const terminal = new Terminal({
       allowTransparency: false,
@@ -184,6 +188,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
       fontFamily: XTERM_FONT,
       fontSize: 13,
       scrollback: TERMINAL_SCROLLBACK_LINES,
+      smoothScrollDuration: TERMINAL_SMOOTH_SCROLL_DURATION_MS,
       theme: xtermTheme(themeRef.current),
     });
     const fit = new FitAddon();
@@ -225,6 +230,16 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
         runResize();
       });
     };
+    const flushWheelScroll = () => {
+      wheelFrame = null;
+      const lines = pendingWheelLines;
+      pendingWheelLines = 0;
+      sendTerminalScroll(ws, lines);
+    };
+    const scheduleWheelScroll = () => {
+      if (disposed || wheelFrame !== null) return;
+      wheelFrame = window.requestAnimationFrame(flushWheelScroll);
+    };
 
     const resizeObserver =
       typeof ResizeObserver === "undefined"
@@ -244,7 +259,15 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
       copyTerminalSelection(event, terminal, host, latestSelectionText);
     };
     const nativeWheelHandler = (event: WheelEvent) => {
-      wheelRemainder = handleTerminalWheelEvent(event, terminal.rows, ws, wheelRemainder);
+      const delta = wheelDeltaToLines(event, terminal.rows, wheelRemainder);
+      if (!delta) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      wheelRemainder = delta.remainder;
+      if (delta.lines === 0) return;
+      pendingWheelLines += delta.lines;
+      scheduleWheelScroll();
     };
     const selectionDisposable = terminal.onSelectionChange(updateSelectionSnapshot);
     host.addEventListener("keydown", nativeKeyHandler, true);
@@ -310,6 +333,10 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
       if (resizeFrame !== null) {
         window.cancelAnimationFrame(resizeFrame);
         resizeFrame = null;
+      }
+      if (wheelFrame !== null) {
+        window.cancelAnimationFrame(wheelFrame);
+        wheelFrame = null;
       }
       inputDisposable.dispose();
       selectionDisposable.dispose();
@@ -467,16 +494,6 @@ function isLineKillShortcut(key: string, event: KeyboardEvent): boolean {
   return event.ctrlKey && !event.metaKey && !isApplePlatform();
 }
 
-function handleTerminalWheelEvent(event: WheelEvent, terminalRows: number, ws: WebSocket, remainder: number): number {
-  const delta = wheelDeltaToLines(event, terminalRows, remainder);
-  if (!delta) return remainder;
-  event.preventDefault();
-  event.stopPropagation();
-  event.stopImmediatePropagation();
-  if (delta.lines !== 0) sendTerminalControl(ws, { type: "scroll", lines: delta.lines });
-  return delta.remainder;
-}
-
 function wheelDeltaToLines(
   event: WheelEvent,
   terminalRows: number,
@@ -505,6 +522,18 @@ function sendTerminalKey(ws: WebSocket, key: TerminalPaneKey): void {
 
 function sendTerminalControl(ws: WebSocket, message: TerminalSocketMessage): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+}
+
+function sendTerminalScroll(ws: WebSocket, lines: number): void {
+  let remaining = Math.trunc(lines);
+  while (remaining !== 0) {
+    const chunk =
+      remaining > 0
+        ? Math.min(remaining, TERMINAL_MAX_SCROLL_LINES_PER_MESSAGE)
+        : Math.max(remaining, -TERMINAL_MAX_SCROLL_LINES_PER_MESSAGE);
+    sendTerminalControl(ws, { type: "scroll", lines: chunk });
+    remaining -= chunk;
+  }
 }
 
 function sendTerminalInterrupt(ws: WebSocket, sessionId: string): void {
