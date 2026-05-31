@@ -287,6 +287,26 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(decodeBinarySent(ws.sent).join("")).not.toContain("\u0003");
   });
 
+  it("does not turn browser-selected terminal text into a macOS Cmd+C interrupt", async () => {
+    await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !term || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+    term.hasSelection.mockReturnValue(false);
+    term.getSelection.mockReturnValue("");
+    selectTextInside(host, "browser selected text");
+    await flushReact(() => ws.open());
+    const event = new KeyboardEvent("keydown", { key: "c", metaKey: true, bubbles: true, cancelable: true });
+
+    host.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(decodeBinarySent(ws.sent).join("")).not.toContain("\u0003");
+  });
+
   it("writes xterm selection text during the browser copy event", async () => {
     await renderTerminal();
     const term = xtermMocks.FakeTerminal.instances[0];
@@ -298,6 +318,18 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     Object.defineProperty(event, "clipboardData", { configurable: true, value: clipboardData });
 
     host.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(clipboardData.setData).toHaveBeenCalledWith("text/plain", "selected text");
+  });
+
+  it("writes terminal selection text when the browser copy event targets the document", async () => {
+    await renderTerminal();
+    const clipboardData = clipboardDataMock();
+    const event = new Event("copy", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { configurable: true, value: clipboardData });
+
+    document.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
     expect(clipboardData.setData).toHaveBeenCalledWith("text/plain", "selected text");
@@ -451,6 +483,16 @@ function clipboardDataMock() {
   return {
     setData: vi.fn(),
   };
+}
+
+function selectTextInside(host: HTMLElement, text: string) {
+  const node = document.createTextNode(text);
+  host.appendChild(node);
+  const range = document.createRange();
+  range.selectNodeContents(node);
+  const selection = document.getSelection();
+  selection?.removeAllRanges();
+  selection?.addRange(range);
 }
 
 function sessionFixture(): AgentSession {

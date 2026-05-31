@@ -165,19 +165,19 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
     resizeObserver?.observe(host);
     window.addEventListener("resize", sendResize);
     const nativeKeyHandler = (event: KeyboardEvent) => {
-      if (!handleTerminalKeyEvent(event, terminal, sessionId, ws, latestSelectionText)) {
+      if (!handleTerminalKeyEvent(event, terminal, sessionId, ws, host, latestSelectionText)) {
         event.preventDefault();
         event.stopImmediatePropagation();
       }
     };
     const nativeCopyHandler = (event: ClipboardEvent) => {
-      copyTerminalSelection(event, terminal, latestSelectionText);
+      copyTerminalSelection(event, terminal, host, latestSelectionText);
     };
     const selectionDisposable = terminal.onSelectionChange(updateSelectionSnapshot);
     host.addEventListener("keydown", nativeKeyHandler, true);
-    host.addEventListener("copy", nativeCopyHandler, true);
+    document.addEventListener("copy", nativeCopyHandler, true);
     terminal.attachCustomKeyEventHandler((event) =>
-      handleTerminalKeyEvent(event, terminal, sessionId, ws, latestSelectionText),
+      handleTerminalKeyEvent(event, terminal, sessionId, ws, host, latestSelectionText),
     );
     const inputDisposable = terminal.onData((data) => {
       if (data.includes("\u0003")) recordTerminalUserAction(sessionId, "ctrl_c");
@@ -225,7 +225,7 @@ export function TerminalPane(props: { session: AgentSession; active?: boolean })
       selectionDisposable.dispose();
       resizeObserver?.disconnect();
       host.removeEventListener("keydown", nativeKeyHandler, true);
-      host.removeEventListener("copy", nativeCopyHandler, true);
+      document.removeEventListener("copy", nativeCopyHandler, true);
       window.removeEventListener("resize", sendResize);
       ws.close();
       terminal.dispose();
@@ -314,6 +314,7 @@ function handleTerminalKeyEvent(
   terminal: Terminal,
   sessionId: string,
   ws: WebSocket,
+  host: HTMLElement,
   selectionSnapshot = "",
 ): boolean {
   if (event.type !== "keydown" || event.isComposing) return true;
@@ -348,7 +349,7 @@ function handleTerminalKeyEvent(
       return false;
     }
     if (key === "c" && event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-      if (terminalSelectionText(terminal, selectionSnapshot)) return true;
+      if (copyableTerminalSelectionText(terminal, host, selectionSnapshot)) return true;
       sendTerminalInterrupt(ws, sessionId);
       return false;
     }
@@ -387,8 +388,13 @@ async function writeTerminalBinary(data: unknown, terminal: Terminal, decoder: T
   }
 }
 
-function copyTerminalSelection(event: ClipboardEvent, terminal: Terminal, selectionSnapshot: string): void {
-  const selection = terminalSelectionText(terminal, selectionSnapshot);
+function copyTerminalSelection(
+  event: ClipboardEvent,
+  terminal: Terminal,
+  host: HTMLElement,
+  selectionSnapshot: string,
+): void {
+  const selection = copyableTerminalSelectionText(terminal, host, selectionSnapshot);
   if (!selection || !event.clipboardData) return;
   event.clipboardData.setData("text/plain", selection);
   event.preventDefault();
@@ -399,6 +405,24 @@ function terminalSelectionText(terminal: Terminal, selectionSnapshot: string): s
   const selection = terminal.getSelection();
   if (selection) return selection;
   return terminal.hasSelection() ? selectionSnapshot : "";
+}
+
+function copyableTerminalSelectionText(terminal: Terminal, host: HTMLElement, selectionSnapshot: string): string {
+  return terminalSelectionText(terminal, selectionSnapshot) || browserSelectionTextWithin(host);
+}
+
+function browserSelectionTextWithin(host: HTMLElement): string {
+  const active = document.activeElement;
+  if (active instanceof HTMLTextAreaElement && host.contains(active)) {
+    return active.value.slice(active.selectionStart, active.selectionEnd);
+  }
+  if (active instanceof HTMLInputElement && host.contains(active)) {
+    return active.value.slice(active.selectionStart ?? 0, active.selectionEnd ?? 0);
+  }
+  const selection = document.getSelection();
+  if (!selection || selection.isCollapsed || !selection.anchorNode || !selection.focusNode) return "";
+  if (!host.contains(selection.anchorNode) || !host.contains(selection.focusNode)) return "";
+  return selection.toString();
 }
 
 async function pasteClipboardIntoTerminal(ws: WebSocket): Promise<void> {
