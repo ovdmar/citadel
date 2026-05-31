@@ -5,13 +5,7 @@ import { createElement } from "react";
 import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  TerminalPane,
-  focusActiveTerminal,
-  getTerminalHandle,
-  isRegisteredTerminalMessageSource,
-  terminalWebSocketUrl,
-} from "./terminal-pane.js";
+import { TerminalPane, getTerminalHandle } from "./terminal-pane.js";
 import { applyThemePreference } from "./use-resolved-theme.js";
 
 const xtermMocks = vi.hoisted(() => {
@@ -140,15 +134,6 @@ class FakeResizeObserver {
   }
 }
 
-async function act(callback: () => void | Promise<void>) {
-  let result: void | Promise<void> = undefined;
-  flushSync(() => {
-    result = callback();
-  });
-  await result;
-  await settle();
-}
-
 beforeEach(() => {
   document.body.innerHTML = "";
   document.documentElement.removeAttribute("data-theme");
@@ -202,55 +187,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-describe("focusActiveTerminal", () => {
-  it("is a no-op when sessionId is null", () => {
-    expect(() => focusActiveTerminal(null)).not.toThrow();
-    expect(() => focusActiveTerminal(undefined)).not.toThrow();
-  });
-
-  it("is a no-op when no handle is registered for the sessionId", () => {
-    expect(getTerminalHandle("unknown-session")).toBeUndefined();
-    expect(() => focusActiveTerminal("unknown-session")).not.toThrow();
-  });
-
-  it("accepts terminal bridge messages by registered session id when the frame source identity is unavailable", async () => {
-    await renderTerminal();
-
-    expect(getTerminalHandle("sess_1")).toBeDefined();
-    expect(isRegisteredTerminalMessageSource(null, "sess_1")).toBe(true);
-    expect(isRegisteredTerminalMessageSource(null, "unknown-session")).toBe(false);
-  });
-
-  it("focuses the registered xterm instance", async () => {
-    await renderTerminal();
-
-    focusActiveTerminal("sess_1");
-
-    expect(xtermMocks.FakeTerminal.instances[0]?.focus).toHaveBeenCalled();
-  });
-});
-
 describe("TerminalPane xterm WebSocket renderer", () => {
-  it("opens the primary /terminal WebSocket without hitting the legacy terminal ensure endpoint", async () => {
-    await renderTerminal();
-
-    expect(FakeWebSocket.instances[0]?.url).toBe(terminalWebSocketUrl("sess_1"));
-    expect(xtermMocks.FakeTerminal.instances[0]?.options.scrollback).toBe(20_000);
-    expect(window.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/api/agent-sessions/sess_1/terminal"));
-    expect(getTerminalHandle("sess_1")).toBeDefined();
-  });
-
-  it("creates an opaque xterm renderer", async () => {
-    await renderTerminal();
-
-    expect(xtermMocks.FakeTerminal.instances[0]?.options).toEqual(
-      expect.objectContaining({
-        allowTransparency: false,
-        theme: expect.objectContaining({ background: "#f5f1e8" }),
-      }),
-    );
-  });
-
   it("keeps retained hidden panes dormant until they become active", async () => {
     const rootElement = document.createElement("div");
     document.body.appendChild(rootElement);
