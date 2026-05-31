@@ -126,8 +126,9 @@ export async function removeWorkspaceImpl(
         exists: fs.existsSync,
         logOp: deps.logOp,
         activity: deps.activity,
-        runConfiguredTeardown: () =>
-          deps.runWorkspaceHooks("workspace.teardown", repo.teardownHookIds, repo, workspace, operation.id),
+        runConfiguredTeardown: async () => {
+          await deps.runWorkspaceHooks("workspace.teardown", repo.teardownHookIds, repo, workspace, operation.id);
+        },
       },
     });
     if (teardownOutcome.kind === "blocked") {

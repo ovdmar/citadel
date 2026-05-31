@@ -171,6 +171,7 @@ export function createDaemonApp(input: {
   };
 
   const recentUserAction = new Map<string, number>();
+  let statusMonitor: ReturnType<typeof startDaemonStatusMonitor> = null;
   const respawnTmuxForWebSocket = buildRespawnTmux(store, config);
 
   const cachedProviderHealth = () =>
@@ -237,12 +238,14 @@ export function createDaemonApp(input: {
       path: typeof body.path === "string" ? body.path.slice(0, 240) : "",
       visibility: typeof body.visibility === "string" ? body.visibility.slice(0, 40) : "unknown",
     });
+    statusMonitor?.invalidatePaneCapture(sessionId);
     res.status(204).end();
   });
 
   app.post("/api/agent-sessions/:sessionId/user-action", (req, res) => {
     const sessionId = typeof req.params.sessionId === "string" ? req.params.sessionId : "";
     recentUserAction.set(sessionId, Date.now());
+    statusMonitor?.invalidatePaneCapture(sessionId);
     res.status(204).end();
   });
 
@@ -428,6 +431,7 @@ export function createDaemonApp(input: {
     providerCache,
     buildWorkspaceCockpitSummary,
     resolveRepoFullName,
+    operations,
   });
 
   registerAgentSessionRoutes(app, { operations, emit, asyncRoute, config });
@@ -649,7 +653,7 @@ export function createDaemonApp(input: {
   }
 
   // Status monitor / auto-recovery / auto-resume / terminal reaper: see their own modules for context.
-  const statusMonitor = startDaemonStatusMonitor(store, emit, config, recentUserAction, diagnostics);
+  statusMonitor = startDaemonStatusMonitor(store, emit, config, recentUserAction, diagnostics);
   if (statusMonitor) server.on("close", () => statusMonitor.stop());
   const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({
     store,

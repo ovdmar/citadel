@@ -33,6 +33,11 @@ export {
 export type { FixConflictsHookEnv, ResolveFixConflictsPromptResult } from "./fix-conflicts.js";
 export { CITADEL_NON_FF_POLICY } from "./non-ff-policy.js";
 
+export { describeError, discoverFileHooks } from "./discovery.js";
+export type { FileHook, FileHookDiagnostic } from "./discovery.js";
+export { parseFrontmatter } from "./frontmatter.js";
+export { renderTemplate } from "./template.js";
+
 export type CommandHook = {
   id: string;
   event: string;
@@ -81,6 +86,10 @@ export async function runCommandHookForDiagnostics(hook: CommandHook, payload: u
       clearTimeout(timer);
       resolve({ stdout, stderr, durationMs: Date.now() - startedAt, exitStatus: code });
     });
+    // Swallow EPIPE: a short-lived script (e.g. `exit 0`) may close stdin
+    // before we finish writing the JSON payload. The exit code is what
+    // matters; bubbling EPIPE would surface a spurious failure.
+    child.stdin.on("error", () => {});
     child.stdin.end(input);
   });
 }
