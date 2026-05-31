@@ -515,9 +515,9 @@
   text-decoration: none;
 }
 .debug-panel__primary {
-  background: var(--c-accent, #3a6dd2);
+  background: var(--color-action);
   border-color: transparent;
-  color: #fff;
+  color: var(--c-on-dark);
 }
 .debug-panel__primary:hover {
   filter: brightness(1.05);
