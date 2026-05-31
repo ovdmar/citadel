@@ -32,13 +32,13 @@ Runtimes are shell-backed command adapters launched through tmux:
 ```json
 {
   "runtimes": [
-    { "id": "codex", "displayName": "Codex", "command": "codex", "args": ["--yolo"] },
+    { "id": "codex", "displayName": "Codex", "command": "codex", "args": ["--yolo", "--enable", "goals"] },
     { "id": "shell", "displayName": "Shell", "command": "bash", "args": ["-l"] }
   ]
 }
 ```
 
-Built-in defaults include `claude-code`, `codex`, `cursor-agent`, `pi`, and `shell`. Codex defaults to `--yolo` so interactive launches use the CLI's no-approval/no-sandbox mode; edit or clear the runtime args in Settings to change that. Runtime health is derived from command availability. Agent sessions persist tmux session name/id for reconnect.
+Built-in defaults include `claude-code`, `codex`, `cursor-agent`, `pi`, and `shell`. Codex defaults to `--yolo` so interactive launches use the CLI's no-approval/no-sandbox mode; edit or clear that runtime arg in Settings to change approvals. Citadel keeps `--enable goals` on the Codex runtime so all Citadel-launched Codex sessions use the experimental goals feature. Runtime health is derived from command availability. Agent sessions persist tmux session name/id for reconnect.
 
 ## Runtime Usage Providers
 
