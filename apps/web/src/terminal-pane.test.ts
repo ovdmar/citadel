@@ -68,6 +68,15 @@ vi.mock("@xterm/addon-fit", () => ({ FitAddon: xtermMocks.FakeFitAddon }));
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+async function act(callback: () => void | Promise<void>) {
+  let result: void | Promise<void> = undefined;
+  flushSync(() => {
+    result = callback();
+  });
+  await result;
+  await settle();
+}
+
 class FakeWebSocket extends EventTarget {
   static CONNECTING = 0;
   static OPEN = 1;
@@ -171,6 +180,39 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(FakeWebSocket.instances[0]?.url).toBe(terminalWebSocketUrl("sess_1"));
     expect(window.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/api/agent-sessions/sess_1/terminal"));
     expect(getTerminalHandle("sess_1")).toBeDefined();
+  });
+
+  it("keeps retained hidden panes dormant until they become active", async () => {
+    const rootElement = document.createElement("div");
+    document.body.appendChild(rootElement);
+    const root = createRoot(rootElement);
+    roots.push(root);
+    const session = sessionFixture();
+
+    await act(async () => {
+      root.render(createElement(TerminalPane, { session, active: false }));
+      await settle();
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(xtermMocks.FakeTerminal.instances).toHaveLength(0);
+    expect(getTerminalHandle("sess_1")).toBeDefined();
+
+    await act(async () => {
+      root.render(createElement(TerminalPane, { session, active: true }));
+      await settle();
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(xtermMocks.FakeTerminal.instances).toHaveLength(1);
+
+    await act(async () => {
+      root.render(createElement(TerminalPane, { session, active: false }));
+      await settle();
+    });
+
+    expect(FakeWebSocket.instances[0]?.readyState).toBe(FakeWebSocket.CLOSED);
+    expect(xtermMocks.FakeTerminal.instances[0]?.dispose).toHaveBeenCalled();
   });
 
   it("writes WebSocket output to xterm and sends input/resize over the same socket", async () => {
