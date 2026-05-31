@@ -10,7 +10,7 @@ import type {
 } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
-import { discoverCodexSessionId } from "@citadel/runtimes";
+import { discoverCodexSessionId, prepareCodexSqliteHomeForWorkspace } from "@citadel/runtimes";
 import {
   COMM_TRUNCATION,
   captureTranscript,
@@ -25,8 +25,6 @@ import {
 const CODEX_STATE_DB_LOCKED = /(?:database is locked|failed to initialize state runtime)/i;
 const CODEX_LAUNCH_MAX_ATTEMPTS = 5;
 const CODEX_LAUNCH_STABILITY_MS = 1200;
-
-let codexLaunchQueue: Promise<void> = Promise.resolve();
 
 export type RuntimeDescriptor = {
   command: string;
@@ -44,6 +42,7 @@ export type RuntimeDescriptor = {
 
 export type CreateAgentSessionDeps = {
   store: SqliteStore;
+  dataDir?: string;
   activity: (
     type: string,
     source: ActivityEvent["source"],
@@ -125,6 +124,14 @@ export async function createAgentSession(
   // and is already foreground; calling launchAgentInSession with "bash"
   // would re-launch bash inside the existing bash. Skip it.
   const isShellRuntime = ["bash", "sh", "zsh", "fish"].includes(runtime.command);
+  const codexSqliteHome =
+    input.runtimeId === "codex"
+      ? prepareCodexSqliteHomeForWorkspace({
+          workspaceId: workspace.id,
+          ...(deps.dataDir ? { dataDir: deps.dataDir } : {}),
+        })
+      : null;
+  const runtimeEnv = codexSqliteHome ? { CODEX_SQLITE_HOME: codexSqliteHome } : undefined;
   let tmux: Awaited<ReturnType<typeof ensureTmuxSession>>;
   let runtimeLaunchStartedMs: number | null = null;
   try {
@@ -132,10 +139,8 @@ export async function createAgentSession(
     if (!isShellRuntime) {
       runtimeLaunchStartedMs =
         input.runtimeId === "codex"
-          ? await withCodexLaunchLock(() =>
-              launchCodexWithRetry(sessionName, tmuxSocketName, runtime.command, runtimeArgs),
-            )
-          : await launchRuntimeOnce(sessionName, tmuxSocketName, runtime.command, runtimeArgs);
+          ? await launchCodexWithRetry(sessionName, tmuxSocketName, runtime.command, runtimeArgs, runtimeEnv)
+          : await launchRuntimeOnce(sessionName, tmuxSocketName, runtime.command, runtimeArgs, runtimeEnv);
     }
     if (promptForKeys) {
       // Treat the initial prompt as load-bearing: if submitPrompt couldn't
@@ -255,24 +260,13 @@ async function launchRuntimeOnce(
   socketName: string | null,
   command: string,
   args: string[],
+  env?: Record<string, string | null | undefined>,
 ): Promise<number> {
   const startedAt = Date.now();
-  await launchAgentInSession(sessionName, command, args, { socketName });
+  const options: { socketName: string | null; env?: Record<string, string | null | undefined> } = { socketName };
+  if (env !== undefined) options.env = env;
+  await launchAgentInSession(sessionName, command, args, options);
   return startedAt;
-}
-
-async function withCodexLaunchLock<T>(fn: () => Promise<T>): Promise<T> {
-  const previous = codexLaunchQueue;
-  let release!: () => void;
-  codexLaunchQueue = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  await previous.catch(() => undefined);
-  try {
-    return await fn();
-  } finally {
-    release();
-  }
 }
 
 async function launchCodexWithRetry(
@@ -280,12 +274,15 @@ async function launchCodexWithRetry(
   socketName: string | null,
   command: string,
   args: string[],
+  env?: Record<string, string | null | undefined>,
 ): Promise<number> {
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= CODEX_LAUNCH_MAX_ATTEMPTS; attempt += 1) {
     const startedAt = Date.now();
     try {
-      await launchAgentInSession(sessionName, command, args, { socketName });
+      const options: { socketName: string | null; env?: Record<string, string | null | undefined> } = { socketName };
+      if (env !== undefined) options.env = env;
+      await launchAgentInSession(sessionName, command, args, options);
       if (await runtimeStayedForeground(sessionName, socketName, command, CODEX_LAUNCH_STABILITY_MS)) return startedAt;
 
       const error = new Error(

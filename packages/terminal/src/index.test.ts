@@ -275,8 +275,9 @@ describe("tmux terminal gateway helpers", () => {
     sendKeys(sessionName, "cat > pasted.txt");
     sendKeys(sessionName, "\r");
     pasteText(sessionName, "alpha\nbeta\n");
+    await waitForCapture(sessionName, "beta");
     sendKeys(sessionName, "\u0004");
-
+    await waitForCapture(sessionName, "$");
     await waitForFile(path.join(cwd, "pasted.txt"), "alpha\nbeta\n");
   });
 
