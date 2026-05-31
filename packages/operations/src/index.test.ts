@@ -491,7 +491,6 @@ describe("OperationService", () => {
     const first = await service.createWorkspace({ repoId: repo.id, name: "reusable", source: "scratch" });
     const removed = await service.removeWorkspace({ workspaceId: first.workspaceId });
     expect(removed).toMatchObject({ removed: true, archived: false });
-    // Row must be hard-deleted (not archived) so the UNIQUE(repo_id, name) index lets us recreate.
     expect(store.listArchivedWorkspaces().find((w) => w.id === first.workspaceId)).toBeUndefined();
     expect(store.listWorkspaces().find((w) => w.id === first.workspaceId)).toBeUndefined();
     // Re-creating under the same name no longer trips the unique index. Pass a

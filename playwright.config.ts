@@ -15,7 +15,6 @@ const dataDir =
   process.env.CITADEL_PLAYWRIGHT_DATA_DIR ||
   (process.env.CITADEL_DATA_DIR?.startsWith("/tmp/citadel-test-") ? process.env.CITADEL_DATA_DIR : undefined) ||
   `/tmp/citadel-playwright-data-${process.pid}`;
-process.env.CITADEL_PLAYWRIGHT_DATA_DIR = dataDir;
 const configPath = process.env.CITADEL_PLAYWRIGHT_CONFIG || `${dataDir}/citadel.config.json`;
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
@@ -26,6 +25,9 @@ process.env.CITADEL_PLAYWRIGHT_SANDBOX_PREFIX = sandboxPrefix;
 const tmuxSocket = (
   process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}-${process.pid}`
 ).replace(/[^A-Za-z0-9_.-]/g, "-");
+
+process.env.CITADEL_PLAYWRIGHT_DATA_DIR = dataDir;
+process.env.CITADEL_PLAYWRIGHT_CONFIG = configPath;
 
 export default defineConfig({
   testDir: "e2e",
@@ -76,8 +78,8 @@ export default defineConfig({
         // Clear operator-shell worktree mode before setting sandbox env below;
         // otherwise a local run can override /tmp e2e paths with worktree paths.
         "CITADEL_WORKTREE=",
-        `CITADEL_CONFIG=${configPath}`,
         `CITADEL_DATA_DIR=${dataDir}`,
+        `CITADEL_CONFIG=${configPath}`,
         `CITADEL_PORT=${daemonPort}`,
         `CITADEL_TMUX_SOCKET=${tmuxSocket}`,
         "CITADEL_WORKTREE=0",

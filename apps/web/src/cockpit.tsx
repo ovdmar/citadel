@@ -1,11 +1,12 @@
-import type { PullRequestSummary, Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import type { AgentSession, PullRequestSummary, Workspace, WorkspaceRecentCommits } from "@citadel/contracts";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { ChevronsLeft, ChevronsRight, Search as SearchIcon, Settings as SettingsIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import { useEventRefresh, useFilteredStateQuery } from "./app-state.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
+import { resolveShortcutAction } from "./cockpit-shortcut-actions.js";
 import {
   invalidateActiveWorkspaceFromBatch,
   prMapFromSummaries,
@@ -18,11 +19,19 @@ import { CommandPalette } from "./command-palette.js";
 import { GhCooldownBanner } from "./gh-cooldown-banner.js";
 import { useFocusRefresh } from "./hooks/use-focus-refresh.js";
 import { Inspector } from "./inspector.js";
+import {
+  expandGroupPath,
+  readNavigatorGrouping,
+  subscribeToCollapseChanges,
+  subscribeToGroupingChanges,
+} from "./navigator-collapse-store.js";
+import { buildGroupTree, flattenWorkspaceOrder, treeGroupingFor } from "./navigator-groups.js";
 import { Navigator } from "./navigator.js";
 import { RestoreBanner } from "./restore-banner.js";
+import { type ShortcutMatch, matchShortcut } from "./shortcuts.js";
 import { Stage } from "./stage.js";
 import { focusActiveTerminal, isRegisteredTerminalMessageSource } from "./terminal-pane.js";
-import { parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
+import { parseTerminalShortcutMessage, terminalShortcutMatch } from "./terminal-shortcut-bridge.js";
 import { ThemeControls } from "./theme-controls.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
@@ -147,9 +156,133 @@ export function Cockpit() {
     ? (activeWorkspaceSessions.find((session) => session.id === activeSessionId) ?? null)
     : (activeWorkspaceSessions[0] ?? null);
 
+  // Grouping mode read from the Navigator's localStorage key. Lives in a piece
+  // of state so the cockpit re-renders (and re-derives the workspace flat
+  // order) when the user changes grouping from inside the Navigator.
+  // Two synchronization sources:
+  //  - `storage` event: cross-tab changes (user switches grouping in another tab).
+  //  - NAVIGATOR_GROUPING_EVENT: same-tab changes (Navigator publishes via the
+  //    custom event whenever its grouping state changes — the native `storage`
+  //    event does NOT fire on same-tab writes).
+  const [navigatorGrouping, setNavigatorGrouping] = useState(() => readNavigatorGrouping());
   useEffect(() => {
-    const toggleCommandPalette = () => setCommandOpen((open) => !open);
+    if (typeof window === "undefined") return;
+    const refresh = () => setNavigatorGrouping(readNavigatorGrouping());
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === "citadel.navigator-group") refresh();
+    };
+    window.addEventListener("storage", onStorage);
+    const unsubscribeGrouping = subscribeToGroupingChanges(refresh);
+    const unsubscribeCollapse = subscribeToCollapseChanges(refresh);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      unsubscribeGrouping();
+      unsubscribeCollapse();
+    };
+  }, []);
+
+  const navTree = useMemo(() => {
+    if (!data) return [];
+    const levels = treeGroupingFor(navigatorGrouping);
+    if (!levels.length) return [];
+    return buildGroupTree(data.workspaces, data.repos, data.sessions, data.operations, levels, data.namespaces);
+  }, [data, navigatorGrouping]);
+  const flatWorkspaceIds = useMemo(() => {
+    if (navTree.length) return flattenWorkspaceOrder(navTree);
+    return data?.workspaces.map((workspace) => workspace.id) ?? [];
+  }, [navTree, data?.workspaces]);
+
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
+  const spawnSession = useMutation({
+    mutationFn: (input: { workspaceId: string; runtimeId: string; displayName: string }) =>
+      api<{ session: AgentSession }>("/api/agent-sessions", {
+        method: "POST",
+        body: JSON.stringify(input),
+      }),
+    onSuccess: ({ session }) => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      setActiveSessionByWorkspace((current) => ({ ...current, [session.workspaceId]: session.id }));
+      setMobileView("stage");
+    },
+    onError: (error) => {
+      setShortcutError(error instanceof Error ? error.message : "Failed to start session");
+    },
+  });
+
+  // Auto-dismiss transient shortcut errors after a short window.
+  useEffect(() => {
+    if (!shortcutError) return;
+    const timer = setTimeout(() => setShortcutError(null), 4000);
+    return () => clearTimeout(timer);
+  }, [shortcutError]);
+
+  const handlerStateRef = useRef({
+    flatWorkspaceIds,
+    activeWorkspace,
+    activeWorkspaceSessions,
+    runtimes: data?.runtimes ?? [],
+    navTree,
+  });
+  handlerStateRef.current = {
+    flatWorkspaceIds,
+    activeWorkspace,
+    activeWorkspaceSessions,
+    runtimes: data?.runtimes ?? [],
+    navTree,
+  };
+
+  useEffect(() => {
     const openCreateWorkspace = () => setCreateWorkspaceOpen(true);
+    const applyShortcutMatch = (match: ShortcutMatch, preventDefault?: () => void) => {
+      const state = handlerStateRef.current;
+      const action = resolveShortcutAction(match, state);
+
+      switch (action.type) {
+        case "toggle-command-palette":
+          preventDefault?.();
+          setCommandOpen((open) => !open);
+          return;
+        case "close-command-palette":
+          setCommandOpen(false);
+          return;
+        case "nav-workspace":
+          preventDefault?.();
+          if (action.expandGroupPath) expandGroupPath(action.expandGroupPath);
+          setActiveWorkspaceId(action.workspaceId);
+          setMobileView("stage");
+          return;
+        case "nav-session":
+          preventDefault?.();
+          setActiveSessionByWorkspace((current) => ({
+            ...current,
+            [action.workspaceId]: action.sessionId,
+          }));
+          setMobileView("stage");
+          return;
+        case "spawn-terminal":
+          preventDefault?.();
+          spawnSession.mutate({
+            workspaceId: action.workspaceId,
+            runtimeId: "shell",
+            displayName: "Terminal",
+          });
+          return;
+        case "spawn-agent":
+          preventDefault?.();
+          spawnSession.mutate({
+            workspaceId: action.workspaceId,
+            runtimeId: action.runtimeId,
+            displayName: action.displayName,
+          });
+          return;
+        case "spawn-agent-no-runtime":
+          preventDefault?.();
+          setShortcutError("No agent runtime available — install Claude Code or another runtime in Settings.");
+          return;
+        case "noop":
+          return;
+      }
+    };
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const inEditable =
@@ -157,27 +290,13 @@ export function Cockpit() {
         target?.tagName === "INPUT" ||
         target?.tagName === "TEXTAREA" ||
         target?.tagName === "SELECT";
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        toggleCommandPalette();
-      } else if (
-        // Ctrl+N opens the new-workspace modal. This works on macOS, where
-        // Ctrl+N is unbound by browsers. On Windows/Linux every major browser
-        // (Chrome, Edge, Firefox) binds Ctrl+N to "open new browser window"
-        // and ignores preventDefault, so the binding is effectively macOS-
-        // only. The plain `c` shortcut below remains as the cross-platform
-        // fallback. Cmd+N is reserved by browsers everywhere.
-        event.ctrlKey &&
-        !event.metaKey &&
-        !event.altKey &&
-        !event.shiftKey &&
-        event.key.toLowerCase() === "n"
-      ) {
+
+      if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "n") {
         event.preventDefault();
         openCreateWorkspace();
-      } else if (
-        // GitHub-style: plain `c` ("create") also opens the new-workspace
-        // modal. Skipped while editing so it doesn't hijack typing.
+        return;
+      }
+      if (
         !inEditable &&
         !event.metaKey &&
         !event.ctrlKey &&
@@ -186,16 +305,24 @@ export function Cockpit() {
         event.key.toLowerCase() === "c"
       ) {
         event.preventDefault();
-        setCreateWorkspaceOpen(true);
-      } else if (event.key === "Escape") {
-        setCommandOpen(false);
+        openCreateWorkspace();
+        return;
       }
+
+      const match = matchShortcut(event);
+      if (!match) return;
+      applyShortcutMatch(match, () => event.preventDefault());
     };
     const onMessage = (event: MessageEvent) => {
       const message = parseTerminalShortcutMessage(event);
       if (!message || !isRegisteredTerminalMessageSource(event.source, message.sessionId)) return;
-      if (message.action === "command-palette") toggleCommandPalette();
-      else if (message.action === "new-workspace") openCreateWorkspace();
+      if (message.action === "new-workspace") {
+        openCreateWorkspace();
+        return;
+      }
+      const match = terminalShortcutMatch(message);
+      if (!match) return;
+      applyShortcutMatch(match);
     };
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("message", onMessage);
@@ -203,16 +330,14 @@ export function Cockpit() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("message", onMessage);
     };
-  }, []);
+  }, [setActiveSessionByWorkspace, setActiveWorkspaceId, spawnSession]);
 
   const focusWorkspace = (workspace: Workspace) => {
     setActiveWorkspaceId(workspace.id);
     setMobileView("stage");
-    // Focus the workspace's currently-active session's terminal iframe so
-    // the user lands one click away from typing into xterm. Cross-origin
-    // limitation: xterm keyboard capture still needs a click inside the
-    // pane. Scheduled in a microtask so React's commit (mounting the new
-    // active terminal) completes before we try to focus.
+    // Focus the workspace's currently-active in-process xterm pane. Scheduled
+    // in a microtask so React's commit (mounting the new active terminal)
+    // completes before we try to focus.
     const targetSessionId =
       activeSessionByWorkspace[workspace.id] ?? allSessions.find((session) => session.workspaceId === workspace.id)?.id;
     if (targetSessionId) {
@@ -273,6 +398,11 @@ export function Cockpit() {
       />
       <GhCooldownBanner summaries={stickySummaries} />
       <RestoreBanner bootRestore={data?.bootRestore ?? null} />
+      {shortcutError ? (
+        <div className="cockpit-shortcut-error" role="alert" aria-live="polite">
+          {shortcutError}
+        </div>
+      ) : null}
       <div
         className={`cockpit-body ${layout.state.leftCollapsed ? "left-collapsed" : ""} ${
           layout.state.rightCollapsed ? "right-collapsed" : ""

@@ -235,14 +235,6 @@ export class OperationService {
     return { retried: false, reason: "unknown_kind" as const };
   }
 
-  /**
-   * Reconcile local state with reality:
-   *  - mark sessions as `orphaned` when their tmux session is gone
-   *  - mark workspaces whose worktree directory no longer exists as failed
-   *  - archive repos whose rootPath no longer exists.
-   *
-   * Returns counts of the cleanup performed.
-   */
   reconcile(): { sessions: number; workspaces: number; repos: number; deletedSessions: number } {
     return reconcileStore(this.store, (message, repoId) =>
       this.activity("repo.removed", "system", message, repoId, null, null),
@@ -388,7 +380,6 @@ export class OperationService {
 
   listDeployedApps = (input: { workspaceId: string }) =>
     listDeployedAppsImpl(this.deployOpsDeps(), this.resolveRepoWorkspace(input.workspaceId));
-  // Per-workspace inflight guard prevents concurrent redeploys (double-click, human+MCP overlap).
   private redeployInflight = new Map<string, ReturnType<typeof redeployAppImpl>>();
   redeployApp = (input: { workspaceId: string; appName?: string | undefined }) => {
     const existing = this.redeployInflight.get(input.workspaceId);
