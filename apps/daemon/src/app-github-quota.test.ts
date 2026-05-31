@@ -97,7 +97,6 @@ exit 1
       const calls = fs.readFileSync(logPath, "utf8").trim().split("\n");
       expect(calls).toEqual(["api rate_limit"]);
     } finally {
-      clearGhCooldown();
       await closeServer(server);
     }
   }, 60_000);
@@ -138,7 +137,6 @@ exit 1
         percentUsed: 100,
       });
     } finally {
-      clearGhCooldown();
       await closeServer(server);
     }
   }, 60_000);
@@ -188,7 +186,6 @@ exit 1
       );
       expect(during.versionControl.cooldownUntil).toBe(new Date(until).toISOString());
     } finally {
-      clearGhCooldown();
       await closeServer(server);
     }
   }, 60_000);
