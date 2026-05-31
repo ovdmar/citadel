@@ -4,7 +4,7 @@
 --
 -- Tables intentionally NOT touched: agent_sessions, background_sessions,
 -- operations, scheduled_agents, scheduled_agent_runs. These reference live
--- tmux/ttyd state and would race the worktree daemon's session manager.
+-- tmux/session state and would race the worktree daemon's session manager.
 
 BEGIN;
 

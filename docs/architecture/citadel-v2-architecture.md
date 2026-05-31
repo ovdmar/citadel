@@ -40,7 +40,7 @@ Providers are capability-first: version control, pull request/review, CI/checks,
 
 ## Terminal Runtime
 
-Shell-backed agent runtimes always launch through tmux. Citadel persists tmux session name/id and owns browser attach/reconnect through `packages/terminal`. The browser uses xterm.js for terminal rendering. REST/SSE carry state; WebSocket carries terminal I/O. Reconnect sends a bounded visible-screen snapshot, then live output streams from tmux control mode as incremental chunks; interaction-triggered snapshots cover short commands that finish before a control client is fully attached. `ttyd` is a reference/fallback only.
+Shell-backed agent runtimes always launch through tmux. Citadel persists tmux session name/id and owns browser attach/reconnect through `packages/terminal`. The browser uses xterm.js for terminal rendering. REST/SSE carry state; WebSocket carries terminal I/O. Each browser attach creates a disposable node-pty `tmux attach-session` viewer, so interactive CLIs receive real PTY semantics while the durable tmux session survives browser refreshes and daemon viewer churn.
 
 ## UI Policy
 

@@ -1,7 +1,7 @@
 import type { AgentSession, Workspace } from "@citadel/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type EnsureArgs = { sessionName: string; cwd: string };
+type EnsureArgs = { sessionName: string; cwd: string; socketName?: string | null };
 
 const ensureTmuxSession = vi.fn(async (_input: EnsureArgs) => ({
   tmuxSessionName: "citadel_ws_sess",
@@ -10,13 +10,15 @@ const ensureTmuxSession = vi.fn(async (_input: EnsureArgs) => ({
 const launchAgentInSession = vi.fn(
   async (_sessionName: string, _runtimeBinary: string, _argv: string[], _options?: unknown) => undefined,
 );
-const panePidProcess = vi.fn((_sessionName: string) => null as { command: string; pid: number } | null);
+const panePidProcess = vi.fn(
+  (_sessionName: string, _socketName?: string | null) => null as { command: string; pid: number } | null,
+);
 
 vi.mock("@citadel/terminal", () => ({
   ensureTmuxSession: (input: EnsureArgs) => ensureTmuxSession(input),
   launchAgentInSession: (sessionName: string, runtimeBinary: string, argv: string[], options?: unknown) =>
     launchAgentInSession(sessionName, runtimeBinary, argv, options),
-  panePidProcess: (sessionName: string) => panePidProcess(sessionName),
+  panePidProcess: (sessionName: string, socketName?: string | null) => panePidProcess(sessionName, socketName),
 }));
 
 import { buildRespawnTmux, buildRestartAgent } from "./terminal-routes-helpers.js";
@@ -58,6 +60,7 @@ function session(overrides: Partial<AgentSession> = {}): AgentSession {
     transport: "connected",
     tmuxSessionName: "citadel_existing",
     tmuxSessionId: "$1",
+    tmuxSocketName: "citadel-ws-ws_1",
     runtimeSessionId: "claude-session-1",
     createdAt: "2026-05-26T00:00:00.000Z",
     updatedAt: "2026-05-26T00:00:00.000Z",
@@ -102,6 +105,7 @@ describe("terminal route launch helpers", () => {
       "claude",
       ["--flag", "--resume", "claude-session-1"],
       {
+        socketName: "citadel-ws-ws_1",
         exitHint: { runtimeId: "claude-code", runtimeSessionId: "claude-session-1" },
       },
     );
@@ -118,6 +122,7 @@ describe("terminal route launch helpers", () => {
       "claude",
       ["--flag", "--resume", "claude-session-1"],
       {
+        socketName: "citadel-ws-ws_1",
         exitHint: { runtimeId: "claude-code", runtimeSessionId: "claude-session-1" },
       },
     );

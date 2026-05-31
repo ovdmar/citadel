@@ -48,11 +48,11 @@ export function agentExitHintCommand(hint: AgentExitHint): string {
  * tmux IO error). The caller is responsible for treating null as the
  * tmux-missing signal (which maps to `status: 'unknown'`, NEVER `stopped`).
  */
-export function panePidProcess(sessionName: string): PanePidProcess | null {
+export function panePidProcess(sessionName: string, socketName?: string | null): PanePidProcess | null {
   try {
     const raw = execFileSync(
       "tmux",
-      [...tmuxPrefix(), "display-message", "-p", "-t", sessionName, "#{pane_current_command} #{pane_pid}"],
+      [...tmuxPrefix(socketName), "display-message", "-p", "-t", sessionName, "#{pane_current_command} #{pane_pid}"],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
     ).trim();
     if (!raw) return null;
@@ -84,17 +84,20 @@ export async function launchAgentInSession(
   sessionName: string,
   runtimeBinary: string,
   argv: string[],
-  options: { timeoutMs?: number; exitHint?: AgentExitHint } = {},
+  options: { timeoutMs?: number; socketName?: string | null; exitHint?: AgentExitHint } = {},
 ): Promise<void> {
   if (!runtimeBinary) throw new Error("launchAgentInSession requires a runtimeBinary");
-  await waitForTerminalIdle(sessionName, { timeoutMs: 1500, idleMs: 200 });
+  await waitForTerminalIdle(sessionName, { timeoutMs: 1500, idleMs: 200, socketName: options.socketName ?? null });
   const launchCmd = [COLOR_ENV_PREFIX, shellQuote(runtimeBinary), ...argv.map(shellQuote)].join(" ");
   const cmd = options.exitHint ? `${launchCmd}; ${agentExitHintCommand(options.exitHint)}` : launchCmd;
-  execFileSync("tmux", [...tmuxPrefix(), "send-keys", "-t", sessionName, cmd, "Enter"], { stdio: "ignore" });
+  execFileSync("tmux", [...tmuxPrefix(options.socketName), "send-keys", "-t", sessionName, cmd, "Enter"], {
+    stdio: "ignore",
+  });
   // Positive predicate against the comm-truncated runtime binary.
   const target = runtimeBinary.slice(0, COMM_TRUNCATION);
   const observed = await waitForPaneCommand(sessionName, (cur) => cur === target, {
     timeoutMs: options.timeoutMs ?? 5000,
+    socketName: options.socketName ?? null,
   });
   if (observed !== target) {
     throw new Error(`runtime_not_ready: expected ${target}, observed ${observed || "none"}`);

@@ -61,7 +61,9 @@ export function readAgentTranscript(
   const session = store.listSessions().find((candidate) => candidate.id === input.sessionId);
   if (!session) return { ok: false, error: "session_not_found" };
   if (!session.tmuxSessionName) return { ok: false, error: "session_has_no_terminal" };
-  const captureOptions: { lines?: number; maxChars?: number } = {};
+  const captureOptions: { lines?: number; maxChars?: number; socketName?: string | null } = {
+    socketName: session.tmuxSocketName ?? null,
+  };
   if (input.lines !== undefined) captureOptions.lines = input.lines;
   if (input.maxChars !== undefined) captureOptions.maxChars = input.maxChars;
   const transcript = captureTranscript(session.tmuxSessionName, captureOptions);
@@ -95,7 +97,7 @@ export async function sendAgentMessage(
   // EXCEPTION: for the `shell` runtime (Plain Terminal), bash IS the
   // runtime — a shell foreground is the normal state, not "agent stopped".
   // Skip the check there.
-  const pane = panePidProcess(session.tmuxSessionName);
+  const pane = panePidProcess(session.tmuxSessionName, session.tmuxSocketName ?? null);
   if (pane === null) {
     return { ok: false, sessionId: session.id, status: session.status, error: "session_has_no_terminal" };
   }
@@ -109,6 +111,7 @@ export async function sendAgentMessage(
   // rate-limit banner cleared, so backoff state isn't reset prematurely.
   const optimistic = input.optimistic ?? true;
   const result = await submitPrompt(session.tmuxSessionName, input.message, {
+    socketName: session.tmuxSocketName ?? null,
     // Plain terminal sessions can be sitting in programs that do not echo
     // input reliably. The shell/program itself is the runtime, so send the
     // message without requiring a visual pre-submit echo.

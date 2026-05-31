@@ -50,8 +50,7 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
   // the *callback*, not the watch installation. With node_modules included
   // a single workspace can hold thousands of watches; tests churning files
   // in node_modules then flood the event loop with ignored callbacks and
-  // ttyd's WS keepalive starts missing pings (visible as the cockpit's
-  // Reconnecting/Reconnected overlay storm).
+  // terminal WebSockets start missing timely reads/writes.
   const watchers = new Map<string, fs.FSWatcher[]>();
   const debounces = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingHeadBusts = new Set<string>();
