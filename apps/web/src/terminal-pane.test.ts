@@ -66,7 +66,12 @@ const xtermMocks = vi.hoisted(() => {
   }
 
   class FakeFitAddon {
+    static instances: FakeFitAddon[] = [];
     fit = vi.fn();
+
+    constructor() {
+      FakeFitAddon.instances.push(this);
+    }
   }
 
   return { FakeTerminal, FakeFitAddon };
@@ -135,6 +140,7 @@ beforeEach(() => {
   (window as Window & { __citadelOverlayOpen?: number }).__citadelOverlayOpen = 0;
   installLocalStorageMock();
   xtermMocks.FakeTerminal.instances = [];
+  xtermMocks.FakeFitAddon.instances = [];
   TerminalPaneWebSocketMock.instances = [];
   vi.spyOn(window, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
   Object.defineProperty(globalThis, "WebSocket", {
@@ -142,6 +148,7 @@ beforeEach(() => {
     writable: true,
     value: TerminalPaneWebSocketMock,
   });
+  Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     writable: true,
@@ -199,6 +206,17 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(getTerminalHandle("sess_1")).toBeDefined();
   });
 
+  it("creates an opaque xterm renderer", async () => {
+    await renderTerminal();
+
+    expect(xtermMocks.FakeTerminal.instances[0]?.options).toEqual(
+      expect.objectContaining({
+        allowTransparency: false,
+        theme: expect.objectContaining({ background: "#f5f1e8" }),
+      }),
+    );
+  });
+
   it("keeps retained hidden panes dormant until they become active", async () => {
     const rootElement = document.createElement("div");
     document.body.appendChild(rootElement);
@@ -229,7 +247,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(xtermMocks.FakeTerminal.instances[0]?.dispose).toHaveBeenCalled();
   });
 
-  it("writes WebSocket output to xterm and sends input/resize over the same socket", async () => {
+  it("writes WebSocket output to xterm and sends input over the same socket", async () => {
     await renderTerminal();
     const ws = TerminalPaneWebSocketMock.instances[0];
     const term = xtermMocks.FakeTerminal.instances[0];
@@ -241,11 +259,10 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     term.emitData("abc");
 
     expect(term.writes.join("")).toBe("snapshot-chunk");
-    expect(ws.sent).toContain(JSON.stringify({ type: "resize", cols: 80, rows: 24 }));
     expect(decodeBinarySent(ws.sent)).toContain("abc");
   });
 
-  it("keeps terminal shortcuts and Ctrl+C usable in the in-process xterm", async () => {
+  it("keeps raw input, control/meta shortcuts, paste, and Ctrl+C usable in the in-process xterm", async () => {
     await renderTerminal();
     const ws = TerminalPaneWebSocketMock.instances[0];
     const term = xtermMocks.FakeTerminal.instances[0];
@@ -253,16 +270,28 @@ describe("TerminalPane xterm WebSocket renderer", () => {
 
     await flushReactUpdate(async () => ws.open());
     term.emitData("\u0003");
+    term.emitData("abc");
     const commandPalette = term.emitKey(
       new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true, cancelable: true }),
     );
     const multiline = term.emitKey(
       new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true }),
     );
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { readText: vi.fn().mockResolvedValue("pasted text") },
+    });
+    const paste = term.emitKey(
+      new KeyboardEvent("keydown", { key: "v", metaKey: true, bubbles: true, cancelable: true }),
+    );
+    await settle();
 
     expect(commandPalette).toBe(false);
     expect(multiline).toBe(false);
+    expect(paste).toBe(false);
     expect(decodeBinarySent(ws.sent)).toContain("\u0003");
+    expect(decodeBinarySent(ws.sent)).toContain("abc");
+    expect(decodeBinarySent(ws.sent)).toContain("pasted text");
     expect(ws.sent).toContain(JSON.stringify({ type: "input", data: "\n" }));
     expect(window.fetch).toHaveBeenCalledWith(
       "/api/agent-sessions/sess_1/user-action",

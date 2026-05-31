@@ -118,9 +118,13 @@ test.describe("scratchpad blocks", () => {
     await textarea.fill("");
     await textarea.press("ControlOrMeta+Enter");
     await expect(page.getByText("delete me via empty edit")).toHaveCount(0);
-    const list = await apiGet(request, `${API_BASE}/api/scratchpad/blocks`);
-    const body = (await list.json()) as { blocks: unknown[] };
-    expect(body.blocks).toHaveLength(0);
+    await expect
+      .poll(async () => {
+        const list = await apiGet(request, `${API_BASE}/api/scratchpad/blocks`);
+        const body = (await list.json()) as { blocks: unknown[] };
+        return body.blocks.length;
+      })
+      .toBe(0);
   });
 
   test("hover-delete removes a block; undo restores it", async ({ page, request }) => {

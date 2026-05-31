@@ -70,6 +70,9 @@ export default defineConfig({
       // boot orphan-reaper can mistake production tmux panes for sandbox
       // orphans and kill the user's live terminals.
       command: [
+        // Clear operator-shell worktree mode before setting sandbox env below;
+        // otherwise a local run can override /tmp e2e paths with worktree paths.
+        "CITADEL_WORKTREE=",
         `CITADEL_DATA_DIR=${dataDir}`,
         `CITADEL_CONFIG=${configPath}`,
         `CITADEL_PORT=${daemonPort}`,
