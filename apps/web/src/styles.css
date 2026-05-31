@@ -275,7 +275,10 @@ a:hover {
   position: absolute;
   inset: 0;
   background: var(--surface);
-  z-index: 10;
+  /* Must sit above Cockpit-level fixed overlays (modal-backdrop z=25,
+   * command-backdrop z=30) because Cockpit stays mounted underneath route
+   * pages. Otherwise hidden cockpit notices can intercept Settings clicks. */
+  z-index: 40;
   overflow: hidden;
   display: grid;
   min-height: 0;
