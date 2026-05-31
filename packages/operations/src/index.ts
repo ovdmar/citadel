@@ -64,9 +64,6 @@ export type RunAutoTransitionsDep = (
 ) => Promise<void>;
 
 export class OperationService {
-  // Daemon registers onSessionStopped to release the ttyd whenever stopAgentSession runs (REST, MCP, restore route).
-  private terminalHooks: { onSessionStopped?: (sessionId: string) => void } = {};
-
   constructor(
     private readonly store: SqliteStore,
     private readonly config?: {
@@ -81,9 +78,6 @@ export class OperationService {
     },
     private readonly runAutoTransitionsDep: RunAutoTransitionsDep | null = null,
   ) {}
-
-  // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-  setTerminalHooks(hooks: { onSessionStopped?: (sessionId: string) => void }) { this.terminalHooks = hooks; }
 
   registerRepo(input: { rootPath: string; name?: string | undefined; worktreeParent?: string | undefined }) {
     const now = nowIso();
@@ -211,8 +205,7 @@ export class OperationService {
   stopAgentSession(input: { sessionId: string }) {
     const session = this.store.listSessions().find((candidate) => candidate.id === input.sessionId);
     if (!session) return { stopped: false, reason: "session_not_found" as const };
-    if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName);
-    this.terminalHooks.onSessionStopped?.(session.id);
+    if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
     this.store.deleteSession(session.id);
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     this.activity(
@@ -333,7 +326,8 @@ export class OperationService {
     }
 
     for (const session of sessions) {
-      if (session.tmuxSessionName && input.cleanupWorktrees) killTmuxSession(session.tmuxSessionName);
+      if (session.tmuxSessionName && input.cleanupWorktrees)
+        killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
     }
 
     let cleanedWorktrees = 0;
@@ -575,7 +569,6 @@ export class OperationService {
       runWorkspaceHooks: (...args) => this.runWorkspaceHooks(...args),
       runNotificationHooks: (...args) => this.runNotificationHooks(...args),
       runAutoTransitions: this.runAutoTransitionsDep,
-      onSessionStopped: (sessionId) => this.terminalHooks.onSessionStopped?.(sessionId),
     };
   }
 }

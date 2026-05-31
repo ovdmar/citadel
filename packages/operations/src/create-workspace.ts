@@ -83,7 +83,6 @@ export type WorkspaceOpsDeps = {
         payload: { repo: Repo; workspace: Workspace },
       ) => Promise<void>)
     | null;
-  onSessionStopped?: (sessionId: string) => void;
 };
 
 export type CreateWorkspaceOptions = {
