@@ -37,10 +37,9 @@ function describe(theme: ThemeSetting): string {
  * the current mode and the next click's destination so screen readers and
  * tooltips agree on what will happen.
  *
- * Live re-theming of any open terminals is the orchestrator's job
- * (`re-theme-orchestrator.ts`), which subscribes to the same `data-theme`
- * mutation this component performs — this component does NOT prompt for a
- * reload and does NOT call `window.location.reload()`.
+ * Open terminals subscribe through useResolvedTheme and update their xterm
+ * palette in place — this component does NOT prompt for a reload and does NOT
+ * call `window.location.reload()`.
  */
 export function ThemeControls() {
   const [theme, setTheme] = useState<ThemeSetting>(() => normalize(readThemePreference()));

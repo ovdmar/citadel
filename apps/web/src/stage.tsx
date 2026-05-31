@@ -1,6 +1,6 @@
 import type { AgentRuntime, AgentSession, Workspace } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
-import { ExternalLink, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
+import { Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import {
@@ -17,10 +17,9 @@ type StageTab = {
   label: string;
 };
 
-// Each daemon allocates 20 ttyd ports (one per active terminal) — see the
-// per-daemon ttyd slice in apps/daemon/src/app.ts. We cap per workspace at
-// the same number so the UI never lets the user create a session that
-// would inevitably fail to bind a terminal port.
+// Per-workspace guardrail so one workspace cannot monopolize the cockpit and
+// status monitor. The renderer no longer consumes one external terminal
+// process per session.
 const WORKSPACE_AGENT_CAP = 20;
 const SESSION_REORDER_MIME = "application/x-citadel-agent-session-reorder";
 export const TERMINAL_PANE_RETAIN_LIMIT = 5;
@@ -73,15 +72,6 @@ function sameOrderedIds(a: Set<string>, b: Set<string>): boolean {
     if (aIds[i] !== bIds[i]) return false;
   }
   return true;
-}
-
-function releaseTerminalViewer(sessionId: string): void {
-  void fetch(`/api/agent-sessions/${encodeURIComponent(sessionId)}/terminal`, {
-    method: "DELETE",
-    keepalive: true,
-  }).catch(() => {
-    // Best-effort: eviction should never block switching tabs.
-  });
 }
 
 export function Stage(props: {
@@ -140,16 +130,15 @@ export function Stage(props: {
     }
   }, [activeSession, keepPending, props]);
 
-  // Keep a bounded LRU of TerminalPane instances alive across workspace/session
-  // switches once the user has opened them. This preserves fast returns for the
-  // most recent terminals without letting hidden iframes keep every ttyd/tmux
-  // viewer attached forever.
+  // Keep a bounded LRU of TerminalPane shells mounted across workspace/session
+  // switches once the user has opened them. Hidden panes are passed active=false
+  // so they do not keep xterm/WebSocket viewers alive and render background
+  // output on the same main thread as the active terminal input path.
   const [visitedIds, setVisitedIds] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     if (props.activeSessionId) initial.add(props.activeSessionId);
     return initial;
   });
-  const retainedIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const activeId = activeSession?.session.id ?? null;
     setVisitedIds((prev) => {
@@ -158,13 +147,6 @@ export function Stage(props: {
       return sameOrderedIds(prev, next) ? prev : next;
     });
   }, [activeSession?.session.id, allSessions]);
-  useEffect(() => {
-    const previous = retainedIdsRef.current;
-    retainedIdsRef.current = visitedIds;
-    for (const id of previous) {
-      if (!visitedIds.has(id)) releaseTerminalViewer(id);
-    }
-  }, [visitedIds]);
   const visitedPanes = stableVisitedSessions(allSessions, visitedIds);
   const workspaceSessionIdsKey = stableWorkspaceSessionIdsKey(props.sessions);
 
@@ -354,20 +336,6 @@ export function Stage(props: {
                   </button>
                   <button
                     type="button"
-                    className="stage-tab-act"
-                    aria-label="Open terminal in standalone tab"
-                    title="Open in standalone tab"
-                    disabled={!getTerminalHandle(tab.session.id)?.url}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      const handle = getTerminalHandle(tab.session.id);
-                      if (handle?.url) window.open(handle.url, "_blank");
-                    }}
-                  >
-                    <ExternalLink size={11} />
-                  </button>
-                  <button
-                    type="button"
                     className="close-tab"
                     aria-label="Stop session"
                     onClick={(event) => {
@@ -473,7 +441,7 @@ export function Stage(props: {
             key={session.id}
             className={session.id === activeSession?.session.id ? "terminal-active" : "terminal-hidden"}
           >
-            <TerminalPane session={session} />
+            <TerminalPane session={session} active={session.id === activeSession?.session.id} />
           </div>
         ))}
         {tabs.length === 0 ? (

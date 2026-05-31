@@ -2,10 +2,10 @@ import { execFileSync } from "node:child_process";
 import { sweepPtyLogs as defaultSweepPtyLogs, sweepLegacyAgentSentinels, tmuxPrefix } from "@citadel/terminal";
 
 // citadel-tmux.service SEGV'd at 29.8 GB on 2026-05-26 after accumulating
-// per-client tmux server allocations. Each ttyd browser connection / WS
-// reconnect spawns a fresh `bash -lc → exec tmux attach` child; when the
-// owning ttyd dies or the bash wrapper is killed, the tmux client struct
-// inside the server is sometimes left behind ("orphan") and never reclaimed.
+// per-client tmux server allocations. Each browser terminal connection
+// attaches a tmux client; when the owning viewer process is killed abruptly,
+// the tmux client struct inside the server can be left behind ("orphan") and
+// never reclaimed.
 // On a long-lived host with many sessions, those orphans compound to
 // gigabytes. This reaper periodically detaches clients whose owning
 // process is gone — safe by construction since detach only removes the
@@ -25,10 +25,11 @@ export type StartTerminalReaperOptions = {
   reapIntervalMs?: number;
   rotateIntervalMs?: number;
   ptyLogMaxAgeMs?: number;
+  listSocketNames?: () => Iterable<string | null>;
   /** Stub for `tmux list-clients`. Default invokes tmux via the citadel socket. */
-  listClients?: () => string;
+  listClients?: (socketName?: string | null) => string;
   /** Stub for `tmux detach-client -t <tty>`. Default invokes tmux. */
-  detachClient?: (tty: string) => void;
+  detachClient?: (tty: string, socketName?: string | null) => void;
   /** Stub for the pipe-pane log rotation. Default sweeps $TMPDIR/citadel-pty. */
   sweepPtyLogs?: (maxAgeMs: number) => { scanned: number; removed: number };
 };
@@ -51,13 +52,14 @@ export function startTerminalReaper(options: StartTerminalReaperOptions = {}): {
   const reapIntervalMs = options.reapIntervalMs ?? DEFAULT_REAP_INTERVAL_MS;
   const rotateIntervalMs = options.rotateIntervalMs ?? DEFAULT_ROTATE_INTERVAL_MS;
   const ptyLogMaxAgeMs = options.ptyLogMaxAgeMs ?? DEFAULT_PTY_LOG_MAX_AGE_MS;
+  const listSocketNames = options.listSocketNames ?? (() => [null]);
   const listClients = options.listClients ?? defaultListClients;
   const detachClient = options.detachClient ?? defaultDetachClient;
   const sweep = options.sweepPtyLogs ?? defaultSweepPtyLogs;
 
   const reaperTimer = setInterval(() => {
     try {
-      reapOrphanedClients(listClients, detachClient);
+      reapOrphanedClients(listSocketNames, listClients, detachClient);
     } catch {
       /* non-fatal — never let a stray exception crash the daemon */
     }
@@ -80,28 +82,34 @@ export function startTerminalReaper(options: StartTerminalReaperOptions = {}): {
   };
 }
 
-function reapOrphanedClients(listClients: () => string, detachClient: (tty: string) => void): void {
-  let raw: string;
-  try {
-    raw = listClients();
-  } catch {
-    return; // tmux not running, no clients to reap
-  }
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const space = trimmed.indexOf(" ");
-    if (space < 0) continue;
-    const tty = trimmed.slice(0, space).trim();
-    const pidStr = trimmed.slice(space + 1).trim();
-    if (!tty || !pidStr) continue;
-    const pid = Number.parseInt(pidStr, 10);
-    if (!Number.isFinite(pid) || pid <= 0) continue;
-    if (isProcessAlive(pid)) continue;
+function reapOrphanedClients(
+  listSocketNames: () => Iterable<string | null>,
+  listClients: (socketName?: string | null) => string,
+  detachClient: (tty: string, socketName?: string | null) => void,
+): void {
+  for (const socketName of listSocketNames()) {
+    let raw: string;
     try {
-      detachClient(tty);
+      raw = listClients(socketName);
     } catch {
-      // ignore — client may have raced us and gone away on its own
+      continue; // tmux not running on this socket, no clients to reap
+    }
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const space = trimmed.indexOf(" ");
+      if (space < 0) continue;
+      const tty = trimmed.slice(0, space).trim();
+      const pidStr = trimmed.slice(space + 1).trim();
+      if (!tty || !pidStr) continue;
+      const pid = Number.parseInt(pidStr, 10);
+      if (!Number.isFinite(pid) || pid <= 0) continue;
+      if (isProcessAlive(pid)) continue;
+      try {
+        detachClient(tty, socketName);
+      } catch {
+        // ignore — client may have raced us and gone away on its own
+      }
     }
   }
 }
@@ -119,13 +127,13 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function defaultListClients(): string {
-  return execFileSync("tmux", [...tmuxPrefix(), "list-clients", "-F", "#{client_tty} #{client_pid}"], {
+function defaultListClients(socketName?: string | null): string {
+  return execFileSync("tmux", [...tmuxPrefix(socketName), "list-clients", "-F", "#{client_tty} #{client_pid}"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   });
 }
 
-function defaultDetachClient(tty: string): void {
-  execFileSync("tmux", [...tmuxPrefix(), "detach-client", "-t", tty], { stdio: "ignore" });
+function defaultDetachClient(tty: string, socketName?: string | null): void {
+  execFileSync("tmux", [...tmuxPrefix(socketName), "detach-client", "-t", tty], { stdio: "ignore" });
 }

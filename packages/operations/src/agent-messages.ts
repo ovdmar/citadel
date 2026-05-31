@@ -42,15 +42,12 @@ export type SendMessageResult = {
   error?: string;
 };
 
-// Shell-first: `idle` deliberately dropped — in the new pane lifecycle,
-// `idle` means the foreground process is the operator's shell, NOT the
-// agent. Sending a paste into bash would inject the message as a shell
-// command. The cached `idle` here used to mean "agent paused, ready for
-// input"; that meaning is preserved by `waiting_for_input`/`rate_limited`/
-// `usage_limited` (all derived from pane content by the runtime adapter,
-// not from foreground command). Belt-and-suspenders: even when status is
-// `running`, sendAgentMessage re-checks panePidProcess at send-time below.
-const acceptingStates = new Set(["starting", "running", "waiting_for_input", "rate_limited", "usage_limited"]);
+// Shell-first: `idle` is ambiguous. It can mean the agent TUI is ready for
+// input (Codex after a completed turn), or it can mean the agent exited and
+// the pane is back at bash. Keep `idle` eligible here and let the live
+// foreground-process check below decide whether the paste would land in an
+// agent TUI or in an operator shell.
+const acceptingStates = new Set(["starting", "running", "idle", "waiting_for_input", "rate_limited", "usage_limited"]);
 
 // Foreground commands that mean "this pane is at the shell prompt, NOT
 // running an agent". The send-time check below refuses to deliver a paste
@@ -64,7 +61,9 @@ export function readAgentTranscript(
   const session = store.listSessions().find((candidate) => candidate.id === input.sessionId);
   if (!session) return { ok: false, error: "session_not_found" };
   if (!session.tmuxSessionName) return { ok: false, error: "session_has_no_terminal" };
-  const captureOptions: { lines?: number; maxChars?: number } = {};
+  const captureOptions: { lines?: number; maxChars?: number; socketName?: string | null } = {
+    socketName: session.tmuxSocketName ?? null,
+  };
   if (input.lines !== undefined) captureOptions.lines = input.lines;
   if (input.maxChars !== undefined) captureOptions.maxChars = input.maxChars;
   const transcript = captureTranscript(session.tmuxSessionName, captureOptions);
@@ -98,7 +97,7 @@ export async function sendAgentMessage(
   // EXCEPTION: for the `shell` runtime (Plain Terminal), bash IS the
   // runtime — a shell foreground is the normal state, not "agent stopped".
   // Skip the check there.
-  const pane = panePidProcess(session.tmuxSessionName);
+  const pane = panePidProcess(session.tmuxSessionName, session.tmuxSocketName ?? null);
   if (pane === null) {
     return { ok: false, sessionId: session.id, status: session.status, error: "session_has_no_terminal" };
   }
@@ -111,7 +110,9 @@ export async function sendAgentMessage(
   // status-monitor tick to confirm via real pane observation whether the
   // rate-limit banner cleared, so backoff state isn't reset prematurely.
   const optimistic = input.optimistic ?? true;
-  const result = await submitPrompt(session.tmuxSessionName, input.message);
+  const result = await submitPrompt(session.tmuxSessionName, input.message, {
+    socketName: session.tmuxSocketName ?? null,
+  });
   if (result.ok) {
     // We don't record the message here — the runtime's own transcript
     // (claude-code .jsonl, codex rollout, …) captures it whether it arrived

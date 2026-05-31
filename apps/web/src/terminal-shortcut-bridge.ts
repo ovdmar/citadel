@@ -20,3 +20,10 @@ export function parseTerminalShortcutMessage(event: MessageEvent): TerminalShort
     ? { action, sessionId }
     : null;
 }
+
+export function postTerminalShortcutMessage(action: TerminalShortcutAction, sessionId: string): void {
+  window.postMessage(
+    { source: TERMINAL_SHORTCUT_SOURCE, type: TERMINAL_SHORTCUT_TYPE, action, sessionId },
+    window.location.origin,
+  );
+}

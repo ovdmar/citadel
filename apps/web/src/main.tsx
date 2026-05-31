@@ -14,7 +14,6 @@ import { queryClient } from "./api.js";
 import { OptimisticRemoveProvider } from "./app-state.js";
 import { Cockpit } from "./cockpit.js";
 import { bootstrapLastRoute, clearLastRoute, saveLastRoute } from "./lib/last-route.js";
-import { setupReThemeOrchestrator } from "./re-theme-orchestrator.js";
 import { DashboardView } from "./routes/dashboard.js";
 import { HistoryView } from "./routes/history.js";
 import { OnboardingView } from "./routes/onboarding.js";
@@ -25,11 +24,12 @@ import { ScratchpadView } from "./routes/scratchpad.js";
 import { SettingsView } from "./routes/settings.js";
 import { getScratchpadDrawerOpen, setScratchpadDrawerOpen, toggleScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { ScratchpadPanel } from "./scratchpad-panel.js";
-import { isRegisteredTerminalMessageSource, listTerminalHandles } from "./terminal-pane.js";
+import { isRegisteredTerminalMessageSource } from "./terminal-pane.js";
 import { parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
 import { ToastProvider } from "./toast.js";
 import { installUiDiagnostics } from "./ui-diagnostics.js";
 import { applyThemePreference, readThemePreference } from "./use-resolved-theme.js";
+import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 import "./chrome.css";
 import "./stage-terminal.css";
@@ -56,7 +56,7 @@ import "./responsive.css";
 
 // Seed data-theme on <html> BEFORE React renders so any component that
 // reads it synchronously on first render (e.g. useResolvedTheme used by
-// TerminalPane to spawn ttyd with the matching xterm palette) doesn't
+// TerminalPane to initialize xterm with the matching palette) doesn't
 // race ThemeControls's useEffect that writes the attribute later.
 (() => {
   applyThemePreference(readThemePreference());
@@ -64,30 +64,16 @@ import "./responsive.css";
 
 installUiDiagnostics();
 
-// Mount the live re-theme orchestrator BEFORE React renders so the
-// subscription is live before any terminal handles register and before the
-// first matchMedia change can fire. HMR-safe: a prior cleanup is invoked on
-// module re-import so we never end up with two active subscriptions.
-declare global {
-  // eslint-disable-next-line no-var
-  var __citadelReThemeCleanup: (() => void) | undefined;
-}
-if (typeof window !== "undefined") {
-  globalThis.__citadelReThemeCleanup?.();
-  const handle = setupReThemeOrchestrator({ getHandles: listTerminalHandles });
-  globalThis.__citadelReThemeCleanup = handle.cleanup;
-}
-
 const rootRoute = createRootRoute({
   component: () => <Shell />,
 });
 
 // Pathless layout route whose component renders the Cockpit unconditionally
 // plus an overlay slot for any child route. Every non-index route mounts as
-// a child here, so the Cockpit (and the TerminalPane iframes inside it) is
+// a child here, so the Cockpit (and the TerminalPane instances inside it) is
 // kept alive across navigations to Settings, Scratchpad, etc. Without this,
-// every route transition unmounted Cockpit → ttyd iframes were destroyed →
-// returning forced a fresh ttyd handshake (the user's "reloads first" gripe).
+// every route transition unmounted Cockpit, destroyed the live terminal panes,
+// and forced a fresh attach on return.
 const cockpitLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "cockpit-layout",

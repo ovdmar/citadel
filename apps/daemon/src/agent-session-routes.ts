@@ -12,7 +12,6 @@ type Deps = {
   emit: (type: string, payload: unknown) => void;
   asyncRoute: AsyncRoute;
   config: CitadelConfig;
-  ttyd: { release: (sessionId: string, reason?: string) => void };
 };
 
 /**
@@ -21,7 +20,7 @@ type Deps = {
  * automation share the same backend code path.
  */
 export function registerAgentSessionRoutes(app: express.Express, deps: Deps) {
-  const { operations, emit, asyncRoute, config, ttyd } = deps;
+  const { operations, emit, asyncRoute, config } = deps;
 
   app.post(
     "/api/agent-sessions",
@@ -49,7 +48,6 @@ export function registerAgentSessionRoutes(app: express.Express, deps: Deps) {
       if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
       const result = operations.stopAgentSession({ sessionId });
       if (!result.stopped) return res.status(404).json(result);
-      ttyd.release(sessionId, "agent-session-delete-route");
       emit("agent.updated", { sessionId });
       res.status(202).json(result);
     }),

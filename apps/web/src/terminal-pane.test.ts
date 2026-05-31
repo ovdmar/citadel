@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
 import type { AgentSession } from "@citadel/contracts";
-import { act, createElement } from "react";
+import { createElement } from "react";
+import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -9,22 +10,102 @@ import {
   focusActiveTerminal,
   getTerminalHandle,
   isRegisteredTerminalMessageSource,
-  isTtydHttpErrorPageVisible,
-  isTtydReconnectPromptVisible,
-  terminalIframeSrc,
+  parseTerminalSocketMessage,
+  terminalWebSocketUrl,
 } from "./terminal-pane.js";
-import { type ResolvedTheme, applyThemePreference } from "./use-resolved-theme.js";
+import { applyThemePreference } from "./use-resolved-theme.js";
 
-const apiMocks = vi.hoisted(() => {
-  class ApiError extends Error {
-    detail?: string;
+const xtermMocks = vi.hoisted(() => {
+  class FakeTerminal {
+    static instances: FakeTerminal[] = [];
+    options: Record<string, unknown>;
+    cols = 80;
+    rows = 24;
+    writes: string[] = [];
+    focus = vi.fn();
+    dispose = vi.fn();
+    selectAll = vi.fn();
+    getSelection = vi.fn(() => "selected text");
+    private dataHandler: ((data: string) => void) | null = null;
+    private keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
+
+    constructor(options: Record<string, unknown>) {
+      this.options = options;
+      FakeTerminal.instances.push(this);
+    }
+
+    loadAddon() {}
+    open(host: HTMLElement) {
+      host.dataset.xterm = "open";
+    }
+    onData(handler: (data: string) => void) {
+      this.dataHandler = handler;
+      return { dispose: vi.fn() };
+    }
+    write(data: string) {
+      this.writes.push(data);
+    }
+    attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
+      this.keyHandler = handler;
+    }
+    emitData(data: string) {
+      this.dataHandler?.(data);
+    }
+    emitKey(event: KeyboardEvent) {
+      return this.keyHandler?.(event);
+    }
   }
-  return { ApiError, api: vi.fn() };
+
+  class FakeFitAddon {
+    fit = vi.fn();
+  }
+
+  return { FakeTerminal, FakeFitAddon };
 });
 
-vi.mock("./api.js", () => apiMocks);
+vi.mock("@xterm/xterm", () => ({ Terminal: xtermMocks.FakeTerminal }));
+vi.mock("@xterm/addon-fit", () => ({ FitAddon: xtermMocks.FakeFitAddon }));
 
-(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+class FakeWebSocket extends EventTarget {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+  static instances: FakeWebSocket[] = [];
+  readyState = FakeWebSocket.CONNECTING;
+  binaryType = "";
+  sent: unknown[] = [];
+
+  constructor(readonly url: string) {
+    super();
+    FakeWebSocket.instances.push(this);
+  }
+
+  send(data: unknown) {
+    this.sent.push(data);
+  }
+
+  close() {
+    this.readyState = FakeWebSocket.CLOSED;
+  }
+
+  open() {
+    this.readyState = FakeWebSocket.OPEN;
+    this.dispatchEvent(new Event("open"));
+  }
+
+  message(data: unknown) {
+    this.dispatchEvent(new MessageEvent("message", { data }));
+  }
+
+  closeFromServer(code = 1006, reason = "") {
+    this.readyState = FakeWebSocket.CLOSED;
+    const event = new Event("close") as CloseEvent;
+    Object.defineProperty(event, "code", { value: code });
+    Object.defineProperty(event, "reason", { value: reason });
+    this.dispatchEvent(event);
+  }
+}
 
 const roots: Root[] = [];
 
@@ -32,6 +113,10 @@ beforeEach(() => {
   document.body.innerHTML = "";
   document.documentElement.removeAttribute("data-theme");
   installLocalStorageMock();
+  xtermMocks.FakeTerminal.instances = [];
+  FakeWebSocket.instances = [];
+  vi.spyOn(window, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
+  Object.defineProperty(globalThis, "WebSocket", { configurable: true, writable: true, value: FakeWebSocket });
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     writable: true,
@@ -42,29 +127,13 @@ beforeEach(() => {
       removeEventListener: vi.fn(),
     })),
   });
-  apiMocks.api.mockReset();
-  apiMocks.api.mockImplementation(async (path: string) => {
-    const url = new URL(path, "http://citadel.test");
-    const theme = (url.searchParams.get("theme") ?? "dark") as ResolvedTheme;
-    return {
-      terminal: {
-        key: "sess_1",
-        url: "about:blank",
-        basePath: "/terminals/sess_1",
-        port: 11000,
-        tmuxSession: "citadel_sess_1",
-        worktreePath: null,
-        startedAt: "2026-05-28T00:00:00.000Z",
-        theme,
-      },
-    };
-  });
 });
 
 afterEach(async () => {
-  await act(async () => {
+  await flushReact(() => {
     for (const root of roots.splice(0)) root.unmount();
   });
+  vi.restoreAllMocks();
 });
 
 describe("focusActiveTerminal", () => {
@@ -79,118 +148,184 @@ describe("focusActiveTerminal", () => {
   });
 
   it("accepts terminal bridge messages by registered session id when the frame source identity is unavailable", async () => {
-    const rootElement = document.createElement("div");
-    document.body.appendChild(rootElement);
-    const root = createRoot(rootElement);
-    roots.push(root);
-
-    await act(async () => {
-      root.render(createElement(TerminalPane, { session: sessionFixture() }));
-      await settle();
-    });
+    await renderTerminal();
 
     expect(getTerminalHandle("sess_1")).toBeDefined();
     expect(isRegisteredTerminalMessageSource(null, "sess_1")).toBe(true);
     expect(isRegisteredTerminalMessageSource(null, "unknown-session")).toBe(false);
   });
-});
 
-function iframeWithBody(html: string): HTMLIFrameElement {
-  const iframe = document.createElement("iframe");
-  document.body.appendChild(iframe);
-  const doc = iframe.contentDocument;
-  if (!doc) throw new Error("iframe contentDocument unavailable");
-  doc.body.innerHTML = html;
-  return iframe;
-}
+  it("focuses the registered xterm instance", async () => {
+    await renderTerminal();
 
-describe("isTtydReconnectPromptVisible", () => {
-  it("detects ttyd's persistent reconnect overlay", () => {
-    const iframe = iframeWithBody('<div class="xterm"><div>Press ⏎ to Reconnect</div></div>');
+    focusActiveTerminal("sess_1");
 
-    expect(isTtydReconnectPromptVisible(iframe)).toBe(true);
-  });
-
-  it("detects reconnect button overlays from ttyd variants", () => {
-    const iframe = iframeWithBody('<main><button type="button">Reconnect</button></main>');
-
-    expect(isTtydReconnectPromptVisible(iframe)).toBe(true);
-  });
-
-  it("ignores normal terminal output mentioning reconnect", () => {
-    const iframe = iframeWithBody(
-      '<div class="xterm"><div class="xterm-screen"><span>run reconnect-database when ready</span></div></div>',
-    );
-
-    expect(isTtydReconnectPromptVisible(iframe)).toBe(false);
-  });
-
-  it("ignores hidden reconnect overlays", () => {
-    const iframe = iframeWithBody('<div class="xterm"><div style="display: none">Press ⏎ to Reconnect</div></div>');
-
-    expect(isTtydReconnectPromptVisible(iframe)).toBe(false);
+    expect(xtermMocks.FakeTerminal.instances[0]?.focus).toHaveBeenCalled();
   });
 });
 
-describe("isTtydHttpErrorPageVisible", () => {
-  it("detects terminal proxy 404 pages", () => {
-    expect(isTtydHttpErrorPageVisible(iframeWithBody("terminal_not_found"))).toBe(true);
-    expect(isTtydHttpErrorPageVisible(iframeWithBody("404 page not found"))).toBe(true);
+describe("TerminalPane xterm WebSocket renderer", () => {
+  it("opens the primary /terminal WebSocket without hitting the legacy terminal ensure endpoint", async () => {
+    await renderTerminal();
+
+    expect(FakeWebSocket.instances[0]?.url).toBe(terminalWebSocketUrl("sess_1"));
+    expect(window.fetch).not.toHaveBeenCalledWith(expect.stringContaining("/api/agent-sessions/sess_1/terminal"));
+    expect(getTerminalHandle("sess_1")).toBeDefined();
   });
 
-  it("ignores normal xterm terminal content", () => {
-    const iframe = iframeWithBody('<div class="xterm"><div class="xterm-screen">404 from curl</div></div>');
-
-    expect(isTtydHttpErrorPageVisible(iframe)).toBe(false);
-  });
-});
-
-describe("TerminalPane theme handling", () => {
-  it("does not respawn an already-open ttyd frame when the resolved theme changes", async () => {
-    applyThemePreference("dark");
+  it("keeps retained hidden panes dormant until they become active", async () => {
     const rootElement = document.createElement("div");
     document.body.appendChild(rootElement);
     const root = createRoot(rootElement);
     roots.push(root);
+    const session = sessionFixture();
 
-    await act(async () => {
-      root.render(createElement(TerminalPane, { session: sessionFixture() }));
-      await settle();
+    await flushReact(() => {
+      root.render(createElement(TerminalPane, { session, active: false }));
     });
 
-    expect(apiMocks.api).toHaveBeenCalledTimes(1);
-    expect(searchParam(apiCallPath(0), "theme")).toBe("dark");
-    expect(searchParam(apiCallPath(0), "force")).toBeNull();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(xtermMocks.FakeTerminal.instances).toHaveLength(0);
+    expect(getTerminalHandle("sess_1")).toBeDefined();
 
-    await act(async () => {
+    await flushReact(() => {
+      root.render(createElement(TerminalPane, { session, active: true }));
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(xtermMocks.FakeTerminal.instances).toHaveLength(1);
+
+    await flushReact(() => {
+      root.render(createElement(TerminalPane, { session, active: false }));
+    });
+
+    expect(FakeWebSocket.instances[0]?.readyState).toBe(FakeWebSocket.CLOSED);
+    expect(xtermMocks.FakeTerminal.instances[0]?.dispose).toHaveBeenCalled();
+  });
+
+  it("writes WebSocket output to xterm and sends input/resize over the same socket", async () => {
+    await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    if (!ws || !term) throw new Error("terminal rig missing");
+
+    await flushReact(() => ws.open());
+    ws.message(new TextEncoder().encode("snapshot").buffer);
+    ws.message(new TextEncoder().encode("-chunk").buffer);
+    term.emitData("abc");
+
+    expect(term.writes.join("")).toBe("snapshot-chunk");
+    expect(ws.sent).toContain(JSON.stringify({ type: "resize", cols: 80, rows: 24 }));
+    expect(decodeBinarySent(ws.sent)).toContain("abc");
+  });
+
+  it("keeps terminal shortcuts and Ctrl+C usable in the in-process xterm", async () => {
+    await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    if (!ws || !term) throw new Error("terminal rig missing");
+
+    await flushReact(() => ws.open());
+    term.emitData("\u0003");
+    const commandPalette = term.emitKey(
+      new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true, cancelable: true }),
+    );
+    const multiline = term.emitKey(
+      new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true }),
+    );
+
+    expect(commandPalette).toBe(false);
+    expect(multiline).toBe(false);
+    expect(decodeBinarySent(ws.sent)).toContain("\u0003");
+    expect(ws.sent).toContain(JSON.stringify({ type: "input", data: "\n" }));
+    expect(window.fetch).toHaveBeenCalledWith(
+      "/api/agent-sessions/sess_1/user-action",
+      expect.objectContaining({ body: JSON.stringify({ reason: "ctrl_c" }) }),
+    );
+  });
+
+  it("captures Shift+Enter before the browser terminal can emit a plain Enter", async () => {
+    await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+
+    await flushReact(() => ws.open());
+    const event = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true });
+    const downstream = vi.fn();
+    host.addEventListener("keydown", downstream);
+
+    host.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(downstream).not.toHaveBeenCalled();
+    expect(ws.sent).toContain(JSON.stringify({ type: "input", data: "\n" }));
+  });
+
+  it("does not reconnect the terminal when the resolved theme changes", async () => {
+    applyThemePreference("dark");
+    await renderTerminal();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    const term = xtermMocks.FakeTerminal.instances[0];
+    if (!term) throw new Error("terminal rig missing");
+    expect((term.options.theme as { background?: string }).background).toBe("#1a1814");
+
+    await flushReact(() => {
       applyThemePreference("light");
-      await settle();
     });
 
-    expect(apiMocks.api).toHaveBeenCalledTimes(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect((term.options.theme as { background?: string }).background).toBe("#f5f1e8");
+  });
+
+  it("shows an actionable error when the WebSocket closes", async () => {
+    await renderTerminal();
+    const ws = FakeWebSocket.instances[0];
+    if (!ws) throw new Error("missing ws");
+
+    await flushReact(() => ws.closeFromServer(1006, "lost"));
+
+    expect(document.body.textContent).toContain("terminal_disconnected");
+    expect(document.body.textContent).toContain("lost");
   });
 });
 
-describe("terminalIframeSrc", () => {
-  it("adds a client-version cache buster without discarding existing query params", () => {
-    expect(terminalIframeSrc("/terminals/sess_1/")).toBe("/terminals/sess_1/?citadelClient=shortcut-bridge-v2");
-    expect(terminalIframeSrc("/terminals/sess_1/?x=1")).toBe("/terminals/sess_1/?x=1&citadelClient=shortcut-bridge-v2");
+describe("terminal URL helpers", () => {
+  it("builds the primary WebSocket URL", () => {
+    const location = { protocol: "https:", host: "citadel.example" } as Location;
+
+    expect(terminalWebSocketUrl("sess 1", location)).toBe("wss://citadel.example/terminal/sess%201");
+  });
+
+  it("parses terminal socket messages defensively", () => {
+    expect(parseTerminalSocketMessage(JSON.stringify({ type: "output", data: "ok" }))).toEqual({
+      type: "output",
+      data: "ok",
+    });
+    expect(parseTerminalSocketMessage("not-json")).toBeNull();
+    expect(parseTerminalSocketMessage({ type: "output" })).toBeNull();
   });
 });
+
+async function renderTerminal() {
+  const rootElement = document.createElement("div");
+  document.body.appendChild(rootElement);
+  const root = createRoot(rootElement);
+  roots.push(root);
+  await flushReact(() => {
+    root.render(createElement(TerminalPane, { session: sessionFixture() }));
+  });
+  return root;
+}
+
+async function flushReact(action: () => void) {
+  flushSync(action);
+  await settle();
+}
 
 async function settle() {
   await Promise.resolve();
   await Promise.resolve();
-}
-
-function searchParam(path: unknown, param: string) {
-  return new URL(String(path), "http://citadel.test").searchParams.get(param);
-}
-
-function apiCallPath(index: number) {
-  const call = apiMocks.api.mock.calls[index];
-  if (!call) throw new Error(`missing api call ${index}`);
-  return call[0];
 }
 
 function installLocalStorageMock() {
@@ -204,6 +339,12 @@ function installLocalStorageMock() {
       clear: () => storage.clear(),
     },
   });
+}
+
+function decodeBinarySent(sent: unknown[]): string[] {
+  return sent
+    .filter((item): item is Uint8Array => item instanceof Uint8Array)
+    .map((item) => new TextDecoder().decode(item));
 }
 
 function sessionFixture(): AgentSession {
