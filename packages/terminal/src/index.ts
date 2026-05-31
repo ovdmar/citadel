@@ -119,11 +119,12 @@ export {
   DEFAULT_SENTINEL_MARKER_PATH,
   DEFAULT_SENTINEL_MAX_AGE_MS,
   DEFAULT_SENTINEL_SAFEGUARD,
+  agentExitHintCommand,
   launchAgentInSession,
   panePidProcess,
   sweepLegacyAgentSentinels,
 } from "./pane-lifecycle.js";
-export type { PanePidProcess, SweepLegacySentinelsResult } from "./pane-lifecycle.js";
+export type { AgentExitHint, PanePidProcess, SweepLegacySentinelsResult } from "./pane-lifecycle.js";
 
 // Path of the "agent still running" sentinel file for a given tmux session.
 // The wrapper script touches this before exec'ing the agent and removes it

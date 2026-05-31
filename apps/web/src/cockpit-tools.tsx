@@ -104,13 +104,75 @@ export function useWorkspacesPrState() {
 // entry untouched so the navbar keeps showing the last-known PR icon.
 const AUTHORITATIVE_EMPTY_REASONS = new Set(["no-remote", "root-workspace", "workspace_not_found"]);
 
+function isMergedState(state: string | null | undefined): boolean {
+  return state?.toLowerCase() === "merged";
+}
+
+export function markPullRequestMerged(pr: PullRequestSummary): PullRequestSummary {
+  return {
+    ...pr,
+    state: "MERGED",
+    mergeable: "unknown",
+    allowedMergeStrategies: [],
+    mergeStateStatus: null,
+  };
+}
+
+function summaryWithMergedPr(summary: WorkspaceCockpitSummary, prNumber: number): WorkspaceCockpitSummary {
+  const pr = summary.versionControl.pullRequest;
+  if (!pr || pr.number !== prNumber || isMergedState(pr.state)) return summary;
+  return {
+    ...summary,
+    versionControl: {
+      ...summary.versionControl,
+      pullRequest: markPullRequestMerged(pr),
+    },
+  };
+}
+
+function preserveMergedPrState(
+  previous: WorkspaceCockpitSummary | undefined,
+  next: WorkspaceCockpitSummary,
+): WorkspaceCockpitSummary {
+  const previousPr = previous?.versionControl.pullRequest;
+  const nextPr = next.versionControl.pullRequest;
+  if (!previousPr || !nextPr) return next;
+  if (previousPr.number !== nextPr.number) return next;
+  if (!isMergedState(previousPr.state) || isMergedState(nextPr.state)) return next;
+  return summaryWithMergedPr(next, nextPr.number);
+}
+
+export function markWorkspacePrMergedInQueryCache(
+  queryClient: Pick<QueryClient, "setQueryData">,
+  workspaceId: string,
+  prNumber: number,
+): void {
+  queryClient.setQueryData<WorkspaceCockpitSummary>(["workspace-cockpit", workspaceId], (previous) =>
+    previous ? summaryWithMergedPr(previous, prNumber) : previous,
+  );
+  queryClient.setQueryData<WorkspaceCockpitSummaryBatchResponse>(["workspaces-pr-batch"], (previous) => {
+    if (!previous) return previous;
+    let changed = false;
+    const summaries = previous.summaries.map((entry) => {
+      if (!entry.ok || entry.workspaceId !== workspaceId) return entry;
+      const summary = entry.summary as WorkspaceCockpitSummary;
+      const next = summaryWithMergedPr(summary, prNumber);
+      if (next === summary) return entry;
+      changed = true;
+      return { ...entry, summary: next };
+    });
+    return changed ? { ...previous, summaries } : previous;
+  });
+}
+
 // Apply a batch onto a sticky cache. Pulled out so the merge rules can be
 // unit-tested without React.
 //
 // Update rules:
 //  - ok:true with versionControl.status === "healthy" — definitive update,
 //    overwrites the cached entry (a null pullRequest in a healthy response
-//    means "the PR was closed/merged or the branch genuinely has none").
+//    means "the PR was closed/merged or the branch genuinely has none"),
+//    except stale same-PR "open" data cannot downgrade a locally merged PR.
 //  - ok:true with versionControl.status === "degraded" — non-authoritative
 //    (the provider couldn't talk to gh cleanly), so we KEEP the previous
 //    entry to avoid the navbar's "PR state disappeared" flicker.
@@ -131,7 +193,7 @@ export function applyStickyUpdates(
         // a real WorkspaceCockpitSummary — cast it back here.
         const summary = entry.summary as WorkspaceCockpitSummary;
         if (summary.versionControl.status === "healthy") {
-          cache.set(entry.workspaceId, summary);
+          cache.set(entry.workspaceId, preserveMergedPrState(cache.get(entry.workspaceId), summary));
         } else if (summary.versionControl.cooldownUntil && cache.has(entry.workspaceId)) {
           // Degraded response carrying an active gh cooldown — merge cooldownUntil
           // onto the previous healthy entry so the banner has a data source even

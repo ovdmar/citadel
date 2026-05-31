@@ -5,7 +5,7 @@ import { type CitadelConfig, ensureCodexGoalsFeatureArgs } from "@citadel/config
 import type { AgentSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { prepareCodexSqliteHomeForWorkspace } from "@citadel/runtimes";
-import { ensureTmuxSession, launchAgentInSession } from "@citadel/terminal";
+import { ensureTmuxSession, launchAgentInSession, panePidProcess } from "@citadel/terminal";
 
 const SHELL_COMMANDS = ["bash", "sh", "zsh", "fish"] as const;
 function isShellCommand(command: string): boolean {
@@ -37,6 +37,19 @@ function resolveSessionContext(
   };
 }
 
+function codexEnvForSession(
+  session: AgentSession,
+  config: CitadelConfig,
+): Record<string, string | null | undefined> | undefined {
+  if (session.runtimeId !== "codex") return undefined;
+  return {
+    CODEX_SQLITE_HOME: prepareCodexSqliteHomeForWorkspace({
+      workspaceId: session.workspaceId,
+      dataDir: config.dataDir,
+    }),
+  };
+}
+
 export function buildRespawnTmux(
   store: SqliteStore,
   config: CitadelConfig,
@@ -56,18 +69,49 @@ export function buildRespawnTmux(
       if (session.runtimeSessionId && ctx.runtime.resumeArg) {
         argv.push(ctx.runtime.resumeArg, session.runtimeSessionId);
       }
-      const codexSqliteHome =
-        session.runtimeId === "codex"
-          ? prepareCodexSqliteHomeForWorkspace({
-              workspaceId: session.workspaceId,
-              dataDir: config.dataDir,
-            })
-          : null;
+      const env = codexEnvForSession(session, config);
       await launchAgentInSession(ctx.sessionName, ctx.runtime.command, argv, {
         socketName: ctx.socketName,
-        ...(codexSqliteHome ? { env: { CODEX_SQLITE_HOME: codexSqliteHome } } : {}),
+        exitHint: { runtimeId: session.runtimeId, runtimeSessionId: session.runtimeSessionId ?? null },
+        ...(env ? { env } : {}),
       });
     }
     return tmux;
+  };
+}
+
+// Restart endpoint: relaunches the agent inside an existing pane. Throws
+// `agent_already_running` when the pane's foreground IS the runtime binary
+// (stale UI / race) so we don't type the launch command INTO the live TUI
+// input. Otherwise composes the shell-first three-step and clears
+// statusReason/statusReasonAt so the cockpit doesn't briefly show a stale
+// idle_after_unexpected_exit label.
+export function buildRestartAgent(store: SqliteStore, config: CitadelConfig): (session: AgentSession) => Promise<void> {
+  return async (session) => {
+    const ctx = resolveSessionContext(store, config, session);
+    if (!ctx) throw new Error("session_resolution_failed");
+    const pane = panePidProcess(ctx.sessionName, ctx.socketName);
+    if (pane && pane.command === ctx.runtime.command.slice(0, 15)) {
+      throw new Error("agent_already_running");
+    }
+    await ensureTmuxSession({ sessionName: ctx.sessionName, cwd: ctx.workspacePath, socketName: ctx.socketName });
+    if (!isShellCommand(ctx.runtime.command)) {
+      const argv = ensureCodexGoalsFeatureArgs(session.runtimeId, ctx.runtime.args);
+      if (session.runtimeSessionId && ctx.runtime.resumeArg) {
+        argv.push(ctx.runtime.resumeArg, session.runtimeSessionId);
+      }
+      const env = codexEnvForSession(session, config);
+      await launchAgentInSession(ctx.sessionName, ctx.runtime.command, argv, {
+        socketName: ctx.socketName,
+        exitHint: { runtimeId: session.runtimeId, runtimeSessionId: session.runtimeSessionId ?? null },
+        ...(env ? { env } : {}),
+      });
+    }
+    store.updateSessionStatus(session.id, {
+      status: "running",
+      statusReason: null,
+      statusReasonAt: null,
+      lastStatusAt: new Date().toISOString(),
+    });
   };
 }

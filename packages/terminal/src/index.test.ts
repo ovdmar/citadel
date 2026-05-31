@@ -267,8 +267,9 @@ describe("tmux terminal gateway helpers", () => {
       cwd,
     });
 
-    sendKeys(sessionName, "trap 'echo INTERRUPTED' INT; sleep 10");
+    sendKeys(sessionName, "trap 'echo INTERRUPTED' INT; echo READY_FOR_INTERRUPT; sleep 10");
     sendKeys(sessionName, "\r");
+    await waitForCapture(sessionName, "READY_FOR_INTERRUPT");
     sendKeys(sessionName, "\u0003");
     await waitForCapture(sessionName, "INTERRUPTED");
 
@@ -401,7 +402,7 @@ describe("tmux terminal gateway helpers", () => {
     }
   }, 15000);
 
-  it("sends WebSocket input control messages as literal pane input", async () => {
+  it("sends WebSocket control messages as literal pane input and pane keys", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
     dirs.push(cwd);
     const sessionName = `citadel_ws_literal_${Date.now().toString(36)}`;
@@ -439,8 +440,9 @@ describe("tmux terminal gateway helpers", () => {
       await waitForOpen(ws);
 
       ws.send(JSON.stringify({ type: "input", data: "\n" }));
+      ws.send(JSON.stringify({ type: "key", key: "C-u" }));
 
-      await waitForCapture(sessionName, "BYTES:0a");
+      await waitForCapture(sessionName, "BYTES:0a15");
       ws.close();
       await waitForClose(ws);
     } finally {

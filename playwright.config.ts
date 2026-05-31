@@ -7,12 +7,15 @@ import { defineConfig, devices } from "@playwright/test";
 // Playwright silently reuse a production daemon listening on that port and
 // the e2e suite overwrote the user's scratchpad with fixture data
 // ("first idea\n\nsecond idea\n", etc.) instead of writing to its sandbox
-// data dir at /tmp/citadel-playwright-data.
+// data dir under /tmp/citadel-playwright-data*.
 const daemonPort = process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012";
 const webPort = process.env.CITADEL_PLAYWRIGHT_WEB_PORT || "15174";
 const daemonLog = process.env.CITADEL_PLAYWRIGHT_DAEMON_LOG || "/tmp/citadel-playwright-daemon.log";
 const dataDir =
-  process.env.CITADEL_DATA_DIR || process.env.CITADEL_PLAYWRIGHT_DATA_DIR || "/tmp/citadel-playwright-data";
+  process.env.CITADEL_PLAYWRIGHT_DATA_DIR ||
+  (process.env.CITADEL_DATA_DIR?.startsWith("/tmp/citadel-test-") ? process.env.CITADEL_DATA_DIR : undefined) ||
+  `/tmp/citadel-playwright-data-${process.pid}`;
+process.env.CITADEL_PLAYWRIGHT_DATA_DIR = dataDir;
 const configPath = process.env.CITADEL_PLAYWRIGHT_CONFIG || `${dataDir}/citadel.config.json`;
 const daemonBase = `http://127.0.0.1:${daemonPort}`;
 const webBase = `http://127.0.0.1:${webPort}`;
@@ -20,18 +23,20 @@ const e2eRunId = process.env.CITADEL_PLAYWRIGHT_RUN_ID || `playwright-${randomUU
 process.env.CITADEL_PLAYWRIGHT_RUN_ID = e2eRunId;
 const sandboxPrefix = process.env.CITADEL_PLAYWRIGHT_SANDBOX_PREFIX || dataDir;
 process.env.CITADEL_PLAYWRIGHT_SANDBOX_PREFIX = sandboxPrefix;
-const tmuxSocket = (process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}`).replace(
-  /[^A-Za-z0-9_.-]/g,
-  "-",
-);
+const tmuxSocket = (
+  process.env.CITADEL_PLAYWRIGHT_TMUX_SOCKET || `citadel-playwright-${daemonPort}-${process.pid}`
+).replace(/[^A-Za-z0-9_.-]/g, "-");
 
 export default defineConfig({
   testDir: "e2e",
-  timeout: 30_000,
-  expect: { timeout: 10_000 },
-  // The suite intentionally shares one daemon and one data dir. Keep workers
-  // serial so stateful specs do not race each other through global settings.
+  // The suite mutates daemon-global config, scratchpad files, repos, and tmux
+  // sessions. Keep it serial even on high-core local machines; GitHub Actions
+  // happened to run one worker, while local parallelism exposed state races.
+  // `pnpm e2e` also runs viewport projects as separate Playwright invocations
+  // so each project gets its own daemon, data dir, and tmux socket.
   workers: 1,
+  timeout: 45_000,
+  expect: { timeout: 10_000 },
   use: {
     baseURL: webBase,
     trace: "retain-on-failure",
@@ -68,6 +73,9 @@ export default defineConfig({
       // boot orphan-reaper can mistake production tmux panes for sandbox
       // orphans and kill the user's live terminals.
       command: [
+        // Clear operator-shell worktree mode before setting sandbox env below;
+        // otherwise a local run can override /tmp e2e paths with worktree paths.
+        "CITADEL_WORKTREE=",
         `CITADEL_CONFIG=${configPath}`,
         `CITADEL_DATA_DIR=${dataDir}`,
         `CITADEL_PORT=${daemonPort}`,

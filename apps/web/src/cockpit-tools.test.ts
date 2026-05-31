@@ -2,6 +2,7 @@
 
 import type { PullRequestSummary, Workspace, WorkspaceCockpitSummary } from "@citadel/contracts";
 import type { WorkspaceCockpitSummaryBatchResponse } from "@citadel/contracts/pr-routes";
+import { QueryClient } from "@tanstack/react-query";
 import { createElement } from "react";
 import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
@@ -11,6 +12,8 @@ import {
   applyStickyUpdates,
   filterPollableWorkspaceIds,
   invalidateActiveWorkspaceFromBatch,
+  markPullRequestMerged,
+  markWorkspacePrMergedInQueryCache,
   nextPollInterval,
   prMapFromSummaries,
   selectActiveGhCooldown,
@@ -230,6 +233,16 @@ describe("applyStickyUpdates", () => {
     expect(cache.get("ws_a")?.versionControl.pullRequest).toBeNull();
   });
 
+  it("does not downgrade a locally-merged PR when a stale healthy open summary arrives", () => {
+    const cache = new Map<string, WorkspaceCockpitSummary>();
+    cache.set("ws_a", makeSummary("ws_a", "healthy", makePr({ number: 7, state: "MERGED" })));
+    const batch: WorkspaceCockpitSummaryBatchResponse = {
+      summaries: [{ workspaceId: "ws_a", ok: true, summary: makeSummary("ws_a", "healthy", makePr({ number: 7 })) }],
+    };
+    applyStickyUpdates(cache, new Set(["ws_a"]), batch);
+    expect(cache.get("ws_a")?.versionControl.pullRequest?.state).toBe("MERGED");
+  });
+
   it("prunes entries for workspaces that no longer exist", () => {
     const cache = new Map<string, WorkspaceCockpitSummary>();
     cache.set("ws_gone", makeSummary("ws_gone", "healthy", makePr()));
@@ -253,6 +266,61 @@ describe("prMapFromSummaries", () => {
     const cache = new Map<string, WorkspaceCockpitSummary>();
     cache.set("ws_nopr", makeSummary("ws_nopr", "healthy", null));
     expect(prMapFromSummaries(cache).get("ws_nopr")).toBeNull();
+  });
+});
+
+describe("markWorkspacePrMergedInQueryCache", () => {
+  it("marks active and batch PR summaries as merged while preserving PR stats", () => {
+    const queryClient = new QueryClient();
+    const summary = makeSummary(
+      "ws_a",
+      "healthy",
+      makePr({ additions: 88, deletions: 11, mergeable: "mergeable", allowedMergeStrategies: ["squash"] }),
+    );
+    queryClient.setQueryData(["workspace-cockpit", "ws_a"], summary);
+    queryClient.setQueryData<WorkspaceCockpitSummaryBatchResponse>(["workspaces-pr-batch"], {
+      summaries: [
+        { workspaceId: "ws_a", ok: true, summary },
+        { workspaceId: "ws_b", ok: true, summary: makeSummary("ws_b", "healthy", makePr({ number: 9 })) },
+      ],
+    });
+
+    markWorkspacePrMergedInQueryCache(queryClient, "ws_a", 42);
+
+    const active = queryClient.getQueryData<WorkspaceCockpitSummary>(["workspace-cockpit", "ws_a"]);
+    expect(active?.versionControl.pullRequest).toMatchObject({
+      number: 42,
+      state: "MERGED",
+      additions: 88,
+      deletions: 11,
+      mergeable: "unknown",
+      allowedMergeStrategies: [],
+      mergeStateStatus: null,
+    });
+
+    const batch = queryClient.getQueryData<WorkspaceCockpitSummaryBatchResponse>(["workspaces-pr-batch"]);
+    const wsA = batch?.summaries.find((entry) => entry.workspaceId === "ws_a" && entry.ok);
+    const wsB = batch?.summaries.find((entry) => entry.workspaceId === "ws_b" && entry.ok);
+    const wsASummary = (wsA?.ok ? wsA.summary : null) as WorkspaceCockpitSummary | null;
+    const wsBSummary = (wsB?.ok ? wsB.summary : null) as WorkspaceCockpitSummary | null;
+    expect(wsASummary?.versionControl.pullRequest?.state).toBe("MERGED");
+    expect(wsBSummary?.versionControl.pullRequest?.state).toBe("OPEN");
+  });
+
+  it("leaves unrelated PR numbers unchanged", () => {
+    const pr = makePr({ number: 7 });
+    expect(markPullRequestMerged(pr).state).toBe("MERGED");
+
+    const queryClient = new QueryClient();
+    const summary = makeSummary("ws_a", "healthy", pr);
+    queryClient.setQueryData(["workspace-cockpit", "ws_a"], summary);
+
+    markWorkspacePrMergedInQueryCache(queryClient, "ws_a", 42);
+
+    expect(
+      queryClient.getQueryData<WorkspaceCockpitSummary>(["workspace-cockpit", "ws_a"])?.versionControl.pullRequest
+        ?.state,
+    ).toBe("OPEN");
   });
 });
 
