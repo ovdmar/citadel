@@ -301,35 +301,34 @@ function normalizeScrollLines(lines: number): number | null {
 
 function scrollTmuxPane(sessionName: string, lines: number, socketName?: string | null): void {
   const count = String(Math.abs(lines));
+  const action = lines < 0 ? "scroll-up" : "scroll-down";
   try {
-    if (lines < 0 && !tmuxPaneInMode(sessionName, socketName)) {
-      execFileSync("tmux", [...tmuxPrefix(socketName), "copy-mode", "-e", "-t", sessionName], { stdio: "ignore" });
+    if (lines < 0) {
+      execFileSync(
+        "tmux",
+        [
+          ...tmuxPrefix(socketName),
+          "copy-mode",
+          "-e",
+          "-t",
+          sessionName,
+          ";",
+          "send-keys",
+          "-t",
+          sessionName,
+          "-X",
+          "-N",
+          count,
+          action,
+        ],
+        { stdio: "ignore" },
+      );
+      return;
     }
-    if (lines > 0 && !tmuxPaneInMode(sessionName, socketName)) return;
-    execFileSync(
-      "tmux",
-      [
-        ...tmuxPrefix(socketName),
-        "send-keys",
-        "-t",
-        sessionName,
-        "-X",
-        "-N",
-        count,
-        lines < 0 ? "scroll-up" : "scroll-down",
-      ],
-      { stdio: "ignore" },
-    );
+    execFileSync("tmux", [...tmuxPrefix(socketName), "send-keys", "-t", sessionName, "-X", "-N", count, action], {
+      stdio: "ignore",
+    });
   } catch {
     // Scroll is best-effort UI state. Never turn a wheel event into a terminal error overlay.
   }
-}
-
-function tmuxPaneInMode(sessionName: string, socketName?: string | null): boolean {
-  return (
-    execFileSync("tmux", [...tmuxPrefix(socketName), "display-message", "-p", "-t", sessionName, "#{pane_in_mode}"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim() === "1"
-  );
 }
