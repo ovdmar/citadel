@@ -16,6 +16,30 @@ type StageTab = {
 // would inevitably fail to bind a terminal port.
 const WORKSPACE_AGENT_CAP = 20;
 
+function compareStageSessions(a: AgentSession, b: AgentSession) {
+  const aKey = a.tabId ?? a.id;
+  const bKey = b.tabId ?? b.id;
+  const cmp = aKey.localeCompare(bKey);
+  return cmp !== 0 ? cmp : a.createdAt.localeCompare(b.createdAt);
+}
+
+export function stableVisitedSessions(allSessions: AgentSession[], visitedIds: Set<string>): AgentSession[] {
+  const byId = new Map(allSessions.map((session) => [session.id, session]));
+  const result: AgentSession[] = [];
+  for (const id of visitedIds) {
+    const session = byId.get(id);
+    if (session) result.push(session);
+  }
+  return result;
+}
+
+export function stableWorkspaceSessionIdsKey(sessions: AgentSession[]): string {
+  return [...sessions]
+    .sort(compareStageSessions)
+    .map((session) => session.id)
+    .join("\0");
+}
+
 export function Stage(props: {
   workspace: Workspace;
   sessions: AgentSession[];
@@ -24,7 +48,13 @@ export function Stage(props: {
   activeSessionId: string | undefined;
   onActiveSession: (id: string) => void;
 }) {
-  const sortedSessions = [...props.sessions].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  // Sort by tabId (time-encoded by createId on the daemon side), with createdAt
+  // as a stable tie-breaker for legacy rows whose tab_id pre-dates migration 11.
+  // The point of tabId: when a session is restored via `claude --resume <uuid>`
+  // the new row inherits the source row's tabId, so the restored tab appears
+  // in the same slot the original lived in — sorting by createdAt instead would
+  // jump the restored session to the end of the strip.
+  const sortedSessions = [...props.sessions].sort(compareStageSessions);
   const tabs: StageTab[] = sortedSessions.map((session) => ({ session, label: session.displayName }));
   const allSessions = props.allSessions ?? props.sessions;
 
@@ -86,7 +116,19 @@ export function Stage(props: {
       return next.size === prev.size ? prev : next;
     });
   }, [allSessions]);
-  const visitedPanes = allSessions.filter((session) => visitedIds.has(session.id));
+  const visitedPanes = stableVisitedSessions(allSessions, visitedIds);
+  const workspaceSessionIdsKey = stableWorkspaceSessionIdsKey(props.sessions);
+
+  useEffect(() => {
+    if (!workspaceSessionIdsKey) return;
+    const sessionIds = workspaceSessionIdsKey.split("\0").filter(Boolean);
+    const timer = window.setTimeout(() => {
+      for (const sessionId of sessionIds) {
+        getTerminalHandle(sessionId)?.recoverIfDisconnected();
+      }
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [workspaceSessionIdsKey]);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");

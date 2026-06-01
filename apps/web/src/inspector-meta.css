@@ -171,6 +171,19 @@
   font-variant-numeric: tabular-nums;
 }
 
+.ins-recent-more {
+  margin-top: 6px;
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  font-size: 10.5px;
+  color: var(--c-fg-3);
+  cursor: pointer;
+}
+.ins-recent-more:hover {
+  color: var(--c-fg-2);
+}
+
 /* Inspector tabs row gets a small collapse affordance pinned to the right */
 
 .inspector-tabs-collapse {

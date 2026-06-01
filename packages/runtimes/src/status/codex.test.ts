@@ -23,6 +23,12 @@ function ctx(paneCapture: string, over: Partial<ObservationContext> = {}): Obser
   };
 }
 
+function observeStatus(state: SessionAdapterState, context: ObservationContext) {
+  const observed = codexStatusAdapter.observe(state, context);
+  if (observed === null || typeof observed === "string") return observed;
+  return observed.observed;
+}
+
 describe("codexStatusAdapter", () => {
   let state: SessionAdapterState;
 
@@ -32,26 +38,23 @@ describe("codexStatusAdapter", () => {
 
   describe("fixture coverage", () => {
     it("classifies waiting-for-input-sandbox.txt as waiting_for_input", () => {
-      expect(codexStatusAdapter.observe(state, ctx(load("waiting-for-input-sandbox")))).toBe("waiting_for_input");
+      expect(observeStatus(state, ctx(load("waiting-for-input-sandbox")))).toBe("waiting_for_input");
     });
 
     it("classifies idle.txt as idle when ≥2 stable ticks and observed", () => {
       const pane = load("idle");
       expect(
-        codexStatusAdapter.observe(
-          state,
-          ctx(pane, { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 2 }),
-        ),
+        observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 2 })),
       ).toBe("idle");
     });
 
-    it("classifies running-mid-stream.txt as running when activity recent", () => {
+    it("does not classify running-mid-stream.txt as running from activity alone", () => {
       expect(
-        codexStatusAdapter.observe(
+        observeStatus(
           state,
           ctx(load("running-mid-stream"), { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 }),
         ),
-      ).toBe("running");
+      ).toBeNull();
     });
 
     it("classifies idle-post-turn-divider.txt as idle immediately on the divider (no null window)", () => {
@@ -60,7 +63,7 @@ describe("codexStatusAdapter", () => {
       // which left the UI flickering through running before settling on idle.
       // Detector now treats the divider as a positive idle signal.
       expect(
-        codexStatusAdapter.observe(
+        observeStatus(
           state,
           ctx(load("idle-post-turn-divider"), { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 0 }),
         ),
@@ -73,7 +76,7 @@ describe("codexStatusAdapter", () => {
       // is the only positive signal. Previously misclassified as idle once
       // the activity timestamp went stale.
       expect(
-        codexStatusAdapter.observe(
+        observeStatus(
           state,
           ctx(load("running-spinner"), { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 5 }),
         ),
@@ -81,35 +84,93 @@ describe("codexStatusAdapter", () => {
     });
   });
 
-  describe("active spinner detection", () => {
+  describe("active interrupt marker detection", () => {
     it("'• Working (1m 52s • esc to interrupt)' → running", () => {
       const pane = "some output\n• Working (1m 52s • esc to interrupt)\n\n  gpt-5.5 default · ~/wherever";
-      expect(
-        codexStatusAdapter.observe(state, ctx(pane, { ticksSinceActivityChange: 10, hasObservedSinceBoot: true })),
-      ).toBe("running");
+      expect(observeStatus(state, ctx(pane, { ticksSinceActivityChange: 10, hasObservedSinceBoot: true }))).toBe(
+        "running",
+      );
     });
 
     it("'◦ Thinking (12s • esc to interrupt)' (animated bullet variant) → running", () => {
       const pane = "x\n◦ Thinking (12s • esc to interrupt)\n  gpt-5.5 default · ~/wherever";
+      expect(observeStatus(state, ctx(pane, { ticksSinceActivityChange: 10, hasObservedSinceBoot: true }))).toBe(
+        "running",
+      );
+    });
+
+    it("'esc for interrupt' wording variant → running", () => {
+      const pane = "x\n◦ Thinking (12s • esc for interrupt)\n  gpt-5.5 default · ~/wherever";
+      expect(observeStatus(state, ctx(pane, { ticksSinceActivityChange: 10, hasObservedSinceBoot: true }))).toBe(
+        "running",
+      );
+    });
+
+    it("interrupt marker beats a visible post-turn divider and stable-idle fallback", () => {
+      const pane = [
+        "agent output",
+        "─ Worked for 1m 12s ──────────────────────",
+        "",
+        "◦ Working (18s • esc for interrupt)",
+        "",
+        "  gpt-5.5 default · ~/wherever",
+      ].join("\n");
       expect(
-        codexStatusAdapter.observe(state, ctx(pane, { ticksSinceActivityChange: 10, hasObservedSinceBoot: true })),
+        observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 10 })),
       ).toBe("running");
+    });
+
+    it("interrupt marker beats the sandbox footer if both are visible", () => {
+      const pane = "◦ Working (18s • esc for interrupt)\nPress enter to confirm or esc to cancel";
+      expect(observeStatus(state, ctx(pane, { ticksSinceActivityChange: 10, hasObservedSinceBoot: true }))).toBe(
+        "running",
+      );
     });
 
     it("post-turn divider beats stale tmux activity (running → idle is immediate)", () => {
       const pane = "agent output\n─ Worked for 1m 12s ──────────────────────";
       expect(
-        codexStatusAdapter.observe(
-          state,
-          ctx(pane, { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 }),
-        ),
+        observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 })),
+      ).toBe("idle");
+    });
+
+    it("prompt text after a post-turn divider still reports idle, even with fresh pane activity", () => {
+      const pane = [
+        "previous output",
+        "─ Worked for 1m 12s ──────────────────────",
+        "",
+        "› Start another task.",
+        "",
+        "• I am beginning the task, but the spinner has not rendered in this capture.",
+        "",
+        "› Use /skills to list available skills",
+        "  gpt-5.5 default · ~/wherever",
+      ].join("\n");
+      expect(
+        observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 })),
+      ).toBe("idle");
+    });
+
+    it("current-turn post divider after the latest prompt still reports idle immediately", () => {
+      const pane = [
+        "› Start another task.",
+        "",
+        "• Done.",
+        "",
+        "─ Worked for 5s ──────────────────────",
+        "",
+        "› Use /skills to list available skills",
+        "  gpt-5.5 default · ~/wherever",
+      ].join("\n");
+      expect(
+        observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 })),
       ).toBe("idle");
     });
 
     it("body line mentioning 'worked for' (no leading divider glyph) does NOT trigger idle", () => {
       const pane = "I worked for 3 hours on this\n";
       expect(
-        codexStatusAdapter.observe(
+        observeStatus(
           state,
           ctx(pane, {
             tmuxActivityChangedSinceLastTick: false,
@@ -122,22 +183,80 @@ describe("codexStatusAdapter", () => {
 
     it("sandbox footer 'esc to cancel' (no closing paren) does NOT trigger running", () => {
       const pane = "x\nPress enter to confirm or esc to cancel";
-      expect(
-        codexStatusAdapter.observe(state, ctx(pane, { ticksSinceActivityChange: 10, hasObservedSinceBoot: true })),
-      ).toBe("waiting_for_input");
+      expect(observeStatus(state, ctx(pane, { ticksSinceActivityChange: 10, hasObservedSinceBoot: true }))).toBe(
+        "waiting_for_input",
+      );
     });
   });
 
   describe("activity timestamp drives running/idle", () => {
-    it("tmuxActivityChangedSinceLastTick → running regardless of stability", () => {
+    it("elapsed timer advancement is a first-pass running signal without tmux activity", () => {
+      const paneAt10s = "some output\n◦ Working (10s)\n  gpt-5.5 default · ~/wherever";
+      const paneAt12s = "some output\n• Working (12s)\n  gpt-5.5 default · ~/wherever";
       expect(
-        codexStatusAdapter.observe(state, ctx("some pane content", { tmuxActivityChangedSinceLastTick: true })),
+        observeStatus(state, ctx(paneAt10s, { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 10 })),
+      ).toBeNull();
+      expect(
+        observeStatus(state, ctx(paneAt12s, { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 10 })),
       ).toBe("running");
+    });
+
+    it("a visible active timer suppresses stable-timeout idle until a later tick proves it is stale", () => {
+      const pane = "some output\n◦ Working (2m 36s)\n  gpt-5.5 default · ~/wherever";
+      expect(
+        observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 10 })),
+      ).toBeNull();
+      expect(
+        observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 10 })),
+      ).toBe("idle");
+    });
+
+    it("tmux activity alone is not a running signal", () => {
+      expect(
+        observeStatus(
+          state,
+          ctx("some pane content", { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 }),
+        ),
+      ).toBeNull();
+    });
+
+    it("typed prompt after a completed turn stays idle, even with fresh pane activity", () => {
+      const pane = [
+        "Implemented the status detection change.",
+        "",
+        "─ Worked for 13m 12s ──────────────────────",
+        "",
+        "",
+        "› Find and fix a bug in @filename",
+        "",
+        "  gpt-5.5 xhigh · ~/Workspace/citadel",
+      ].join("\n");
+      expect(
+        observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 })),
+      ).toBe("idle");
+    });
+
+    it("answer text mentioning esc to interrupt after a completed turn stays idle", () => {
+      const pane = [
+        "• You’re right. I fixed it so Codex no longer treats tmux activity as running.",
+        "",
+        "  It now reports running only from positive runtime signals: advancing active timer or esc to interrupt.",
+        "",
+        "─ Worked for 2m 50s ──────────────────────",
+        "",
+        "",
+        "› Find and fix a bug in @filename",
+        "",
+        "  gpt-5.5 xhigh · ~/Workspace/citadel",
+      ].join("\n");
+      expect(
+        observeStatus(state, ctx(pane, { tmuxActivityChangedSinceLastTick: true, ticksSinceActivityChange: 0 })),
+      ).toBe("idle");
     });
 
     it("stability of exactly 1 tick → null (not yet enough to call idle)", () => {
       expect(
-        codexStatusAdapter.observe(
+        observeStatus(
           state,
           ctx("some pane content", { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 1 }),
         ),
@@ -146,7 +265,7 @@ describe("codexStatusAdapter", () => {
 
     it("stability of 2 ticks → idle", () => {
       expect(
-        codexStatusAdapter.observe(
+        observeStatus(
           state,
           ctx("some pane content", { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 2 }),
         ),
@@ -155,7 +274,7 @@ describe("codexStatusAdapter", () => {
 
     it("stability of 5 ticks → idle (still)", () => {
       expect(
-        codexStatusAdapter.observe(
+        observeStatus(
           state,
           ctx("some pane content", { tmuxActivityChangedSinceLastTick: false, ticksSinceActivityChange: 5 }),
         ),
@@ -166,7 +285,7 @@ describe("codexStatusAdapter", () => {
   describe("boot suppression — first post-boot tick MUST NOT emit idle", () => {
     it("source=boot with 2 stable ticks → null (don't classify yet)", () => {
       expect(
-        codexStatusAdapter.observe(
+        observeStatus(
           state,
           ctx("some pane content", { source: "boot", ticksSinceActivityChange: 2, hasObservedSinceBoot: false }),
         ),
@@ -175,7 +294,7 @@ describe("codexStatusAdapter", () => {
 
     it("source=tick but hasObservedSinceBoot=false (cold start) → null even with stability", () => {
       expect(
-        codexStatusAdapter.observe(
+        observeStatus(
           state,
           ctx("some pane content", { source: "tick", ticksSinceActivityChange: 2, hasObservedSinceBoot: false }),
         ),
@@ -184,7 +303,7 @@ describe("codexStatusAdapter", () => {
 
     it("source=tick with hasObservedSinceBoot=true and stability → idle", () => {
       expect(
-        codexStatusAdapter.observe(
+        observeStatus(
           state,
           ctx("some pane content", { source: "tick", ticksSinceActivityChange: 2, hasObservedSinceBoot: true }),
         ),
@@ -193,7 +312,7 @@ describe("codexStatusAdapter", () => {
 
     it("source=boot but waiting_for_input footer still applies (sandbox approval is sticky)", () => {
       const pane = "something\nPress enter to confirm or esc to cancel";
-      expect(codexStatusAdapter.observe(state, ctx(pane, { source: "boot", hasObservedSinceBoot: false }))).toBe(
+      expect(observeStatus(state, ctx(pane, { source: "boot", hasObservedSinceBoot: false }))).toBe(
         "waiting_for_input",
       );
     });
@@ -202,7 +321,7 @@ describe("codexStatusAdapter", () => {
   describe("false-positive guard", () => {
     it("classifies false-positive-prompt-text.txt as idle (chrome strings only in body)", () => {
       expect(
-        codexStatusAdapter.observe(
+        observeStatus(
           state,
           ctx(load("false-positive-prompt-text"), { ticksSinceActivityChange: 2, hasObservedSinceBoot: true }),
         ),
@@ -212,8 +331,8 @@ describe("codexStatusAdapter", () => {
 
   describe("ticksObserved counter", () => {
     it("increments on every observe call", () => {
-      codexStatusAdapter.observe(state, ctx(""));
-      codexStatusAdapter.observe(state, ctx(""));
+      observeStatus(state, ctx(""));
+      observeStatus(state, ctx(""));
       expect(state.ticksObserved).toBe(2);
     });
   });

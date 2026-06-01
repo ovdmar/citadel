@@ -46,6 +46,7 @@ export function VoiceCaptureButton(props: VoiceCaptureButtonProps) {
       aria-label={ariaLabel}
       aria-pressed={speech.listening}
       title={ariaLabel}
+      onMouseDown={(event) => event.preventDefault()}
       onClick={() => (speech.listening ? speech.stop() : speech.start())}
     >
       {speech.listening ? <MicOff size={16} aria-hidden /> : <Mic size={16} aria-hidden />}
