@@ -44,15 +44,30 @@ export function repoFromRow(row: Record<string, unknown>): Repo {
 }
 
 export function workspaceFromRow(row: Record<string, unknown>): Workspace {
+  const parentIssue =
+    row.parent_issue_provider && row.parent_issue_key
+      ? {
+          provider: asString(row, "parent_issue_provider"),
+          key: asString(row, "parent_issue_key"),
+          url: row.parent_issue_url ? asString(row, "parent_issue_url") : null,
+          title: row.parent_issue_title ? asString(row, "parent_issue_title") : null,
+          status: row.parent_issue_status ? asString(row, "parent_issue_status") : null,
+          fetchedAt: null,
+        }
+      : undefined;
   return {
     id: asString(row, "id"),
-    repoId: asString(row, "repo_id"),
+    repoId: row.repo_id ? asString(row, "repo_id") : null,
     name: asString(row, "name"),
     path: asString(row, "path"),
+    rootPath: row.root_path ? asString(row, "root_path") : undefined,
+    mode: row.mode ? (asString(row, "mode") as Workspace["mode"]) : undefined,
     branch: asString(row, "branch"),
     baseBranch: asString(row, "base_branch"),
     source: asString(row, "source") as Workspace["source"],
     kind: ((row.kind as string) ?? "worktree") as Workspace["kind"],
+    lifecyclePhase: row.lifecycle_phase ? (asString(row, "lifecycle_phase") as Workspace["lifecyclePhase"]) : undefined,
+    parentIssue,
     prUrl: row.pr_url ? asString(row, "pr_url") : null,
     issueKey: row.issue_key ? asString(row, "issue_key") : null,
     issueTitle: row.issue_title ? asString(row, "issue_title") : null,
@@ -75,6 +90,8 @@ export function sessionFromRow(row: Record<string, unknown>): WorkspaceSession {
     id: asString(row, "id"),
     kind,
     workspaceId: asString(row, "workspace_id"),
+    targetType: row.target_type ? (asString(row, "target_type") as WorkspaceSession["targetType"]) : undefined,
+    checkoutId: row.checkout_id ? asString(row, "checkout_id") : null,
     displayName: asString(row, "display_name"),
     status: asString(row, "status") as WorkspaceSession["status"],
     statusReason: row.status_reason ? asString(row, "status_reason") : null,
@@ -94,6 +111,13 @@ export function sessionFromRow(row: Record<string, unknown>): WorkspaceSession {
     // every legacy row as its own tab — matches pre-migration ordering.
     tabId: row.tab_id ? asString(row, "tab_id") : asString(row, "id"),
     runtimeSessionId: row.runtime_session_id ? asString(row, "runtime_session_id") : null,
+    role: row.role ? (asString(row, "role") as WorkspaceSession["role"]) : null,
+    actionId: row.action_id ? asString(row, "action_id") : null,
+    managed: Number(row.managed ?? 0) === 1,
+    parentSessionId: row.parent_session_id ? asString(row, "parent_session_id") : null,
+    planVersionId: row.plan_version_id ? asString(row, "plan_version_id") : null,
+    closedAt: row.closed_at ? asString(row, "closed_at") : null,
+    launchWarnings: jsonArray(row, "launch_warnings"),
     rateLimitResumeAttempts:
       row.rate_limit_resume_attempts === null || row.rate_limit_resume_attempts === undefined
         ? 0

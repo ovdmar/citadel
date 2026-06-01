@@ -593,6 +593,68 @@ describe("workspaces-pr-snapshot migration (v9)", () => {
   });
 });
 
+describe("workspace home/checkouts/manager migration (v16)", () => {
+  it("relaxes workspaces.repo_id and adds structured workspace tables", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    const workspaceCols = db.prepare("PRAGMA table_info(workspaces)").all() as Array<{
+      name: string;
+      notnull: number;
+    }>;
+
+    expect(workspaceCols.find((c) => c.name === "repo_id")?.notnull).toBe(0);
+    for (const column of ["root_path", "mode", "lifecycle_phase", "parent_issue_key"]) {
+      expect(
+        workspaceCols.some((c) => c.name === column),
+        `missing ${column}`,
+      ).toBe(true);
+    }
+    for (const table of [
+      "workspace_checkouts",
+      "workspace_plan_versions",
+      "workspace_plan_reviews",
+      "workspace_plan_decisions",
+      "workspace_managers",
+      "manager_events",
+      "plan_deviation_reports",
+      "checkout_review_artifacts",
+    ]) {
+      const row = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?").get(table) as
+        | { name: string }
+        | undefined;
+      expect(row?.name).toBe(table);
+    }
+    const migration = db.prepare("SELECT name FROM schema_migrations WHERE version = 16").get() as
+      | { name: string }
+      | undefined;
+    expect(migration?.name).toBe("workspace-home-checkouts-manager");
+  });
+
+  it("backfills one checkout for existing worktree workspaces", () => {
+    const dbPath = makeTempPath();
+    seedLegacySession(dbPath, { id: "sess_checkout_backfill", legacyStatus: "idle" });
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+
+    expect(store.listWorkspaces().find((workspace) => workspace.id === "ws_test")).toMatchObject({
+      rootPath: "/tmp/ws",
+      mode: "freestyle",
+      parentIssue: undefined,
+    });
+    expect(store.listWorkspaceCheckouts("ws_test")).toMatchObject([
+      {
+        id: "checkout_ws_test",
+        repoId: "repo_test",
+        path: "/tmp/ws",
+        branch: "main",
+        gateStatus: "not_started",
+      },
+    ]);
+  });
+});
+
 describe("updateWorkspacePrSnapshot / getWorkspacePrSnapshot", () => {
   function freshStore(): SqliteStore {
     const dbPath = makeTempPath();

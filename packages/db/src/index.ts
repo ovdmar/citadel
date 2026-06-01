@@ -177,19 +177,29 @@ export class SqliteStore {
   insertWorkspace(workspace: Workspace) {
     this.database
       .prepare(
-        `INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, kind, pr_url,
-          issue_key, issue_title, issue_url, slack_thread_url, section, pinned, lifecycle, dirty, namespace_id, created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO workspaces (id, repo_id, name, path, root_path, mode, branch, base_branch, source, kind,
+          lifecycle_phase, parent_issue_provider, parent_issue_key, parent_issue_url, parent_issue_title,
+          parent_issue_status, pr_url, issue_key, issue_title, issue_url, slack_thread_url, section, pinned,
+          lifecycle, dirty, namespace_id, created_at, updated_at, archived_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         workspace.id,
-        workspace.repoId,
+        workspace.repoId ?? null,
         workspace.name,
         workspace.path,
+        workspace.rootPath ?? workspace.path,
+        workspace.mode ?? "freestyle",
         workspace.branch,
         workspace.baseBranch,
         workspace.source,
         workspace.kind ?? "worktree",
+        workspace.lifecyclePhase ?? "implementation",
+        workspace.parentIssue?.provider ?? (workspace.issueKey ? "jira" : null),
+        workspace.parentIssue?.key ?? workspace.issueKey ?? null,
+        workspace.parentIssue?.url ?? workspace.issueUrl ?? null,
+        workspace.parentIssue?.title ?? workspace.issueTitle ?? null,
+        workspace.parentIssue?.status ?? null,
         workspace.prUrl ?? null,
         workspace.issueKey ?? null,
         workspace.issueTitle ?? null,
@@ -370,12 +380,13 @@ export class SqliteStore {
     this.database
       .prepare(
         `INSERT INTO workspace_sessions (id, workspace_id, kind, runtime_id, display_name, status, status_reason,
-          status_reason_at,
+          status_reason_at, target_type, checkout_id, role, action_id, managed, parent_session_id, plan_version_id,
+          closed_at, launch_warnings,
           last_status_at, last_output_at, ended_at, exit_code, transport,
           tmux_session_name, tmux_session_id, tmux_socket_name, tab_id, runtime_session_id,
           rate_limit_resume_attempts, next_resume_at, last_resume_from_rate_limit_at,
           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -386,6 +397,15 @@ export class SqliteStore {
         session.status,
         session.statusReason ?? null,
         session.statusReasonAt ?? null,
+        session.targetType ?? "worktree_checkout",
+        session.checkoutId ?? null,
+        session.role ?? null,
+        session.actionId ?? null,
+        session.managed ? 1 : 0,
+        session.parentSessionId ?? null,
+        session.planVersionId ?? null,
+        session.closedAt ?? null,
+        JSON.stringify(session.launchWarnings ?? []),
         // Optional in the schema (older test fixtures + out-of-band callers
         // may omit these); the DB layer normalizes to sensible defaults so
         // the column constraints are still satisfied.
@@ -637,3 +657,6 @@ Object.assign(SqliteStore.prototype, scheduledAgentStoreMethods);
 // hoisting would run it before this class declaration completes.
 import { scheduledRunStoreMethods } from "./scheduled-run-store.js";
 Object.assign(SqliteStore.prototype, scheduledRunStoreMethods);
+
+import { agentsSystemStoreMethods } from "./agents-system-store.js";
+Object.assign(SqliteStore.prototype, agentsSystemStoreMethods);

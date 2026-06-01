@@ -1,4 +1,5 @@
 import process from "node:process";
+import { migrateWorkspaceHomeCheckoutsManager } from "./workspace-structure-migration.js";
 
 // All SQLite schema creation + additive migrations. Extracted from
 // SqliteStore so that index.ts stays under the 800-line file-size gate.
@@ -23,7 +24,7 @@ type SessionTableName = "agent_sessions" | "workspace_sessions";
 // the new version below. Consumed by the doctor's database-schema check so
 // `make doctor` can flag an installed daemon whose code is newer than the
 // database it's been given.
-export const CURRENT_SCHEMA_VERSION = 15;
+export const CURRENT_SCHEMA_VERSION = 16;
 
 function tmuxSocketBase(): string {
   const configured = process.env.CITADEL_TMUX_SOCKET?.trim();
@@ -364,6 +365,7 @@ export function runMigrations(
   migrateWorkspaceSessions(db);
   ensureColumn("workspace_sessions", "tmux_socket_name", "TEXT");
   backfillWorkspaceTmuxSocketNames(db, "workspace_sessions");
+  migrateWorkspaceHomeCheckoutsManager(db, ensureColumn);
 }
 
 function tableExists(db: SqliteDatabase, tableName: string): boolean {
