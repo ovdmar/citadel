@@ -1,8 +1,9 @@
-// Boot-time auto-restore. Runs once shortly after the daemon comes up, walks
-// the same candidate list the Settings → Restore panel uses, and resumes
-// every conversation that died "recently" (within RECENT_WINDOW_MS) without
-// asking the user. The cockpit banner then surfaces "Restored N sessions
-// from previous run" so the user sees what happened.
+// Boot-time auto-restore. Runs once shortly after the daemon comes up, first
+// reconciles DB rows that still looked live but whose tmux pane is absent,
+// then resumes only those freshly-reconciled conversations when they died
+// "recently" (within RECENT_WINDOW_MS). Pre-existing restore candidates stay
+// manual-only in Settings, so a routine daemon restart/install does not
+// unexpectedly resurrect old lost sessions.
 //
 // Why automatic (vs. manual click-through): after a power loss or daemon
 // crash the user wants to be back at their work, not navigating Settings.
@@ -82,20 +83,20 @@ async function hasSessionWithRetries(
 }
 
 // Walk every DB session marked live and, if its tmux session is missing from
-// the live tmux server, flip it to `terminated` so collectRestoreCandidates
-// returns it. Returns the count of flipped rows for logging. Idempotent and
+// the live tmux server, flip it to `unknown` so collectRestoreCandidates
+// returns it. Returns the ids of flipped rows for logging/filtering. Idempotent and
 // cheap — a single `tmux list-sessions` plus N row updates only for the
 // stale rows.
 async function reconcileStaleLiveRows(
   store: SqliteStore,
   liveTmuxNames: Set<string> | null,
   hasSession: (name: string) => Promise<boolean> | boolean,
-): Promise<number> {
+): Promise<Set<string>> {
+  const flipped = new Set<string>();
   // null = tmux server unreachable even after the readiness wait. Don't flip
   // anything — we can't distinguish "fresh boot" from "tmux genuinely down"
   // and false-positive flips lose user trust.
-  if (liveTmuxNames === null) return 0;
-  let flipped = 0;
+  if (liveTmuxNames === null) return flipped;
   const nowIso = new Date().toISOString();
   for (const session of store.listSessions()) {
     if (!LIVE_STATUSES.includes(session.status)) continue;
@@ -116,7 +117,7 @@ async function reconcileStaleLiveRows(
       statusReasonAt: nowIso,
       lastStatusAt: nowIso,
     });
-    flipped += 1;
+    flipped.add(session.id);
   }
   return flipped;
 }
@@ -215,20 +216,21 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
   const hasSession = deps.hasTmuxSession
     ? hasSessionBase
     : (name: string) => hasSessionWithRetries(hasSessionBase, name, { attempts: 3, delayMs: 250 });
-  const flippedStale = await reconcileStaleLiveRows(deps.store, liveTmuxNames, hasSession);
-  if (flippedStale > 0) {
-    console.log(`[boot-restore] reconciled ${flippedStale} stale 'live' rows (fresh-boot)`);
+  const flippedStaleIds = await reconcileStaleLiveRows(deps.store, liveTmuxNames, hasSession);
+  if (flippedStaleIds.size > 0) {
+    console.log(`[boot-restore] reconciled ${flippedStaleIds.size} stale 'live' rows (fresh-boot)`);
   }
   deps.diagnostics?.log("restore", "reconcile.done", {
     tmuxReachable: liveTmuxNames !== null,
     liveTmuxCount: liveTmuxNames?.size ?? null,
-    flippedStaleRows: flippedStale,
+    flippedStaleRows: flippedStaleIds.size,
   });
   const allCandidates = collectRestoreCandidates(deps.store);
+  const bootCandidates = allCandidates.filter((candidate) => flippedStaleIds.has(candidate.sourceSessionId));
   const cutoffMs = Date.now() - RECENT_WINDOW_MS;
   const recent: RestoreCandidate[] = [];
   let skippedOlder = 0;
-  for (const candidate of allCandidates) {
+  for (const candidate of bootCandidates) {
     const activityMs = Date.parse(candidate.lastActivityAt);
     if (Number.isFinite(activityMs) && activityMs >= cutoffMs) {
       recent.push(candidate);
@@ -254,6 +256,7 @@ export async function runBootRestore(deps: BootRestoreDeps): Promise<BootRestore
 
   deps.diagnostics?.log("restore", "candidates.collected", {
     total: allCandidates.length,
+    freshBoot: bootCandidates.length,
     recent: recent.length,
     skippedOlder,
     recentWindowMs: RECENT_WINDOW_MS,

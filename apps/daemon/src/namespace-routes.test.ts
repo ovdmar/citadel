@@ -249,12 +249,12 @@ describe("namespace routes + MCP integration", () => {
           params: { name: "assign_workspace_to_namespace", arguments: { workspaceId: workspaceCreate.workspaceId } },
         }),
       });
-      expect(missingArgResponse.status).toBe(400);
+      expect(missingArgResponse.status).toBe(200);
       const missingArgBody = (await missingArgResponse.json()) as {
-        error?: string;
-        issues?: Array<{ path: string }>;
+        error?: { code?: number; message?: string };
       };
-      expect(missingArgBody.issues?.some((issue) => issue.path === "namespaceId")).toBe(true);
+      expect(missingArgBody.error?.code).toBe(-32000);
+      expect(missingArgBody.error?.message).toContain("namespaceId");
     } finally {
       await closeServer(server);
     }

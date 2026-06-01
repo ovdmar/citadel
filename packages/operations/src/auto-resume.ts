@@ -94,6 +94,10 @@ export interface AutoResumeDeps {
   // Future hook: when account-wide rate-limit detection lands, returning a
   // non-null value postpones every auto-resume until reset.
   isAccountRateLimited?(): AccountRateLimitInfo | null;
+  // Runtime health gate for forced resume nudges. When a runtime is unhealthy
+  // (missing command, failed auth/billing probe, etc.), the loop must not send
+  // "resume" messages into sessions backed by that runtime.
+  isRuntimeHealthy?(runtimeId: string): boolean;
   rng?(): number;
   logger?: { warn(msg: string, meta?: unknown): void };
 }
@@ -142,6 +146,20 @@ export async function runAutoResumeTick(deps: AutoResumeDeps): Promise<AutoResum
   const nowDate = deps.now();
   const nowMs = nowDate.getTime();
   const sessions = deps.listSessions();
+  const runtimeHealthCache = new Map<string, boolean>();
+  const runtimeCanResume = (runtimeId: string): boolean => {
+    if (!deps.isRuntimeHealthy) return true;
+    const cached = runtimeHealthCache.get(runtimeId);
+    if (cached !== undefined) return cached;
+    let healthy = false;
+    try {
+      healthy = deps.isRuntimeHealthy(runtimeId);
+    } catch (err) {
+      deps.logger?.warn?.(`[auto-resume] runtime health check threw for ${runtimeId}: ${String(err)}`);
+    }
+    runtimeHealthCache.set(runtimeId, healthy);
+    return healthy;
+  };
   const result: AutoResumeTickResult = {
     resumed: 0,
     scheduled: 0,
@@ -152,6 +170,7 @@ export async function runAutoResumeTick(deps: AutoResumeDeps): Promise<AutoResum
 
   for (const session of sessions) {
     if (session.status === "usage_limited") {
+      if (!runtimeCanResume(session.runtimeId)) continue;
       // Account-wide cap: wait until the reset wall-clock passes, then send
       // a single nudge to wake the agent. No backoff escalation — the reset
       // moment is deterministic, and if the agent is still capped after the
@@ -196,6 +215,7 @@ export async function runAutoResumeTick(deps: AutoResumeDeps): Promise<AutoResum
     }
 
     if (session.status === "rate_limited") {
+      if (!runtimeCanResume(session.runtimeId)) continue;
       if (accountLimit) continue; // Account-wide rate limit — defer everything.
       const nextResumeAt = session.nextResumeAt ?? null;
       if (nextResumeAt === null) {

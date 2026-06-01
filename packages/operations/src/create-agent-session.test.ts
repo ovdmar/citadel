@@ -86,6 +86,36 @@ describe("createAgentSession session-id wiring", () => {
       service.stopAgentSession({ sessionId: session.id });
     }
   }, 15_000);
+
+  it("passes Codex initial prompts as positional argv instead of pasting into the TUI", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = makeService(store);
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "codex-prompt", source: "scratch" });
+    const argvPath = path.join(fixture.dir, "codex-argv.json");
+    const script = [
+      "const fs = require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(1)));`,
+      "setTimeout(() => {}, 10000);",
+    ].join(" ");
+
+    const session = await service.createAgentSession(
+      { workspaceId: created.workspaceId, runtimeId: "codex", prompt: "hello codex" },
+      { command: "node", args: ["-e", script], displayName: "Fake Codex", sessionIdArg: "--session-id" },
+    );
+    try {
+      const deadline = Date.now() + 3000;
+      while (!fs.existsSync(argvPath) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      const argv = JSON.parse(fs.readFileSync(argvPath, "utf8")) as string[];
+      expect(argv).toContain("hello codex");
+    } finally {
+      service.stopAgentSession({ sessionId: session.id });
+    }
+  }, 15_000);
 });
 
 function makeService(store: SqliteStore) {

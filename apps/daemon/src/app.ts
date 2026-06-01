@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CitadelConfig } from "@citadel/config";
@@ -95,6 +96,21 @@ type ProviderCollectors = {
   transitionJiraIssue: typeof transitionJiraIssue;
 };
 
+function expandTilde(input: string): string {
+  if (input === "~") return os.homedir();
+  if (input.startsWith("~/")) return path.join(os.homedir(), input.slice(2));
+  return input;
+}
+
+function clippedString(value: unknown, fallback: string, max: number): string {
+  if (typeof value !== "string") return fallback;
+  return value.length > max ? value.slice(0, max) : value;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 export function createDaemonApp(input: {
   config: CitadelConfig;
   configPath: string;
@@ -134,7 +150,7 @@ export function createDaemonApp(input: {
   const ttyd = createTtydManager({ ...resolveTtydPortRange(config.port), diagnostics });
   // Release the ttyd on every stopAgentSession path; guarded for test stubs.
   if (typeof operations.setTerminalHooks === "function") {
-    operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId) });
+    operations.setTerminalHooks({ onSessionStopped: (sessionId) => ttyd.release(sessionId, "session-stopped-hook") });
   }
 
   const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
@@ -178,11 +194,10 @@ export function createDaemonApp(input: {
   // WebSocket auto-reconnect (xterm `reconnect=3`) lands on the *same* ttyd
   // it was talking to before the restart.
   //
-  // Discovery is host-wide (NOT scoped to this daemon's port slot) so we can
-  // also reap ttyds that pre-date the current port-slot scheme (the 7xxx
-  // generation from before ttyd-slot.ts shipped on 2026-05-27). adopt()
-  // routes by DB membership via the resolveTabId callback: known sessionIds
-  // get adopted, unknown ones get SIGTERMed.
+  // Discovery is scoped to this daemon's port slot before adopt() routes by
+  // DB membership. That port filter is a hard safety boundary: sandbox
+  // daemons can carry prod-looking DB rows, but they must not see or SIGTERM
+  // the installed daemon's ttyds.
   //
   // Skipped under vitest: tests that boot a daemon would otherwise re-attach
   // to the live cockpit's ttyds and the next test that calls release() would
@@ -190,6 +205,8 @@ export function createDaemonApp(input: {
   if (!process.env.VITEST) {
     const survivors = discoverExistingTtyds({
       basePathPrefix: ttyd.config.basePathPrefix,
+      portBase: ttyd.config.portBase,
+      portMax: ttyd.config.portMax,
     });
     const sessionTabIds = new Map<string, string>();
     for (const session of store.listSessions()) {
@@ -206,7 +223,16 @@ export function createDaemonApp(input: {
       });
     }
   }
-  const { recentUserAction } = wireTerminalRoutes({ app, server, store, ttyd, dataDir: config.dataDir, emit, config });
+  const { recentUserAction } = wireTerminalRoutes({
+    app,
+    server,
+    store,
+    ttyd,
+    dataDir: config.dataDir,
+    emit,
+    config,
+    diagnostics,
+  });
 
   const cachedProviderHealth = () =>
     cachedProvider(
@@ -272,6 +298,23 @@ export function createDaemonApp(input: {
   // died".
   app.get("/api/diagnostics/snapshot", (_req, res) => {
     res.json(buildDiagnosticsSnapshot({ store, ttyd, diagnostics, config }));
+  });
+  app.post("/api/diagnostics/client-event", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    diagnostics.log("ui-client", clippedString(body.event, "unknown", 80), {
+      pageId: clippedString(body.pageId, "", 80),
+      path: clippedString(body.path, "", 240),
+      href: clippedString(body.href, "", 360),
+      visibility: clippedString(body.visibility, "unknown", 40),
+      navigationType: clippedString(body.navigationType, "", 40),
+      ageMs: finiteNumber(body.ageMs),
+      persisted: typeof body.persisted === "boolean" ? body.persisted : null,
+      online: typeof body.online === "boolean" ? body.online : null,
+      wasDiscarded: typeof body.wasDiscarded === "boolean" ? body.wasDiscarded : null,
+      swController: typeof body.swController === "boolean" ? body.swController : null,
+      userAgent: clippedString(req.header("user-agent"), "", 240),
+    });
+    res.status(204).end();
   });
   app.get("/api/diagnostics/bundle.tar.gz", async (_req, res) => {
     try {
@@ -686,7 +729,7 @@ export function createDaemonApp(input: {
     cachedProvider,
   });
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
-  const autoResume = startDaemonAutoResumeLoop(store, operations);
+  const autoResume = startDaemonAutoResumeLoop(store, operations, config);
   if (autoResume) server.on("close", () => autoResume.stop());
   const terminalReaper = startTerminalReaper();
   server.on("close", () => terminalReaper.stop());

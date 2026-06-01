@@ -1,417 +1,905 @@
 Activate the /implement-task skill first.
 
-# Plan: Agents System — runtimes, configs, MCP launchers, handoff
+# Plan: Agents, Structured Workspaces, And Manager Orchestration
+
+## Supersession
+
+This plan supersedes the previous `.agents/plans/agents-system.md` direction and the current `agent/12-agents-system-6haz23` implementation slice. The current branch may be used as reference material only after deliberate review; implementation should start from a clean branch, recommended `fb-agents-orchestration-v2`, because the existing code leans into custom agents, single-repo workspace assumptions, and local-only handoff primitives that no longer match the product direction.
+
+The opening line is retained because Citadel's `/implement-task` handoff convention requires it. The implementation session must still start with the specs-first steps in this plan, not by writing production code immediately.
 
 ## Acceptance Criteria
 
-Sourced from scratchpad block `00000012-0012-4012-8012-000000000012`, scope confirmed with the user as "D — everything including plan handoff".
+- [ ] Citadel supports two workspace modes: freestyle workspaces for today-style manual work and structured workspaces for automated feature delivery.
+- [ ] A structured workspace is a feature container with a real root directory, an unremovable `Home` execution target, zero or more worktree checkouts, and an optional external parent issue binding.
+- [ ] New structured workspaces can start with zero checkouts so PM, architect, and manager work can happen before the affected repos are known. Prototype is checkout-scoped and can start only after the user/plan creates a repository checkout for prototyping.
+- [ ] A structured workspace may remain provider-less during discovery/prototype/architecture, but structured implementation cannot begin until a parent issue and child ticket bindings exist. Provider-less coding remains freestyle, not structured.
+- [ ] Worktree checkouts live under the workspace root directory. Multiple checkouts may point at the same repository, and Citadel models one checkout as one branch and one intended PR.
+- [ ] Existing single-repo workspaces migrate automatically once to the root + checkout layout when safety checks pass. Dirty worktrees are migrated too, but dirty files must not be lost.
+- [ ] Workspace `Home` and worktree checkouts are first-class execution targets. Home-scoped sessions run at the workspace root; checkout-scoped sessions run inside the checkout.
+- [ ] The navigator evolves to show workspaces as top-level rows with `Home` and checkout children. Each target has its own live tabs/chats.
+- [ ] Closing a tab kills the tmux session, but the durable agent-session history keeps runtime session id, role/action metadata, artifacts, and resume information.
+- [ ] Workspace-level agent history is visible across Home and all checkouts so many manager-created sessions can be inspected or resumed without keeping every tab open.
+- [ ] Global Agents nav is configuration only: it edits predefined role templates and their built-in action templates. Workspace-specific manager state/history lives inside the workspace.
+- [ ] V1 ships exactly five predefined roles: `pm`, `architect`, `implementation`, `prototype`, and `manager`.
+- [ ] Predefined roles are non-deletable, editable, and resettable to Citadel defaults. Custom agents, custom CRUD, `list_custom_agents`, and `launch_custom_agent` are out of scope for v1.
+- [ ] Role templates store system prompt plus launch settings: runtime id, model id, reasoning/thinking effort where supported, fast mode where supported, and max-context mode where supported.
+- [ ] Built-in action templates belong to roles, not to a global trigger builder. Actions have editable prompt/runtime/model/effort/fast/context settings and reset-to-defaults.
+- [ ] V1 ships built-in triggers/actions only. Users cannot define arbitrary triggers in v1.
+- [ ] Runtime model and option discovery is available from day one. If a configured model or option becomes invalid, launch falls back to the runtime default and records a warning.
+- [ ] Runtime launch supports runtime-specific model/effort/fast/context arguments through configurable arg mapping plus runtime adapters, not prompt-only metadata.
+- [ ] Manual launch UI offers specialized predefined roles where valid and freestyle empty runtime sessions separately. Specialized sessions are manager-tracked by default; freestyle runtime sessions are not manager-tracked.
+- [ ] Role target rules are enforced by UI and MCP: `pm`, `architect`, and `manager` run on Home; `implementation` and `prototype` run on checkouts.
+- [ ] `launch_pm_agent` can bootstrap a structured workspace shell from an idea or external parent issue without requiring a repo or checkout first.
+- [ ] `launch_architect_agent` requires an existing structured workspace Home, discovery marked ready by the human, and a selected `planApprovalMode` (`manual` or `auto`).
+- [ ] In structured mode, specialized implementation launch is blocked until a final active workspace plan exists, the workspace has a parent issue binding, and the target checkout/delivery unit has exactly one child ticket binding. Freestyle runtime launches remain available separately.
+- [ ] Prototype can run before the workspace plan is ready, but only inside a worktree checkout. Prototype checkouts are discovery/design evidence and do not satisfy implementation delivery gates.
+- [ ] Every structured workspace gets one manager instance at creation. It starts mostly no-op and becomes active as lifecycle state advances. Freestyle workspaces may opt into a manager manually.
+- [ ] Manager automation can be paused globally and per workspace. Pause stops manager/agent-triggered automated actions but does not block human manual launches or important local notifications. Manual specialized launches while paused are tracked, but manager follow-up waits until automation is unpaused.
+- [ ] Manager heartbeat is event-first with a configurable periodic tick backstop.
+- [ ] Manager runs at workspace Home, has Citadel MCP access, and can call tools directly. Invariants and safety checks live in MCP tool implementations.
+- [ ] Manager automation is idempotent: one manager per workspace, deduped active actions per scope/action key, one checkout per planned delivery unit, and one review gate result per checkout/head/plan.
+- [ ] Structured workspace lifecycle is explicit: discovery inputs, architecture, optional plan review/approval, implementation, ready for human review, done.
+- [ ] Discovery inputs can come from PM, prototype, both, human-written PRD, external issue text, or provider artifacts. Only the human marks discovery ready and launches architecture.
+- [ ] PM-to-architect handoff is first-class and records discovery context, `planApprovalMode`, and expected plan artifact requirements.
+- [ ] Architect plans use `/do-tech-plan` as the base format and add manager-readable delivery sections.
+- [ ] Architect completion requires registering a final reviewed workspace plan artifact. An idle architect session without plan registration is incomplete.
+- [ ] Architect plan creation runs `review-tech-plan`.
+- [ ] Workspace plans are versioned per workspace with Citadel-generated autoincrement versions. All versions, review artifacts, and decisions remain inspectable.
+- [ ] Exactly one approved active workspace plan version drives manager automation. New approved versions supersede older active versions.
+- [ ] When a new active plan version appears during implementation, manager notifies all active implementation agents so they adapt.
+- [ ] Implementation agents can report plan deviations through a structured MCP tool. Manager pauses affected delivery units when possible, otherwise all, then can launch architect replan. Replans use the workspace's existing approval policy.
+- [ ] Architect plans include required sections for delivery units, dependencies/timeline, branch strategy, and manager handoff.
+- [ ] Structured implementation checkouts require a child ticket binding. The ticket provider is abstract; Jira is one provider, but the model must allow GitHub Issues or Linear later. A workspace uses one ticket provider, not mixed providers.
+- [ ] Citadel reads parent/child ticket planning content live from the issue provider. Citadel stores local execution bindings and prompt snapshots, not local-only work items.
+- [ ] Architect agents create/update external child tickets through provider tools; Citadel binds checkouts to those existing external tickets.
+- [ ] Manager creates/selects implementation checkouts from the active plan, binds each checkout to one child ticket, and launches implementation agents according to dependencies. If any planned implementation unit cannot be bound to exactly one child ticket, manager pauses that unit and asks for human/provider correction.
+- [ ] Dependency edge types distinguish parallel work, stacked PR work, true wait-for-merge/release work, and manual checkpoints.
+- [ ] For same-repo stacked work, downstream checkouts start from upstream branch/head by default after upstream CI is green and `review-pr` has passed.
+- [ ] Manager owns stack orchestration and automatic restacking in v1. Base branch updates and upstream PR changes cascade through the stack from bottom to top.
+- [ ] Implementation agents must explicitly signal completion through a tool once they believe PR exists and checks are green. Manager independently verifies gates.
+- [ ] Readiness for each implementation checkout requires PR exists, checks green, no conflicts, current head SHA reviewed by `review-pr`, no unresolved blocking review findings unless explicitly waived by a human, and no invalidated plan/review state.
+- [ ] `review-pr` is a built-in action under the implementation role, always launched in a separate session. Its artifact is required before an implementation checkout is ready for human review.
+- [ ] Review artifacts are versioned per checkout/PR with PR head SHA, active plan version, result, findings status, and timestamp.
+- [ ] Any PR head SHA change invalidates the previous review artifact and manager re-runs `review-pr` once PR is green/no-conflict again.
+- [ ] Manager continues tracking PR conflicts until PR merge. If conflicts appear later, readiness is revoked and fix/restack automation runs when unpaused.
+- [ ] Manager updates external ticket execution status best-effort by asking provider tools/agents to move tickets to internal states such as in progress, in QA, in review, or done. Delivery does not block on failed ticket transitions.
+- [ ] V1 human notifications are local only: in-app activity/alert plus optional browser/PWA desktop notification and sound. Slack/Teams/external notification connectors are deferred.
+- [ ] MCP context tools accept `cwd` but only resolve paths inside Citadel-registered workspace roots or checkouts; otherwise they return an error.
+- [ ] Out of scope for v1: custom agents, arbitrary user-defined triggers, Slack/Teams/external notifications, mixed issue providers in one workspace, local-only work items, full "join existing epic from another user's Citadel" flow, and manual checkout-purpose selection.
 
-- [ ] A new "Agents" entry appears in the cockpit's left navigation, positioned immediately above the existing "History" entry.
-- [ ] The Agents view lists four predefined agents (`implementation`, `prototype`, `pm`, `architect`) and any user-defined custom agents.
-- [ ] Each agent definition exposes three editable fields: system prompt (multiline), runtime (selector populated from `list_runtimes`), and model (selector populated from the chosen runtime's model list).
-- [ ] Predefined agents cannot be deleted but ARE editable; each has a "Reset to citadel defaults" affordance that overwrites only that one definition with its seeded value.
-- [ ] Custom agents support full CRUD (create, read, edit, delete) and are persisted across daemon restarts.
-- [ ] Six new MCP tools are registered and callable by remote agents: `launch_implementation_agent`, `launch_prototype_agent`, `launch_pm_agent`, `launch_architect_agent`, `list_custom_agents`, `launch_custom_agent`. Each `launch_*` tool accepts an optional `workspace` field; when omitted, a new workspace is created (matching the existing `launch_agent` behavior).
-- [ ] When a `launch_*_agent` tool fires, the named agent's system prompt is prepended to the user-supplied prompt before the prompt is submitted to the runtime — uniformly across all runtimes (no runtime-specific `--system-prompt` flags).
-- [ ] Per-runtime adapters expose a `listModels()` function returning the model identifiers the runtime can launch with; the cockpit's model selector calls this via a `/api/runtimes/:id/models` daemon endpoint. The claude-code adapter scrapes the interactive `/models` TUI via the existing `tmux-pty.ts` capture pattern when no flag is available. If a probe fails, the adapter returns a hardcoded conservative fallback list AND the API response includes a `probeError` field so the UI can surface it.
-- [ ] A new global setting "Default agent runtime" is persisted (used as the default when an agent is created without an explicit runtime). The setting is exposed as a single row in existing Settings — no rich UI for this knob.
-- [ ] An MCP `register_plan({workspaceId, path, summary?})` tool stores a plan registration record (workspaceId, absolute path inside the workspace, optional summary, registeredAt). Registrations persist across daemon restarts.
-- [ ] An MCP `launch_handoff_agent({workspaceId, planId?, predefinedKind?, customAgentId?, additionalPrompt?})` tool reads the registered plan (or, if `planId` is omitted, the newest registered plan for that workspace; or, if no registration exists, the newest `*.md` under `<workspacePath>/.agents/plans/`), prepends the plan's content to the agent's system prompt, and launches the named agent in the SAME workspace. Exactly one of `predefinedKind` (enum: `implementation`|`prototype`|`pm`|`architect`) or `customAgentId` MUST be supplied — typos cannot silently fall through to a 404'd custom-agent lookup.
-- [ ] Predefined agent system prompts are seeded with citadel-authored text that cites the semantics of the corresponding skills (architect → planning, implementation → TDD execution, pm → scoping, prototype → fast UI iteration) but does NOT embed the full skill text.
-- [ ] All four predefined agents survive a "delete attempt" path with a clear error (`predefined_agent_cannot_be_deleted`).
-- [ ] All persistence respects the user-level scope: `~/.citadel/agents/<id>.json` for definitions, `~/.citadel/agents.config.json` for global settings (default runtime). Plan registrations live in the daemon's SQLite DB (worktree-relative `.citadel/data/`, matching existing daemon convention) because they are workspace-scoped, not user-global. **Cross-daemon coordination:** the systemd long-term daemon and any worktree `make deploy` daemons share the same `~/.citadel/agents/` directory. The storage layer therefore (a) re-reads from disk on every API call (no in-memory cache that can desync), (b) writes one file per definition (no shared-file races), and (c) computes a content hash before writing during seed() — only writes the seed if the file is missing or its content has drifted from a known-good citadel default (idempotent-by-content).
-- [ ] "Reset to citadel defaults" uses the citadel-authored seed values, NOT the user's current `defaultRuntime` setting (so reset is deterministic regardless of user config).
+## Context and Problem Statement
 
-## Context and problem statement
+Citadel currently models a workspace as a single git worktree attached to one repository. That is too narrow for the agent workflow we want:
 
-Citadel today supports launching agents in workspaces via a single MCP tool, `launch_agent`, which takes a free-form `prompt` plus a `runtimeId`. There is no concept of a **reusable agent definition** — every caller assembles its own prompt and runtime choice from scratch, and the predefined SDLC personas (the implementation/architect/pm/prototype roles that mirror the existing `.agents/skills` family) live only as ad-hoc human conventions.
+- A feature may start with no repo context while PM discovery and architecture are still happening. Prototype is still part of discovery, but it requires a chosen repo checkout because prototype agents are checkout-scoped.
+- A feature may later require several repositories, or several independent/stacked branches in the same monorepo.
+- PM, architect, manager, implementation, prototype, review, CI-fix, conflict-fix, and restack work need different runtimes/models and different scopes.
+- A manager agent is the core value proposition, but it needs Citadel-owned durable state instead of being a plain one-off chat.
+- Handoff must be reliable across many short-lived agent sessions so Citadel can use cheaper/faster models for smaller steps without losing auditability.
 
-This plan adds a first-class **Agent definition** (system prompt + runtime + model) that is:
+The existing branch started by adding reusable agent definitions, custom agents, MCP launchers, model listing, and local plan registration. Grilling changed the product direction. The correct v1 is not a generic custom-agent registry; it is a structured automation model around five predefined roles, workspace Home/checkouts, manager orchestration, plan versions, PR gates, and role-owned actions.
 
-1. **Configurable** via a new "Agents" cockpit nav entry and editor.
-2. **Reusable** via six new MCP launchers (four predefined + two custom).
-3. **Composable** via a plan-handoff mechanism: an agent that produces a plan can register it; another agent can be launched in the same workspace and primed with that plan's content.
+## Spec Alignment
 
-The change touches four layers — contracts, MCP surface, daemon HTTP/state, and the web cockpit — but is additive only: the existing `launch_agent` MCP tool is untouched and the new launchers compose on top of it.
+This change is cross-cutting and must update specs before code:
 
-The motivating product trajectory: tonight's user is launching 10 parallel agents on 10 scratchpad topics. The pattern is repeatable but currently requires a human to know the right system prompt and runtime per topic. Predefined named agents close that gap; plan-handoff closes the next gap (architect → implementation) by automating the most common SDLC chain inside the cockpit.
-
-## Spec alignment
-
-Per the review-pr extension's spec mappings, this change is **cross-cutting**:
-
-| Touched area | Spec |
+| Area | Spec |
 |---|---|
-| `packages/contracts/**` (new schemas) | `specs/A-shared-definitions.md` |
-| `packages/mcp/**`, `apps/daemon/src/operations/**` (new MCP tools) | `specs/B.7-operations-activity-mcp.md` |
-| `apps/web/**`, `packages/ui/**` (new nav entry + editor) | `specs/B.2-ade-cockpit.md`, `specs/B.8-ui-performance-quality.md` |
-| `apps/daemon/src/agents/**` (composing on top of `operations.launchAgent`) | `specs/B.3-agent-sessions-terminal.md` |
-| `packages/db/**` (plan_registrations table) | `specs/A-shared-definitions.md` |
-| `packages/runtimes/**` (new `models/` adapter directory) | `specs/B.6-providers-hooks-config.md` |
+| Shared product terms, contracts, DB schema | `specs/A-shared-definitions.md` |
+| Workspace root, Home target, checkouts, migration, structured/freestyle modes | `specs/B.1-repositories-workspaces.md` |
+| Navigator tree, Agents nav config, workspace automation/history UI, local notifications | `specs/B.2-ade-cockpit.md`, `specs/B.8-ui-performance-quality.md` |
+| Agent sessions, tabs vs durable history, runtime session id, role/action sessions | `specs/B.3-agent-sessions-terminal.md` |
+| PR gates, stacked PRs, conflict tracking, restacking, review artifacts | `specs/B.4-git-pr-ci-diff.md` |
+| Providers, ticket status updates, runtime model/launch option discovery | `specs/B.6-providers-hooks-config.md` |
+| MCP tools, manager state machine, plan registration/versioning, activity/events | `specs/B.7-operations-activity-mcp.md` |
+| Build/architecture constraints and migration safety | `specs/C-technical-stack.md` |
 
-**Reviewed each spec for required updates:**
+Existing spec text in `B.2`, `B.3`, `B.6`, and `B.7` already reflects the superseded custom-agent/single-workspace launcher plan. The first implementation step must replace that with the new model so later agents do not implement the wrong contract.
 
-- `specs/A-shared-definitions.md` — needs a new "Agent definition" entry in the glossary and the schema list (alongside the existing Repository/Workspace/Agent session entries). Defines the difference between an "Agent definition" (a reusable template) and an "Agent session" (a running instance — already defined).
-- `specs/B.7-operations-activity-mcp.md` — needs an "Agent launchers" subsection enumerating the six new MCP tools, their inputs/outputs, and the snapshot-vs-daemon dispatch path. Also documents `register_plan` and `launch_handoff_agent`.
-- `specs/B.2-ade-cockpit.md` — needs an "Agents nav" subsection placing the entry above History and describing the master/detail editor layout.
-- `specs/B.6-providers-hooks-config.md` — needs a "Runtime model discovery" subsection documenting `listModels()` adapters and the claude-code TUI scrape.
-- `specs/B.3-agent-sessions-terminal.md` — needs a note clarifying that the new launchers compose on top of `operations.launchAgent` (system prompt is prepended to the user prompt; runtime invocation is unchanged).
+## Implementation Approach
 
-**Step 1 of the implementation MUST be updating these specs before any code.**
+### Product Model
 
-## Implementation approach
+Use these canonical terms:
 
-The chosen approach treats agent definitions as **user-global config** distinct from daemon runtime state. Definitions live in `~/.citadel/agents/<id>.json` (one file per definition); the daemon reads them on every API call (cheap; cached for the request lifetime). Plan registrations, by contrast, are **workspace-scoped state** and live in the daemon's SQLite DB.
+- **Workspace:** a feature/task container. It has a root directory, lifecycle, optional external parent issue binding, optional manager instance, plan history, and Home target.
+- **Workspace Home:** the unremovable execution target rooted at the workspace root. PM, architect, and manager run here.
+- **Worktree checkout:** one repo worktree under the workspace root. It has repo id, path, branch, base branch, optional child issue binding, intended PR metadata, stack relationship, gate state, and inferred purpose.
+- **Agent session:** a durable runtime conversation record. A tab is only the currently open tmux-backed view of a session.
+- **Role template:** one of the five built-in roles with system prompt and launch settings.
+- **Action template:** a role-owned built-in triggered action with prompt and launch settings.
+- **Manager instance:** the workspace supervisor state machine, one per structured workspace, optional for freestyle workspaces.
+- **Workspace plan version:** a registered reviewed plan artifact with autoincrement version, status, hash, review artifacts, decisions, and one active approved version.
+- **Implementation gate:** per-checkout delivery state derived from PR/CI/conflict/review/plan facts and current active sessions.
 
-Six layers, in dependency order:
+### Storage Shape
 
-1. **Contracts.** Add `AgentDefinitionSchema`, `AgentDefinitionStorageSchema` (the on-disk form with `kind: "predefined" | "custom"` and a `definitionId`), `LaunchPredefinedAgentInputSchema` (used by all four `launch_*_agent` tools — same shape), `LaunchCustomAgentInputSchema`, `RegisterPlanInputSchema`, `LaunchHandoffAgentInputSchema`, `PlanRegistrationSchema`, `RuntimeModelDescriptorSchema`.
-2. **DB.** Add a `plan_registrations` table (additive migration version 8) keyed by `(workspaceId, id)` with `path`, `summary`, `registeredAt`, `registeredBySessionId`.
-3. **Runtimes.** Add `packages/runtimes/src/models/` mirroring the `usage/` adapter pattern. `runtimeModelListers` record with adapters for `claude-code`, `codex`, `cursor-agent`, `pi`. The `claude-code` adapter uses the existing `tmux-pty.ts` capture utilities to scrape `/models`. Each adapter returns `{ models, probeError? }` so the caller can surface partial failure.
-4. **Daemon.**
-   - Add a small `agentDefinitions` service in `apps/daemon/src/agent-definitions/` that reads/writes `~/.citadel/agents/` and seeds predefined definitions on first read.
-   - Add HTTP routes: `GET/POST/PATCH/DELETE /api/agents`, `POST /api/agents/:id/reset` (predefined only), `GET /api/runtimes/:id/models`, `GET/PUT /api/agents/config` (for default runtime).
-   - In `daemon-mcp-tool.ts`, dispatch the six new launch tools and the two plan tools. Each launch tool:
-     1. Loads the named agent definition from disk (predefined launchers use a fixed id; `launch_custom_agent` takes an `agentId`).
-     2. Composes `effectivePrompt = agent.systemPrompt + "\n\n---\n\n" + userPrompt`.
-     3. Resolves the workspace: if `workspace` provided, look it up; if absent, create a new one (delegating to the existing `operations.launchAgent` create-workspace path).
-     4. Calls `operations.launchAgent({ runtimeId: agent.runtime, prompt: effectivePrompt, ... })`.
-   - `register_plan` inserts a row; `launch_handoff_agent` resolves the plan (registered first, filename fallback second) and then routes through the same launch path with the plan body prepended.
-5. **MCP layer.** In `packages/mcp/src/index.ts`, register the eight new tool definitions and add snapshot dispatch:
-   - `list_custom_agents` is read-only and CAN execute in the snapshot path (it reads `~/.citadel/agents/` directly).
-   - The seven mutating tools follow the existing pattern of returning `{ error: "mutating_tool_requires_daemon" }` in the snapshot path; the daemon implements them in `daemon-mcp-tool.ts`.
-6. **Web cockpit.**
-   - Add a nav `<Link to="/agents">` immediately above the History link in `apps/web/src/navigator.tsx`.
-   - Add `apps/web/src/routes/agents.tsx` (a new file — TanStack Router auto-mounts) with a master/detail layout mirroring `settings-scheduled-agents.tsx`: left rail lists all definitions; right pane is the editor.
-   - Add a `RuntimeModelSelector` component that calls `/api/runtimes/:id/models` and shows a probe-failure banner when present.
-   - Add a "Default agent runtime" row in the existing Settings panel (in `apps/web/src/settings-runtimes.tsx` or its sibling — the row reads/writes `/api/agents/config`).
+The implementation should remodel `workspaces` as the top-level root entity and move repo/branch/PR fields to a child checkout table. Because this install is local-first and effectively single-user, an automatic once-on-start migration is acceptable, but it must be idempotent and protect dirty worktrees.
 
-Test strategy is two-layered per the citadel extension: Vitest for everything that can be unit-tested (schemas, the agent-definitions service, the MCP dispatcher, the model-list adapters with mocked tmux IO); a small Playwright happy-path for the new nav entry and editor save.
+Expected core DB additions/changes:
 
-## Alternatives considered
+- Add explicit `workspaces.root_path` and `workspaces.mode` first. Do not silently change all call sites to reinterpret `workspaces.path`; existing code may still assume it is a checkout path. New code must use typed accessors (`workspaceRootPath`, `checkoutPath`, `executionTargetCwd`) while callers are migrated.
+- `workspaces.path` remains a legacy/current-primary-checkout path during the compatibility phase. It can be deprecated or rebuilt only after every repo/branch/PR/terminal caller has moved to `workspace_checkouts.path` or `workspaces.root_path`.
+- New `workspace_checkouts` table:
+  - `id`
+  - `workspace_id`
+  - `repo_id`
+  - `name`
+  - `path`
+  - `branch`
+  - `base_branch`
+  - `issue_provider`, `issue_key`, `issue_url`
+  - `intended_pr_provider`, `intended_pr_number`, `intended_pr_url`, `pr_head_sha`, `pr_base_ref`
+  - `stack_parent_checkout_id`
+  - `inferred_purpose` nullable (`prototype`/`implementation` only when claimed by workflow)
+  - `gate_status`
+  - timestamps and archive fields
+- New `agent_templates` storage under user config or daemon data for five predefined role/action templates. This may be file-backed like the current branch if boot-safe, but must not expose custom-agent CRUD.
+- `agent_sessions` extended with target scope and role/action metadata:
+  - `target_type` (`workspace_home` or `worktree_checkout`)
+  - `checkout_id` nullable
+  - `role`
+  - `action_id` nullable
+  - `managed` boolean
+  - `parent_session_id` nullable
+  - `plan_version_id` nullable
+  - `runtime_session_id` retained
+  - `closed_at` or equivalent tab lifecycle metadata
+- New plan/version tables:
+  - `workspace_plan_versions`
+  - `workspace_plan_reviews`
+  - `workspace_plan_decisions`
+- New checkout artifact tables:
+  - `checkout_review_artifacts` for `review-pr`
+  - optional generic `checkout_artifacts` if useful for prototype PRs, CI fix notes, conflict fix notes
+- New manager tables:
+  - `workspace_managers`
+  - `manager_events` or activity-backed event records for heartbeat/action history
+  - `plan_deviation_reports`
+- Idempotency/lease fields or tables:
+  - one manager row per workspace (`UNIQUE(workspace_id)`)
+  - one active manager action per scope/action key
+  - one checkout per active plan delivery-unit key
+  - one review artifact/gate attempt per checkout + PR head SHA + plan version + action attempt
+- Optional notification settings/state for local browser notifications and sound preferences.
 
-1. **Per-repo storage (`<repo>/.citadel/agents/`).** Lets teams share agent definitions via git, parallel to how hooks work. **Rejected**: the user explicitly chose global at decision time; predefined agents would also need a global fallback when no repo-level file exists, doubling the lookup path. Revisit if multi-user team use emerges.
+Do not add local work item rows as a planning source of truth. For structured work, child tickets are read live from the issue provider and Citadel stores only local execution bindings.
 
-2. **Runtime-specific system-prompt flags (e.g. `claude-code --append-system-prompt`).** Best fidelity for claude-code (the system prompt would not appear in the chat history). **Rejected**: only one of the four runtimes supports such a flag today; the resulting two-code-path divergence ("flag" vs "prepend") is more maintenance than it's worth for v1. Reconsidered later if user feedback shows the system prompt appearing in the transcript is a UX issue.
+### Filesystem Layout
 
-3. **Hardcoded model list per runtime in code.** Simpler than CLI probing; no flakiness. **Rejected**: user picked probe-based discovery explicitly so the model list stays current as runtimes ship new models. The hardcoded list still appears in the adapter as the fallback when probing fails — best of both as a degraded mode.
+New structured workspace layout:
 
-4. **Filename convention only for handoff (no DB).** Smallest surface; no schema migration; the daemon just scans `<workspacePath>/plans/` and picks the newest. **Rejected**: user picked both ("register MCP + filename fallback"). Registration gives the producing agent explicit control over which plan is the current one when multiple exist.
+```text
+~/Workspace/citadel-workspaces/feature-billing-retry/
+  .citadel/workspace.json
+  .agents/plans/
+  api/
+  web/
+  worker/
+```
 
-5. **Implement only the schema + 4 predefined launchers in this PR; defer the nav UI, custom agents, and handoff to follow-ups (slice A from the grilling).** Genuinely safer in a 10-parallel-agent environment. **Rejected by the user.** Carrying this as a follow-up signal: if implementation discovers a sharp file-overlap conflict with another in-flight branch, fall back to slice A and land the rest as follow-ups.
+Existing single-repo workspaces migrate to:
 
-6. **Collapse the six predefined launchers into one `launch_predefined_agent({ kind })` tool.** Smaller MCP surface. **Rejected**: user's AC explicitly enumerates the six tool names — that's the contract callers were told they'd see, and renaming them later is more breaking than fewer tools is helpful.
+```text
+<workspace-root>/
+  .citadel/workspace.json
+  <checkout-name>/
+```
 
-## Implementation steps
+Migration must use `git worktree move` on the same filesystem. If same-device worktree move is unavailable, skip automatic migration and surface manual action. No full backup copy is required.
 
-### 1. Specs update (FIRST — before any code)
+For existing workspaces, the safe move shape is:
 
-- Add an "Agent definition" entry to `specs/A-shared-definitions.md` (after the existing "Agent session" entry). Distinguish: an Agent definition is a reusable template (system prompt + runtime + model); an Agent session is a running instance.
-- Add an "Agent launchers" subsection to `specs/B.7-operations-activity-mcp.md` enumerating the six new MCP tools, their inputs/outputs, and the snapshot vs daemon dispatch path. Add a separate "Plan handoff" subsection covering `register_plan` and `launch_handoff_agent`, including the registration-first / filename-fallback resolution order.
-- Add an "Agents nav" subsection to `specs/B.2-ade-cockpit.md` placing the entry above History and describing the master/detail editor layout, the predefined vs custom distinction, and the "reset to defaults" affordance.
-- Add a "Runtime model discovery" subsection to `specs/B.6-providers-hooks-config.md` covering `listModels()` adapters, the claude-code TUI scrape, and the `probeError` fallback path.
-- Add one paragraph to `specs/B.3-agent-sessions-terminal.md` clarifying that new launchers compose on top of `operations.launchAgent`: the system prompt is prepended to the user prompt at launch time, runtime invocation is otherwise unchanged.
+1. `oldCheckoutPath = current workspaces.path`.
+2. `finalRootPath = oldCheckoutPath` so existing operator-visible workspace path remains the workspace root.
+3. `tempCheckoutPath = sibling path "<oldCheckoutPath>.citadel-migrating-<workspaceId>"`.
+4. `finalCheckoutPath = path.join(finalRootPath, checkoutName)`.
+5. Use `git worktree move oldCheckoutPath tempCheckoutPath`.
+6. Create `finalRootPath`.
+7. Use `git worktree move tempCheckoutPath finalCheckoutPath`.
+8. Update DB only after all verification passes.
+
+Do not use raw `mv` for Git worktrees in the automatic path. If `git worktree move` is unavailable or fails, skip automatic migration and surface a manual action. If a partially moved state is detected, use the migration manifest and `git worktree list --porcelain` / `git worktree repair` only as an explicit recovery path before DB mutation.
+
+### Agent Templates And Actions
+
+The Agents nav edits five predefined roles:
+
+- `pm`
+- `architect`
+- `implementation`
+- `prototype`
+- `manager`
+
+Each role has:
+
+- system prompt
+- launch settings (`runtimeId`, `model`, `effort`, `fastMode`, `contextMode`)
+- required role identity and required built-in actions
+- reset-to-Citadel-defaults
+
+Action templates belong under roles. Initial action set:
+
+- `implementation.review_pr`
+- `implementation.fix_ci`
+- `implementation.fix_conflicts`
+- `implementation.poke_idle_without_pr`
+- `implementation.restack_checkout`
+- `architect.replan_from_deviation`
+- `manager.heartbeat_digest`
+- `manager.notify_ready_for_human_review`
+- `manager.update_ticket_status`
+- prototype actions can start minimal and be expanded when prototype/autogrill is specified in detail
+
+Action execution mode supports `new_session` or `existing_session`. Existing-session actions target the last active matching session for role/scope; if none exists, create a new session by default. `review_pr` always launches a new session.
+
+### Runtime Launch Settings
+
+Runtime config and adapters must support:
+
+- model discovery
+- default model discovery
+- model launch argument mapping (`modelArg` or adapter-specific mapping)
+- effort/reasoning argument mapping when supported
+- fast mode argument mapping when supported
+- max-context/context mode argument mapping when supported
+- static fallback capabilities/model defaults when live probing is unavailable
+
+Role/action templates store semantic launch settings. At launch:
+
+1. Resolve runtime.
+2. Fetch/validate current runtime capabilities and model list using live adapter data when available, otherwise static config fallback.
+3. If selected model is unavailable, fall back to runtime default.
+4. Drop unsupported effort/fast/context options.
+5. Record warnings and capability freshness timestamps on the session/action event.
+6. Build runtime-specific argv through a central launch-profile resolver before `createAgentSession`.
+
+### MCP Direction
+
+Prefer explicit target ids for UI/daemon calls and `cwd` for agent-facing calls. Every `cwd` input must realpath and resolve to a Citadel-registered workspace root or checkout. Unknown paths return an error. Resolution is most-specific-first: exact checkout or descendant of checkout wins over workspace root; Home matches only the workspace root itself or a non-checkout descendant under the root.
+
+New or redesigned MCP tools should include:
+
+- `launch_pm_agent`
+- `launch_architect_agent`
+- `launch_implementation_agent`
+- `launch_prototype_agent`
+- `start_workspace_manager`
+- `pause_workspace_manager`
+- `resume_workspace_manager`
+- `register_workspace_plan`
+- `get_workspace_plan`
+- `report_plan_deviation`
+- `mark_checkout_ready_for_review`
+- `get_citadel_context`
+- `get_checkout_ticket`
+- `get_checkout_pr`
+- `get_checkout_gate_status`
+- `list_workspace_checkouts`
+- `create_workspace_checkout`
+- `update_ticket_status`
+
+Do not ship `list_custom_agents` or `launch_custom_agent` in v1.
+
+### Manager State Machine
+
+Manager uses durable workspace/checkouts/plan/session state, not transcript parsing, as source of truth. It wakes on events and on a configurable tick.
+
+Core managed states/facts:
+
+- workspace lifecycle phase
+- current active plan version
+- discovery readiness
+- plan approval mode
+- active implementation/prototype/review/fix sessions
+- checkout PR identity/head SHA/checks/conflicts
+- review artifact status for current head SHA
+- plan deviation reports
+- stack dependency state
+- local notification state
+
+Manager can launch agents and call MCP tools directly. Safety and idempotency live inside the tools.
+
+Every manager-triggered side effect must:
+
+- check global and workspace pause state before executing
+- be covered by an explicit tool/action allowlist for that manager action
+- use idempotency keys so retrying the same event does not duplicate work
+- write an activity/audit event with the triggering fact and resulting operation/session/artifact
+- require human confirmation for destructive archive/remove/delete operations even when called by manager
+
+### Plans And Handoff
+
+Architect plan format starts from `/do-tech-plan` and must add these required sections:
+
+```markdown
+## Delivery Units
+[Each unit: child ticket, repo, checkout/branch strategy, intended PR, role/model hints if needed]
+
+## Dependencies / Timeline
+[Edges: parallel, stacked_on_pr, wait_for_merge_or_release, manual. Include default start condition.]
+
+## Manager Handoff
+[What manager should create, launch, gate, notify, and watch.]
+
+## Plan Version Notes
+[Human-readable summary of what changed from prior plan version when applicable.]
+```
+
+Plan registration creates the next autoincrement workspace version. Plan statuses:
+
+- `draft`
+- `under_review`
+- `changes_requested`
+- `approved`
+- `superseded`
+
+Only one approved plan is active. Implementation sessions record the plan version they launched with.
+
+### PR And Review Gates
+
+Per implementation checkout, ready for human review requires:
+
+1. PR exists.
+2. Checks are green.
+3. No conflicts/mergeability blockers.
+4. `review-pr` artifact exists for the current PR head SHA and active plan version.
+5. No unresolved plan deviation affecting this checkout.
+6. No newer active plan version that has not been acknowledged by the implementation session.
+7. The `review-pr` artifact completed successfully and has no blocking findings, or every blocking finding is explicitly resolved by a later review artifact or waived by a recorded human decision. Manager/implementation agents cannot self-waive blocking findings.
+
+Any head SHA change invalidates the review gate. Conflict fixes, CI fixes, restacks, or manual commits all trigger review invalidation.
+
+### Stacked PRs
+
+The architecture plan must tell manager which delivery units are parallel, stacked, or true wait-for-merge/release dependencies.
+
+Default stacked behavior:
+
+1. Upstream checkout reaches ready-for-human-review.
+2. Manager creates downstream checkout from upstream branch/head.
+3. If base/main changes, update bottom PR first, then each downstream checkout from its parent.
+4. If upstream changes, mark downstream `needs_restack`.
+5. Manager runs restack in order and re-runs PR gates for every changed checkout.
+
+### External Issue Provider
+
+Structured workspaces bind to one ticket provider. Jira is expected first, but contracts should stay provider-neutral.
+
+Provider binding is not required for early structured discovery. A PM bootstrap can create a structured workspace from an idea without a parent issue. Before structured implementation starts, Citadel must have a parent issue binding and each implementation checkout must bind to one child ticket. If the user wants to code without tickets, they should use a freestyle workspace/session instead of structured implementation.
+
+Citadel reads planning fields live from provider:
+
+- parent title/description/AC/status
+- child task list/title/description/AC/status
+
+Citadel stores:
+
+- parent issue binding on workspace
+- child issue binding on checkout
+- prompt snapshots used at agent launch
+- execution status/events/artifacts
+
+Ticket status transitions are best-effort manager-triggered provider actions. For v1, the manager/tool may inspect provider transitions live and move the issue toward an internal state (`todo`, `in_progress`, `in_qa`, `in_review`, `done`). Record only lightweight result facts: issue key/url, requested internal state, resulting external status, success/failure, timestamp, actor/session.
+
+Provider facts used for gates must carry freshness:
+
+- PR/CI/conflict facts include fetched-at timestamps and provider cooldown/rate-limit state.
+- Unknown or stale PR/CI/conflict state does not satisfy readiness.
+- Manager may continue running implementation agents while provider data is stale, but cannot mark a checkout ready for human review until required provider facts are fresh enough.
+
+### Local Notifications
+
+V1 notifications are local only:
+
+- in-app activity/alert
+- optional browser/PWA desktop notification after permission
+- optional sound
+
+Default notification trigger: each PR becomes ready for human review. External Slack/Teams/email providers are deferred.
+
+## Alternatives Considered
+
+1. **Continue current branch and ship custom agents first.** Rejected. The branch solves a narrower prompt-template problem and would confuse future implementation by cementing custom agents, old launcher semantics, and local-only handoff.
+2. **Keep current single-repo workspace and add multi-repo later.** Rejected. Manager launch rules, Home-scoped PM/architect sessions, zero-checkout discovery, and multi-checkout monorepo work all depend on workspace root/checkouts.
+3. **Model local work items in Citadel.** Rejected. Issue providers own planning content. Citadel stores execution bindings and artifacts only.
+4. **Make manager a normal launchable role only.** Rejected. Manager needs durable supervisor state, heartbeat, pause controls, gate tracking, and action history.
+5. **Use arbitrary user-defined triggers in v1.** Rejected. Built-in triggers/actions are enough, and unrestricted automation would be hard to make safe before the state machine is proven.
+6. **Wait for PR merge before starting dependent work.** Rejected as default. Same-repo dependent work should use stacked PRs and start after upstream green/reviewed; true wait-for-merge/release remains an explicit dependency edge type.
+7. **Static Jira status mappings through hooks.** Rejected for v1. Agent/provider actions can inspect transitions live and record the result; static mappings can be added later if repeated workflows justify them.
+8. **Prompt-template interpolation for all context.** Rejected. Agents run in scoped cwd and use MCP tools for live context. Prompts can stay mostly static.
+
+## Implementation Steps
+
+### 0. Branch Hygiene And Current Worktree
+
+- Start implementation from clean `main` on `fb-agents-orchestration-v2`.
+- Treat current branch changes as superseded. Cherry-pick only after comparing against this plan.
+- Remove or replace obsolete spec text about custom agents, `list_custom_agents`, `launch_custom_agent`, and old `register_plan`.
+
+### 1. Specs First
+
+- Update `specs/A-shared-definitions.md` with Workspace, Workspace Home, Worktree checkout, Role template, Action template, Manager instance, Workspace plan version, Review artifact, and Implementation gate.
+- Update `specs/B.1-repositories-workspaces.md` for root-directory workspaces, Home, checkouts, zero-checkout structured workspaces, multi-checkout same repo, one checkout/branch/PR, and automatic migration.
+- Update `specs/B.2-ade-cockpit.md` for workspace tree navigation, Home/checkouts/tabs, Agents config nav, specialized-vs-freestyle launch UI, agent history, manager state panels, and local notifications.
+- Update `specs/B.3-agent-sessions-terminal.md` for target-scoped sessions, durable session history vs live tabs, runtime session resume, role/action metadata, and close-tab semantics.
+- Update `specs/B.4-git-pr-ci-diff.md` for implementation gates, `review-pr` artifacts, head-SHA invalidation, conflict tracking until merge, stacked PR edge types, and automatic restacking.
+- Update `specs/B.6-providers-hooks-config.md` for provider-neutral ticket bindings, live ticket reads, best-effort ticket transitions, runtime model/effort/fast/context discovery and launch mapping.
+- Update `specs/B.7-operations-activity-mcp.md` for redesigned role launchers, manager tools, context-by-cwd tools, plan version registration, deviation reports, completion signals, and removal of custom-agent MCP tools from v1.
+- Update `specs/B.8-ui-performance-quality.md` if new navigator/agent-history UI introduces performance expectations.
 
 ### 2. Contracts
 
-In `packages/contracts/src/index.ts`, just before `DiffFileSchema` (line ~694):
+- Replace the current `AgentDefinition` shape with `RoleTemplate`, `ActionTemplate`, and `LaunchSettings` schemas.
+- Add semantic launch settings:
+  - `runtimeId`
+  - `model`
+  - `effort`
+  - `fastMode`
+  - `contextMode`
+- Add runtime capability/model schemas covering model list, default model, supported effort values, fast mode, and context modes.
+- Add workspace root/checkouts contracts:
+  - `WorkspaceMode`
+  - `WorkspaceLifecyclePhase`
+  - `WorkspaceHomeTarget`
+  - `WorktreeCheckout`
+  - `ExecutionTarget`
+  - `IssueBinding`
+  - `PullRequestBinding`
+  - `CheckoutGateStatus`
+- Add plan/version contracts:
+  - `WorkspacePlanVersion`
+  - `WorkspacePlanReview`
+  - `WorkspacePlanDecision`
+  - `RegisterWorkspacePlanInput`
+  - `PlanDeviationReport`
+- Add manager contracts:
+  - `WorkspaceManager`
+  - `ManagerPauseState`
+  - `ManagerEvent`
+  - `ManagerHeartbeatConfig`
+- Extend agent-session contract with target scope, role/action metadata, managed flag, plan version, parent session, closed/restorable lifecycle.
+- Add MCP input schemas for redesigned launchers and context tools. Remove v1 custom-agent tool schemas.
 
-- `AgentDefinitionKindSchema = z.enum(["predefined", "custom"])`
-- `AgentDefinitionIdSchema = IdSchema` (reuse the existing constraint)
-- `AgentDefinitionSchema` — `{ id, kind, name, systemPrompt, runtime, model?, createdAt, updatedAt }`. `model` is optional because users may not have picked one yet.
-- `CreateAgentDefinitionInputSchema` — `{ name, systemPrompt, runtime, model? }` (kind is always "custom" on create; "predefined" definitions are seeded by the daemon, not user-created).
-- `UpdateAgentDefinitionInputSchema` — partial of the same fields plus the id; rejects changes to `kind`.
-- `LaunchPredefinedAgentInputSchema` — `{ prompt, workspaceId? OR (repoId? AND repoName?), namespaceId?, displayName?, branchName?, workspaceName? }`. Used identically by all four `launch_*_agent` tools — they only differ by the hardcoded definition id they load.
-- `LaunchCustomAgentInputSchema` — same as above plus required `agentId`.
-- `RegisterPlanInputSchema` — `{ workspaceId, path, summary? }`.
-- `PlanRegistrationSchema` — `{ id, workspaceId, path, summary?, registeredAt, registeredBySessionId? }`.
-- `LaunchHandoffAgentInputSchema` — `{ workspaceId, planId?, predefinedKind?: "implementation" | "prototype" | "pm" | "architect", customAgentId?: AgentDefinitionId, additionalPrompt? }`. Validated via `.refine(...)` so that exactly one of `predefinedKind` or `customAgentId` is supplied — a typo cannot silently fall through to a non-existent custom agent.
-- `RuntimeModelDescriptorSchema` — `{ id, displayName?, isDefault? }`.
-- `RuntimeModelsResponseSchema` — `{ models: RuntimeModelDescriptor[], probeError?: string }`.
-- `AgentsConfigSchema` — `{ defaultRuntime: string }`.
+### 3. Database And Migration
 
-Export every schema and its inferred type. Add a small set of `.parse()`-based round-trip tests in `packages/contracts/src/index.test.ts`.
+Migration strategy:
 
-### 3. Database (migration version 8)
+| Operation | Classification | Notes |
+|---|---|---|
+| Add `workspaces.root_path`, `workspaces.mode`, and structured workspace fields while keeping `workspaces.path` as legacy primary-checkout path | Additive | Transitional invariant: `root_path` is workspace root, `path` remains legacy checkout path until every caller uses typed accessors. |
+| Create `workspace_checkouts` | Additive | Child table for repo worktrees. |
+| Backfill one checkout for each existing worktree workspace | Data backfill | Preserve repo/branch/path/PR/issue fields. |
+| Move existing worktree directories under new workspace roots | Filesystem migration | Automatic once, same-device only, dirty-safe verification required. |
+| Extend `agent_sessions` with target/role/action/history fields | Additive | Nullable/defaulted for existing rows. |
+| Create role/action template storage if DB-backed | Additive | File-backed user config is also acceptable if boot-safe. |
+| Create `workspace_managers` and manager event/deviation tables | Additive | One manager per structured workspace. |
+| Create workspace plan version/review/decision tables | Additive | Autoincrement version per workspace. |
+| Create review artifact table | Additive | Tracks `review-pr` by checkout, PR head SHA, plan version. |
+| Create local notification state table if needed | Additive | Optional if browser permission state remains client-local. |
 
-In `packages/db/src/migrate.ts`:
+`schema_migrations` target: if starting from clean `main` whose max is v12, use v13 named `workspace-home-checkouts-manager`. If implementation keeps any current-branch obsolete v13 plan-registration row, replace it with this migration or renumber to the next contiguous version. Do not ship both the obsolete local plan-registration migration and this model.
 
-**Migration strategy:**
+Preserve `PRAGMA foreign_keys = ON`.
 
-| Operation | Classification | Reversibility | Notes |
-|---|---|---|---|
-| `CREATE TABLE IF NOT EXISTS plan_registrations (...)` | **Additive** | Yes (drop table) | New table; safe on every existing install. |
-| `CREATE INDEX IF NOT EXISTS idx_plan_registrations_workspace ON plan_registrations(workspace_id)` | **Additive** | Yes | Indexes are rebuildable. |
-| `INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES (8, 'plan-registrations', datetime('now'))` | **Migration record** | N/A | Version 8 (current max is 7 per `packages/db/src/migrate.ts:195-201`). |
+Operator data implications:
 
-Schema:
-```sql
-CREATE TABLE IF NOT EXISTS plan_registrations (
-  id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL,
-  path TEXT NOT NULL,                  -- stored as fs.realpathSync(input) at registration time
-  summary TEXT,
-  registered_at TEXT NOT NULL,
-  registered_by_session_id TEXT,
-  FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS idx_plan_registrations_workspace ON plan_registrations(workspace_id);
-```
+- Existing local workspaces are migrated on daemon startup.
+- Dirty worktrees are moved only if pre/post `git status --porcelain` matches and `.git` worktree metadata remains valid.
+- Root/imported repo workspaces are not moved as checkouts unless explicitly Citadel-managed worktree records.
+- Failed/skipped migrations leave the old workspace untouched and surface a blocking admin/readiness item.
 
-`PRAGMA foreign_keys = ON` is preserved (not touched). Local-first impact: every existing install gets the new table on next startup; existing data is untouched (no row writes during migration).
+### 4. Workspace Filesystem And Operations
 
-**Migration version drift mitigation (parallel branches).** Several other in-flight branches tonight may also introduce a v8. The implementer MUST rebase on `main` immediately before merge; if `main` now contains a v8, bump THIS PR's migration to the next available version (v9 or higher) and update the assertion in `packages/db/src/index.test.ts` (`schema_migrations` version list). `INSERT OR IGNORE` already prevents row collisions, but the schema work itself may diverge silently if two v8s exist on different branches.
+- Add operations for creating structured workspace shells with zero checkouts.
+- Add operations for adding/removing/archiving worktree checkouts under a workspace root.
+- Add same-repo multi-checkout support with unique checkout names and branches.
+- Add checkout creation from:
+  - scratch branch off repo default branch
+  - existing branch
+  - PR
+  - upstream checkout branch for stacked PRs
+- Add automatic migration runner with manifest and idempotent resume behavior.
+- Update cleanup/archive/remove logic to operate at workspace root and checkout levels without deleting dirty work unexpectedly.
 
-Add store methods in `packages/db/src/index.ts`:
-- `insertPlanRegistration(row)`, `listPlanRegistrationsForWorkspace(workspaceId)`, `deletePlanRegistration(id)`.
+### 5. Runtime Launch Profiles
 
-### 4. Runtime model adapters
+- Add `LaunchProfile` resolver in `packages/runtimes` or `packages/operations` that maps semantic launch settings to runtime argv.
+- Extend runtime config schema with configurable mappings for model, effort, fast mode, and context mode where runtime supports them.
+- Add per-runtime adapters for model/default/capability discovery for `claude-code`, `codex`, `cursor-agent`, and `pi`.
+- Update `createAgentSession` so callers pass launch settings/model options and the resolver builds argv before spawn/resume.
+- Persist launch warnings on the session/activity when model/options fall back.
+- Keep prompt submission separate from model selection. Model selection must affect actual runtime invocation.
 
-Add `packages/runtimes/src/models/` directory mirroring `usage/`:
+### 6. Agent Templates And Agents Nav
 
-- `models/index.ts` — exports `runtimeModelListers: Record<string, RuntimeModelLister>` (claude-code, codex, cursor-agent, pi) and a `hasRuntimeModelLister(id)` helper. `RuntimeModelLister = (input: { command: string; args?: string[] }) => Promise<{ models: RuntimeModelDescriptor[]; probeError?: string }>`.
-- `models/claude-code.ts` — uses the existing `tmux-pty.ts` capture pattern to spawn the runtime, send `/models`, capture the pane, parse the list. Falls back to `["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5"]` with a `probeError` on any failure. **Cleanup hardening:** the tmux session MUST be killed in a `try { ... } finally { killSession() }` regardless of parse success/failure/timeout, per the existing ttyd cleanup-storm lessons. The probe wraps in a hard 5s timeout; on timeout the finally block still runs. **Fixture-first parser:** before writing the parser, capture a real `/models` output by running `tmux-pty.ts` once interactively and check the captured bytes into `packages/runtimes/src/models/fixtures/claude-code-models.txt`; the parser test asserts on that fixture, not a guessed format.
-- `models/codex.ts` — codex CLI does not expose model selection (per `mcp__citadel__list_runtimes` capabilities); return the hardcoded list `["gpt-5.5"]` (or whatever the current codex default is) with no `probeError`.
-- `models/cursor-agent.ts`, `models/pi.ts` — minimal fallbacks; each runtime currently shows `supportsModelSelection: false`. Return a single "default" entry so the UI never shows an empty list.
+- Build predefined role/action template storage with seeds for the five roles.
+- Remove/defer custom agent create/delete/list surfaces from this plan.
+- Add `/api/agent-templates` endpoints for list/update/reset role and action templates.
+- Add model/effort/fast/context selectors driven by runtime capabilities.
+- Build `/agents` route in the cockpit:
+  - role list
+  - role prompt editor
+  - role launch settings editor
+  - role-owned action list/editor
+  - reset controls
+  - validation warnings
+- Keep live workspace manager state out of the global Agents nav.
 
-Unit tests mock the tmux IO surface (the test harness can already do this — see existing `packages/runtimes/src/usage/*.test.ts`).
+### 7. Execution Targets, Tabs, And History UI
 
-### 5. Daemon — agent-definitions service
+- Add API/state shape for workspace tree: workspace, Home target, checkouts, sessions grouped by target.
+- Update navigator to render workspace > Home/checkouts.
+- Update Stage tab strip to operate on selected execution target.
+- Update launch menu:
+  - Home: PM, Architect if discovery ready, Manager/manual, freestyle runtimes, Terminal.
+  - Checkout: Implementation if plan ready plus parent/child ticket bindings exist in structured mode, Prototype, freestyle runtimes, Terminal.
+  - Hide invalid specialized roles.
+- Add specialized role/action visual marker distinct from freestyle runtime sessions.
+- Add workspace-level agent history panel showing closed/restorable sessions across Home/checkouts.
+- Implement close-tab behavior: kill tmux, mark tab closed, retain runtime session id/history for restore.
 
-Add `apps/daemon/src/agent-definitions/` directory:
+### 8. Structured Workspace Lifecycle
 
-- `agent-definitions/storage.ts` — reads/writes `~/.citadel/agents/` (uses `os.homedir()` + `path.join`); creates the directory on first call; seeds the four predefined definitions if absent. Exposes:
-  - `list(): AgentDefinition[]` (predefined + custom). Re-reads from disk on EVERY call — no in-memory cache, so cross-daemon edits propagate immediately.
-  - `get(id): AgentDefinition | undefined`
-  - `create(input): AgentDefinition` (custom only; predefined ids reserved)
-  - `update(id, patch): AgentDefinition` (works for both kinds; rejects `kind` changes)
-  - `remove(id): void` (throws on predefined)
-  - `resetToDefaults(id): AgentDefinition` (predefined only; uses citadel-authored seed, NOT user defaultRuntime)
-  - `readConfig(): AgentsConfig`, `writeConfig(patch): AgentsConfig`
+- Add workspace mode/lifecycle state.
+- Add PM bootstrap flow:
+  - input idea/prompt
+  - optional parent issue key/url
+  - optional workspace name/provider/project
+  - create structured workspace shell
+  - create manager instance
+  - launch PM on Home
+- Add discovery artifact/readiness state. Human marks discovery ready.
+- Add PM-to-architect handoff action with `planApprovalMode`.
+- Enforce architect launch preconditions.
+- Enforce implementation launch preconditions in structured mode: active approved plan, parent issue binding, and exactly one child ticket binding for the checkout/delivery unit.
+- Enforce automation pause only on manager/agent-triggered automated actions. Human UI/manual specialized launches remain allowed while paused, but should show a paused-automation warning and should not trigger manager follow-up until unpaused.
 
-**Cross-daemon coordination:** the systemd long-term daemon at `:4010` AND any worktree `make deploy` daemon (4110–4209) share this directory. Mitigations:
-1. Every `list()` re-reads from disk (no stale cache).
-2. Writes are file-per-id; atomic via `fs.writeFile(<file>, content)` (no shared write target).
-3. `seed()` computes a content hash for each missing predefined file BEFORE writing; if the file is missing it writes the seed; if the file exists it leaves it alone (idempotent). This avoids two daemons racing to seed the same dir at first run.
-4. **Boot-safe.** If `~/.citadel/agents/` is unreadable (EACCES, ENOENT on a parent, broken symlink, file-where-dir-should-be), the storage layer logs loudly and the daemon STILL boots; subsequent calls to `list()/get()/create()` return a structured error that the HTTP layer maps to 503. The daemon MUST NOT crashloop on a broken storage state (otherwise systemd's `Restart=always` will spin endlessly).
-- `agent-definitions/seed.ts` — the four citadel-authored predefined system prompts. Each is ~10–20 lines, cites its skill semantics, and explicitly does NOT embed the skill text:
-  - `implementation` — references TDD execution semantics from `/implement-task`.
-  - `architect` — references planning semantics from `/do-tech-plan`.
-  - `pm` — references scoping/requirements gathering.
-  - `prototype` — references fast UI iteration (no tests, no migrations, single-shot prompts).
+### 9. Workspace Plans And Review
 
-Why per-file (vs single JSON file): atomic writes per definition are simpler; "reset to defaults" overwrites a single file deterministically; concurrent editor sessions don't race on a shared file.
+- Implement `register_workspace_plan` MCP/API:
+  - accepts `workspaceId` or validated `cwd`
+  - accepts local path and later provider attachment/link
+  - validates local paths inside workspace root
+  - computes hash
+  - allocates next workspace plan version
+  - records status/review/decision
+- Add plan version UI/history on workspace Home.
+- Update architect default prompt to require `/do-tech-plan` structure plus Delivery Units, Dependencies / Timeline, Manager Handoff, and Plan Version Notes.
+- Model `review-tech-plan` as a first-class action runner, not just a prompt instruction. It must register review artifacts, status, failures, and the final approved/overridden decision before a plan version can become active.
+- Manager reacts only to final approved/auto-approved active plan.
+- Active-plan automation that creates implementation checkouts must validate parent issue binding and one child ticket per delivery unit before launching implementation. Missing/ambiguous ticket bindings pause only the affected delivery unit when possible.
 
-### 6. Daemon — HTTP routes (NEW FILE — extracted, NOT appended to `app.ts`)
+### 10. Manager Instance And Heartbeat
 
-**File-size gate:** `apps/daemon/src/app.ts` is currently 804 lines (verified) — already at the 800-LoC limit. Adding seven new routes inline would push it well over. The established pattern in the daemon for new endpoint families is a sibling `*-routes.ts` module — verified by inspection: `agent-session-routes.ts`, `namespace-routes.ts`, `scheduled-agent-routes.ts`, `scratchpad-routes.ts`, `runtime-usage-routes.ts`, `terminal-routes.ts`, `workspace-diff-routes.ts`, `mcp-routes.ts`, `extra-routes.ts` all follow this shape.
+- Create manager instance at structured workspace creation.
+- Add global and per-workspace automation pause controls.
+- Store enough actor/source metadata on launch requests to distinguish human manual launches from manager/agent-triggered automated actions.
+- Implement event bus hooks for:
+  - plan registered/approved
+  - agent status changes
+  - plan deviation report
+  - checkout completion signal
+  - PR opened/head changed/checks changed/conflicts changed
+  - base branch moved
+  - review artifact registered
+  - ticket transition result
+- Add configurable periodic tick.
+- Implement manager decision loop as deterministic state machine that calls role/action launch helpers and MCP tools.
+- Add manager Home session launch/resume for audit/context where useful.
 
-Create `apps/daemon/src/agents-routes.ts` exporting `registerAgentsRoutes({ app, asyncRoute, agentDefinitions, runtimeModelListers, store })`. In `app.ts`, add ONE call to `registerAgentsRoutes(...)` near the existing route-registration block (around line 706) — a single-line addition that won't push `app.ts` over the limit.
+### 11. MCP Tools
 
-Endpoints in `agents-routes.ts`:
+- Redesign role launchers around target rules:
+  - `launch_pm_agent` can bootstrap workspace or target Home.
+  - `launch_architect_agent` targets Home and requires discovery ready + `planApprovalMode`.
+  - `launch_implementation_agent` targets checkout and requires active plan + parent issue + exactly one child ticket binding in structured mode.
+  - `launch_prototype_agent` targets checkout and can run before plan ready.
+- MCP/daemon launchers that can be called by agents must enforce pause for automated actors. Human UI launch routes must either pass an explicit human/manual actor or use a separate code path so pause semantics cannot be bypassed accidentally by agents.
+- Add manager lifecycle tools.
+- Add context resolution tools that accept `cwd` and validate against registered paths.
+- Add plan/deviation/completion/gate tools.
+- Remove v1 custom-agent tools.
+- Ensure all side-effectful MCP tools emit operations/activity and are idempotent where manager may retry.
 
-- `GET /api/agents` → returns `{ definitions: AgentDefinition[], config: AgentsConfig }`. Returns `503 { error: "agent_storage_unavailable" }` if the storage layer reports a boot-failure state.
-- `POST /api/agents` → body `CreateAgentDefinitionInputSchema`; returns created definition.
-- `PATCH /api/agents/:id` → body `UpdateAgentDefinitionInputSchema`; returns updated definition.
-- `DELETE /api/agents/:id` → 409 `{ error: "predefined_agent_cannot_be_deleted" }` if predefined; else removes.
-- `POST /api/agents/:id/reset` → 400 if not predefined; else overwrites with seed.
-- `GET /api/agents/config` / `PUT /api/agents/config` → reads/writes `~/.citadel/agents.config.json`.
-- `GET /api/runtimes/:id/models` → calls `runtimeModelListers[id]` and returns `RuntimeModelsResponseSchema`. **Cache policy:** results cached per `(runtimeId)` for **1 hour TTL**, NOT daemon-lifetime (claude-code/codex CLI upgrades happen out-of-band and a stale cache produces "unknown model" errors at launch time). `?refresh=1` forces a re-probe. UI also surfaces a small explicit "Refresh models" affordance next to the selector.
+### 12. Implementation Gates, PRs, And Review Artifacts
 
-All endpoints invalidate `["state"]` on the client side via standard react-query patterns when called from the cockpit.
+- Track intended PR binding per checkout.
+- Detect PR existence/head SHA/checks/conflicts per checkout.
+- Add `mark_checkout_ready_for_review` tool for implementation agents.
+- Manager verifies `reviewPrerequisites` before launching `implementation.review_pr`: PR exists, checks are green, conflicts are absent, provider facts are fresh, active plan version is current, and no blocking deviation affects the checkout. Full `readyForHumanReview` is evaluated only after the review artifact is registered.
+- Model `review-pr` as a first-class action runner under the implementation role, not just a prompt instruction.
+- Implement `review-pr` action launch in separate session with required artifact registration, parseable result status, failure status, retry behavior, and artifact path/link.
+- Store review artifacts with checkout id, PR id/url, head SHA, plan version, result, findings status, blocking findings, human waiver decisions, artifact path/link, timestamps.
+- Invalidate review gate on head SHA change, conflict fix, CI fix, restack, or plan version mismatch.
 
-**Boot safety.** `registerAgentsRoutes` MUST NOT throw at registration time even if `~/.citadel/agents/` is unreadable. Storage failures surface as 503 responses, never as daemon crash. Regression test: load the daemon's HTTP app in vitest with the home dir pointed at a read-only directory and assert the app boots and `GET /api/agents` returns 503.
+### 13. Stacked PRs And Restacking
 
-### 7. Daemon — MCP dispatch
+- Parse plan dependency edge types.
+- Add checkout stack relationships.
+- Implement stacked checkout creation from upstream branch/head.
+- Implement base branch change detection as stack invalidation trigger.
+- Implement manager-owned restack orchestration:
+  - update bottom checkout from base
+  - update each child from parent
+  - launch fix-conflicts/restack sessions when needed
+  - re-run CI/review gates after head changes
+- Add restack edge-case coverage for force-push, upstream branch deletion, manual rebase, partial stack failure, and provider stale/unknown state.
 
-Extend `apps/daemon/src/daemon-mcp-tool.ts` `callDaemonMcpTool` switch with EIGHT new cases (`list_custom_agents` runs ONLY in the daemon path — see §8 below for why).
+### 14. Issue Provider Integration
 
-**Pre-step: verify and unify the launch seam.** The plan currently mentions two downstream operations entry points (`operations.startAgentSession` for an existing-workspace launch, `operations.launchAgent` for a create-and-launch). Before implementing the launchers, read `packages/operations/src/index.ts` (and the corresponding daemon-side caller) to verify that BOTH entry points thread a `prompt` argument through to the same tmux submit path. If they diverge (e.g. one expects the caller to submit the prompt via a separate `submitPrompt` call), introduce a single helper in `packages/operations/src/index.ts` named `composeAndLaunchAgent({ store, deps, workspaceId?, runtimeId, prompt })` that normalizes the two paths so BOTH MCP launchers go through one seam. Tests on the seam are the canary against "system prompt silently dropped".
+- Add provider-neutral issue binding contracts for parent and child tickets.
+- Implement live child-ticket reads for Jira first through existing shell-backed provider approach.
+- Add best-effort `update_ticket_status` action/tool:
+  - manager requests internal target state
+  - provider action inspects transitions live
+  - records resulting external status
+  - failures become warnings/activity, not delivery blockers
+- Ensure Citadel stores prompt snapshots for agent launches that include external issue content.
 
-- `launch_implementation_agent` / `launch_prototype_agent` / `launch_pm_agent` / `launch_architect_agent` — each calls a shared helper `launchPredefinedAgent(deps, definitionId, input)` that:
-  1. Loads the definition via `agentDefinitions.get(definitionId)`. Returns `{ error: "agent_storage_unavailable" }` if storage is in a boot-failure state.
-  2. Resolves the runtime + model (uses agent's `model` if set; else lets `operations.launchAgent` use its default; if agent has no `runtime`, fall back to `agentsConfig.defaultRuntime`).
-  3. Composes `effectivePrompt = "## System\n" + definition.systemPrompt + "\n\n## User prompt\n" + input.prompt`.
-  4. Routes through the unified `composeAndLaunchAgent` seam (see pre-step) — no per-path branching in the launcher itself.
-  5. Returns `{ workspaceId, sessionId, branchName, workspacePath, operationId }` (same shape as `launch_agent`).
-- `list_custom_agents` — returns `{ agents: AgentDefinition[] }` filtered to `kind === "custom"`. Daemon-only (see §8).
-- `launch_custom_agent` — same as predefined helper but takes `input.agentId` and reads the matching custom definition; 404 if not found OR if the id is predefined (caller should use `launch_*_agent` for those).
-- `register_plan` — security-hardened path validation:
-  1. `inputPath = path.resolve(workspacePath, input.path)` — produce an absolute path.
-  2. `realPath = await fs.promises.realpath(inputPath)` — resolves symlinks. Wrap in try/catch — ENOENT or EACCES becomes `{ error: "plan_path_unreadable" }`.
-  3. `workspaceReal = await fs.promises.realpath(workspacePath)`.
-  4. Reject (`{ error: "plan_path_escapes_workspace" }`) if `!realPath.startsWith(workspaceReal + path.sep)` — note `path.sep`, NOT just the prefix string, to avoid `/work/ws` matching `/work/ws-evil/...`.
-  5. Stat the file: reject if not a regular file (`stat.isFile()`) or larger than **1 MiB** (`stat.size > 1_048_576`) — `{ error: "plan_file_too_large" }`.
-  6. INSERT the row, storing `realPath` (not the original input) in the `path` column so a post-registration symlink swap can't change the target.
-  Returns `{ planId, registeredAt }`.
-- `launch_handoff_agent` — input validated via `LaunchHandoffAgentInputSchema` (one-of: `predefinedKind` OR `customAgentId`). Resolves the plan:
-  1. If `input.planId` set: load by id; reject if its `workspaceId` doesn't match `input.workspaceId`.
-  2. Else: pick the newest `plan_registrations` row for the workspace.
-  3. Else: scan `<workspacePath>/.agents/plans/*.md` and pick newest by mtime. (**Note:** `.agents/plans/`, NOT `plans/` — verified against the citadel repo convention: this very plan file lives at `.agents/plans/agents-system.md`.)
-  4. Else: return `{ error: "no_plan_found" }`.
-  Re-validates the stored `path` via realpath + workspace-prefix check AT READ TIME (defense-in-depth against post-registration symlink swap). Reads the plan file (still enforcing the 1 MiB cap), prepends content to the agent's system prompt under a `## Plan to implement` header, and routes through the same `composeAndLaunchAgent` seam.
+### 15. Local Notifications
 
-### 8. MCP layer (snapshot path)
+- Add in-app activity/readiness notification when a PR becomes ready for human review.
+- Add optional browser notification permission flow.
+- Add optional sound setting and playback for ready/human-input-needed events.
+- Keep external notification providers out of v1.
 
-In `packages/mcp/src/index.ts`:
+### 16. Current Branch Cleanup
 
-- Add the eight tool names to the `McpToolName` union.
-- Add the eight `McpToolDefinition` entries (name, description, inputSchema, `destructive: false` for all eight — we don't expose any destructive agent-definition op via MCP in this PR; the cockpit handles delete/reset).
-- In `callMcpTool` (snapshot dispatch):
-  - **All eight tools — including `list_custom_agents` — return `{ error: "agent_launcher_requires_daemon" }`.** The earlier revision's idea of running `list_custom_agents` in the snapshot path was wrong: `McpToolContext` (file:line in `packages/mcp/src/index.ts` ~73–84) is pure in-memory snapshots — it has no fs access, no `agentDefinitions` reference, and no `os.homedir()` setup. Forcing fs access into the snapshot path also breaks the "snapshot may run remote-of-daemon" invariant. The pattern matches the existing scratchpad family (`packages/mcp/src/index.ts` ~682-683): "the scratchpad lives on disk under the daemon's data dir; the snapshot path has no fs access, so route through the daemon explicitly."
-  - Use a new, family-specific sentinel `agent_launcher_requires_daemon` (matching the existing per-family pattern: `scratchpad_tool_requires_daemon`, `session_tool_requires_daemon`, `scheduled_agent_run_tool_requires_daemon`) — NOT the generic `mutating_tool_requires_daemon`.
-- Extend `mcpToolDefinitions()` exports so `pnpm check` round-trips them in tests.
+- Delete or rewrite code from the current branch that conflicts with this plan:
+  - custom agent CRUD
+  - `list_custom_agents`
+  - `launch_custom_agent`
+  - old `register_plan`
+  - old `launch_handoff_agent`
+  - old single-repo launcher assumptions
+- Salvage only:
+  - boot-safe predefined-template storage if adapted to five roles/actions
+  - model discovery code if extended to launch profiles
+  - plan-registration tests only if rewritten around workspace plan versions
 
-### 9. Web cockpit — Agents nav entry
+### 17. Feature Exposure Controls
 
-In `apps/web/src/navigator.tsx`, immediately above the existing History `<Link>` (line 228):
+- Keep incomplete structured workspace/manager surfaces behind a feature flag or hidden/admin-only route until a coherent user-facing path is available.
+- Do not expose a migration prompt, structured workspace creation, or manager automation UI before the corresponding backend invariants and rollback/readiness states are implemented.
+- Each suggested PR slice may merge internal contracts/services first, but user-visible affordances should appear only when they can complete the flow they advertise.
 
-```tsx
-<Link to="/agents" className={path === "/agents" ? "active" : ""} title="Manage agent definitions">
-  <Bot size={13} /> <span>Agents</span>
-</Link>
-```
+## Migration Strategy
 
-Pick an unused lucide-react icon (e.g. `Bot` or `UserCog`). Verify no other nav entry already uses it.
+### Schema Operations
 
-### 10. Web cockpit — Agents route + editor (THREE files, file-size pre-commit)
+The implementation must include an explicit DB migration test for every operation below.
 
-**Pre-commit to file split** so the 800-LoC gate doesn't get hit by the editor + form + selector being one file:
+1. Add `workspaces.root_path`, `workspaces.mode`, external parent issue binding, lifecycle phase, and manager linkage. Keep `workspaces.path` compatibility until callers are migrated.
+2. Create `workspace_checkouts` with FK to `workspaces` and `repos`.
+3. Backfill one checkout for every existing worktree workspace.
+4. Extend `agent_sessions` with target/role/action/history fields.
+5. Create workspace manager tables.
+6. Create workspace plan version/review/decision tables.
+7. Create plan deviation table.
+8. Create review artifact table.
+9. Create any notification preference/state table if server-side state is needed.
+10. Insert `schema_migrations` row for the next contiguous version.
 
-1. `apps/web/src/routes/agents.tsx` (route + master/detail layout; target ≤200 LoC).
-   - Top-level `<AgentsView />` with `useQuery({ queryKey: ["agents"], queryFn: ... })` against `/api/agents`.
-   - Left rail: predefined section, then custom section, with a "+ New custom agent" button.
-   - Right pane: renders `<AgentsEditor agent={selected} />`.
+### Filesystem Migration
 
-2. `apps/web/src/agents-editor.tsx` (editor form + mutations; target ≤300 LoC).
-   - Form fields: `name` (read-only for predefined), `systemPrompt` (textarea, monospace), `runtime` selector (from `/api/state`'s `runtimes`), `model` selector (`<RuntimeModelSelector>`).
-   - Buttons: `Save` (both kinds), `Reset to citadel defaults` (predefined only), `Delete` (custom only — confirm dialog).
-   - Mutations: `useMutation` per action; invalidates `["agents"]` and `["state"]` on success.
-   - Errors render in a small banner above the form (e.g. `predefined_agent_cannot_be_deleted`, `name_collides`, `agent_storage_unavailable`).
+Automatic workspace layout migration must:
 
-3. `apps/web/src/components/runtime-model-selector.tsx` (target ≤150 LoC).
-   - Props: `{ runtime: string, value?: string, onChange(model: string): void }`.
-   - Calls `useQuery({ queryKey: ["runtime-models", runtime] })`.
-   - Shows a `probeError` banner if returned; still renders the fallback list so the user can save.
-   - **Renders a small "↻ Refresh" button** next to the selector that triggers a re-query against `/api/runtimes/:id/models?refresh=1` (matches the daemon's TTL invalidation knob).
+- write a manifest before starting each workspace migration
+- run before boot restore/session respawn for the affected workspace
+- skip any workspace that still has a live Citadel tmux session or active operation
+- verify original path exists and is a git worktree
+- capture `git status --porcelain`
+- capture `git rev-parse --show-toplevel`, `git rev-parse --git-common-dir`, current branch, HEAD, and `git worktree list --porcelain`
+- move with `git worktree move` to a sibling temp path, create the root path, then `git worktree move` into the root as a checkout
+- verify `.git` file/gitdir remains valid and `git rev-parse --show-toplevel` returns the final checkout path
+- verify branch, HEAD, common dir, and worktree list remain coherent
+- verify `git status --porcelain` after move matches before move
+- update DB only after filesystem verification succeeds
+- be idempotent if daemon crashes mid-migration
+- skip cross-device moves, missing paths, target collisions, broken git state, or root/imported repositories
+- inventory existing Citadel-owned artifacts under the old checkout path. Workspace-level artifacts such as `.agents/plans` move/reindex to Home; repo-local files remain inside the checkout; external runtime transcripts stay in their runtime-owned locations and are relinked through session history.
 
-### 11. Web cockpit — default-runtime Settings row
+No full backup copy is required.
 
-In `apps/web/src/settings-runtimes.tsx`, add a single labeled row near the top:
+### Version
 
-- Label: "Default agent runtime".
-- Selector: same list of healthy runtimes already shown elsewhere on the page.
-- Save: PUTs `/api/agents/config` with `{ defaultRuntime }`.
-- Used by: the `/api/agents` create path defaults `runtime` to this when the user doesn't pick one in the editor.
+Target `schema_migrations` version is v13 if starting from clean `main` with current max v12. If the implementation branch already contains an obsolete v13 row from the superseded plan, replace it or renumber to the next contiguous version before review.
 
-### 12. Smoke / E2E
+### Foreign Keys
 
-Add a single Playwright happy-path test that:
-1. Loads the cockpit.
-2. Clicks the Agents nav entry.
-3. Verifies the four predefined agents appear in the list.
-4. Opens "implementation", edits the system prompt, clicks Save, refreshes, verifies the edit persisted.
+`PRAGMA foreign_keys = ON` remains required. New child tables use FK constraints with clear cascade behavior:
+
+- checkouts cascade/archive with workspace according to product cleanup rules
+- plan versions cascade with workspace
+- review artifacts cascade with checkout
+- sessions keep enough history; do not cascade-delete useful audit rows unless workspace is fully removed with explicit cleanup
+
+## Hard Gate Commitments
+
+### Architecture Boundaries
+
+- `packages/contracts` owns shared schemas and types only.
+- `packages/db` owns SQLite schema/store methods only; it does not import daemon/web/runtime internals.
+- `packages/operations` owns filesystem/worktree operations and manager reducers that are independent of Express.
+- `apps/daemon` owns HTTP/MCP wiring and provider-backed orchestration.
+- `apps/web` consumes daemon APIs through shared contracts only; it must not import daemon internals.
+- `packages/core` remains pure. Do not add filesystem, process, React, DB, provider, terminal, runtime, daemon, or MCP imports there.
+- New cross-package imports must be checked against `scripts/checks/architecture-boundaries.ts`, and the script must be extended if the new architecture introduces a boundary not currently covered.
+
+### File Size
+
+No new non-generated source file may exceed the 800-line limit. Implementation should split large areas up front:
+
+- daemon route modules separate from `app.ts`
+- manager reducer/state-machine modules separate from route/MCP wiring
+- checkout store/helpers separate from the main DB store file where practical
+- web workspace tree, agent history, and Agents config editors as separate focused components
+
+If an existing file is near the limit, the implementation step must extract a sibling module instead of appending.
+
+### Provider Degradation
+
+Provider-backed features must degrade clearly:
+
+- If ticket provider health is unavailable, structured workspace still shows existing local bindings/history, but live child-ticket reads and ticket status updates show a provider-unavailable state.
+- If PR/CI provider health is unavailable or rate-limited, manager does not mark gates complete from stale data. It waits, records a warning/activity item, and notifies locally when human attention is needed.
+- Ticket status transitions are best-effort and never block code delivery.
+- Provider-derived prompt snapshots must record when provider data was unavailable/stale so downstream sessions know what context they actually received.
+
+### Workspace Cleanup And Migration Safety
+
+- Workspace migration must not delete dirty worktrees.
+- Dirty worktrees may be moved only when pre/post `git status --porcelain` matches.
+- Root/imported repository workspaces are not moved automatically.
+- Same-device rename is the automatic path. Cross-device copy/delete is not automatic.
+- Failed/skipped migrations leave the original workspace untouched and produce a visible readiness/admin item.
+- Remove/archive cleanup paths must retain the existing dirty-worktree protections and log any explicit force policy if one is later added.
+
+### Terminal Completeness
+
+This plan should not require changing the terminal renderer or low-level PTY input path. It does change agent-session metadata, close-tab semantics, restore/history behavior, and runtime launch argv construction. If implementation touches `packages/terminal`, ttyd proxying, xterm input, resize, paste, or terminal attach/reconnect behavior, terminal completeness applies and tests must cover raw input, control/meta sequences, paste, resize, long output, alternate screen where supported, reconnect, and cross-session isolation. If implementation only changes metadata while leaving terminal transport untouched, add targeted regression tests for close-tab/restore/session-history behavior.
+
+### Lockfile And Dependencies
+
+No new runtime dependency is expected for v1. If implementation adds, removes, or upgrades dependencies:
+
+- use pnpm only
+- do not introduce `package-lock.json` or `yarn.lock`
+- justify each dependency in the PR
+- inspect package lifecycle scripts (`preinstall`, `install`, `postinstall`) before accepting the dependency
 
 ## QA/Test Strategy
 
-### Layer evaluation
+### Layer Evaluation
 
 | Layer | Verdict | Details |
 |---|---|---|
-| Unit (Vitest) | **Required** | Contracts schema round-trips; agent-definitions service (seed, CRUD, reset, predefined-delete-rejection); model-list adapters (with mocked tmux IO); MCP dispatcher (all 8 new cases, including auth/validation/error paths); handoff plan-resolution order. |
-| E2E (Playwright) | **Required** | One happy-path: nav entry visible, predefined list renders, edit-and-save persists across reload. |
+| Unit (Vitest) | Required | Contracts, DB migrations, filesystem migration planner, runtime launch-profile resolver, template storage, MCP context resolution, manager state machine, gate reducers, stack planner, provider status action results, and React components/hooks need unit coverage. |
+| E2E (Playwright) | Required | New workspace tree, PM bootstrap, Agents config, specialized launch rules, checkout launch, manager pause, local notification readiness, and restore/history flows need browser coverage because they are core user journeys. |
 
-### New tests to add
+### New Tests To Add
 
-**Vitest unit tests:**
+- `packages/contracts/src/index.test.ts`: role/action templates, launch settings, execution targets, checkouts, plan versions, manager state, review artifacts, MCP inputs.
+- `packages/db/src/migration.test.ts`: v13 schema rows, workspace rebuild/backfill, FK behavior, existing-data migration.
+- `packages/db/src/workspace-checkouts.test.ts`: checkout CRUD, multiple checkouts per repo/workspace, stack relationships.
+- `packages/operations/src/workspace-layout-migration.test.ts`: dirty worktree migration preserves status, same-device move, skip cases, idempotent crash recovery.
+- `packages/operations/src/workspace-layout-migration.test.ts`: `git worktree move` sequence, temp path crash recovery, branch/HEAD/common-dir preservation, active-session skip, artifact relocation/reindexing.
+- `packages/operations/src/create-workspace.test.ts` or equivalent: zero-checkout structured workspace shell creation with Home-only specialized roles.
+- `packages/operations/src/create-worktree-checkout.test.ts`: checkout creation from default branch, existing branch, PR, and upstream checkout for stacked work.
+- `packages/runtimes/src/launch-profile.test.ts`: model/effort/fast/context argv mapping and fallback warnings.
+- `apps/daemon/src/agent-templates-routes.test.ts`: list/update/reset five predefined roles/actions and no custom CRUD.
+- `apps/daemon/src/mcp-context-tools.test.ts`: cwd realpath validation and unknown path errors.
+- `apps/daemon/src/role-launchers.test.ts`: target rule enforcement, PM bootstrap, architect preconditions, implementation plan gate, prototype pre-plan launch.
+- `apps/daemon/src/workspace-plan-routes.test.ts`: register plan, autoincrement versions, active plan rules, review/decision history.
+- `apps/daemon/src/manager-state-machine.test.ts`: plan-ready auto/manual behavior, pause behavior, completion signal, review launch, plan deviation, replan, notification triggers.
+- `apps/daemon/src/manager-idempotency.test.ts`: duplicate heartbeat/event delivery does not duplicate sessions, checkouts, reviews, restacks, or ticket transitions.
+- `apps/daemon/src/pr-gates.test.ts`: PR exists/checks/conflicts/review artifact/head SHA invalidation.
+- `apps/daemon/src/stack-orchestration.test.ts`: stacked start condition, base update cascade, restack ordering, force-push, upstream deletion, manual rebase, and partial stack failure.
+- `apps/web/src/agents-template-editor.test.tsx`: role/action editor, reset, runtime/model option validation.
+- `apps/web/src/workspace-tree.test.tsx`: Home/checkouts tree, specialized/freestyle markers, valid launch options.
+- `apps/web/src/agent-history.test.tsx`: closed/restorable sessions and runtime session id display.
+- `e2e/structured-workspace.spec.ts`: PM bootstrap creates workspace shell/Home and launches PM.
+- `e2e/agents-config.spec.ts`: edit/reset role/action launch settings.
+- `e2e/workspace-checkouts.spec.ts`: add checkout, launch implementation only after plan ready, show specialized icon.
+- `e2e/manager-readiness.spec.ts`: manager marks PR ready locally and surfaces notification/activity.
 
-- `packages/contracts/src/index.test.ts` — extend with a new `describe("agent definition contracts")` block that round-trips `AgentDefinitionSchema`, `LaunchPredefinedAgentInputSchema`, `LaunchCustomAgentInputSchema`, `RegisterPlanInputSchema`, `LaunchHandoffAgentInputSchema`, `PlanRegistrationSchema`, `RuntimeModelsResponseSchema`, `AgentsConfigSchema`. Specifically assert: kind enum is exact; ids match `IdSchema`; LaunchPredefinedAgentInputSchema accepts both `workspaceId`-only AND `repoName`-only inputs (xor branch).
-- `apps/daemon/src/agent-definitions/storage.test.ts` (new file) — assert: seed creates four files on first read; `seed()` is idempotent-by-content (running it on a directory that already has well-formed defaults does NOT rewrite the files; running it on a directory with a missing predefined file recreates just that one); `create()` rejects when name or id collides with a predefined; `update()` rejects `kind` change; `remove()` throws on predefined id; `resetToDefaults()` rejects on custom id; `resetToDefaults()` returns the citadel-authored seed, NOT the user's `defaultRuntime`; concurrent `create` calls don't corrupt the directory; **boot-safety**: when `~/.citadel/agents/` cannot be created (parent is read-only), `list()` returns a structured error and does NOT throw out of the call chain.
-- `apps/daemon/src/agent-definitions/seed.test.ts` (new file) — assert: each of the four predefined seeds has a non-empty system prompt; runtime defaults to claude-code; names are stable across calls (the seed function is pure).
-- `packages/runtimes/src/models/index.test.ts` (new file) — assert: `runtimeModelListers` has entries for the four citadel-maintained runtimes; `hasRuntimeModelLister` returns false for unknown ids.
-- `packages/runtimes/src/models/claude-code.test.ts` (new file) — mock the tmux capture surface; assert: a happy-path capture returns a parsed model list (driven by `packages/runtimes/src/models/fixtures/claude-code-models.txt` — a real captured `/models` output, NOT a hand-crafted approximation); a tmux failure returns `{ models: [...fallback], probeError: "<reason>" }`; a 5s+ hang triggers the timeout AND the tmux session is killed (verify via the kill-session mock counter); a parser throw still triggers tmux cleanup (the `finally` block runs).
-- `packages/mcp/src/index.test.ts` — extend with a new `describe("agent launchers")` block that asserts: snapshot dispatch returns `{ error: "agent_launcher_requires_daemon" }` for ALL EIGHT new tools (including `list_custom_agents`); tool definitions include the eight new names; sentinel name does NOT clash with any existing sentinel.
-- `apps/daemon/src/daemon-mcp-tool.test.ts` (or whichever file holds the existing daemon-mcp-tool tests — verify path first) — assert: `launch_implementation_agent` composes prompt as `## System\n... \n\n## User prompt\n...` (exact header strings; the canary for "system prompt silently dropped"); composition works identically whether `workspaceId` is provided or omitted (both paths route through `composeAndLaunchAgent`); `launch_custom_agent` 404s on unknown id AND on predefined id; `register_plan` rejects:
-  - `../etc/passwd` (lexical traversal) → `plan_path_escapes_workspace`
-  - `/etc/passwd` (absolute outside workspace) → `plan_path_escapes_workspace`
-  - a symlink under `<workspacePath>` pointing OUT to `/etc/passwd` (realpath escape) → `plan_path_escapes_workspace`
-  - a directory rather than a file → `plan_path_unreadable` or similar
-  - a file larger than 1 MiB → `plan_file_too_large`
-- And ACCEPTS a normal `<workspacePath>/.agents/plans/some-plan.md`, storing the realpath in the row.
-- `launch_handoff_agent`:
-  - When `predefinedKind` and `customAgentId` are both supplied → schema-level rejection (one-of constraint).
-  - When neither is supplied → schema-level rejection.
-  - Resolves in the order: `planId` → newest registered → newest `.agents/plans/*.md` → `no_plan_found`. Mtimes controlled by test fixtures.
-  - Re-validates the stored path at read time: if a registered plan's realpath now escapes the workspace (symlink swap post-registration), reject with `plan_path_escapes_workspace` and do NOT launch.
-- `apps/daemon/src/agents-routes.test.ts` (new file — pattern confirmed: `apps/daemon/src/` has `agent-session-routes.ts`, `namespace-routes.ts`, etc. as siblings, follow the existing test-co-location convention). Tests:
-  - Happy path for each of the seven new HTTP endpoints.
-  - `DELETE /api/agents/<predefined-id>` → 409 with structured error body.
-  - `POST /api/agents/<custom-id>/reset` → 400 (only predefined can be reset).
-  - `GET /api/runtimes/:id/models` propagates `probeError` to the response without failing the request.
-  - `GET /api/runtimes/:id/models?refresh=1` bypasses cache (counter on the underlying adapter advances).
-  - `GET /api/runtimes/:id/models` honors the 1h TTL: two calls within 1h hit the cache (counter advances once), a third call after `vi.advanceTimersByTime(3_600_001)` re-probes (counter advances).
-  - **Boot-failure regression**: mount the daemon HTTP app in a vitest harness with the home dir pointed at a path where the agents dir cannot be created (e.g. a file where the dir should be); assert the daemon-app boot does NOT throw, `GET /api/agents` returns 503 `{ error: "agent_storage_unavailable" }`, and `POST /api/agents` returns 503 likewise.
-  - **Workspace cascade test**: insert a workspace + a `plan_registrations` row, DELETE the workspace via the existing workspace-removal route (or call `store.removeWorkspace` directly), assert the registration row is gone AND `launch_handoff_agent` for that workspace returns `no_plan_found` without throwing.
+### Existing Tests To Update
 
-**Playwright E2E tests:**
+- Workspace creation tests in `packages/operations/src/index.test.ts` and daemon route tests to understand workspace root + checkout creation.
+- Existing `agent-session` tests to include target scope, role/action metadata, closed tab history, runtime session resume.
+- Existing PR/conflict tests to move PR state from workspace-level assumptions to checkout-level bindings.
+- Existing navigator/stage tests to group sessions by Home/checkouts.
+- Existing MCP tests to remove custom-agent expectations and assert new role/manager/context tools.
+- Existing specs/tests from the current branch that mention `plan_registrations` must be rewritten or removed.
 
-- `e2e/agents.spec.ts` (new file) — one test as described in step 12 above. Use the existing fixtures harness (see `e2e/` for the pattern).
+### Assertions To Add/Change/Tighten
 
-### Existing tests to update
+- A structured workspace can exist without `repoId`/checkout.
+- A workspace can have two checkouts for the same repo.
+- A checkout cannot satisfy implementation readiness without exactly one intended PR.
+- In structured mode, implementation role launch fails before active plan exists.
+- In structured mode, implementation role launch also fails without parent issue binding or exactly one child ticket binding.
+- Prototype role launch does not require active plan but does require a checkout target.
+- Architect launch fails until discovery is marked ready and `planApprovalMode` is provided.
+- Closing a tab removes tmux but preserves session history and runtime session id.
+- `cwd` context tools reject paths outside registered workspace roots/checkouts, including symlink escapes.
+- Path containment uses `path.relative`/resolved-root equality semantics, not raw string prefix checks.
+- Context resolution is most-specific-first: checkout exact/descendant beats workspace Home root; Home matches root or non-checkout descendants only.
+- Deprecated model fallback records a warning and uses runtime default.
+- Review artifact for old PR head SHA does not satisfy readiness.
+- Review artifact with blocking unresolved findings does not satisfy readiness.
+- Any head SHA change invalidates review gate.
+- Conflict appearance after readiness revokes readiness.
+- Stack restack order is parent before child.
+- Pause blocks manager/agent-triggered automated actions but does not block human manual launches or local notification events.
+- Agent-callable launcher paths cannot bypass pause by spoofing human/manual source metadata.
 
-- `packages/mcp/src/index.test.ts` — the existing `it("reports local/internal MCP tools and resources")` test asserts `tools` contains specific names (around `expect(status.tools).toContain("launch_agent")`). Update so it also asserts the eight new names are present.
-- `packages/db/src/index.test.ts` — the existing `expect(store.query("SELECT version FROM schema_migrations ORDER BY version")).toEqual([...])` assertion (around line 37) needs version 8 appended to the expected list.
+### Failure Modes / Edge Cases / Regression Risks
 
-### Assertions to add/change/tighten
+- Filesystem migration loses dirty/untracked files or updates DB before move verification.
+- Existing root repo workspaces are accidentally moved or deleted.
+- UI still assumes workspace has a single repo/branch and hides checkouts.
+- Agent sessions launch in the wrong cwd.
+- Manager duplicates agents because it ignores active session state.
+- Manager never pokes because it waits only on events and misses a transition.
+- Custom-agent endpoints leak into v1 and confuse MCP clients.
+- Runtime model fallback silently changes behavior without recording a warning.
+- Plan approval auto-starts implementation before plan review/registration is complete.
+- A stale `review-pr` artifact is accepted after new commits.
+- Stacked restack updates child before parent and creates avoidable conflicts.
+- Ticket status transition failure blocks code delivery.
+- Browser notifications are attempted before permission and create noisy errors.
 
-- In every MCP launch test, assert the **exact** prompt composition: the system prompt MUST appear at the top of the user-facing message, separated by the `## System` / `## User prompt` headers we chose. A regression where the system prompt is silently dropped or appended at the bottom would defeat the entire feature; this assertion is the canary. Run the assertion on BOTH `workspaceId`-provided and `workspaceId`-absent paths.
-- Assert that `register_plan`'s path-traversal rejection is strict: `path.resolve` then `fs.realpath` then `startsWith(realpathWorkspace + path.sep)` (note: include `path.sep` to avoid `/work/ws` matching `/work/ws-evil/...`). Test with `../etc/passwd`, `/etc/passwd`, a symlink under `<workspacePath>` pointing to `/etc/passwd`, and a 2-MiB file.
-- Assert that the stored `path` column in `plan_registrations` is the realpath (not the input), so a post-registration symlink swap cannot change the target.
-- Assert that the handoff resolution order is deterministic given mtimes (the test fixture controls them explicitly).
-- Assert that the `LaunchHandoffAgentInputSchema` one-of constraint rejects both "neither field" and "both fields" inputs at schema-parse time (before the daemon dispatch).
+### Adversarial Analysis
 
-### Failure modes / edge cases / regression risks
-
-- **System prompt silently dropped via two-path divergence.** If `operations.startAgentSession` and `operations.launchAgent` thread `prompt` differently to the runtime, the system prompt could be applied in the create-workspace path but dropped in the reuse-workspace path. Mitigation: unified `composeAndLaunchAgent` seam in `packages/operations`; composition assertion runs against BOTH workspaceId-provided and workspaceId-absent inputs.
-- **Symlink-based exfiltration via `register_plan`.** A compromised remote agent registers `<workspacePath>/.agents/plans/innocent.md` where it's a symlink to `~/.ssh/id_rsa` or `/etc/passwd`; on `launch_handoff_agent`, the daemon would read the target and prepend it to the next agent's prompt, leaking secrets to the runtime. Mitigation: realpath-based check on register AND on read, max file size 1 MiB.
-- **Boot-loop on the user's running systemd daemon.** Merging this PR triggers migration v8 AND new HTTP routes on the user's `:4010` daemon at next start. A defect in `~/.citadel/agents/` access could crashloop the daemon under `Restart=always`. Mitigation: storage layer never throws out of route handlers; broken storage surfaces as 503; boot-safety regression test pins this.
-- **Cross-daemon edit races.** Systemd daemon + worktree daemon both write to `~/.citadel/agents/`. Mitigation: file-per-id atomic writes; no in-memory cache (re-read on every API call); seed() is idempotent-by-content; documented "concurrent edits last-write-wins" caveat at v1.
-- **Predefined agent ids collide with custom user ids.** A user creates a custom agent with id `implementation`. Storage layer must reserve the four predefined ids; covered by a unit test.
-- **Schema migration race on daemon startup.** Two daemon processes start simultaneously (e.g. systemd + a `make deploy`) and both try to apply v8. The existing `INSERT OR IGNORE` already handles this; verify no new code paths introduce a non-idempotent step.
-- **Plan registration FK violation when workspace is deleted.** The FK has `ON DELETE CASCADE`; covered by an integration-style unit test that deletes a workspace and asserts registrations vanish.
-- **claude-code TUI scrape hangs.** The `/models` interactive command could block if the TUI is unresponsive. The adapter MUST wrap the tmux call in a hard timeout (≤5s) and return the fallback list with a `probeError`. Covered by a timeout-injection test in `claude-code.test.ts`.
-- **Nav-entry icon collision.** Adding the wrong `Bot` icon may clash visually with an existing entry. Check by running the cockpit visually before merging (the Playwright test won't catch this).
-- **Concurrent edits to the same agent file.** Two cockpit tabs editing the same definition; last write wins. Acceptable for v1 — the form re-reads on save success — but flag for future optimistic-locking work.
-- **Other parallel agents touching `apps/daemon/src/app.ts` or `packages/mcp/src/index.ts`.** High overlap risk tonight. Mitigation: prefer adding new files (`apps/daemon/src/agents-routes.ts`, `apps/daemon/src/agent-definitions/*`) and keep edits to `app.ts` and `index.ts` to a few additive lines.
-
-### Adversarial analysis
-
-- **How could this fail in production?** A malformed predefined seed (e.g., a non-string system prompt) is written to `~/.citadel/agents/`, then read on next daemon boot, and the schema-validation throw makes the daemon refuse to start. **Mitigation:** the storage layer validates with the schema on read; on validation failure, log loudly and fall back to re-seeding the predefined defaults rather than crashing.
-- **What user actions trigger unexpected behavior?** A user deletes `~/.citadel/agents/implementation.json` manually outside the cockpit. **Mitigation:** the seed function runs on every `list()`, recreating any missing predefined file. Test this explicitly.
-- **What existing behavior could break?** The new launchers compose on top of `operations.launchAgent`. If the prompt composition mangles the user prompt (e.g., a stray null byte from the system prompt's encoding), the runtime could receive a malformed input and fail. **Mitigation:** assert the composed prompt is valid UTF-8 and contains the original user prompt verbatim in a contract test.
-- **Which tests credibly catch those failures?** The composition assertion, the path-traversal assertion, the timeout-injection assertion, the FK-cascade assertion. Together these cover the four highest-risk paths.
-- **What gaps remain?** The Playwright happy-path only covers the edit-and-save loop, not the actual MCP-launch path through to a running agent. Validating an MCP launch end-to-end requires a real workspace + real runtime, which the current Playwright harness doesn't have. Acceptable gap: the unit-level tests around composition and dispatch cover the contract; the launch path itself is already exercised by the existing `launch_agent` MCP tests, and the new launchers reuse that path.
+- **How could this fail in production?** The largest risks are data migration mistakes, wrong cwd launches, duplicate manager automation, stale plan/review gates, and provider/rate-limit failures.
+- **What user actions trigger unexpected behavior?** Dirty worktrees during migration, manual git branch changes inside a checkout, closing tabs while runtime sessions should remain resumable, manually committing after review, and pausing automation mid-stack.
+- **What existing behavior could break?** Current single-workspace navigation, workspace creation, PR display, terminal session restore, scheduled agents, auto-resume, and fix-conflicts routes all assume workspace path is a repo worktree.
+- **Which tests credibly catch those failures?** Migration fixture tests, target-cwd unit tests, MCP path-validation tests, Playwright workspace tree/launch tests, and manager reducer tests for duplicate/idempotent decisions.
+- **What gaps remain?** Real Jira/Linear workflow variance, real browser PWA notification behavior, long-running manager behavior over days, and complex stacked PR restacks will still need manual dogfooding.
 
 ## Tests
 
-(Files listed in QA/Test Strategy above. TDD order: contracts tests → schema/migration tests → storage service tests → model adapter tests → MCP dispatch tests → HTTP route tests → Playwright E2E.)
+Implementation should follow TDD by unit:
 
-## Schema or contract generation
+1. Contracts and schemas.
+2. DB migration and workspace/checkouts store methods.
+3. Filesystem migration planner/executor.
+4. Runtime launch-profile resolver.
+5. Agent template storage/routes.
+6. Execution-target session creation/history.
+7. MCP context and role launchers.
+8. Workspace plan versioning.
+9. Manager reducer/state machine and gates.
+10. Stack orchestration.
+11. Web navigator/stage/Agents config components.
+12. Playwright end-to-end flows.
 
-No code-generation step; the contracts package is hand-written zod schemas. Run `pnpm -r build` (covered by `make check`) after edits to ensure the contracts package compiles cleanly and consumers pick up the new exports.
+## Schema or Contract Generation
+
+No generated schema artifacts are currently known. If implementation adds generated OpenAPI/JSON schema output, include the repo-specific generation command in the PR and verification steps.
 
 ## Verification
 
-Before opening the PR:
+Required before PR:
 
-- `make check` — runs `check:arch`, `check:size` (800 LoC limit), `typecheck`, `lint` (biome), `test` (vitest), `coverage` (90% target on core/backend/shared), `check:deps`, `build`. **Mandatory.** This includes `check:arch` (architecture-boundary gate — verify the new imports in `apps/web` don't pull in `@citadel/daemon` internals; web stays on `@citadel/contracts` only) and `check:size` (file-size gate — `apps/daemon/src/app.ts` is currently 804 LoC; this PR must leave it at or below 800).
-- `make e2e` — Playwright happy-path. **Mandatory** (we added a new spec).
-- `make smoke` — local API smoke against a running daemon. **Mandatory** (we added several new HTTP endpoints).
-- `make performance` — local perf smoke. **Skip** unless we observe regression in the cockpit's initial load (we are adding one new query against `/api/agents`; if the daemon is cold, this could marginally affect time-to-first-paint, so run it if `make smoke` shows non-trivial added latency).
+- `make check` — comprehensive architecture, typecheck, lint, unit, coverage, dependency, and build gate.
+- `make e2e` — required because this changes cockpit navigation, launch UI, and workspace flows.
+- `make smoke` — required because daemon HTTP/MCP/workspace APIs change.
+- `make performance` — required because navigator/state payloads and manager heartbeat could affect startup/rendering hot paths.
 
-**Pre-merge sequencing.** Immediately before merge, rebase on `main`. If another branch landed a v8 migration first, bump THIS PR's migration to the next free version and update `packages/db/src/index.test.ts`'s `schema_migrations` version assertion. `INSERT OR IGNORE` prevents row collisions but does NOT prevent silent schema-version drift.
+## Suggested PR Slicing
 
-Manual gates (per `CLAUDE.md`):
-- Don't run `pkill -f node` (would kill the user's systemd daemon).
-- Don't touch `/home/jonsnow/Workspace/citadel/` (the main checkout).
-- For redeploy/restart, use `make deploy`.
+The feature remains one product initiative, but implementation should land in reviewable PRs:
+
+1. **Specs + contracts + DB migration foundation:** workspace root/checkouts, sessions target metadata, plan/version schemas. No manager automation yet.
+2. **Workspace UI/navigation + migration:** root/Home/checkouts layout, existing workspace migration, target-scoped tabs/history.
+3. **Runtime launch profiles + Agents config:** five predefined roles/actions, launch settings, model/effort/fast/context support, no custom agents.
+4. **Role launchers + structured lifecycle:** PM bootstrap, architect handoff, plan registration/versioning, implementation/prototype launch rules.
+5. **Manager v1 gates:** manager instance, pause, heartbeat, implementation completion, PR gates, review-pr artifacts.
+6. **Stacked PR orchestration + restack:** dependency edges, stack creation, base update cascade, restack action.
+7. **Issue provider/status + local notifications:** live child ticket reads, best-effort status updates, in-app/browser/sound notifications.
+
+Each PR should keep the workspace usable and avoid exposing half-wired automation as if it were complete.
