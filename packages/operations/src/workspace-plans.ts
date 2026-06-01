@@ -39,7 +39,9 @@ export type RegisterWorkspacePlanResult =
         | "workspace_not_found"
         | "cwd_not_registered"
         | "plan_path_outside_workspace"
-        | "plan_path_missing";
+        | "plan_path_missing"
+        | "plan_structure_invalid"
+        | "plan_approval_required";
       detail?: string;
     };
 
@@ -76,9 +78,15 @@ export function registerWorkspacePlan(
 ): RegisterWorkspacePlanResult {
   const scope = resolveWorkspaceScope(deps.store, input);
   if (!scope.ok) return mapScopeError(scope);
-  const resolvedPlan = resolvePlanPath(scope.workspace, input.path);
+  const resolvedPlan = resolvePlanPath(scope.workspace, input.path, scope.cwd);
   if (!resolvedPlan.ok) return resolvedPlan;
   const content = fs.readFileSync(resolvedPlan.path);
+  if (input.status === "approved") {
+    if (input.createdBySessionId && input.approvalMode !== "auto")
+      return { ok: false, error: "plan_approval_required" };
+    const structure = validateApprovedPlanStructure(content.toString("utf8"));
+    if (!structure.ok) return structure;
+  }
   const now = nowIso();
   const existing = deps.store.listWorkspacePlanVersions(scope.workspace.id);
   const planVersion: WorkspacePlanVersion = {
@@ -101,7 +109,7 @@ export function registerWorkspacePlan(
       planVersionId: planVersion.id,
       decision: "approve",
       reason: "Registered as approved plan",
-      actor: "human",
+      actor: input.createdBySessionId ? "system" : "human",
       createdAt: now,
     });
   }
@@ -209,9 +217,17 @@ export function resolveWorkspaceScope(
   const workspaces = store.listWorkspaces();
   if (input.workspaceId) {
     const workspace = workspaces.find((candidate) => candidate.id === input.workspaceId);
-    return workspace
-      ? { ok: true, workspace, checkout: null, cwd: null }
-      : { ok: false, error: "workspace_not_found", workspaceId: input.workspaceId };
+    if (!workspace) return { ok: false, error: "workspace_not_found", workspaceId: input.workspaceId };
+    if (!input.cwd) return { ok: true, workspace, checkout: null, cwd: null };
+    const checkouts = listAllCheckouts(store, workspaces);
+    const target = resolveExecutionTargetForCwd({ cwd: input.cwd, workspaces, checkouts });
+    if (!target.ok || target.target.workspaceId !== workspace.id) return { ok: false, error: "cwd_not_registered" };
+    const resolvedTarget = target.target;
+    const checkout =
+      resolvedTarget.type === "worktree_checkout"
+        ? (checkouts.find((candidate) => candidate.id === resolvedTarget.checkoutId) ?? null)
+        : null;
+    return { ok: true, workspace, checkout, cwd: resolvedTarget.cwd };
   }
   if (!input.cwd) return { ok: false, error: "workspace_required" };
   const checkouts = listAllCheckouts(store, workspaces);
@@ -230,15 +246,28 @@ export function resolveWorkspaceScope(
 function resolvePlanPath(
   workspace: Workspace,
   planPath: string,
+  cwd: string | null,
 ):
   | { ok: true; path: string }
   | { ok: false; error: "plan_path_outside_workspace" | "plan_path_missing"; detail?: string } {
   const root = realpathIfExists(workspaceRootPath(workspace));
-  const absolute = path.resolve(planPath);
+  const absolute = path.isAbsolute(planPath) ? path.resolve(planPath) : path.resolve(cwd ?? root, planPath);
   if (!fs.existsSync(absolute)) return { ok: false, error: "plan_path_missing", detail: absolute };
   const resolved = realpathIfExists(absolute);
   if (!containsPath(root, resolved)) return { ok: false, error: "plan_path_outside_workspace", detail: resolved };
   return { ok: true, path: resolved };
+}
+
+function validateApprovedPlanStructure(
+  content: string,
+): { ok: true } | { ok: false; error: "plan_structure_invalid"; detail: string } {
+  const required = ["Delivery Units", "Dependencies / Timeline", "Manager Handoff", "Plan Version Notes"];
+  const missing = required.filter((heading) => !new RegExp(`^## ${escapeRegExp(heading)}\\b`, "im").test(content));
+  return missing.length ? { ok: false, error: "plan_structure_invalid", detail: missing.join(", ") } : { ok: true };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function listAllCheckouts(store: SqliteStore, workspaces: Workspace[]): WorktreeCheckout[] {

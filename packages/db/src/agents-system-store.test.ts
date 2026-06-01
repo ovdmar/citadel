@@ -87,7 +87,10 @@ describe("agents system store methods", () => {
         url: "https://example.test/pr/12",
         headSha: "abc",
         baseRef: "main",
-        fetchedAt: null,
+        fetchedAt: timestamp,
+        checksGreen: true,
+        mergeStateStatus: "CLEAN",
+        hasConflicts: false,
       },
       stackParentCheckoutId: null,
       inferredPurpose: "implementation",
@@ -98,7 +101,18 @@ describe("agents system store methods", () => {
     });
 
     expect(store.listWorkspaceCheckouts("ws_1")).toMatchObject([
-      { id: "co_1", issue: { key: "CIT-2" }, intendedPr: { number: 12 }, gateStatus: "waiting_for_pr" },
+      {
+        id: "co_1",
+        issue: { key: "CIT-2" },
+        intendedPr: {
+          number: 12,
+          fetchedAt: timestamp,
+          checksGreen: true,
+          mergeStateStatus: "CLEAN",
+          hasConflicts: false,
+        },
+        gateStatus: "waiting_for_pr",
+      },
     ]);
     expect(store.updateWorkspaceCheckoutGate("co_1", "ready_for_human_review")).toMatchObject({
       gateStatus: "ready_for_human_review",
@@ -120,9 +134,21 @@ describe("agents system store methods", () => {
         url: "https://example.test/pr/13",
         headSha: "def",
         baseRef: "main",
-        fetchedAt: null,
+        fetchedAt: timestamp,
+        checksGreen: false,
+        mergeStateStatus: "DIRTY",
+        hasConflicts: true,
       }),
-    ).toMatchObject({ intendedPr: { number: 13, headSha: "def" } });
+    ).toMatchObject({
+      intendedPr: {
+        number: 13,
+        headSha: "def",
+        fetchedAt: timestamp,
+        checksGreen: false,
+        mergeStateStatus: "DIRTY",
+        hasConflicts: true,
+      },
+    });
   });
 
   it("stores plans, manager state, deviations, events, and review artifacts", () => {
@@ -239,5 +265,120 @@ describe("agents system store methods", () => {
     expect(store.listReviewArtifacts("co_1")).toMatchObject([
       { id: "review_1", findingsStatus: "open_blocking", blockingFindings: ["fix tests"] },
     ]);
+  });
+
+  it("enforces structured workspace foreign keys and cascades workspace deletes", () => {
+    const store = freshStore();
+    expect(() =>
+      store.insertWorkspaceCheckout({
+        id: "co_orphan",
+        workspaceId: "ws_missing",
+        repoId: "repo_1",
+        name: "api",
+        path: "/tmp/orphan",
+        branch: "feature/api",
+        baseBranch: "main",
+        issue: null,
+        intendedPr: null,
+        stackParentCheckoutId: null,
+        inferredPurpose: "implementation",
+        gateStatus: "not_started",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        archivedAt: null,
+      }),
+    ).toThrow();
+
+    store.insertWorkspaceCheckout({
+      id: "co_1",
+      workspaceId: "ws_1",
+      repoId: "repo_1",
+      name: "api",
+      path: "/tmp/api",
+      branch: "feature/api",
+      baseBranch: "main",
+      issue: null,
+      intendedPr: null,
+      stackParentCheckoutId: null,
+      inferredPurpose: "implementation",
+      gateStatus: "not_started",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      archivedAt: null,
+    });
+    store.insertWorkspacePlanVersion({
+      id: "plan_1",
+      workspaceId: "ws_1",
+      version: 1,
+      status: "approved",
+      path: "/tmp/plan.md",
+      hash: "hash1",
+      active: true,
+      approvalMode: "manual",
+      createdBySessionId: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    store.insertWorkspaceManager({
+      id: "mgr_1",
+      workspaceId: "ws_1",
+      pauseState: "running",
+      heartbeatIntervalSeconds: 300,
+      lastHeartbeatAt: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    store.insertManagerEvent({
+      id: "evt_1",
+      workspaceId: "ws_1",
+      managerId: "mgr_1",
+      type: "heartbeat",
+      scopeKey: "workspace:ws_1",
+      actionKey: "manager.heartbeat_digest",
+      idempotencyKey: "heartbeat:cascade",
+      status: "succeeded",
+      message: "ok",
+      createdAt: timestamp,
+    });
+    store.insertPlanDeviationReport({
+      id: "dev_1",
+      workspaceId: "ws_1",
+      checkoutId: "co_1",
+      planVersionId: "plan_1",
+      severity: "blocking",
+      description: "Need replan",
+      status: "open",
+      reportedBySessionId: null,
+      createdAt: timestamp,
+      resolvedAt: null,
+    });
+    store.insertReviewArtifact({
+      id: "review_1",
+      workspaceId: "ws_1",
+      checkoutId: "co_1",
+      planVersionId: "plan_1",
+      prProvider: "github",
+      prNumber: 12,
+      prUrl: "https://example.test/pr/12",
+      headSha: "abc",
+      result: "approve",
+      findingsStatus: "none",
+      blockingFindings: [],
+      artifactPath: "/tmp/review.md",
+      createdAt: timestamp,
+    });
+
+    store.deleteWorkspace("ws_1");
+
+    for (const table of [
+      "workspace_checkouts",
+      "workspace_plan_versions",
+      "workspace_managers",
+      "manager_events",
+      "plan_deviation_reports",
+      "checkout_review_artifacts",
+    ]) {
+      expect(store.query<{ count: number }>(`SELECT COUNT(*) AS count FROM ${table}`)[0]?.count).toBe(0);
+    }
   });
 });

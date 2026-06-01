@@ -60,6 +60,10 @@ export function migrateWorkspaceHomeCheckoutsManager(
       intended_pr_url TEXT,
       pr_head_sha TEXT,
       pr_base_ref TEXT,
+      intended_pr_fetched_at TEXT,
+      intended_pr_checks_green INTEGER,
+      intended_pr_merge_state_status TEXT,
+      intended_pr_has_conflicts INTEGER,
       stack_parent_checkout_id TEXT REFERENCES workspace_checkouts(id),
       inferred_purpose TEXT,
       gate_status TEXT NOT NULL DEFAULT 'not_started',
@@ -74,6 +78,10 @@ export function migrateWorkspaceHomeCheckoutsManager(
   ensureColumn("workspace_checkouts", "issue_title", "TEXT");
   ensureColumn("workspace_checkouts", "issue_status", "TEXT");
   ensureColumn("workspace_checkouts", "issue_fetched_at", "TEXT");
+  ensureColumn("workspace_checkouts", "intended_pr_fetched_at", "TEXT");
+  ensureColumn("workspace_checkouts", "intended_pr_checks_green", "INTEGER");
+  ensureColumn("workspace_checkouts", "intended_pr_merge_state_status", "TEXT");
+  ensureColumn("workspace_checkouts", "intended_pr_has_conflicts", "INTEGER");
   db.exec(`
     INSERT OR IGNORE INTO workspace_checkouts (
       id, workspace_id, repo_id, name, path, branch, base_branch, issue_provider, issue_key, issue_url, issue_title,
@@ -176,73 +184,75 @@ function relaxWorkspacesRepoId(db: SqliteDatabase) {
   const repoId = cols.find((col) => col.name === "repo_id");
   if (!repoId || repoId.notnull === 0) return;
   db.exec("PRAGMA foreign_keys = OFF");
-  db.exec("BEGIN IMMEDIATE");
   try {
-    db.exec(`
-      CREATE TABLE workspaces_new (
-        id TEXT PRIMARY KEY,
-        repo_id TEXT REFERENCES repos(id),
-        name TEXT NOT NULL,
-        path TEXT NOT NULL UNIQUE,
-        root_path TEXT NOT NULL,
-        mode TEXT NOT NULL DEFAULT 'freestyle',
-        branch TEXT NOT NULL,
-        base_branch TEXT NOT NULL,
-        source TEXT NOT NULL,
-        kind TEXT NOT NULL DEFAULT 'worktree',
-        lifecycle_phase TEXT NOT NULL DEFAULT 'implementation',
-        parent_issue_provider TEXT,
-        parent_issue_key TEXT,
-        parent_issue_url TEXT,
-        parent_issue_title TEXT,
-        parent_issue_status TEXT,
-        pr_url TEXT,
-        issue_key TEXT,
-        issue_title TEXT,
-        issue_url TEXT,
-        slack_thread_url TEXT,
-        section TEXT NOT NULL,
-        pinned INTEGER NOT NULL,
-        lifecycle TEXT NOT NULL,
-        dirty INTEGER NOT NULL,
-        namespace_id TEXT REFERENCES namespaces(id),
-        auto_recovery_last_ci_sha TEXT,
-        auto_recovery_last_attempt_at TEXT,
-        pr_number INTEGER,
-        pr_state TEXT,
-        pr_last_fetch_at TEXT,
-        pr_last_checks_green_at TEXT,
-        pr_last_head_sha TEXT,
-        pr_last_head_sha_changed_at TEXT,
-        pr_last_merge_state_status TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        archived_at TEXT,
-        UNIQUE(repo_id, name)
-      );
-      INSERT INTO workspaces_new (
-        id, repo_id, name, path, root_path, mode, branch, base_branch, source, kind, lifecycle_phase,
-        parent_issue_provider, parent_issue_key, parent_issue_url, parent_issue_title, parent_issue_status,
-        pr_url, issue_key, issue_title, issue_url, slack_thread_url, section, pinned, lifecycle, dirty,
-        namespace_id, auto_recovery_last_ci_sha, auto_recovery_last_attempt_at, pr_number, pr_state,
-        pr_last_fetch_at, pr_last_checks_green_at, pr_last_head_sha, pr_last_head_sha_changed_at,
-        pr_last_merge_state_status, created_at, updated_at, archived_at
-      )
-      SELECT
-        id, repo_id, name, path, COALESCE(NULLIF(root_path, ''), path), mode, branch, base_branch, source, kind,
-        lifecycle_phase, parent_issue_provider, parent_issue_key, parent_issue_url, parent_issue_title,
-        parent_issue_status, pr_url, issue_key, issue_title, issue_url, slack_thread_url, section, pinned,
-        lifecycle, dirty, namespace_id, auto_recovery_last_ci_sha, auto_recovery_last_attempt_at, pr_number,
-        pr_state, pr_last_fetch_at, pr_last_checks_green_at, pr_last_head_sha, pr_last_head_sha_changed_at,
-        pr_last_merge_state_status, created_at, updated_at, archived_at
-      FROM workspaces;
-      DROP TABLE workspaces;
-      ALTER TABLE workspaces_new RENAME TO workspaces;
-    `);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      db.exec(`
+        CREATE TABLE workspaces_new (
+          id TEXT PRIMARY KEY,
+          repo_id TEXT REFERENCES repos(id),
+          name TEXT NOT NULL,
+          path TEXT NOT NULL UNIQUE,
+          root_path TEXT NOT NULL,
+          mode TEXT NOT NULL DEFAULT 'freestyle',
+          branch TEXT NOT NULL,
+          base_branch TEXT NOT NULL,
+          source TEXT NOT NULL,
+          kind TEXT NOT NULL DEFAULT 'worktree',
+          lifecycle_phase TEXT NOT NULL DEFAULT 'implementation',
+          parent_issue_provider TEXT,
+          parent_issue_key TEXT,
+          parent_issue_url TEXT,
+          parent_issue_title TEXT,
+          parent_issue_status TEXT,
+          pr_url TEXT,
+          issue_key TEXT,
+          issue_title TEXT,
+          issue_url TEXT,
+          slack_thread_url TEXT,
+          section TEXT NOT NULL,
+          pinned INTEGER NOT NULL,
+          lifecycle TEXT NOT NULL,
+          dirty INTEGER NOT NULL,
+          namespace_id TEXT REFERENCES namespaces(id),
+          auto_recovery_last_ci_sha TEXT,
+          auto_recovery_last_attempt_at TEXT,
+          pr_number INTEGER,
+          pr_state TEXT,
+          pr_last_fetch_at TEXT,
+          pr_last_checks_green_at TEXT,
+          pr_last_head_sha TEXT,
+          pr_last_head_sha_changed_at TEXT,
+          pr_last_merge_state_status TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          archived_at TEXT,
+          UNIQUE(repo_id, name)
+        );
+        INSERT INTO workspaces_new (
+          id, repo_id, name, path, root_path, mode, branch, base_branch, source, kind, lifecycle_phase,
+          parent_issue_provider, parent_issue_key, parent_issue_url, parent_issue_title, parent_issue_status,
+          pr_url, issue_key, issue_title, issue_url, slack_thread_url, section, pinned, lifecycle, dirty,
+          namespace_id, auto_recovery_last_ci_sha, auto_recovery_last_attempt_at, pr_number, pr_state,
+          pr_last_fetch_at, pr_last_checks_green_at, pr_last_head_sha, pr_last_head_sha_changed_at,
+          pr_last_merge_state_status, created_at, updated_at, archived_at
+        )
+        SELECT
+          id, repo_id, name, path, COALESCE(NULLIF(root_path, ''), path), mode, branch, base_branch, source, kind,
+          lifecycle_phase, parent_issue_provider, parent_issue_key, parent_issue_url, parent_issue_title,
+          parent_issue_status, pr_url, issue_key, issue_title, issue_url, slack_thread_url, section, pinned,
+          lifecycle, dirty, namespace_id, auto_recovery_last_ci_sha, auto_recovery_last_attempt_at, pr_number,
+          pr_state, pr_last_fetch_at, pr_last_checks_green_at, pr_last_head_sha, pr_last_head_sha_changed_at,
+          pr_last_merge_state_status, created_at, updated_at, archived_at
+        FROM workspaces;
+        DROP TABLE workspaces;
+        ALTER TABLE workspaces_new RENAME TO workspaces;
+      `);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
   } finally {
     db.exec("PRAGMA foreign_keys = ON");
   }

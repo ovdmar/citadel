@@ -88,7 +88,9 @@ export async function createWorkspaceCheckoutImpl(
   if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
   const repo = deps.store.listRepos().find((candidate) => candidate.id === input.repoId);
   if (!repo) throw new Error(`Unknown repo: ${input.repoId}`);
-  const checkoutPath = path.join(workspaceRootPath(workspace), input.name);
+  const checkoutName = input.name.trim();
+  if (!isSafeCheckoutName(checkoutName)) throw new Error("checkout_name_invalid");
+  const checkoutPath = path.join(workspaceRootPath(workspace), checkoutName);
   const branch = input.branch.trim();
   const baseBranch = input.baseBranch?.trim() || repo.defaultBranch;
   const now = nowIso();
@@ -115,7 +117,7 @@ export async function createWorkspaceCheckoutImpl(
       id: createId("co"),
       workspaceId: workspace.id,
       repoId: repo.id,
-      name: input.name,
+      name: checkoutName,
       path: checkoutPath,
       branch,
       baseBranch,
@@ -133,13 +135,13 @@ export async function createWorkspaceCheckoutImpl(
       ...operation,
       status: "succeeded",
       progress: 100,
-      message: `Checkout ${input.name} ready`,
+      message: `Checkout ${checkoutName} ready`,
       updatedAt: nowIso(),
     });
     deps.activity(
       "workspace.checkout.created",
       "system",
-      `Created checkout ${input.name}`,
+      `Created checkout ${checkoutName}`,
       repo.id,
       workspace.id,
       operation.id,
@@ -150,4 +152,8 @@ export async function createWorkspaceCheckoutImpl(
     deps.store.upsertOperation({ ...operation, status: "failed", progress: 100, error: message, updatedAt: nowIso() });
     throw error;
   }
+}
+
+function isSafeCheckoutName(name: string): boolean {
+  return name.length > 0 && name !== "." && name !== ".." && !name.includes("/") && !name.includes("\\");
 }

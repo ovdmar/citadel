@@ -35,7 +35,12 @@ export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
 export { executionTargetCwd, resolveExecutionTargetForCwd, workspaceRootPath } from "./workspace-layout.js";
-export { executeWorkspaceLayoutMigration, planWorkspaceLayoutMigration } from "./workspace-layout-migration.js";
+export {
+  executeWorkspaceLayoutMigration,
+  hasWorkspaceLayoutMigrationCandidates,
+  planWorkspaceLayoutMigration,
+  runWorkspaceLayoutMigrations,
+} from "./workspace-layout-migration.js";
 export type {
   CheckoutGateSnapshot,
   MarkCheckoutReadyForReviewResult,
@@ -63,6 +68,10 @@ import { type DispatchAgentHook, runNotificationHooks, runWorkspaceHooks } from 
 import { createWorkspaceCheckoutImpl } from "./structured-workspace.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import { type WorkspaceAppsDeps, discoverWorkspaceApps as discoverWorkspaceAppsImpl, runWorkspaceAction as runWorkspaceActionImpl } from "./workspace-apps.js";
+import {
+  hasWorkspaceLayoutMigrationCandidates,
+  runWorkspaceLayoutMigrations as runWorkspaceLayoutMigrationsImpl,
+} from "./workspace-layout-migration.js";
 import * as workspaceManager from "./workspace-manager.js";
 import * as workspacePlans from "./workspace-plans.js";
 
@@ -158,6 +167,52 @@ export class OperationService {
 
   updateTicketStatus = (input: UpdateTicketStatusInput) =>
     workspaceManager.updateTicketStatus(this.managerDeps(), input);
+
+  runWorkspaceLayoutMigrations = () => {
+    if (!hasWorkspaceLayoutMigrationCandidates(this.store)) {
+      return { operationId: null, considered: 0, migrated: 0, skipped: [] };
+    }
+    const operation = this.operation(
+      "workspace.layout_migration",
+      "running",
+      null,
+      null,
+      5,
+      "Migrating legacy workspace layouts",
+    );
+    const summary = runWorkspaceLayoutMigrationsImpl({
+      store: this.store,
+      log: (level, message) => this.logOp(operation.id, level, message),
+    });
+    const failed = summary.skipped.filter((entry) => entry.reason === "migration_failed");
+    this.finalizeOperation(operation.id, {
+      status: failed.length ? "failed" : "succeeded",
+      progress: 100,
+      message: `Workspace layout migration: ${summary.migrated} migrated, ${summary.skipped.length} skipped`,
+      error: failed.length ? `${failed.length} workspace layout migration(s) failed` : null,
+    });
+    if (summary.migrated > 0) {
+      this.activity(
+        "workspace.layout_migration.migrated",
+        "system",
+        `Migrated ${summary.migrated} workspace layout(s)`,
+        null,
+        null,
+        operation.id,
+      );
+    }
+    if (summary.skipped.length > 0) {
+      this.activity(
+        "workspace.layout_migration.skipped",
+        "system",
+        `Skipped ${summary.skipped.length} workspace layout migration(s)`,
+        null,
+        null,
+        operation.id,
+      );
+    }
+    return { operationId: operation.id, ...summary };
+  };
 
   createAgentSession = (
     input: CreateAgentSessionInput,

@@ -55,7 +55,17 @@ type ResolvedCheckout =
 
 export type MarkCheckoutReadyForReviewResult =
   | { ok: true; artifact: ReviewArtifact; gate: CheckoutGateSnapshot }
-  | { ok: false; error: CheckoutResolveError | "active_plan_required" | "pr_required" | "pr_head_sha_required" };
+  | {
+      ok: false;
+      error:
+        | CheckoutResolveError
+        | "active_plan_required"
+        | "pr_required"
+        | "pr_head_sha_required"
+        | "review_artifact_required";
+    };
+
+const PROVIDER_FACT_FRESH_MS = 15 * 60 * 1000;
 
 export function startWorkspaceManager(
   deps: WorkspaceManagerDeps,
@@ -139,6 +149,19 @@ export function getCheckoutGateStatus(
   } else if (!currentHead) {
     status = "review_required";
     reasons.push("pr_head_sha_required");
+  } else if (!currentPr.fetchedAt || !isFreshIso(currentPr.fetchedAt)) {
+    status = "stale_provider";
+    reasons.push("stale_provider_facts");
+  } else if (
+    currentPr.hasConflicts ||
+    currentPr.mergeStateStatus === "DIRTY" ||
+    currentPr.mergeStateStatus === "CONFLICTING"
+  ) {
+    status = "conflicts";
+    reasons.push("pr_conflicts");
+  } else if (currentPr.checksGreen !== true) {
+    status = currentPr.checksGreen === false ? "checks_failing" : "checks_pending";
+    reasons.push(currentPr.checksGreen === false ? "checks_failing" : "checks_pending");
   } else if (openDeviations.length) {
     status = "blocked";
     reasons.push("open_plan_deviation");
@@ -186,23 +209,29 @@ export function markCheckoutReadyForReview(
   const existing = deps.store
     .listReviewArtifacts(checkout.id)
     .find((artifact) => artifact.planVersionId === activePlan.id && artifact.headSha === pr.headSha);
+  const reviewInput = input.review;
+  if (!existing && !reviewInput) return { ok: false, error: "review_artifact_required" as const };
   const now = nowIso();
-  const artifact: ReviewArtifact = existing ?? {
-    id: createId("review"),
-    workspaceId: resolved.workspace.id,
-    checkoutId: checkout.id,
-    planVersionId: activePlan.id,
-    prProvider: pr.provider,
-    prNumber: pr.number ?? null,
-    prUrl: pr.url ?? null,
-    headSha: pr.headSha,
-    result: "approve",
-    findingsStatus: "none",
-    blockingFindings: [],
-    artifactPath: null,
-    createdAt: now,
-  };
-  if (!existing) deps.store.insertReviewArtifact(artifact);
+  let artifact = existing;
+  if (!artifact) {
+    if (!reviewInput) return { ok: false, error: "review_artifact_required" as const };
+    artifact = {
+      id: createId("review"),
+      workspaceId: resolved.workspace.id,
+      checkoutId: checkout.id,
+      planVersionId: activePlan.id,
+      prProvider: pr.provider,
+      prNumber: pr.number ?? null,
+      prUrl: pr.url ?? null,
+      headSha: pr.headSha,
+      result: reviewInput.result,
+      findingsStatus: reviewInput.findingsStatus,
+      blockingFindings: reviewInput.blockingFindings,
+      artifactPath: reviewInput.artifactPath,
+      createdAt: now,
+    };
+    deps.store.insertReviewArtifact(artifact);
+  }
   const gate = getCheckoutGateStatus(deps, { checkoutId: checkout.id });
   if (gate.ok) {
     deps.store.updateWorkspaceCheckoutGate(checkout.id, gate.status);
@@ -224,6 +253,8 @@ export function markCheckoutReadyForReview(
 export function updateTicketStatus(deps: WorkspaceManagerDeps, input: UpdateTicketStatusInput) {
   const checkout = input.checkoutId ? deps.store.findWorkspaceCheckout(input.checkoutId) : null;
   if (input.checkoutId && !checkout) return { ok: false, error: "checkout_not_found" as const };
+  if (checkout && checkout.workspaceId !== input.workspaceId)
+    return { ok: false, error: "checkout_not_found" as const };
   const issue: IssueBinding = { ...input.issue, status: input.targetState };
   const updated = checkout ? deps.store.updateWorkspaceCheckoutIssue(checkout.id, issue) : null;
   deps.activity(
@@ -241,6 +272,11 @@ export function updateTicketStatus(deps: WorkspaceManagerDeps, input: UpdateTick
     issue,
     checkout: updated,
   };
+}
+
+function isFreshIso(value: string): boolean {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && Date.now() - parsed <= PROVIDER_FACT_FRESH_MS;
 }
 
 function setManagerPause(

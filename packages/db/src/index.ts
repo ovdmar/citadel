@@ -270,6 +270,17 @@ export class SqliteStore {
     this.database.prepare(`UPDATE workspaces SET ${fields.join(", ")} WHERE id = ?`).run(...(values as unknown[]));
   }
 
+  updateWorkspaceLayout(
+    workspaceId: string,
+    patch: Pick<Workspace, "path"> & { rootPath: string; mode?: Workspace["mode"] },
+  ): Workspace | null {
+    this.database
+      .prepare("UPDATE workspaces SET path = ?, root_path = ?, mode = ?, updated_at = ? WHERE id = ?")
+      .run(patch.path, patch.rootPath, patch.mode ?? "freestyle", new Date().toISOString(), workspaceId);
+    const row = this.database.prepare("SELECT * FROM workspaces WHERE id = ?").get(workspaceId);
+    return row ? workspaceFromRow(row as Record<string, unknown>) : null;
+  }
+
   archiveWorkspace(workspaceId: string, lifecycle: Workspace["lifecycle"], dirty = false) {
     const now = new Date().toISOString();
     this.database

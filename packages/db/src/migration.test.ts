@@ -654,13 +654,21 @@ describe("workspace home/checkouts/manager migration (v16)", () => {
     ]);
   });
 
-  it("records checkout issue status migration columns", () => {
+  it("records checkout issue and PR gate fact migration columns", () => {
     const dbPath = makeTempPath();
     const store = new SqliteStore(dbPath);
     store.migrate();
     const db = (store as unknown as { database: DatabaseSync }).database;
     const checkoutCols = db.prepare("PRAGMA table_info(workspace_checkouts)").all() as Array<{ name: string }>;
-    for (const column of ["issue_title", "issue_status", "issue_fetched_at"]) {
+    for (const column of [
+      "issue_title",
+      "issue_status",
+      "issue_fetched_at",
+      "intended_pr_fetched_at",
+      "intended_pr_checks_green",
+      "intended_pr_merge_state_status",
+      "intended_pr_has_conflicts",
+    ]) {
       expect(
         checkoutCols.some((entry) => entry.name === column),
         `missing ${column}`,
@@ -670,6 +678,10 @@ describe("workspace home/checkouts/manager migration (v16)", () => {
       | { name: string }
       | undefined;
     expect(migration?.name).toBe("workspace-checkout-issue-status");
+    const prMigration = db.prepare("SELECT name FROM schema_migrations WHERE version = 18").get() as
+      | { name: string }
+      | undefined;
+    expect(prMigration?.name).toBe("checkout-pr-gate-facts");
   });
 });
 

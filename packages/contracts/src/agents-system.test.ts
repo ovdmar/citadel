@@ -104,6 +104,11 @@ describe("agents system contracts", () => {
     });
 
     expect(checkout.gateStatus).toBe("not_started");
+    expect(checkout.intendedPr).toMatchObject({
+      checksGreen: null,
+      mergeStateStatus: null,
+      hasConflicts: null,
+    });
     expect(target.type).toBe("worktree_checkout");
     expect(plan.approvalMode).toBe("manual");
     expect(artifact.blockingFindings).toEqual([]);
@@ -119,7 +124,12 @@ describe("agents system contracts", () => {
       CreateWorkspaceCheckoutInputSchema.parse({ workspaceId: "ws_1", repoId: "repo_1", name: "api", branch: "b" })
         .source,
     ).toBe("default_branch");
-    expect(MarkCheckoutReadyForReviewInputSchema.parse({ checkoutId: "co_1" }).checkoutId).toBe("co_1");
+    expect(
+      MarkCheckoutReadyForReviewInputSchema.parse({
+        checkoutId: "co_1",
+        review: { result: "approve", findingsStatus: "none", blockingFindings: [], artifactPath: "/tmp/review.md" },
+      }).review?.result,
+    ).toBe("approve");
     expect(
       UpdateTicketStatusInputSchema.parse({
         workspaceId: "ws_1",

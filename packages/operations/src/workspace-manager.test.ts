@@ -1,11 +1,41 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { PullRequestBinding } from "@citadel/contracts";
 import { SqliteStore } from "@citadel/db";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperationService } from "./index.js";
 
 const dirs: string[] = [];
+const validPlan = `# Plan
+
+## Delivery Units
+API work.
+
+## Dependencies / Timeline
+None.
+
+## Manager Handoff
+Launch implementation.
+
+## Plan Version Notes
+Initial.
+`;
+
+function freshPr(overrides: Partial<PullRequestBinding> = {}): PullRequestBinding {
+  return {
+    provider: "github",
+    number: 42,
+    url: "https://example.test/pull/42",
+    headSha: "abc123",
+    baseRef: "main",
+    fetchedAt: new Date().toISOString(),
+    checksGreen: true,
+    mergeStateStatus: "CLEAN",
+    hasConflicts: false,
+    ...overrides,
+  };
+}
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
@@ -71,14 +101,7 @@ function setup() {
     branch: "feature/api",
     baseBranch: "main",
     issue: { provider: "jira", key: "CIT-2", url: null, title: "API", status: "To Do", fetchedAt: null },
-    intendedPr: {
-      provider: "github",
-      number: 42,
-      url: "https://example.test/pull/42",
-      headSha: "abc123",
-      baseRef: "main",
-      fetchedAt: null,
-    },
+    intendedPr: freshPr(),
     stackParentCheckoutId: null,
     inferredPurpose: "implementation",
     gateStatus: "not_started",
@@ -87,7 +110,7 @@ function setup() {
     archivedAt: null,
   });
   const planPath = path.join(rootPath, "plan.md");
-  fs.writeFileSync(planPath, "# Plan\n");
+  fs.writeFileSync(planPath, validPlan);
   service.registerWorkspacePlan({
     workspaceId: "ws_manager",
     path: planPath,
@@ -127,7 +150,16 @@ describe("workspace manager operations", () => {
       reasons: ["review_pr_artifact_required"],
     });
 
-    const marked = service.markCheckoutReadyForReview({ checkoutId: "co_api", notes: "review-pr passed" });
+    expect(service.markCheckoutReadyForReview({ checkoutId: "co_api", notes: "review-pr passed" })).toMatchObject({
+      ok: false,
+      error: "review_artifact_required",
+    });
+
+    const marked = service.markCheckoutReadyForReview({
+      checkoutId: "co_api",
+      notes: "review-pr passed",
+      review: { result: "approve", findingsStatus: "none", blockingFindings: [], artifactPath: null },
+    });
     expect(marked).toMatchObject({ ok: true, gate: { ok: true, status: "ready_for_human_review" } });
     expect(store.findWorkspaceCheckout("co_api")).toMatchObject({ gateStatus: "ready_for_human_review" });
     expect(store.listReviewArtifacts("co_api")).toHaveLength(1);
@@ -136,6 +168,64 @@ describe("workspace manager operations", () => {
     service.markCheckoutReadyForReview({ checkoutId: "co_api", notes: "retry" });
     expect(store.listReviewArtifacts("co_api")).toHaveLength(1);
     expect(store.listManagerEvents("ws_manager")).toHaveLength(1);
+  });
+
+  it("blocks readiness when provider facts, review result, deviations, or stack parents are not ready", () => {
+    const { store, service } = setup();
+
+    store.updateWorkspaceCheckoutPr("co_api", freshPr({ fetchedAt: "2020-01-01T00:00:00.000Z" }));
+    expect(service.getCheckoutGateStatus({ checkoutId: "co_api" })).toMatchObject({
+      ok: true,
+      status: "stale_provider",
+      reasons: ["stale_provider_facts"],
+    });
+
+    store.updateWorkspaceCheckoutPr("co_api", freshPr({ checksGreen: false }));
+    expect(service.getCheckoutGateStatus({ checkoutId: "co_api" })).toMatchObject({
+      ok: true,
+      status: "checks_failing",
+      reasons: ["checks_failing"],
+    });
+
+    store.updateWorkspaceCheckoutPr("co_api", freshPr({ hasConflicts: true }));
+    expect(service.getCheckoutGateStatus({ checkoutId: "co_api" })).toMatchObject({
+      ok: true,
+      status: "conflicts",
+      reasons: ["pr_conflicts"],
+    });
+
+    store.updateWorkspaceCheckoutPr("co_api", freshPr());
+    expect(
+      service.markCheckoutReadyForReview({
+        checkoutId: "co_api",
+        review: {
+          result: "request_changes",
+          findingsStatus: "open_blocking",
+          blockingFindings: ["Fix API"],
+          artifactPath: null,
+        },
+      }),
+    ).toMatchObject({ ok: true, gate: { ok: true, status: "review_blocked" } });
+
+    const plan = store.findActiveWorkspacePlan("ws_manager");
+    if (!plan) throw new Error("plan missing");
+    store.insertPlanDeviationReport({
+      id: "dev_blocking",
+      workspaceId: "ws_manager",
+      checkoutId: "co_api",
+      planVersionId: plan.id,
+      severity: "blocking",
+      description: "Scope changed",
+      status: "open",
+      reportedBySessionId: null,
+      createdAt: new Date().toISOString(),
+      resolvedAt: null,
+    });
+    expect(service.getCheckoutGateStatus({ checkoutId: "co_api" })).toMatchObject({
+      ok: true,
+      status: "blocked",
+      reasons: ["open_plan_deviation"],
+    });
   });
 
   it("updates provider-neutral checkout ticket status locally", () => {
@@ -150,5 +240,19 @@ describe("workspace manager operations", () => {
       }),
     ).toMatchObject({ ok: true, issue: { status: "in_review" }, externalUpdate: "not_configured" });
     expect(store.findWorkspaceCheckout("co_api")?.issue).toMatchObject({ key: "CIT-2", status: "in_review" });
+  });
+
+  it("does not update a checkout ticket through another workspace id", () => {
+    const { store, service } = setup();
+
+    expect(
+      service.updateTicketStatus({
+        workspaceId: "ws_other",
+        checkoutId: "co_api",
+        issue: { provider: "jira", key: "CIT-2", url: null, title: "API", status: "To Do", fetchedAt: null },
+        targetState: "done",
+      }),
+    ).toMatchObject({ ok: false, error: "checkout_not_found" });
+    expect(store.findWorkspaceCheckout("co_api")?.issue).toMatchObject({ key: "CIT-2", status: "To Do" });
   });
 });

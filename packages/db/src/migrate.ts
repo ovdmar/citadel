@@ -24,7 +24,7 @@ type SessionTableName = "agent_sessions" | "workspace_sessions";
 // the new version below. Consumed by the doctor's database-schema check so
 // `make doctor` can flag an installed daemon whose code is newer than the
 // database it's been given.
-export const CURRENT_SCHEMA_VERSION = 17;
+export const CURRENT_SCHEMA_VERSION = 18;
 
 function tmuxSocketBase(): string {
   const configured = process.env.CITADEL_TMUX_SOCKET?.trim();
@@ -372,6 +372,14 @@ export function runMigrations(
   db.exec(`
     INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
       (17, 'workspace-checkout-issue-status', datetime('now'));
+  `);
+  ensureColumn("workspace_checkouts", "intended_pr_fetched_at", "TEXT");
+  ensureColumn("workspace_checkouts", "intended_pr_checks_green", "INTEGER");
+  ensureColumn("workspace_checkouts", "intended_pr_merge_state_status", "TEXT");
+  ensureColumn("workspace_checkouts", "intended_pr_has_conflicts", "INTEGER");
+  db.exec(`
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (18, 'checkout-pr-gate-facts', datetime('now'));
   `);
 }
 

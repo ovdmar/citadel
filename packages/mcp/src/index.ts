@@ -37,6 +37,7 @@ export type McpToolName =
   | "list_workspaces"
   | "list_agent_sessions"
   | "list_provider_health"
+  | "list_agent_runtimes"
   | "list_runtimes"
   | "list_workspace_links"
   | "get_citadel_context"
@@ -228,7 +229,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       destructive: false,
     },
     {
-      name: "list_runtimes",
+      name: "list_agent_runtimes",
       description: "List configured agent runtimes and their health.",
       inputSchema: { type: "object", additionalProperties: false },
       destructive: false,
@@ -652,6 +653,7 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
       return { providerHealth: context.providerHealth };
     case "list_scheduled_agents":
       return { scheduledAgents: context.scheduledAgents ?? [] };
+    case "list_agent_runtimes":
     case "list_runtimes":
       return { runtimes: context.runtimes };
     case "list_workspace_links":

@@ -80,6 +80,31 @@ describe("structured workspace operations", () => {
     });
     expect(fs.existsSync(path.join(row?.path ?? "", ".git"))).toBe(true);
   });
+
+  it("rejects checkout names that would escape the workspace root", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = serviceFor(fixture.dir, store);
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const workspace = await service.createWorkspace({
+      mode: "structured",
+      rootPath: path.join(fixture.dir, "feature"),
+      name: "Feature",
+      source: "scratch",
+    });
+
+    await expect(
+      service.createWorkspaceCheckout({
+        workspaceId: workspace.workspaceId,
+        repoId: repo.id,
+        name: "../outside",
+        source: "default_branch",
+        branch: "feature/outside",
+      }),
+    ).rejects.toThrow("checkout_name_invalid");
+    expect(store.listWorkspaceCheckouts(workspace.workspaceId)).toEqual([]);
+  });
 });
 
 function createGitFixture() {

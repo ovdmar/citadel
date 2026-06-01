@@ -165,6 +165,8 @@ async function launchRoleSession(
     prompt: Array<string | null>;
   },
 ): Promise<RoleLaunchResult> {
+  const manager = deps.store.getWorkspaceManager(input.workspace.id);
+  if (input.actor !== "human" && manager?.pauseState === "paused") return { ok: false, error: "automation_paused" };
   const session = await deps.operations.createAgentSession(
     {
       workspaceId: input.workspace.id,

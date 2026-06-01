@@ -18,6 +18,7 @@ declare module "./index.js" {
     listWorkspaceCheckouts(workspaceId: string): WorktreeCheckout[];
     findWorkspaceCheckout(id: string): WorktreeCheckout | null;
     insertWorkspaceCheckout(checkout: WorktreeCheckout): void;
+    updateWorkspaceCheckoutLayout(id: string, patch: Pick<WorktreeCheckout, "name" | "path">): WorktreeCheckout | null;
     updateWorkspaceCheckoutGate(id: string, gateStatus: WorktreeCheckout["gateStatus"]): WorktreeCheckout | null;
     updateWorkspaceCheckoutIssue(id: string, issue: IssueBinding | null): WorktreeCheckout | null;
     updateWorkspaceCheckoutPr(id: string, pr: PullRequestBinding | null): WorktreeCheckout | null;
@@ -69,7 +70,16 @@ function checkoutFromRow(row: Record<string, unknown>): WorktreeCheckout {
           url: row.intended_pr_url ? asString(row, "intended_pr_url") : null,
           headSha: row.pr_head_sha ? asString(row, "pr_head_sha") : null,
           baseRef: row.pr_base_ref ? asString(row, "pr_base_ref") : null,
-          fetchedAt: null,
+          fetchedAt: row.intended_pr_fetched_at ? asString(row, "intended_pr_fetched_at") : null,
+          checksGreen:
+            row.intended_pr_checks_green === null || row.intended_pr_checks_green === undefined
+              ? null
+              : Boolean(row.intended_pr_checks_green),
+          mergeStateStatus: row.intended_pr_merge_state_status ? asString(row, "intended_pr_merge_state_status") : null,
+          hasConflicts:
+            row.intended_pr_has_conflicts === null || row.intended_pr_has_conflicts === undefined
+              ? null
+              : Boolean(row.intended_pr_has_conflicts),
         }
       : null,
     stackParentCheckoutId: row.stack_parent_checkout_id ? asString(row, "stack_parent_checkout_id") : null,
@@ -200,9 +210,11 @@ export const agentsSystemStoreMethods = {
         `INSERT INTO workspace_checkouts (id, workspace_id, repo_id, name, path, branch, base_branch,
           issue_provider, issue_key, issue_url, issue_title, issue_status, issue_fetched_at,
           intended_pr_provider, intended_pr_number, intended_pr_url,
-          pr_head_sha, pr_base_ref, stack_parent_checkout_id, inferred_purpose, gate_status,
+          pr_head_sha, pr_base_ref, intended_pr_fetched_at, intended_pr_checks_green,
+          intended_pr_merge_state_status, intended_pr_has_conflicts,
+          stack_parent_checkout_id, inferred_purpose, gate_status,
           created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         checkout.id,
@@ -223,6 +235,10 @@ export const agentsSystemStoreMethods = {
         checkout.intendedPr?.url ?? null,
         checkout.intendedPr?.headSha ?? null,
         checkout.intendedPr?.baseRef ?? null,
+        checkout.intendedPr?.fetchedAt ?? null,
+        checkout.intendedPr?.checksGreen == null ? null : Number(checkout.intendedPr.checksGreen),
+        checkout.intendedPr?.mergeStateStatus ?? null,
+        checkout.intendedPr?.hasConflicts == null ? null : Number(checkout.intendedPr.hasConflicts),
         checkout.stackParentCheckoutId ?? null,
         checkout.inferredPurpose ?? null,
         checkout.gateStatus,
@@ -230,6 +246,17 @@ export const agentsSystemStoreMethods = {
         checkout.updatedAt,
         checkout.archivedAt ?? null,
       );
+  },
+
+  updateWorkspaceCheckoutLayout(
+    this: SqliteStore,
+    id: string,
+    patch: Pick<WorktreeCheckout, "name" | "path">,
+  ): WorktreeCheckout | null {
+    this.database
+      .prepare("UPDATE workspace_checkouts SET name = ?, path = ?, updated_at = ? WHERE id = ?")
+      .run(patch.name, patch.path, new Date().toISOString(), id);
+    return this.findWorkspaceCheckout(id);
   },
 
   updateWorkspaceCheckoutGate(
@@ -269,6 +296,8 @@ export const agentsSystemStoreMethods = {
       .prepare(
         `UPDATE workspace_checkouts
          SET intended_pr_provider = ?, intended_pr_number = ?, intended_pr_url = ?, pr_head_sha = ?, pr_base_ref = ?,
+           intended_pr_fetched_at = ?, intended_pr_checks_green = ?, intended_pr_merge_state_status = ?,
+           intended_pr_has_conflicts = ?,
            updated_at = ?
          WHERE id = ?`,
       )
@@ -278,6 +307,10 @@ export const agentsSystemStoreMethods = {
         pr?.url ?? null,
         pr?.headSha ?? null,
         pr?.baseRef ?? null,
+        pr?.fetchedAt ?? null,
+        pr?.checksGreen == null ? null : Number(pr.checksGreen),
+        pr?.mergeStateStatus ?? null,
+        pr?.hasConflicts == null ? null : Number(pr.hasConflicts),
         new Date().toISOString(),
         id,
       );

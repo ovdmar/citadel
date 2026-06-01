@@ -1,7 +1,7 @@
 import type { AgentRuntime, TerminalProfile, Workspace, WorkspaceSession } from "@citadel/contracts";
 import { deriveAgentLifecycleTone } from "@citadel/core";
 import { useMutation } from "@tanstack/react-query";
-import { Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
+import { Bot, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import {
@@ -17,6 +17,18 @@ import { lifecycleToneClass } from "./workspace-card.js";
 type StageTab = {
   session: WorkspaceSession;
   label: string;
+};
+
+export type StageStructuredAction = {
+  id: string;
+  label: string;
+  toolName:
+    | "launch_pm_agent"
+    | "launch_architect_agent"
+    | "launch_implementation_agent"
+    | "launch_prototype_agent"
+    | "start_workspace_manager";
+  arguments: Record<string, unknown>;
 };
 
 const WORKSPACE_SESSION_CAP = 20;
@@ -61,6 +73,51 @@ export function stableWorkspaceSessionIdsKey(sessions: WorkspaceSession[]): stri
     .sort(compareStageSessions)
     .map((session) => session.id)
     .join("\0");
+}
+
+export function structuredStageActions(input: {
+  workspace: Workspace;
+  targetType: "workspace_home" | "worktree_checkout";
+  checkoutId: string | null;
+}): StageStructuredAction[] {
+  if (input.workspace.mode !== "structured") return [];
+  if (input.targetType === "workspace_home") {
+    return [
+      {
+        id: "pm",
+        label: "PM",
+        toolName: "launch_pm_agent",
+        arguments: { workspaceId: input.workspace.id, actor: "human" },
+      },
+      {
+        id: "architect",
+        label: "Architect",
+        toolName: "launch_architect_agent",
+        arguments: { workspaceId: input.workspace.id, planApprovalMode: "manual", actor: "human" },
+      },
+      {
+        id: "manager",
+        label: "Manager",
+        toolName: "start_workspace_manager",
+        arguments: { workspaceId: input.workspace.id },
+      },
+    ];
+  }
+  if (!input.checkoutId) return [];
+  return [
+    {
+      id: "implementation",
+      label: "Implementation",
+      toolName: "launch_implementation_agent",
+      arguments: { checkoutId: input.checkoutId, actor: "human" },
+    },
+    {
+      id: "prototype",
+      label: "Prototype",
+      toolName: "launch_prototype_agent",
+      arguments: { checkoutId: input.checkoutId, actor: "human" },
+    },
+  ];
 }
 
 function WorkspaceSessionHistory(props: { sessions: WorkspaceSession[]; currentTargetKey: string }) {
@@ -248,6 +305,24 @@ export function Stage(props: {
     },
   });
 
+  const startStructuredAction = useMutation({
+    mutationFn: async (action: StageStructuredAction) => {
+      const response = await api<{ result: StructuredToolResult }>("/api/mcp/tools/call", {
+        method: "POST",
+        body: JSON.stringify({ name: action.toolName, arguments: action.arguments }),
+      });
+      if (response.result?.error || response.result?.ok === false) {
+        throw new Error(structuredToolError(response.result));
+      }
+      return response.result;
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      if (result.session?.id) props.onActiveSession(result.session.id);
+      setAddMenuOpen(false);
+    },
+  });
+
   const stopSession = useMutation({
     mutationFn: (sessionId: string) => api(`/api/workspace-sessions/${sessionId}`, { method: "DELETE" }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
@@ -272,7 +347,9 @@ export function Stage(props: {
       ? startAgentSession.error.message
       : startTerminalSession.error instanceof Error
         ? startTerminalSession.error.message
-        : null;
+        : startStructuredAction.error instanceof Error
+          ? startStructuredAction.error.message
+          : null;
   const atSessionCap = props.sessions.length >= WORKSPACE_SESSION_CAP;
   // Per spec B.2 §Center Stage Sessions #10: starting a session needs a
   // ready worktree, so the "+" button is gated off while the workspace is
@@ -281,12 +358,21 @@ export function Stage(props: {
   // during the synchronous setup window.
   const lifecycleCreating = props.workspace.lifecycle === "creating";
   const addDisabled =
-    startAgentSession.isPending || startTerminalSession.isPending || atSessionCap || lifecycleCreating;
+    startAgentSession.isPending ||
+    startTerminalSession.isPending ||
+    startStructuredAction.isPending ||
+    atSessionCap ||
+    lifecycleCreating;
   const addTitle = atSessionCap
     ? `Workspace is at the ${WORKSPACE_SESSION_CAP}-session cap. Close a session to start another.`
     : lifecycleCreating
       ? "Workspace is still being set up."
       : "Add session";
+  const structuredActions = structuredStageActions({
+    workspace: props.workspace,
+    targetType: props.targetType,
+    checkoutId: props.checkoutId,
+  });
   return (
     <>
       <div className="stage-tabbar">
@@ -448,6 +534,18 @@ export function Stage(props: {
                   </output>
                 ) : null}
               </div>
+              {structuredActions.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  role="menuitem"
+                  title={atSessionCap ? `Cap reached (${WORKSPACE_SESSION_CAP}). Close a session first.` : action.label}
+                  onClick={() => startStructuredAction.mutate(action)}
+                  disabled={addDisabled}
+                >
+                  <Bot size={12} /> {action.label}
+                </button>
+              ))}
               <button
                 type="button"
                 role="menuitem"
@@ -519,4 +617,17 @@ export function Stage(props: {
       </div>
     </>
   );
+}
+
+type StructuredToolResult = {
+  ok?: boolean;
+  error?: string;
+  detail?: string;
+  session?: WorkspaceSession;
+};
+
+function structuredToolError(result: StructuredToolResult): string {
+  return result.detail
+    ? `${result.error ?? "structured_action_failed"}: ${result.detail}`
+    : (result.error ?? "structured_action_failed");
 }

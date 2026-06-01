@@ -308,6 +308,7 @@ describe("mcp helpers", () => {
     expect(callMcpTool({ name: "list_provider_health" }, context)).toEqual({
       providerHealth: context.providerHealth,
     });
+    expect(callMcpTool({ name: "list_agent_runtimes" }, context)).toEqual({ runtimes: context.runtimes });
     expect(callMcpTool({ name: "list_runtimes" }, context)).toEqual({ runtimes: context.runtimes });
     expect(callMcpTool({ name: "list_scheduled_agents" }, context)).toEqual({ scheduledAgents: [] });
     expect(callMcpTool({ name: "create_scheduled_agent" }, context)).toEqual({

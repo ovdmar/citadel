@@ -28,6 +28,9 @@ export const PullRequestBindingSchema = z.object({
   headSha: z.string().nullable().default(null),
   baseRef: z.string().nullable().default(null),
   fetchedAt: z.string().nullable().default(null),
+  checksGreen: z.boolean().nullable().default(null),
+  mergeStateStatus: z.string().nullable().default(null),
+  hasConflicts: z.boolean().nullable().default(null),
 });
 
 export const ExecutionTargetTypeSchema = z.enum(["workspace_home", "worktree_checkout"]);
@@ -314,7 +317,15 @@ export const LaunchPrototypeAgentInputSchema = z.object({
 export const CreateWorkspaceCheckoutInputSchema = z.object({
   workspaceId: IdSchema,
   repoId: IdSchema,
-  name: z.string().min(1),
+  name: z
+    .string()
+    .min(1)
+    .refine((value) => {
+      const trimmed = value.trim();
+      return (
+        trimmed.length > 0 && trimmed !== "." && trimmed !== ".." && !trimmed.includes("/") && !trimmed.includes("\\")
+      );
+    }, "checkout_name_invalid"),
   branch: z.string().min(1),
   baseBranch: z.string().min(1).optional(),
   source: z.enum(["default_branch", "existing_branch", "pr", "upstream_checkout"]).default("default_branch"),
@@ -326,6 +337,14 @@ export const MarkCheckoutReadyForReviewInputSchema = z.object({
   checkoutId: IdSchema,
   sessionId: IdSchema.optional(),
   pr: PullRequestBindingSchema.optional(),
+  review: z
+    .object({
+      result: z.enum(["approve", "nit", "request_changes", "failed"]),
+      findingsStatus: z.enum(["none", "open_blocking", "resolved", "waived"]),
+      blockingFindings: z.array(z.string().min(1)).default([]),
+      artifactPath: z.string().nullable().default(null),
+    })
+    .optional(),
   notes: z.string().optional(),
 });
 

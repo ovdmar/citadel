@@ -6,6 +6,20 @@ import { afterEach, describe, expect, it } from "vitest";
 import { OperationService } from "./index.js";
 
 const dirs: string[] = [];
+const validPlan = (title: string) => `# ${title}
+
+## Delivery Units
+API work.
+
+## Dependencies / Timeline
+None.
+
+## Manager Handoff
+Launch implementation.
+
+## Plan Version Notes
+Initial.
+`;
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
@@ -69,7 +83,7 @@ describe("workspace plan operations", () => {
   it("registers approved plan versions and supersedes the previous active plan", () => {
     const { store, service, rootPath } = setup();
     const planPath = path.join(rootPath, "plan.md");
-    fs.writeFileSync(planPath, "# Plan v1\n");
+    fs.writeFileSync(planPath, validPlan("Plan v1"));
 
     const first = service.registerWorkspacePlan({
       workspaceId: "ws_plan",
@@ -83,7 +97,7 @@ describe("workspace plan operations", () => {
       expect.objectContaining({ decision: "approve", actor: "human" }),
     ]);
 
-    fs.writeFileSync(planPath, "# Plan v2\n");
+    fs.writeFileSync(planPath, validPlan("Plan v2"));
     const second = service.registerWorkspacePlan({
       workspaceId: "ws_plan",
       path: planPath,
@@ -114,6 +128,54 @@ describe("workspace plan operations", () => {
     ).toMatchObject({ ok: false, error: "plan_path_outside_workspace" });
   });
 
+  it("rejects approved plans without required manager handoff sections", () => {
+    const { service, rootPath } = setup();
+    const planPath = path.join(rootPath, "plan.md");
+    fs.writeFileSync(planPath, "# Thin plan\n");
+
+    expect(
+      service.registerWorkspacePlan({
+        workspaceId: "ws_plan",
+        path: planPath,
+        status: "approved",
+        approvalMode: "manual",
+      }),
+    ).toMatchObject({ ok: false, error: "plan_structure_invalid" });
+  });
+
+  it("resolves relative plan paths from a validated cwd", () => {
+    const { service, rootPath } = setup();
+    const plansDir = path.join(rootPath, ".agents", "plans");
+    fs.mkdirSync(plansDir, { recursive: true });
+    fs.writeFileSync(path.join(plansDir, "feature.md"), validPlan("Feature"));
+
+    expect(
+      service.registerWorkspacePlan({
+        workspaceId: "ws_plan",
+        cwd: plansDir,
+        path: "feature.md",
+        status: "approved",
+        approvalMode: "manual",
+      }),
+    ).toMatchObject({ ok: true, planVersion: { path: path.join(plansDir, "feature.md") } });
+  });
+
+  it("does not let agent sessions record manual approval decisions", () => {
+    const { service, rootPath } = setup();
+    const planPath = path.join(rootPath, "plan.md");
+    fs.writeFileSync(planPath, validPlan("Agent Plan"));
+
+    expect(
+      service.registerWorkspacePlan({
+        workspaceId: "ws_plan",
+        path: planPath,
+        status: "approved",
+        approvalMode: "manual",
+        createdBySessionId: "sess_architect",
+      }),
+    ).toMatchObject({ ok: false, error: "plan_approval_required" });
+  });
+
   it("resolves cwd context and reports deviations against the active plan", () => {
     const { store, service, rootPath } = setup();
     const checkoutPath = path.join(rootPath, "api");
@@ -136,7 +198,7 @@ describe("workspace plan operations", () => {
       archivedAt: null,
     });
     const planPath = path.join(rootPath, "plan.md");
-    fs.writeFileSync(planPath, "# Plan\n");
+    fs.writeFileSync(planPath, validPlan("Plan"));
     const plan = service.registerWorkspacePlan({
       cwd: checkoutPath,
       path: planPath,

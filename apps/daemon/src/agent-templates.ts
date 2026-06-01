@@ -78,7 +78,7 @@ function writeRaw(dataDir: string, store: StoredAgentTemplates): void {
   renameSync(tmp, filePath);
 }
 
-export function defaultAgentTemplates(): RoleTemplate[] {
+function defaultAgentTemplates(): RoleTemplate[] {
   return DEFAULT_ROLES.map((role) => cloneRole(role, nowIso()));
 }
 
