@@ -244,6 +244,40 @@
   position: relative;
 }
 
+.nav-workspace-target-wrap {
+  display: grid;
+  gap: 2px;
+}
+
+.nav-workspace-targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 8px 3px 30px;
+}
+
+.nav-workspace-targets button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--c-line-1);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--c-fg-4);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.nav-workspace-targets button.is-active {
+  border-color: var(--c-accent, #5b8df8);
+  color: var(--c-fg-1);
+  background: var(--c-line-1);
+}
+
 /* Intra-group drag-reorder indicator: a thin accent line above or below
  * the card during a hover-over-drop. The wrap is `position: relative`
  * already, so absolute lines slot in without affecting layout. */

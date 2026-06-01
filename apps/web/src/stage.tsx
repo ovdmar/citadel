@@ -2,7 +2,7 @@ import type { AgentRuntime, TerminalProfile, Workspace, WorkspaceSession } from 
 import { deriveAgentLifecycleTone } from "@citadel/core";
 import { useMutation } from "@tanstack/react-query";
 import { Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import {
   applySessionOrder,
@@ -63,6 +63,35 @@ export function stableWorkspaceSessionIdsKey(sessions: WorkspaceSession[]): stri
     .join("\0");
 }
 
+function WorkspaceSessionHistory(props: { sessions: WorkspaceSession[]; currentTargetKey: string }) {
+  const closed = props.sessions
+    .filter((session) => session.closedAt)
+    .sort((a, b) => (b.closedAt ?? b.updatedAt).localeCompare(a.closedAt ?? a.updatedAt))
+    .slice(0, 8);
+  if (!closed.length) return null;
+  return (
+    <div className="stage-history" aria-label="Workspace agent history">
+      <div className="stage-history-title">History</div>
+      <div className="stage-history-list">
+        {closed.map((session) => (
+          <div key={session.id} className={targetKeyForSession(session) === props.currentTargetKey ? "is-current" : ""}>
+            <span className="stage-history-name">{session.displayName}</span>
+            <span className="stage-history-meta">
+              {session.role ?? (session.kind === "terminal" ? "terminal" : session.runtimeId)}
+              {session.actionId ? ` / ${session.actionId}` : ""}
+              {session.runtimeSessionId ? ` / ${session.runtimeSessionId.slice(0, 8)}` : ""}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function targetKeyForSession(session: WorkspaceSession): string {
+  return session.targetType === "worktree_checkout" && session.checkoutId ? `checkout:${session.checkoutId}` : "home";
+}
+
 function sameOrderedIds(a: Set<string>, b: Set<string>): boolean {
   if (a.size !== b.size) return false;
   const aIds = [...a];
@@ -77,6 +106,10 @@ export function Stage(props: {
   workspace: Workspace;
   sessions: WorkspaceSession[];
   allSessions?: WorkspaceSession[];
+  targetKey: string;
+  targetType: "workspace_home" | "worktree_checkout";
+  checkoutId: string | null;
+  targetLabel: string;
   runtimes: AgentRuntime[];
   terminal: TerminalProfile;
   activeSessionId: string | undefined;
@@ -93,14 +126,17 @@ export function Stage(props: {
   useEffect(() => saveSessionOrder(sessionOrder), [sessionOrder]);
   useEffect(() => {
     const live = new Set(
-      props.allSessions?.map((session) => session.id) ?? props.sessions.map((session) => session.id),
+      props.allSessions?.filter((session) => !session.closedAt).map((session) => session.id) ??
+        props.sessions.map((session) => session.id),
     );
     setSessionOrder((prev) => pruneSessionOrder(prev, live));
   }, [props.allSessions, props.sessions]);
-  const sortedSessions = applySessionOrder(defaultSortedSessions, sessionOrder[props.workspace.id]);
+  const orderKey = `${props.workspace.id}:${props.targetKey}`;
+  const sortedSessions = applySessionOrder(defaultSortedSessions, sessionOrder[orderKey]);
   const tabs: StageTab[] = sortedSessions.map((session) => ({ session, label: session.displayName }));
   const visibleTabIds = tabs.map((tab) => tab.session.id);
   const allSessions = props.allSessions ?? props.sessions;
+  const liveSessions = useMemo(() => allSessions.filter((session) => !session.closedAt), [allSessions]);
 
   // If the caller just selected a session that hasn't shown up in props.sessions
   // yet (mutation responded, query refetch in flight), keep that ID even though
@@ -142,12 +178,12 @@ export function Stage(props: {
   useEffect(() => {
     const activeId = activeSession?.session.id ?? null;
     setVisitedIds((prev) => {
-      const live = new Set(allSessions.map((session) => session.id));
+      const live = new Set(liveSessions.map((session) => session.id));
       const next = retainRecentTerminalIds(prev, activeId, live);
       return sameOrderedIds(prev, next) ? prev : next;
     });
-  }, [activeSession?.session.id, allSessions]);
-  const visitedPanes = stableVisitedSessions(allSessions, visitedIds);
+  }, [activeSession?.session.id, liveSessions]);
+  const visitedPanes = stableVisitedSessions(liveSessions, visitedIds);
   const workspaceSessionIdsKey = stableWorkspaceSessionIdsKey(props.sessions);
 
   useEffect(() => {
@@ -182,6 +218,8 @@ export function Stage(props: {
         method: "POST",
         body: JSON.stringify({
           workspaceId: props.workspace.id,
+          targetType: props.targetType,
+          ...(props.checkoutId ? { checkoutId: props.checkoutId } : {}),
           runtimeId: input.runtimeId,
           displayName: input.displayName,
         }),
@@ -197,7 +235,11 @@ export function Stage(props: {
     mutationFn: () =>
       api<{ session: WorkspaceSession }>(`/api/workspaces/${props.workspace.id}/terminal-sessions`, {
         method: "POST",
-        body: JSON.stringify({ displayName: props.terminal.displayName }),
+        body: JSON.stringify({
+          displayName: props.terminal.displayName,
+          targetType: props.targetType,
+          ...(props.checkoutId ? { checkoutId: props.checkoutId } : {}),
+        }),
       }),
     onSuccess: ({ session }) => {
       queryClient.invalidateQueries({ queryKey: ["state"] });
@@ -289,7 +331,7 @@ export function Stage(props: {
                   const insertIndex = tabDropIndicator?.side === "after" ? targetIndex + 1 : targetIndex;
                   setSessionOrder((prev) => ({
                     ...prev,
-                    [props.workspace.id]: spliceSessionOrder(visibleTabIds, draggedId, insertIndex),
+                    [orderKey]: spliceSessionOrder(visibleTabIds, draggedId, insertIndex),
                   }));
                   setTabDropIndicator(null);
                 }}
@@ -336,7 +378,10 @@ export function Stage(props: {
                         }}
                       />
                     ) : (
-                      <span className="stage-tab-label">{tab.label}</span>
+                      <>
+                        {tab.session.role ? <span className="stage-tab-role">{tab.session.role}</span> : null}
+                        <span className="stage-tab-label">{tab.label}</span>
+                      </>
                     )}
                   </span>
                 </button>
@@ -396,7 +441,7 @@ export function Stage(props: {
           {addMenuOpen ? (
             <div className="stage-add-menu" role="menu">
               <div className="stage-add-menu-label">
-                New session
+                New session in {props.targetLabel}
                 {atSessionCap ? (
                   <output className="stage-add-cap">
                     {props.sessions.length}/{WORKSPACE_SESSION_CAP} — cap reached
@@ -454,6 +499,7 @@ export function Stage(props: {
           Failed to start session: {startError}
         </div>
       ) : null}
+      <WorkspaceSessionHistory sessions={allSessions} currentTargetKey={props.targetKey} />
       <div className="stage-body">
         {visitedPanes.map((session) => (
           <div

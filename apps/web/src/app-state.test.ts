@@ -32,6 +32,7 @@ function baseState(workspaces: Workspace[]): StateResponse {
   return {
     repos: [],
     workspaces,
+    checkouts: [],
     sessions: [],
     operations: [],
     activity: [],

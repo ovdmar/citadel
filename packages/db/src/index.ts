@@ -544,6 +544,18 @@ export class SqliteStore {
     this.database.prepare("DELETE FROM workspace_sessions WHERE id = ?").run(sessionId);
   }
 
+  closeWorkspaceSession(sessionId: string, closedAt = new Date().toISOString()) {
+    this.database
+      .prepare(
+        `UPDATE workspace_sessions
+         SET status = 'stopped', status_reason = 'closed_by_user', status_reason_at = ?,
+             transport = 'disconnected', tmux_session_name = NULL, tmux_session_id = NULL, tmux_socket_name = NULL,
+             closed_at = ?, ended_at = COALESCE(ended_at, ?), updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(closedAt, closedAt, closedAt, closedAt, sessionId);
+  }
+
   deleteSession(sessionId: string) {
     this.deleteWorkspaceSession(sessionId);
   }

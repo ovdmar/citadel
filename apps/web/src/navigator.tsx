@@ -1,4 +1,12 @@
-import type { Namespace, Operation, PullRequestSummary, Repo, Workspace, WorkspaceSession } from "@citadel/contracts";
+import type {
+  Namespace,
+  Operation,
+  PullRequestSummary,
+  Repo,
+  Workspace,
+  WorkspaceSession,
+  WorktreeCheckout,
+} from "@citadel/contracts";
 import { type LifecycleTone, deriveWorkspaceLifecycleTone } from "@citadel/core";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
@@ -8,6 +16,8 @@ import {
   ChevronRight,
   ClipboardList,
   FolderPlus,
+  GitBranch,
+  Home,
   LayoutDashboard,
   NotebookPen,
   PanelLeftClose,
@@ -62,10 +72,12 @@ export function aggregateNavigatorTone(
 export function Navigator(props: {
   repos: Repo[];
   workspaces: Workspace[];
+  checkouts: WorktreeCheckout[];
   sessions: WorkspaceSession[];
   operations: Operation[];
   prByWorkspaceId: Map<string, PullRequestSummary | null>;
   activeWorkspaceId: string;
+  activeTargetKey: string;
   runtimes: import("@citadel/contracts").AgentRuntime[];
   namespaces: Namespace[];
   lastRepoId: string | undefined;
@@ -75,6 +87,7 @@ export function Navigator(props: {
   onCollapse: () => void;
   onPickWorkspace: (workspace: Workspace) => void;
   onPickWorkspaceId: (workspaceId: string) => void;
+  onPickTarget: (workspaceId: string, targetKey: string) => void;
 }) {
   const location = useLocation();
   const path = location.pathname;
@@ -212,40 +225,71 @@ export function Navigator(props: {
   );
 
   const renderWorkspace = useCallback(
-    ({ workspace, sessions }: WorkspaceEntry, groupPath: string, visibleIds: readonly string[]) => (
-      <WorkspaceCard
-        key={workspace.id}
-        workspace={workspace}
-        sessions={sessions}
-        operation={
-          props.operations
-            .filter((operation) => operation.workspaceId === workspace.id && operation.type === "workspace.create")
-            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null
-        }
-        pullRequest={props.prByWorkspaceId.get(workspace.id) ?? null}
-        namespace={
-          grouping === "namespace"
-            ? null
-            : workspace.namespaceId
-              ? (namespacesById.get(workspace.namespaceId) ?? null)
-              : null
-        }
-        namespaces={props.namespaces}
-        active={workspace.id === props.activeWorkspaceId}
-        dropTarget={grouping === "namespace" ? "namespace" : null}
-        reorder={{
-          groupPath,
-          visibleIds,
-          onReorder: (draggedId, targetIndex) => reorderWorkspace(groupPath, visibleIds, draggedId, targetIndex),
-        }}
-        onSelect={() => props.onPickWorkspace(workspace)}
-      />
-    ),
+    ({ workspace, sessions }: WorkspaceEntry, groupPath: string, visibleIds: readonly string[]) => {
+      const checkouts = props.checkouts.filter(
+        (checkout) => checkout.workspaceId === workspace.id && !checkout.archivedAt,
+      );
+      const activeWorkspace = workspace.id === props.activeWorkspaceId;
+      return (
+        <div key={workspace.id} className="nav-workspace-target-wrap">
+          <WorkspaceCard
+            workspace={workspace}
+            sessions={sessions.filter((session) => !session.closedAt)}
+            operation={
+              props.operations
+                .filter((operation) => operation.workspaceId === workspace.id && operation.type === "workspace.create")
+                .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null
+            }
+            pullRequest={props.prByWorkspaceId.get(workspace.id) ?? null}
+            namespace={
+              grouping === "namespace"
+                ? null
+                : workspace.namespaceId
+                  ? (namespacesById.get(workspace.namespaceId) ?? null)
+                  : null
+            }
+            namespaces={props.namespaces}
+            active={activeWorkspace}
+            dropTarget={grouping === "namespace" ? "namespace" : null}
+            reorder={{
+              groupPath,
+              visibleIds,
+              onReorder: (draggedId, targetIndex) => reorderWorkspace(groupPath, visibleIds, draggedId, targetIndex),
+            }}
+            onSelect={() => props.onPickWorkspace(workspace)}
+          />
+          {workspace.mode === "structured" || checkouts.length ? (
+            <div className="nav-workspace-targets" aria-label={`${workspace.name} execution targets`}>
+              <button
+                type="button"
+                className={activeWorkspace && props.activeTargetKey === "home" ? "is-active" : ""}
+                onClick={() => props.onPickTarget(workspace.id, "home")}
+              >
+                <Home size={11} /> Home
+              </button>
+              {checkouts.map((checkout) => (
+                <button
+                  key={checkout.id}
+                  type="button"
+                  className={activeWorkspace && props.activeTargetKey === `checkout:${checkout.id}` ? "is-active" : ""}
+                  onClick={() => props.onPickTarget(workspace.id, `checkout:${checkout.id}`)}
+                >
+                  <GitBranch size={11} /> {checkout.name}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      );
+    },
     [
+      props.checkouts,
       props.prByWorkspaceId,
       props.operations,
       props.activeWorkspaceId,
+      props.activeTargetKey,
       props.onPickWorkspace,
+      props.onPickTarget,
       props.namespaces,
       namespacesById,
       grouping,

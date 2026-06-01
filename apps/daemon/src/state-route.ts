@@ -25,11 +25,13 @@ export function registerStateRoute(input: {
     asyncRoute(async (_req, res) => {
       const repos = store.listRepos();
       const workspaces = store.listWorkspaces();
+      const checkouts = workspaces.flatMap((workspace) => store.listWorkspaceCheckouts(workspace.id));
       const sessions = store.listWorkspaceSessions();
       const providerHealth = await cachedProviderHealth();
       res.json({
         repos,
         workspaces,
+        checkouts,
         sessions,
         operations: store.listOperations(),
         activity: store.listActivity(),

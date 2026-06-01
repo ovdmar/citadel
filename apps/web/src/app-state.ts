@@ -9,6 +9,7 @@ import type {
   TerminalProfile,
   Workspace,
   WorkspaceSession,
+  WorktreeCheckout,
 } from "@citadel/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, createContext, createElement, useContext, useEffect, useMemo, useState } from "react";
@@ -34,6 +35,7 @@ export type BootRestoreSummary = {
 export type StateResponse = {
   repos: Repo[];
   workspaces: Workspace[];
+  checkouts: WorktreeCheckout[];
   sessions: WorkspaceSession[];
   operations: Operation[];
   activity: ActivityEvent[];
@@ -112,7 +114,11 @@ export function applyOptimisticRemoveFilter(
   ids: ReadonlySet<string>,
 ): StateResponse | undefined {
   if (!state || ids.size === 0) return state;
-  return { ...state, workspaces: state.workspaces.filter((w) => !ids.has(w.id)) };
+  return {
+    ...state,
+    workspaces: state.workspaces.filter((w) => !ids.has(w.id)),
+    checkouts: state.checkouts.filter((checkout) => !ids.has(checkout.workspaceId)),
+  };
 }
 
 // Wrapper hook for consumers that render the workspace list: subtracts

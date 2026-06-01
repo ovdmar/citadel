@@ -5,11 +5,13 @@ import type {
   AgentSession,
   CreateAgentSessionInput,
   CreateTerminalSessionInput,
+  ExecutionTarget,
   JiraAutoTransitionEvent,
   Repo,
   TerminalProfile,
   Workspace,
   WorkspaceSession,
+  WorktreeCheckout,
 } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
@@ -30,6 +32,7 @@ import {
   submitPrompt,
   tmuxSocketNameForWorkspace,
 } from "@citadel/terminal";
+import { executionTargetCwd } from "./workspace-layout.js";
 
 const CODEX_STATE_DB_LOCKED = /(?:database is locked|failed to initialize state runtime)/i;
 const CODEX_LAUNCH_MAX_ATTEMPTS = 5;
@@ -99,6 +102,15 @@ export async function createAgentSession(
   const { store } = deps;
   const workspace = store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
   if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+  const checkout = input.checkoutId ? store.findWorkspaceCheckout(input.checkoutId) : null;
+  if (input.checkoutId && !checkout) throw new Error(`Unknown checkout: ${input.checkoutId}`);
+  if (checkout && checkout.workspaceId !== workspace.id) {
+    throw new Error(`Checkout ${checkout.id} does not belong to workspace ${workspace.id}`);
+  }
+  const targetType =
+    input.targetType ??
+    (checkout ? "worktree_checkout" : workspace.mode === "structured" ? "workspace_home" : "worktree_checkout");
+  const cwd = resolveSessionCwd({ workspace, checkout, targetType });
   const now = nowIso();
   const sessionName = `citadel_${workspace.id}_${createId("agent").slice(-8)}`;
   const tmuxSocketName = tmuxSocketNameForWorkspace(workspace.id);
@@ -169,7 +181,7 @@ export async function createAgentSession(
   try {
     tmux = await ensureTmuxSession({
       sessionName,
-      cwd: workspace.path,
+      cwd,
       socketName: tmuxSocketName,
       terminal: deps.terminal ?? DEFAULT_TERMINAL_PROFILE,
     });
@@ -224,7 +236,7 @@ export async function createAgentSession(
     workspaceId: workspace.id,
     runtimeId: input.runtimeId,
     displayName: input.displayName || runtime.displayName,
-    targetType: input.targetType ?? (workspace.mode === "structured" ? "workspace_home" : "worktree_checkout"),
+    targetType,
     checkoutId: input.checkoutId ?? null,
     role: input.role ?? null,
     actionId: input.actionId ?? null,
@@ -264,7 +276,7 @@ export async function createAgentSession(
     void (async () => {
       try {
         const found = await discoverCodexSessionId({
-          workspacePath: workspace.path,
+          workspacePath: cwd,
           spawnTimeMs,
           timeoutMs: 120_000,
           ...(paneRootPid ? { rootPid: paneRootPid } : {}),
@@ -331,13 +343,22 @@ export async function createTerminalSession(
   const { store } = deps;
   const workspace = store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
   if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+  const checkout = input.checkoutId ? store.findWorkspaceCheckout(input.checkoutId) : null;
+  if (input.checkoutId && !checkout) throw new Error(`Unknown checkout: ${input.checkoutId}`);
+  if (checkout && checkout.workspaceId !== workspace.id) {
+    throw new Error(`Checkout ${checkout.id} does not belong to workspace ${workspace.id}`);
+  }
+  const targetType =
+    input.targetType ??
+    (checkout ? "worktree_checkout" : workspace.mode === "structured" ? "workspace_home" : "worktree_checkout");
+  const cwd = resolveSessionCwd({ workspace, checkout, targetType });
   const now = nowIso();
   const terminal = deps.terminal ?? DEFAULT_TERMINAL_PROFILE;
   const sessionName = `citadel_${workspace.id}_${createId("term").slice(-8)}`;
   const tmuxSocketName = tmuxSocketNameForWorkspace(workspace.id);
   let tmux: Awaited<ReturnType<typeof ensureTmuxSession>>;
   try {
-    tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path, terminal, socketName: tmuxSocketName });
+    tmux = await ensureTmuxSession({ sessionName, cwd, terminal, socketName: tmuxSocketName });
   } catch (error) {
     killTmuxSession(sessionName, tmuxSocketName);
     throw error;
@@ -348,6 +369,8 @@ export async function createTerminalSession(
     workspaceId: workspace.id,
     runtimeId: null,
     displayName: input.displayName || terminal.displayName,
+    targetType,
+    checkoutId: input.checkoutId ?? null,
     status: "running",
     statusReason: "launched",
     lastStatusAt: now,
@@ -469,4 +492,17 @@ function codexRetryDelayMs(attempt: number): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resolveSessionCwd(input: {
+  workspace: Workspace;
+  checkout: WorktreeCheckout | null;
+  targetType: ExecutionTarget["type"];
+}): string {
+  if (input.checkout) return executionTargetCwd(input);
+  if (input.targetType === "workspace_home") {
+    return executionTargetCwd({ workspace: input.workspace, targetType: "workspace_home" });
+  }
+  if (input.workspace.mode === "structured") throw new Error("checkout_required");
+  return input.workspace.path;
 }
