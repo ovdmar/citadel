@@ -73,6 +73,8 @@ const DEFAULTS = {
   readyTimeoutMs: 10000,
 };
 
+const TTYD_PING_INTERVAL_SECONDS = 45;
+
 export class TtydUnavailableError extends Error {
   readonly code: "ttyd_missing" | "no_free_port" | "ttyd_start_timeout" | "tmux_session_missing" | "spawn_failed";
   constructor(code: TtydUnavailableError["code"], message: string) {
@@ -147,11 +149,11 @@ export type TtydManager = {
     enableTmuxMouse?: boolean;
   }): Promise<TtydEntry>;
   lookup(key: string): TtydEntry | null;
-  release(key: string): void;
+  release(key: string, reason?: string): void;
   /** Release every entry whose tabId matches. Used by the workspace-remove
    * path so closing a workspace tears down its ttyds along with the tmux
    * sessions. */
-  releaseTab(tabId: string): number;
+  releaseTab(tabId: string, reason?: string): number;
   list(): TtydEntry[];
   cleanupStale(): { killed: number; portRange: [number, number] };
   /**
@@ -265,6 +267,19 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
   }): Promise<TtydEntry> {
     const desiredTheme: TtydTheme = args.theme ?? "dark";
     const tabId = args.tabId ?? null;
+    let targetTmuxAlive: boolean | null = null;
+
+    function assertTargetTmuxAlive(context: Record<string, unknown>): void {
+      targetTmuxAlive ??= tmuxSessionAlive(args.tmuxSession);
+      if (targetTmuxAlive) return;
+      diag.log("ttyd", "ensure.tmux-missing", {
+        key: args.key,
+        tabId,
+        tmuxSession: args.tmuxSession,
+        ...context,
+      });
+      throw new TtydUnavailableError("tmux_session_missing", `tmux session ${args.tmuxSession} not found`);
+    }
 
     // Tab-level dedup: if a different key already serves this tab, that's
     // a stale entry (typically the source row of a just-completed restore,
@@ -275,8 +290,15 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
       const incumbentKey = tabIndex.get(tabId);
       if (incumbentKey && incumbentKey !== args.key) {
         const incumbent = entries.get(incumbentKey);
-        if (incumbent) {
+        if (incumbent && isEntryAlive(incumbent)) {
+          assertTargetTmuxAlive({
+            phase: "tab-replace",
+            incumbentKey,
+            incumbentTmuxSession: incumbent.tmuxSession,
+          });
           signalEntry(incumbent, "SIGTERM");
+          deleteEntry(incumbentKey);
+        } else if (incumbent) {
           deleteEntry(incumbentKey);
         } else {
           tabIndex.delete(tabId);
@@ -301,9 +323,9 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     if (existing && isEntryAlive(existing)) {
       // If the existing ttyd is attached to the wrong tmux target (the
       // session was respawned under a new name during boot-restore), we
-      // can't switch its attach in-place — respawn. Same for explicit
-      // force=true (palette reload). Otherwise reuse and just refresh the
-      // tabId in case it became known after adoption.
+      // can't switch its attach in-place — respawn. Palette changes are only
+      // applied on explicit force=true reload; automatic theme drift must not
+      // tear down an active terminal connection.
       const tmuxMismatch = existing.tmuxSession !== args.tmuxSession;
       if (!args.force && !tmuxMismatch) {
         if (tabId && existing.tabId !== tabId) {
@@ -313,6 +335,12 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
         }
         return toEntry(existing);
       }
+      assertTargetTmuxAlive({
+        phase: "respawn",
+        port: existing.port,
+        reason: tmuxMismatch ? "tmux-mismatch" : "force",
+        oldTmuxSession: existing.tmuxSession,
+      });
       diag.log("ttyd", "respawn", {
         key: args.key,
         tabId,
@@ -320,14 +348,13 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
         reason: tmuxMismatch ? "tmux-mismatch" : "force",
         oldTmuxSession: existing.tmuxSession,
         newTmuxSession: args.tmuxSession,
+        oldTheme: existing.theme,
+        newTheme: desiredTheme,
       });
       signalEntry(existing, "SIGTERM");
       deleteEntry(args.key);
     }
-    if (!tmuxSessionAlive(args.tmuxSession)) {
-      diag.log("ttyd", "ensure.tmux-missing", { key: args.key, tabId, tmuxSession: args.tmuxSession });
-      throw new TtydUnavailableError("tmux_session_missing", `tmux session ${args.tmuxSession} not found`);
-    }
+    assertTargetTmuxAlive({ phase: "spawn" });
     if (!binaryExists(config.ttydBin)) {
       throw new TtydUnavailableError("ttyd_missing", `ttyd binary not found at ${config.ttydBin}`);
     }
@@ -349,7 +376,7 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
           "-b",
           basePath,
           "-P",
-          "10",
+          String(TTYD_PING_INTERVAL_SECONDS),
           ...themeOptions,
           config.shellBin,
           "-lc",
@@ -396,7 +423,7 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
       if (current && current.pid === record.pid) deleteEntry(args.key);
       diag.log("ttyd", "exit", { key: args.key, tabId, port, pid: record.pid, code, signal });
     });
-    const ready = await waitForPort(port, config.readyTimeoutMs);
+    const ready = await waitForOwnedPort(port, record.pid, config.readyTimeoutMs);
     if (!ready) {
       deleteEntry(args.key);
       reservedPorts.delete(port);
@@ -421,20 +448,21 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     return toEntry(entry);
   }
 
-  function release(key: string) {
+  function release(key: string, reason = "unspecified") {
     const entry = entries.get(key);
     if (!entry) return;
-    diag.log("ttyd", "release", { key, tabId: entry.tabId, port: entry.port, pid: entry.pid });
+    diag.log("ttyd", "release", { key, tabId: entry.tabId, port: entry.port, pid: entry.pid, reason });
     signalEntry(entry, "SIGTERM");
     deleteEntry(key);
   }
 
-  function releaseTab(tabId: string): number {
+  function releaseTab(tabId: string, reason = "tab-release") {
     const key = tabIndex.get(tabId);
     let released = 0;
     if (key) {
       const entry = entries.get(key);
       if (entry) {
+        diag.log("ttyd", "release", { key, tabId: entry.tabId, port: entry.port, pid: entry.pid, reason });
         signalEntry(entry, "SIGTERM");
         deleteEntry(key);
         released += 1;
@@ -447,6 +475,7 @@ export function createTtydManager(input: TtydManagerConfig = {}): TtydManager {
     // with deleteEntry on a duplicate). Catch them here too.
     for (const [k, entry] of Array.from(entries)) {
       if (entry.tabId === tabId) {
+        diag.log("ttyd", "release", { key: k, tabId: entry.tabId, port: entry.port, pid: entry.pid, reason });
         signalEntry(entry, "SIGTERM");
         deleteEntry(k);
         released += 1;
@@ -645,8 +674,10 @@ function portOpen(port: number) {
 }
 
 async function reserveFreePort(base: number, max: number, reserved: Set<number>) {
+  const occupied = listListeningPortsInRange(base, max);
   for (let port = base; port <= max; port += 1) {
     if (reserved.has(port)) continue;
+    if (occupied.has(port)) continue;
     if (await portOpen(port)) continue;
     reserved.add(port);
     return port;
@@ -654,17 +685,65 @@ async function reserveFreePort(base: number, max: number, reserved: Set<number>)
   throw new TtydUnavailableError("no_free_port", `no free port between ${base} and ${max}`);
 }
 
-async function waitForPort(port: number, timeoutMs: number) {
+async function waitForOwnedPort(port: number, pid: number, timeoutMs: number) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (await portOpen(port)) return true;
+    const owner = listeningPidForPort(port);
+    if (owner === pid) return true;
+    // If lsof is unavailable in a test/dev environment, fall back to the old
+    // readiness probe. In production, a known-but-wrong owner must not satisfy
+    // readiness; that is how a ttyd launched for session A can accidentally
+    // serve session B's iframe as a white 404 page.
+    if (owner === undefined && (await portOpen(port))) return true;
+    if (pid > 0 && !processAlive(pid)) return false;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   return false;
 }
 
-function listListeningTtyds(): Map<number, number> {
-  return listListeningTtydsInRange(0, Number.MAX_SAFE_INTEGER);
+function processAlive(pid: number): boolean {
+  if (!pid || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function listeningPidForPort(port: number): number | null | undefined {
+  try {
+    const output = execFileSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const match = /^p(\d+)$/m.exec(output);
+    return match ? Number(match[1]) : null;
+  } catch (error) {
+    const status = (error as { status?: unknown }).status;
+    if (status === 1) return null;
+    return undefined;
+  }
+}
+
+function listListeningPortsInRange(portBase: number, portMax: number): Set<number> {
+  const ports = new Set<number>();
+  let lsofOutput = "";
+  try {
+    lsofOutput = execFileSync("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return ports;
+  }
+  for (const line of lsofOutput.split("\n")) {
+    const match = /TCP .*:(\d+) \(LISTEN\)/.exec(line);
+    if (!match) continue;
+    const port = Number(match[1]);
+    if (port >= portBase && port <= portMax) ports.add(port);
+  }
+  return ports;
 }
 
 function listListeningTtydsInRange(portBase: number, portMax: number): Map<number, number> {
@@ -712,12 +791,10 @@ function trimSlashes(value: string) {
  * Scan the host for ttyd processes left behind by a previous daemon
  * incarnation that we can re-attach to instead of killing-and-respawning.
  * Filters by the `-b /<basePathPrefix>/<key>` argv shape (so non-Citadel
- * ttyds are skipped). NOT filtered by port range — adoption uses the DB to
- * decide ownership instead, so this picks up ttyds spawned by codebases
- * that pre-date the current port slot (ttyd-slot.ts moved the systemd
- * daemon's slot from 7000-ish to 11000+ on 2026-05-27, stranding the
- * pre-existing ttyds). The DB-membership filter on the caller side
- * (`adopt(records, resolveTabId)`) decides which records to keep vs SIGTERM.
+ * ttyds are skipped) and, when supplied, the caller's ttyd port range. The
+ * range filter is a safety boundary: a sandbox daemon with a fixture DB must
+ * not scan host-wide ttyds and SIGTERM production terminals whose keys are
+ * absent from the sandbox DB.
  *
  * Linux-only — relies on `/proc/<pid>/cmdline`. On other platforms returns
  * an empty list (caller falls back to spawning fresh ttyds).
@@ -725,11 +802,15 @@ function trimSlashes(value: string) {
 export function discoverExistingTtyds(
   opts: {
     basePathPrefix?: string;
+    portBase?: number;
+    portMax?: number;
   } = {},
 ): TtydEntry[] {
   const basePathPrefix = trimSlashes(opts.basePathPrefix ?? DEFAULTS.basePathPrefix);
+  const portBase = opts.portBase ?? 0;
+  const portMax = opts.portMax ?? Number.MAX_SAFE_INTEGER;
   const found: TtydEntry[] = [];
-  for (const [pid, port] of listListeningTtyds()) {
+  for (const [pid, port] of listListeningTtydsInRange(portBase, portMax)) {
     const entry = readTtydEntryFromProc(pid, port, basePathPrefix);
     if (entry) found.push(entry);
   }
@@ -751,6 +832,10 @@ function readTtydEntryFromProc(pid: number, port: number, basePathPrefix: string
     const value = args[i + 1] ?? "";
     if (flag === "-b") basePath = value;
     if (flag === "-t" && value.startsWith("theme=")) themeJson = value.slice("theme=".length);
+    // ttyd parses client options in-place and can replace the "=" in
+    // `theme=<json>` with NUL, so adopted processes may present as
+    // `-t`, `theme`, `<json>` in /proc/<pid>/cmdline.
+    if (flag === "-t" && value === "theme") themeJson = args[i + 2] ?? null;
   }
   if (!basePath) return null;
   const prefix = `/${basePathPrefix}/`;

@@ -54,6 +54,7 @@ function makeDeps(opts: {
   sendBehavior?: "ok" | "fail" | "throw";
   rng?: () => number;
   isAccountRateLimited?: AutoResumeDeps["isAccountRateLimited"];
+  isRuntimeHealthy?: AutoResumeDeps["isRuntimeHealthy"];
   now?: () => Date;
 }): FakeDeps {
   const updates: FakeDeps["updates"] = [];
@@ -93,6 +94,7 @@ function makeDeps(opts: {
   };
   if (opts.rng) deps.rng = opts.rng;
   if (opts.isAccountRateLimited) deps.isAccountRateLimited = opts.isAccountRateLimited;
+  if (opts.isRuntimeHealthy) deps.isRuntimeHealthy = opts.isRuntimeHealthy;
   return deps;
 }
 
@@ -196,6 +198,31 @@ describe("runAutoResumeTick", () => {
     expect(update?.lastResumeFromRateLimitAt).toBe(new Date(NOW_MS).toISOString());
     // attempts=1, rng=0 → 2min base + 2min jitter floor = 4min total
     expect(update?.nextResumeAt).toBe(new Date(NOW_MS + BASE_DELAY_MS * 2 + JITTER_MIN_MS).toISOString());
+  });
+
+  it("skips forced resume messages for unhealthy runtimes while allowing healthy runtimes", async () => {
+    const due = new Date(NOW_MS - 5_000).toISOString();
+    const pastReset = new Date(NOW_MS - 1).toISOString();
+    const deps = makeDeps({
+      sessions: [
+        session({ id: "bad-rate", runtimeId: "claude-code", nextResumeAt: due, rateLimitResumeAttempts: 2 }),
+        session({
+          id: "bad-usage",
+          runtimeId: "claude-code",
+          status: "usage_limited",
+          statusReason: `pane:usage_limited:reset=${pastReset}`,
+        }),
+        session({ id: "good-rate", runtimeId: "codex", nextResumeAt: due, rateLimitResumeAttempts: 0 }),
+      ],
+      isRuntimeHealthy: (runtimeId) => runtimeId === "codex",
+      rng: () => 0,
+    });
+    const result = await runAutoResumeTick(deps);
+
+    expect(result.resumed).toBe(1);
+    expect(deps.sendCalls).toHaveLength(1);
+    expect(deps.sendCalls[0]?.sessionId).toBe("good-rate");
+    expect(deps.updates.map((update) => update.sessionId)).toEqual(["good-rate"]);
   });
 
   it("backoff doubles 1 → 2 → 4 → 8 … and caps at 128 min over many ticks (TA11)", async () => {
