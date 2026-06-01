@@ -3,6 +3,8 @@ import type {
   PlanDeviationReport,
   ReviewArtifact,
   WorkspaceManager,
+  WorkspacePlanDecision,
+  WorkspacePlanReview,
   WorkspacePlanVersion,
   WorktreeCheckout,
 } from "@citadel/contracts";
@@ -18,6 +20,10 @@ declare module "./index.js" {
     listWorkspacePlanVersions(workspaceId: string): WorkspacePlanVersion[];
     findActiveWorkspacePlan(workspaceId: string): WorkspacePlanVersion | null;
     insertWorkspacePlanVersion(plan: WorkspacePlanVersion): void;
+    insertWorkspacePlanReview(review: WorkspacePlanReview): void;
+    listWorkspacePlanReviews(planVersionId: string): WorkspacePlanReview[];
+    insertWorkspacePlanDecision(decision: WorkspacePlanDecision): void;
+    listWorkspacePlanDecisions(planVersionId: string): WorkspacePlanDecision[];
     insertWorkspaceManager(manager: WorkspaceManager): void;
     getWorkspaceManager(workspaceId: string): WorkspaceManager | null;
     setWorkspaceManagerPause(workspaceId: string, pauseState: WorkspaceManager["pauseState"]): WorkspaceManager | null;
@@ -86,6 +92,28 @@ function planVersionFromRow(row: Record<string, unknown>): WorkspacePlanVersion 
     createdBySessionId: row.created_by_session_id ? asString(row, "created_by_session_id") : null,
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
+  };
+}
+
+function planReviewFromRow(row: Record<string, unknown>): WorkspacePlanReview {
+  return {
+    id: asString(row, "id"),
+    planVersionId: asString(row, "plan_version_id"),
+    reviewer: asString(row, "reviewer"),
+    result: asString(row, "result") as WorkspacePlanReview["result"],
+    artifactPath: row.artifact_path ? asString(row, "artifact_path") : null,
+    createdAt: asString(row, "created_at"),
+  };
+}
+
+function planDecisionFromRow(row: Record<string, unknown>): WorkspacePlanDecision {
+  return {
+    id: asString(row, "id"),
+    planVersionId: asString(row, "plan_version_id"),
+    decision: asString(row, "decision") as WorkspacePlanDecision["decision"],
+    reason: row.reason ? asString(row, "reason") : null,
+    actor: asString(row, "actor") as WorkspacePlanDecision["actor"],
+    createdAt: asString(row, "created_at"),
   };
 }
 
@@ -224,8 +252,10 @@ export const agentsSystemStoreMethods = {
   insertWorkspacePlanVersion(this: SqliteStore, plan: WorkspacePlanVersion) {
     if (plan.active) {
       this.database
-        .prepare("UPDATE workspace_plan_versions SET active = 0 WHERE workspace_id = ?")
-        .run(plan.workspaceId);
+        .prepare(
+          "UPDATE workspace_plan_versions SET active = 0, status = 'superseded', updated_at = ? WHERE workspace_id = ? AND active = 1",
+        )
+        .run(plan.updatedAt, plan.workspaceId);
     }
     this.database
       .prepare(
@@ -246,6 +276,52 @@ export const agentsSystemStoreMethods = {
         plan.createdAt,
         plan.updatedAt,
       );
+  },
+
+  insertWorkspacePlanReview(this: SqliteStore, review: WorkspacePlanReview) {
+    this.database
+      .prepare(
+        `INSERT INTO workspace_plan_reviews (id, plan_version_id, reviewer, result, artifact_path, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        review.id,
+        review.planVersionId,
+        review.reviewer,
+        review.result,
+        review.artifactPath ?? null,
+        review.createdAt,
+      );
+  },
+
+  listWorkspacePlanReviews(this: SqliteStore, planVersionId: string): WorkspacePlanReview[] {
+    const rows = this.database
+      .prepare("SELECT * FROM workspace_plan_reviews WHERE plan_version_id = ? ORDER BY created_at DESC")
+      .all(planVersionId) as Array<Record<string, unknown>>;
+    return rows.map(planReviewFromRow);
+  },
+
+  insertWorkspacePlanDecision(this: SqliteStore, decision: WorkspacePlanDecision) {
+    this.database
+      .prepare(
+        `INSERT INTO workspace_plan_decisions (id, plan_version_id, decision, reason, actor, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        decision.id,
+        decision.planVersionId,
+        decision.decision,
+        decision.reason ?? null,
+        decision.actor,
+        decision.createdAt,
+      );
+  },
+
+  listWorkspacePlanDecisions(this: SqliteStore, planVersionId: string): WorkspacePlanDecision[] {
+    const rows = this.database
+      .prepare("SELECT * FROM workspace_plan_decisions WHERE plan_version_id = ? ORDER BY created_at DESC")
+      .all(planVersionId) as Array<Record<string, unknown>>;
+    return rows.map(planDecisionFromRow);
   },
 
   insertWorkspaceManager(this: SqliteStore, manager: WorkspaceManager) {

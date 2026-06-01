@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import type { ActivityEvent, AgentSession, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceCheckoutInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
+import type { ActivityEvent, AgentSession, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceCheckoutInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, Namespace, Operation, PlanDeviationReport, RegisterWorkspacePlanInput, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
@@ -19,6 +19,7 @@ import * as namespaceOps from "./namespaces.js";
 import { registerRepo as registerRepoImpl } from "./register-repo.js";
 import { checkWorkspaceRemovalImpl, removeWorkspaceImpl } from "./remove-workspace.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
+export type { RuntimeDescriptor } from "./create-agent-session.js";
 export type { LaunchAgentResult } from "./launch-agent.js";
 export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
 export type { AgentHistoryResult, AgentHistoryErrorResult } from "./agent-history.js";
@@ -35,6 +36,7 @@ export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
 export { executionTargetCwd, resolveExecutionTargetForCwd, workspaceRootPath } from "./workspace-layout.js";
 export { executeWorkspaceLayoutMigration, planWorkspaceLayoutMigration } from "./workspace-layout-migration.js";
+export type { CitadelContextResult, RegisterWorkspacePlanResult, WorkspacePlanSnapshot } from "./workspace-plans.js";
 export type {
   WorkspaceGitSnapshot,
   WorkspaceLayoutMigrationPlan,
@@ -56,6 +58,7 @@ import { type DispatchAgentHook, runNotificationHooks, runWorkspaceHooks } from 
 import { createWorkspaceCheckoutImpl } from "./structured-workspace.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import { type WorkspaceAppsDeps, discoverWorkspaceApps as discoverWorkspaceAppsImpl, runWorkspaceAction as runWorkspaceActionImpl } from "./workspace-apps.js";
+import * as workspacePlans from "./workspace-plans.js";
 
 // Daemon-constructed callback that fires lifecycle-event-driven Jira
 // transitions. Optional — when not wired (e.g., unit tests that don't
@@ -113,6 +116,24 @@ export class OperationService {
 
   createWorkspaceCheckout = (input: CreateWorkspaceCheckoutInput) =>
     createWorkspaceCheckoutImpl(this.workspaceOpsDeps(), input);
+
+  registerWorkspacePlan = (input: RegisterWorkspacePlanInput) =>
+    workspacePlans.registerWorkspacePlan(this.planDeps(), input);
+
+  getWorkspacePlan = (input: { workspaceId?: string | undefined; cwd?: string | undefined }) =>
+    workspacePlans.getWorkspacePlan(this.planDeps(), input);
+
+  getCitadelContext = (input: { cwd: string }) => workspacePlans.getCitadelContext(this.planDeps(), input);
+
+  reportPlanDeviation = (input: {
+    workspaceId?: string | undefined;
+    checkoutId?: string | undefined;
+    cwd?: string | undefined;
+    planVersionId?: string | undefined;
+    severity?: PlanDeviationReport["severity"] | undefined;
+    description: string;
+    reportedBySessionId?: string | undefined;
+  }) => workspacePlans.reportPlanDeviation(this.planDeps(), input);
 
   createAgentSession = (
     input: CreateAgentSessionInput,
@@ -596,6 +617,13 @@ export class OperationService {
       runWorkspaceHooks: (...args) => this.runWorkspaceHooks(...args),
       runNotificationHooks: (...args) => this.runNotificationHooks(...args),
       runAutoTransitions: this.runAutoTransitionsDep,
+    };
+  }
+
+  private planDeps(): workspacePlans.WorkspacePlanDeps {
+    return {
+      store: this.store,
+      activity: (...args) => this.activity(...args),
     };
   }
 }

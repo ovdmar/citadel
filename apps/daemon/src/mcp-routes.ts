@@ -32,10 +32,12 @@ export function registerMcpRoutes(
   });
 
   app.get("/api/mcp/resources/workspaces", (_req, res) => {
+    const workspaces = store.listWorkspaces();
     res.json(
       serializeWorkspaceResource({
         repos: store.listRepos(),
-        workspaces: store.listWorkspaces(),
+        workspaces,
+        checkouts: workspaces.flatMap((workspace) => store.listWorkspaceCheckouts(workspace.id)),
         sessions: store.listSessions(),
       }),
     );

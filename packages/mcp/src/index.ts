@@ -2,16 +2,21 @@ import type {
   ActivityEvent,
   AgentRuntime,
   AgentSession,
-  HookAction,
-  HookLink,
   Namespace,
   Operation,
   ProviderHealth,
   Repo,
   ScheduledAgent,
   Workspace,
+  WorkspaceManager,
+  WorkspacePlanVersion,
+  WorktreeCheckout,
 } from "@citadel/contracts";
+import { AGENTS_SYSTEM_TOOL_DEFINITIONS } from "./agents-system-tools.js";
+import { listWorkspaceLinks, serializeWorkspaceResource } from "./resources.js";
 import { SCRATCHPAD_TOOL_DEFINITIONS, type ScratchpadToolName } from "./scratchpad-tools.js";
+
+export { listWorkspaceLinks, serializeWorkspaceResource } from "./resources.js";
 
 export type AgentSessionSummary = AgentSession & {
   namespaceId: string | null;
@@ -34,6 +39,16 @@ export type McpToolName =
   | "list_provider_health"
   | "list_runtimes"
   | "list_workspace_links"
+  | "get_citadel_context"
+  | "list_workspace_checkouts"
+  | "create_workspace_checkout"
+  | "register_workspace_plan"
+  | "get_workspace_plan"
+  | "report_plan_deviation"
+  | "launch_pm_agent"
+  | "launch_architect_agent"
+  | "launch_implementation_agent"
+  | "launch_prototype_agent"
   | "register_repo"
   | "create_workspace"
   | "start_agent_session"
@@ -79,6 +94,9 @@ export type McpToolContext = {
   providerHealth: ProviderHealth[];
   runtimes: AgentRuntime[];
   scheduledAgents?: ScheduledAgent[];
+  checkouts?: WorktreeCheckout[];
+  workspacePlanVersions?: WorkspacePlanVersion[];
+  managers?: WorkspaceManager[];
   namespaces: Namespace[];
   sessionPromptSummary?: (sessionId: string) => { initialPrompt: string | null; messageCount: number };
   // Absolute path of the daemon's notes file. Surfaced through `inspect_status`
@@ -213,6 +231,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       inputSchema: { type: "object", properties: { workspaceId: { type: "string" } }, additionalProperties: false },
       destructive: false,
     },
+    ...AGENTS_SYSTEM_TOOL_DEFINITIONS,
     {
       name: "register_repo",
       description:
@@ -593,6 +612,7 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
         namespaces: context.namespaces.length,
         operations: context.operations.slice(0, 10),
         providerHealth: context.providerHealth,
+        checkouts: context.checkouts?.length ?? 0,
         scratchpad: { path: context.scratchpadPath },
       };
     case "list_repos":
@@ -628,6 +648,21 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
       return { runtimes: context.runtimes };
     case "list_workspace_links":
       return listWorkspaceLinks(context.activity, call.arguments?.workspaceId);
+    case "list_workspace_checkouts": {
+      if (!context.checkouts) return { error: "context_tool_requires_daemon" };
+      const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";
+      return { checkouts: context.checkouts.filter((checkout) => checkout.workspaceId === workspaceId) };
+    }
+    case "get_workspace_plan": {
+      if (!context.workspacePlanVersions) return { error: "context_tool_requires_daemon" };
+      const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";
+      const planVersions = context.workspacePlanVersions.filter((plan) => plan.workspaceId === workspaceId);
+      return {
+        workspaceId,
+        activePlan: planVersions.find((plan) => plan.active) ?? null,
+        planVersions,
+      };
+    }
     case "list_namespaces": {
       // includeArchived from the daemon path is honored there; here we only
       // see the active snapshot the daemon serialized into context.namespaces.
@@ -652,6 +687,13 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     }
     case "register_repo":
     case "create_workspace":
+    case "create_workspace_checkout":
+    case "register_workspace_plan":
+    case "report_plan_deviation":
+    case "launch_pm_agent":
+    case "launch_architect_agent":
+    case "launch_implementation_agent":
+    case "launch_prototype_agent":
     case "start_agent_session":
     case "launch_agent":
     case "stop_agent_session":
@@ -675,6 +717,8 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "list_scheduled_agent_runs":
     case "read_scheduled_agent_run_log":
       return { error: "scheduled_agent_run_tool_requires_daemon" };
+    case "get_citadel_context":
+      return { error: "context_tool_requires_daemon" };
     case "read_agent_output":
     case "send_agent_message":
     case "read_agent_history":
@@ -713,45 +757,6 @@ function annotateSession(session: AgentSession, workspaces: Workspace[], namespa
 function filterByNamespaceId(workspaces: Workspace[], namespaceId: unknown) {
   if (typeof namespaceId !== "string") return workspaces;
   return workspaces.filter((workspace) => workspace.namespaceId === namespaceId);
-}
-
-export function serializeWorkspaceResource(input: {
-  repos: Repo[];
-  workspaces: Workspace[];
-  sessions: AgentSession[];
-}) {
-  return {
-    repos: input.repos,
-    workspaces: input.workspaces,
-    sessions: input.sessions.map((session) => ({
-      id: session.id,
-      workspaceId: session.workspaceId,
-      runtimeId: session.runtimeId,
-      status: session.status,
-      tmuxSessionName: session.tmuxSessionName,
-    })),
-  };
-}
-
-export function listWorkspaceLinks(activity: ActivityEvent[], workspaceId: unknown) {
-  const events =
-    typeof workspaceId === "string" ? activity.filter((event) => event.workspaceId === workspaceId) : activity;
-  const links: Array<HookLink & { workspaceId: string; eventId: string }> = [];
-  const actions: Array<HookAction & { workspaceId: string; eventId: string }> = [];
-  for (const event of events) {
-    if (!event.workspaceId || !event.hookOutput) continue;
-    links.push(
-      ...event.hookOutput.links.map((link) => ({ ...link, workspaceId: event.workspaceId ?? "", eventId: event.id })),
-    );
-    actions.push(
-      ...event.hookOutput.actions.map((action) => ({
-        ...action,
-        workspaceId: event.workspaceId ?? "",
-        eventId: event.id,
-      })),
-    );
-  }
-  return { links, actions };
 }
 
 function truncatePrompt(text: string | null) {

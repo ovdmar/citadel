@@ -329,6 +329,16 @@ export const MarkCheckoutReadyForReviewInputSchema = z.object({
   notes: z.string().optional(),
 });
 
+export const ReportPlanDeviationInputSchema = z.object({
+  workspaceId: IdSchema.optional(),
+  checkoutId: IdSchema.optional(),
+  cwd: z.string().min(1).optional(),
+  planVersionId: IdSchema.optional(),
+  severity: z.enum(["info", "blocking"]).default("blocking"),
+  description: z.string().min(1),
+  reportedBySessionId: IdSchema.optional(),
+});
+
 export const UpdateTicketStatusInputSchema = z.object({
   workspaceId: IdSchema,
   checkoutId: IdSchema.optional(),
@@ -361,3 +371,8 @@ export type WorkspaceManager = z.infer<typeof WorkspaceManagerSchema>;
 export type ManagerEvent = z.infer<typeof ManagerEventSchema>;
 export type RegisterWorkspacePlanInput = z.infer<typeof RegisterWorkspacePlanInputSchema>;
 export type CreateWorkspaceCheckoutInput = z.infer<typeof CreateWorkspaceCheckoutInputSchema>;
+export type LaunchPmAgentInput = z.infer<typeof LaunchPmAgentInputSchema>;
+export type LaunchArchitectAgentInput = z.infer<typeof LaunchArchitectAgentInputSchema>;
+export type LaunchImplementationAgentInput = z.infer<typeof LaunchImplementationAgentInputSchema>;
+export type LaunchPrototypeAgentInput = z.infer<typeof LaunchPrototypeAgentInputSchema>;
+export type ReportPlanDeviationInput = z.infer<typeof ReportPlanDeviationInputSchema>;
