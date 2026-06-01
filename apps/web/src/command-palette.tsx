@@ -41,7 +41,7 @@ export function CommandPalette(props: CommandPaletteProps) {
 
   const results = useMemo<Hit[]>(() => {
     const haystack = props.workspaces.map((workspace) => {
-      const repoName = props.repoNames[workspace.repoId] ?? "";
+      const repoName = workspace.repoId ? (props.repoNames[workspace.repoId] ?? "") : "";
       const meta = props.workspaceMeta[workspace.id] ?? {};
       const tokens = [
         workspace.name,
@@ -164,7 +164,9 @@ export function CommandPalette(props: CommandPaletteProps) {
                 <strong>{hit.workspace.name}</strong>
                 <span className="command-result-meta">{hit.hint}</span>
               </span>
-              <span className="command-result-hint">{props.repoNames[hit.workspace.repoId] ?? ""}</span>
+              <span className="command-result-hint">
+                {hit.workspace.repoId ? (props.repoNames[hit.workspace.repoId] ?? "") : ""}
+              </span>
             </button>
           ))}
           {!results.length && query.trim() ? (

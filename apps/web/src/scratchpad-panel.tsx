@@ -554,7 +554,7 @@ export function ScratchpadPanel() {
     if (lastWorkspaceId) {
       try {
         const state = await api<{ workspaces: Workspace[] }>("/api/state");
-        repoId = state.workspaces.find((w) => w.id === lastWorkspaceId)?.repoId;
+        repoId = state.workspaces.find((w) => w.id === lastWorkspaceId)?.repoId ?? undefined;
       } catch {
         /* fall back to daemon's default resolution */
       }

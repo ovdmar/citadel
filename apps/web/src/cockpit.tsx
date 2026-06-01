@@ -90,7 +90,7 @@ export function Cockpit() {
   }, [activeWorkspaceId, data?.workspaces]);
   useEffect(() => {
     if (activeWorkspace && activeWorkspace.id !== activeWorkspaceId) setActiveWorkspaceId(activeWorkspace.id);
-    if (activeWorkspace && activeWorkspace.repoId !== lastRepoId) setLastRepoId(activeWorkspace.repoId);
+    if (activeWorkspace?.repoId && activeWorkspace.repoId !== lastRepoId) setLastRepoId(activeWorkspace.repoId);
   }, [activeWorkspace, activeWorkspaceId, lastRepoId, setActiveWorkspaceId, setLastRepoId]);
 
   // Order matters: the batch poll + sticky cache must run before the single-
@@ -144,7 +144,7 @@ export function Cockpit() {
     }
     return map;
   }, [prStateQuery.data, stickySummaries, cockpitSummary.data]);
-  const selectedRepo = activeWorkspace
+  const selectedRepo = activeWorkspace?.repoId
     ? (data?.repos.find((repo) => repo.id === activeWorkspace.repoId) ?? null)
     : (data?.repos[0] ?? null);
   const allSessions = data?.sessions ?? [];
