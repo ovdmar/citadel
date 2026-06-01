@@ -653,6 +653,24 @@ describe("workspace home/checkouts/manager migration (v16)", () => {
       },
     ]);
   });
+
+  it("records checkout issue status migration columns", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    const checkoutCols = db.prepare("PRAGMA table_info(workspace_checkouts)").all() as Array<{ name: string }>;
+    for (const column of ["issue_title", "issue_status", "issue_fetched_at"]) {
+      expect(
+        checkoutCols.some((entry) => entry.name === column),
+        `missing ${column}`,
+      ).toBe(true);
+    }
+    const migration = db.prepare("SELECT name FROM schema_migrations WHERE version = 17").get() as
+      | { name: string }
+      | undefined;
+    expect(migration?.name).toBe("workspace-checkout-issue-status");
+  });
 });
 
 describe("updateWorkspacePrSnapshot / getWorkspacePrSnapshot", () => {

@@ -1,6 +1,8 @@
 import type {
+  IssueBinding,
   ManagerEvent,
   PlanDeviationReport,
+  PullRequestBinding,
   ReviewArtifact,
   WorkspaceManager,
   WorkspacePlanDecision,
@@ -17,6 +19,8 @@ declare module "./index.js" {
     findWorkspaceCheckout(id: string): WorktreeCheckout | null;
     insertWorkspaceCheckout(checkout: WorktreeCheckout): void;
     updateWorkspaceCheckoutGate(id: string, gateStatus: WorktreeCheckout["gateStatus"]): WorktreeCheckout | null;
+    updateWorkspaceCheckoutIssue(id: string, issue: IssueBinding | null): WorktreeCheckout | null;
+    updateWorkspaceCheckoutPr(id: string, pr: PullRequestBinding | null): WorktreeCheckout | null;
     listWorkspacePlanVersions(workspaceId: string): WorkspacePlanVersion[];
     findActiveWorkspacePlan(workspaceId: string): WorkspacePlanVersion | null;
     insertWorkspacePlanVersion(plan: WorkspacePlanVersion): void;
@@ -50,9 +54,9 @@ function checkoutFromRow(row: Record<string, unknown>): WorktreeCheckout {
           provider: asString(row, "issue_provider"),
           key: asString(row, "issue_key"),
           url: row.issue_url ? asString(row, "issue_url") : null,
-          title: null,
-          status: null,
-          fetchedAt: null,
+          title: row.issue_title ? asString(row, "issue_title") : null,
+          status: row.issue_status ? asString(row, "issue_status") : null,
+          fetchedAt: row.issue_fetched_at ? asString(row, "issue_fetched_at") : null,
         }
       : null,
     intendedPr: row.intended_pr_provider
@@ -194,10 +198,11 @@ export const agentsSystemStoreMethods = {
     this.database
       .prepare(
         `INSERT INTO workspace_checkouts (id, workspace_id, repo_id, name, path, branch, base_branch,
-          issue_provider, issue_key, issue_url, intended_pr_provider, intended_pr_number, intended_pr_url,
+          issue_provider, issue_key, issue_url, issue_title, issue_status, issue_fetched_at,
+          intended_pr_provider, intended_pr_number, intended_pr_url,
           pr_head_sha, pr_base_ref, stack_parent_checkout_id, inferred_purpose, gate_status,
           created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         checkout.id,
@@ -210,6 +215,9 @@ export const agentsSystemStoreMethods = {
         checkout.issue?.provider ?? null,
         checkout.issue?.key ?? null,
         checkout.issue?.url ?? null,
+        checkout.issue?.title ?? null,
+        checkout.issue?.status ?? null,
+        checkout.issue?.fetchedAt ?? null,
         checkout.intendedPr?.provider ?? null,
         checkout.intendedPr?.number ?? null,
         checkout.intendedPr?.url ?? null,
@@ -232,6 +240,47 @@ export const agentsSystemStoreMethods = {
     this.database
       .prepare("UPDATE workspace_checkouts SET gate_status = ?, updated_at = ? WHERE id = ?")
       .run(gateStatus, new Date().toISOString(), id);
+    return this.findWorkspaceCheckout(id);
+  },
+
+  updateWorkspaceCheckoutIssue(this: SqliteStore, id: string, issue: IssueBinding | null): WorktreeCheckout | null {
+    this.database
+      .prepare(
+        `UPDATE workspace_checkouts
+         SET issue_provider = ?, issue_key = ?, issue_url = ?, issue_title = ?, issue_status = ?, issue_fetched_at = ?,
+           updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        issue?.provider ?? null,
+        issue?.key ?? null,
+        issue?.url ?? null,
+        issue?.title ?? null,
+        issue?.status ?? null,
+        issue?.fetchedAt ?? null,
+        new Date().toISOString(),
+        id,
+      );
+    return this.findWorkspaceCheckout(id);
+  },
+
+  updateWorkspaceCheckoutPr(this: SqliteStore, id: string, pr: PullRequestBinding | null): WorktreeCheckout | null {
+    this.database
+      .prepare(
+        `UPDATE workspace_checkouts
+         SET intended_pr_provider = ?, intended_pr_number = ?, intended_pr_url = ?, pr_head_sha = ?, pr_base_ref = ?,
+           updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        pr?.provider ?? null,
+        pr?.number ?? null,
+        pr?.url ?? null,
+        pr?.headSha ?? null,
+        pr?.baseRef ?? null,
+        new Date().toISOString(),
+        id,
+      );
     return this.findWorkspaceCheckout(id);
   },
 

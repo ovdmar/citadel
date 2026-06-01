@@ -45,6 +45,14 @@ export type McpToolName =
   | "register_workspace_plan"
   | "get_workspace_plan"
   | "report_plan_deviation"
+  | "start_workspace_manager"
+  | "pause_workspace_manager"
+  | "resume_workspace_manager"
+  | "mark_checkout_ready_for_review"
+  | "get_checkout_ticket"
+  | "get_checkout_pr"
+  | "get_checkout_gate_status"
+  | "update_ticket_status"
   | "launch_pm_agent"
   | "launch_architect_agent"
   | "launch_implementation_agent"
@@ -663,6 +671,10 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
         planVersions,
       };
     }
+    case "get_checkout_ticket":
+    case "get_checkout_pr":
+    case "get_checkout_gate_status":
+      return { error: "context_tool_requires_daemon" };
     case "list_namespaces": {
       // includeArchived from the daemon path is honored there; here we only
       // see the active snapshot the daemon serialized into context.namespaces.
@@ -690,6 +702,11 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "create_workspace_checkout":
     case "register_workspace_plan":
     case "report_plan_deviation":
+    case "start_workspace_manager":
+    case "pause_workspace_manager":
+    case "resume_workspace_manager":
+    case "mark_checkout_ready_for_review":
+    case "update_ticket_status":
     case "launch_pm_agent":
     case "launch_architect_agent":
     case "launch_implementation_agent":

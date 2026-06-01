@@ -30,6 +30,14 @@ describe("mcp helpers", () => {
       "register_workspace_plan",
       "get_workspace_plan",
       "report_plan_deviation",
+      "start_workspace_manager",
+      "pause_workspace_manager",
+      "resume_workspace_manager",
+      "mark_checkout_ready_for_review",
+      "get_checkout_ticket",
+      "get_checkout_pr",
+      "get_checkout_gate_status",
+      "update_ticket_status",
       "launch_pm_agent",
       "launch_architect_agent",
       "launch_implementation_agent",
@@ -330,6 +338,9 @@ describe("mcp helpers", () => {
       error: "session_tool_requires_daemon",
     });
     expect(callMcpTool({ name: "get_citadel_context", arguments: { cwd: "/tmp" } }, context)).toEqual({
+      error: "context_tool_requires_daemon",
+    });
+    expect(callMcpTool({ name: "get_checkout_gate_status", arguments: { checkoutId: "co_api" } }, context)).toEqual({
       error: "context_tool_requires_daemon",
     });
     expect(

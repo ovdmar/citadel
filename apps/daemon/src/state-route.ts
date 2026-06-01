@@ -26,12 +26,20 @@ export function registerStateRoute(input: {
       const repos = store.listRepos();
       const workspaces = store.listWorkspaces();
       const checkouts = workspaces.flatMap((workspace) => store.listWorkspaceCheckouts(workspace.id));
+      const workspacePlans = workspaces.flatMap((workspace) => store.listWorkspacePlanVersions(workspace.id));
+      const workspaceManagers = workspaces
+        .map((workspace) => store.getWorkspaceManager(workspace.id))
+        .filter((manager) => manager !== null);
+      const planDeviations = workspaces.flatMap((workspace) => store.listPlanDeviationReports(workspace.id));
       const sessions = store.listWorkspaceSessions();
       const providerHealth = await cachedProviderHealth();
       res.json({
         repos,
         workspaces,
         checkouts,
+        workspacePlans,
+        workspaceManagers,
+        planDeviations,
         sessions,
         operations: store.listOperations(),
         activity: store.listActivity(),

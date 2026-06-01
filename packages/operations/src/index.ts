@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import type { ActivityEvent, AgentSession, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceCheckoutInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, Namespace, Operation, PlanDeviationReport, RegisterWorkspacePlanInput, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
+import type { ActivityEvent, AgentSession, CheckoutContextInput, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceCheckoutInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, MarkCheckoutReadyForReviewInput, Namespace, Operation, PlanDeviationReport, RegisterWorkspacePlanInput, Repo, UpdateNamespaceInput, UpdateTicketStatusInput, Workspace, WorkspaceManagerControlInput } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
@@ -36,6 +36,11 @@ export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
 export { executionTargetCwd, resolveExecutionTargetForCwd, workspaceRootPath } from "./workspace-layout.js";
 export { executeWorkspaceLayoutMigration, planWorkspaceLayoutMigration } from "./workspace-layout-migration.js";
+export type {
+  CheckoutGateSnapshot,
+  MarkCheckoutReadyForReviewResult,
+  WorkspaceManagerControlResult,
+} from "./workspace-manager.js";
 export type { CitadelContextResult, RegisterWorkspacePlanResult, WorkspacePlanSnapshot } from "./workspace-plans.js";
 export type {
   WorkspaceGitSnapshot,
@@ -58,6 +63,7 @@ import { type DispatchAgentHook, runNotificationHooks, runWorkspaceHooks } from 
 import { createWorkspaceCheckoutImpl } from "./structured-workspace.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import { type WorkspaceAppsDeps, discoverWorkspaceApps as discoverWorkspaceAppsImpl, runWorkspaceAction as runWorkspaceActionImpl } from "./workspace-apps.js";
+import * as workspaceManager from "./workspace-manager.js";
 import * as workspacePlans from "./workspace-plans.js";
 
 // Daemon-constructed callback that fires lifecycle-event-driven Jira
@@ -134,6 +140,24 @@ export class OperationService {
     description: string;
     reportedBySessionId?: string | undefined;
   }) => workspacePlans.reportPlanDeviation(this.planDeps(), input);
+
+  startWorkspaceManager = (input: WorkspaceManagerControlInput) =>
+    workspaceManager.startWorkspaceManager(this.managerDeps(), input);
+
+  pauseWorkspaceManager = (input: WorkspaceManagerControlInput) =>
+    workspaceManager.pauseWorkspaceManager(this.managerDeps(), input);
+
+  resumeWorkspaceManager = (input: WorkspaceManagerControlInput) =>
+    workspaceManager.resumeWorkspaceManager(this.managerDeps(), input);
+
+  getCheckoutGateStatus = (input: CheckoutContextInput) =>
+    workspaceManager.getCheckoutGateStatus(this.managerDeps(), input);
+
+  markCheckoutReadyForReview = (input: MarkCheckoutReadyForReviewInput) =>
+    workspaceManager.markCheckoutReadyForReview(this.managerDeps(), input);
+
+  updateTicketStatus = (input: UpdateTicketStatusInput) =>
+    workspaceManager.updateTicketStatus(this.managerDeps(), input);
 
   createAgentSession = (
     input: CreateAgentSessionInput,
@@ -621,6 +645,13 @@ export class OperationService {
   }
 
   private planDeps(): workspacePlans.WorkspacePlanDeps {
+    return {
+      store: this.store,
+      activity: (...args) => this.activity(...args),
+    };
+  }
+
+  private managerDeps(): workspaceManager.WorkspaceManagerDeps {
     return {
       store: this.store,
       activity: (...args) => this.activity(...args),

@@ -103,6 +103,26 @@ describe("agents system store methods", () => {
     expect(store.updateWorkspaceCheckoutGate("co_1", "ready_for_human_review")).toMatchObject({
       gateStatus: "ready_for_human_review",
     });
+    expect(
+      store.updateWorkspaceCheckoutIssue("co_1", {
+        provider: "jira",
+        key: "CIT-2",
+        url: null,
+        title: "API ticket",
+        status: "In Review",
+        fetchedAt: timestamp,
+      }),
+    ).toMatchObject({ issue: { title: "API ticket", status: "In Review", fetchedAt: timestamp } });
+    expect(
+      store.updateWorkspaceCheckoutPr("co_1", {
+        provider: "github",
+        number: 13,
+        url: "https://example.test/pr/13",
+        headSha: "def",
+        baseRef: "main",
+        fetchedAt: null,
+      }),
+    ).toMatchObject({ intendedPr: { number: 13, headSha: "def" } });
   });
 
   it("stores plans, manager state, deviations, events, and review artifacts", () => {

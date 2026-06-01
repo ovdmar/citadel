@@ -52,6 +52,9 @@ export function migrateWorkspaceHomeCheckoutsManager(
       issue_provider TEXT,
       issue_key TEXT,
       issue_url TEXT,
+      issue_title TEXT,
+      issue_status TEXT,
+      issue_fetched_at TEXT,
       intended_pr_provider TEXT,
       intended_pr_number INTEGER,
       intended_pr_url TEXT,
@@ -67,12 +70,17 @@ export function migrateWorkspaceHomeCheckoutsManager(
     );
     CREATE INDEX IF NOT EXISTS idx_workspace_checkouts_workspace ON workspace_checkouts(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_workspace_checkouts_repo ON workspace_checkouts(repo_id);
+  `);
+  ensureColumn("workspace_checkouts", "issue_title", "TEXT");
+  ensureColumn("workspace_checkouts", "issue_status", "TEXT");
+  ensureColumn("workspace_checkouts", "issue_fetched_at", "TEXT");
+  db.exec(`
     INSERT OR IGNORE INTO workspace_checkouts (
-      id, workspace_id, repo_id, name, path, branch, base_branch, issue_provider, issue_key, issue_url,
+      id, workspace_id, repo_id, name, path, branch, base_branch, issue_provider, issue_key, issue_url, issue_title,
       intended_pr_provider, intended_pr_url, gate_status, created_at, updated_at, archived_at
     )
     SELECT 'checkout_' || id, id, repo_id, name, path, branch, base_branch,
-      CASE WHEN issue_key IS NOT NULL THEN 'jira' END, issue_key, issue_url,
+      CASE WHEN issue_key IS NOT NULL THEN 'jira' END, issue_key, issue_url, issue_title,
       CASE WHEN pr_url IS NOT NULL THEN 'github' END, pr_url, 'not_started', created_at, updated_at, archived_at
     FROM workspaces
     WHERE repo_id IS NOT NULL AND kind = 'worktree';

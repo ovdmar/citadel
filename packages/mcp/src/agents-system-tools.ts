@@ -93,6 +93,105 @@ export const AGENTS_SYSTEM_TOOL_DEFINITIONS = [
     destructive: false,
   },
   {
+    name: "start_workspace_manager",
+    description: "Ensure the durable manager instance exists for a structured workspace. Idempotent per workspace.",
+    inputSchema: {
+      type: "object",
+      required: ["workspaceId"],
+      properties: { workspaceId: { type: "string" } },
+      additionalProperties: false,
+    },
+    destructive: false,
+  },
+  {
+    name: "pause_workspace_manager",
+    description:
+      "Pause manager automation for a workspace. Human manual launches remain allowed, but manager follow-up waits until resumed.",
+    inputSchema: {
+      type: "object",
+      required: ["workspaceId"],
+      properties: { workspaceId: { type: "string" } },
+      additionalProperties: false,
+    },
+    destructive: false,
+  },
+  {
+    name: "resume_workspace_manager",
+    description: "Resume manager automation for a previously paused workspace manager.",
+    inputSchema: {
+      type: "object",
+      required: ["workspaceId"],
+      properties: { workspaceId: { type: "string" } },
+      additionalProperties: false,
+    },
+    destructive: false,
+  },
+  {
+    name: "mark_checkout_ready_for_review",
+    description:
+      "Record the checkout's PR identity/head and create the review artifact used by the ready-for-human-review gate.",
+    inputSchema: {
+      type: "object",
+      required: ["checkoutId"],
+      properties: {
+        checkoutId: { type: "string" },
+        sessionId: { type: "string" },
+        pr: { type: "object" },
+        notes: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    destructive: false,
+  },
+  {
+    name: "get_checkout_ticket",
+    description: "Return the provider-neutral child ticket binding for a checkout resolved by checkoutId or cwd.",
+    inputSchema: {
+      type: "object",
+      properties: { checkoutId: { type: "string" }, cwd: { type: "string", minLength: 1 } },
+      additionalProperties: false,
+    },
+    destructive: false,
+  },
+  {
+    name: "get_checkout_pr",
+    description: "Return the intended/current PR binding for a checkout resolved by checkoutId or cwd.",
+    inputSchema: {
+      type: "object",
+      properties: { checkoutId: { type: "string" }, cwd: { type: "string", minLength: 1 } },
+      additionalProperties: false,
+    },
+    destructive: false,
+  },
+  {
+    name: "get_checkout_gate_status",
+    description:
+      "Evaluate the deterministic implementation gate for a checkout, including active plan, PR head review artifact, deviations, and stack parent state.",
+    inputSchema: {
+      type: "object",
+      properties: { checkoutId: { type: "string" }, cwd: { type: "string", minLength: 1 } },
+      additionalProperties: false,
+    },
+    destructive: false,
+  },
+  {
+    name: "update_ticket_status",
+    description:
+      "Update the local provider-neutral ticket binding status for a workspace or checkout. External provider writes are best-effort and reported separately.",
+    inputSchema: {
+      type: "object",
+      required: ["workspaceId", "issue", "targetState"],
+      properties: {
+        workspaceId: { type: "string" },
+        checkoutId: { type: "string" },
+        issue: { type: "object" },
+        targetState: { type: "string", enum: ["todo", "in_progress", "in_qa", "in_review", "done"] },
+      },
+      additionalProperties: false,
+    },
+    destructive: false,
+  },
+  {
     name: "launch_pm_agent",
     description:
       "Launch the predefined PM role on workspace Home. Without workspaceId/cwd it bootstraps a zero-checkout structured workspace shell from idea/workspaceName/parentIssue.",

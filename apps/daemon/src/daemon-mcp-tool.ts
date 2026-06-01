@@ -1,6 +1,7 @@
 import { type CitadelConfig, effectiveNotesPath } from "@citadel/config";
 import {
   AssignWorkspaceToNamespaceInputSchema,
+  CheckoutContextInputSchema,
   CreateAgentSessionInputSchema,
   CreateNamespaceInputSchema,
   CreateRepoInputSchema,
@@ -13,10 +14,13 @@ import {
   LaunchImplementationAgentInputSchema,
   LaunchPmAgentInputSchema,
   LaunchPrototypeAgentInputSchema,
+  MarkCheckoutReadyForReviewInputSchema,
   RegisterWorkspacePlanInputSchema,
   ReportPlanDeviationInputSchema,
   UpdateNamespaceInputSchema,
   UpdateScheduledAgentInputSchema,
+  UpdateTicketStatusInputSchema,
+  WorkspaceManagerControlInputSchema,
 } from "@citadel/contracts";
 import { fuzzySearchBlocks } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
@@ -146,6 +150,45 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     const result = operations.reportPlanDeviation(ReportPlanDeviationInputSchema.parse(call.arguments ?? {}));
     if (result.ok)
       emit("workspace.plan.deviation", { workspaceId: result.deviation.workspaceId, deviationId: result.deviation.id });
+    return result;
+  }
+  if (call.name === "start_workspace_manager") {
+    const result = operations.startWorkspaceManager(WorkspaceManagerControlInputSchema.parse(call.arguments ?? {}));
+    if (result.ok) emit("workspace.manager.updated", { workspaceId: result.manager.workspaceId });
+    return result;
+  }
+  if (call.name === "pause_workspace_manager") {
+    const result = operations.pauseWorkspaceManager(WorkspaceManagerControlInputSchema.parse(call.arguments ?? {}));
+    if (result.ok) emit("workspace.manager.updated", { workspaceId: result.manager?.workspaceId });
+    return result;
+  }
+  if (call.name === "resume_workspace_manager") {
+    const result = operations.resumeWorkspaceManager(WorkspaceManagerControlInputSchema.parse(call.arguments ?? {}));
+    if (result.ok) emit("workspace.manager.updated", { workspaceId: result.manager?.workspaceId });
+    return result;
+  }
+  if (call.name === "get_checkout_gate_status") {
+    return operations.getCheckoutGateStatus(CheckoutContextInputSchema.parse(call.arguments ?? {}));
+  }
+  if (call.name === "get_checkout_ticket") {
+    const gate = operations.getCheckoutGateStatus(CheckoutContextInputSchema.parse(call.arguments ?? {}));
+    return gate.ok ? { ok: true, checkoutId: gate.checkout.id, issue: gate.checkout.issue } : gate;
+  }
+  if (call.name === "get_checkout_pr") {
+    const gate = operations.getCheckoutGateStatus(CheckoutContextInputSchema.parse(call.arguments ?? {}));
+    return gate.ok ? { ok: true, checkoutId: gate.checkout.id, pr: gate.checkout.intendedPr } : gate;
+  }
+  if (call.name === "mark_checkout_ready_for_review") {
+    const result = operations.markCheckoutReadyForReview(
+      MarkCheckoutReadyForReviewInputSchema.parse(call.arguments ?? {}),
+    );
+    if (result.ok) emit("checkout.gate.updated", { checkoutId: result.artifact.checkoutId });
+    return result;
+  }
+  if (call.name === "update_ticket_status") {
+    const result = operations.updateTicketStatus(UpdateTicketStatusInputSchema.parse(call.arguments ?? {}));
+    if (result.ok)
+      emit("ticket.updated", { workspaceId: call.arguments?.workspaceId, checkoutId: call.arguments?.checkoutId });
     return result;
   }
   if (

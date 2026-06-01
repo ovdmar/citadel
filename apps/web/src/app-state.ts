@@ -3,11 +3,14 @@ import type {
   AgentRuntime,
   Namespace,
   Operation,
+  PlanDeviationReport,
   ProviderHealth,
   Repo,
   ScheduledAgent,
   TerminalProfile,
   Workspace,
+  WorkspaceManager,
+  WorkspacePlanVersion,
   WorkspaceSession,
   WorktreeCheckout,
 } from "@citadel/contracts";
@@ -36,6 +39,9 @@ export type StateResponse = {
   repos: Repo[];
   workspaces: Workspace[];
   checkouts: WorktreeCheckout[];
+  workspacePlans: WorkspacePlanVersion[];
+  workspaceManagers: WorkspaceManager[];
+  planDeviations: PlanDeviationReport[];
   sessions: WorkspaceSession[];
   operations: Operation[];
   activity: ActivityEvent[];
@@ -118,6 +124,9 @@ export function applyOptimisticRemoveFilter(
     ...state,
     workspaces: state.workspaces.filter((w) => !ids.has(w.id)),
     checkouts: state.checkouts.filter((checkout) => !ids.has(checkout.workspaceId)),
+    workspacePlans: state.workspacePlans.filter((plan) => !ids.has(plan.workspaceId)),
+    workspaceManagers: state.workspaceManagers.filter((manager) => !ids.has(manager.workspaceId)),
+    planDeviations: state.planDeviations.filter((report) => !ids.has(report.workspaceId)),
   };
 }
 
@@ -138,6 +147,11 @@ export function useEventRefresh() {
     events.onmessage = () => queryClient.invalidateQueries({ queryKey: ["state"] });
     events.addEventListener("repo.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("workspace.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("workspace.manager.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("workspace.plan.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("workspace.plan.deviation", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("checkout.gate.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("ticket.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("agent.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("scheduled-agent.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("scheduled-agent.run", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
