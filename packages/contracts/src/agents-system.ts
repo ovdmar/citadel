@@ -157,6 +157,19 @@ export const RoleTemplateSchema = z.object({
   updatedAt: z.string().nullable().default(null),
 });
 
+export const UpdateRoleTemplateInputSchema = z.object({
+  systemPrompt: z.string().min(1).optional(),
+  launchSettings: LaunchSettingsSchema.optional(),
+  updatedAt: z.string(),
+});
+
+export const UpdateActionTemplateInputSchema = z.object({
+  prompt: z.string().min(1).optional(),
+  launchSettings: LaunchSettingsSchema.optional(),
+  executionMode: ActionExecutionModeSchema.optional(),
+  updatedAt: z.string(),
+});
+
 export const WorkspacePlanStatusSchema = z.enum([
   "draft",
   "under_review",
@@ -337,6 +350,8 @@ export type LaunchSettings = z.infer<typeof LaunchSettingsSchema>;
 export type RuntimeLaunchOptionCapabilities = z.infer<typeof RuntimeLaunchOptionCapabilitiesSchema>;
 export type RoleTemplate = z.infer<typeof RoleTemplateSchema>;
 export type ActionTemplate = z.infer<typeof ActionTemplateSchema>;
+export type UpdateRoleTemplateInput = z.infer<typeof UpdateRoleTemplateInputSchema>;
+export type UpdateActionTemplateInput = z.infer<typeof UpdateActionTemplateInputSchema>;
 export type WorkspacePlanVersion = z.infer<typeof WorkspacePlanVersionSchema>;
 export type WorkspacePlanReview = z.infer<typeof WorkspacePlanReviewSchema>;
 export type WorkspacePlanDecision = z.infer<typeof WorkspacePlanDecisionSchema>;

@@ -7,10 +7,10 @@ export type RuntimeLaunchOptionsInput = {
   effortValues?: string[];
   supportsFastMode?: boolean;
   contextModes?: string[];
-  modelArgv?: LaunchArgvMapping;
-  effortArgv?: LaunchArgvMapping;
-  fastArgv?: LaunchArgvMapping;
-  contextArgv?: LaunchArgvMapping;
+  modelArgv?: LaunchArgvMapping | undefined;
+  effortArgv?: LaunchArgvMapping | undefined;
+  fastArgv?: LaunchArgvMapping | undefined;
+  contextArgv?: LaunchArgvMapping | undefined;
 };
 
 export type RuntimeWithLaunchOptions = {

@@ -4,6 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
   AlarmClock,
+  Bot,
   ChevronRight,
   ClipboardList,
   FolderPlus,
@@ -286,6 +287,9 @@ export function Navigator(props: {
             title="Scheduled agents — cron-driven agent runs"
           >
             <AlarmClock size={13} /> Scheduled agents
+          </Link>
+          <Link to="/agents" className={path === "/agents" ? "active" : ""} title="Agent role templates">
+            <Bot size={13} /> Agents
           </Link>
           <Link to="/history" className={path === "/history" ? "active" : ""} title="Activity & operations history">
             <ClipboardList size={13} /> <span>History</span>

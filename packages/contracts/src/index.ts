@@ -4,6 +4,7 @@ import {
   IssueBindingSchema,
   LaunchSettingsSchema,
   RoleIdSchema,
+  RuntimeLaunchOptionCapabilitiesSchema,
   WorkspaceLifecyclePhaseSchema,
   WorkspaceModeSchema,
 } from "./agents-system.js";
@@ -106,6 +107,7 @@ export const AgentRuntimeSchema = z.object({
   health: ProviderStatusSchema,
   healthReason: z.string().nullable().default(null),
   capabilities: RuntimeCapabilitySchema,
+  launchCapabilities: RuntimeLaunchOptionCapabilitiesSchema.optional(),
 });
 
 export const TerminalProfileSchema = z.object({

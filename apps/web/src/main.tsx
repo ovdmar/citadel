@@ -14,6 +14,7 @@ import { queryClient } from "./api.js";
 import { OptimisticRemoveProvider } from "./app-state.js";
 import { Cockpit } from "./cockpit.js";
 import { bootstrapLastRoute, clearLastRoute, saveLastRoute } from "./lib/last-route.js";
+import { AgentTemplatesView } from "./routes/agents.js";
 import { DashboardView } from "./routes/dashboard.js";
 import { HistoryView } from "./routes/history.js";
 import { OnboardingView } from "./routes/onboarding.js";
@@ -93,6 +94,12 @@ const settingsRoute = createRoute({
   getParentRoute: () => cockpitLayoutRoute,
   path: "/settings",
   component: SettingsView,
+});
+
+const agentsRoute = createRoute({
+  getParentRoute: () => cockpitLayoutRoute,
+  path: "/agents",
+  component: AgentTemplatesView,
 });
 
 const repoSettingsRoute = createRoute({
@@ -260,6 +267,7 @@ const router = createRouter({
     cockpitLayoutRoute.addChildren([
       indexRoute,
       settingsRoute,
+      agentsRoute,
       repoSettingsRoute,
       operationsRoute,
       onboardingRoute,

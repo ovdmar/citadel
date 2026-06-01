@@ -12,6 +12,8 @@ import {
   ReviewArtifactSchema,
   RoleTemplateSchema,
   RuntimeLaunchOptionCapabilitiesSchema,
+  UpdateActionTemplateInputSchema,
+  UpdateRoleTemplateInputSchema,
   UpdateTicketStatusInputSchema,
   WorkspaceManagerSchema,
   WorkspacePlanVersionSchema,
@@ -47,6 +49,10 @@ describe("agents system contracts", () => {
     expect(role.actions[0]?.executionMode).toBe("new_session");
     expect(ActionTemplateSchema.safeParse({ ...action, role: "manager" }).success).toBe(false);
     expect(RoleTemplateSchema.safeParse({ ...role, role: "custom" }).success).toBe(false);
+    expect(UpdateRoleTemplateInputSchema.parse({ systemPrompt: "new", updatedAt: timestamp }).systemPrompt).toBe("new");
+    expect(
+      UpdateActionTemplateInputSchema.parse({ executionMode: "existing_session", updatedAt: timestamp }).executionMode,
+    ).toBe("existing_session");
   });
 
   it("models workspace targets, checkouts, plans, review artifacts, and manager state", () => {
