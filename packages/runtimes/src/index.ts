@@ -59,6 +59,12 @@ export type {
   ActiveElapsedTimerProbe,
 } from "./status/index.js";
 
+export {
+  resolveRuntimeLaunchProfile,
+  runtimeLaunchOptionCapabilities,
+} from "./launch-profile.js";
+export type { ResolvedLaunchProfile, RuntimeLaunchOptionsInput, RuntimeWithLaunchOptions } from "./launch-profile.js";
+
 const baseCapabilities = {
   supportsPrompt: false,
   supportsResume: false,

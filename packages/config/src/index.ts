@@ -2,7 +2,7 @@ import { X509Certificate } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { HookEventSchema, JiraAutoTransitionSchema } from "@citadel/contracts";
+import { HookEventSchema, JiraAutoTransitionSchema, RuntimeModelSchema } from "@citadel/contracts";
 import { z } from "zod";
 
 export { devStatePath, loadDevState, saveDevState, resolveWorktreeRoot, DevStateSchema } from "./dev-state.js";
@@ -30,6 +30,19 @@ type BuiltinAgentRuntime = {
   supportsResume?: boolean;
   supportsPrompt?: boolean;
   supportsModelSelection?: boolean;
+  launchOptions?: RuntimeLaunchOptionsConfig;
+};
+
+type RuntimeLaunchOptionsConfig = {
+  models?: Array<{ id: string; label: string; default?: boolean; deprecated?: boolean }>;
+  defaultModel?: string | null;
+  effortValues?: string[];
+  supportsFastMode?: boolean;
+  contextModes?: string[];
+  modelArgv?: { argv: string[] };
+  effortArgv?: { argv: string[] };
+  fastArgv?: { argv: string[] };
+  contextArgv?: { argv: string[] };
 };
 
 export const CODEX_GOALS_FEATURE_ARGS = ["--enable", "goals"] as const;
@@ -49,6 +62,15 @@ const BUILTIN_AGENT_RUNTIMES: BuiltinAgentRuntime[] = [
     supportsResume: true,
     supportsPrompt: true,
     supportsModelSelection: true,
+    launchOptions: {
+      models: [
+        { id: "sonnet", label: "Sonnet", default: true },
+        { id: "opus", label: "Opus" },
+        { id: "haiku", label: "Haiku" },
+      ],
+      defaultModel: "sonnet",
+      modelArgv: { argv: ["--model", "{value}"] },
+    },
   },
   {
     id: "codex",
@@ -70,6 +92,20 @@ const BUILTIN_AGENT_RUNTIMES: BuiltinAgentRuntime[] = [
     resumeArg: "resume",
     supportsResume: true,
     supportsPrompt: true,
+    supportsModelSelection: true,
+    launchOptions: {
+      models: [
+        { id: "gpt-5.4", label: "GPT-5.4", default: true },
+        { id: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
+        { id: "gpt-5.3-codex", label: "GPT-5.3 Codex" },
+      ],
+      defaultModel: "gpt-5.4",
+      effortValues: ["low", "medium", "high", "xhigh"],
+      contextModes: ["standard", "max"],
+      modelArgv: { argv: ["-m", "{value}"] },
+      effortArgv: { argv: ["-c", "model_reasoning_effort={value}"] },
+      contextArgv: { argv: ["-c", "model_context_window={value}"] },
+    },
   },
   {
     id: "cursor-agent",
@@ -77,6 +113,12 @@ const BUILTIN_AGENT_RUNTIMES: BuiltinAgentRuntime[] = [
     command: "cursor-agent",
     args: [],
     supportsPrompt: true,
+    supportsModelSelection: true,
+    launchOptions: {
+      modelArgv: { argv: ["--model", "{value}"] },
+      supportsFastMode: true,
+      fastArgv: { argv: ["--fast"] },
+    },
   },
   { id: "pi", displayName: "Pi", command: "pi", args: [] },
 ];
@@ -112,6 +154,19 @@ export const AgentRuntimeConfigSchema = z.object({
   // category sits inside a section, else just `<label>`. Stale keys (provider
   // renamed a row) silently fall back to the first available category.
   topBarCategoryKey: z.string().min(1).max(200).optional(),
+  launchOptions: z
+    .object({
+      models: z.array(RuntimeModelSchema).default([]),
+      defaultModel: z.string().min(1).nullable().default(null),
+      effortValues: z.array(z.string().min(1)).default([]),
+      supportsFastMode: z.boolean().default(false),
+      contextModes: z.array(z.string().min(1)).default([]),
+      modelArgv: z.object({ argv: z.array(z.string().min(1)).min(1) }).optional(),
+      effortArgv: z.object({ argv: z.array(z.string().min(1)).min(1) }).optional(),
+      fastArgv: z.object({ argv: z.array(z.string().min(1)).min(1) }).optional(),
+      contextArgv: z.object({ argv: z.array(z.string().min(1)).min(1) }).optional(),
+    })
+    .optional(),
 });
 
 export const TerminalProfileConfigSchema = z.object({

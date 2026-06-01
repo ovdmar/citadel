@@ -13,7 +13,12 @@ import type {
 } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
-import { discoverCodexSessionId, prepareCodexSqliteHomeForWorkspace } from "@citadel/runtimes";
+import {
+  type RuntimeLaunchOptionsInput,
+  discoverCodexSessionId,
+  prepareCodexSqliteHomeForWorkspace,
+  resolveRuntimeLaunchProfile,
+} from "@citadel/runtimes";
 import {
   type AgentExitHint,
   COMM_TRUNCATION,
@@ -36,6 +41,7 @@ type RuntimeLaunchEnv = Record<string, string | null | undefined>;
 type RuntimeLaunchOptions = { exitHint: AgentExitHint; env?: RuntimeLaunchEnv };
 
 export type RuntimeDescriptor = {
+  id?: string;
   command: string;
   args: string[];
   displayName: string;
@@ -47,6 +53,7 @@ export type RuntimeDescriptor = {
   // CLI flag for resuming a previous conversation by UUID (e.g. "--resume").
   // Used in the restore path when input.resumeRuntimeSessionId is set.
   resumeArg?: string | null;
+  launchOptions?: RuntimeLaunchOptionsInput;
 };
 
 export type CreateAgentSessionDeps = {
@@ -98,7 +105,20 @@ export async function createAgentSession(
   // Prefer runtime-native initial-prompt argv when available. Codex accepts
   // the prompt as a positional argument; Claude Code's interactive mode does
   // not, so for runtimes without argv support we paste once the TUI is ready.
-  const runtimeArgs = ensureCodexGoalsFeatureArgs(input.runtimeId, runtime.args);
+  const launchProfile = resolveRuntimeLaunchProfile({
+    runtime: {
+      id: runtime.id ?? input.runtimeId,
+      command: runtime.command,
+      args: ensureCodexGoalsFeatureArgs(input.runtimeId, runtime.args),
+      displayName: runtime.displayName,
+      promptArg: runtime.promptArg ?? undefined,
+      sessionIdArg: runtime.sessionIdArg ?? undefined,
+      resumeArg: runtime.resumeArg ?? undefined,
+      launchOptions: runtime.launchOptions,
+    },
+    settings: input.launchSettings,
+  });
+  const runtimeArgs = [...launchProfile.args];
   let promptForKeys: string | null = null;
   if (input.prompt?.length) {
     if (runtime.promptArg) runtimeArgs.push(runtime.promptArg, input.prompt);
@@ -204,6 +224,13 @@ export async function createAgentSession(
     workspaceId: workspace.id,
     runtimeId: input.runtimeId,
     displayName: input.displayName || runtime.displayName,
+    targetType: input.targetType ?? (workspace.mode === "structured" ? "workspace_home" : "worktree_checkout"),
+    checkoutId: input.checkoutId ?? null,
+    role: input.role ?? null,
+    actionId: input.actionId ?? null,
+    managed: input.managed ?? false,
+    parentSessionId: input.parentSessionId ?? null,
+    planVersionId: input.planVersionId ?? null,
     status: "running",
     statusReason: "launched",
     lastStatusAt: now,
@@ -220,6 +247,7 @@ export async function createAgentSession(
     // identical to ordering by createdAt.
     tabId: input.tabId ?? createId("tab"),
     runtimeSessionId,
+    launchWarnings: launchProfile.launchWarnings,
     createdAt: now,
     updatedAt: now,
   };
@@ -264,6 +292,16 @@ export async function createAgentSession(
     workspace.id,
     launchedFromOperation,
   );
+  for (const warning of launchProfile.launchWarnings) {
+    deps.activity(
+      "agent.launch_warning",
+      activitySource,
+      warning,
+      workspace.repoId,
+      workspace.id,
+      launchedFromOperation,
+    );
+  }
   const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
   if (repo) {
     await deps.runNotificationHooks("agent.started", repo, workspace, launchedFromOperation, {

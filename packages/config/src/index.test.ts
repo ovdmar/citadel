@@ -40,6 +40,11 @@ describe("loadConfig", () => {
       "--enable",
       "goals",
     ]);
+    expect(config.agentRuntimes.find((runtime) => runtime.id === "codex")?.launchOptions).toMatchObject({
+      defaultModel: "gpt-5.4",
+      effortValues: ["low", "medium", "high", "xhigh"],
+      modelArgv: { argv: ["-m", "{value}"] },
+    });
     expect(config.terminal).toEqual({ displayName: "Terminal", command: "bash", args: ["-l"] });
     expect(config.usageProviders).toEqual([]);
     expect(config.automations.fixCi).toMatchObject({

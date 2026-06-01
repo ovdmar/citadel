@@ -149,6 +149,70 @@ describe("createAgentSession session-id wiring", () => {
     }
   }, 15_000);
 
+  it("applies launch settings through the runtime launch profile and persists warnings", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = makeService(store, fixture.dir);
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "launch-profile", source: "scratch" });
+    const argvPath = path.join(fixture.dir, "launch-profile-argv.json");
+    const scriptPath = path.join(fixture.dir, "fake-profile-runtime.js");
+    fs.writeFileSync(
+      scriptPath,
+      [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+    );
+
+    const session = await service.createAgentSession(
+      {
+        workspaceId: created.workspaceId,
+        runtimeId: "test-agent",
+        launchSettings: {
+          runtimeId: "test-agent",
+          model: "old-model",
+          effort: "extreme",
+          fastMode: true,
+          contextMode: null,
+        },
+      },
+      {
+        command: "node",
+        args: [scriptPath],
+        displayName: "Profile Runtime",
+        launchOptions: {
+          models: [
+            { id: "stable-model", label: "Stable", default: true },
+            { id: "old-model", label: "Old", deprecated: true },
+          ],
+          defaultModel: "stable-model",
+          effortValues: ["low", "high"],
+          modelArgv: { argv: ["--model", "{value}"] },
+        },
+      },
+    );
+    try {
+      const deadline = Date.now() + 3000;
+      while (!fs.existsSync(argvPath) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(JSON.parse(fs.readFileSync(argvPath, "utf8"))).toEqual(["--model", "stable-model"]);
+      expect(store.listSessions(created.workspaceId).find((s) => s.id === session.id)?.launchWarnings).toEqual([
+        "Runtime test-agent model old-model is unavailable; using stable-model",
+        "effort extreme is not supported; dropping effort",
+        "Runtime test-agent does not support fast mode; dropping fastMode",
+      ]);
+      expect(
+        store.listActivity(created.workspaceId).filter((event) => event.type === "agent.launch_warning"),
+      ).toHaveLength(3);
+    } finally {
+      service.stopAgentSession({ sessionId: session.id });
+    }
+  }, 15_000);
+
   it("launches Codex with an isolated workspace CODEX_SQLITE_HOME", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
