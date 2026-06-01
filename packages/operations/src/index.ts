@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import type { ActivityEvent, AgentSession, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
+import type { ActivityEvent, AgentSession, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceCheckoutInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
@@ -33,6 +33,13 @@ export {
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
+export { executionTargetCwd, resolveExecutionTargetForCwd, workspaceRootPath } from "./workspace-layout.js";
+export { executeWorkspaceLayoutMigration, planWorkspaceLayoutMigration } from "./workspace-layout-migration.js";
+export type {
+  WorkspaceGitSnapshot,
+  WorkspaceLayoutMigrationPlan,
+  WorkspaceLayoutMigrationSkipReason,
+} from "./workspace-layout-migration.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export { createDiagnosticsLogger, noopDiagnosticsLogger, type DiagnosticEvent, type DiagnosticsLogger, type DiagnosticsLoggerOptions } from "./diagnostics.js";
 export { parseUsageLimitResetFromReason, deriveAccountUsageLimit, type AccountRateLimitInfo } from "./usage-limit.js";
@@ -46,6 +53,7 @@ import { cancelOperationInStore, listHookDiagnostics, reconcileStore, tryRunGit 
 export { BranchInUseByWorktreeError, RemoteRefMissingError, WorkspaceInUseError, WorkspaceNameTakenError } from "./helpers.js";
 import { buildDispatchAgentHookDeps, dispatchAgentHook as dispatchAgentHookImpl } from "./dispatch-agent-hook.js";
 import { type DispatchAgentHook, runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
+import { createWorkspaceCheckoutImpl } from "./structured-workspace.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import { type WorkspaceAppsDeps, discoverWorkspaceApps as discoverWorkspaceAppsImpl, runWorkspaceAction as runWorkspaceActionImpl } from "./workspace-apps.js";
 
@@ -102,6 +110,9 @@ export class OperationService {
 
   createWorkspace = (input: CreateWorkspaceInput, options?: CreateWorkspaceOptions) =>
     createWorkspaceImpl(this.workspaceOpsDeps(), input, options);
+
+  createWorkspaceCheckout = (input: CreateWorkspaceCheckoutInput) =>
+    createWorkspaceCheckoutImpl(this.workspaceOpsDeps(), input);
 
   createAgentSession = (
     input: CreateAgentSessionInput,
