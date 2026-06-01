@@ -54,6 +54,7 @@ type ConfigResponse = {
     hooks: HookConfig[];
     repoDefaults: { setupHookIds: string[]; teardownHookIds: string[] };
     commandPolicy: { hookTimeoutMs: number; allowDestructiveWorkspaceCleanup: boolean };
+    scratchpad?: { path?: string };
   };
   configPath: string;
 };
@@ -87,6 +88,7 @@ export function StructuredConfig() {
   const [teardownHookIds, setTeardownHookIds] = useState("");
   const [hookTimeoutMs, setHookTimeoutMs] = useState(120_000);
   const [allowDestructive, setAllowDestructive] = useState(false);
+  const [scratchpadPath, setScratchpadPath] = useState("");
 
   useEffect(() => {
     const cfg = configQuery.data?.config;
@@ -104,6 +106,7 @@ export function StructuredConfig() {
     setTeardownHookIds(cfg.repoDefaults.teardownHookIds.join(", "));
     setHookTimeoutMs(cfg.commandPolicy.hookTimeoutMs);
     setAllowDestructive(cfg.commandPolicy.allowDestructiveWorkspaceCleanup);
+    setScratchpadPath(cfg.scratchpad?.path ?? "");
   }, [configQuery.data]);
 
   const save = useMutation({
@@ -128,6 +131,7 @@ export function StructuredConfig() {
             teardownHookIds: split(teardownHookIds),
           },
           commandPolicy: { hookTimeoutMs, allowDestructiveWorkspaceCleanup: allowDestructive },
+          scratchpad: { path: scratchpadPath.trim() || undefined },
         }),
       }),
     onSuccess: () => {
@@ -200,6 +204,25 @@ export function StructuredConfig() {
               value={hookTimeoutMs}
               onChange={(event) => setHookTimeoutMs(Number(event.target.value))}
             />
+          </label>
+        </div>
+      </section>
+
+      <section className="config-section">
+        <h3>Notes</h3>
+        <div className="form-grid">
+          <label>
+            Notes location
+            <input
+              data-testid="notes-location-input"
+              value={scratchpadPath}
+              onChange={(event) => setScratchpadPath(event.target.value)}
+              placeholder="Default: <dataDir>/scratchpad.md"
+            />
+            <small>
+              Absolute path. Leave empty to use the default under the data directory. <code>~/</code> is expanded to
+              your home directory.
+            </small>
           </label>
         </div>
       </section>

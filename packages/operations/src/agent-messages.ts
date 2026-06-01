@@ -1,7 +1,7 @@
 import type { ActivityEvent } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
-import { captureTranscript, submitPrompt } from "@citadel/terminal";
+import { captureTranscript, panePidProcess, submitPrompt } from "@citadel/terminal";
 import { reduceStatus } from "./agent-status.js";
 
 // Source of a follow-up submit. Defaults to "user" so existing operator-
@@ -42,7 +42,20 @@ export type SendMessageResult = {
   error?: string;
 };
 
-const acceptingStates = new Set(["starting", "running", "waiting_for_input", "rate_limited", "usage_limited", "idle"]);
+// Shell-first: `idle` deliberately dropped — in the new pane lifecycle,
+// `idle` means the foreground process is the operator's shell, NOT the
+// agent. Sending a paste into bash would inject the message as a shell
+// command. The cached `idle` here used to mean "agent paused, ready for
+// input"; that meaning is preserved by `waiting_for_input`/`rate_limited`/
+// `usage_limited` (all derived from pane content by the runtime adapter,
+// not from foreground command). Belt-and-suspenders: even when status is
+// `running`, sendAgentMessage re-checks panePidProcess at send-time below.
+const acceptingStates = new Set(["starting", "running", "waiting_for_input", "rate_limited", "usage_limited"]);
+
+// Foreground commands that mean "this pane is at the shell prompt, NOT
+// running an agent". The send-time check below refuses to deliver a paste
+// when the foreground matches.
+const SHELL_BINARIES = new Set(["bash", "sh", "zsh", "fish", "dash"]);
 
 export function readAgentTranscript(
   store: SqliteStore,
@@ -74,6 +87,22 @@ export async function sendAgentMessage(
   if (!session) return { ok: false, error: "session_not_found" };
   if (!session.tmuxSessionName) return { ok: false, error: "session_has_no_terminal" };
   if (!acceptingStates.has(session.status)) {
+    return { ok: false, sessionId: session.id, status: session.status, error: "session_not_accepting_input" };
+  }
+  // Belt-and-suspenders: re-check the pane's foreground process at send-time
+  // (not just the cached DB status). Cached status can be stale by up to one
+  // monitor tick (~2 s); in that window a shell-first session whose agent
+  // just exited would still read as "running" but the foreground is bash,
+  // and a paste here would land in the shell prompt instead of the TUI.
+  //
+  // EXCEPTION: for the `shell` runtime (Plain Terminal), bash IS the
+  // runtime — a shell foreground is the normal state, not "agent stopped".
+  // Skip the check there.
+  const pane = panePidProcess(session.tmuxSessionName);
+  if (pane === null) {
+    return { ok: false, sessionId: session.id, status: session.status, error: "session_has_no_terminal" };
+  }
+  if (session.runtimeId !== "shell" && SHELL_BINARIES.has(pane.command)) {
     return { ok: false, sessionId: session.id, status: session.status, error: "session_not_accepting_input" };
   }
   const source: SendMessageSource = input.source ?? "user";

@@ -81,6 +81,13 @@ export type McpToolContext = {
   scheduledAgents?: ScheduledAgent[];
   namespaces: Namespace[];
   sessionPromptSummary?: (sessionId: string) => { initialPrompt: string | null; messageCount: number };
+  // Absolute path of the daemon's notes file. Surfaced through `inspect_status`
+  // so MCP-using agents can discover the scratchpad location without a separate
+  // `/api/config` round-trip. Required (non-optional) — leaving it optional
+  // would make the `inspect_status.scratchpad` field sometimes-present and
+  // weaken the discovery guarantee for MCP clients. The daemon-side constructor
+  // populates it from `effectiveNotesPath(config)` in apps/daemon/src/daemon-mcp-tool.ts.
+  scratchpadPath: string;
 };
 
 const INITIAL_PROMPT_PREVIEW_CHARS = 200;
@@ -108,7 +115,8 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
   return [
     {
       name: "inspect_status",
-      description: "Summarize Citadel local state and provider health.",
+      description:
+        "Summarize Citadel local state and provider health. Includes `scratchpad.path` — the absolute filesystem path of the daemon's notes file — so agents can discover where notes live without a separate `/api/config` call.",
       inputSchema: { type: "object", additionalProperties: false },
       destructive: false,
     },
@@ -585,6 +593,7 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
         namespaces: context.namespaces.length,
         operations: context.operations.slice(0, 10),
         providerHealth: context.providerHealth,
+        scratchpad: { path: context.scratchpadPath },
       };
     case "list_repos":
       return { repos: context.repos };
@@ -679,6 +688,8 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "add_block":
     case "update_block":
     case "delete_block":
+    case "fuzzy_search_scratchpad":
+    case "refine_scratchpad":
       // The scratchpad lives on disk under the daemon's data dir; the snapshot
       // path has no fs access, so route through the daemon explicitly.
       return { error: "scratchpad_tool_requires_daemon" };
