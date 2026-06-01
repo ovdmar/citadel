@@ -38,7 +38,7 @@
 [ ] 11. The History route also exposes a back-to-cockpit link in its compact header, matching the Dashboard treatment.
 [ ] 12. Settings and onboarding surfaces follow the cockpit's dark-blue dense aesthetic: slim sub-nav, small uppercase panel titles, compact health/setup rows, no wall-of-form layouts.
 [ ] 13. Workspace > Home/checkouts navigation preserves stable row heights and does not shift while live session/gate counts update.
-[ ] 14. Workspace-level history remains usable for many manager-created sessions without mounting terminal renderers for closed tabs.
+[~] 14. Workspace-level history remains usable for many manager-created sessions without mounting terminal renderers for closed tabs.
 
 ## Performance
 
@@ -49,7 +49,7 @@
 [ ] 5. Terminal scrollback is bounded or virtualized. The tmux server enforces a global `history-limit` (default 20000 lines per pane) so a forgotten session can't grow per-pane scrollback without bound.
 [~] 6. Normal navigation transfers only the terminal data needed for mounted views: tmux's current visible state on attach plus live PTY output while the pane is mounted.
 [ ] 7. Main happy paths have performance smoke coverage.
-[ ] 8. Navigator/state payloads for structured workspaces are normalized enough that manager history, plan versions, and closed sessions do not force repeated full-terminal or full-artifact payload downloads.
+[~] 8. Navigator/state payloads for structured workspaces are normalized enough that manager history, plan versions, and closed sessions do not force repeated full-terminal or full-artifact payload downloads.
 [ ] 9. Manager heartbeat/tick work is event-first with a low-frequency backstop and must not poll provider-heavy gates for inactive or paused workspaces without need.
 
 ## Release Quality

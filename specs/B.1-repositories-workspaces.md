@@ -63,26 +63,26 @@
 
 ## Workspace Modes And Creation
 
-[ ] 1. A freestyle workspace maps to one manually chosen repository worktree and remains valid without structured manager gates.
-[ ] 2. A structured workspace creates a root directory, writes `.citadel/workspace.json`, creates Home, optionally binds a parent issue, creates one manager instance, and may start with zero checkouts.
-[ ] 3. PM bootstrap can create a structured workspace shell from an idea or parent issue without requiring a repository or checkout.
-[ ] 4. Prototype requires a checkout target but does not require an active plan or child ticket binding.
-[ ] 5. Structured implementation requires an active approved workspace plan, a parent issue binding, and exactly one child ticket binding on the target checkout.
-[ ] 6. Checkout creation supports a scratch branch off repo default branch, existing branch, PR, and upstream checkout branch/head for stacked work.
-[ ] 7. Multiple checkouts in one workspace may point to the same repository. One checkout is one branch and one intended PR.
-[ ] 8. Worktree checkouts live under the workspace root and store repo id, path, branch, base branch, issue binding, intended PR binding, stack parent, inferred purpose, gate status, timestamps, and archive fields.
-[ ] 9. Create workspace and create checkout run through operations, surface setup progress, and leave failed attempts recoverable.
+[~] 1. A freestyle workspace maps to one manually chosen repository worktree and remains valid without structured manager gates.
+[~] 2. A structured workspace creates a root directory, writes `.citadel/workspace.json`, creates Home, optionally binds a parent issue, creates one manager instance, and may start with zero checkouts.
+[~] 3. PM bootstrap can create a structured workspace shell from an idea or parent issue without requiring a repository or checkout.
+[~] 4. Prototype requires a checkout target but does not require an active plan or child ticket binding.
+[~] 5. Structured implementation requires an active approved workspace plan, a parent issue binding, and exactly one child ticket binding on the target checkout.
+[~] 6. Checkout creation supports a scratch branch off repo default branch, existing branch, PR, and upstream checkout branch/head for stacked work.
+[~] 7. Multiple checkouts in one workspace may point to the same repository. One checkout is one branch and one intended PR.
+[~] 8. Worktree checkouts live under the workspace root and store repo id, path, branch, base branch, issue binding, intended PR binding, stack parent, inferred purpose, gate status, timestamps, and archive fields.
+[~] 9. Create workspace and create checkout run through operations, surface setup progress, and leave failed attempts recoverable.
 [ ] 10. Provider-less discovery/prototype/architecture are valid structured states. Provider-less coding remains a freestyle launch, not structured implementation.
 
 ## Workspace Layout Migration
 
-[ ] 1. Existing single-repo workspaces migrate automatically once to the root + checkout layout when safety checks pass.
-[ ] 2. Migration preserves `workspaces.path` as the legacy/current-primary-checkout path during compatibility while new code reads `workspaces.root_path` and `workspace_checkouts.path`.
-[ ] 3. Migration moves Git worktrees using `git worktree move` only. Raw directory moves are not used for automatic migration.
-[ ] 4. The automatic path uses a sibling temporary checkout path, creates the final workspace root at the old operator-visible path, then moves the checkout under that root.
-[ ] 5. Dirty worktrees may be migrated only when pre/post `git status --porcelain` output matches and git metadata remains valid.
-[ ] 6. Migration writes a manifest before moving, skips live sessions/operations, verifies branch/HEAD/common-dir/worktree-list state, updates DB only after verification, and is idempotent after crashes.
-[ ] 7. Cross-device moves, target collisions, root/imported repositories, missing paths, and broken git state are skipped without mutating the DB and surface a visible admin/readiness item.
+[~] 1. Existing single-repo workspaces migrate automatically once to the root + checkout layout when safety checks pass.
+[~] 2. Migration preserves `workspaces.path` as the legacy/current-primary-checkout path during compatibility while new code reads `workspaces.root_path` and `workspace_checkouts.path`.
+[~] 3. Migration moves Git worktrees using `git worktree move` only. Raw directory moves are not used for automatic migration.
+[~] 4. The automatic path uses a sibling temporary checkout path, creates the final workspace root at the old operator-visible path, then moves the checkout under that root.
+[~] 5. Dirty worktrees may be migrated only when pre/post `git status --porcelain` output matches and git metadata remains valid.
+[~] 6. Migration writes a manifest before moving, skips live sessions/operations, verifies branch/HEAD/common-dir/worktree-list state, updates DB only after verification, and is idempotent after crashes.
+[~] 7. Cross-device moves, target collisions, root/imported repositories, missing paths, and broken git state are skipped without mutating the DB and surface a visible admin/readiness item.
 
 ## Archive And Remove Workspace
 

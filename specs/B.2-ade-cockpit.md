@@ -53,9 +53,9 @@
 
 [ ] 1. The center column shows tabs for the selected execution target, not all workspace sessions at once.
 [ ] 2. Selecting a workspace row defaults to Home. Selecting `Home` or a checkout child switches the tab strip to that target's live tabs.
-[ ] 3. A plus button next to tabs adds a new session valid for the selected target. Home offers PM, Architect when discovery is ready, Manager/manual, freestyle runtimes, and Terminal. Checkout offers Implementation when structured gates pass, Prototype, freestyle runtimes, and Terminal.
+[~] 3. A plus button next to tabs adds a new session valid for the selected target. Home offers PM, Architect when discovery is ready, Manager/manual, freestyle runtimes, and Terminal. Checkout offers Implementation when structured gates pass, Prototype, freestyle runtimes, and Terminal.
 [ ] 4. Specialized role sessions and freestyle runtime sessions are visually distinct. Specialized role sessions are manager-tracked by default; freestyle runtime sessions are not manager-tracked.
-[ ] 5. Role target rules are enforced in the UI: `pm`, `architect`, and `manager` run on Home; `implementation` and `prototype` run on checkouts.
+[~] 5. Role target rules are enforced in the UI: `pm`, `architect`, and `manager` run on Home; `implementation` and `prototype` run on checkouts.
 [ ] 6. Selecting `Terminal` calls the terminal-session REST endpoint and creates a `kind: "terminal"` session in the selected target cwd.
 [ ] 7. Selecting a freestyle runtime creates a `kind: "agent"` session with no role/action metadata in the selected target cwd.
 [ ] 8. Selecting a specialized role or action creates a `kind: "agent"` session with role/action/managed metadata and any launch warnings from runtime capability resolution.
@@ -78,8 +78,8 @@
 ## Workspace Automation And History
 
 [ ] 1. Workspace Home shows lifecycle, parent issue binding, discovery readiness, active plan version, manager pause state, and manager action history.
-[ ] 2. Workspace-level agent history lists closed/restorable sessions across Home and all checkouts without reopening every tab.
-[ ] 3. Manager pause controls exist globally and per workspace. Pause blocks automated manager/agent-triggered actions, not human manual launches or important local notifications.
+[~] 2. Workspace-level agent history lists closed/restorable sessions across Home and all checkouts without reopening every tab.
+[~] 3. Manager pause controls exist globally and per workspace. Pause blocks automated manager/agent-triggered actions, not human manual launches or important local notifications.
 [ ] 4. Local notifications surface ready-for-human-review and human-input-needed events through in-app activity/alert plus optional browser notification and sound.
 
 ## Inspector Tabs
