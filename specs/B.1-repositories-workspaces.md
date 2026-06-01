@@ -51,47 +51,46 @@
 
 ## Workspace List
 
-[~] 1. Citadel tracks multiple workspaces per repository.
-[~] 2. Workspaces appear in a compact left-side navigator.
-[~] 3. Workspaces are grouped by repository.
-[ ] 4. Workspaces are grouped or sorted by readiness/status inside each repository.
-[ ] 5. Workspace rows show branch, readiness, active session count, dirty state, PR/check state, and blocking operations.
-[ ] 6. The navigator remains scannable with 10-12 active workspaces across 2-3 repositories.
-[ ] 7. The navigator is the primary left-side operating surface.
-[ ] 8. Workspace rows are slim (two lines): left agent state icon, first line workspace title, second line branch name in lighter monospace.
-[ ] 9. Workspace title is editable inline. Default is the worktree name; when an issue is attached the default is `<issue-key> · <issue-title> · <workspace-name>`.
-[ ] 10. The agent state icon shows a spinner while a workspace session with `kind: "agent"` is starting or actively running, and a static icon when only terminal sessions or no sessions are running.
-[ ] 11. The navigator exposes a group-by overlay with checkboxes for `Repository` and `Status`. Both are reorderable to control grouping order. Default: both on, Repository first.
-[ ] 12. Group-by preferences persist locally.
-[ ] 13. Workspace rows are manually reorderable within their group via drag-and-drop. The order is persisted locally (per-browser localStorage, no server sync). Explicit user order overrides the default sort. Reorder is intra-group only — cross-group drops are no-ops in v1.
+[~] 1. Citadel tracks multiple workspaces, each with a root directory and a mode.
+[ ] 2. Workspaces appear as top-level navigator rows. Each workspace row expands to an unremovable `Home` child and zero or more worktree checkout children.
+[ ] 3. Freestyle workspaces preserve today's manual worktree behavior. Structured workspaces are feature containers for automated delivery and may begin with no checkout.
+[ ] 4. Workspace rows show title, mode, lifecycle, parent issue, manager pause/attention state, active session count, and aggregate gate status.
+[ ] 5. Checkout rows show repo, branch, inferred purpose, dirty state, PR/check/conflict state, child issue binding, and implementation gate status.
+[ ] 6. The navigator remains scannable with 10-12 active workspaces across 2-3 repositories and supports larger structured workspaces by collapsing checkout children.
+[ ] 7. Workspace title is editable inline. Checkout display names are unique within a workspace and default to repo or delivery-unit names.
+[ ] 8. Grouping by repository remains available for freestyle workspaces, but structured workspaces stay grouped by feature root so Home/checkouts remain visually together.
+[ ] 9. Workspace-level history, manager state, plan versions, and local notifications are reachable from the workspace row and Home target.
 
-## Create Workspace
+## Workspace Modes And Creation
 
-[ ] 1. A workspace maps to a git worktree.
-[ ] 2. Create workspace supports a blank/new branch workspace.
-[ ] 3. Create workspace supports a workspace from an existing branch.
-[ ] 4. Create workspace supports a workspace from a PR.
-[ ] 5. Create workspace supports a workspace from a Jira issue.
-[ ] 6. Create workspace previews branch name, path, base branch, linked PR/issue, and setup hooks before creation.
-[ ] 7. Create workspace executes repo setup hooks through operations.
-[ ] 8. A created workspace appears in the navigator with readiness, git state, and session affordances.
-[ ] 9. The create workspace entry point is the plus icon button next to the *Workspaces* header in the navigator. It opens a centered modal.
-[ ] 10. The modal requires repository selection first. The most recently used repository is pre-selected, and a search input is available when many repositories are registered.
-[ ] 11. The modal exposes workspace source as tabs: `From scratch`, `From issue`, `From branch`.
-[ ] 12. The `From issue` tab queries the active issue provider for issues assigned to or created by the current user, sorted by most recent activity.
-[ ] 13. The `From branch` tab lists recent local and remote branches with an inline branch search.
-[ ] 14. The modal supports an optional initial agent task that auto-launches a chosen runtime when the workspace is created.
-[ ] 15. When the workspace is created from this modal and a default agent runtime exists for the repo, Citadel opens that agent in the center column immediately.
-[ ] 16. The create modal closes immediately on submit. The workspace appears in the navigator with `lifecycle = "creating"` and an inline setup-progress affordance showing the current stage (`fetching` · `adding worktree` · `running setup hooks` · `ready`). The user can switch away while the workspace boots; provisioning continues in the background. Failures surface inline on the workspace card with a retry action and never leave the workspace stuck in `creating` state.
-[ ] 17. When no name is provided at creation, Citadel generates a memorable two-token name (adjective + animal, e.g. `funny-cat`). Generated names follow the normal rename flow and are not distinguished from user-chosen names in the UI. Names must be unique within the active workspace set; the daemon retries on collision and falls back to a 4-char suffix.
+[ ] 1. A freestyle workspace maps to one manually chosen repository worktree and remains valid without structured manager gates.
+[ ] 2. A structured workspace creates a root directory, writes `.citadel/workspace.json`, creates Home, optionally binds a parent issue, creates one manager instance, and may start with zero checkouts.
+[ ] 3. PM bootstrap can create a structured workspace shell from an idea or parent issue without requiring a repository or checkout.
+[ ] 4. Prototype requires a checkout target but does not require an active plan or child ticket binding.
+[ ] 5. Structured implementation requires an active approved workspace plan, a parent issue binding, and exactly one child ticket binding on the target checkout.
+[ ] 6. Checkout creation supports a scratch branch off repo default branch, existing branch, PR, and upstream checkout branch/head for stacked work.
+[ ] 7. Multiple checkouts in one workspace may point to the same repository. One checkout is one branch and one intended PR.
+[ ] 8. Worktree checkouts live under the workspace root and store repo id, path, branch, base branch, issue binding, intended PR binding, stack parent, inferred purpose, gate status, timestamps, and archive fields.
+[ ] 9. Create workspace and create checkout run through operations, surface setup progress, and leave failed attempts recoverable.
+[ ] 10. Provider-less discovery/prototype/architecture are valid structured states. Provider-less coding remains a freestyle launch, not structured implementation.
+
+## Workspace Layout Migration
+
+[ ] 1. Existing single-repo workspaces migrate automatically once to the root + checkout layout when safety checks pass.
+[ ] 2. Migration preserves `workspaces.path` as the legacy/current-primary-checkout path during compatibility while new code reads `workspaces.root_path` and `workspace_checkouts.path`.
+[ ] 3. Migration moves Git worktrees using `git worktree move` only. Raw directory moves are not used for automatic migration.
+[ ] 4. The automatic path uses a sibling temporary checkout path, creates the final workspace root at the old operator-visible path, then moves the checkout under that root.
+[ ] 5. Dirty worktrees may be migrated only when pre/post `git status --porcelain` output matches and git metadata remains valid.
+[ ] 6. Migration writes a manifest before moving, skips live sessions/operations, verifies branch/HEAD/common-dir/worktree-list state, updates DB only after verification, and is idempotent after crashes.
+[ ] 7. Cross-device moves, target collisions, root/imported repositories, missing paths, and broken git state are skipped without mutating the DB and surface a visible admin/readiness item.
 
 ## Archive And Remove Workspace
 
 [ ] 1. Archive workspace keeps history while hiding the workspace from active cockpit views.
-[ ] 2. Remove workspace explains worktree, sessions, operations, and hook cleanup impact.
-[ ] 3. Remove workspace requires explicit confirmation when active sessions or dirty files exist.
+[ ] 2. Remove workspace explains root directory, checkouts, sessions, operations, hooks, plan artifacts, manager state, and provider bindings affected by cleanup.
+[ ] 3. Remove workspace requires explicit confirmation when active sessions, active manager actions, dirty checkout files, or unpushed checkout commits exist.
 [~] 4. Remove workspace runs repo teardown hooks before tmux/worktree cleanup; both `repo.teardownHookIds` and an executable `.citadel/hooks/teardown` are honored (file first, then configured).
-[ ] 5. Remove workspace can preserve the worktree on disk when selected.
+[ ] 5. Remove workspace can preserve the root/checkouts on disk when selected. Checkout archive/remove paths retain dirty-worktree protection.
 [ ] 6. Workspace lifecycle is tracked separately from agent session, terminal, git, PR, and deployment state.
 [ ] 7. Archived/removed workspaces remain visible from the *History* navigator entry.
 [ ] 8. The history view distinguishes fully-removed workspaces from archived workspaces whose worktree is still present on disk.

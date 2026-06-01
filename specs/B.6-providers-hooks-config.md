@@ -15,6 +15,9 @@
 [ ] 7. Provider degraded state explains missing/stale data.
 [~] 8. Provider data includes refresh age. The GitHub provider additionally surfaces an active rate-limit cooldown via `versionControl.cooldownUntil` (ISO timestamp) so the cockpit can render an explicit "retrying at HH:MM" banner instead of an opaque "degraded".
 [ ] 9. Citadel prefers existing external tool auth for the first production baseline.
+[ ] 10. Structured workspaces bind to at most one ticket provider. Mixed issue providers inside one structured workspace are out of scope for v1.
+[ ] 11. Parent and child ticket planning content is read live from the issue provider. Citadel stores local execution bindings and prompt snapshots, not local-only work items.
+[ ] 12. Provider facts used for gates include freshness timestamps and rate-limit/cooldown state. Unknown or stale PR/CI/conflict state cannot satisfy readiness.
 
 ## Provider Category Model (source of truth)
 
@@ -46,6 +49,20 @@ Issue-tracker providers may declare auto-transitions that fire on lifecycle even
 - **Idempotency:** before transitioning, the runtime reads the issue's current status. If it already equals the target status, the call is skipped and recorded as `provider.issue_transition.auto.skip` in the activity log.
 - **Degradation:** auto-transition failures (provider unavailable, transition unresolved, etc.) log to `activity_events` (`provider.issue_transition.auto.unresolved` for resolution failures; `provider.issue_transition.auto` with `status: "degraded"` for transition failures) and **never block the originating operation**. The agent or workspace lifecycle the event came from still completes.
 - **SSE event name:** successful auto-transitions re-emit a distinct SSE event `provider.issue_transition.auto` (not `provider.issue_transition`, which the manual transition route uses). Cockpit consumers listen for both; the operations layer must never subscribe to either to avoid feedback loops.
+
+## Structured Ticket Bindings
+
+[ ] 1. Structured discovery may run without a parent issue. Structured implementation cannot start until the workspace has a parent issue binding and the target checkout has exactly one child issue binding.
+[ ] 2. Architect agents create/update external child tickets through provider tools. Citadel binds checkouts to those external tickets.
+[ ] 3. Manager reads parent title/description/acceptance/status and child ticket title/description/acceptance/status live when preparing prompts or validating implementation gates.
+[ ] 4. Ticket status transitions are best-effort manager/provider actions toward internal states such as `todo`, `in_progress`, `in_qa`, `in_review`, and `done`. Failed transitions record warnings/activity and never block code delivery.
+[ ] 5. Prompt snapshots record whether provider content was unavailable or stale so downstream sessions know what context they actually received.
+
+## Runtime Capability Discovery
+
+[ ] 1. Runtime adapters expose model list, default model, supported effort values, fast mode support, context/max-context modes, freshness, and degradation reason.
+[ ] 2. Runtime config supports adapter-specific argv mappings for model, effort/reasoning, fast mode, and context mode.
+[ ] 3. If live probing is unavailable, static fallback capabilities/defaults are used with freshness warnings.
 
 ## Provider Setup
 
@@ -104,7 +121,7 @@ Sections:
 
 - **Overview** — readiness counters (providers, agents, terminal, repos, MCP).
 - **Providers** — see Provider Category Model above.
-- **Agents** — built-in/platform agents (`claude-code`, `codex`, `cursor-agent`, `pi`) plus custom agents from `config.agentRuntimes`.
+- **Agents** — runtime health/capabilities plus the five predefined role/action templates. Custom agent CRUD is not exposed in v1.
 - **Terminal** — the singular terminal profile from `config.terminal`; plain shell is configured here, not as an agent runtime.
 - **Repositories** — register repos, remove tracking, and deep-link to per-repo settings.
 - **MCP** — local-first MCP toggle visibility plus a JSON client configuration example.

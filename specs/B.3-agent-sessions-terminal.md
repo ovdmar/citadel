@@ -6,32 +6,34 @@
 
 ## Agent Sessions
 
-[~] 1. A workspace can have multiple agent sessions.
-[ ] 2. The session list shows kind, agent runtime when present, status, task/title, started time, last activity, and attention state.
-[ ] 3. The operator can start a new session in a workspace.
+[~] 1. A workspace can have multiple agent sessions across Home and checkout execution targets.
+[ ] 2. The session list shows target type, checkout when present, kind, runtime, role, action, managed flag, parent session, plan version, status, task/title, started time, last activity, and attention state.
+[ ] 3. The operator can start a new session in a valid execution target.
 [ ] 4. The operator can choose the runtime adapter when starting a session.
 [ ] 5. The operator can provide an initial prompt/task when starting a session.
 [ ] 6. The operator can resume or reconnect to an existing session.
-[ ] 7. The operator can stop a session with confirmation.
+[ ] 7. The operator can stop a live session with confirmation. Closing a tab kills tmux but retains durable session history and runtime resume metadata.
 [~] 8. Session status uses a canonical enum: `starting`, `running`, `waiting_for_input`, `rate_limited`, `usage_limited`, `idle`, `stopped`, `failed`, `unknown`. Semantics for `kind: "agent"`: `starting` = TUI initializing; `running` = agent foreground process is the runtime binary (claude/codex/etc.) AND/OR in-turn background work still in flight; `waiting_for_input` / `rate_limited` / `usage_limited` = runtime-adapter-derived from pane content; `idle` = the pane's foreground command is a shell binary (agent not currently running, covering both "agent finished cleanly" and "operator Ctrl+C'd the agent"); `stopped` = operator explicitly stopped the session via the cockpit Stop button; `failed` is reserved for `launch_failed` reducer signals only; `unknown` = tmux unreachable. Semantics for `kind: "terminal"`: the session is `running` while its tmux session exists and `stopped` when the operator stops it; a shell foreground process is normal. Status is persisted in `workspace_sessions` along with `kind`, nullable `runtime_id`, `last_status_at`, `last_output_at`, `ended_at`, `exit_code`, `status_reason`, and `status_reason_at`. Because the shell-first pane lifecycle makes the agent a child of the terminal profile shell (not the pane PID), the daemon cannot reliably capture an agent's exit code when it exits mid-session; an agent that crashes mid-session shows `idle` with `status_reason: 'idle_after_unexpected_exit'` (surfaced as a red pulse for 30 minutes) rather than `failed`.
 
 Rate-limit recovery is automatic: Claude Code usage-limit banners persist `pane:usage_limited:reset=<iso>` in `status_reason`; the daemon scans for these reset-bound sessions and, on first detection, creates one internal one-shot background scheduled agent at `reset+60s`. When it fires, that background run calls the daemon's internal resume endpoint, which re-reads all currently `rate_limited` / `usage_limited` sessions and submits a system `resume` message to every session whose reset is due. Transient server `rate_limited` sessions without a reset continue through the bounded per-session auto-resume backoff.
 [~] 14. Workspace cards, session tabs, and the navigator aggregate display use one four-tone lifecycle taxonomy. Grey (`cit-pulse-idle`) means never started only. Yellow (`cit-pulse-run`) means actively starting/running. Green pulsing (`cit-pulse-done`) means the agent has transitioned from running to done and is awaiting review/human action with no PR conflict or failing CI. Red pulsing (`cit-pulse-bad`) means attention is required: `waiting_for_input`, `rate_limited`, `usage_limited`, `failed`, bad exits, crash/unknown attention reasons (`idle_after_unexpected_exit`, `tmux_missing`, `sentinel_missing_tmux_alive`, `migrated_from_orphaned`), PR conflicts, or failing CI. The shared predicates are `deriveAgentLifecycleTone` / `deriveWorkspaceLifecycleTone` in `@citadel/core`; UI code only maps those tones to pulse classes.
 [ ] 9. Session state survives browser refresh/reconnect.
 [ ] 10. Switching sessions preserves useful terminal context.
-[ ] 11. Sessions surface in the center column as a tab strip with a plus button that offers `Terminal` plus every healthy agent runtime.
-[ ] 12. Session tab titles are editable inline. The default title is the agent runtime display name for agent sessions and the terminal profile display name (`Terminal`) for terminal sessions.
-[ ] 13. When a workspace opens for the first time and a default agent runtime is healthy, Citadel opens that agent session automatically.
+[ ] 11. Sessions surface in the center column as a target-scoped tab strip with a plus button that offers valid specialized roles/actions, freestyle agent runtimes, and Terminal.
+[ ] 12. Session tab titles are editable inline. The default title is the role/action display name, agent runtime display name for freestyle agent sessions, and terminal profile display name for terminal sessions.
+[ ] 13. Structured workspaces launch PM/manager through explicit lifecycle flows, not by auto-opening a default freestyle agent on first workspace open.
+[ ] 14. Agent sessions persist `runtime_session_id`, role/action metadata, target scope, checkout id, parent session, managed flag, prompt snapshot, launch warnings, plan version, artifact links, `closed_at`, and restore information.
 
-## Agent Runtimes
+## Agent Runtimes And Launch Profiles
 
 [ ] 1. Agent runtimes expose capabilities.
-[~] 2. Capability examples include start, resume, prompt injection, transcript discovery, model selection, status detection, and plan/review modes. Status detection is implemented as a per-runtime adapter that analyzes pane content on each monitor tick and emits canonical status observations (`running` / `idle` / `waiting_for_input` / null). Adapter regexes are anchored to the bottom of the visible pane (mode-line / status-line region) and matched against committed fixture files; UI rendering changes in a runtime trigger fixture-update-and-regex-update as a single PR. Lifecycle signals (`tmux_missing`, `exited_clean`, `exited_failed`) come from the deterministic process layer (tmux session existence, bash wrapper's `.live` / `.exit` sentinel files), runtime-agnostic.
+[~] 2. Capability examples include start, resume, prompt injection, transcript discovery, model discovery, default model discovery, effort/reasoning support, fast mode support, context/max-context support, status detection, and plan/review modes. Status detection is implemented as a per-runtime adapter that analyzes pane content on each monitor tick and emits canonical status observations (`running` / `idle` / `waiting_for_input` / null). Adapter regexes are anchored to the bottom of the visible pane (mode-line / status-line region) and matched against committed fixture files; UI rendering changes in a runtime trigger fixture-update-and-regex-update as a single PR. Lifecycle signals (`tmux_missing`, `exited_clean`, `exited_failed`) come from the deterministic process layer (tmux session existence, bash wrapper's `.live` / `.exit` sentinel files), runtime-agnostic.
 [ ] 3. Runtime health is visible before session start.
 [ ] 4. Unavailable runtime adapters explain the missing binary, auth, config, or health issue.
 [ ] 5. Agent runtime configuration lives in `config.agentRuntimes` and Citadel settings/config.
-[ ] 6. Settings uses the operator-facing name **Agents**, not Runtimes. It distinguishes **platform agents** (shipped with Citadel: `claude-code`, `codex`, `cursor-agent`, `pi`) from operator-defined **custom agents**. The platform group exists even when the binary is missing; Citadel surfaces it as `unavailable` and explains how to install it. Custom agents can be added from the Agents settings panel without using Advanced.
+[ ] 6. Settings uses the operator-facing name **Agents**, not Runtimes. It distinguishes platform runtimes (`claude-code`, `codex`, `cursor-agent`, `pi`) from Citadel role/action templates. Custom role CRUD is out of scope for v1.
 [ ] 7. Plain shell is configured by the singular terminal profile and is never an agent runtime. It never appears in agent counts or MCP agent-session listings, but it is a first-class option when starting a workspace session from the cockpit.
+[ ] 8. Role/action templates store semantic launch settings. At launch, Citadel resolves runtime capabilities, validates the configured model/options, falls back to runtime defaults when necessary, drops unsupported options, records warnings, and builds runtime-specific argv centrally.
 
 ## Terminal
 

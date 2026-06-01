@@ -18,18 +18,18 @@
 
 ## PR Identity
 
-[~] 1. Workspace cards and details show PR identity and URL when available.
-[~] 2. Workspace cards and details show PR draft state.
-[~] 3. Workspace cards and details show PR review decision.
-[ ] 4. Workspace details show PR title, author, branch, target branch, labels, and mergeability when available.
+[~] 1. Checkout rows and details show intended and detected PR identity and URL when available.
+[~] 2. Checkout rows and details show PR draft state.
+[~] 3. Checkout rows and details show PR review decision.
+[ ] 4. Checkout details show PR title, author, branch, target branch, labels, head SHA, base ref, and mergeability when available.
 [x] 5. Workspace details show PR review requests and approval/blocking review state when available — rendered as overlapping reviewer avatars plus `N approved · N changes · N pending` counters in the inspector PR meta row.
-[ ] 6. PR state contributes to readiness and next action.
-[~] 7. Workspace cards render the PR icon with lifecycle color: grey when no PR exists, yellow when the PR exists and checks are pending, green when checks pass, red when any check fails.
-[ ] 8. The PR icon on a workspace card links directly to the provider PR URL.
-[ ] 9. Workspace cards render a separate approval icon to the right of the PR icon: grey when no reviewer is requested, yellow when reviewers are pending, red when changes are requested or comments are unresolved, green check when at least one approval exists.
-[x] 10. Workspace cards always render a PR row, even when no PR exists — an explicit thin placeholder makes the lifecycle slot visible without requiring workspace selection.
+[ ] 6. PR state contributes to checkout implementation gate, workspace readiness, and next action.
+[~] 7. Checkout rows render the PR icon with lifecycle color: grey when no PR exists, yellow when checks are pending, green when checks pass, red when checks fail or conflicts block.
+[ ] 8. The PR icon on a checkout row links directly to the provider PR URL.
+[ ] 9. Checkout rows render a separate approval/review-artifact icon: grey when no review is required yet, yellow when pending/stale, red when blocking findings exist, green when the current head SHA is reviewed.
+[x] 10. Checkout rows always reserve a PR slot, even when no PR exists.
 [x] 11. The PR row exposes a copy-branch affordance for the head branch, and uses GitHub's `base ← head` direction.
-[x] 12. Stacked PRs are detected by comparing each PR's base ref to other open and recently-merged PRs in the same head repository. When a parent is detected, the workspace card and inspector show an `↑ #<parent-number>` chip linking to that PR; merged parents are rendered with a distinct tone.
+[x] 12. Stacked PRs are modeled through checkout stack relationships and can also be detected by comparing each PR's base ref to other open and recently-merged PRs in the same head repository. When a parent is detected, the checkout row and inspector show an `↑ #<parent-number>` chip linking to that PR; merged parents are rendered with a distinct tone.
 [x] 13. The inspector PR card surfaces a single action button at its bottom-right. It renders Merge when the PR is open and the GitHub CLI is healthy — respecting the repository's allowed merge strategies (squash/merge/rebase) and never deleting the head branch by default — and switches to Fix conflicts when `mergeable === "conflicting"` or `mergeStateStatus === "DIRTY"`. Merge and Fix conflicts are mutually exclusive (a conflicting PR cannot be merged); merged or closed PRs render no action.
 [~] 14. GitHub's `mergeable` and `mergeStateStatus` fields are surfaced through `PullRequestSummary`. `mergeable !== "CONFLICTING"` is required for the `ready-to-merge` readiness state; `mergeStateStatus` informs the workspace-card tone only. These fields are refreshed when (a) the PR's own `headSha` changes, (b) the repo's default-branch SHA moves (detected by the per-repo merge-to-main watcher), or (c) the operator clicks force-refresh — never on every poll.
 [~] 15. When `mergeable === "CONFLICTING"`, the workspace enters the dedicated `pr-conflicts` readiness state, distinct from the local working-tree `conflicts` state and from `checks-failing`. The workspace-card tone also flips to `conflicting` when `mergeStateStatus === "DIRTY"`, but the readiness state itself remains scoped to `mergeable === "CONFLICTING"`.
@@ -44,6 +44,23 @@
 [ ] 6. Stale check data is visible.
 [x] 7. The inspector renders all PR commits (not just local recent commits) with a "Show more" expander when the list exceeds 5; each commit shows a per-commit check-roll-up dot (passing/pending/failing).
 [x] 8. The inspector exposes a manual force-refresh control for PR and check state, and a live-ticking "Last fetched X ago" timestamp drawn from `versionControl.checkedAt`.
+
+## Implementation Gates And Review Artifacts
+
+[ ] 1. A checkout is ready for human review only when PR exists, checks are green, mergeability has no conflicts, provider facts are fresh, current PR head SHA has a `review-pr` artifact for the active plan version, and no unresolved blocking review finding or plan deviation affects the checkout.
+[ ] 2. `review-pr` is a built-in implementation action launched in a separate session. Its artifact stores checkout id, PR id/url, head SHA, plan version, result, findings status, blocking findings, artifact path/link, timestamp, and human waiver decisions.
+[ ] 3. Any PR head SHA change invalidates the previous review artifact. Conflict fixes, CI fixes, restacks, manual commits, or plan version mismatches also invalidate readiness.
+[ ] 4. Implementation agents signal completion through a structured tool, but manager independently verifies all gate facts before marking the checkout ready.
+[ ] 5. Manager and implementation agents cannot self-waive blocking review findings. Only a recorded human decision can waive a blocking finding.
+[ ] 6. Conflict appearance after readiness revokes readiness and triggers fix/restack automation when automation is unpaused.
+
+## Stacked PRs And Restacking
+
+[ ] 1. Plan dependency edges distinguish `parallel`, `stacked_on_pr`, `wait_for_merge_or_release`, and `manual` checkpoints.
+[ ] 2. For same-repo stacked work, downstream checkouts start from the upstream branch/head after upstream CI is green and the current head has passed `review-pr`.
+[ ] 3. Base branch updates cascade from bottom to top. Upstream checkout changes mark downstream checkouts `needs_restack`.
+[ ] 4. Manager owns restack orchestration in v1: update bottom checkout from base, update each child from parent, launch conflict/restack actions when needed, then re-run gates for changed checkouts.
+[ ] 5. Force-push, upstream branch deletion, manual rebase, partial stack failure, and stale/unknown provider state are explicit restack states, not silent success.
 
 ## Background Refresh
 

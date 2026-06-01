@@ -49,10 +49,11 @@
 ## Persistence And Config
 
 [~] 1. SQLite is the mutable local state baseline.
-[ ] 2. SQLite owns repositories, workspaces, operations, activity, workspace sessions, provider health snapshots, UI preferences, and runtime state.
-[ ] 3. Config files own static defaults, providers, agent runtimes, the terminal profile, hooks, repo defaults, and command policy.
+[ ] 2. SQLite owns repositories, workspace roots, workspace checkouts, operations, activity, workspace sessions, provider health snapshots, plan versions, manager state/events, review artifacts, UI preferences, and runtime state.
+[ ] 3. Config files own static defaults, providers, runtime definitions, terminal profile, hooks, repo defaults, command policy, and may own editable predefined role/action templates when boot-safe. DB-backed template storage is also acceptable.
 [ ] 4. Migrations are forward-only for the initial local-first baseline.
 [ ] 5. Backup/restore is the rollback strategy for local data.
+[ ] 6. Workspace schema migration is append-only in spirit: add `workspaces.root_path`/`mode`, keep `workspaces.path` as legacy primary-checkout compatibility until all callers use typed accessors, and create child tables for checkouts/plans/managers/review artifacts.
 
 ## Terminal And Runtime Stack
 
@@ -78,6 +79,8 @@
 [~] 9. packages/hooks contains hook contracts, command execution, and event dispatch.
 [~] 10. packages/mcp contains MCP tools/resources over normalized Citadel concepts.
 [~] 11. packages/testing contains fixtures, fake providers/runtimes, and e2e helpers.
+[ ] 12. Workspace and checkout path helpers expose typed accessors (`workspaceRootPath`, `checkoutPath`, `executionTargetCwd`) so callers do not reinterpret legacy `workspaces.path`.
+[ ] 13. Manager reducers, gate reducers, stack planners, and migration planners live in pure packages where practical; daemon route/MCP modules wire them to persistence, providers, terminal, and operations.
 
 ## Provider And Hook Stack
 
