@@ -458,7 +458,16 @@ describe("OperationService", () => {
     expect(session.status).toBe("running");
     const result = service.stopAgentSession({ sessionId: session.id });
     expect(result.stopped).toBe(true);
-    expect(store.listSessions().find((candidate) => candidate.id === session.id)).toBeUndefined();
+    const stopped = store.listSessions().find((candidate) => candidate.id === session.id);
+    expect(stopped).toMatchObject({
+      id: session.id,
+      status: "stopped",
+      statusReason: "closed_by_user",
+      transport: "disconnected",
+      tmuxSessionName: null,
+      tmuxSessionId: null,
+    });
+    expect(stopped?.closedAt).toEqual(expect.any(String));
     expect(store.listActivity().find((event) => event.type === "agent.stopped")).toBeTruthy();
   });
 

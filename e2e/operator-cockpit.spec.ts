@@ -247,7 +247,7 @@ test("dialogs render near viewport center on desktop and tablet", async ({ page,
   }
 });
 
-test("desktop session stop endpoint removes the session", async ({ request }, testInfo) => {
+test("desktop session stop endpoint closes the session", async ({ request }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "session lifecycle coverage runs once against the shared daemon");
   const fixture = createGitFixture();
   let workspaceId: string | null = null;
@@ -259,9 +259,12 @@ test("desktop session stop endpoint removes the session", async ({ request }, te
     const stop = await apiDelete(request, `${API_BASE}/api/workspace-sessions/${session.id}`);
     expect(stop.ok()).toBe(true);
     const state = await apiGet(request, `${API_BASE}/api/state`);
-    const body = (await state.json()) as { sessions: Array<{ id: string }> };
-    // Stop is destructive: the session is deleted from the cockpit, not merely marked stopped.
-    expect(body.sessions.find((entry) => entry.id === session.id)).toBeUndefined();
+    const body = (await state.json()) as { sessions: Array<{ closedAt: string | null; id: string }> };
+    expect(body.sessions.find((entry) => entry.id === session.id)).toMatchObject({
+      closedAt: expect.any(String),
+      status: "stopped",
+      statusReason: "closed_by_user",
+    });
   } finally {
     if (workspaceId) await apiDelete(request, `${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
     fs.rmSync(fixture.dir, { recursive: true, force: true });
