@@ -52,10 +52,10 @@
 ## Workspace List
 
 [~] 1. Citadel tracks multiple workspaces, each with a root directory and a mode.
-[ ] 2. Workspaces appear as top-level navigator rows. Each workspace row expands to an unremovable `Home` child and zero or more worktree checkout children.
+[~] 2. Workspaces appear as top-level navigator rows. Each structured workspace row visually preserves the unremovable `Home` target and zero or more worktree checkout children as one feature group; grouped/nested rendering is partial while detailed gate/history badges are still being added.
 [ ] 3. Freestyle workspaces preserve today's manual worktree behavior. Structured workspaces are feature containers for automated delivery and may begin with no checkout.
-[ ] 4. Workspace rows show title, mode, lifecycle, parent issue, manager pause/attention state, active session count, and aggregate gate status.
-[ ] 5. Checkout rows show repo, branch, inferred purpose, dirty state, PR/check/conflict state, child issue binding, and implementation gate status.
+[~] 4. Workspace rows show title, mode, lifecycle, parent issue, manager pause/attention state, active session count, and aggregate gate status. The current row can aggregate checkout count, PR count, and live sessions; manager/gate attention badges are still partial.
+[~] 5. Checkout rows show repo, branch, inferred purpose, dirty state, PR/check/conflict state, child issue binding, and implementation gate status. The current row surfaces repo/checkout identity, branch, issue key, PR/check tone, and approval tone; detailed gate reasons are still partial.
 [ ] 6. The navigator remains scannable with 10-12 active workspaces across 2-3 repositories and supports larger structured workspaces by collapsing checkout children.
 [ ] 7. Workspace title is editable inline. Checkout display names are unique within a workspace and default to repo or delivery-unit names.
 [ ] 8. Grouping by repository remains available for freestyle workspaces, but structured workspaces stay grouped by feature root so Home/checkouts remain visually together.
@@ -73,6 +73,9 @@
 [~] 8. Worktree checkouts live under the workspace root and store repo id, path, branch, base branch, issue binding, intended PR binding, stack parent, inferred purpose, gate status, timestamps, and archive fields.
 [~] 9. Create workspace and create checkout run through operations, surface setup progress, and leave failed attempts recoverable.
 [ ] 10. Provider-less discovery/prototype/architecture are valid structured states. Provider-less coding remains a freestyle launch, not structured implementation.
+[ ] 11. Manager-owned checkout creation from an approved plan is idempotent by `workspace_id + delivery_plan_version_id + delivery_unit_key`; existing compatible checkouts are selected before creating new ones.
+[ ] 12. Worktree checkouts may carry delivery-unit identity (`deliveryUnitKey`, `deliveryPlanVersionId`) and manager freshness/status fields. Existing/manual checkouts keep these fields nullable until claimed or mapped.
+[ ] 13. Delivery-unit checkout names and branches are plan-controlled identifiers and must be validated before use; checkout names are local names, never filesystem paths.
 
 ## Workspace Layout Migration
 
@@ -98,6 +101,13 @@
 [ ] 10. The history view offers an unarchive control when the worktree is still present and the workspace can be safely returned to active lifecycle.
 [ ] 11. Remove workspace removes the row from the navigator optimistically on confirmation; teardown continues in the background. The row only re-renders if backend cleanup fails (or on a page reload before the DELETE response). On failure, the drop dialog re-opens for the resurrected workspace seeded with the error message — even if the user has navigated to a different workspace in the meantime.
 [ ] 12. When removal is blocked by a dirty worktree, the dialog surfaces the actual change summary: a list of uncommitted file paths with their git porcelain status code, and a list of unpushed commits with short SHA + subject. Lists are capped at 50 files and 20 commits.
+
+## Delivery Units And Checkout Binding
+
+[ ] 1. Approved structured plans include machine-readable delivery units and dependency edges. The daemon snapshots the parsed delivery units at plan registration so later markdown edits cannot silently change manager behavior.
+[ ] 2. Each delivery unit has a stable key, target repository identity, safe checkout/worktree name, safe branch/ref intent, exactly one child issue binding when implementation will launch, and zero or more typed dependency edges.
+[ ] 3. Delivery-unit keys, checkout names, and branch/ref intents are unique within the approved plan wherever collisions would make checkout selection ambiguous.
+[ ] 4. Existing active plans without machine-readable delivery units remain visible, but manager automation emits `human_input_needed` until the plan is repaired or re-registered.
 
 ---
 

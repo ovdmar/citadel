@@ -33,6 +33,7 @@
 [x] 13. The inspector PR card surfaces a single action button at its bottom-right. It renders Merge when the PR is open and the GitHub CLI is healthy — respecting the repository's allowed merge strategies (squash/merge/rebase) and never deleting the head branch by default — and switches to Fix conflicts when `mergeable === "conflicting"` or `mergeStateStatus === "DIRTY"`. Merge and Fix conflicts are mutually exclusive (a conflicting PR cannot be merged); merged or closed PRs render no action.
 [~] 14. GitHub's `mergeable` and `mergeStateStatus` fields are surfaced through `PullRequestSummary`. `mergeable !== "CONFLICTING"` is required for the `ready-to-merge` readiness state; `mergeStateStatus` informs the workspace-card tone only. These fields are refreshed when (a) the PR's own `headSha` changes, (b) the repo's default-branch SHA moves (detected by the per-repo merge-to-main watcher), or (c) the operator clicks force-refresh — never on every poll.
 [~] 15. When `mergeable === "CONFLICTING"`, the workspace enters the dedicated `pr-conflicts` readiness state, distinct from the local working-tree `conflicts` state and from `checks-failing`. The workspace-card tone also flips to `conflicting` when `mergeStateStatus === "DIRTY"`, but the readiness state itself remains scoped to `mergeable === "CONFLICTING"`.
+[ ] 16. Structured checkout gates consume durable checkout PR facts keyed by provider instance/account, repository identity, checkout id, PR identity, and head SHA. Workspace-level PR caches may render UI summaries but cannot satisfy structured readiness on their own.
 
 ## Checks And CI
 
@@ -44,6 +45,7 @@
 [ ] 6. Stale check data is visible.
 [x] 7. The inspector renders all PR commits (not just local recent commits) with a "Show more" expander when the list exceeds 5; each commit shows a per-commit check-roll-up dot (passing/pending/failing).
 [x] 8. The inspector exposes a manual force-refresh control for PR and check state, and a live-ticking "Last fetched X ago" timestamp drawn from `versionControl.checkedAt`.
+[ ] 9. Structured checkout gates consume durable check facts keyed by provider instance/account, repository identity, checkout PR/head binding, and check identity. Stale or degraded check facts are visible and block readiness.
 
 ## Implementation Gates And Review Artifacts
 
@@ -53,6 +55,9 @@
 [ ] 4. Implementation agents signal completion through a structured tool, but manager independently verifies all gate facts before marking the checkout ready.
 [ ] 5. Manager and implementation agents cannot self-waive blocking review findings. Only a recorded human decision can waive a blocking finding.
 [ ] 6. Conflict appearance after readiness revokes readiness and triggers fix/restack automation when automation is unpaused.
+[ ] 7. `mark_checkout_ready_for_review` records implementation completion plus PR/head facts and notes only; it does not create a review artifact.
+[ ] 8. `register_checkout_review_artifact` records review artifacts only for server-linked `implementation.review_pr` action sessions or explicit local human imports.
+[ ] 9. Review artifacts include `invalidatedAt`, `invalidatedReason`, explicit human waiver fields, and the plan/head identity needed to show stale artifacts without satisfying the gate.
 
 ## Stacked PRs And Restacking
 
@@ -61,6 +66,8 @@
 [ ] 3. Base branch updates cascade from bottom to top. Upstream checkout changes mark downstream checkouts `needs_restack`.
 [ ] 4. Manager owns restack orchestration in v1: update bottom checkout from base, update each child from parent, launch conflict/restack actions when needed, then re-run gates for changed checkouts.
 [ ] 5. Force-push, upstream branch deletion, manual rebase, partial stack failure, and stale/unknown provider state are explicit restack states, not silent success.
+[ ] 6. Automated restack acquires a per-checkout/worktree mutation lock, refuses dirty/diverged/conflicted checkouts, blocks when unrelated mutating sessions are active, creates backup refs before branch rewriting, re-checks cleanliness and lock ownership before each mutating git command, and never force-pushes by default.
+[ ] 7. Restack conflicts stop the affected branch of the cascade, record a visible operation/gate reason, and launch the configured conflict/restack action only when automation is unpaused.
 
 ## Background Refresh
 

@@ -18,6 +18,7 @@
 [ ] 10. Structured workspaces bind to at most one ticket provider. Mixed issue providers inside one structured workspace are out of scope for v1.
 [ ] 11. Parent and child ticket planning content is read live from the issue provider. Citadel stores local execution bindings and prompt snapshots, not local-only work items.
 [ ] 12. Provider facts used for gates include freshness timestamps and rate-limit/cooldown state. Unknown or stale PR/CI/conflict state cannot satisfy readiness.
+[ ] 13. Durable provider facts include provider type, provider instance/account id, host/external URL, workspace binding id, source binding, stable external id when available, and external key/number so same issue keys or PR numbers from different providers/repos/hosts never collide.
 
 ## Provider Category Model (source of truth)
 
@@ -57,6 +58,9 @@ Issue-tracker providers may declare auto-transitions that fire on lifecycle even
 [ ] 3. Manager reads parent title/description/acceptance/status and child ticket title/description/acceptance/status live when preparing prompts or validating implementation gates.
 [ ] 4. Ticket status transitions are best-effort manager/provider actions toward internal states such as `todo`, `in_progress`, `in_qa`, `in_review`, and `done`. Failed transitions record warnings/activity and never block code delivery.
 [ ] 5. Prompt snapshots record whether provider content was unavailable or stale so downstream sessions know what context they actually received.
+[ ] 6. Parent/child issue facts persist title/status/acceptance snapshots, fetched/stale timestamps, cooldown metadata, degraded reason, and source binding. Local issue bindings remain visible when the provider is unavailable.
+[ ] 7. PR/check/conflict facts persist checkout-scoped PR/head/base/mergeability/check state before manager gates consume them. Last-known facts remain visible but stale/degraded facts cannot satisfy readiness.
+[ ] 8. Issue transition attempts are durable history with requested internal state, current external status, selected transition, resulting status, success/failure, degraded reason, manager action id, and timestamp.
 
 ## Runtime Capability Discovery
 

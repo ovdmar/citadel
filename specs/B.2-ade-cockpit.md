@@ -53,8 +53,8 @@
 
 [ ] 1. The center column shows tabs for the selected execution target, not all workspace sessions at once.
 [ ] 2. Selecting a workspace row defaults to Home. Selecting `Home` or a checkout child switches the tab strip to that target's live tabs.
-[~] 3. A plus button next to tabs adds a new session valid for the selected target. Home offers PM, Architect when discovery is ready, Manager/manual, freestyle runtimes, and Terminal. Checkout offers Implementation when structured gates pass, Prototype, freestyle runtimes, and Terminal.
-[ ] 4. Specialized role sessions and freestyle runtime sessions are visually distinct. Specialized role sessions are manager-tracked by default; freestyle runtime sessions are not manager-tracked.
+[~] 3. A plus button next to tabs adds a new session valid for the selected target. Home offers PM, Architect when discovery is ready, Manager/manual, freestyle runtimes, and Terminal. Checkout offers Implementation when structured gates pass, Prototype, freestyle runtimes, and Terminal. Disabled role/action options show exact precondition reasons from daemon-derived launch rules.
+[~] 4. Specialized role sessions and freestyle runtime sessions are visually distinct. Specialized role sessions are manager-tracked by default; freestyle runtime sessions are not manager-tracked.
 [~] 5. Role target rules are enforced in the UI: `pm`, `architect`, and `manager` run on Home; `implementation` and `prototype` run on checkouts.
 [ ] 6. Selecting `Terminal` calls the terminal-session REST endpoint and creates a `kind: "terminal"` session in the selected target cwd.
 [ ] 7. Selecting a freestyle runtime creates a `kind: "agent"` session with no role/action metadata in the selected target cwd.
@@ -66,6 +66,7 @@
 [ ] 13. Selecting a target in the navigator focuses that target's currently-active xterm pane directly. If the target has no live session, focusing is a no-op.
 [ ] 14. Closing the active tab immediately focuses the left sibling, falling back to the right sibling. Closing the only remaining tab leaves the target selected and shows its history/empty state.
 [ ] 15. The Stage's `+` add-session button is disabled when the selected target is not ready for local execution.
+[~] 16. Global shortcut session creation respects the selected execution target and uses the Home or checkout cwd consistently with explicit target-scoped launches.
 
 ## Global Agents Configuration
 
@@ -77,10 +78,13 @@
 
 ## Workspace Automation And History
 
-[ ] 1. Workspace Home shows lifecycle, parent issue binding, discovery readiness, active plan version, manager pause state, and manager action history.
+[ ] 1. Workspace Home shows lifecycle, parent issue binding, discovery readiness, active plan version, manager pause state, manager decisions, manager action ledger/history, local notifications, and next actions.
 [~] 2. Workspace-level agent history lists closed/restorable sessions across Home and all checkouts without reopening every tab.
 [~] 3. Manager pause controls exist globally and per workspace. Pause blocks automated manager/agent-triggered actions, not human manual launches or important local notifications.
 [ ] 4. Local notifications surface ready-for-human-review and human-input-needed events through in-app activity/alert plus optional browser notification and sound.
+[ ] 5. Checkout detail shows delivery unit, child issue, PR identity/head/checks/mergeability/conflicts, current and stale review artifacts, deviations, stack parent/children, gate reasons, and related action history.
+[ ] 6. Home and checkout detail render as the selected target's useful empty state before any live terminal/session is open.
+[ ] 7. Plan registration UI previews parsed delivery units, dependency graph, unsafe identifiers, missing/ambiguous repos, missing child issues, and manager-blocking parser errors before approval.
 
 ## Inspector Tabs
 
@@ -129,6 +133,7 @@
 [ ] 9. Waiting-review state is explicit.
 [ ] 10. Failed operation state is explicit.
 [ ] 11. Ready-to-merge or ready-to-deploy state is explicit when provider data supports it.
+[ ] 12. Browser notification unsupported/denied and sound disabled/playback-failed states are explicit and do not break in-app notification delivery.
 
 ## Operator Actions
 

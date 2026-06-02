@@ -51,6 +51,7 @@
 [ ] 7. Main happy paths have performance smoke coverage.
 [~] 8. Navigator/state payloads for structured workspaces are normalized enough that manager history, plan versions, and closed sessions do not force repeated full-terminal or full-artifact payload downloads.
 [ ] 9. Manager heartbeat/tick work is event-first with a low-frequency backstop and must not poll provider-heavy gates for inactive or paused workspaces without need.
+[ ] 10. Structured workspace state exposed to the web is normalized enough that manager actions/events, parsed delivery units, review artifacts, gate snapshots, durable facts, notifications, and closed-session history can render without downloading prompt bodies, transcripts, raw provider dumps, or full terminal buffers.
 
 ## Release Quality
 
@@ -67,6 +68,8 @@
 [ ] 11. Release checks include format, typecheck, lint, test, e2e, production build, and performance smoke.
 [ ] 12. Coverage targets are meaningful and behavior-oriented.
 [ ] 13. E2E covers structured workspace shell creation, Home/checkouts navigation, Agents config edit/reset, specialized launch gating, manager pause, local readiness notification, and closed-session history.
+[ ] 14. E2E uses deterministic fake runtime/provider/review fixtures so structured manager flows can drive PR, issue, transition, review, notification, and manager tick outcomes without live Jira/GitHub dependencies.
+[ ] 15. Unit tests cover manager decision reducers, action idempotency/lease fencing, plan parsing, provider fact identity/degradation, PR/check fact identity/degradation, review artifact invalidation, stack/restack safety, authorization spoof rejection, launch-option derivation, Home/checkout components, notifications, Agents config validation, and target-aware session history/focus.
 
 ## Test Isolation (source of truth)
 

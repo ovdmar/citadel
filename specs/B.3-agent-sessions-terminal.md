@@ -22,7 +22,10 @@ Rate-limit recovery is automatic: Claude Code usage-limit banners persist `pane:
 [ ] 11. Sessions surface in the center column as a target-scoped tab strip with a plus button that offers valid specialized roles/actions, freestyle agent runtimes, and Terminal.
 [ ] 12. Session tab titles are editable inline. The default title is the role/action display name, agent runtime display name for freestyle agent sessions, and terminal profile display name for terminal sessions.
 [ ] 13. Structured workspaces launch PM/manager through explicit lifecycle flows, not by auto-opening a default freestyle agent on first workspace open.
-[ ] 14. Agent sessions persist `runtime_session_id`, role/action metadata, target scope, checkout id, parent session, managed flag, prompt snapshot, launch warnings, plan version, artifact links, `closed_at`, and restore information.
+[~] 14. Agent sessions persist `runtime_session_id`, role/action metadata, target scope, checkout id, parent session, managed flag, prompt snapshot, launch warnings, plan version, artifact links, `closed_at`, and restore information.
+[ ] 15. Managed sessions launched by the manager persist `manager_action_id` and idempotency key links so crash reconciliation can relink existing side effects instead of relaunching.
+[ ] 16. Managed agent-facing tool access is derived from server-held session context or an opaque per-session authority record; request bodies cannot claim `actor: "human"`, session ownership, manager action ownership, or waiver authority.
+[ ] 17. Raw authority tokens are never exposed in shell-visible terminal environments, `/api/state`, SSE payloads, logs, prompt snapshots, transcripts, terminal metadata, review artifacts, manager events, or activity.
 
 ## Agent Runtimes And Launch Profiles
 
@@ -50,6 +53,7 @@ Rate-limit recovery is automatic: Claude Code usage-limit banners persist `pane:
 [~] 11. The Citadel daemon exposes the xterm/WebSocket gateway at `/terminal/:sessionId` for the cockpit, tooling, and tests.
 [~] 12. Trade-offs of the xterm/WebSocket renderer are accepted: Citadel owns a small PTY bridge, but uses xterm.js, node-pty, and tmux attach rather than a from-scratch terminal emulator. The benefit is native terminal semantics for interactive CLIs plus low RAM because normal navigation no longer needs one external renderer process and iframe per active session.
 [~] 13. When an agent process exits back to the shell, the pane prints a Citadel hint with the real runtime session id when available: `[citadel] Agent exited. Run any command, or restart the agent (e.g. \`claude resume <real-session-id>\`).` The literal `<sessionId>` placeholder is never shown. If the runtime id is not known at launch time, Claude panes fall back to the latest transcript id in the workspace's `~/.claude/projects/.../*.jsonl` directory, then to an interactive `claude resume` hint.
+[~] 14. Session creation, restore, close/kill, global shortcuts, and reconnect flows preserve execution target metadata and cwd. Any target-aware launch into a checkout must resolve to that checkout path, not the workspace Home root.
 
 ## Future Terminal Surfaces
 
