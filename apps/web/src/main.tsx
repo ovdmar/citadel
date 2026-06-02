@@ -34,6 +34,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 import "./chrome.css";
 import "./stage-terminal.css";
+import "./structured-home-summary.css";
 import "./cockpit-extras.css";
 import "./pr-card-actions.css";
 import "./inspector-stats.css";
