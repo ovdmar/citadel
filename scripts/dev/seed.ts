@@ -13,7 +13,7 @@ fs.mkdirSync(dataDir, { recursive: true });
 const store = new SqliteStore(dbPath);
 store.migrate();
 
-const sentinelWorkspaceId = "33333333-3333-4333-8333-333333333333";
+const sentinelWorkspaceId = "55555555-5555-4555-8555-555555555555";
 const existing = store.query<{ c: number }>(`SELECT COUNT(*) AS c FROM workspaces WHERE id = '${sentinelWorkspaceId}'`);
 const alreadySeeded = (existing[0]?.c ?? 0) > 0;
 

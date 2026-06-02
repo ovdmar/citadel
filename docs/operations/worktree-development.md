@@ -120,7 +120,7 @@ those sessions, breaking the live cockpit.
 
 | Command | What it does |
 |---|---|
-| `make seed` | Materializes `<checkout>/.citadel/mock-repo/` (a git repo with two `feature/*` worktrees under `mock-worktrees/`) and inserts fixture rows into `<checkout>/.citadel/data/citadel.sqlite`: 1 namespace, 1 repo, 2 workspaces (one with a PR snapshot + Jira issue), 10 activity events, and a 3-block scratchpad. Idempotent. Touches **only** safe-to-seed tables — never `workspace_sessions`, `background_sessions`, `operations`, or `scheduled_agents`. |
+| `make seed` | Materializes `<checkout>/.citadel/mock-repo/` (a git repo with four `feature/*` worktrees under `mock-worktrees/`) and inserts fixture rows into `<checkout>/.citadel/data/citadel.sqlite`: 1 namespace, 1 repo, 2 freestyle workspaces, 1 structured workspace with 2 checkouts, an approved plan, manager state/events, review/deviation artifacts, closed role-session history, activity events, and a 3-block scratchpad. Idempotent. Touches only safe-to-seed rows — never `background_sessions`, `operations`, or `scheduled_agents`; seeded `workspace_sessions` are closed/disconnected history rows with no tmux ownership. |
 | `make seed-reset` | Stops this worktree's dev stack, removes the SQLite + mock repo + mock worktrees, and re-seeds from scratch. Use for a clean QA baseline. |
 
 `make deploy` auto-runs `make seed` if neither the mock repo nor the SQLite
@@ -137,20 +137,28 @@ make deploy                      # auto-seeds; cockpit has data
 make seed-reset && make deploy   # back to a clean QA baseline
 ```
 
+**Structured QA fixture:**
+
+- `structured-delivery` is a structured workspace root with Home plus two checkout children.
+- `review-ready` has a fresh intended PR, green checks, no conflicts, an approved plan, and a matching review artifact. It should evaluate as ready for human review.
+- `blocked-checks` has a failing intended PR and an open blocking plan deviation. It should stay blocked.
+- The seeded role history includes closed PM, architect, implementation, prototype, and manager sessions. These rows are disconnected history only; launch a new role from the Stage `+` menu to create a live tmux-backed session.
+
 **What's NOT seeded, and why:**
 
-- No `workspace_sessions` / `background_sessions` rows — those carry tmux
-  session names that the daemon will try to attach to at boot, and any
+- No live `workspace_sessions` / `background_sessions` rows — live rows carry
+  tmux session names that the daemon will try to attach to at boot, and any
   collision with the systemd long-term daemon's sessions would steal them
-  away from the live cockpit.
+  away from the live cockpit. Closed/disconnected workspace-session history is
+  safe and is seeded for structured-workspace QA.
 - No `operations` rows — they reference in-flight async work that doesn't
   exist after a daemon restart.
 - No scheduled agents — they'd start firing crons against the mock repo.
 
 If you need to QA agent-launch / scheduled-agent / background-session flows,
 trigger them through the seeded cockpit yourself (start an agent on
-`demo-feature`, etc.). That way the rows reference *this* worktree's tmux
-and daemon.
+`structured-delivery` or `demo-feature`, etc.). That way the rows reference
+*this* worktree's tmux and daemon.
 
 ## Typical flows
 

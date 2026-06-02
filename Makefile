@@ -258,10 +258,10 @@ logs:
 	@tail -n 80 -f $(WORKTREE_LOG)
 
 # `make seed` materializes the checked-in fixture: a mock git repo at
-# $(WORKTREE_MOCK_REPO) (+ two mock worktrees under $(WORKTREE_MOCK_WORKTREES))
-# and a small set of synthetic rows in this worktree's SQLite. Idempotent — if
-# either piece is already in place, that piece is skipped. `make deploy`
-# auto-runs this on a fresh worktree so the cockpit isn't empty.
+# $(WORKTREE_MOCK_REPO) (+ demo worktrees under $(WORKTREE_MOCK_WORKTREES))
+# and synthetic rows in this worktree's SQLite. Idempotent — if either piece is
+# already in place, that piece is skipped. `make deploy` auto-runs this on a
+# fresh worktree so the cockpit isn't empty.
 #
 # Why not snapshot from prod: prod data carries live workspace_sessions rows that
 # reference tmux sessions owned by the systemd long-term daemon. A worktree
