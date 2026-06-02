@@ -2,11 +2,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   COLLAPSE_STORAGE_KEY,
+  GROUP_STORAGE_KEY,
   NAVIGATOR_COLLAPSE_EVENT,
   NAVIGATOR_GROUPING_EVENT,
   expandGroupPath,
   publishNavigatorGroupingChanged,
   readCollapsedMap,
+  readNavigatorGrouping,
   subscribeToCollapseChanges,
   subscribeToGroupingChanges,
 } from "./navigator-collapse-store.js";
@@ -43,6 +45,7 @@ describe("navigator-collapse-store", () => {
 
   afterEach(() => {
     window.localStorage.removeItem(COLLAPSE_STORAGE_KEY);
+    window.localStorage.removeItem(GROUP_STORAGE_KEY);
   });
 
   it("readCollapsedMap returns {} when localStorage is empty", () => {
@@ -57,6 +60,15 @@ describe("navigator-collapse-store", () => {
   it("readCollapsedMap returns {} on malformed JSON", () => {
     window.localStorage.setItem(COLLAPSE_STORAGE_KEY, "not json");
     expect(readCollapsedMap()).toEqual({});
+  });
+
+  it("readNavigatorGrouping defaults to workspace grouping", () => {
+    expect(readNavigatorGrouping()).toBe("workspace");
+  });
+
+  it("readNavigatorGrouping accepts the workspace grouping value", () => {
+    window.localStorage.setItem(GROUP_STORAGE_KEY, "workspace");
+    expect(readNavigatorGrouping()).toBe("workspace");
   });
 
   it("expandGroupPath is a no-op when the path is not currently collapsed", () => {

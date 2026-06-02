@@ -10,17 +10,17 @@ export const GROUP_STORAGE_KEY = "citadel.navigator-group";
 export const NAVIGATOR_COLLAPSE_EVENT = "citadel:navigator-collapse-changed";
 export const NAVIGATOR_GROUPING_EVENT = "citadel:navigator-grouping-changed";
 
-type NavigatorGrouping = "repo" | "status" | "namespace" | "none";
+type NavigatorGrouping = "workspace" | "repo" | "status" | "namespace" | "none";
 
 export function readNavigatorGrouping(): NavigatorGrouping {
-  if (typeof window === "undefined") return "none";
+  if (typeof window === "undefined") return "workspace";
   try {
     const raw = window.localStorage.getItem(GROUP_STORAGE_KEY) ?? "";
-    if (raw === "repo" || raw === "status" || raw === "namespace" || raw === "none") return raw;
+    if (raw === "workspace" || raw === "repo" || raw === "status" || raw === "namespace" || raw === "none") return raw;
   } catch {
     // fall through
   }
-  return "none";
+  return "workspace";
 }
 
 // In-tab broadcast for grouping changes. The browser's native `storage` event

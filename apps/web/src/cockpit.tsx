@@ -1,10 +1,4 @@
-import type {
-  PullRequestSummary,
-  Workspace,
-  WorkspaceRecentCommits,
-  WorkspaceSession,
-  WorktreeCheckout,
-} from "@citadel/contracts";
+import type { PullRequestSummary, Workspace, WorkspaceRecentCommits, WorkspaceSession } from "@citadel/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { ChevronsLeft, Search as SearchIcon, Settings as SettingsIcon } from "lucide-react";
@@ -13,6 +7,12 @@ import { api } from "./api.js";
 import { useEventRefresh, useFilteredStateQuery } from "./app-state.js";
 import { CollapsedLeftRail } from "./cockpit-rails.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
+import {
+  checkoutIdFromTargetKey,
+  sessionMatchesTarget,
+  targetKeyForSession,
+  targetLabel,
+} from "./cockpit-session-targets.js";
 import { resolveShortcutAction } from "./cockpit-shortcut-actions.js";
 import {
   invalidateActiveWorkspaceFromBatch,
@@ -85,9 +85,10 @@ export function Cockpit() {
   useEffect(() => {
     if (search.workspace) {
       setActiveWorkspaceId(search.workspace);
+      setActiveTargetByWorkspace((current) => ({ ...current, [search.workspace as string]: "home" }));
       navigate({ to: location.pathname, search: {} as Record<string, string> });
     }
-  }, [search.workspace, navigate, location.pathname, setActiveWorkspaceId]);
+  }, [search.workspace, navigate, location.pathname, setActiveWorkspaceId, setActiveTargetByWorkspace]);
 
   const activeWorkspace = useMemo<Workspace | null>(() => {
     if (!data?.workspaces.length) return null;
@@ -224,7 +225,10 @@ export function Cockpit() {
       }),
     onSuccess: ({ session }) => {
       queryClient.invalidateQueries({ queryKey: ["state"] });
-      setActiveSessionByWorkspace((current) => ({ ...current, [session.workspaceId]: session.id }));
+      setActiveSessionByWorkspace((current) => ({
+        ...current,
+        [`${session.workspaceId}:${targetKeyForSession(session)}`]: session.id,
+      }));
       setMobileView("stage");
     },
     onError: (error) => {
@@ -239,7 +243,10 @@ export function Cockpit() {
       }),
     onSuccess: ({ session }) => {
       queryClient.invalidateQueries({ queryKey: ["state"] });
-      setActiveSessionByWorkspace((current) => ({ ...current, [session.workspaceId]: session.id }));
+      setActiveSessionByWorkspace((current) => ({
+        ...current,
+        [`${session.workspaceId}:${targetKeyForSession(session)}`]: session.id,
+      }));
       setMobileView("stage");
     },
     onError: (error) => {
@@ -287,16 +294,19 @@ export function Cockpit() {
           preventDefault?.();
           if (action.expandGroupPath) expandGroupPath(action.expandGroupPath);
           setActiveWorkspaceId(action.workspaceId);
+          setActiveTargetByWorkspace((current) => ({ ...current, [action.workspaceId]: "home" }));
           setMobileView("stage");
           return;
-        case "nav-session":
+        case "nav-session": {
           preventDefault?.();
+          const targetKey = activeTargetByWorkspace[action.workspaceId] ?? "home";
           setActiveSessionByWorkspace((current) => ({
             ...current,
-            [action.workspaceId]: action.sessionId,
+            [`${action.workspaceId}:${targetKey}`]: action.sessionId,
           }));
           setMobileView("stage");
           return;
+        }
         case "spawn-terminal":
           preventDefault?.();
           spawnTerminalSession.mutate({ workspaceId: action.workspaceId, displayName: "Terminal" });
@@ -364,25 +374,41 @@ export function Cockpit() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("message", onMessage);
     };
-  }, [setActiveSessionByWorkspace, setActiveWorkspaceId, spawnSession, spawnTerminalSession]);
+  }, [
+    activeTargetByWorkspace,
+    setActiveSessionByWorkspace,
+    setActiveTargetByWorkspace,
+    setActiveWorkspaceId,
+    spawnSession,
+    spawnTerminalSession,
+  ]);
 
-  const focusWorkspace = (workspace: Workspace) => {
-    setActiveWorkspaceId(workspace.id);
+  const focusWorkspaceTarget = (workspaceId: string, targetKey: string) => {
+    setActiveWorkspaceId(workspaceId);
+    setActiveTargetByWorkspace((current) => ({ ...current, [workspaceId]: targetKey }));
     setMobileView("stage");
-    // Focus the workspace's currently-active in-process xterm pane. Scheduled
-    // in a microtask so React's commit (mounting the new active terminal)
-    // completes before we try to focus.
-    const targetKey = activeTargetByWorkspace[workspace.id] ?? "home";
+    const workspace = data?.workspaces.find((entry) => entry.id === workspaceId);
+    const checkouts = allCheckouts.filter((checkout) => checkout.workspaceId === workspaceId && !checkout.archivedAt);
+    const checkoutId = checkoutIdFromTargetKey(targetKey, checkouts);
+    const targetType = checkoutId ? "worktree_checkout" : "workspace_home";
     const targetSessionId =
-      activeSessionByWorkspace[`${workspace.id}:${targetKey}`] ??
-      allSessions.find((session) => session.workspaceId === workspace.id && !session.closedAt)?.id;
+      activeSessionByWorkspace[`${workspaceId}:${targetKey}`] ??
+      allSessions.find(
+        (session) =>
+          workspace &&
+          session.workspaceId === workspaceId &&
+          !session.closedAt &&
+          sessionMatchesTarget(session, workspace, targetType, checkoutId),
+      )?.id;
     if (targetSessionId) {
       focusTerminalSoon(targetSessionId);
     }
   };
+  const focusWorkspace = (workspace: Workspace) => {
+    focusWorkspaceTarget(workspace.id, "home");
+  };
   const focusWorkspaceId = (workspaceId: string) => {
-    setActiveWorkspaceId(workspaceId);
-    setMobileView("stage");
+    focusWorkspaceTarget(workspaceId, "home");
   };
 
   const repoNames = useMemo(() => {
@@ -493,10 +519,7 @@ export function Cockpit() {
               onCollapse={layout.toggleLeft}
               onPickWorkspace={focusWorkspace}
               onPickWorkspaceId={focusWorkspaceId}
-              onPickTarget={(workspaceId, targetKey) => {
-                setActiveWorkspaceId(workspaceId);
-                setActiveTargetByWorkspace((current) => ({ ...current, [workspaceId]: targetKey }));
-              }}
+              onPickTarget={focusWorkspaceTarget}
             />
           </aside>
         )}
@@ -739,32 +762,6 @@ function EmptyInspector(props: { onCollapse: () => void }) {
       </div>
     </>
   );
-}
-
-function checkoutIdFromTargetKey(targetKey: string, checkouts: WorktreeCheckout[]): string | null {
-  if (!targetKey.startsWith("checkout:")) return null;
-  const checkoutId = targetKey.slice("checkout:".length);
-  return checkouts.some((checkout) => checkout.id === checkoutId) ? checkoutId : null;
-}
-
-function sessionMatchesTarget(
-  session: WorkspaceSession,
-  workspace: Workspace,
-  targetType: "workspace_home" | "worktree_checkout",
-  checkoutId: string | null,
-): boolean {
-  if (workspace.mode !== "structured") return true;
-  if (targetType === "workspace_home") return (session.targetType ?? "workspace_home") === "workspace_home";
-  return session.checkoutId === checkoutId;
-}
-
-function targetLabel(
-  targetType: "workspace_home" | "worktree_checkout",
-  checkoutId: string | null,
-  checkouts: WorktreeCheckout[],
-): string {
-  if (targetType === "workspace_home") return "Home";
-  return checkouts.find((checkout) => checkout.id === checkoutId)?.name ?? "Checkout";
 }
 
 function useLocalStorage(key: string, fallback: string) {

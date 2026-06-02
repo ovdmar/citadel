@@ -6,6 +6,7 @@ import {
   collectGroupPaths,
   findGroupPathForWorkspace,
   flattenWorkspaceOrder,
+  treeGroupingFor,
 } from "./navigator-groups.js";
 
 const ts = "2026-01-01T00:00:00.000Z";
@@ -132,6 +133,16 @@ describe("buildGroupTree", () => {
     const orphan = makeWorkspace("w-orphan", "r-missing");
     const tree = buildGroupTree([orphan], repos, [], [], ["repo"]);
     expect(tree[0]?.label).toBe("Unknown repo");
+  });
+});
+
+describe("treeGroupingFor", () => {
+  it("uses workspace-root rendering for the default workspace grouping", () => {
+    expect(treeGroupingFor("workspace")).toEqual([]);
+  });
+
+  it("keeps namespace grouping nested below repo", () => {
+    expect(treeGroupingFor("namespace")).toEqual(["repo", "namespace"]);
   });
 });
 

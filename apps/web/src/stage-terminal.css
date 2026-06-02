@@ -351,60 +351,6 @@
   border-bottom: 1px solid color-mix(in srgb, var(--color-danger) 30%, transparent);
 }
 
-.stage-history {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 8px;
-  align-items: start;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--c-line-1);
-  background: var(--c-card);
-  color: var(--c-fg-3);
-  font-size: 11px;
-}
-
-.stage-history-title {
-  font-weight: 700;
-  color: var(--c-fg-2);
-}
-
-.stage-history-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  min-width: 0;
-}
-
-.stage-history-list > div {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 260px;
-  padding: 2px 6px;
-  border: 1px solid var(--c-line-1);
-  border-radius: 4px;
-}
-
-.stage-history-list > div.is-current {
-  border-color: var(--c-accent, #5b8df8);
-}
-
-.stage-history-name,
-.stage-history-meta {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.stage-history-name {
-  color: var(--c-fg-2);
-}
-
-.stage-history-meta {
-  color: var(--c-fg-4);
-  font-family: var(--font-mono);
-}
-
 /* Unused — pane-head was removed; the tab strip + body alone form the chrome.
    Keeping the .stage-pane-chip rule for any future button that wants the
    same warm-cream pill look. */

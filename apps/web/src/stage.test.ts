@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 
-import type { TerminalSession, Workspace } from "@citadel/contracts";
+import type { RoleTemplate, TerminalSession, Workspace } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  freestyleStageActions,
   retainRecentTerminalIds,
   stableVisitedSessions,
   stableWorkspaceSessionIdsKey,
@@ -79,6 +80,22 @@ describe("Stage terminal pane ordering", () => {
       }),
     ).toEqual([]);
   });
+
+  it("offers PM and Prototype specialized actions for freestyle workspaces", () => {
+    expect(
+      freestyleStageActions({
+        workspace: workspaceFixture({ mode: "freestyle" }),
+        templates: [
+          roleTemplate("pm", "PM"),
+          roleTemplate("prototype", "Prototype"),
+          roleTemplate("manager", "Manager"),
+        ],
+      }).map((action) => [action.id, action.label]),
+    ).toEqual([
+      ["pm", "PM"],
+      ["prototype", "Prototype"],
+    ]);
+  });
 });
 
 function sessionFixture(overrides: Partial<TerminalSession> = {}): TerminalSession {
@@ -125,5 +142,24 @@ function workspaceFixture(overrides: Partial<Workspace> = {}): Workspace {
     updatedAt: "2026-06-01T00:00:00.000Z",
     archivedAt: null,
     ...overrides,
+  };
+}
+
+function roleTemplate(role: RoleTemplate["role"], displayName: string): RoleTemplate {
+  return {
+    role,
+    displayName,
+    systemPrompt: `${displayName} prompt`,
+    launchSettings: {
+      runtimeId: "codex",
+      model: "gpt-5.4",
+      effort: "high",
+      fastMode: null,
+      contextMode: null,
+    },
+    actions: [],
+    builtIn: true,
+    resettable: true,
+    updatedAt: null,
   };
 }

@@ -16,8 +16,6 @@ import {
   ChevronRight,
   ClipboardList,
   FolderPlus,
-  GitBranch,
-  Home,
   LayoutDashboard,
   NotebookPen,
   PanelLeftClose,
@@ -44,6 +42,13 @@ import {
   treeGroupingFor,
 } from "./navigator-groups.js";
 import { applyLocalOrder, loadOrder, pruneOrder, saveOrder, spliceIntoOrder } from "./navigator-order.js";
+import {
+  CheckoutNavCard,
+  checkoutSessions,
+  hasNestedCheckouts,
+  pullRequestForCheckout,
+  workspaceAggregateBranchLabel,
+} from "./navigator-workspace-cards.js";
 import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { WorkspaceCard, lifecycleToneClass } from "./workspace-card.js";
 
@@ -92,21 +97,28 @@ export function Navigator(props: {
   const location = useLocation();
   const path = location.pathname;
   const [grouping, setGrouping] = useState<GroupKey>(() => {
-    if (typeof window === "undefined") return "repo";
+    if (typeof window === "undefined") return "workspace";
     const raw = window.localStorage.getItem(GROUP_STORAGE);
-    if (raw === "repo" || raw === "status" || raw === "namespace" || raw === "none") return raw;
+    if (raw === "workspace" || raw === "repo" || raw === "status" || raw === "namespace" || raw === "none") return raw;
     // Migration: legacy storage held an array like ["repo","status"]; collapse
-    // to the first entry, otherwise default to "repo".
+    // to the first entry, otherwise default to workspace-root grouping.
     if (raw?.startsWith("[")) {
       try {
         const parsed = JSON.parse(raw) as unknown[];
         const first = parsed[0];
-        if (first === "repo" || first === "status" || first === "namespace" || first === "none") return first;
+        if (
+          first === "workspace" ||
+          first === "repo" ||
+          first === "status" ||
+          first === "namespace" ||
+          first === "none"
+        )
+          return first;
       } catch {
         // fall through to default
       }
     }
-    return "repo";
+    return "workspace";
   });
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -229,18 +241,29 @@ export function Navigator(props: {
       const checkouts = props.checkouts.filter(
         (checkout) => checkout.workspaceId === workspace.id && !checkout.archivedAt,
       );
+      const nested = hasNestedCheckouts(checkouts);
+      const workspaceCheckout = checkouts.length === 1 ? checkouts[0] : null;
       const activeWorkspace = workspace.id === props.activeWorkspaceId;
+      const workspacePullRequest = props.prByWorkspaceId.get(workspace.id) ?? null;
+      const cardWorkspace = nested
+        ? {
+            ...workspace,
+            repoId: workspaceCheckout?.repoId ?? workspace.repoId,
+            branch: workspaceAggregateBranchLabel({ checkouts, sessions, pullRequest: workspacePullRequest }),
+          }
+        : workspace;
+      const cardActive = activeWorkspace && props.activeTargetKey === "home";
       return (
         <div key={workspace.id} className="nav-workspace-target-wrap">
           <WorkspaceCard
-            workspace={workspace}
+            workspace={cardWorkspace}
             sessions={sessions.filter((session) => !session.closedAt)}
             operation={
               props.operations
                 .filter((operation) => operation.workspaceId === workspace.id && operation.type === "workspace.create")
                 .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null
             }
-            pullRequest={props.prByWorkspaceId.get(workspace.id) ?? null}
+            pullRequest={nested ? null : workspacePullRequest}
             namespace={
               grouping === "namespace"
                 ? null
@@ -249,34 +272,33 @@ export function Navigator(props: {
                   : null
             }
             namespaces={props.namespaces}
-            active={activeWorkspace}
             dropTarget={grouping === "namespace" ? "namespace" : null}
             reorder={{
               groupPath,
               visibleIds,
               onReorder: (draggedId, targetIndex) => reorderWorkspace(groupPath, visibleIds, draggedId, targetIndex),
             }}
-            onSelect={() => props.onPickWorkspace(workspace)}
+            active={cardActive}
+            onSelect={() => props.onPickTarget(workspace.id, "home")}
           />
-          {workspace.mode === "structured" || checkouts.length ? (
-            <div className="nav-workspace-targets" aria-label={`${workspace.name} execution targets`}>
-              <button
-                type="button"
-                className={activeWorkspace && props.activeTargetKey === "home" ? "is-active" : ""}
-                onClick={() => props.onPickTarget(workspace.id, "home")}
-              >
-                <Home size={11} /> Home
-              </button>
-              {checkouts.map((checkout) => (
-                <button
-                  key={checkout.id}
-                  type="button"
-                  className={activeWorkspace && props.activeTargetKey === `checkout:${checkout.id}` ? "is-active" : ""}
-                  onClick={() => props.onPickTarget(workspace.id, `checkout:${checkout.id}`)}
-                >
-                  <GitBranch size={11} /> {checkout.name}
-                </button>
-              ))}
+          {nested ? (
+            <div className="nav-workspace-checkouts" aria-label={`${workspace.name} worktrees`}>
+              {checkouts.map((checkout) => {
+                const repo = props.repos.find((entry) => entry.id === checkout.repoId) ?? null;
+                const targetKey = `checkout:${checkout.id}`;
+                return (
+                  <CheckoutNavCard
+                    key={checkout.id}
+                    workspace={workspace}
+                    checkout={checkout}
+                    repo={repo}
+                    sessions={checkoutSessions(sessions, checkout.id)}
+                    pullRequest={pullRequestForCheckout(workspacePullRequest, checkout)}
+                    active={activeWorkspace && props.activeTargetKey === targetKey}
+                    onSelect={() => props.onPickTarget(workspace.id, targetKey)}
+                  />
+                );
+              })}
             </div>
           ) : null}
         </div>
@@ -285,10 +307,10 @@ export function Navigator(props: {
     [
       props.checkouts,
       props.prByWorkspaceId,
+      props.repos,
       props.operations,
       props.activeWorkspaceId,
       props.activeTargetKey,
-      props.onPickWorkspace,
       props.onPickTarget,
       props.namespaces,
       namespacesById,
@@ -382,7 +404,7 @@ export function Navigator(props: {
           </div>
         </div>
         <div className="nav-groups">
-          {grouping === "none"
+          {grouping === "workspace" || grouping === "none"
             ? (() => {
                 const groupPath = "__flat";
                 const orderedFlat = applyLocalOrder(flatEntries, navigatorOrder[groupPath]);
