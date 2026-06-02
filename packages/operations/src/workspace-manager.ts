@@ -6,6 +6,7 @@ import type {
   IssueBinding,
   ManagerEvent,
   MarkCheckoutReadyForReviewInput,
+  RegisterCheckoutReviewArtifactInput,
   ReviewArtifact,
   UpdateTicketStatusInput,
   Workspace,
@@ -54,16 +55,12 @@ type ResolvedCheckout =
   | { ok: false; error: CheckoutResolveError };
 
 export type MarkCheckoutReadyForReviewResult =
+  | { ok: true; checkout: WorktreeCheckout; gate: CheckoutGateSnapshot }
+  | { ok: false; error: CheckoutResolveError | "active_plan_required" | "pr_required" | "pr_head_sha_required" };
+
+export type RegisterCheckoutReviewArtifactResult =
   | { ok: true; artifact: ReviewArtifact; gate: CheckoutGateSnapshot }
-  | {
-      ok: false;
-      error:
-        | CheckoutResolveError
-        | "active_plan_required"
-        | "pr_required"
-        | "pr_head_sha_required"
-        | "review_artifact_required";
-    };
+  | { ok: false; error: CheckoutResolveError | "active_plan_required" | "pr_required" | "pr_head_sha_required" };
 
 const PROVIDER_FACT_FRESH_MS = 15 * 60 * 1000;
 
@@ -118,8 +115,10 @@ export function getCheckoutGateStatus(
   const artifacts = deps.store.listReviewArtifacts(checkout.id);
   const currentReview =
     currentHead && activePlan
-      ? (artifacts.find((artifact) => artifact.headSha === currentHead && artifact.planVersionId === activePlan.id) ??
-        null)
+      ? (artifacts.find(
+          (artifact) =>
+            artifact.headSha === currentHead && artifact.planVersionId === activePlan.id && !artifact.invalidatedAt,
+        ) ?? null)
       : null;
   const openDeviations = deps.store
     .listPlanDeviationReports(workspace.id)
@@ -206,16 +205,42 @@ export function markCheckoutReadyForReview(
   const pr = checkout.intendedPr;
   if (!pr?.provider || (!pr.number && !pr.url)) return { ok: false, error: "pr_required" as const };
   if (!pr.headSha) return { ok: false, error: "pr_head_sha_required" as const };
+  const gate = getCheckoutGateStatus(deps, { checkoutId: checkout.id });
+  if (gate.ok) {
+    deps.store.updateWorkspaceCheckoutGate(checkout.id, gate.status);
+  }
+  deps.activity(
+    "checkout.implementation.completed",
+    input.sessionId ? "agent" : "mcp",
+    input.notes ?? `Recorded implementation completion for ${checkout.name}`,
+    resolved.workspace.repoId,
+    resolved.workspace.id,
+    null,
+  );
+  return { ok: true, checkout, gate };
+}
+
+export function registerCheckoutReviewArtifact(
+  deps: WorkspaceManagerDeps,
+  input: RegisterCheckoutReviewArtifactInput,
+): RegisterCheckoutReviewArtifactResult {
+  const resolved = resolveCheckout(deps.store, { checkoutId: input.checkoutId });
+  if (!resolved.ok) return resolved;
+  const activePlan = input.planVersionId
+    ? deps.store.listWorkspacePlanVersions(resolved.workspace.id).find((plan) => plan.id === input.planVersionId)
+    : deps.store.findActiveWorkspacePlan(resolved.workspace.id);
+  if (!activePlan) return { ok: false, error: "active_plan_required" as const };
+  const checkout = input.pr ? deps.store.updateWorkspaceCheckoutPr(input.checkoutId, input.pr) : resolved.checkout;
+  if (!checkout) return { ok: false, error: "checkout_not_found" as const };
+  const pr = checkout.intendedPr;
+  if (!pr?.provider || (!pr.number && !pr.url)) return { ok: false, error: "pr_required" as const };
+  if (!pr.headSha) return { ok: false, error: "pr_head_sha_required" as const };
   const existing = deps.store
     .listReviewArtifacts(checkout.id)
     .find((artifact) => artifact.planVersionId === activePlan.id && artifact.headSha === pr.headSha);
-  const reviewInput = input.review;
-  if (!existing && !reviewInput) return { ok: false, error: "review_artifact_required" as const };
-  const now = nowIso();
-  let artifact = existing;
-  if (!artifact) {
-    if (!reviewInput) return { ok: false, error: "review_artifact_required" as const };
-    artifact = {
+  const artifact: ReviewArtifact =
+    existing ??
+    ({
       id: createId("review"),
       workspaceId: resolved.workspace.id,
       checkoutId: checkout.id,
@@ -224,14 +249,13 @@ export function markCheckoutReadyForReview(
       prNumber: pr.number ?? null,
       prUrl: pr.url ?? null,
       headSha: pr.headSha,
-      result: reviewInput.result,
-      findingsStatus: reviewInput.findingsStatus,
-      blockingFindings: reviewInput.blockingFindings,
-      artifactPath: reviewInput.artifactPath,
-      createdAt: now,
-    };
-    deps.store.insertReviewArtifact(artifact);
-  }
+      result: input.result,
+      findingsStatus: input.findingsStatus,
+      blockingFindings: input.blockingFindings,
+      artifactPath: input.artifactPath,
+      createdAt: nowIso(),
+    } satisfies ReviewArtifact);
+  if (!existing) deps.store.insertReviewArtifact(artifact);
   const gate = getCheckoutGateStatus(deps, { checkoutId: checkout.id });
   if (gate.ok) {
     deps.store.updateWorkspaceCheckoutGate(checkout.id, gate.status);
@@ -240,9 +264,9 @@ export function markCheckoutReadyForReview(
     }
   }
   deps.activity(
-    "checkout.review.marked",
+    "checkout.review.artifact.registered",
     input.sessionId ? "agent" : "mcp",
-    input.notes ?? `Marked ${checkout.name} ready for review gate evaluation`,
+    input.notes ?? `Registered review artifact for ${checkout.name}`,
     resolved.workspace.repoId,
     resolved.workspace.id,
     null,

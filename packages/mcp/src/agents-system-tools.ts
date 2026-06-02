@@ -129,7 +129,7 @@ export const AGENTS_SYSTEM_TOOL_DEFINITIONS = [
   {
     name: "mark_checkout_ready_for_review",
     description:
-      "Record the checkout's PR identity/head and create the review artifact used by the ready-for-human-review gate.",
+      "Record an implementation completion signal plus the checkout's PR identity/head. This does not create a review artifact; the manager/review action registers artifacts separately.",
     inputSchema: {
       type: "object",
       required: ["checkoutId"],
@@ -137,6 +137,29 @@ export const AGENTS_SYSTEM_TOOL_DEFINITIONS = [
         checkoutId: { type: "string" },
         sessionId: { type: "string" },
         pr: { type: "object" },
+        notes: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    destructive: false,
+  },
+  {
+    name: "register_checkout_review_artifact",
+    description:
+      "Register a review-pr artifact for a checkout/head/plan. Daemon-side authority links the caller to a review action session or local human import.",
+    inputSchema: {
+      type: "object",
+      required: ["checkoutId", "result", "findingsStatus"],
+      properties: {
+        checkoutId: { type: "string" },
+        sessionId: { type: "string" },
+        managerActionId: { type: "string" },
+        planVersionId: { type: "string" },
+        pr: { type: "object" },
+        result: { type: "string", enum: ["approve", "nit", "request_changes", "failed"] },
+        findingsStatus: { type: "string", enum: ["none", "open_blocking", "resolved", "waived"] },
+        blockingFindings: { type: "array", items: { type: "string", minLength: 1 } },
+        artifactPath: { type: ["string", "null"] },
         notes: { type: "string" },
       },
       additionalProperties: false,

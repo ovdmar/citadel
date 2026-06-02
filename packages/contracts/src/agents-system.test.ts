@@ -1,23 +1,39 @@
 import { describe, expect, it } from "vitest";
 import {
   ActionTemplateSchema,
+  AgentToolAuthoritySchema,
+  CheckoutCheckFactSchema,
+  CheckoutGateSnapshotSchema,
+  CheckoutNameSchema,
+  CheckoutPrFactSchema,
   CreateWorkspaceCheckoutInputSchema,
+  DeliveryUnitKeySchema,
   ExecutionTargetSchema,
+  GitBranchNameSchema,
+  IssueTransitionAttemptSchema,
   LaunchArchitectAgentInputSchema,
   LaunchImplementationAgentInputSchema,
   LaunchPmAgentInputSchema,
   LaunchSettingsSchema,
+  LocalNotificationEventSchema,
+  ManagerActionLedgerEntrySchema,
   MarkCheckoutReadyForReviewInputSchema,
+  ProviderIssueFactSchema,
+  RegisterCheckoutReviewArtifactInputSchema,
   RegisterWorkspacePlanInputSchema,
   ReviewArtifactSchema,
   RoleTemplateSchema,
   RuntimeLaunchOptionCapabilitiesSchema,
+  StructuredLaunchOptionSchema,
   UpdateActionTemplateInputSchema,
   UpdateRoleTemplateInputSchema,
   UpdateTicketStatusInputSchema,
   WorkspaceManagerSchema,
+  WorkspacePlanDeliveryUnitsBlockSchema,
   WorkspacePlanVersionSchema,
   WorktreeCheckoutSchema,
+  isSafeCheckoutName,
+  isSafeGitBranchName,
 } from "./index.js";
 
 const timestamp = "2026-06-01T00:00:00.000Z";
@@ -112,7 +128,218 @@ describe("agents system contracts", () => {
     expect(target.type).toBe("worktree_checkout");
     expect(plan.approvalMode).toBe("manual");
     expect(artifact.blockingFindings).toEqual([]);
+    expect(artifact.invalidatedAt).toBeUndefined();
     expect(manager.pauseState).toBe("running");
+  });
+
+  it("validates delivery units, dependency edges, branch refs, and checkout names", () => {
+    expect(isSafeCheckoutName("api-gate")).toBe(true);
+    expect(isSafeCheckoutName("../api")).toBe(false);
+    expect(isSafeCheckoutName("home")).toBe(false);
+    expect(isSafeGitBranchName("feature/api-gate")).toBe(true);
+    expect(isSafeGitBranchName("refs/heads/main")).toBe(false);
+    expect(isSafeGitBranchName("bad..branch")).toBe(false);
+    expect(DeliveryUnitKeySchema.safeParse("api.gate-1").success).toBe(true);
+    expect(CheckoutNameSchema.safeParse("api/gate").success).toBe(false);
+    expect(GitBranchNameSchema.safeParse("feature/api gate").success).toBe(false);
+
+    const parsed = WorkspacePlanDeliveryUnitsBlockSchema.parse({
+      deliveryUnits: [
+        {
+          key: "api-gate",
+          repoName: "citadel",
+          checkoutName: "api-gate",
+          branch: "feature/api-gate",
+          childIssue: { provider: "jira", key: "CIT-1" },
+          dependencies: [],
+        },
+        {
+          key: "web-gate",
+          repoName: "citadel",
+          checkoutName: "web-gate",
+          branch: "feature/web-gate",
+          childIssue: { provider: "jira", key: "CIT-2" },
+          dependencies: [{ fromUnitKey: "api-gate", type: "stacked_on_pr" }],
+        },
+      ],
+    });
+
+    expect(parsed.deliveryUnits[1]?.dependencies[0]?.type).toBe("stacked_on_pr");
+    expect(
+      WorkspacePlanDeliveryUnitsBlockSchema.safeParse({
+        deliveryUnits: [
+          {
+            key: "api-gate",
+            repoName: "citadel",
+            checkoutName: "api-gate",
+            branch: "feature/api-gate",
+            dependencies: [{ fromUnitKey: "api-gate" }],
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      WorkspacePlanDeliveryUnitsBlockSchema.safeParse({
+        deliveryUnits: [
+          { key: "dup", repoName: "citadel", checkoutName: "one", branch: "feature/one" },
+          { key: "dup", repoName: "citadel", checkoutName: "two", branch: "feature/two" },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("models manager ledger, gate snapshots, launch options, notifications, provider facts, and authorities", () => {
+    const action = ManagerActionLedgerEntrySchema.parse({
+      id: "act_1",
+      workspaceId: "ws_1",
+      checkoutId: "co_1",
+      managerId: "mgr_1",
+      actionName: "launch_implementation",
+      status: "claimed",
+      scopeKey: "ws_1:plan_1:api",
+      actionKey: "launch_implementation",
+      idempotencyKey: "ws_1:plan_1:api:launch_implementation",
+      leaseOwnerId: "daemon-a",
+      leaseGeneration: 2,
+      attemptCount: 1,
+      planVersionId: "plan_1",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+    expect(action.maxAttempts).toBe(3);
+
+    const artifact = ReviewArtifactSchema.parse({
+      id: "review_1",
+      workspaceId: "ws_1",
+      checkoutId: "co_1",
+      planVersionId: "plan_1",
+      prProvider: "github",
+      headSha: "abc123",
+      result: "request_changes",
+      findingsStatus: "open_blocking",
+      invalidatedAt: timestamp,
+      invalidatedReason: "head_changed",
+      createdAt: timestamp,
+    });
+    const gate = CheckoutGateSnapshotSchema.parse({
+      workspaceId: "ws_1",
+      checkoutId: "co_1",
+      planVersionId: "plan_1",
+      status: "review_blocked",
+      refreshedAt: timestamp,
+      reasons: [{ code: "blocking_review_findings", message: "Review has blocking findings" }],
+      staleReviewArtifacts: [artifact],
+      deviations: [],
+    });
+    expect(gate.providerFreshness.stale).toBe(false);
+    expect(gate.staleReviewArtifacts[0]?.invalidatedReason).toBe("head_changed");
+
+    expect(
+      StructuredLaunchOptionSchema.parse({
+        id: "implementation",
+        enabled: false,
+        reason: "Active plan required",
+        severity: "blocking",
+        role: "implementation",
+        targetType: "worktree_checkout",
+        actionName: "launch_implementation_agent",
+      }).payload,
+    ).toEqual({});
+
+    expect(
+      LocalNotificationEventSchema.parse({
+        id: "note_1",
+        workspaceId: "ws_1",
+        checkoutId: "co_1",
+        type: "human_input_needed",
+        title: "Input needed",
+        message: "Plan has no delivery units",
+        dedupeKey: "ws_1:plan_1:no-delivery-units",
+        triggeringFactFingerprint: "plan_1:no-delivery-units",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }).status,
+    ).toBe("active");
+
+    const identity = {
+      providerType: "jira",
+      providerInstanceId: "jira-primary",
+      accountId: "acct-1",
+      hostUrl: "https://jira.example.test",
+      externalUrl: "https://jira.example.test/browse/CIT-1",
+      workspaceBindingId: "binding_1",
+      sourceBindingType: "checkout_child_issue" as const,
+      sourceBindingId: "co_1",
+    };
+    expect(
+      ProviderIssueFactSchema.parse({
+        id: "issue_fact_1",
+        workspaceId: "ws_1",
+        checkoutId: "co_1",
+        identity,
+        issueKey: "CIT-1",
+        fetchedAt: timestamp,
+      }).identity.providerInstanceId,
+    ).toBe("jira-primary");
+    expect(
+      IssueTransitionAttemptSchema.parse({
+        id: "transition_1",
+        workspaceId: "ws_1",
+        checkoutId: "co_1",
+        identity,
+        issueKey: "CIT-1",
+        requestedInternalState: "in_review",
+        success: false,
+        degradedReason: "transition_unavailable",
+        createdAt: timestamp,
+      }).success,
+    ).toBe(false);
+
+    const prIdentity = { ...identity, providerType: "github", sourceBindingType: "checkout_pr" as const };
+    expect(
+      CheckoutPrFactSchema.parse({
+        id: "pr_fact_1",
+        workspaceId: "ws_1",
+        checkoutId: "co_1",
+        identity: { ...prIdentity, repositoryId: "repo_1", providerRepositoryKey: "org/repo" },
+        prNumber: 12,
+        prUrl: "https://github.example.test/org/repo/pull/12",
+        headSha: "abc123",
+        baseRef: "main",
+        fetchedAt: timestamp,
+      }).identity.providerRepositoryKey,
+    ).toBe("org/repo");
+    expect(
+      CheckoutCheckFactSchema.parse({
+        id: "check_fact_1",
+        workspaceId: "ws_1",
+        checkoutId: "co_1",
+        identity: { ...prIdentity, repositoryId: "repo_1", providerRepositoryKey: "org/repo" },
+        headSha: "abc123",
+        name: "ci",
+        status: "completed",
+        conclusion: "success",
+        fetchedAt: timestamp,
+      }).name,
+    ).toBe("ci");
+
+    expect(
+      AgentToolAuthoritySchema.parse({
+        id: "auth_1",
+        tokenHash: "x".repeat(64),
+        sessionId: "sess_1",
+        role: "implementation",
+        actionId: "implementation.review_pr",
+        checkoutId: "co_1",
+        planVersionId: "plan_1",
+        managerActionId: "act_1",
+        allowedToolNames: ["register_checkout_review_artifact"],
+        issuedAt: timestamp,
+        expiresAt: "2026-06-01T00:15:00.000Z",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      }).revokedAt,
+    ).toBeNull();
   });
 
   it("validates launcher and MCP input contracts", () => {
@@ -127,8 +354,19 @@ describe("agents system contracts", () => {
     expect(
       MarkCheckoutReadyForReviewInputSchema.parse({
         checkoutId: "co_1",
-        review: { result: "approve", findingsStatus: "none", blockingFindings: [], artifactPath: "/tmp/review.md" },
-      }).review?.result,
+        pr: { provider: "github", number: 12, headSha: "abc123" },
+        notes: "implementation complete",
+      }).pr?.headSha,
+    ).toBe("abc123");
+    expect(
+      RegisterCheckoutReviewArtifactInputSchema.parse({
+        checkoutId: "co_1",
+        managerActionId: "act_1",
+        result: "approve",
+        findingsStatus: "none",
+        blockingFindings: [],
+        artifactPath: "/tmp/review.md",
+      }).result,
     ).toBe("approve");
     expect(
       UpdateTicketStatusInputSchema.parse({

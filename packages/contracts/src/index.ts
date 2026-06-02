@@ -708,3 +708,4 @@ export type ApiError = { error: string; detail?: string; fieldErrors?: Record<st
 export * from "./scheduled-agents.js";
 export type { WorkspacePrStateEntry, WorkspacesPrStateResponse } from "./workspaces-pr-state.js";
 export * from "./agents-system.js";
+export * from "./manager-orchestration.js";

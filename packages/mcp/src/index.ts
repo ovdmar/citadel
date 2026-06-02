@@ -50,6 +50,7 @@ export type McpToolName =
   | "pause_workspace_manager"
   | "resume_workspace_manager"
   | "mark_checkout_ready_for_review"
+  | "register_checkout_review_artifact"
   | "get_checkout_ticket"
   | "get_checkout_pr"
   | "get_checkout_gate_status"
@@ -708,6 +709,7 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "pause_workspace_manager":
     case "resume_workspace_manager":
     case "mark_checkout_ready_for_review":
+    case "register_checkout_review_artifact":
     case "update_ticket_status":
     case "launch_pm_agent":
     case "launch_architect_agent":

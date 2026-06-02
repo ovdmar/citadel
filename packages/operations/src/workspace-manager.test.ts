@@ -150,22 +150,34 @@ describe("workspace manager operations", () => {
       reasons: ["review_pr_artifact_required"],
     });
 
-    expect(service.markCheckoutReadyForReview({ checkoutId: "co_api", notes: "review-pr passed" })).toMatchObject({
-      ok: false,
-      error: "review_artifact_required",
+    expect(
+      service.markCheckoutReadyForReview({ checkoutId: "co_api", notes: "implementation complete" }),
+    ).toMatchObject({
+      ok: true,
+      gate: { ok: true, status: "review_required" },
     });
 
-    const marked = service.markCheckoutReadyForReview({
+    const marked = service.registerCheckoutReviewArtifact({
       checkoutId: "co_api",
       notes: "review-pr passed",
-      review: { result: "approve", findingsStatus: "none", blockingFindings: [], artifactPath: null },
+      result: "approve",
+      findingsStatus: "none",
+      blockingFindings: [],
+      artifactPath: null,
     });
     expect(marked).toMatchObject({ ok: true, gate: { ok: true, status: "ready_for_human_review" } });
     expect(store.findWorkspaceCheckout("co_api")).toMatchObject({ gateStatus: "ready_for_human_review" });
     expect(store.listReviewArtifacts("co_api")).toHaveLength(1);
     expect(store.listManagerEvents("ws_manager")).toHaveLength(1);
 
-    service.markCheckoutReadyForReview({ checkoutId: "co_api", notes: "retry" });
+    service.registerCheckoutReviewArtifact({
+      checkoutId: "co_api",
+      notes: "retry",
+      result: "approve",
+      findingsStatus: "none",
+      blockingFindings: [],
+      artifactPath: null,
+    });
     expect(store.listReviewArtifacts("co_api")).toHaveLength(1);
     expect(store.listManagerEvents("ws_manager")).toHaveLength(1);
   });
@@ -196,14 +208,12 @@ describe("workspace manager operations", () => {
 
     store.updateWorkspaceCheckoutPr("co_api", freshPr());
     expect(
-      service.markCheckoutReadyForReview({
+      service.registerCheckoutReviewArtifact({
         checkoutId: "co_api",
-        review: {
-          result: "request_changes",
-          findingsStatus: "open_blocking",
-          blockingFindings: ["Fix API"],
-          artifactPath: null,
-        },
+        result: "request_changes",
+        findingsStatus: "open_blocking",
+        blockingFindings: ["Fix API"],
+        artifactPath: null,
       }),
     ).toMatchObject({ ok: true, gate: { ok: true, status: "review_blocked" } });
 

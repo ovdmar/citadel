@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import type { ActivityEvent, AgentSession, CheckoutContextInput, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceCheckoutInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, MarkCheckoutReadyForReviewInput, Namespace, Operation, PlanDeviationReport, RegisterWorkspacePlanInput, Repo, UpdateNamespaceInput, UpdateTicketStatusInput, Workspace, WorkspaceManagerControlInput } from "@citadel/contracts";
+import type { ActivityEvent, AgentSession, CheckoutContextInput, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceCheckoutInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, MarkCheckoutReadyForReviewInput, Namespace, Operation, PlanDeviationReport, RegisterCheckoutReviewArtifactInput, RegisterWorkspacePlanInput, Repo, UpdateNamespaceInput, UpdateTicketStatusInput, Workspace, WorkspaceManagerControlInput } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
@@ -44,6 +44,7 @@ export {
 export type {
   CheckoutGateSnapshot,
   MarkCheckoutReadyForReviewResult,
+  RegisterCheckoutReviewArtifactResult,
   WorkspaceManagerControlResult,
 } from "./workspace-manager.js";
 export type { CitadelContextResult, RegisterWorkspacePlanResult, WorkspacePlanSnapshot } from "./workspace-plans.js";
@@ -164,6 +165,9 @@ export class OperationService {
 
   markCheckoutReadyForReview = (input: MarkCheckoutReadyForReviewInput) =>
     workspaceManager.markCheckoutReadyForReview(this.managerDeps(), input);
+
+  registerCheckoutReviewArtifact = (input: RegisterCheckoutReviewArtifactInput) =>
+    workspaceManager.registerCheckoutReviewArtifact(this.managerDeps(), input);
 
   updateTicketStatus = (input: UpdateTicketStatusInput) =>
     workspaceManager.updateTicketStatus(this.managerDeps(), input);

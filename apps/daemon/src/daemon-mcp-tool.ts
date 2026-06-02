@@ -15,6 +15,7 @@ import {
   LaunchPmAgentInputSchema,
   LaunchPrototypeAgentInputSchema,
   MarkCheckoutReadyForReviewInputSchema,
+  RegisterCheckoutReviewArtifactInputSchema,
   RegisterWorkspacePlanInputSchema,
   ReportPlanDeviationInputSchema,
   UpdateNamespaceInputSchema,
@@ -181,6 +182,13 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
   if (call.name === "mark_checkout_ready_for_review") {
     const result = operations.markCheckoutReadyForReview(
       MarkCheckoutReadyForReviewInputSchema.parse(call.arguments ?? {}),
+    );
+    if (result.ok) emit("checkout.gate.updated", { checkoutId: result.checkout.id });
+    return result;
+  }
+  if (call.name === "register_checkout_review_artifact") {
+    const result = operations.registerCheckoutReviewArtifact(
+      RegisterCheckoutReviewArtifactInputSchema.parse(call.arguments ?? {}),
     );
     if (result.ok) emit("checkout.gate.updated", { checkoutId: result.artifact.checkoutId });
     return result;
