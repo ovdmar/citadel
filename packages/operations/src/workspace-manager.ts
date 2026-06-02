@@ -68,7 +68,16 @@ export type MarkCheckoutReadyForReviewResult =
 
 export type RegisterCheckoutReviewArtifactResult =
   | { ok: true; artifact: ReviewArtifact; gate: CheckoutGateSnapshot }
-  | { ok: false; error: CheckoutResolveError | "active_plan_required" | "pr_required" | "pr_head_sha_required" };
+  | {
+      ok: false;
+      error:
+        | CheckoutResolveError
+        | "active_plan_required"
+        | "pr_required"
+        | "pr_head_sha_required"
+        | "review_authority_required"
+        | "review_action_mismatch";
+    };
 
 export type WorkspaceManagerTickResult =
   | {
@@ -290,6 +299,7 @@ export function markCheckoutReadyForReview(
   const pr = checkout.intendedPr;
   if (!pr?.provider || (!pr.number && !pr.url)) return { ok: false, error: "pr_required" as const };
   if (!pr.headSha) return { ok: false, error: "pr_head_sha_required" as const };
+  deps.store.invalidateCheckoutReviewArtifacts(checkout.id, "head_changed", pr.headSha);
   const gate = getCheckoutGateStatus(deps, { checkoutId: checkout.id });
   if (gate.ok) {
     deps.store.updateWorkspaceCheckoutGate(checkout.id, gate.status);
@@ -320,6 +330,9 @@ export function registerCheckoutReviewArtifact(
   const pr = checkout.intendedPr;
   if (!pr?.provider || (!pr.number && !pr.url)) return { ok: false, error: "pr_required" as const };
   if (!pr.headSha) return { ok: false, error: "pr_head_sha_required" as const };
+  const authority = validateReviewArtifactAuthority(deps, input, activePlan, checkout, pr.headSha);
+  if (!authority.ok) return authority;
+  deps.store.invalidateCheckoutReviewArtifacts(checkout.id, "head_changed", pr.headSha);
   const existing = deps.store
     .listReviewArtifacts(checkout.id)
     .find((artifact) => artifact.planVersionId === activePlan.id && artifact.headSha === pr.headSha);
@@ -381,6 +394,50 @@ export function updateTicketStatus(deps: WorkspaceManagerDeps, input: UpdateTick
     issue,
     checkout: updated,
   };
+}
+
+function validateReviewArtifactAuthority(
+  deps: WorkspaceManagerDeps,
+  input: RegisterCheckoutReviewArtifactInput,
+  plan: WorkspacePlanVersion,
+  checkout: WorktreeCheckout,
+  headSha: string,
+): { ok: true } | { ok: false; error: "review_authority_required" | "review_action_mismatch" } {
+  if (!input.sessionId && !input.managerActionId) return { ok: true };
+  const session = input.sessionId
+    ? deps.store.listWorkspaceSessions().find((candidate) => candidate.id === input.sessionId)
+    : null;
+  if (input.sessionId) {
+    if (!session || session.kind !== "agent") return { ok: false, error: "review_authority_required" as const };
+    if (
+      session.checkoutId !== checkout.id ||
+      session.planVersionId !== plan.id ||
+      session.role !== "implementation" ||
+      session.actionId !== "implementation.review_pr"
+    ) {
+      return { ok: false, error: "review_action_mismatch" as const };
+    }
+    if (input.managerActionId && session.managerActionId !== input.managerActionId) {
+      return { ok: false, error: "review_action_mismatch" as const };
+    }
+  }
+  const managerActionId = input.managerActionId ?? session?.managerActionId ?? null;
+  if (!managerActionId) return input.sessionId ? { ok: true } : { ok: false, error: "review_authority_required" };
+  const action = deps.store
+    .listManagerActions(checkout.workspaceId)
+    .find((candidate) => candidate.id === managerActionId);
+  if (!action) return { ok: false, error: "review_authority_required" as const };
+  if (
+    action.actionName !== "run_review_pr" ||
+    action.checkoutId !== checkout.id ||
+    action.planVersionId !== plan.id ||
+    action.prHeadSha !== headSha ||
+    action.status === "superseded" ||
+    action.status === "abandoned"
+  ) {
+    return { ok: false, error: "review_action_mismatch" as const };
+  }
+  return { ok: true };
 }
 
 function bindExistingDeliveryUnitCheckouts(

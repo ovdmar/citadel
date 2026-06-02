@@ -243,6 +243,7 @@ export async function createAgentSession(
     managed: input.managed ?? false,
     parentSessionId: input.parentSessionId ?? null,
     planVersionId: input.planVersionId ?? null,
+    managerActionId: input.managerActionId ?? null,
     status: "running",
     statusReason: "launched",
     lastStatusAt: now,

@@ -537,6 +537,7 @@ export const CreateAgentSessionInputSchema = z.object({
   managed: z.boolean().optional(),
   parentSessionId: IdSchema.optional(),
   planVersionId: IdSchema.optional(),
+  managerActionId: IdSchema.optional(),
   launchSettings: LaunchSettingsSchema.optional(),
   namespaceId: IdSchema.optional(),
   // operationId lets hook-dispatched sessions link their activity back to the

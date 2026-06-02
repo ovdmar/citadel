@@ -185,6 +185,109 @@ describe("workspace manager operations", () => {
     ).toHaveLength(1);
   });
 
+  it("authorizes review artifacts from linked review sessions and rejects mismatches", () => {
+    const { store, service } = setup();
+    service.startWorkspaceManager({ workspaceId: "ws_manager" });
+    const tick = service.runWorkspaceManagerTick({ workspaceId: "ws_manager" });
+    if (!tick.ok) throw new Error("manager tick failed");
+    const action = store.listManagerActions("ws_manager").find((entry) => entry.actionName === "run_review_pr");
+    const plan = store.findActiveWorkspacePlan("ws_manager");
+    if (!action || !plan) throw new Error("review action missing");
+    store.insertWorkspaceSession({
+      id: "sess_review",
+      kind: "agent",
+      workspaceId: "ws_manager",
+      runtimeId: "codex",
+      displayName: "Review",
+      targetType: "worktree_checkout",
+      checkoutId: "co_api",
+      role: "implementation",
+      actionId: "implementation.review_pr",
+      managed: true,
+      parentSessionId: null,
+      planVersionId: plan.id,
+      managerActionId: action.id,
+      status: "running",
+      transport: "connected",
+      tmuxSessionName: "tmux",
+      tmuxSessionId: "$1",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+    });
+
+    expect(
+      service.registerCheckoutReviewArtifact({
+        checkoutId: "co_api",
+        sessionId: "sess_review",
+        managerActionId: action.id,
+        result: "approve",
+        findingsStatus: "none",
+        blockingFindings: [],
+        artifactPath: null,
+      }),
+    ).toMatchObject({ ok: true, artifact: { checkoutId: "co_api", planVersionId: plan.id } });
+
+    store.insertWorkspaceSession({
+      id: "sess_bad_review",
+      kind: "agent",
+      workspaceId: "ws_manager",
+      runtimeId: "codex",
+      displayName: "CI",
+      targetType: "worktree_checkout",
+      checkoutId: "co_api",
+      role: "implementation",
+      actionId: "implementation.fix_ci",
+      managed: true,
+      parentSessionId: null,
+      planVersionId: plan.id,
+      managerActionId: action.id,
+      status: "running",
+      transport: "connected",
+      tmuxSessionName: "tmux",
+      tmuxSessionId: "$2",
+      createdAt: "2026-06-01T00:00:00.000Z",
+      updatedAt: "2026-06-01T00:00:00.000Z",
+    });
+    expect(
+      service.registerCheckoutReviewArtifact({
+        checkoutId: "co_api",
+        sessionId: "sess_bad_review",
+        managerActionId: action.id,
+        result: "approve",
+        findingsStatus: "none",
+        blockingFindings: [],
+        artifactPath: null,
+      }),
+    ).toMatchObject({ ok: false, error: "review_action_mismatch" });
+  });
+
+  it("invalidates stale review artifacts when the PR head changes", () => {
+    const { store, service } = setup();
+    expect(
+      service.registerCheckoutReviewArtifact({
+        checkoutId: "co_api",
+        notes: "old review",
+        result: "approve",
+        findingsStatus: "none",
+        blockingFindings: [],
+        artifactPath: null,
+      }),
+    ).toMatchObject({ ok: true });
+
+    expect(
+      service.markCheckoutReadyForReview({
+        checkoutId: "co_api",
+        pr: freshPr({ headSha: "def456" }),
+        notes: "new head",
+      }),
+    ).toMatchObject({ ok: true, gate: { ok: true, status: "review_required" } });
+
+    expect(store.listCheckoutReviewArtifacts("co_api", { includeInvalidated: true })).toEqual(
+      expect.arrayContaining([expect.objectContaining({ headSha: "abc123", invalidatedReason: "head_changed" })]),
+    );
+    expect(store.listCheckoutReviewArtifacts("co_api")).toEqual([]);
+  });
+
   it("evaluates PR review gates and records idempotent ready notifications", () => {
     const { store, service } = setup();
     service.startWorkspaceManager({ workspaceId: "ws_manager" });
