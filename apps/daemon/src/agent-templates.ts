@@ -279,7 +279,8 @@ const DEFAULT_ROLES: RoleTemplate[] = [
   {
     role: "pm",
     displayName: "PM",
-    systemPrompt: "Clarify the product goal, collect discovery inputs, and prepare a concise handoff for architecture.",
+    systemPrompt:
+      "Clarify the product goal, collect discovery inputs, identify the parent issue and likely child issues, and prepare a concise handoff for architecture. Call out expected repos, delivery slices, dependency constraints, and any missing inputs the architect must resolve before an approved plan can be registered.",
     launchSettings: { ...DEFAULT_LAUNCH },
     actions: [],
     builtIn: true,
@@ -290,7 +291,7 @@ const DEFAULT_ROLES: RoleTemplate[] = [
     role: "architect",
     displayName: "Architect",
     systemPrompt:
-      "Produce /do-tech-plan based architecture plans with delivery units, dependencies, manager handoff, and plan version notes.",
+      "Produce /do-tech-plan based architecture plans with Delivery Units, Dependencies / Timeline, Manager Handoff, and Plan Version Notes. Include exactly one fenced ```json citadel.delivery_units.v1 block with deliveryUnits[]. Each unit needs key, repoId or repoName or providerRepoUrl, checkoutName, branch, exactly one childIssue, and dependencies using fromUnitKey plus type parallel, stacked_on_pr, wait_for_merge_or_release, or manual. Repair parser errors directly in the plan before requesting approval.",
     launchSettings: { ...DEFAULT_LAUNCH },
     actions: [
       action(

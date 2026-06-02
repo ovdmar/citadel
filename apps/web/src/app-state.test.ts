@@ -34,6 +34,8 @@ function baseState(workspaces: Workspace[]): StateResponse {
     workspaces,
     checkouts: [],
     workspacePlans: [],
+    workspacePlanDeliveryUnits: [],
+    workspacePlanDependencyEdges: [],
     workspaceManagers: [],
     planDeviations: [],
     sessions: [],

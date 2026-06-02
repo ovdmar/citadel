@@ -10,6 +10,8 @@ import type {
   TerminalProfile,
   Workspace,
   WorkspaceManager,
+  WorkspacePlanDeliveryUnit,
+  WorkspacePlanDependencyEdge,
   WorkspacePlanVersion,
   WorkspaceSession,
   WorktreeCheckout,
@@ -40,6 +42,8 @@ export type StateResponse = {
   workspaces: Workspace[];
   checkouts: WorktreeCheckout[];
   workspacePlans: WorkspacePlanVersion[];
+  workspacePlanDeliveryUnits: WorkspacePlanDeliveryUnit[];
+  workspacePlanDependencyEdges: WorkspacePlanDependencyEdge[];
   workspaceManagers: WorkspaceManager[];
   planDeviations: PlanDeviationReport[];
   sessions: WorkspaceSession[];
@@ -125,6 +129,12 @@ export function applyOptimisticRemoveFilter(
     workspaces: state.workspaces.filter((w) => !ids.has(w.id)),
     checkouts: state.checkouts.filter((checkout) => !ids.has(checkout.workspaceId)),
     workspacePlans: state.workspacePlans.filter((plan) => !ids.has(plan.workspaceId)),
+    workspacePlanDeliveryUnits: state.workspacePlanDeliveryUnits.filter(
+      (unit) => !unit.workspaceId || !ids.has(unit.workspaceId),
+    ),
+    workspacePlanDependencyEdges: state.workspacePlanDependencyEdges.filter(
+      (edge) => !edge.workspaceId || !ids.has(edge.workspaceId),
+    ),
     workspaceManagers: state.workspaceManagers.filter((manager) => !ids.has(manager.workspaceId)),
     planDeviations: state.planDeviations.filter((report) => !ids.has(report.workspaceId)),
   };

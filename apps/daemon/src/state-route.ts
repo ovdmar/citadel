@@ -27,6 +27,12 @@ export function registerStateRoute(input: {
       const workspaces = store.listWorkspaces();
       const checkouts = workspaces.flatMap((workspace) => store.listWorkspaceCheckouts(workspace.id));
       const workspacePlans = workspaces.flatMap((workspace) => store.listWorkspacePlanVersions(workspace.id));
+      const workspacePlanDeliveryUnits = workspacePlans.flatMap((plan) =>
+        store.listWorkspacePlanDeliveryUnits(plan.id),
+      );
+      const workspacePlanDependencyEdges = workspacePlans.flatMap((plan) =>
+        store.listWorkspacePlanDependencyEdges(plan.id),
+      );
       const workspaceManagers = workspaces
         .map((workspace) => store.getWorkspaceManager(workspace.id))
         .filter((manager) => manager !== null);
@@ -38,6 +44,8 @@ export function registerStateRoute(input: {
         workspaces,
         checkouts,
         workspacePlans,
+        workspacePlanDeliveryUnits,
+        workspacePlanDependencyEdges,
         workspaceManagers,
         planDeviations,
         sessions,

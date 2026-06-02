@@ -11,6 +11,21 @@ const validPlan = (title: string) => `# ${title}
 ## Delivery Units
 API work.
 
+\`\`\`json citadel.delivery_units.v1
+{
+  "deliveryUnits": [
+    {
+      "key": "api",
+      "repoName": "API",
+      "checkoutName": "api",
+      "branch": "feature/api",
+      "childIssue": { "provider": "jira", "key": "CIT-2" },
+      "dependencies": []
+    }
+  ]
+}
+\`\`\`
+
 ## Dependencies / Timeline
 None.
 
@@ -93,6 +108,10 @@ describe("workspace plan operations", () => {
     });
 
     expect(first).toMatchObject({ ok: true, planVersion: { version: 1, active: true, status: "approved" } });
+    if (!first.ok) throw new Error("expected first plan registration to succeed");
+    expect(store.listWorkspacePlanDeliveryUnits(first.planVersion.id)).toMatchObject([
+      { key: "api", repoName: "API", checkoutName: "api", branch: "feature/api" },
+    ]);
     expect(store.listWorkspacePlanDecisions((first as Extract<typeof first, { ok: true }>).planVersion.id)).toEqual([
       expect.objectContaining({ decision: "approve", actor: "human" }),
     ]);
@@ -141,6 +160,82 @@ describe("workspace plan operations", () => {
         approvalMode: "manual",
       }),
     ).toMatchObject({ ok: false, error: "plan_structure_invalid" });
+  });
+
+  it("rejects approved plans without a machine-readable delivery-unit block", () => {
+    const { service, rootPath } = setup();
+    const planPath = path.join(rootPath, "plan.md");
+    fs.writeFileSync(
+      planPath,
+      `# Missing block
+
+## Delivery Units
+API work.
+
+## Dependencies / Timeline
+None.
+
+## Manager Handoff
+Launch implementation.
+
+## Plan Version Notes
+Initial.
+`,
+    );
+
+    expect(
+      service.registerWorkspacePlan({
+        workspaceId: "ws_plan",
+        path: planPath,
+        status: "approved",
+        approvalMode: "manual",
+      }),
+    ).toMatchObject({ ok: false, error: "plan_delivery_units_required" });
+  });
+
+  it("rejects approved plans with invalid delivery-unit semantics", () => {
+    const { service, rootPath } = setup();
+    const planPath = path.join(rootPath, "plan.md");
+    fs.writeFileSync(
+      planPath,
+      `# Bad block
+
+## Delivery Units
+API work.
+
+\`\`\`json citadel.delivery_units.v1
+{
+  "deliveryUnits": [
+    {
+      "key": "api",
+      "repoName": "Missing",
+      "checkoutName": "api",
+      "branch": "feature/api",
+      "dependencies": []
+    }
+  ]
+}
+\`\`\`
+
+## Dependencies / Timeline
+None.
+
+## Manager Handoff
+Launch implementation.
+
+## Plan Version Notes
+Initial.
+`,
+    );
+
+    expect(
+      service.registerWorkspacePlan({
+        workspaceId: "ws_plan",
+        path: planPath,
+        status: "approved",
+        approvalMode: "manual",
+      }),
+    ).toMatchObject({ ok: false, error: "plan_delivery_units_invalid" });
   });
 
   it("resolves relative plan paths from a validated cwd", () => {
@@ -208,7 +303,11 @@ describe("workspace plan operations", () => {
     expect(plan.ok).toBe(true);
 
     const context = service.getCitadelContext({ cwd: path.join(checkoutPath, "src") });
-    expect(context).toMatchObject({ ok: true, target: { type: "worktree_checkout", checkoutId: "co_api" } });
+    expect(context).toMatchObject({
+      ok: true,
+      target: { type: "worktree_checkout", checkoutId: "co_api" },
+      deliveryUnits: [expect.objectContaining({ key: "api" })],
+    });
 
     const deviation = service.reportPlanDeviation({
       cwd: path.join(checkoutPath, "src"),

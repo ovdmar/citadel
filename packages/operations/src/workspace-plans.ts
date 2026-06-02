@@ -6,12 +6,21 @@ import type {
   ExecutionTarget,
   PlanDeviationReport,
   RegisterWorkspacePlanInput,
+  Repo,
   Workspace,
+  WorkspacePlanDeliveryUnit,
+  WorkspacePlanDeliveryUnitsBlock,
+  WorkspacePlanDependencyEdge,
   WorkspacePlanVersion,
   WorktreeCheckout,
 } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
+import {
+  type PlanDeliveryUnitsValidationIssue,
+  materializePlanDeliveryUnits,
+  parsePlanDeliveryUnitsBlock,
+} from "./plan-delivery-units.js";
 import { resolveExecutionTargetForCwd, workspaceRootPath } from "./workspace-layout.js";
 
 export type WorkspacePlanDeps = {
@@ -31,7 +40,12 @@ export type WorkspaceScope =
   | { ok: false; error: "workspace_required" | "workspace_not_found" | "cwd_not_registered"; workspaceId?: string };
 
 export type RegisterWorkspacePlanResult =
-  | { ok: true; planVersion: WorkspacePlanVersion }
+  | {
+      ok: true;
+      planVersion: WorkspacePlanVersion;
+      deliveryUnits: WorkspacePlanDeliveryUnit[];
+      dependencyEdges: WorkspacePlanDependencyEdge[];
+    }
   | {
       ok: false;
       error:
@@ -41,7 +55,9 @@ export type RegisterWorkspacePlanResult =
         | "plan_path_outside_workspace"
         | "plan_path_missing"
         | "plan_structure_invalid"
-        | "plan_approval_required";
+        | "plan_approval_required"
+        | "plan_delivery_units_required"
+        | "plan_delivery_units_invalid";
       detail?: string;
     };
 
@@ -51,6 +67,8 @@ export type WorkspacePlanSnapshot =
       workspace: Workspace;
       activePlan: WorkspacePlanVersion | null;
       planVersions: WorkspacePlanVersion[];
+      deliveryUnits: WorkspacePlanDeliveryUnit[];
+      dependencyEdges: WorkspacePlanDependencyEdge[];
       deviations: PlanDeviationReport[];
     }
   | { ok: false; error: "workspace_required" | "workspace_not_found" | "cwd_not_registered" };
@@ -63,6 +81,8 @@ export type CitadelContextResult =
       checkout: WorktreeCheckout | null;
       checkouts: WorktreeCheckout[];
       activePlan: WorkspacePlanVersion | null;
+      deliveryUnits: WorkspacePlanDeliveryUnit[];
+      dependencyEdges: WorkspacePlanDependencyEdge[];
       manager: ReturnType<SqliteStore["getWorkspaceManager"]>;
       deviations: PlanDeviationReport[];
     }
@@ -81,11 +101,15 @@ export function registerWorkspacePlan(
   const resolvedPlan = resolvePlanPath(scope.workspace, input.path, scope.cwd);
   if (!resolvedPlan.ok) return resolvedPlan;
   const content = fs.readFileSync(resolvedPlan.path);
+  let parsedDeliveryUnitsBlock: WorkspacePlanDeliveryUnitsBlock | null = null;
   if (input.status === "approved") {
     if (input.createdBySessionId && input.approvalMode !== "auto")
       return { ok: false, error: "plan_approval_required" };
     const structure = validateApprovedPlanStructure(content.toString("utf8"));
     if (!structure.ok) return structure;
+    const parsed = validateApprovedPlanDeliveryUnits(content.toString("utf8"), deps.store.listRepos());
+    if (!parsed.ok) return parsed;
+    parsedDeliveryUnitsBlock = parsed.block;
   }
   const now = nowIso();
   const existing = deps.store.listWorkspacePlanVersions(scope.workspace.id);
@@ -102,7 +126,18 @@ export function registerWorkspacePlan(
     createdAt: now,
     updatedAt: now,
   };
+  const materializedUnits = parsedDeliveryUnitsBlock
+    ? materializePlanDeliveryUnits(parsedDeliveryUnitsBlock, {
+        workspaceId: scope.workspace.id,
+        planVersionId: planVersion.id,
+        timestamp: now,
+      })
+    : null;
   deps.store.insertWorkspacePlanVersion(planVersion);
+  if (materializedUnits) {
+    deps.store.insertWorkspacePlanDeliveryUnits(materializedUnits.deliveryUnits);
+    deps.store.insertWorkspacePlanDependencyEdges(materializedUnits.dependencyEdges);
+  }
   if (planVersion.status === "approved") {
     deps.store.insertWorkspacePlanDecision({
       id: createId("decision"),
@@ -121,7 +156,12 @@ export function registerWorkspacePlan(
     scope.workspace.id,
     null,
   );
-  return { ok: true, planVersion };
+  return {
+    ok: true,
+    planVersion,
+    deliveryUnits: materializedUnits?.deliveryUnits ?? [],
+    dependencyEdges: materializedUnits?.dependencyEdges ?? [],
+  };
 }
 
 export function getWorkspacePlan(
@@ -130,11 +170,14 @@ export function getWorkspacePlan(
 ) {
   const scope = resolveWorkspaceScope(deps.store, input);
   if (!scope.ok) return { ok: false, error: scope.error } satisfies WorkspacePlanSnapshot;
+  const activePlan = deps.store.findActiveWorkspacePlan(scope.workspace.id);
   return {
     ok: true,
     workspace: scope.workspace,
-    activePlan: deps.store.findActiveWorkspacePlan(scope.workspace.id),
+    activePlan,
     planVersions: deps.store.listWorkspacePlanVersions(scope.workspace.id),
+    deliveryUnits: activePlan ? deps.store.listWorkspacePlanDeliveryUnits(activePlan.id) : [],
+    dependencyEdges: activePlan ? deps.store.listWorkspacePlanDependencyEdges(activePlan.id) : [],
     deviations: deps.store.listPlanDeviationReports(scope.workspace.id),
   } satisfies WorkspacePlanSnapshot;
 }
@@ -154,13 +197,16 @@ export function getCitadelContext(
     resolvedTarget.type === "worktree_checkout"
       ? (checkouts.find((candidate) => candidate.id === resolvedTarget.checkoutId) ?? null)
       : null;
+  const activePlan = deps.store.findActiveWorkspacePlan(workspace.id);
   return {
     ok: true,
     target: resolvedTarget,
     workspace,
     checkout,
     checkouts: checkouts.filter((candidate) => candidate.workspaceId === workspace.id),
-    activePlan: deps.store.findActiveWorkspacePlan(workspace.id),
+    activePlan,
+    deliveryUnits: activePlan ? deps.store.listWorkspacePlanDeliveryUnits(activePlan.id) : [],
+    dependencyEdges: activePlan ? deps.store.listWorkspacePlanDependencyEdges(activePlan.id) : [],
     manager: deps.store.getWorkspaceManager(workspace.id),
     deviations: deps.store.listPlanDeviationReports(workspace.id),
   };
@@ -264,6 +310,95 @@ function validateApprovedPlanStructure(
   const required = ["Delivery Units", "Dependencies / Timeline", "Manager Handoff", "Plan Version Notes"];
   const missing = required.filter((heading) => !new RegExp(`^## ${escapeRegExp(heading)}\\b`, "im").test(content));
   return missing.length ? { ok: false, error: "plan_structure_invalid", detail: missing.join(", ") } : { ok: true };
+}
+
+function validateApprovedPlanDeliveryUnits(
+  content: string,
+  repos: Repo[],
+):
+  | { ok: true; block: WorkspacePlanDeliveryUnitsBlock }
+  | { ok: false; error: "plan_delivery_units_required" | "plan_delivery_units_invalid"; detail: string } {
+  const parsed = parsePlanDeliveryUnitsBlock(content);
+  if (!parsed.ok) {
+    const required = parsed.issues.every((entry) => entry.code === "plan_delivery_units_required");
+    return {
+      ok: false,
+      error: required ? "plan_delivery_units_required" : "plan_delivery_units_invalid",
+      detail: formatDeliveryUnitIssues(parsed.issues),
+    };
+  }
+  const semanticIssues = validateDeliveryUnitSemantics(parsed.block.deliveryUnits, repos);
+  if (semanticIssues.length) {
+    return { ok: false, error: "plan_delivery_units_invalid", detail: formatDeliveryUnitIssues(semanticIssues) };
+  }
+  return { ok: true, block: parsed.block };
+}
+
+function validateDeliveryUnitSemantics(
+  deliveryUnits: WorkspacePlanDeliveryUnit[],
+  repos: Repo[],
+): PlanDeliveryUnitsValidationIssue[] {
+  const issues: PlanDeliveryUnitsValidationIssue[] = [];
+  const childIssues = new Set<string>();
+  for (const [index, unit] of deliveryUnits.entries()) {
+    const pathPrefix = `deliveryUnits.${index}`;
+    if (!unit.childIssue) {
+      issues.push({
+        code: "delivery_unit_child_issue_required",
+        message: "Approved delivery units must bind exactly one child issue",
+        path: `${pathPrefix}.childIssue`,
+      });
+    } else {
+      const childIssueKey = `${unit.childIssue.provider}:${unit.childIssue.key}`;
+      if (childIssues.has(childIssueKey)) {
+        issues.push({
+          code: "delivery_unit_child_issue_duplicate",
+          message: `Duplicate child issue ${childIssueKey}`,
+          path: `${pathPrefix}.childIssue`,
+        });
+      }
+      childIssues.add(childIssueKey);
+    }
+    if (unit.repoId) {
+      if (!repos.some((repo) => repo.id === unit.repoId)) {
+        issues.push({
+          code: "delivery_unit_repo_not_found",
+          message: `Unknown repo id ${unit.repoId}`,
+          path: `${pathPrefix}.repoId`,
+        });
+      }
+      continue;
+    }
+    if (unit.repoName) {
+      const matches = repos.filter((repo) => repo.name === unit.repoName);
+      if (matches.length === 0) {
+        issues.push({
+          code: "delivery_unit_repo_not_found",
+          message: `Unknown repo name ${unit.repoName}`,
+          path: `${pathPrefix}.repoName`,
+        });
+      } else if (matches.length > 1) {
+        issues.push({
+          code: "delivery_unit_repo_ambiguous",
+          message: `Ambiguous repo name ${unit.repoName}`,
+          path: `${pathPrefix}.repoName`,
+        });
+      }
+      continue;
+    }
+    if (!unit.providerRepoUrl) {
+      issues.push({
+        code: "delivery_unit_repo_required",
+        message: "Delivery unit must specify repoId, repoName, or providerRepoUrl",
+        path: `${pathPrefix}.repoName`,
+      });
+    }
+  }
+  return issues;
+}
+
+function formatDeliveryUnitIssues(issues: PlanDeliveryUnitsValidationIssue[]): string {
+  return issues.map((entry) => `${entry.path ? `${entry.path}: ` : ""}${entry.code}: ${entry.message}`).join("; ");
 }
 
 function escapeRegExp(value: string): string {

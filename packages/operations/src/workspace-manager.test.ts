@@ -12,6 +12,21 @@ const validPlan = `# Plan
 ## Delivery Units
 API work.
 
+\`\`\`json citadel.delivery_units.v1
+{
+  "deliveryUnits": [
+    {
+      "key": "api",
+      "repoName": "API",
+      "checkoutName": "api",
+      "branch": "feature/api",
+      "childIssue": { "provider": "jira", "key": "CIT-2" },
+      "dependencies": []
+    }
+  ]
+}
+\`\`\`
+
 ## Dependencies / Timeline
 None.
 
