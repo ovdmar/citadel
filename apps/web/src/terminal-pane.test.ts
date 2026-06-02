@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import type { WorkspaceSession } from "@citadel/contracts";
 import { createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -548,6 +549,79 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(scrollMessages(ws)).toEqual([{ type: "scroll", lines: -1 }]);
   });
 
+  it("maps line-mode wheel ticks to multiple terminal rows", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+    await flushReactUpdate(async () => ws.open());
+
+    host.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, deltaMode: 1, bubbles: true, cancelable: true }));
+    await nextAnimationFrame();
+
+    expect(scrollMessages(ws)).toEqual([{ type: "scroll", lines: -3 }]);
+  });
+
+  it("accelerates large wheel deltas and Alt fast-scrolls in larger chunks", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+    await flushReactUpdate(async () => ws.open());
+
+    const event = new WheelEvent("wheel", { deltaY: -72, deltaMode: 0, bubbles: true, cancelable: true });
+    Object.defineProperty(event, "altKey", { configurable: true, value: true });
+
+    host.dispatchEvent(event);
+    await nextAnimationFrame();
+
+    expect(scrollMessages(ws)).toEqual([{ type: "scroll", lines: -45 }]);
+  });
+
+  it("leaves shifted wheel events alone for browser horizontal-scroll gestures", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+    const downstream = vi.fn();
+    host.addEventListener("wheel", downstream);
+    await flushReactUpdate(async () => ws.open());
+
+    const event = new WheelEvent("wheel", { deltaY: -32, deltaMode: 0, bubbles: true, cancelable: true });
+    Object.defineProperty(event, "shiftKey", { configurable: true, value: true });
+
+    host.dispatchEvent(event);
+    await nextAnimationFrame();
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(downstream).toHaveBeenCalledTimes(1);
+    expect(scrollMessages(ws)).toEqual([]);
+  });
+
+  it("lets Claude Code receive wheel input for fullscreen mouse scrolling", async () => {
+    await renderTerminal({
+      ...sessionFixture(),
+      kind: "agent",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
+    });
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+    const downstream = vi.fn();
+    host.addEventListener("wheel", downstream);
+    await flushReactUpdate(async () => ws.open());
+
+    const event = new WheelEvent("wheel", { deltaY: -32, deltaMode: 0, bubbles: true, cancelable: true });
+
+    host.dispatchEvent(event);
+    await nextAnimationFrame();
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(downstream).toHaveBeenCalledTimes(1);
+    expect(scrollMessages(ws)).toEqual([]);
+  });
+
   it("does not reconnect the terminal when the resolved theme changes", async () => {
     applyThemePreference("dark");
     await renderTerminal();
@@ -566,13 +640,13 @@ describe("TerminalPane xterm WebSocket renderer", () => {
   });
 });
 
-async function renderTerminal() {
+async function renderTerminal(session: WorkspaceSession = sessionFixture()) {
   const rootElement = document.createElement("div");
   document.body.appendChild(rootElement);
   const root = createRoot(rootElement);
   roots.push(root);
   await flushReactUpdate(async () => {
-    root.render(createElement(TerminalPane, { session: sessionFixture() }));
+    root.render(createElement(TerminalPane, { session }));
     await settle();
   });
   return root;

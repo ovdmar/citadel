@@ -61,6 +61,12 @@ export function ensureTmuxExtendedKeys(socketName?: TmuxSocketName) {
   });
 }
 
+export function setTmuxMouseForSession(sessionName: string, enabled: boolean, socketName?: TmuxSocketName): void {
+  execFileSync("tmux", [...tmuxPrefix(socketName), "set-option", "-t", sessionName, "mouse", enabled ? "on" : "off"], {
+    stdio: "ignore",
+  });
+}
+
 export function tmuxHistoryLimit(): number {
   const raw = process.env.CITADEL_TMUX_HISTORY_LIMIT?.trim();
   if (!raw) return DEFAULT_TMUX_HISTORY_LIMIT;

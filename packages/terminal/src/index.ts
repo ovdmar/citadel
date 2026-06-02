@@ -8,6 +8,7 @@ export { submitPrompt } from "./submit-prompt.js";
 export {
   DEFAULT_TMUX_HISTORY_LIMIT,
   ensureTmuxExtendedKeys,
+  setTmuxMouseForSession,
   tmuxHistoryLimit,
   tmuxPrefix,
   tmuxSocketNameForWorkspace,

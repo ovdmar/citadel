@@ -20,12 +20,16 @@ const LINE_START_KEY = "C-a";
 const LINE_END_KEY = "C-e";
 const LINE_KILL_KEY = "C-u";
 const TERMINAL_SCROLLBACK_LINES = 20_000;
-const TERMINAL_WHEEL_PIXELS_PER_LINE = 16;
-const TERMINAL_SMOOTH_SCROLL_DURATION_MS = 80;
+const TERMINAL_WHEEL_PIXELS_PER_LINE = 12;
+const TERMINAL_WHEEL_LINES_PER_LINE_DELTA = 3;
+const TERMINAL_WHEEL_ACCELERATION_THRESHOLD_LINES = 6;
+const TERMINAL_WHEEL_ACCELERATION_MULTIPLIER = 1.5;
+const TERMINAL_FAST_SCROLL_MULTIPLIER = 5;
 const TERMINAL_MAX_SCROLL_LINES_PER_MESSAGE = 200;
 const TERMINAL_AUTO_RETRY_LIMIT = 3;
 const TERMINAL_AUTO_RETRY_BACKOFF_MS = 5_000;
 const AUTO_RETRYABLE_TERMINAL_ERRORS = new Set(["terminal_disconnected", "terminal_socket_error"]);
+const RUNTIME_MOUSE_EVENT_RUNTIMES = new Set(["claude-code"]);
 type TerminalPaneKey = typeof LINE_START_KEY | typeof LINE_END_KEY | typeof LINE_KILL_KEY;
 
 export type TerminalSocketMessage = {
@@ -106,6 +110,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
   const decoderRef = useRef(new TextDecoder());
   const autoRetryAttemptsRef = useRef(0);
   const autoRetryTimerRef = useRef<number | null>(null);
+  const forwardWheelToRuntime = shouldForwardWheelToRuntime(props.session);
   themeRef.current = theme;
   const [connectionState, setConnectionState] = useState<"connecting" | "attached" | "disconnected">("connecting");
   const [error, setError] = useState<TerminalError | null>(null);
@@ -187,8 +192,10 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
       cursorBlink: true,
       fontFamily: XTERM_FONT,
       fontSize: 13,
+      fastScrollModifier: "alt",
+      fastScrollSensitivity: TERMINAL_FAST_SCROLL_MULTIPLIER,
       scrollback: TERMINAL_SCROLLBACK_LINES,
-      smoothScrollDuration: TERMINAL_SMOOTH_SCROLL_DURATION_MS,
+      smoothScrollDuration: 0,
       theme: xtermTheme(themeRef.current),
     });
     const fit = new FitAddon();
@@ -271,7 +278,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     };
     const selectionDisposable = terminal.onSelectionChange(updateSelectionSnapshot);
     host.addEventListener("keydown", nativeKeyHandler, true);
-    host.addEventListener("wheel", nativeWheelHandler, { capture: true, passive: false });
+    if (!forwardWheelToRuntime) host.addEventListener("wheel", nativeWheelHandler, { capture: true, passive: false });
     document.addEventListener("copy", nativeCopyHandler, true);
     terminal.attachCustomKeyEventHandler((event) =>
       handleTerminalKeyEvent(event, terminal, sessionId, ws, host, latestSelectionText),
@@ -342,7 +349,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
       selectionDisposable.dispose();
       resizeObserver?.disconnect();
       host.removeEventListener("keydown", nativeKeyHandler, true);
-      host.removeEventListener("wheel", nativeWheelHandler, { capture: true });
+      if (!forwardWheelToRuntime) host.removeEventListener("wheel", nativeWheelHandler, { capture: true });
       document.removeEventListener("copy", nativeCopyHandler, true);
       window.removeEventListener("resize", scheduleResize);
       ws.close();
@@ -351,7 +358,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
       if (fitRef.current === fit) fitRef.current = null;
       if (wsRef.current === ws) wsRef.current = null;
     };
-  }, [sessionId, generation, active, clearAutoRetryTimer, scheduleAutoRetry]);
+  }, [sessionId, generation, active, clearAutoRetryTimer, scheduleAutoRetry, forwardWheelToRuntime]);
 
   // Publish the live URL + reload/focus/recover callbacks so nav selection and
   // tab actions can drive state owned by TerminalPane.
@@ -494,22 +501,39 @@ function isLineKillShortcut(key: string, event: KeyboardEvent): boolean {
   return event.ctrlKey && !event.metaKey && !isApplePlatform();
 }
 
+function shouldForwardWheelToRuntime(session: WorkspaceSession): boolean {
+  return session.kind === "agent" && RUNTIME_MOUSE_EVENT_RUNTIMES.has(session.runtimeId);
+}
+
 function wheelDeltaToLines(
   event: WheelEvent,
   terminalRows: number,
   remainder: number,
 ): { lines: number; remainder: number } | null {
-  if (!Number.isFinite(event.deltaY) || event.deltaY === 0) return null;
+  if (!Number.isFinite(event.deltaY) || event.deltaY === 0 || event.shiftKey) return null;
   const rows = Number.isFinite(terminalRows) && terminalRows > 1 ? Math.trunc(terminalRows) : 24;
-  const lineDelta =
+  const rawLineDelta =
     event.deltaMode === 1
-      ? event.deltaY
+      ? event.deltaY * TERMINAL_WHEEL_LINES_PER_LINE_DELTA
       : event.deltaMode === 2
         ? event.deltaY * Math.max(1, rows - 1)
         : event.deltaY / TERMINAL_WHEEL_PIXELS_PER_LINE;
+  const lineDelta = accelerateWheelLineDelta(rawLineDelta, event, rows);
   const total = remainder + lineDelta;
   const lines = total < 0 ? Math.ceil(total) : Math.floor(total);
   return { lines, remainder: total - lines };
+}
+
+function accelerateWheelLineDelta(lineDelta: number, event: WheelEvent, terminalRows: number): number {
+  const magnitude = Math.abs(lineDelta);
+  if (magnitude === 0) return 0;
+  const accelerated =
+    magnitude >= TERMINAL_WHEEL_ACCELERATION_THRESHOLD_LINES
+      ? magnitude * TERMINAL_WHEEL_ACCELERATION_MULTIPLIER
+      : magnitude;
+  const fastMultiplier = event.altKey ? TERMINAL_FAST_SCROLL_MULTIPLIER : 1;
+  const maxLines = Math.max(1, terminalRows - 1) * fastMultiplier;
+  return Math.sign(lineDelta) * Math.min(maxLines, accelerated * fastMultiplier);
 }
 
 function sendTerminalInput(ws: WebSocket, data: string): void {
