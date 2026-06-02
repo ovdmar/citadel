@@ -86,6 +86,11 @@ function checkoutFromRow(row: Record<string, unknown>): WorktreeCheckout {
     inferredPurpose: row.inferred_purpose
       ? (asString(row, "inferred_purpose") as WorktreeCheckout["inferredPurpose"])
       : null,
+    deliveryUnitKey: row.delivery_unit_key ? asString(row, "delivery_unit_key") : null,
+    deliveryPlanVersionId: row.delivery_plan_version_id ? asString(row, "delivery_plan_version_id") : null,
+    managerStatus: row.manager_status ? (asString(row, "manager_status") as WorktreeCheckout["managerStatus"]) : null,
+    managerStatusReason: row.manager_status_reason ? asString(row, "manager_status_reason") : null,
+    managerStatusUpdatedAt: row.manager_status_updated_at ? asString(row, "manager_status_updated_at") : null,
     gateStatus: asString(row, "gate_status") as WorktreeCheckout["gateStatus"],
     createdAt: asString(row, "created_at"),
     updatedAt: asString(row, "updated_at"),
@@ -187,6 +192,11 @@ function reviewArtifactFromRow(row: Record<string, unknown>): ReviewArtifact {
     findingsStatus: asString(row, "findings_status") as ReviewArtifact["findingsStatus"],
     blockingFindings: jsonArray(row, "blocking_findings"),
     artifactPath: row.artifact_path ? asString(row, "artifact_path") : null,
+    invalidatedAt: row.invalidated_at ? asString(row, "invalidated_at") : null,
+    invalidatedReason: row.invalidated_reason ? asString(row, "invalidated_reason") : null,
+    humanWaivedAt: row.human_waived_at ? asString(row, "human_waived_at") : null,
+    humanWaivedBy: row.human_waived_by ? asString(row, "human_waived_by") : null,
+    humanWaiverReason: row.human_waiver_reason ? asString(row, "human_waiver_reason") : null,
     createdAt: asString(row, "created_at"),
   };
 }
@@ -212,9 +222,10 @@ export const agentsSystemStoreMethods = {
           intended_pr_provider, intended_pr_number, intended_pr_url,
           pr_head_sha, pr_base_ref, intended_pr_fetched_at, intended_pr_checks_green,
           intended_pr_merge_state_status, intended_pr_has_conflicts,
-          stack_parent_checkout_id, inferred_purpose, gate_status,
+          stack_parent_checkout_id, inferred_purpose, delivery_unit_key, delivery_plan_version_id,
+          manager_status, manager_status_reason, manager_status_updated_at, gate_status,
           created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         checkout.id,
@@ -241,6 +252,11 @@ export const agentsSystemStoreMethods = {
         checkout.intendedPr?.hasConflicts == null ? null : Number(checkout.intendedPr.hasConflicts),
         checkout.stackParentCheckoutId ?? null,
         checkout.inferredPurpose ?? null,
+        checkout.deliveryUnitKey ?? null,
+        checkout.deliveryPlanVersionId ?? null,
+        checkout.managerStatus ?? null,
+        checkout.managerStatusReason ?? null,
+        checkout.managerStatusUpdatedAt ?? null,
         checkout.gateStatus,
         checkout.createdAt,
         checkout.updatedAt,
@@ -500,8 +516,9 @@ export const agentsSystemStoreMethods = {
     this.database
       .prepare(
         `INSERT OR REPLACE INTO checkout_review_artifacts (id, workspace_id, checkout_id, plan_version_id,
-          pr_provider, pr_number, pr_url, head_sha, result, findings_status, blocking_findings, artifact_path, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          pr_provider, pr_number, pr_url, head_sha, result, findings_status, blocking_findings, artifact_path,
+          invalidated_at, invalidated_reason, human_waived_at, human_waived_by, human_waiver_reason, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         artifact.id,
@@ -516,6 +533,11 @@ export const agentsSystemStoreMethods = {
         artifact.findingsStatus,
         JSON.stringify(artifact.blockingFindings),
         artifact.artifactPath ?? null,
+        artifact.invalidatedAt ?? null,
+        artifact.invalidatedReason ?? null,
+        artifact.humanWaivedAt ?? null,
+        artifact.humanWaivedBy ?? null,
+        artifact.humanWaiverReason ?? null,
         artifact.createdAt,
       );
   },

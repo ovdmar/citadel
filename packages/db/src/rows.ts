@@ -116,6 +116,7 @@ export function sessionFromRow(row: Record<string, unknown>): WorkspaceSession {
     managed: Number(row.managed ?? 0) === 1,
     parentSessionId: row.parent_session_id ? asString(row, "parent_session_id") : null,
     planVersionId: row.plan_version_id ? asString(row, "plan_version_id") : null,
+    managerActionId: row.manager_action_id ? asString(row, "manager_action_id") : null,
     closedAt: row.closed_at ? asString(row, "closed_at") : null,
     launchWarnings: jsonArray(row, "launch_warnings"),
     rateLimitResumeAttempts:

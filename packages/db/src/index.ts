@@ -392,12 +392,12 @@ export class SqliteStore {
       .prepare(
         `INSERT INTO workspace_sessions (id, workspace_id, kind, runtime_id, display_name, status, status_reason,
           status_reason_at, target_type, checkout_id, role, action_id, managed, parent_session_id, plan_version_id,
-          closed_at, launch_warnings,
+          manager_action_id, closed_at, launch_warnings,
           last_status_at, last_output_at, ended_at, exit_code, transport,
           tmux_session_name, tmux_session_id, tmux_socket_name, tab_id, runtime_session_id,
           rate_limit_resume_attempts, next_resume_at, last_resume_from_rate_limit_at,
           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -415,6 +415,7 @@ export class SqliteStore {
         session.managed ? 1 : 0,
         session.parentSessionId ?? null,
         session.planVersionId ?? null,
+        session.managerActionId ?? null,
         session.closedAt ?? null,
         JSON.stringify(session.launchWarnings ?? []),
         // Optional in the schema (older test fixtures + out-of-band callers
@@ -683,3 +684,6 @@ Object.assign(SqliteStore.prototype, scheduledRunStoreMethods);
 
 import { agentsSystemStoreMethods } from "./agents-system-store.js";
 Object.assign(SqliteStore.prototype, agentsSystemStoreMethods);
+
+import { managerOrchestrationStoreMethods } from "./manager-orchestration-store.js";
+Object.assign(SqliteStore.prototype, managerOrchestrationStoreMethods);

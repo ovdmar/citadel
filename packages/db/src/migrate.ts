@@ -1,4 +1,5 @@
 import process from "node:process";
+import { migrateManagerOrchestrationLedger } from "./manager-orchestration-migration.js";
 import { migrateWorkspaceHomeCheckoutsManager } from "./workspace-structure-migration.js";
 
 // All SQLite schema creation + additive migrations. Extracted from
@@ -24,7 +25,7 @@ type SessionTableName = "agent_sessions" | "workspace_sessions";
 // the new version below. Consumed by the doctor's database-schema check so
 // `make doctor` can flag an installed daemon whose code is newer than the
 // database it's been given.
-export const CURRENT_SCHEMA_VERSION = 18;
+export const CURRENT_SCHEMA_VERSION = 19;
 
 function tmuxSocketBase(): string {
   const configured = process.env.CITADEL_TMUX_SOCKET?.trim();
@@ -381,6 +382,7 @@ export function runMigrations(
     INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
       (18, 'checkout-pr-gate-facts', datetime('now'));
   `);
+  migrateManagerOrchestrationLedger(db, ensureColumn);
 }
 
 function tableExists(db: SqliteDatabase, tableName: string): boolean {

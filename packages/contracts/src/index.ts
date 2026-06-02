@@ -162,6 +162,7 @@ const WorkspaceSessionBaseSchema = z.object({
   managed: z.boolean().optional(),
   parentSessionId: IdSchema.nullable().optional(),
   planVersionId: IdSchema.nullable().optional(),
+  managerActionId: IdSchema.nullable().optional(),
   closedAt: z.string().nullable().optional(),
   launchWarnings: z.array(z.string()).optional(),
   // Auto-resume bookkeeping for sessions that hit a global API rate limit.
