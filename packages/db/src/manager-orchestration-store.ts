@@ -50,6 +50,12 @@ declare module "./index.js" {
       >,
     ): ManagerActionLedgerEntry | null;
     markManagerActionSuperseded(id: string, error?: string | null): ManagerActionLedgerEntry | null;
+    reconcileExpiredManagerAction(
+      id: string,
+      ownerId: string,
+      generation: number,
+      now: string,
+    ): ManagerActionLedgerEntry | null;
     findManagerActionByKey(idempotencyKey: string): ManagerActionLedgerEntry | null;
     listManagerActions(workspaceId: string): ManagerActionLedgerEntry[];
     reconcileManagerActions(now: string): ManagerActionLedgerEntry[];
@@ -167,7 +173,7 @@ export const managerOrchestrationStoreMethods = {
   },
 
   claimManagerAction(this: SqliteStore, action: ManagerActionLedgerEntry): ManagerActionLedgerEntry {
-    this.database
+    const result = this.database
       .prepare(
         `INSERT OR IGNORE INTO manager_action_ledger (id, workspace_id, checkout_id, manager_id, action_name, status,
           scope_key, action_key, fact_key, idempotency_key, lease_owner_id, lease_generation, lease_expires_at,
@@ -203,6 +209,26 @@ export const managerOrchestrationStoreMethods = {
         action.createdAt,
         action.updatedAt,
       );
+    if (!result.changes && action.leaseOwnerId) {
+      const existing = this.findManagerActionByKey(action.idempotencyKey);
+      if (existing?.status === "queued" && existing.attemptCount < existing.maxAttempts) {
+        this.database
+          .prepare(
+            `UPDATE manager_action_ledger
+             SET status = 'claimed', lease_owner_id = ?, lease_generation = lease_generation + 1,
+               lease_expires_at = ?, attempt_count = attempt_count + 1,
+               claimed_at = COALESCE(claimed_at, ?), error = NULL, updated_at = ?
+            WHERE id = ? AND status = 'queued' AND attempt_count < max_attempts`,
+          )
+          .run(
+            action.leaseOwnerId,
+            action.leaseExpiresAt ?? null,
+            action.claimedAt ?? action.updatedAt,
+            action.updatedAt,
+            existing.id,
+          );
+      }
+    }
     const claimed = this.findManagerActionByKey(action.idempotencyKey);
     if (!claimed) throw new Error(`manager action claim disappeared: ${action.idempotencyKey}`);
     return claimed;
@@ -269,6 +295,26 @@ export const managerOrchestrationStoreMethods = {
          WHERE id = ?`,
       )
       .run(error ?? null, new Date().toISOString(), id);
+    return findManagerActionById(this, id);
+  },
+
+  reconcileExpiredManagerAction(
+    this: SqliteStore,
+    id: string,
+    ownerId: string,
+    generation: number,
+    now: string,
+  ): ManagerActionLedgerEntry | null {
+    this.database
+      .prepare(
+        `UPDATE manager_action_ledger
+         SET status = CASE WHEN attempt_count >= max_attempts THEN 'failed' ELSE 'queued' END,
+           lease_owner_id = NULL, lease_expires_at = NULL, last_reconciled_at = ?,
+           error = CASE WHEN attempt_count >= max_attempts THEN 'lease_expired_max_attempts' ELSE 'lease_expired' END,
+           updated_at = ?
+         WHERE id = ? AND lease_owner_id = ? AND lease_generation = ? AND status IN ('claimed', 'running')`,
+      )
+      .run(now, now, id, ownerId, generation);
     return findManagerActionById(this, id);
   },
 

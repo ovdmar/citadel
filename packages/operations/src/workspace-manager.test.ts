@@ -185,6 +185,33 @@ describe("workspace manager operations", () => {
     ).toHaveLength(1);
   });
 
+  it("reclaims expired manager action leases without duplicating the side effect claim", () => {
+    const { store, service } = setup();
+    service.startWorkspaceManager({ workspaceId: "ws_manager" });
+    const first = service.runWorkspaceManagerTick({
+      workspaceId: "ws_manager",
+      leaseOwnerId: "worker-a",
+      leaseSeconds: -1,
+    });
+    expect(first).toMatchObject({
+      ok: true,
+      actions: [expect.objectContaining({ actionName: "run_review_pr", leaseOwnerId: "worker-a" })],
+    });
+
+    const second = service.runWorkspaceManagerTick({
+      workspaceId: "ws_manager",
+      leaseOwnerId: "worker-b",
+      leaseSeconds: 60,
+    });
+    expect(second).toMatchObject({
+      ok: true,
+      actions: [expect.objectContaining({ actionName: "run_review_pr", leaseOwnerId: "worker-b" })],
+    });
+    expect(
+      store.listManagerActions("ws_manager").filter((action) => action.actionName === "run_review_pr"),
+    ).toMatchObject([{ leaseOwnerId: "worker-b", leaseGeneration: 2, attemptCount: 2 }]);
+  });
+
   it("authorizes review artifacts from linked review sessions and rejects mismatches", () => {
     const { store, service } = setup();
     service.startWorkspaceManager({ workspaceId: "ws_manager" });

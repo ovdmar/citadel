@@ -148,7 +148,9 @@ export function runWorkspaceManagerTick(
   const expired = deps.store.reconcileManagerActions(now);
   const expiredForWorkspace = expired.filter((entry) => entry.workspaceId === workspace.id);
   for (const action of expiredForWorkspace) {
-    deps.store.markManagerActionSuperseded(action.id, "lease_expired");
+    if (action.leaseOwnerId) {
+      deps.store.reconcileExpiredManagerAction(action.id, action.leaseOwnerId, action.leaseGeneration, now);
+    }
   }
 
   const boundCheckouts = activePlan ? bindExistingDeliveryUnitCheckouts(deps, workspace, activePlan, deliveryUnits) : 0;

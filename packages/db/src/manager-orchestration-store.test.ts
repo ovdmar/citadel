@@ -207,8 +207,28 @@ describe("manager orchestration store methods", () => {
     });
     expect(renewed).toMatchObject({ leaseOwnerId: "owner-b", leaseGeneration: 2, attemptCount: 1 });
     expect(store.completeManagerAction("act_1", "owner-a", 1, { status: "succeeded" })).toBeNull();
+    expect(store.reconcileExpiredManagerAction("act_1", "owner-b", 2, "2026-06-01T00:11:00.000Z")).toMatchObject({
+      status: "queued",
+      leaseOwnerId: null,
+      leaseGeneration: 2,
+      attemptCount: 1,
+      error: "lease_expired",
+    });
+    expect(store.completeManagerAction("act_1", "owner-b", 2, { status: "succeeded" })).toBeNull();
+    const reclaimed = store.claimManagerAction({
+      ...action,
+      id: "act_reclaim",
+      leaseOwnerId: "owner-c",
+      leaseGeneration: 1,
+      leaseExpiresAt: "2026-06-01T00:20:00.000Z",
+      attemptCount: 1,
+      claimedAt: "2026-06-01T00:11:00.000Z",
+      updatedAt: "2026-06-01T00:11:00.000Z",
+    });
+    expect(reclaimed).toMatchObject({ id: "act_1", leaseOwnerId: "owner-c", leaseGeneration: 3, attemptCount: 2 });
+    expect(store.completeManagerAction("act_1", "owner-b", 2, { status: "succeeded" })).toBeNull();
     expect(
-      store.completeManagerAction("act_1", "owner-b", 2, { status: "succeeded", sessionId: "sess_1" }),
+      store.completeManagerAction("act_1", "owner-c", 3, { status: "succeeded", sessionId: "sess_1" }),
     ).toMatchObject({ status: "succeeded", leaseOwnerId: null, sessionId: "sess_1" });
   });
 
