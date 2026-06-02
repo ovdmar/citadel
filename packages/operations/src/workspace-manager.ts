@@ -1,21 +1,29 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import type {
   ActivityEvent,
+  AgentSession,
   CheckoutContextInput,
   CheckoutGateStatus,
+  CheckoutPrFact,
   IssueBinding,
+  LocalNotificationEvent,
+  ManagerActionLedgerEntry,
   ManagerEvent,
   MarkCheckoutReadyForReviewInput,
+  ProviderIssueFact,
   RegisterCheckoutReviewArtifactInput,
   ReviewArtifact,
   UpdateTicketStatusInput,
   Workspace,
   WorkspaceManager,
+  WorkspacePlanDeliveryUnit,
   WorkspacePlanVersion,
   WorktreeCheckout,
 } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
+import { type ManagerDecision, evaluateManagerDecisions } from "./manager-decision.js";
 import { resolveExecutionTargetForCwd } from "./workspace-layout.js";
 
 export type WorkspaceManagerDeps = {
@@ -62,6 +70,20 @@ export type RegisterCheckoutReviewArtifactResult =
   | { ok: true; artifact: ReviewArtifact; gate: CheckoutGateSnapshot }
   | { ok: false; error: CheckoutResolveError | "active_plan_required" | "pr_required" | "pr_head_sha_required" };
 
+export type WorkspaceManagerTickResult =
+  | {
+      ok: true;
+      workspace: Workspace;
+      manager: WorkspaceManager;
+      decisions: ManagerDecision[];
+      actions: ManagerActionLedgerEntry[];
+      boundCheckouts: number;
+      providerFacts: { issues: number; prs: number };
+      notifications: number;
+      supersededActions: number;
+    }
+  | { ok: false; error: "workspace_not_found" | "structured_workspace_required" | "manager_not_found" };
+
 const PROVIDER_FACT_FRESH_MS = 15 * 60 * 1000;
 
 export function startWorkspaceManager(
@@ -100,6 +122,69 @@ export function resumeWorkspaceManager(
   input: { workspaceId: string },
 ): WorkspaceManagerControlResult {
   return setManagerPause(deps, input.workspaceId, "running");
+}
+
+export function runWorkspaceManagerTick(
+  deps: WorkspaceManagerDeps,
+  input: { workspaceId: string; leaseOwnerId?: string; leaseSeconds?: number },
+): WorkspaceManagerTickResult {
+  const workspace = deps.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+  if (!workspace) return { ok: false, error: "workspace_not_found" as const };
+  if (workspace.mode !== "structured") return { ok: false, error: "structured_workspace_required" as const };
+  const manager = deps.store.getWorkspaceManager(workspace.id);
+  if (!manager) return { ok: false, error: "manager_not_found" as const };
+  const now = nowIso();
+  const activePlan = deps.store.findActiveWorkspacePlan(workspace.id);
+  const deliveryUnits = activePlan ? deps.store.listWorkspacePlanDeliveryUnits(activePlan.id) : [];
+  const expired = deps.store.reconcileManagerActions(now);
+  const expiredForWorkspace = expired.filter((entry) => entry.workspaceId === workspace.id);
+  for (const action of expiredForWorkspace) {
+    deps.store.markManagerActionSuperseded(action.id, "lease_expired");
+  }
+
+  const boundCheckouts = activePlan ? bindExistingDeliveryUnitCheckouts(deps, workspace, activePlan, deliveryUnits) : 0;
+  const providerFacts = syncLocalProviderFacts(deps, workspace, deliveryUnits, now);
+  const checkouts = deps.store.listWorkspaceCheckouts(workspace.id);
+  const gates = checkouts.flatMap((checkout) => {
+    const gate = getCheckoutGateStatus(deps, { checkoutId: checkout.id });
+    return gate.ok ? [{ checkoutId: checkout.id, status: gate.status, reasons: gate.reasons }] : [];
+  });
+  const decisions = evaluateManagerDecisions({
+    workspaceId: workspace.id,
+    manager,
+    activePlan,
+    deliveryUnits,
+    checkouts,
+    sessions: deps.store
+      .listWorkspaceSessions()
+      .filter((session): session is AgentSession => session.workspaceId === workspace.id && session.kind === "agent"),
+    gates,
+  });
+  const actions: ManagerActionLedgerEntry[] = [];
+  let notifications = 0;
+  for (const decision of decisions) {
+    const action = deps.store.claimManagerAction(actionFromDecision(decision, workspace.id, manager.id, now, input));
+    actions.push(action);
+    if (
+      decision.actionName === "notify_human_input_needed" ||
+      decision.actionName === "notify_ready_for_human_review"
+    ) {
+      deps.store.upsertLocalNotificationEvent(notificationFromDecision(decision, workspace.id, action.id, now));
+      notifications += 1;
+    }
+    recordManagerDecisionEvent(deps, workspace, manager, decision, action, now);
+  }
+  return {
+    ok: true,
+    workspace,
+    manager,
+    decisions,
+    actions,
+    boundCheckouts,
+    providerFacts,
+    notifications,
+    supersededActions: expiredForWorkspace.length,
+  };
 }
 
 export function getCheckoutGateStatus(
@@ -296,6 +381,260 @@ export function updateTicketStatus(deps: WorkspaceManagerDeps, input: UpdateTick
     issue,
     checkout: updated,
   };
+}
+
+function bindExistingDeliveryUnitCheckouts(
+  deps: WorkspaceManagerDeps,
+  workspace: Workspace,
+  plan: WorkspacePlanVersion,
+  deliveryUnits: WorkspacePlanDeliveryUnit[],
+): number {
+  let bound = 0;
+  for (const unit of deliveryUnits) {
+    const checkouts = deps.store.listWorkspaceCheckouts(workspace.id);
+    if (
+      checkouts.some((checkout) => checkout.deliveryPlanVersionId === plan.id && checkout.deliveryUnitKey === unit.key)
+    ) {
+      continue;
+    }
+    const matches = checkouts.filter(
+      (checkout) =>
+        !checkout.deliveryUnitKey &&
+        checkout.name === unit.checkoutName &&
+        Boolean(unit.childIssue) &&
+        Boolean(checkout.issue) &&
+        issueMatches(checkout.issue, unit.childIssue),
+    );
+    if (matches.length === 1 && matches[0]) {
+      deps.store.updateWorkspaceCheckoutDeliveryUnit(matches[0].id, {
+        deliveryPlanVersionId: plan.id,
+        deliveryUnitKey: unit.key,
+      });
+      bound += 1;
+    }
+  }
+  return bound;
+}
+
+function syncLocalProviderFacts(
+  deps: WorkspaceManagerDeps,
+  workspace: Workspace,
+  deliveryUnits: WorkspacePlanDeliveryUnit[],
+  timestamp: string,
+): { issues: number; prs: number } {
+  let issues = 0;
+  let prs = 0;
+  if (workspace.parentIssue) {
+    deps.store.upsertProviderIssueFact(issueFactFromBinding(workspace, null, null, workspace.parentIssue, timestamp));
+    issues += 1;
+  }
+  for (const unit of deliveryUnits) {
+    if (unit.childIssue) {
+      deps.store.upsertProviderIssueFact(issueFactFromBinding(workspace, null, unit.key, unit.childIssue, timestamp));
+      issues += 1;
+    }
+  }
+  for (const checkout of deps.store.listWorkspaceCheckouts(workspace.id)) {
+    if (checkout.issue) {
+      deps.store.upsertProviderIssueFact(
+        issueFactFromBinding(workspace, checkout, checkout.deliveryUnitKey, checkout.issue, timestamp),
+      );
+      issues += 1;
+    }
+    if (checkout.intendedPr) {
+      deps.store.upsertCheckoutPrFact(prFactFromBinding(workspace, checkout, timestamp));
+      prs += 1;
+    }
+  }
+  return { issues, prs };
+}
+
+function actionFromDecision(
+  decision: ManagerDecision,
+  workspaceId: string,
+  managerId: string,
+  timestamp: string,
+  input: { leaseOwnerId?: string; leaseSeconds?: number },
+): ManagerActionLedgerEntry {
+  const leaseOwnerId = input.leaseOwnerId ?? null;
+  const leaseExpiresAt =
+    leaseOwnerId && input.leaseSeconds
+      ? new Date(Date.parse(timestamp) + input.leaseSeconds * 1000).toISOString()
+      : null;
+  return {
+    id: stableId("act", decision.idempotencyKey),
+    workspaceId,
+    checkoutId: decision.checkoutId,
+    managerId,
+    actionName: decision.actionName,
+    status: leaseOwnerId ? "claimed" : "queued",
+    scopeKey: decision.scopeKey,
+    actionKey: decision.actionKey,
+    factKey: decision.factKey,
+    idempotencyKey: decision.idempotencyKey,
+    leaseOwnerId,
+    leaseGeneration: leaseOwnerId ? 1 : 0,
+    leaseExpiresAt,
+    attemptCount: leaseOwnerId ? 1 : 0,
+    maxAttempts: 3,
+    operationId: null,
+    sessionId: null,
+    artifactId: null,
+    prHeadSha: decision.prHeadSha,
+    planVersionId: decision.planVersionId,
+    claimedAt: leaseOwnerId ? timestamp : null,
+    completedAt: null,
+    lastReconciledAt: null,
+    error: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function notificationFromDecision(
+  decision: ManagerDecision,
+  workspaceId: string,
+  managerActionId: string,
+  timestamp: string,
+): LocalNotificationEvent {
+  const type =
+    decision.actionName === "notify_ready_for_human_review" ? "ready_for_human_review" : "human_input_needed";
+  return {
+    id: stableId("note", decision.idempotencyKey),
+    workspaceId,
+    checkoutId: decision.checkoutId,
+    type,
+    status: "active",
+    title: decision.title,
+    message: decision.message,
+    dedupeKey: decision.idempotencyKey,
+    triggeringFactFingerprint: decision.factKey ?? decision.idempotencyKey,
+    managerActionId,
+    resolvedAt: null,
+    rearmedAt: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+function recordManagerDecisionEvent(
+  deps: WorkspaceManagerDeps,
+  workspace: Workspace,
+  manager: WorkspaceManager,
+  decision: ManagerDecision,
+  action: ManagerActionLedgerEntry,
+  timestamp: string,
+) {
+  if (deps.store.listManagerEvents(workspace.id).some((event) => event.idempotencyKey === decision.idempotencyKey))
+    return;
+  deps.store.insertManagerEvent({
+    id: stableId("mevt", decision.idempotencyKey),
+    workspaceId: workspace.id,
+    managerId: manager.id,
+    type: "manager_decision",
+    scopeKey: decision.scopeKey,
+    actionKey: decision.actionKey,
+    idempotencyKey: decision.idempotencyKey,
+    status: managerEventStatus(action.status),
+    message: decision.message,
+    createdAt: timestamp,
+  });
+}
+
+function issueFactFromBinding(
+  workspace: Workspace,
+  checkout: WorktreeCheckout | null,
+  deliveryUnitKey: string | null | undefined,
+  issue: IssueBinding,
+  timestamp: string,
+): ProviderIssueFact {
+  const sourceBindingType = checkout
+    ? "checkout_child_issue"
+    : deliveryUnitKey
+      ? "plan_delivery_unit"
+      : "workspace_parent_issue";
+  const sourceBindingId = checkout?.id ?? deliveryUnitKey ?? workspace.id;
+  return {
+    id: stableId(
+      "pif",
+      workspace.id,
+      checkout?.id ?? "workspace",
+      deliveryUnitKey ?? "no_unit",
+      issue.provider,
+      issue.key,
+    ),
+    workspaceId: workspace.id,
+    checkoutId: checkout?.id ?? null,
+    deliveryUnitKey: deliveryUnitKey ?? null,
+    identity: {
+      providerType: issue.provider,
+      providerInstanceId: issue.provider,
+      accountId: null,
+      hostUrl: null,
+      externalUrl: issue.url,
+      workspaceBindingId: workspace.id,
+      sourceBindingType,
+      sourceBindingId,
+    },
+    issueId: null,
+    issueKey: issue.key,
+    title: issue.title ?? null,
+    status: issue.status ?? null,
+    acceptanceSnapshot: null,
+    fetchedAt: issue.fetchedAt ?? timestamp,
+    staleAt: null,
+    degradedReason: null,
+    cooldownUntil: null,
+  };
+}
+
+function prFactFromBinding(workspace: Workspace, checkout: WorktreeCheckout, timestamp: string): CheckoutPrFact {
+  const pr = checkout.intendedPr;
+  if (!pr) throw new Error("pr_required");
+  return {
+    id: stableId("cpf", workspace.id, checkout.id, pr.provider, String(pr.number ?? pr.url ?? "pr")),
+    workspaceId: workspace.id,
+    checkoutId: checkout.id,
+    identity: {
+      providerType: pr.provider,
+      providerInstanceId: pr.provider,
+      accountId: null,
+      hostUrl: null,
+      externalUrl: pr.url,
+      workspaceBindingId: workspace.id,
+      sourceBindingType: "checkout_pr",
+      sourceBindingId: checkout.id,
+      repositoryId: checkout.repoId,
+      providerRepositoryKey: null,
+    },
+    prId: null,
+    prNumber: pr.number ?? null,
+    prUrl: pr.url ?? null,
+    headSha: pr.headSha ?? null,
+    baseRef: pr.baseRef ?? null,
+    mergeStateStatus: pr.mergeStateStatus ?? null,
+    hasConflicts: pr.hasConflicts ?? null,
+    fetchedAt: pr.fetchedAt ?? timestamp,
+    staleAt: null,
+    degradedReason: null,
+    cooldownUntil: null,
+  };
+}
+
+function issueMatches(left: IssueBinding | null | undefined, right: IssueBinding | null | undefined): boolean {
+  return Boolean(left && right && left.provider === right.provider && left.key === right.key);
+}
+
+function stableId(prefix: string, ...parts: string[]): string {
+  return `${prefix}_${createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 24)}`;
+}
+
+function managerEventStatus(status: ManagerActionLedgerEntry["status"]): ManagerEvent["status"] {
+  if (status === "queued") return "queued";
+  if (status === "succeeded") return "succeeded";
+  if (status === "failed" || status === "blocked") return "failed";
+  if (status === "superseded" || status === "abandoned") return "skipped";
+  return "running";
 }
 
 function isFreshIso(value: string): boolean {

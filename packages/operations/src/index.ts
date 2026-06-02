@@ -46,6 +46,7 @@ export type {
   MarkCheckoutReadyForReviewResult,
   RegisterCheckoutReviewArtifactResult,
   WorkspaceManagerControlResult,
+  WorkspaceManagerTickResult,
 } from "./workspace-manager.js";
 export type { CitadelContextResult, RegisterWorkspacePlanResult, WorkspacePlanSnapshot } from "./workspace-plans.js";
 export type {
@@ -159,6 +160,9 @@ export class OperationService {
 
   resumeWorkspaceManager = (input: WorkspaceManagerControlInput) =>
     workspaceManager.resumeWorkspaceManager(this.managerDeps(), input);
+
+  runWorkspaceManagerTick = (input: { workspaceId: string; leaseOwnerId?: string; leaseSeconds?: number }) =>
+    workspaceManager.runWorkspaceManagerTick(this.managerDeps(), input);
 
   getCheckoutGateStatus = (input: CheckoutContextInput) =>
     workspaceManager.getCheckoutGateStatus(this.managerDeps(), input);

@@ -155,6 +155,36 @@ describe("workspace manager operations", () => {
     expect(store.listActivity().map((event) => event.type)).toContain("workspace.manager.paused");
   });
 
+  it("binds parsed delivery units, syncs provider facts, and claims manager actions idempotently", () => {
+    const { store, service } = setup();
+    service.startWorkspaceManager({ workspaceId: "ws_manager" });
+    const first = service.runWorkspaceManagerTick({ workspaceId: "ws_manager" });
+
+    expect(first).toMatchObject({
+      ok: true,
+      boundCheckouts: 1,
+      providerFacts: { issues: 3, prs: 1 },
+      actions: [expect.objectContaining({ actionName: "run_review_pr" })],
+    });
+    expect(store.findWorkspaceCheckout("co_api")).toMatchObject({
+      deliveryUnitKey: "api",
+      deliveryPlanVersionId: expect.any(String),
+    });
+    expect(
+      store
+        .listProviderIssueFacts("ws_manager")
+        .map((fact) => fact.issueKey)
+        .sort(),
+    ).toEqual(["CIT-1", "CIT-2", "CIT-2"]);
+    expect(store.listCheckoutPrFacts("co_api")).toMatchObject([{ prNumber: 42, headSha: "abc123" }]);
+
+    const second = service.runWorkspaceManagerTick({ workspaceId: "ws_manager" });
+    expect(second).toMatchObject({ ok: true, boundCheckouts: 0 });
+    expect(
+      store.listManagerActions("ws_manager").filter((action) => action.actionName === "run_review_pr"),
+    ).toHaveLength(1);
+  });
+
   it("evaluates PR review gates and records idempotent ready notifications", () => {
     const { store, service } = setup();
     service.startWorkspaceManager({ workspaceId: "ws_manager" });

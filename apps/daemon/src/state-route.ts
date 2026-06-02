@@ -36,6 +36,8 @@ export function registerStateRoute(input: {
       const workspaceManagers = workspaces
         .map((workspace) => store.getWorkspaceManager(workspace.id))
         .filter((manager) => manager !== null);
+      const managerActions = workspaces.flatMap((workspace) => store.listManagerActions(workspace.id));
+      const localNotifications = workspaces.flatMap((workspace) => store.listLocalNotificationEvents(workspace.id));
       const planDeviations = workspaces.flatMap((workspace) => store.listPlanDeviationReports(workspace.id));
       const sessions = store.listWorkspaceSessions();
       const providerHealth = await cachedProviderHealth();
@@ -47,6 +49,8 @@ export function registerStateRoute(input: {
         workspacePlanDeliveryUnits,
         workspacePlanDependencyEdges,
         workspaceManagers,
+        managerActions,
+        localNotifications,
         planDeviations,
         sessions,
         operations: store.listOperations(),

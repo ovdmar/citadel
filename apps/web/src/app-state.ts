@@ -1,6 +1,8 @@
 import type {
   ActivityEvent,
   AgentRuntime,
+  LocalNotificationEvent,
+  ManagerActionLedgerEntry,
   Namespace,
   Operation,
   PlanDeviationReport,
@@ -45,6 +47,8 @@ export type StateResponse = {
   workspacePlanDeliveryUnits: WorkspacePlanDeliveryUnit[];
   workspacePlanDependencyEdges: WorkspacePlanDependencyEdge[];
   workspaceManagers: WorkspaceManager[];
+  managerActions: ManagerActionLedgerEntry[];
+  localNotifications: LocalNotificationEvent[];
   planDeviations: PlanDeviationReport[];
   sessions: WorkspaceSession[];
   operations: Operation[];
@@ -136,6 +140,8 @@ export function applyOptimisticRemoveFilter(
       (edge) => !edge.workspaceId || !ids.has(edge.workspaceId),
     ),
     workspaceManagers: state.workspaceManagers.filter((manager) => !ids.has(manager.workspaceId)),
+    managerActions: state.managerActions.filter((action) => !ids.has(action.workspaceId)),
+    localNotifications: state.localNotifications.filter((event) => !ids.has(event.workspaceId)),
     planDeviations: state.planDeviations.filter((report) => !ids.has(report.workspaceId)),
   };
 }
