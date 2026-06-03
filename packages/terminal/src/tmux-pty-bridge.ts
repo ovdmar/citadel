@@ -3,9 +3,9 @@ import type http from "node:http";
 import type { Duplex } from "node:stream";
 import { type IPty, spawn } from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
-import { ensureTmuxExtendedKeys, tmuxPrefix } from "./tmux.js";
+import { ensureTmuxExtendedKeys, setTmuxMouseForSession, tmuxPrefix } from "./tmux.js";
 
-export type TerminalPtyTarget = { sessionName: string; socketName?: string | null };
+export type TerminalPtyTarget = { sessionName: string; socketName?: string | null; enableTmuxMouse?: boolean };
 type ResolveTerminalSession = (
   id: string,
 ) => TerminalPtyTarget | string | null | Promise<TerminalPtyTarget | string | null>;
@@ -92,7 +92,9 @@ export function attachTerminalWebSocket(
         wss.handleUpgrade(request, socket, head, (ws) => {
           let pty: IPty;
           try {
-            pty = attachTmuxPty(tmuxTarget.sessionName, DEFAULT_COLS, DEFAULT_ROWS, tmuxTarget.socketName);
+            pty = attachTmuxPty(tmuxTarget.sessionName, DEFAULT_COLS, DEFAULT_ROWS, tmuxTarget.socketName, {
+              enableTmuxMouse: tmuxTarget.enableTmuxMouse === true,
+            });
           } catch (error) {
             sendControl(ws, {
               type: "error",
@@ -210,8 +212,10 @@ export function attachTmuxPty(
   cols = DEFAULT_COLS,
   rows = DEFAULT_ROWS,
   socketName?: string | null,
+  options: { enableTmuxMouse?: boolean } = {},
 ): IPty {
   ensureTmuxExtendedKeys(socketName);
+  if (options.enableTmuxMouse) setTmuxMouseForSession(sessionName, true, socketName);
   const size = clampSize(cols, rows);
   return spawn("tmux", [...tmuxPrefix(socketName), "attach-session", "-t", sessionName], {
     name: "xterm-256color",

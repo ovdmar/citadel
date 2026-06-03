@@ -70,6 +70,7 @@ import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-w
 import { registerWorkspacesPrStateRoute } from "./workspaces-pr-state-route.js";
 
 type AnyServer = http.Server | https.Server;
+const TMUX_MOUSE_RUNTIMES = new Set(["claude-code"]);
 
 export type DaemonApp = {
   app: express.Express;
@@ -536,13 +537,18 @@ export async function createDaemonApp(input: {
     async (sessionId) => {
       const session = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
       if (!session) return null;
+      const enableTmuxMouse = session.kind === "agent" && TMUX_MOUSE_RUNTIMES.has(session.runtimeId);
       if (session.tmuxSessionName && tmuxSessionExists(session.tmuxSessionName, session.tmuxSocketName ?? null)) {
-        return { sessionName: session.tmuxSessionName, socketName: session.tmuxSocketName ?? null };
+        return {
+          sessionName: session.tmuxSessionName,
+          socketName: session.tmuxSocketName ?? null,
+          enableTmuxMouse,
+        };
       }
       const respawn = await respawnTmuxForWebSocket(session);
       if (!respawn) return null;
       emit("terminal.ready", { sessionId: session.id, tmuxSession: respawn.tmuxSessionName, renderer: "xterm-pty" });
-      return { sessionName: respawn.tmuxSessionName, socketName: respawn.tmuxSocketName ?? null };
+      return { sessionName: respawn.tmuxSessionName, socketName: respawn.tmuxSocketName ?? null, enableTmuxMouse };
     },
     {
       authorize: (request) => {
