@@ -43,8 +43,6 @@ export function registerRepo(
     updatedAt: now,
     archivedAt: null,
   };
-  deps.store.insertRepo(repo);
-  deps.activity("repo.registered", "user", `Registered ${repo.name}`, repo.id, null, null);
   const rootWorkspace: Workspace = {
     id: createId("ws"),
     repoId: repo.id,
@@ -68,7 +66,10 @@ export function registerRepo(
     updatedAt: now,
     archivedAt: null,
   };
+  deps.store.exec("BEGIN IMMEDIATE");
   try {
+    deps.store.insertRepo(repo);
+    deps.activity("repo.registered", "user", `Registered ${repo.name}`, repo.id, null, null);
     deps.store.insertWorkspace(rootWorkspace);
     deps.activity(
       "workspace.root.created",
@@ -78,8 +79,10 @@ export function registerRepo(
       rootWorkspace.id,
       null,
     );
-  } catch {
-    // root already present (re-register or migration backfill)
+    deps.store.exec("COMMIT");
+  } catch (error) {
+    deps.store.exec("ROLLBACK");
+    throw error;
   }
   return repo;
 }

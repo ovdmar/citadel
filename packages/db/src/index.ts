@@ -54,6 +54,7 @@ function loadDatabaseSync(): DatabaseSyncCtor {
 export class SqliteStore {
   readonly databasePath: string;
   private db: SqliteDatabase | null = null;
+  private columns = new Map<string, Set<string>>();
 
   constructor(databasePath: string) {
     this.databasePath = databasePath;
@@ -80,6 +81,7 @@ export class SqliteStore {
         // best-effort
       }
       this.db = null;
+      this.columns.clear();
     }
   }
 
@@ -89,6 +91,7 @@ export class SqliteStore {
 
   exec(sql: string) {
     this.database.exec(sql);
+    this.columns.clear();
   }
 
   query<T>(sql: string): T[] {
@@ -176,45 +179,71 @@ export class SqliteStore {
   }
 
   insertWorkspace(workspace: Workspace) {
+    const columns = [
+      "id",
+      "repo_id",
+      "name",
+      "path",
+      "branch",
+      "base_branch",
+      "source",
+      "kind",
+      "pr_url",
+      "issue_key",
+      "issue_title",
+      "issue_url",
+      "slack_thread_url",
+      "section",
+      "pinned",
+      "lifecycle",
+      "dirty",
+      "namespace_id",
+      "created_at",
+      "updated_at",
+      "archived_at",
+    ];
+    const values: unknown[] = [
+      workspace.id,
+      workspace.repoId ?? null,
+      workspace.name,
+      workspace.path,
+      workspace.branch,
+      workspace.baseBranch,
+      workspace.source,
+      workspace.kind ?? "worktree",
+      workspace.prUrl ?? null,
+      workspace.issueKey ?? null,
+      workspace.issueTitle ?? null,
+      workspace.issueUrl ?? null,
+      workspace.slackThreadUrl ?? null,
+      workspace.section,
+      workspace.pinned ? 1 : 0,
+      workspace.lifecycle,
+      workspace.dirty ? 1 : 0,
+      workspace.namespaceId ?? null,
+      workspace.createdAt,
+      workspace.updatedAt,
+      workspace.archivedAt ?? null,
+    ];
+    const optionalColumns: Array<[string, unknown]> = [
+      ["root_path", workspace.rootPath ?? workspace.path],
+      ["mode", workspace.mode ?? "freestyle"],
+      ["lifecycle_phase", workspace.lifecyclePhase ?? "implementation"],
+      ["parent_issue_provider", workspace.parentIssue?.provider ?? (workspace.issueKey ? "jira" : null)],
+      ["parent_issue_key", workspace.parentIssue?.key ?? workspace.issueKey ?? null],
+      ["parent_issue_url", workspace.parentIssue?.url ?? workspace.issueUrl ?? null],
+      ["parent_issue_title", workspace.parentIssue?.title ?? workspace.issueTitle ?? null],
+      ["parent_issue_status", workspace.parentIssue?.status ?? null],
+    ];
+    for (const [column, value] of optionalColumns) {
+      if (this.hasColumn("workspaces", column)) {
+        columns.push(column);
+        values.push(value);
+      }
+    }
     this.database
-      .prepare(
-        `INSERT INTO workspaces (id, repo_id, name, path, root_path, mode, branch, base_branch, source, kind,
-          lifecycle_phase, parent_issue_provider, parent_issue_key, parent_issue_url, parent_issue_title,
-          parent_issue_status, pr_url, issue_key, issue_title, issue_url, slack_thread_url, section, pinned,
-          lifecycle, dirty, namespace_id, created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        workspace.id,
-        workspace.repoId ?? null,
-        workspace.name,
-        workspace.path,
-        workspace.rootPath ?? workspace.path,
-        workspace.mode ?? "freestyle",
-        workspace.branch,
-        workspace.baseBranch,
-        workspace.source,
-        workspace.kind ?? "worktree",
-        workspace.lifecyclePhase ?? "implementation",
-        workspace.parentIssue?.provider ?? (workspace.issueKey ? "jira" : null),
-        workspace.parentIssue?.key ?? workspace.issueKey ?? null,
-        workspace.parentIssue?.url ?? workspace.issueUrl ?? null,
-        workspace.parentIssue?.title ?? workspace.issueTitle ?? null,
-        workspace.parentIssue?.status ?? null,
-        workspace.prUrl ?? null,
-        workspace.issueKey ?? null,
-        workspace.issueTitle ?? null,
-        workspace.issueUrl ?? null,
-        workspace.slackThreadUrl ?? null,
-        workspace.section,
-        workspace.pinned ? 1 : 0,
-        workspace.lifecycle,
-        workspace.dirty ? 1 : 0,
-        workspace.namespaceId ?? null,
-        workspace.createdAt,
-        workspace.updatedAt,
-        workspace.archivedAt ?? null,
-      );
+      .prepare(`INSERT INTO workspaces (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`)
+      .run(...values);
   }
 
   setWorkspaceNamespace = (id: string, n: string | null) => namespaces.setWorkspaceNamespace(this.database, id, n);
@@ -691,7 +720,18 @@ export class SqliteStore {
     const cols = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (!cols.some((entry) => entry.name === column)) {
       this.database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+      this.columns.delete(table);
     }
+  }
+
+  private hasColumn(table: string, column: string) {
+    let columns = this.columns.get(table);
+    if (!columns) {
+      const rows = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+      columns = new Set(rows.map((row) => row.name));
+      this.columns.set(table, columns);
+    }
+    return columns.has(column);
   }
 }
 import { scheduledAgentStoreMethods } from "./scheduled-agent-store.js";
