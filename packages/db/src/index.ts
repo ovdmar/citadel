@@ -53,6 +53,7 @@ function loadDatabaseSync(): DatabaseSyncCtor {
 export class SqliteStore {
   readonly databasePath: string;
   private db: SqliteDatabase | null = null;
+  private columns = new Map<string, Set<string>>();
 
   constructor(databasePath: string) {
     this.databasePath = databasePath;
@@ -79,6 +80,7 @@ export class SqliteStore {
         // best-effort
       }
       this.db = null;
+      this.columns.clear();
     }
   }
 
@@ -88,6 +90,7 @@ export class SqliteStore {
 
   exec(sql: string) {
     this.database.exec(sql);
+    this.columns.clear();
   }
 
   query<T>(sql: string): T[] {
@@ -175,35 +178,62 @@ export class SqliteStore {
   }
 
   insertWorkspace(workspace: Workspace) {
+    const columns = [
+      "id",
+      "repo_id",
+      "name",
+      "path",
+      "branch",
+      "base_branch",
+      "source",
+      "kind",
+      "pr_url",
+      "issue_key",
+      "issue_title",
+      "issue_url",
+      "slack_thread_url",
+      "section",
+      "pinned",
+      "lifecycle",
+      "dirty",
+      "namespace_id",
+      "created_at",
+      "updated_at",
+      "archived_at",
+    ];
+    const values: unknown[] = [
+      workspace.id,
+      workspace.repoId,
+      workspace.name,
+      workspace.path,
+      workspace.branch,
+      workspace.baseBranch,
+      workspace.source,
+      workspace.kind ?? "worktree",
+      workspace.prUrl ?? null,
+      workspace.issueKey ?? null,
+      workspace.issueTitle ?? null,
+      workspace.issueUrl ?? null,
+      workspace.slackThreadUrl ?? null,
+      workspace.section,
+      workspace.pinned ? 1 : 0,
+      workspace.lifecycle,
+      workspace.dirty ? 1 : 0,
+      workspace.namespaceId ?? null,
+      workspace.createdAt,
+      workspace.updatedAt,
+      workspace.archivedAt ?? null,
+    ];
+    // Some installed DBs briefly carried workspaces.root_path; populate it
+    // when present so those schemas keep accepting new workspace rows.
+    if (this.hasColumn("workspaces", "root_path")) {
+      const pathIndex = columns.indexOf("path") + 1;
+      columns.splice(pathIndex, 0, "root_path");
+      values.splice(pathIndex, 0, workspace.path);
+    }
     this.database
-      .prepare(
-        `INSERT INTO workspaces (id, repo_id, name, path, branch, base_branch, source, kind, pr_url,
-          issue_key, issue_title, issue_url, slack_thread_url, section, pinned, lifecycle, dirty, namespace_id, created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        workspace.id,
-        workspace.repoId,
-        workspace.name,
-        workspace.path,
-        workspace.branch,
-        workspace.baseBranch,
-        workspace.source,
-        workspace.kind ?? "worktree",
-        workspace.prUrl ?? null,
-        workspace.issueKey ?? null,
-        workspace.issueTitle ?? null,
-        workspace.issueUrl ?? null,
-        workspace.slackThreadUrl ?? null,
-        workspace.section,
-        workspace.pinned ? 1 : 0,
-        workspace.lifecycle,
-        workspace.dirty ? 1 : 0,
-        workspace.namespaceId ?? null,
-        workspace.createdAt,
-        workspace.updatedAt,
-        workspace.archivedAt ?? null,
-      );
+      .prepare(`INSERT INTO workspaces (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`)
+      .run(...values);
   }
 
   setWorkspaceNamespace = (id: string, n: string | null) => namespaces.setWorkspaceNamespace(this.database, id, n);
@@ -623,7 +653,18 @@ export class SqliteStore {
     const cols = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (!cols.some((entry) => entry.name === column)) {
       this.database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+      this.columns.delete(table);
     }
+  }
+
+  private hasColumn(table: string, column: string) {
+    let columns = this.columns.get(table);
+    if (!columns) {
+      const rows = this.database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+      columns = new Set(rows.map((row) => row.name));
+      this.columns.set(table, columns);
+    }
+    return columns.has(column);
   }
 }
 import { scheduledAgentStoreMethods } from "./scheduled-agent-store.js";
