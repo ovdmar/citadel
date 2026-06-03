@@ -4,26 +4,21 @@ import { Check, Search, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
+import { type GroupKey, type NavigatorGrouping, normalizeNavigatorGrouping } from "./navigator-groups.js";
 import { defaultAgentRuntimeId } from "./runtime-defaults.js";
 import { useToast } from "./toast.js";
 import { useOverlayPresent } from "./use-overlay-present.js";
-
-export type GroupKey = "workspace" | "repo" | "status" | "namespace" | "none";
 
 const GROUP_BY_OPTIONS: Array<{ id: GroupKey; label: string; hint: string }> = [
   { id: "workspace", label: "Workspace", hint: "workspace → worktrees" },
   { id: "repo", label: "Repository", hint: "citadel · skills · …" },
   { id: "status", label: "Status", hint: "running · review · idle" },
-  // Namespace mode nests under Repository so two workspaces named "main" in
-  // different repos don't collapse together. The nav tree builder owns that
-  // two-level shape; this menu just exposes the toggle.
-  { id: "namespace", label: "Namespace", hint: "repo → namespace" },
-  { id: "none", label: "No grouping", hint: "flat list" },
+  { id: "namespace", label: "Namespace", hint: "demo · platform · uncategorized" },
 ];
 
 type GroupByMenuProps = {
-  value: GroupKey;
-  onChange: (next: GroupKey) => void;
+  value: NavigatorGrouping;
+  onChange: (next: NavigatorGrouping) => void;
   onClose: () => void;
   // When provided, the click-outside check uses this container instead of
   // the menu's inner ref. The wrapping container in the navigator includes
@@ -58,21 +53,18 @@ export function GroupByMenu(props: GroupByMenuProps) {
     };
   }, [containerRefProp]);
   return (
-    <div ref={ref} className="cit-gb-menu" role="menu" aria-label="Group workspaces">
-      <div className="cit-gb-menu-head">Group workspaces by</div>
+    <div ref={ref} className="cit-gb-menu" role="menu" aria-label="Group worktrees">
+      <div className="cit-gb-menu-head">Group worktrees by</div>
       {GROUP_BY_OPTIONS.map((option) => (
         <button
           key={option.id}
           type="button"
-          role="menuitemradio"
-          aria-checked={props.value === option.id}
-          className={`cit-gb-opt ${props.value === option.id ? "is-active" : ""}`}
-          onClick={() => {
-            props.onChange(option.id);
-            props.onClose();
-          }}
+          role="menuitemcheckbox"
+          aria-checked={props.value.includes(option.id)}
+          className={`cit-gb-opt ${props.value.includes(option.id) ? "is-active" : ""}`}
+          onClick={() => props.onChange(nextGroupingSelection(props.value, option.id))}
         >
-          <span className="cit-gb-opt-check">{props.value === option.id ? <Check size={11} /> : null}</span>
+          <span className="cit-gb-opt-check">{props.value.includes(option.id) ? <Check size={11} /> : null}</span>
           <span className="cit-gb-opt-text">
             <span className="cit-gb-opt-label">{option.label}</span>
             <span className="cit-gb-opt-hint">{option.hint}</span>
@@ -81,6 +73,23 @@ export function GroupByMenu(props: GroupByMenuProps) {
       ))}
     </div>
   );
+}
+
+function nextGroupingSelection(current: NavigatorGrouping, option: GroupKey): NavigatorGrouping {
+  const selected = current.includes(option);
+  if (selected) {
+    const next = current.filter((key) => key !== option);
+    return normalizeNavigatorGrouping(next.length ? next : ["workspace"]);
+  }
+  if (option === "workspace") {
+    return normalizeNavigatorGrouping([...current.filter((key) => key === "namespace"), "workspace"]);
+  }
+  if (option === "namespace") {
+    return normalizeNavigatorGrouping(["namespace", "workspace"]);
+  }
+  const next = current.filter((key) => key !== "workspace");
+  next.push(option);
+  return normalizeNavigatorGrouping(next);
 }
 
 type CreateWorkspaceModalProps = {

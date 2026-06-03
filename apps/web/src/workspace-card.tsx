@@ -8,11 +8,11 @@ import type {
 } from "@citadel/contracts";
 import { type LifecycleTone, deriveWorkspaceLifecycleTone } from "@citadel/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
+import { GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
+import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { type StateResponse, useOptimisticRemove, useStateQuery } from "./app-state.js";
-import { pickReadableForeground } from "./color-contrast.js";
 import { encodeReorderMimeType, findReorderMimeType, parseReorderMimeType } from "./navigator-order.js";
 import { useToast } from "./toast.js";
 import { useOverlayPresent } from "./use-overlay-present.js";
@@ -82,6 +82,8 @@ export function WorkspaceCard(
     // `draggable={true}`) doesn't have to change in this PR. Internally
     // treated as `dropTarget: "namespace"` to preserve existing behavior.
     draggable?: boolean;
+    hideBranch?: boolean;
+    rightControl?: ReactNode;
   },
 ) {
   const { workspace, pullRequest } = props;
@@ -103,16 +105,10 @@ export function WorkspaceCard(
         : null;
 
   // Only hit the global state query when callers haven't already passed the
-  // resolved namespace / namespace list in via props.
-  const needsFallback = props.namespace === undefined && props.namespaces === undefined;
+  // namespace list in via props.
+  const needsFallback = props.namespaces === undefined;
   const fallbackState = useStateQuery({ enabled: needsFallback });
   const namespacesForPicker = props.namespaces ?? fallbackState.data?.namespaces ?? [];
-  const namespace =
-    props.namespace !== undefined
-      ? props.namespace
-      : workspace.namespaceId
-        ? (namespacesForPicker.find((entry) => entry.id === workspace.namespaceId) ?? null)
-        : null;
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(titleDisplay);
@@ -212,6 +208,7 @@ export function WorkspaceCard(
 
   const wrapClassName = [
     "workspace-card-wrap",
+    props.rightControl ? "has-right-control" : null,
     reorderIndicator === "above" ? "is-drop-above" : null,
     reorderIndicator === "below" ? "is-drop-below" : null,
   ]
@@ -292,9 +289,11 @@ export function WorkspaceCard(
               </strong>
             )}
           </span>
-          <span className="workspace-card-branch" title={workspace.branch}>
-            {workspace.branch}
-          </span>
+          {!props.hideBranch && workspace.branch ? (
+            <span className="workspace-card-branch" title={workspace.branch}>
+              {workspace.branch}
+            </span>
+          ) : null}
           {lifecycleText ? (
             <span className={`workspace-card-lifecycle ${workspace.lifecycle}`} title={lifecycleText}>
               {lifecycleText}
@@ -302,25 +301,13 @@ export function WorkspaceCard(
           ) : null}
         </span>
         <span className="workspace-card-right" aria-hidden>
-          {namespace ? (
-            <span
-              className="namespace-pill"
-              title={`Namespace: ${namespace.name}`}
-              style={
-                namespace.color
-                  ? { background: namespace.color, color: pickReadableForeground(namespace.color) }
-                  : undefined
-              }
-            >
-              <Folder size={10} /> {namespace.name}
-            </span>
-          ) : null}
           {hasDiff ? (
             <span className="workspace-card-diff" title="Lines changed in this PR">
               <span className="diff-add">+{additions ?? 0}</span>
               <span className="diff-del">-{deletions ?? 0}</span>
             </span>
           ) : null}
+          {props.rightControl ? <span className="workspace-card-right-control-spacer" /> : null}
           <span className={`approval-pill tone-${approvalTone}`} title={`Approval: ${approvalTone}`}>
             {approvalTone === "approved" ? (
               <ShieldCheck size={13} />
@@ -334,6 +321,7 @@ export function WorkspaceCard(
           </span>
         </span>
       </button>
+      {props.rightControl ? <span className="workspace-card-right-control">{props.rightControl}</span> : null}
       {workspace.kind === "root" ? null : (
         <button
           type="button"

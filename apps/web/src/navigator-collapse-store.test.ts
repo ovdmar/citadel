@@ -63,12 +63,35 @@ describe("navigator-collapse-store", () => {
   });
 
   it("readNavigatorGrouping defaults to workspace grouping", () => {
-    expect(readNavigatorGrouping()).toBe("workspace");
+    expect(readNavigatorGrouping()).toEqual(["workspace"]);
   });
 
-  it("readNavigatorGrouping accepts the workspace grouping value", () => {
+  it("readNavigatorGrouping accepts legacy single-value grouping", () => {
     window.localStorage.setItem(GROUP_STORAGE_KEY, "workspace");
-    expect(readNavigatorGrouping()).toBe("workspace");
+    expect(readNavigatorGrouping()).toEqual(["workspace"]);
+    window.localStorage.setItem(GROUP_STORAGE_KEY, "repo");
+    expect(readNavigatorGrouping()).toEqual(["repo"]);
+    window.localStorage.setItem(GROUP_STORAGE_KEY, "namespace");
+    expect(readNavigatorGrouping()).toEqual(["namespace", "workspace"]);
+  });
+
+  it("readNavigatorGrouping accepts ordered multi-field grouping", () => {
+    window.localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify(["repo", "status"]));
+    expect(readNavigatorGrouping()).toEqual(["repo", "status"]);
+  });
+
+  it("readNavigatorGrouping keeps workspace plus namespace but drops workspace before repo/status", () => {
+    window.localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify(["workspace", "namespace"]));
+    expect(readNavigatorGrouping()).toEqual(["namespace", "workspace"]);
+    window.localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify(["workspace", "repo", "status"]));
+    expect(readNavigatorGrouping()).toEqual(["repo", "status"]);
+  });
+
+  it("readNavigatorGrouping drops namespace from invalid repo/status combinations", () => {
+    window.localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify(["repo", "namespace"]));
+    expect(readNavigatorGrouping()).toEqual(["repo"]);
+    window.localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify(["status", "namespace"]));
+    expect(readNavigatorGrouping()).toEqual(["status"]);
   });
 
   it("expandGroupPath is a no-op when the path is not currently collapsed", () => {

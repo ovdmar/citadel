@@ -4,6 +4,10 @@
   padding: 0 0 2px 18px;
 }
 
+.nav-workspace-checkouts--repo-grouped {
+  padding-left: 0;
+}
+
 .nav-checkout-card {
   min-height: 34px;
   border-left: 1px solid var(--c-line-1);

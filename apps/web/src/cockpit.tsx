@@ -37,7 +37,6 @@ import { Navigator } from "./navigator.js";
 import { RestoreBanner } from "./restore-banner.js";
 import { type ShortcutMatch, matchShortcut } from "./shortcuts.js";
 import { Stage } from "./stage.js";
-import { StructuredHomeSummary } from "./structured-home-summary.js";
 import { focusActiveTerminal, isRegisteredTerminalMessageSource } from "./terminal-pane.js";
 import { parseTerminalShortcutMessage, terminalShortcutMatch } from "./terminal-shortcut-bridge.js";
 import { ThemeControls } from "./theme-controls.js";
@@ -534,9 +533,6 @@ export function Cockpit() {
           aria-hidden
         />
         <main className={`column col-center ${mobileView === "stage" ? "" : "mobile-hidden"}`} aria-label="Agent stage">
-          {activeWorkspace?.mode === "structured" && activeTargetType === "workspace_home" && data ? (
-            <StructuredHomeSummary workspace={activeWorkspace} state={data} checkouts={activeWorkspaceCheckouts} />
-          ) : null}
           {activeWorkspace ? (
             <Stage
               workspace={activeWorkspace}

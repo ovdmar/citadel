@@ -1,21 +1,42 @@
 import type { Namespace, Operation, Repo, Workspace, WorkspaceSession } from "@citadel/contracts";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { formatLabel } from "./labels.js";
-import type { GroupKey } from "./modals.js";
 
 export const SECTION_ORDER = ["blocked", "needs-review", "working", "dirty", "idle", "done"];
 
-// Subset of GroupKey that actually participates in the bucket tree. "workspace"
-// and "none" are rendered as workspace-root lists and never reach buildGroupTree.
-export type GroupableKey = Exclude<GroupKey, "workspace" | "none">;
+export type GroupKey = "workspace" | "repo" | "status" | "namespace";
+export type NavigatorGrouping = GroupKey[];
 
-// Translate the user-facing grouping mode into the level sequence buildGroupTree
-// consumes. Mirrors the inline mapping inside navigator.tsx so cockpit-side
-// callers (Ctrl+1..9 workspace nav) can derive the exact same tree.
-export function treeGroupingFor(grouping: GroupKey): GroupableKey[] {
-  if (grouping === "workspace" || grouping === "none") return [];
-  if (grouping === "namespace") return ["repo", "namespace"];
-  return [grouping];
+// Subset of GroupKey that actually participates in the bucket tree. "workspace"
+// is rendered as the workspace-root list and never reaches buildGroupTree.
+export type GroupableKey = Exclude<GroupKey, "workspace">;
+
+export function normalizeNavigatorGrouping(value: unknown): NavigatorGrouping {
+  const raw = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  const out: NavigatorGrouping = [];
+  for (const key of raw) {
+    if (key !== "workspace" && key !== "repo" && key !== "status" && key !== "namespace") continue;
+    if (!out.includes(key)) out.push(key);
+  }
+  if (!out.length) return ["workspace"];
+  if (out.includes("namespace") && (out.includes("repo") || out.includes("status"))) {
+    return out.filter((key) => key !== "workspace" && key !== "namespace");
+  }
+  if (out.includes("workspace") && (out.includes("repo") || out.includes("status"))) {
+    return out.filter((key) => key !== "workspace");
+  }
+  if (out.includes("namespace")) {
+    return [...out.filter((key) => key !== "workspace"), "workspace"];
+  }
+  return out;
+}
+
+// Translate the user-facing grouping sequence into the level sequence
+// buildGroupTree consumes. "workspace" is the leaf/root workspace card mode,
+// so combining it with namespace means "namespace groups containing workspace
+// rows"; combining it with repo/status is normalized away above.
+export function treeGroupingFor(grouping: NavigatorGrouping | GroupKey | "none"): GroupableKey[] {
+  return normalizeNavigatorGrouping(grouping).filter((key): key is GroupableKey => key !== "workspace");
 }
 
 export type WorkspaceEntry = { workspace: Workspace; sessions: WorkspaceSession[] };
