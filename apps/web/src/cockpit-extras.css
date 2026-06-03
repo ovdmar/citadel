@@ -456,55 +456,6 @@
   gap: 8px;
 }
 
-/* Toast surface (AC4 rollback path + future create-error notifications).
- * Bottom-right stack, each entry auto-dismisses after 6s. */
-.cit-toast-stack {
-  position: fixed;
-  bottom: 16px;
-  right: 16px;
-  display: grid;
-  gap: 8px;
-  z-index: 9000;
-  pointer-events: none;
-}
-
-.cit-toast {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: center;
-  min-width: 240px;
-  max-width: 360px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  color: CanvasText;
-  font-size: 13px;
-  line-height: 1.4;
-  box-shadow: 0 16px 48px rgb(var(--shadow-color) / 0.18);
-  pointer-events: auto;
-}
-
-.cit-toast-error {
-  border-color: var(--color-danger, #c64646);
-  color: var(--color-danger, #c64646);
-}
-
-.cit-toast-message {
-  word-wrap: break-word;
-}
-
-.cit-toast-dismiss {
-  background: transparent;
-  border: 0;
-  color: inherit;
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 4px 6px;
-}
-
 .drop-workspace-cancel,
 .drop-workspace-confirm {
   min-height: 32px;
