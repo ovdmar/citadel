@@ -5,7 +5,6 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
 import { type GroupKey, type NavigatorGrouping, normalizeNavigatorGrouping } from "./navigator-groups.js";
-import { defaultAgentRuntimeId } from "./runtime-defaults.js";
 import { useToast } from "./toast.js";
 import { useOverlayPresent } from "./use-overlay-present.js";
 
@@ -97,9 +96,15 @@ type CreateWorkspaceModalProps = {
   lastRepoId?: string;
   runtimes: AgentRuntime[];
   namespaces?: Namespace[];
+  grouping?: NavigatorGrouping;
+  intent?: CreateWorkspaceIntent;
   onClose: () => void;
   onCreated: (workspaceId: string) => void;
 };
+
+export type CreateWorkspaceIntent =
+  | { kind: "auto" }
+  | { kind: "attach-worktree"; workspaceId: string; workspaceName: string };
 
 type LinkedContext = {
   source: "scratch" | "issue" | "pr";
@@ -110,6 +115,7 @@ type LinkedContext = {
 };
 
 type WorkspaceLaunchMode = "pm" | "prototype" | "freestyle";
+export type CreateWorkspaceContext = "workspace-home" | "repo-worktree" | "attach-worktree";
 
 const JIRA_KEY_FROM_URL = /\/browse\/([A-Z][A-Z0-9]+-\d+)/i;
 const JIRA_KEY_BARE = /^[A-Z][A-Z0-9]+-\d+$/;
@@ -166,27 +172,50 @@ function defaultNameForSubmit(linked: LinkedContext): string {
   return "";
 }
 
+export function resolveCreateWorkspaceContext(
+  intent: CreateWorkspaceIntent | undefined,
+  grouping: NavigatorGrouping | undefined,
+): CreateWorkspaceContext {
+  if (intent?.kind === "attach-worktree") return "attach-worktree";
+  return normalizeNavigatorGrouping(grouping ?? ["workspace"]).includes("repo") ? "repo-worktree" : "workspace-home";
+}
+
+function defaultLaunchModeForContext(_context: CreateWorkspaceContext): WorkspaceLaunchMode {
+  return "freestyle";
+}
+
+function launchModesForContext(context: CreateWorkspaceContext): WorkspaceLaunchMode[] {
+  return context === "workspace-home" ? ["freestyle", "pm"] : ["freestyle", "prototype"];
+}
+
+function checkoutSource(linked: LinkedContext, branch: string): "default_branch" | "existing_branch" | "pr" {
+  if (linked.source === "pr") return "pr";
+  return branch.trim() ? "existing_branch" : "default_branch";
+}
+
 export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   useOverlayPresent();
   const toast = useToast();
+  const creationContext = resolveCreateWorkspaceContext(props.intent, props.grouping);
+  const allowedLaunchModes = useMemo(() => launchModesForContext(creationContext), [creationContext]);
   const initialRepo = props.repos.find((repo) => repo.id === props.lastRepoId)?.id ?? props.repos[0]?.id ?? "";
-  const [launchMode, setLaunchMode] = useState<WorkspaceLaunchMode>("pm");
+  const [launchMode, setLaunchMode] = useState<WorkspaceLaunchMode>(() => defaultLaunchModeForContext(creationContext));
   const [repoId, setRepoId] = useState(initialRepo);
   const [prompt, setPrompt] = useState("");
   const [linkInput, setLinkInput] = useState("");
   const [name, setName] = useState("");
   const [branch, setBranch] = useState("");
   const [namespaceId, setNamespaceId] = useState("");
+  const selectedRepo = props.repos.find((repo) => repo.id === repoId) ?? null;
+  useEffect(() => {
+    if (!allowedLaunchModes.includes(launchMode)) setLaunchMode(defaultLaunchModeForContext(creationContext));
+  }, [allowedLaunchModes, creationContext, launchMode]);
 
   const launchableRuntimes = useMemo(
     () => props.runtimes.filter((runtime) => runtime.health === "healthy"),
     [props.runtimes],
   );
-  const defaultRuntimeId = useMemo(() => defaultAgentRuntimeId(props.runtimes), [props.runtimes]);
-  const [runtimeId, setRuntimeId] = useState(defaultRuntimeId);
-  useEffect(() => {
-    if (!runtimeId && defaultRuntimeId) setRuntimeId(defaultRuntimeId);
-  }, [defaultRuntimeId, runtimeId]);
+  const [runtimeId, setRuntimeId] = useState("");
 
   const agentTemplates = useQuery({
     queryKey: ["agent-templates"],
@@ -204,7 +233,8 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   // the user never typed and the daemon won't use.
   const trimmedName = name.trim();
   const submitName = defaultNameForSubmit(linked);
-  const branchPreview = trimmedName || submitName ? defaultBranchPreview(linked, trimmedName || submitName) : "<auto>";
+  const branchBaseName = trimmedName || submitName || (creationContext === "workspace-home" ? "" : selectedRepo?.name);
+  const branchPreview = branchBaseName ? defaultBranchPreview(linked, branchBaseName) : "<auto>";
 
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {
@@ -246,7 +276,6 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
 
       const trimmed = name.trim();
       const payload: Record<string, unknown> = {
-        repoId,
         // Empty string signals "daemon should generate a funny-name". The
         // issue-linked path still sends the issue-key-lowercased default
         // for backwards-compatible branch-name derivation.
@@ -258,29 +287,70 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
       if (linked.prUrl) payload.prUrl = linked.prUrl;
       if (linked.slackThreadUrl) payload.slackThreadUrl = linked.slackThreadUrl;
       const customBranch = branch.trim();
-      if (customBranch) payload.existingBranch = customBranch;
-      if (namespaceId) payload.namespaceId = namespaceId;
-      const result = await api<{ workspaceId: string }>("/api/workspaces", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
+      if (creationContext === "workspace-home") {
+        if (namespaceId) payload.namespaceId = namespaceId;
+        const result = await api<{ workspaceId: string }>("/api/workspaces/home", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        if (runtimeId) {
+          void launchAgentWhenWorkspaceReady(result.workspaceId, runtimeId, prompt.trim()).catch((error) => {
+            toast.push({
+              tone: "error",
+              message: `Agent launch failed: ${error instanceof Error ? error.message : "unknown error"}`,
+            });
+          });
+        }
+        return result;
+      }
+
+      const workspaceId =
+        props.intent?.kind === "attach-worktree"
+          ? props.intent.workspaceId
+          : (
+              await api<{ workspaceId: string }>("/api/workspaces/home", {
+                method: "POST",
+                body: JSON.stringify({ ...payload, ...(namespaceId ? { namespaceId } : {}) }),
+              })
+            ).workspaceId;
+      const checkoutName = trimmed || defaultNameForSubmit(linked) || selectedRepo?.name || "worktree";
+      const checkoutResult = await api<{ workspaceId: string; checkoutId: string }>(
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/checkouts`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            ...payload,
+            repoId,
+            name: checkoutName,
+            branch: customBranch || defaultBranchPreview(linked, checkoutName),
+            source: checkoutSource(linked, customBranch),
+          }),
+        },
+      );
       if (launchMode === "prototype") {
         if (!prototypeTemplate) throw new Error("prototype_template_unavailable");
-        void launchRoleWhenWorkspaceReady(result.workspaceId, prototypeTemplate, prompt.trim()).catch((error) => {
+        void launchRoleWhenWorkspaceReady(
+          workspaceId,
+          prototypeTemplate,
+          prompt.trim(),
+          checkoutResult.checkoutId,
+        ).catch((error) => {
           toast.push({
             tone: "error",
             message: `Prototype launch failed: ${error instanceof Error ? error.message : "unknown error"}`,
           });
         });
       } else if (runtimeId) {
-        void launchAgentWhenWorkspaceReady(result.workspaceId, runtimeId, prompt.trim()).catch((error) => {
-          toast.push({
-            tone: "error",
-            message: `Agent launch failed: ${error instanceof Error ? error.message : "unknown error"}`,
-          });
-        });
+        void launchAgentWhenWorkspaceReady(workspaceId, runtimeId, prompt.trim(), checkoutResult.checkoutId).catch(
+          (error) => {
+            toast.push({
+              tone: "error",
+              message: `Agent launch failed: ${error instanceof Error ? error.message : "unknown error"}`,
+            });
+          },
+        );
       }
-      return result;
+      return { workspaceId };
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["state"] });
@@ -302,9 +372,37 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
         : linked.slackThreadUrl
           ? "Linked Slack thread"
           : "";
+  const repoRequired = creationContext !== "workspace-home";
+  const namespaces = props.namespaces ?? [];
+  const showNamespace = creationContext !== "attach-worktree" && namespaces.length > 0;
+  const modalTitle =
+    creationContext === "attach-worktree"
+      ? `Add worktree to ${props.intent?.kind === "attach-worktree" ? props.intent.workspaceName : "workspace"}`
+      : creationContext === "repo-worktree"
+        ? "New worktree"
+        : "New workspace";
+  const submitLabel = create.isPending
+    ? "Creating…"
+    : launchMode === "pm"
+      ? "Create & launch PM"
+      : creationContext === "attach-worktree"
+        ? launchMode === "prototype"
+          ? "Add & launch Prototype"
+          : runtimeId
+            ? "Add & launch agent"
+            : "Add worktree"
+        : creationContext === "repo-worktree"
+          ? launchMode === "prototype"
+            ? "Create worktree & launch Prototype"
+            : runtimeId
+              ? "Create worktree & launch agent"
+              : "Create worktree"
+          : runtimeId
+            ? "Create workspace & launch"
+            : "Create workspace";
 
   return (
-    <Modal title="New workspace" onClose={props.onClose}>
+    <Modal title={modalTitle} onClose={props.onClose}>
       <div className="modal-form workspace-modal">
         <label className="workspace-modal-prompt">
           Initial prompt
@@ -320,9 +418,11 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
           <label>
             Mode
             <select value={launchMode} onChange={(event) => setLaunchMode(event.target.value as WorkspaceLaunchMode)}>
-              <option value="pm">PM</option>
-              <option value="prototype">Prototype</option>
-              <option value="freestyle">Freestyle</option>
+              {allowedLaunchModes.map((mode) => (
+                <option key={mode} value={mode}>
+                  {mode === "pm" ? "PM" : mode === "prototype" ? "Prototype" : "Freestyle"}
+                </option>
+              ))}
             </select>
           </label>
           {launchMode === "freestyle" ? (
@@ -339,7 +439,7 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
             </label>
           ) : null}
         </div>
-        {launchMode === "pm" ? null : (
+        {repoRequired ? (
           <div className="workspace-modal-row">
             <label>
               Repository
@@ -352,13 +452,13 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
               </select>
             </label>
           </div>
-        )}
-        {launchMode !== "pm" && props.namespaces?.length ? (
+        ) : null}
+        {showNamespace ? (
           <label>
             Namespace
             <select value={namespaceId} onChange={(event) => setNamespaceId(event.target.value)}>
               <option value="">Uncategorized</option>
-              {props.namespaces.map((namespace) => (
+              {namespaces.map((namespace) => (
                 <option key={namespace.id} value={namespace.id}>
                   {namespace.name}
                 </option>
@@ -367,7 +467,7 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
           </label>
         ) : null}
         <details className="workspace-modal-advanced">
-          <summary>Optional: link, name, branch</summary>
+          <summary>{repoRequired ? "Optional: link, name, branch" : "Optional: link, name"}</summary>
           <label>
             Link Jira / GitHub PR / Slack URL
             <input
@@ -379,14 +479,14 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
           </label>
           <div className="workspace-modal-row">
             <label>
-              Workspace name
+              {repoRequired ? "Worktree name" : "Workspace name"}
               <input
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder={`Defaults to ${namePreview}`}
               />
             </label>
-            {launchMode === "pm" ? null : (
+            {repoRequired ? (
               <label>
                 Branch
                 <input
@@ -395,7 +495,7 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
                   placeholder={`Defaults to ${branchPreview}`}
                 />
               </label>
-            )}
+            ) : null}
           </div>
         </details>
         {launchMode === "freestyle" && !launchableRuntimes.length ? (
@@ -410,35 +510,31 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
         </Button>
         <Button
           type="button"
-          disabled={
-            create.isPending || (launchMode !== "pm" && !repoId) || (launchMode === "prototype" && !prototypeTemplate)
-          }
+          disabled={create.isPending || (repoRequired && !repoId) || (launchMode === "prototype" && !prototypeTemplate)}
           onClick={() => {
             create.mutate();
             props.onClose();
           }}
         >
-          {create.isPending
-            ? "Creating…"
-            : launchMode === "pm"
-              ? "Create & launch PM"
-              : launchMode === "prototype"
-                ? "Create & launch Prototype"
-                : runtimeId
-                  ? "Create & launch agent"
-                  : "Create workspace"}
+          {submitLabel}
         </Button>
       </div>
     </Modal>
   );
 }
 
-async function launchAgentWhenWorkspaceReady(workspaceId: string, runtimeId: string, prompt: string) {
+async function launchAgentWhenWorkspaceReady(
+  workspaceId: string,
+  runtimeId: string,
+  prompt: string,
+  checkoutId?: string,
+) {
   for (let attempt = 0; attempt < WORKSPACE_READY_MAX_ATTEMPTS; attempt += 1) {
     const state = await api<{ workspaces: Array<Pick<Workspace, "id" | "lifecycle">> }>("/api/workspaces");
     const workspace = state.workspaces.find((entry) => entry.id === workspaceId);
     if (workspace?.lifecycle === "ready") {
       const sessionPayload: Record<string, unknown> = { workspaceId, runtimeId };
+      if (checkoutId) sessionPayload.checkoutId = checkoutId;
       if (prompt) sessionPayload.prompt = prompt;
       await api("/api/agent-sessions", {
         method: "POST",
@@ -453,7 +549,12 @@ async function launchAgentWhenWorkspaceReady(workspaceId: string, runtimeId: str
   throw new Error("workspace_setup_timeout");
 }
 
-async function launchRoleWhenWorkspaceReady(workspaceId: string, template: RoleTemplate, prompt: string) {
+async function launchRoleWhenWorkspaceReady(
+  workspaceId: string,
+  template: RoleTemplate,
+  prompt: string,
+  checkoutId?: string,
+) {
   for (let attempt = 0; attempt < WORKSPACE_READY_MAX_ATTEMPTS; attempt += 1) {
     const state = await api<{ workspaces: Array<Pick<Workspace, "id" | "lifecycle">> }>("/api/workspaces");
     const workspace = state.workspaces.find((entry) => entry.id === workspaceId);
@@ -462,6 +563,7 @@ async function launchRoleWhenWorkspaceReady(workspaceId: string, template: RoleT
         method: "POST",
         body: JSON.stringify({
           workspaceId,
+          ...(checkoutId ? { checkoutId } : {}),
           runtimeId: template.launchSettings.runtimeId,
           displayName: template.displayName,
           prompt: [template.systemPrompt, prompt || null].filter(Boolean).join("\n\n"),

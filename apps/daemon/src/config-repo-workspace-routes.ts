@@ -1,6 +1,11 @@
 import type { CitadelConfig } from "@citadel/config";
 import { mergeConfigPatch, saveConfig } from "@citadel/config";
-import { CreateRepoInputSchema, CreateWorkspaceInputSchema } from "@citadel/contracts";
+import {
+  CreateRepoInputSchema,
+  CreateWorkspaceCheckoutInputSchema,
+  CreateWorkspaceInputSchema,
+} from "@citadel/contracts";
+import { workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
 import { setGithubCommand, setJiraCommand } from "@citadel/providers";
@@ -8,6 +13,7 @@ import { listRuntimeHealth } from "@citadel/runtimes";
 import type express from "express";
 import type { asyncRoute as AsyncRoute, ProviderCache } from "./app-helpers.js";
 import { bustCacheByPrefixes } from "./workspace-fs-watcher.js";
+import { slug, uniqueWorkspaceRoot } from "./workspace-home-paths.js";
 
 export function registerConfigRepoWorkspaceRoutes(input: {
   app: express.Express;
@@ -170,7 +176,92 @@ export function registerConfigRepoWorkspaceRoutes(input: {
     }),
   );
 
+  app.post(
+    "/api/workspaces/home",
+    asyncRoute(async (req, res) => {
+      const raw = asRecord(req.body);
+      if (raw.repoId !== undefined || raw.rootPath !== undefined) {
+        return res.status(400).json({ error: "structured_workspace_home_is_repo_less" });
+      }
+      const parsed = CreateWorkspaceInputSchema.parse(raw);
+      const { mode: _mode, repoId: _repoId, rootPath: _rootPath, ...homeInput } = parsed;
+      const rootPath = uniqueWorkspaceRoot(config.dataDir, homeInput.name || "workspace");
+      const result = await operations.createWorkspace({
+        ...homeInput,
+        mode: "structured",
+        rootPath,
+      });
+      emit("workspace.updated", result);
+      res.status(202).json(result);
+    }),
+  );
+
+  app.post(
+    "/api/workspaces/:workspaceId/checkouts",
+    asyncRoute(async (req, res) => {
+      const workspaceId = req.params.workspaceId;
+      const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+      if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
+      const raw = asRecord(req.body);
+      const repoId = stringField(raw.repoId);
+      const repo = repoId ? store.listRepos().find((candidate) => candidate.id === repoId) : null;
+      if (!repo) return res.status(404).json({ error: "repo_not_found" });
+
+      const source = checkoutSource(raw.source, raw.branch);
+      const name = checkoutName(raw.name, raw.issueKey, repo.name);
+      const branch =
+        stringField(raw.branch) ?? workspaceBranchName({ name, source: source === "pr" ? "pr" : "scratch" });
+      const issue = issueBinding(raw);
+      const parsed = CreateWorkspaceCheckoutInputSchema.parse({
+        workspaceId,
+        repoId: repo.id,
+        name,
+        branch,
+        source,
+        ...(stringField(raw.baseBranch) ? { baseBranch: stringField(raw.baseBranch) } : {}),
+        ...(issue ? { issue } : {}),
+      });
+      const result = await operations.createWorkspaceCheckout(parsed);
+      emit("workspace.updated", { workspaceId, checkoutId: result.checkoutId, operationId: result.operationId });
+      res.status(202).json({ workspaceId, ...result });
+    }),
+  );
+
   app.get("/api/agent-runtimes", (_req, res) => {
     res.json({ agentRuntimes: listRuntimeHealth(config.agentRuntimes) });
   });
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function stringField(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function checkoutSource(value: unknown, branch: unknown): "default_branch" | "existing_branch" | "pr" {
+  if (value === "default_branch" || value === "existing_branch" || value === "pr") return value;
+  return stringField(branch) ? "existing_branch" : "default_branch";
+}
+
+function checkoutName(value: unknown, issueKey: unknown, repoName: string): string {
+  const explicit = stringField(value);
+  if (explicit) return slug(explicit);
+  const issue = stringField(issueKey);
+  if (issue) return slug(issue);
+  return slug(repoName);
+}
+
+function issueBinding(raw: Record<string, unknown>) {
+  const key = stringField(raw.issueKey);
+  if (!key) return null;
+  return {
+    provider: "jira" as const,
+    key: key.toUpperCase(),
+    url: stringField(raw.issueUrl),
+    title: stringField(raw.issueTitle),
+    status: null,
+    fetchedAt: null,
+  };
 }

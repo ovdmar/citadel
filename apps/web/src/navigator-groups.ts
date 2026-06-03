@@ -1,4 +1,4 @@
-import type { Namespace, Operation, Repo, Workspace, WorkspaceSession } from "@citadel/contracts";
+import type { Namespace, Operation, Repo, Workspace, WorkspaceSession, WorktreeCheckout } from "@citadel/contracts";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { formatLabel } from "./labels.js";
 
@@ -110,21 +110,29 @@ export function buildGroupTree(
   operations: Operation[],
   grouping: GroupableKey[],
   namespaces: Namespace[] = [],
+  checkouts: WorktreeCheckout[] = [],
 ): GroupNode[] {
   if (!grouping.length) return [];
 
-  const enriched: EnrichedWorkspace[] = workspaces.map((workspace) => {
+  const groupByRepo = grouping.includes("repo");
+  const enriched: EnrichedWorkspace[] = workspaces.flatMap((workspace) => {
     const workspaceSessions = sessions.filter((session) => session.workspaceId === workspace.id);
     const workspaceOps = operations.filter((operation) => operation.workspaceId === workspace.id);
     const attention = readinessForWorkspace(workspace, {
       sessions: workspaceSessions,
       operations: workspaceOps,
     });
-    const repo = repos.find((entry) => entry.id === workspace.repoId);
     const namespace = workspace.namespaceId
       ? (namespaces.find((entry) => entry.id === workspace.namespaceId) ?? null)
       : null;
-    return { workspace, sessions: workspaceSessions, repo, namespace, section: attention.section };
+    const repoIds = groupByRepo ? repoIdsForWorkspace(workspace, checkouts) : [workspace.repoId];
+    return repoIds.map((repoId) => ({
+      workspace,
+      sessions: workspaceSessions,
+      repo: repos.find((entry) => entry.id === repoId),
+      namespace,
+      section: attention.section,
+    }));
   });
 
   const build = (entries: EnrichedWorkspace[], levels: GroupableKey[], parentPath: string): GroupNode[] => {
@@ -181,6 +189,15 @@ export function buildGroupTree(
   };
 
   return build(enriched, grouping, "");
+}
+
+function repoIdsForWorkspace(workspace: Workspace, checkouts: WorktreeCheckout[]): Array<string | null> {
+  if (workspace.repoId) return [workspace.repoId];
+  const liveRepoIds = new Set<string>();
+  for (const checkout of checkouts) {
+    if (checkout.workspaceId === workspace.id && !checkout.archivedAt) liveRepoIds.add(checkout.repoId);
+  }
+  return liveRepoIds.size ? Array.from(liveRepoIds) : [];
 }
 
 export function collectGroupPaths(nodes: GroupNode[]): Set<string> {

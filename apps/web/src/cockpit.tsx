@@ -209,7 +209,15 @@ export function Cockpit() {
     if (!data) return [];
     const levels = treeGroupingFor(navigatorGrouping);
     if (!levels.length) return [];
-    return buildGroupTree(data.workspaces, data.repos, data.sessions, data.operations, levels, data.namespaces);
+    return buildGroupTree(
+      data.workspaces,
+      data.repos,
+      data.sessions,
+      data.operations,
+      levels,
+      data.namespaces,
+      data.checkouts,
+    );
   }, [data, navigatorGrouping]);
   const flatWorkspaceIds = useMemo(() => {
     if (navTree.length) return flattenWorkspaceOrder(navTree);

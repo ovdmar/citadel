@@ -27,7 +27,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AddRepoModal } from "./add-repo-modal.js";
 import { api, queryClient } from "./api.js";
-import { CreateWorkspaceModal, GroupByMenu } from "./modals.js";
+import { type CreateWorkspaceIntent, CreateWorkspaceModal, GroupByMenu } from "./modals.js";
 import {
   COLLAPSE_STORAGE_KEY as COLLAPSE_STORAGE,
   GROUP_STORAGE_KEY as GROUP_STORAGE,
@@ -128,6 +128,18 @@ export function Navigator(props: {
   const location = useLocation();
   const path = location.pathname;
   const [grouping, setGrouping] = useState<NavigatorGrouping>(() => readNavigatorGrouping());
+  const [createWorkspaceIntent, setCreateWorkspaceIntent] = useState<CreateWorkspaceIntent>({ kind: "auto" });
+  const openCreateWorkspace = useCallback(
+    (intent: CreateWorkspaceIntent = { kind: "auto" }) => {
+      setCreateWorkspaceIntent(intent);
+      props.onOpenCreateWorkspace();
+    },
+    [props.onOpenCreateWorkspace],
+  );
+  const closeCreateWorkspace = useCallback(() => {
+    setCreateWorkspaceIntent({ kind: "auto" });
+    props.onCloseCreateWorkspace();
+  }, [props.onCloseCreateWorkspace]);
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(GROUP_STORAGE, JSON.stringify(grouping));
@@ -217,8 +229,16 @@ export function Navigator(props: {
   const treeGrouping = useMemo<GroupableKey[]>(() => treeGroupingFor(grouping), [grouping]);
   const tree = useMemo(
     () =>
-      buildGroupTree(props.workspaces, props.repos, props.sessions, props.operations, treeGrouping, props.namespaces),
-    [props.workspaces, props.repos, props.sessions, props.operations, treeGrouping, props.namespaces],
+      buildGroupTree(
+        props.workspaces,
+        props.repos,
+        props.sessions,
+        props.operations,
+        treeGrouping,
+        props.namespaces,
+        props.checkouts,
+      ),
+    [props.workspaces, props.repos, props.sessions, props.operations, treeGrouping, props.namespaces, props.checkouts],
   );
   const historyCount = props.operations.length;
   const navigatorTone = aggregateNavigatorTone(props.workspaces, props.sessions, props.prByWorkspaceId);
@@ -284,6 +304,7 @@ export function Navigator(props: {
       const checkoutsCollapsed = collapsedWorkspaceCheckouts[workspace.id] === true;
       const checkoutListId = `nav-workspace-checkouts-${encodeURIComponent(workspace.id)}`;
       const repoGroupName = repoGroupNameFromPath(groupPath);
+      const canAttachCheckout = workspace.kind === "root" && props.repos.length > 0;
       if (nested && repoGroupName) {
         const repoGroupedCheckouts = checkouts.filter((checkout) =>
           checkoutMatchesRepoGroup(checkout, repoGroupName, props.repos),
@@ -350,25 +371,47 @@ export function Navigator(props: {
             onSelect={() => props.onPickTarget(workspace.id, "home")}
             hideBranch={nested}
             rightControl={
-              nested ? (
-                <button
-                  type="button"
-                  className="workspace-card-collapse"
-                  aria-label={`${checkoutsCollapsed ? "Expand" : "Collapse"} ${workspace.name} worktrees`}
-                  aria-controls={checkoutListId}
-                  aria-expanded={!checkoutsCollapsed}
-                  title={`${checkoutsCollapsed ? "Expand" : "Collapse"} worktrees`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    toggleWorkspaceCheckouts(workspace.id);
-                  }}
-                >
-                  <ChevronRight
-                    size={12}
-                    className={`workspace-card-collapse-icon ${checkoutsCollapsed ? "" : "open"}`}
-                    aria-hidden="true"
-                  />
-                </button>
+              canAttachCheckout || nested ? (
+                <>
+                  {canAttachCheckout ? (
+                    <button
+                      type="button"
+                      className="workspace-card-collapse"
+                      aria-label={`Add worktree to ${workspace.name}`}
+                      title="Add worktree"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openCreateWorkspace({
+                          kind: "attach-worktree",
+                          workspaceId: workspace.id,
+                          workspaceName: workspace.name,
+                        });
+                      }}
+                    >
+                      <Plus size={12} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                  {nested ? (
+                    <button
+                      type="button"
+                      className="workspace-card-collapse"
+                      aria-label={`${checkoutsCollapsed ? "Expand" : "Collapse"} ${workspace.name} worktrees`}
+                      aria-controls={checkoutListId}
+                      aria-expanded={!checkoutsCollapsed}
+                      title={`${checkoutsCollapsed ? "Expand" : "Collapse"} worktrees`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        toggleWorkspaceCheckouts(workspace.id);
+                      }}
+                    >
+                      <ChevronRight
+                        size={12}
+                        className={`workspace-card-collapse-icon ${checkoutsCollapsed ? "" : "open"}`}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  ) : null}
+                </>
               ) : null
             }
           />
@@ -407,6 +450,7 @@ export function Navigator(props: {
       props.operations,
       props.activeWorkspaceId,
       props.activeTargetKey,
+      openCreateWorkspace,
       props.onPickTarget,
       props.namespaces,
       namespacesById,
@@ -425,6 +469,7 @@ export function Navigator(props: {
       })),
     [props.workspaces, props.sessions],
   );
+  const hasVisibleWorkspaceEntries = treeGrouping.length === 0 ? props.workspaces.length > 0 : tree.length > 0;
 
   return (
     <>
@@ -506,9 +551,9 @@ export function Navigator(props: {
             </button>
             <button
               type="button"
-              onClick={props.onOpenCreateWorkspace}
-              aria-label="Create workspace"
-              title="New workspace (press c)"
+              onClick={() => openCreateWorkspace()}
+              aria-label={grouping.includes("repo") ? "Create worktree" : "Create workspace"}
+              title={grouping.includes("repo") ? "New worktree (press c)" : "New workspace (press c)"}
             >
               <Plus size={12} />
             </button>
@@ -541,10 +586,12 @@ export function Navigator(props: {
                   repos={props.repos}
                 />
               ))}
-          {!props.workspaces.length ? (
+          {!hasVisibleWorkspaceEntries ? (
             <div className="empty compact">
               {props.repos.length
-                ? "No workspaces yet. Use the plus button above to create one."
+                ? grouping.includes("repo")
+                  ? "No worktrees in repository grouping. Use the plus button above to create one."
+                  : "No workspaces yet. Use the plus button above to create one."
                 : "No repositories registered yet. Use the folder button above to register one."}
             </div>
           ) : null}
@@ -570,9 +617,11 @@ export function Navigator(props: {
           {...(props.lastRepoId ? { lastRepoId: props.lastRepoId } : {})}
           runtimes={props.runtimes}
           namespaces={props.namespaces}
-          onClose={props.onCloseCreateWorkspace}
+          grouping={grouping}
+          intent={createWorkspaceIntent}
+          onClose={closeCreateWorkspace}
           onCreated={(workspaceId) => {
-            props.onCloseCreateWorkspace();
+            closeCreateWorkspace();
             const created = props.workspaces.find((workspace) => workspace.id === workspaceId);
             if (created) props.onPickWorkspace(created);
             else props.onPickWorkspaceId(workspaceId);

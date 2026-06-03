@@ -1,8 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { Repo, Workspace, WorktreeCheckout } from "@citadel/contracts";
 import { afterEach, describe, expect, it } from "vitest";
-import { closeServer, createFixture as createFixtureBase, createGitRepo, getJson, listen } from "./app-test-helpers.js";
+import {
+  closeServer,
+  createFixture as createFixtureBase,
+  createGitFixtureWithRemote,
+  createGitRepo,
+  getJson,
+  listen,
+  postJson,
+} from "./app-test-helpers.js";
 import { createDaemonApp } from "./app.js";
 
 const dirs: string[] = [];
@@ -41,6 +50,56 @@ describe("config/repo/workspace routes", () => {
 
       const tilde = await getJson<{ baseDir: string }>(`${baseUrl}/api/fs/complete?prefix=~%2F`);
       expect(tilde.baseDir).toBe(os.homedir());
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("creates structured workspace Homes and checkouts through REST", async () => {
+    const fixture = createFixtureBase(dirs);
+    const { repoPath } = createGitFixtureWithRemote(fixture.config.dataDir);
+    const { server } = await createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const registered = await postJson<{ repo: Repo }>(`${baseUrl}/api/repos`, {
+        rootPath: repoPath,
+        name: "citadel",
+      });
+      const home = await postJson<{ workspaceId: string }>(`${baseUrl}/api/workspaces/home`, {
+        name: "Feature Home",
+        source: "scratch",
+      });
+      const stateAfterHome = await getJson<{ workspaces: Workspace[] }>(`${baseUrl}/api/workspaces`);
+      const workspace = stateAfterHome.workspaces.find((entry) => entry.id === home.workspaceId);
+      expect(workspace).toMatchObject({
+        repoId: null,
+        kind: "root",
+        mode: "structured",
+        name: "Feature Home",
+      });
+      expect(workspace?.rootPath).toContain(path.join(fixture.config.dataDir, "structured-workspaces"));
+      expect(fs.existsSync(path.join(workspace?.rootPath ?? "", ".citadel", "workspace.json"))).toBe(true);
+
+      const checkout = await postJson<{ workspaceId: string; checkoutId: string }>(
+        `${baseUrl}/api/workspaces/${home.workspaceId}/checkouts`,
+        {
+          repoId: registered.repo.id,
+          name: "api",
+          branch: "feature/api",
+          source: "default_branch",
+        },
+      );
+      expect(checkout.workspaceId).toBe(home.workspaceId);
+      const state = await getJson<{ checkouts: WorktreeCheckout[] }>(`${baseUrl}/api/state`);
+      expect(state.checkouts).toContainEqual(
+        expect.objectContaining({
+          id: checkout.checkoutId,
+          workspaceId: home.workspaceId,
+          repoId: registered.repo.id,
+          name: "api",
+          branch: "feature/api",
+        }),
+      );
     } finally {
       await closeServer(server);
     }

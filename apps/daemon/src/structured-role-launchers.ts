@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { CitadelConfig } from "@citadel/config";
 import type {
   ActivityEvent,
@@ -18,6 +16,7 @@ import type {
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService, RuntimeDescriptor } from "@citadel/operations";
 import { listAgentTemplates } from "./agent-templates.js";
+import { slug, uniqueWorkspaceRoot } from "./workspace-home-paths.js";
 
 type Actor = "human" | "manager" | "agent" | "mcp" | "system";
 type RoleLaunchInput =
@@ -282,25 +281,6 @@ function resolveRuntime(config: CitadelConfig, settings: LaunchSettings): Resolv
       ...(runtime.launchOptions ? { launchOptions: runtime.launchOptions } : {}),
     },
   };
-}
-
-function uniqueWorkspaceRoot(dataDir: string, name: string): string {
-  const parent = path.join(dataDir, "structured-workspaces");
-  const base = slug(name);
-  let candidate = path.join(parent, base);
-  for (let index = 2; fs.existsSync(candidate); index += 1) {
-    candidate = path.join(parent, `${base}-${index}`);
-  }
-  return candidate;
-}
-
-function slug(value: string): string {
-  const normalized = value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  return normalized || `workspace-${Date.now().toString(36)}`;
 }
 
 function activitySource(actor: Actor): ActivityEvent["source"] {

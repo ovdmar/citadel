@@ -1,4 +1,4 @@
-import type { Namespace, Operation, Repo, Workspace } from "@citadel/contracts";
+import type { Namespace, Operation, Repo, Workspace, WorktreeCheckout } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
 import {
   SECTION_ORDER,
@@ -30,7 +30,7 @@ function makeRepo(id: string, name: string): Repo {
   };
 }
 
-function makeWorkspace(id: string, repoId: string, overrides: Partial<Workspace> = {}): Workspace {
+function makeWorkspace(id: string, repoId: string | null, overrides: Partial<Workspace> = {}): Workspace {
   return {
     id,
     repoId,
@@ -65,6 +65,32 @@ function makeNamespace(id: string, name: string): Namespace {
     createdAt: ts,
     updatedAt: ts,
     archivedAt: null,
+  };
+}
+
+function makeCheckout(
+  id: string,
+  workspaceId: string,
+  repoId: string,
+  overrides: Partial<WorktreeCheckout> = {},
+): WorktreeCheckout {
+  return {
+    id,
+    workspaceId,
+    repoId,
+    name: id,
+    path: `/wt/${workspaceId}/${id}`,
+    branch: `feat/${id}`,
+    baseBranch: "main",
+    issue: null,
+    intendedPr: null,
+    stackParentCheckoutId: null,
+    inferredPurpose: null,
+    gateStatus: "not_started",
+    createdAt: ts,
+    updatedAt: ts,
+    archivedAt: null,
+    ...overrides,
   };
 }
 
@@ -145,6 +171,41 @@ describe("buildGroupTree", () => {
     const orphan = makeWorkspace("w-orphan", "r-missing");
     const tree = buildGroupTree([orphan], repos, [], [], ["repo"]);
     expect(tree[0]?.label).toBe("Unknown repo");
+  });
+
+  it("omits repo-less structured Homes with no checkouts from repo grouping", () => {
+    const home = makeWorkspace("home", null, { kind: "root", mode: "structured" });
+    expect(buildGroupTree([home], repos, [], [], ["repo"])).toEqual([]);
+  });
+
+  it("groups structured Homes by checkout repo when grouped by repo", () => {
+    const home = makeWorkspace("home", null, {
+      kind: "root",
+      mode: "structured",
+      path: "/structured/home",
+      rootPath: "/structured/home",
+      branch: "home",
+    });
+    const tree = buildGroupTree([home], repos, [], [], ["repo"], [], [makeCheckout("api", home.id, "r-a")]);
+    expect(tree.map((node) => ({ label: node.label, count: node.count, kind: node.kind }))).toEqual([
+      { label: "alpha", count: 1, kind: "leaf" },
+    ]);
+    expect(tree[0]?.kind === "leaf" ? tree[0].workspaces.map((entry) => entry.workspace.id) : []).toEqual(["home"]);
+  });
+
+  it("dedupes a structured Home once per repo bucket", () => {
+    const home = makeWorkspace("home", null, { kind: "root", mode: "structured" });
+    const tree = buildGroupTree(
+      [home],
+      repos,
+      [],
+      [],
+      ["repo"],
+      [],
+      [makeCheckout("api", home.id, "r-a"), makeCheckout("web", home.id, "r-a")],
+    );
+    expect(tree[0]?.count).toBe(1);
+    expect(tree[0]?.kind === "leaf" ? tree[0].workspaces : []).toHaveLength(1);
   });
 
   it("groups workspace rows directly by namespace", () => {
