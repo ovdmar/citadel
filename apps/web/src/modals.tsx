@@ -206,7 +206,6 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   const [name, setName] = useState("");
   const [branch, setBranch] = useState("");
   const [namespaceId, setNamespaceId] = useState("");
-  const selectedRepo = props.repos.find((repo) => repo.id === repoId) ?? null;
   useEffect(() => {
     if (!allowedLaunchModes.includes(launchMode)) setLaunchMode(defaultLaunchModeForContext(creationContext));
   }, [allowedLaunchModes, creationContext, launchMode]);
@@ -233,7 +232,7 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   // the user never typed and the daemon won't use.
   const trimmedName = name.trim();
   const submitName = defaultNameForSubmit(linked);
-  const branchBaseName = trimmedName || submitName || (creationContext === "workspace-home" ? "" : selectedRepo?.name);
+  const branchBaseName = trimmedName || submitName;
   const branchPreview = branchBaseName ? defaultBranchPreview(linked, branchBaseName) : "<auto>";
 
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
@@ -313,7 +312,7 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
                 body: JSON.stringify({ ...payload, ...(namespaceId ? { namespaceId } : {}) }),
               })
             ).workspaceId;
-      const checkoutName = trimmed || defaultNameForSubmit(linked) || selectedRepo?.name || "worktree";
+      const checkoutName = trimmed || defaultNameForSubmit(linked);
       const checkoutResult = await api<{ workspaceId: string; checkoutId: string }>(
         `/api/workspaces/${encodeURIComponent(workspaceId)}/checkouts`,
         {
@@ -321,8 +320,8 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
           body: JSON.stringify({
             ...payload,
             repoId,
-            name: checkoutName,
-            branch: customBranch || defaultBranchPreview(linked, checkoutName),
+            ...(checkoutName ? { name: checkoutName } : {}),
+            ...(customBranch ? { branch: customBranch } : {}),
             source: checkoutSource(linked, customBranch),
           }),
         },
@@ -511,10 +510,7 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
         <Button
           type="button"
           disabled={create.isPending || (repoRequired && !repoId) || (launchMode === "prototype" && !prototypeTemplate)}
-          onClick={() => {
-            create.mutate();
-            props.onClose();
-          }}
+          onClick={() => create.mutate()}
         >
           {submitLabel}
         </Button>

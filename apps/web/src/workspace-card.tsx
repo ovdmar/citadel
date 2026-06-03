@@ -8,11 +8,12 @@ import type {
 } from "@citadel/contracts";
 import { type LifecycleTone, deriveWorkspaceLifecycleTone } from "@citadel/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
+import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { type StateResponse, useOptimisticRemove, useStateQuery } from "./app-state.js";
+import { pickReadableForeground } from "./color-contrast.js";
 import { encodeReorderMimeType, findReorderMimeType, parseReorderMimeType } from "./navigator-order.js";
 import { useToast } from "./toast.js";
 import { useOverlayPresent } from "./use-overlay-present.js";
@@ -83,15 +84,22 @@ export function WorkspaceCard(
     // treated as `dropTarget: "namespace"` to preserve existing behavior.
     draggable?: boolean;
     hideBranch?: boolean;
+    branchLabel?: string | null;
+    branchTitle?: string;
+    cardTitle?: string;
     rightControl?: ReactNode;
+    disableDrop?: boolean;
+    prToneOverride?: PrTone;
   },
 ) {
   const { workspace, pullRequest } = props;
   const titleDisplay = workspaceDisplayTitle(workspace);
-  const prTone = pullRequest ? prToneFor(pullRequest) : "missing";
+  const prTone = props.prToneOverride ?? (pullRequest ? prToneFor(pullRequest) : "missing");
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
   const lifecycleTone = deriveWorkspaceLifecycleTone({ sessions: props.sessions, pullRequest: pullRequest ?? null });
   const agentToneSuffix = lifecycleToneAriaSuffix(lifecycleTone);
+  const branchLabel = props.branchLabel ?? workspace.branch;
+  const branchTitle = props.branchTitle ?? branchLabel;
   const additions = pullRequest?.additions ?? null;
   const deletions = pullRequest?.deletions ?? null;
   const hasDiff = additions !== null || deletions !== null;
@@ -105,10 +113,16 @@ export function WorkspaceCard(
         : null;
 
   // Only hit the global state query when callers haven't already passed the
-  // namespace list in via props.
-  const needsFallback = props.namespaces === undefined;
+  // resolved namespace / namespace list in via props.
+  const needsFallback = props.namespace === undefined && props.namespaces === undefined;
   const fallbackState = useStateQuery({ enabled: needsFallback });
   const namespacesForPicker = props.namespaces ?? fallbackState.data?.namespaces ?? [];
+  const namespace =
+    props.namespace !== undefined
+      ? props.namespace
+      : workspace.namespaceId
+        ? (namespacesForPicker.find((entry) => entry.id === workspace.namespaceId) ?? null)
+        : null;
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(titleDisplay);
@@ -235,6 +249,7 @@ export function WorkspaceCard(
           setShowNamespaceMenu(true);
         }}
         aria-label={`Open workspace ${workspace.name}${agentToneSuffix}`}
+        title={props.cardTitle}
       >
         <span
           className={`workspace-card-agent tone-${prTone} ${workspace.kind === "root" ? "root" : ""}`}
@@ -289,9 +304,9 @@ export function WorkspaceCard(
               </strong>
             )}
           </span>
-          {!props.hideBranch && workspace.branch ? (
-            <span className="workspace-card-branch" title={workspace.branch}>
-              {workspace.branch}
+          {!props.hideBranch && branchLabel ? (
+            <span className="workspace-card-branch" title={branchTitle}>
+              {branchLabel}
             </span>
           ) : null}
           {lifecycleText ? (
@@ -301,6 +316,19 @@ export function WorkspaceCard(
           ) : null}
         </span>
         <span className="workspace-card-right" aria-hidden>
+          {namespace ? (
+            <span
+              className="namespace-pill"
+              title={`Namespace: ${namespace.name}`}
+              style={
+                namespace.color
+                  ? { background: namespace.color, color: pickReadableForeground(namespace.color) }
+                  : undefined
+              }
+            >
+              <Folder size={10} /> {namespace.name}
+            </span>
+          ) : null}
           {hasDiff ? (
             <span className="workspace-card-diff" title="Lines changed in this PR">
               <span className="diff-add">+{additions ?? 0}</span>
@@ -322,7 +350,7 @@ export function WorkspaceCard(
         </span>
       </button>
       {props.rightControl ? <span className="workspace-card-right-control">{props.rightControl}</span> : null}
-      {workspace.kind === "root" ? null : (
+      {workspace.kind === "root" || props.disableDrop ? null : (
         <button
           type="button"
           className="workspace-card-drop"

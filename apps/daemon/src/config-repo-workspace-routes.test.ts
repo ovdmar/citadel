@@ -104,4 +104,58 @@ describe("config/repo/workspace routes", () => {
       await closeServer(server);
     }
   });
+
+  it("generates unique names and branches for repeated blank structured worktree creates", async () => {
+    const fixture = createFixtureBase(dirs);
+    const { repoPath } = createGitFixtureWithRemote(fixture.config.dataDir);
+    const { server } = await createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const registered = await postJson<{ repo: Repo }>(`${baseUrl}/api/repos`, {
+        rootPath: repoPath,
+        name: "citadel",
+      });
+
+      const firstHome = await postJson<{ workspaceId: string }>(`${baseUrl}/api/workspaces/home`, {
+        name: "",
+        source: "scratch",
+      });
+      const firstCheckout = await postJson<{ workspaceId: string; checkoutId: string }>(
+        `${baseUrl}/api/workspaces/${firstHome.workspaceId}/checkouts`,
+        {
+          repoId: registered.repo.id,
+          source: "default_branch",
+        },
+      );
+
+      const secondHome = await postJson<{ workspaceId: string }>(`${baseUrl}/api/workspaces/home`, {
+        name: "",
+        source: "scratch",
+      });
+      const secondCheckout = await postJson<{ workspaceId: string; checkoutId: string }>(
+        `${baseUrl}/api/workspaces/${secondHome.workspaceId}/checkouts`,
+        {
+          repoId: registered.repo.id,
+          source: "default_branch",
+        },
+      );
+
+      const state = await getJson<{ workspaces: Workspace[]; checkouts: WorktreeCheckout[] }>(`${baseUrl}/api/state`);
+      const createdHomes = state.workspaces.filter((workspace) =>
+        [firstHome.workspaceId, secondHome.workspaceId].includes(workspace.id),
+      );
+      const createdCheckouts = state.checkouts.filter((checkout) =>
+        [firstCheckout.checkoutId, secondCheckout.checkoutId].includes(checkout.id),
+      );
+      expect(createdHomes.map((workspace) => workspace.name)).not.toContain("workspace");
+      expect(new Set(createdHomes.map((workspace) => workspace.name)).size).toBe(2);
+      expect(new Set(createdCheckouts.map((checkout) => checkout.name)).size).toBe(2);
+      expect(new Set(createdCheckouts.map((checkout) => checkout.branch)).size).toBe(2);
+      expect(createdCheckouts.map((checkout) => checkout.name)).toEqual(
+        createdHomes.map((workspace) => workspace.name),
+      );
+    } finally {
+      await closeServer(server);
+    }
+  });
 });

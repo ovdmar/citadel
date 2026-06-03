@@ -1,7 +1,5 @@
 import type { PullRequestSummary, Repo, Workspace, WorkspaceSession, WorktreeCheckout } from "@citadel/contracts";
-import { deriveWorkspaceLifecycleTone } from "@citadel/core";
-import { GitBranch, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
-import { type ApprovalTone, type PrTone, approvalToneFor, lifecycleToneClass, prToneFor } from "./workspace-card.js";
+import { type PrTone, WorkspaceCard, approvalToneFor, prToneFor } from "./workspace-card.js";
 import "./navigator-workspace-cards.css";
 
 type CheckoutNavCardProps = {
@@ -49,66 +47,47 @@ export function pullRequestForCheckout(
 }
 
 export function CheckoutNavCard(props: CheckoutNavCardProps) {
-  const title = props.repo
-    ? props.repo.name === props.checkout.name
-      ? props.repo.name
-      : `${props.repo.name} · ${props.checkout.name}`
-    : props.checkout.name;
+  const workspaceForCard: Workspace = {
+    ...props.workspace,
+    repoId: props.checkout.repoId,
+    branch: props.checkout.branch,
+    baseBranch: props.checkout.baseBranch,
+    kind: "worktree",
+    issueKey: props.checkout.issue?.key ?? props.workspace.issueKey,
+    issueTitle: props.checkout.issue?.title ?? props.workspace.issueTitle,
+    issueUrl: props.checkout.issue?.url ?? props.workspace.issueUrl,
+  };
   const prTone = props.pullRequest ? prToneFor(props.pullRequest) : checkoutPrTone(props.checkout);
-  const approvalTone = props.pullRequest ? approvalToneFor(props.pullRequest) : "none";
-  const lifecycleTone = deriveWorkspaceLifecycleTone({
-    sessions: props.sessions,
-    pullRequest: props.pullRequest,
-  });
-  const prLabel = checkoutPrLabel(props.checkout, props.pullRequest);
-  const hasDiff = props.pullRequest
-    ? props.pullRequest.additions !== null || props.pullRequest.deletions !== null
-    : false;
+  const branchLabel = checkoutBranchLabel(props.checkout, props.repo);
+  const branchTitle = checkoutBranchTitle(props.checkout, props.repo);
 
   return (
-    <button
-      type="button"
-      className={`workspace-card nav-checkout-card ${props.active ? "active" : ""}`}
-      data-cit-on-dark={props.active ? "true" : undefined}
-      onClick={props.onSelect}
-      aria-label={`Open ${title}`}
-      title={props.checkout.path}
-    >
-      <span className={`workspace-card-agent tone-${prTone}`} title={prLabel ?? undefined}>
-        <GitBranch size={14} />
-      </span>
-      <span className="workspace-card-main">
-        <span className="workspace-card-title">
-          <span
-            className={`cit-pulse cit-pulse-sm ${lifecycleToneClass(lifecycleTone)} workspace-status-dot`}
-            aria-hidden="true"
-          />
-          <strong title={title}>
-            {props.checkout.issue?.key ? (
-              <span className="workspace-card-issue">{props.checkout.issue.key}</span>
-            ) : null}
-            {title}
-          </strong>
-        </span>
-        <span className="workspace-card-branch" title={props.checkout.branch}>
-          {props.checkout.branch}
-        </span>
-      </span>
-      <span className="workspace-card-right" aria-hidden>
-        {hasDiff ? (
-          <span className="workspace-card-diff" title="Lines changed in this PR">
-            <span className="diff-add">+{props.pullRequest?.additions ?? 0}</span>
-            <span className="diff-del">-{props.pullRequest?.deletions ?? 0}</span>
-          </span>
-        ) : prLabel ? (
-          <span className="workspace-card-diff" title={prLabel}>
-            {prLabel}
-          </span>
-        ) : null}
-        <ApprovalIcon tone={approvalTone} />
-      </span>
-    </button>
+    <div className="nav-checkout-card">
+      <WorkspaceCard
+        workspace={workspaceForCard}
+        sessions={props.sessions}
+        pullRequest={props.pullRequest}
+        approval={props.pullRequest ? approvalToneFor(props.pullRequest) : "none"}
+        namespace={null}
+        active={props.active}
+        onSelect={props.onSelect}
+        branchLabel={branchLabel}
+        branchTitle={branchTitle}
+        cardTitle={branchTitle}
+        prToneOverride={prTone}
+        disableDrop
+      />
+    </div>
   );
+}
+
+export function checkoutBranchLabel(checkout: WorktreeCheckout, repo: Repo | null): string {
+  return repo ? `${repo.name} · ${checkout.branch}` : checkout.branch;
+}
+
+export function checkoutBranchTitle(checkout: WorktreeCheckout, repo: Repo | null): string {
+  const label = checkoutBranchLabel(checkout, repo);
+  return `${label} · git worktree: ${checkout.name} · ${checkout.path}`;
 }
 
 function aggregatePrCount(checkouts: readonly WorktreeCheckout[], pullRequest: PullRequestSummary | null): number {
@@ -132,22 +111,6 @@ function checkoutPrTone(checkout: WorktreeCheckout): PrTone {
 export function checkoutPrLabel(checkout: WorktreeCheckout, pullRequest: PullRequestSummary | null): string | null {
   if (pullRequest) return `PR #${pullRequest.number}`;
   return checkout.intendedPr?.number ? `PR #${checkout.intendedPr.number}` : null;
-}
-
-function ApprovalIcon(props: { tone: ApprovalTone }) {
-  return (
-    <span className={`approval-pill tone-${props.tone}`} title={`Approval: ${props.tone}`}>
-      {props.tone === "approved" ? (
-        <ShieldCheck size={13} />
-      ) : props.tone === "changes" ? (
-        <ShieldAlert size={13} />
-      ) : props.tone === "pending" ? (
-        <MessageSquare size={13} />
-      ) : (
-        <ShieldQuestion size={13} />
-      )}
-    </span>
-  );
 }
 
 function plural(count: number, noun: string): string {

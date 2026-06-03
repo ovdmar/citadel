@@ -1,3 +1,6 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
 import type { CitadelConfig } from "@citadel/config";
 import { mergeConfigPatch, saveConfig } from "@citadel/config";
 import {
@@ -5,7 +8,7 @@ import {
   CreateWorkspaceCheckoutInputSchema,
   CreateWorkspaceInputSchema,
 } from "@citadel/contracts";
-import { workspaceBranchName } from "@citadel/core";
+import { generateFunnyName, workspaceBranchName } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
 import { setGithubCommand, setJiraCommand } from "@citadel/providers";
@@ -185,9 +188,11 @@ export function registerConfigRepoWorkspaceRoutes(input: {
       }
       const parsed = CreateWorkspaceInputSchema.parse(raw);
       const { mode: _mode, repoId: _repoId, rootPath: _rootPath, ...homeInput } = parsed;
-      const rootPath = uniqueWorkspaceRoot(config.dataDir, homeInput.name || "workspace");
+      const requestedName = stringField(raw.name);
+      const rootPath = uniqueWorkspaceRoot(config.dataDir, requestedName ?? generateFunnyName());
       const result = await operations.createWorkspace({
         ...homeInput,
+        name: requestedName ?? path.basename(rootPath),
         mode: "structured",
         rootPath,
       });
@@ -208,9 +213,22 @@ export function registerConfigRepoWorkspaceRoutes(input: {
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
 
       const source = checkoutSource(raw.source, raw.branch);
-      const name = checkoutName(raw.name, raw.issueKey, repo.name);
-      const branch =
-        stringField(raw.branch) ?? workspaceBranchName({ name, source: source === "pr" ? "pr" : "scratch" });
+      const issueKey = stringField(raw.issueKey);
+      const name = uniqueCheckoutName({
+        workspace,
+        checkouts: store.listWorkspaceCheckouts(workspace.id),
+        rawName: raw.name,
+        issueKey,
+      });
+      const branch = uniqueCheckoutBranch({
+        repo,
+        branch: raw.branch,
+        name,
+        issueKey,
+        source,
+        workspaces: store.listWorkspaces(),
+        store,
+      });
       const issue = issueBinding(raw);
       const parsed = CreateWorkspaceCheckoutInputSchema.parse({
         workspaceId,
@@ -245,12 +263,85 @@ function checkoutSource(value: unknown, branch: unknown): "default_branch" | "ex
   return stringField(branch) ? "existing_branch" : "default_branch";
 }
 
-function checkoutName(value: unknown, issueKey: unknown, repoName: string): string {
+function checkoutName(value: unknown, issueKey: string | null, workspaceName: string, hasCheckouts: boolean): string {
   const explicit = stringField(value);
   if (explicit) return slug(explicit);
-  const issue = stringField(issueKey);
-  if (issue) return slug(issue);
-  return slug(repoName);
+  if (issueKey) return slug(issueKey);
+  if (!hasCheckouts) return slug(workspaceName);
+  return slug(generateFunnyName());
+}
+
+function uniqueCheckoutName(input: {
+  workspace: { name: string; rootPath?: string | null | undefined; path: string };
+  checkouts: Array<{ name: string }>;
+  rawName: unknown;
+  issueKey: string | null;
+}): string {
+  const existingNames = new Set(input.checkouts.map((checkout) => checkout.name));
+  const rootPath = input.workspace.rootPath ?? input.workspace.path;
+  const base = checkoutName(input.rawName, input.issueKey, input.workspace.name, input.checkouts.length > 0);
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const candidate = attempt === 0 ? base : `${base}-${attempt + 1}`;
+    if (!existingNames.has(candidate) && !fs.existsSync(path.join(rootPath, candidate))) return candidate;
+  }
+  return `${base}-${Date.now().toString(36)}`;
+}
+
+function uniqueCheckoutBranch(input: {
+  repo: { id: string; rootPath: string; defaultRemote: string };
+  branch: unknown;
+  name: string;
+  issueKey: string | null;
+  source: "default_branch" | "existing_branch" | "pr";
+  workspaces: Array<{ id: string }>;
+  store: SqliteStore;
+}): string {
+  const explicit = stringField(input.branch);
+  if (explicit) return explicit;
+  const base = workspaceBranchName({
+    name: input.name,
+    source: input.issueKey ? "issue" : input.source === "pr" ? "pr" : "scratch",
+    ...(input.issueKey ? { issueKey: input.issueKey } : {}),
+  });
+  const existingCheckoutBranches = new Set(
+    input.workspaces
+      .flatMap((workspace) => input.store.listWorkspaceCheckouts(workspace.id))
+      .filter((checkout) => checkout.repoId === input.repo.id)
+      .map((checkout) => checkout.branch),
+  );
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const candidate = attempt === 0 ? base : `${base}-${attempt + 1}`;
+    if (
+      !existingCheckoutBranches.has(candidate) &&
+      !branchRefExists(input.repo.rootPath, input.repo.defaultRemote, candidate)
+    )
+      return candidate;
+  }
+  return `${base}-${Date.now().toString(36)}`;
+}
+
+function branchRefExists(cwd: string, remote: string, branch: string): boolean {
+  try {
+    execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
+      cwd,
+      stdio: "pipe",
+    });
+    return true;
+  } catch {
+    return remoteBranchExists(cwd, remote, branch);
+  }
+}
+
+function remoteBranchExists(cwd: string, remote: string, branch: string): boolean {
+  try {
+    execFileSync("git", ["show-ref", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`], {
+      cwd,
+      stdio: "pipe",
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function issueBinding(raw: Record<string, unknown>) {
