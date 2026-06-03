@@ -461,36 +461,30 @@ export const CwdContextInputSchema = z.object({
   cwd: z.string().min(1),
 });
 
-const ActorSourceSchema = z.enum(["human", "manager", "agent", "mcp", "system"]);
-
 export const LaunchPmAgentInputSchema = z.object({
   workspaceId: IdSchema.optional(),
   cwd: z.string().min(1).optional(),
   idea: z.string().min(1).optional(),
   workspaceName: z.string().min(1).optional(),
   parentIssue: IssueBindingSchema.optional(),
-  actor: ActorSourceSchema.default("mcp"),
 });
 
 export const LaunchArchitectAgentInputSchema = z.object({
   workspaceId: IdSchema.optional(),
   cwd: z.string().min(1).optional(),
   planApprovalMode: PlanApprovalModeSchema,
-  actor: ActorSourceSchema.default("mcp"),
 });
 
 export const LaunchImplementationAgentInputSchema = z.object({
   checkoutId: IdSchema.optional(),
   cwd: z.string().min(1).optional(),
   planVersionId: IdSchema.optional(),
-  actor: ActorSourceSchema.default("mcp"),
 });
 
 export const LaunchPrototypeAgentInputSchema = z.object({
   checkoutId: IdSchema.optional(),
   cwd: z.string().min(1).optional(),
   prompt: z.string().min(1).optional(),
-  actor: ActorSourceSchema.default("mcp"),
 });
 
 export const CreateWorkspaceCheckoutInputSchema = z.object({
@@ -513,18 +507,38 @@ export const MarkCheckoutReadyForReviewInputSchema = z.object({
   notes: z.string().optional(),
 });
 
-export const RegisterCheckoutReviewArtifactInputSchema = z.object({
-  checkoutId: IdSchema,
-  sessionId: IdSchema.optional(),
-  managerActionId: IdSchema.optional(),
-  planVersionId: IdSchema.optional(),
-  pr: PullRequestBindingSchema.optional(),
-  result: z.enum(["approve", "nit", "request_changes", "failed"]),
-  findingsStatus: z.enum(["none", "open_blocking", "resolved", "waived"]),
-  blockingFindings: z.array(z.string().min(1)).default([]),
-  artifactPath: z.string().nullable().default(null),
-  notes: z.string().optional(),
-});
+export const RegisterCheckoutReviewArtifactInputSchema = z
+  .object({
+    checkoutId: IdSchema,
+    sessionId: IdSchema.optional(),
+    managerActionId: IdSchema.optional(),
+    planVersionId: IdSchema.optional(),
+    pr: PullRequestBindingSchema.optional(),
+    result: z.enum(["approve", "nit", "request_changes", "failed"]),
+    findingsStatus: z.enum(["none", "open_blocking", "resolved", "waived"]),
+    blockingFindings: z.array(z.string().min(1)).default([]),
+    artifactPath: z.string().nullable().default(null),
+    humanWaivedBy: z.string().min(1).optional(),
+    humanWaiverReason: z.string().min(1).optional(),
+    notes: z.string().optional(),
+  })
+  .superRefine((value, context) => {
+    if (value.findingsStatus !== "waived") return;
+    if (!value.humanWaivedBy) {
+      context.addIssue({
+        code: "custom",
+        path: ["humanWaivedBy"],
+        message: "human_waiver_required",
+      });
+    }
+    if (!value.humanWaiverReason) {
+      context.addIssue({
+        code: "custom",
+        path: ["humanWaiverReason"],
+        message: "human_waiver_required",
+      });
+    }
+  });
 
 export const WorkspaceManagerControlInputSchema = z.object({
   workspaceId: IdSchema,

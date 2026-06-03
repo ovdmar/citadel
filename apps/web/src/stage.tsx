@@ -93,13 +93,13 @@ export function structuredStageActions(input: {
         id: "pm",
         label: "PM",
         toolName: "launch_pm_agent",
-        arguments: { workspaceId: input.workspace.id, actor: "human" },
+        arguments: { workspaceId: input.workspace.id },
       },
       {
         id: "architect",
         label: "Architect",
         toolName: "launch_architect_agent",
-        arguments: { workspaceId: input.workspace.id, planApprovalMode: "manual", actor: "human" },
+        arguments: { workspaceId: input.workspace.id, planApprovalMode: "manual" },
       },
       {
         id: "manager",
@@ -115,13 +115,13 @@ export function structuredStageActions(input: {
       id: "implementation",
       label: "Implementation",
       toolName: "launch_implementation_agent",
-      arguments: { checkoutId: input.checkoutId, actor: "human" },
+      arguments: { checkoutId: input.checkoutId },
     },
     {
       id: "prototype",
       label: "Prototype",
       toolName: "launch_prototype_agent",
-      arguments: { checkoutId: input.checkoutId, actor: "human" },
+      arguments: { checkoutId: input.checkoutId },
     },
   ];
 }

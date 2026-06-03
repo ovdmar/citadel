@@ -7,6 +7,37 @@ import { afterEach, describe, expect, it } from "vitest";
 import { OperationService } from "./index.js";
 
 const dirs: string[] = [];
+function validCheckoutPlan(repoId: string) {
+  return `# Plan
+
+## Delivery Units
+API work.
+
+\`\`\`json citadel.delivery_units.v1
+{
+  "deliveryUnits": [
+    {
+      "key": "api",
+      "repoId": "${repoId}",
+      "checkoutName": "api",
+      "branch": "feature/api",
+      "childIssue": { "provider": "jira", "key": "CIT-2" },
+      "dependencies": []
+    }
+  ]
+}
+\`\`\`
+
+## Dependencies / Timeline
+None.
+
+## Manager Handoff
+Create the checkout.
+
+## Plan Version Notes
+Initial.
+`;
+}
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
@@ -61,6 +92,15 @@ describe("structured workspace operations", () => {
       name: "Feature",
       source: "scratch",
     });
+    const planPath = path.join(fixture.dir, "feature", "plan.md");
+    fs.writeFileSync(planPath, validCheckoutPlan(repo.id));
+    const planResult = service.registerWorkspacePlan({
+      workspaceId: workspace.workspaceId,
+      path: planPath,
+      status: "approved",
+      approvalMode: "manual",
+    });
+    if (!planResult.ok) throw new Error(planResult.error);
 
     const checkout = await service.createWorkspaceCheckout({
       workspaceId: workspace.workspaceId,
@@ -68,6 +108,8 @@ describe("structured workspace operations", () => {
       name: "api",
       source: "default_branch",
       branch: "feature/api",
+      deliveryUnitKey: "api",
+      deliveryPlanVersionId: planResult.planVersion.id,
     });
 
     const row = store.findWorkspaceCheckout(checkout.checkoutId);
@@ -77,6 +119,8 @@ describe("structured workspace operations", () => {
       name: "api",
       path: path.join(fixture.dir, "feature", "api"),
       branch: "feature/api",
+      deliveryUnitKey: "api",
+      deliveryPlanVersionId: planResult.planVersion.id,
     });
     expect(fs.existsSync(path.join(row?.path ?? "", ".git"))).toBe(true);
   });

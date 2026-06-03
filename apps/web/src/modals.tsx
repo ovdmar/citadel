@@ -221,7 +221,6 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
           body: JSON.stringify({
             name: "launch_pm_agent",
             arguments: {
-              actor: "human",
               idea: prompt.trim() || undefined,
               workspaceName: name.trim() || undefined,
               ...(linked.source === "issue" && linked.issueKey

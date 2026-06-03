@@ -42,6 +42,12 @@ describe("manager orchestration migration (v19)", () => {
       | { name: string }
       | undefined;
     expect(migration?.name).toBe("manager-orchestration-ledger");
+    const activeIndex = db
+      .prepare(
+        "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'idx_manager_action_ledger_active_scope_action'",
+      )
+      .get() as { name: string } | undefined;
+    expect(activeIndex?.name).toBe("idx_manager_action_ledger_active_scope_action");
   });
 
   it("adds nullable checkout delivery-unit, review invalidation, and session manager-action columns", () => {

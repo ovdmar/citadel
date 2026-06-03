@@ -39,7 +39,13 @@ export function migrateWorkspaceHomeCheckoutsManager(
         parent_issue_title = COALESCE(parent_issue_title, issue_title)
     WHERE issue_key IS NOT NULL;
   `);
-  relaxWorkspacesRepoId(db);
+  relaxWorkspacesRepoId(db, () => createWorkspaceHomeSchema(db, ensureColumn));
+}
+
+function createWorkspaceHomeSchema(
+  db: SqliteDatabase,
+  ensureColumn: (table: string, column: string, definition: string) => void,
+) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS workspace_checkouts (
       id TEXT PRIMARY KEY,
@@ -179,10 +185,13 @@ export function migrateWorkspaceHomeCheckoutsManager(
   `);
 }
 
-function relaxWorkspacesRepoId(db: SqliteDatabase) {
+function relaxWorkspacesRepoId(db: SqliteDatabase, migrateSchema: () => void) {
   const cols = db.prepare("PRAGMA table_info(workspaces)").all() as Array<{ name: string; notnull: number }>;
   const repoId = cols.find((col) => col.name === "repo_id");
-  if (!repoId || repoId.notnull === 0) return;
+  if (!repoId || repoId.notnull === 0) {
+    migrateSchema();
+    return;
+  }
   db.exec("PRAGMA foreign_keys = OFF");
   try {
     db.exec("BEGIN IMMEDIATE");
@@ -248,6 +257,8 @@ function relaxWorkspacesRepoId(db: SqliteDatabase) {
         DROP TABLE workspaces;
         ALTER TABLE workspaces_new RENAME TO workspaces;
       `);
+      migrateSchema();
+      assertNoForeignKeyViolations(db);
       db.exec("COMMIT");
     } catch (error) {
       db.exec("ROLLBACK");
@@ -256,4 +267,9 @@ function relaxWorkspacesRepoId(db: SqliteDatabase) {
   } finally {
     db.exec("PRAGMA foreign_keys = ON");
   }
+}
+
+function assertNoForeignKeyViolations(db: SqliteDatabase) {
+  const rows = db.prepare("PRAGMA foreign_key_check").all();
+  if (rows.length) throw new Error("workspace_structure_migration_foreign_key_check_failed");
 }

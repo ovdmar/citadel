@@ -66,8 +66,8 @@ describe("Stage terminal pane ordering", () => {
         action.arguments,
       ]),
     ).toEqual([
-      ["Implementation", { checkoutId: "co_1", actor: "human" }],
-      ["Prototype", { checkoutId: "co_1", actor: "human" }],
+      ["Implementation", { checkoutId: "co_1" }],
+      ["Prototype", { checkoutId: "co_1" }],
     ]);
   });
 

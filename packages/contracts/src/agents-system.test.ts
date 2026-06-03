@@ -343,8 +343,13 @@ describe("agents system contracts", () => {
   });
 
   it("validates launcher and MCP input contracts", () => {
-    expect(LaunchPmAgentInputSchema.parse({ idea: "Build checkout automation" }).actor).toBe("mcp");
-    expect(LaunchArchitectAgentInputSchema.parse({ workspaceId: "ws_1", planApprovalMode: "auto" }).actor).toBe("mcp");
+    expect(LaunchPmAgentInputSchema.parse({ idea: "Build checkout automation", actor: "human" })).toEqual({
+      idea: "Build checkout automation",
+    });
+    expect(LaunchArchitectAgentInputSchema.parse({ workspaceId: "ws_1", planApprovalMode: "auto" })).toEqual({
+      workspaceId: "ws_1",
+      planApprovalMode: "auto",
+    });
     expect(LaunchImplementationAgentInputSchema.parse({ checkoutId: "co_1" }).checkoutId).toBe("co_1");
     expect(RegisterWorkspacePlanInputSchema.parse({ workspaceId: "ws_1", path: "/work/plan.md" }).status).toBe("draft");
     expect(
@@ -368,6 +373,13 @@ describe("agents system contracts", () => {
         artifactPath: "/tmp/review.md",
       }).result,
     ).toBe("approve");
+    expect(
+      RegisterCheckoutReviewArtifactInputSchema.safeParse({
+        checkoutId: "co_1",
+        result: "approve",
+        findingsStatus: "waived",
+      }).success,
+    ).toBe(false);
     expect(
       UpdateTicketStatusInputSchema.parse({
         workspaceId: "ws_1",

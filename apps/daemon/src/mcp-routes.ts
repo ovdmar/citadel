@@ -10,7 +10,7 @@ import { rpcError, rpcJsonContent, rpcResourceContent, rpcResult } from "./rpc.j
 export type McpRouteContext = {
   config: CitadelConfig;
   store: SqliteStore;
-  callDaemonMcpTool: (call: McpToolCall) => Promise<unknown>;
+  callDaemonMcpTool: (call: McpToolCall, context?: { actor?: "human" | "mcp" }) => Promise<unknown>;
   readMcpResource: (uri: string) => Promise<unknown>;
 };
 
@@ -67,7 +67,7 @@ export function registerMcpRoutes(
     asyncRoute(async (req, res) => {
       if (!config.mcp.enabled) return res.status(503).json({ error: "mcp_disabled" });
       const call = req.body as McpToolCall;
-      const result = await callDaemonMcpTool(call);
+      const result = await callDaemonMcpTool(call, { actor: "human" });
       res.json({ result });
     }),
   );
@@ -99,7 +99,7 @@ export function registerMcpRoutes(
             return res.json(rpcResult(request.id, { tools: mcpToolDefinitions() }));
           case "tools/call": {
             const params = request.params as McpToolCall;
-            const result = await callDaemonMcpTool(params);
+            const result = await callDaemonMcpTool(params, { actor: "mcp" });
             return res.json(rpcResult(request.id, rpcJsonContent(result)));
           }
           case "resources/list":

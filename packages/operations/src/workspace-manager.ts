@@ -38,6 +38,8 @@ export type WorkspaceManagerDeps = {
   ) => void;
 };
 
+export type TrustedToolActor = "human" | "manager" | "agent" | "mcp" | "system";
+
 export type WorkspaceManagerControlResult =
   | { ok: true; manager: WorkspaceManager; created?: boolean }
   | { ok: false; error: "workspace_not_found" | "structured_workspace_required" | "manager_not_found" };
@@ -76,7 +78,8 @@ export type RegisterCheckoutReviewArtifactResult =
         | "pr_required"
         | "pr_head_sha_required"
         | "review_authority_required"
-        | "review_action_mismatch";
+        | "review_action_mismatch"
+        | "human_waiver_required";
     };
 
 export type WorkspaceManagerTickResult =
@@ -270,6 +273,12 @@ export function getCheckoutGateStatus(
   ) {
     status = "review_blocked";
     reasons.push("blocking_review_findings");
+  } else if (
+    currentReview.findingsStatus === "waived" &&
+    (!currentReview.humanWaivedAt || !currentReview.humanWaivedBy || !currentReview.humanWaiverReason)
+  ) {
+    status = "review_blocked";
+    reasons.push("human_waiver_required");
   } else {
     status = "ready_for_human_review";
     reasons.push("ready");
@@ -320,7 +329,9 @@ export function markCheckoutReadyForReview(
 export function registerCheckoutReviewArtifact(
   deps: WorkspaceManagerDeps,
   input: RegisterCheckoutReviewArtifactInput,
+  options: { actor?: TrustedToolActor } = {},
 ): RegisterCheckoutReviewArtifactResult {
+  const actor = options.actor ?? "human";
   const resolved = resolveCheckout(deps.store, { checkoutId: input.checkoutId });
   if (!resolved.ok) return resolved;
   const activePlan = input.planVersionId
@@ -332,30 +343,41 @@ export function registerCheckoutReviewArtifact(
   const pr = checkout.intendedPr;
   if (!pr?.provider || (!pr.number && !pr.url)) return { ok: false, error: "pr_required" as const };
   if (!pr.headSha) return { ok: false, error: "pr_head_sha_required" as const };
-  const authority = validateReviewArtifactAuthority(deps, input, activePlan, checkout, pr.headSha);
+  if (input.findingsStatus === "waived" && (!input.humanWaivedBy || !input.humanWaiverReason))
+    return { ok: false, error: "human_waiver_required" as const };
+  if (input.findingsStatus === "waived" && actor !== "human")
+    return { ok: false, error: "human_waiver_required" as const };
+  const authority = validateReviewArtifactAuthority(deps, input, activePlan, checkout, pr.headSha, actor);
   if (!authority.ok) return authority;
   deps.store.invalidateCheckoutReviewArtifacts(checkout.id, "head_changed", pr.headSha);
   const existing = deps.store
     .listReviewArtifacts(checkout.id)
-    .find((artifact) => artifact.planVersionId === activePlan.id && artifact.headSha === pr.headSha);
-  const artifact: ReviewArtifact =
-    existing ??
-    ({
-      id: createId("review"),
-      workspaceId: resolved.workspace.id,
-      checkoutId: checkout.id,
-      planVersionId: activePlan.id,
-      prProvider: pr.provider,
-      prNumber: pr.number ?? null,
-      prUrl: pr.url ?? null,
-      headSha: pr.headSha,
-      result: input.result,
-      findingsStatus: input.findingsStatus,
-      blockingFindings: input.blockingFindings,
-      artifactPath: input.artifactPath,
-      createdAt: nowIso(),
-    } satisfies ReviewArtifact);
-  if (!existing) deps.store.insertReviewArtifact(artifact);
+    .find(
+      (artifact) =>
+        artifact.planVersionId === activePlan.id && artifact.headSha === pr.headSha && !artifact.invalidatedAt,
+    );
+  const now = nowIso();
+  const artifact: ReviewArtifact = {
+    id: existing?.id ?? createId("review"),
+    workspaceId: resolved.workspace.id,
+    checkoutId: checkout.id,
+    planVersionId: activePlan.id,
+    prProvider: pr.provider,
+    prNumber: pr.number ?? null,
+    prUrl: pr.url ?? null,
+    headSha: pr.headSha,
+    result: input.result,
+    findingsStatus: input.findingsStatus,
+    blockingFindings: input.blockingFindings,
+    artifactPath: input.artifactPath,
+    invalidatedAt: null,
+    invalidatedReason: null,
+    humanWaivedAt: input.findingsStatus === "waived" ? now : null,
+    humanWaivedBy: input.findingsStatus === "waived" ? (input.humanWaivedBy ?? null) : null,
+    humanWaiverReason: input.findingsStatus === "waived" ? (input.humanWaiverReason ?? null) : null,
+    createdAt: existing?.createdAt ?? now,
+  };
+  deps.store.insertReviewArtifact(artifact);
   const gate = getCheckoutGateStatus(deps, { checkoutId: checkout.id });
   if (gate.ok) {
     deps.store.updateWorkspaceCheckoutGate(checkout.id, gate.status);
@@ -376,11 +398,13 @@ export function registerCheckoutReviewArtifact(
 
 export function updateTicketStatus(deps: WorkspaceManagerDeps, input: UpdateTicketStatusInput) {
   const checkout = input.checkoutId ? deps.store.findWorkspaceCheckout(input.checkoutId) : null;
-  if (input.checkoutId && !checkout) return { ok: false, error: "checkout_not_found" as const };
-  if (checkout && checkout.workspaceId !== input.workspaceId)
+  if (input.checkoutId && (!checkout || checkout.workspaceId !== input.workspaceId))
     return { ok: false, error: "checkout_not_found" as const };
+  const workspace = deps.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+  if (!workspace) return { ok: false, error: "workspace_not_found" as const };
   const issue: IssueBinding = { ...input.issue, status: input.targetState };
-  const updated = checkout ? deps.store.updateWorkspaceCheckoutIssue(checkout.id, issue) : null;
+  const updatedCheckout = checkout ? deps.store.updateWorkspaceCheckoutIssue(checkout.id, issue) : null;
+  const updatedWorkspace = checkout ? null : deps.store.updateWorkspaceParentIssue(workspace.id, issue);
   deps.activity(
     "ticket.status.updated",
     "mcp",
@@ -394,7 +418,8 @@ export function updateTicketStatus(deps: WorkspaceManagerDeps, input: UpdateTick
     provider: issue.provider,
     externalUpdate: "not_configured",
     issue,
-    checkout: updated,
+    checkout: updatedCheckout,
+    workspace: updatedWorkspace,
   };
 }
 
@@ -404,8 +429,11 @@ function validateReviewArtifactAuthority(
   plan: WorkspacePlanVersion,
   checkout: WorktreeCheckout,
   headSha: string,
+  actor: TrustedToolActor,
 ): { ok: true } | { ok: false; error: "review_authority_required" | "review_action_mismatch" } {
-  if (!input.sessionId && !input.managerActionId) return { ok: true };
+  if (!input.sessionId && !input.managerActionId) {
+    return actor === "human" ? { ok: true } : { ok: false, error: "review_authority_required" };
+  }
   const session = input.sessionId
     ? deps.store.listWorkspaceSessions().find((candidate) => candidate.id === input.sessionId)
     : null;

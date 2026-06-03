@@ -134,8 +134,8 @@ export class OperationService {
   createWorkspaceCheckout = (input: CreateWorkspaceCheckoutInput) =>
     createWorkspaceCheckoutImpl(this.workspaceOpsDeps(), input);
 
-  registerWorkspacePlan = (input: RegisterWorkspacePlanInput) =>
-    workspacePlans.registerWorkspacePlan(this.planDeps(), input);
+  registerWorkspacePlan = (input: RegisterWorkspacePlanInput, options?: { actor?: workspacePlans.TrustedToolActor }) =>
+    workspacePlans.registerWorkspacePlan(this.planDeps(), input, options);
 
   getWorkspacePlan = (input: { workspaceId?: string | undefined; cwd?: string | undefined }) =>
     workspacePlans.getWorkspacePlan(this.planDeps(), input);
@@ -170,8 +170,10 @@ export class OperationService {
   markCheckoutReadyForReview = (input: MarkCheckoutReadyForReviewInput) =>
     workspaceManager.markCheckoutReadyForReview(this.managerDeps(), input);
 
-  registerCheckoutReviewArtifact = (input: RegisterCheckoutReviewArtifactInput) =>
-    workspaceManager.registerCheckoutReviewArtifact(this.managerDeps(), input);
+  registerCheckoutReviewArtifact = (
+    input: RegisterCheckoutReviewArtifactInput,
+    options?: { actor?: workspaceManager.TrustedToolActor },
+  ) => workspaceManager.registerCheckoutReviewArtifact(this.managerDeps(), input, options);
 
   updateTicketStatus = (input: UpdateTicketStatusInput) =>
     workspaceManager.updateTicketStatus(this.managerDeps(), input);

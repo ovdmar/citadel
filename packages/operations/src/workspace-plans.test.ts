@@ -271,6 +271,24 @@ Initial.
     ).toMatchObject({ ok: false, error: "plan_approval_required" });
   });
 
+  it("does not let MCP callers self-approve manual plans by omitting a session id", () => {
+    const { service, rootPath } = setup();
+    const planPath = path.join(rootPath, "mcp-plan.md");
+    fs.writeFileSync(planPath, validPlan("MCP Plan"));
+
+    expect(
+      service.registerWorkspacePlan(
+        {
+          workspaceId: "ws_plan",
+          path: planPath,
+          status: "approved",
+          approvalMode: "manual",
+        },
+        { actor: "mcp" },
+      ),
+    ).toMatchObject({ ok: false, error: "plan_approval_required" });
+  });
+
   it("resolves cwd context and reports deviations against the active plan", () => {
     const { store, service, rootPath } = setup();
     const checkoutPath = path.join(rootPath, "api");

@@ -194,6 +194,19 @@ describe("manager orchestration store methods", () => {
     });
     const duplicate = store.claimManagerAction({ ...action, id: "act_dup", leaseOwnerId: "owner-b" });
     expect(duplicate.id).toBe("act_1");
+    const duplicateScope = store.claimManagerAction({
+      ...action,
+      id: "act_dup_scope",
+      idempotencyKey: "ws_1:plan_1:api:launch:new-fact",
+      factKey: "new-fact",
+      leaseOwnerId: "owner-scope",
+    });
+    expect(duplicateScope.id).toBe("act_1");
+    expect(
+      store
+        .listManagerActions("ws_1")
+        .filter((entry) => entry.scopeKey === "ws_1:plan_1:api" && entry.actionKey === "launch_implementation"),
+    ).toHaveLength(1);
 
     expect(
       store.renewManagerActionLease("act_1", "owner-b", 1, {

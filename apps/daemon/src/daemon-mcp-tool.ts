@@ -63,6 +63,11 @@ export type DaemonMcpDeps = {
   emit: (type: string, payload: unknown) => void;
 };
 
+export type DaemonMcpCaller = "human" | "mcp" | "manager" | "agent" | "system";
+export type DaemonMcpCallContext = {
+  actor?: DaemonMcpCaller;
+};
+
 export function workspaceResource(store: SqliteStore) {
   const workspaces = store.listWorkspaces();
   return serializeWorkspaceResource({
@@ -94,8 +99,9 @@ function structuredWorkspaceError(error: unknown): { error: string; [key: string
   return null;
 }
 
-export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) {
+export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall, context: DaemonMcpCallContext = {}) {
   const { config, store, operations, scheduledAgents, scheduledAgentService, providerCache, emit } = deps;
+  const actor = context.actor ?? "mcp";
   if (call.name === "register_repo") {
     const input = CreateRepoInputSchema.parse(call.arguments ?? {});
     const repo = operations.registerRepo(input);
@@ -132,7 +138,9 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     }
   }
   if (call.name === "register_workspace_plan") {
-    const result = operations.registerWorkspacePlan(RegisterWorkspacePlanInputSchema.parse(call.arguments ?? {}));
+    const result = operations.registerWorkspacePlan(RegisterWorkspacePlanInputSchema.parse(call.arguments ?? {}), {
+      actor,
+    });
     if (result.ok)
       emit("workspace.plan.updated", {
         workspaceId: result.planVersion.workspaceId,
@@ -189,6 +197,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
   if (call.name === "register_checkout_review_artifact") {
     const result = operations.registerCheckoutReviewArtifact(
       RegisterCheckoutReviewArtifactInputSchema.parse(call.arguments ?? {}),
+      { actor },
     );
     if (result.ok) emit("checkout.gate.updated", { checkoutId: result.artifact.checkoutId });
     return result;
@@ -216,7 +225,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
                 input: LaunchImplementationAgentInputSchema.parse(call.arguments ?? {}),
               }
             : { role: "prototype" as const, input: LaunchPrototypeAgentInputSchema.parse(call.arguments ?? {}) };
-    const result = await launchStructuredRoleAgent({ config, store, operations }, parsed);
+    const result = await launchStructuredRoleAgent({ config, store, operations }, parsed, { actor });
     if (result.ok) emit("agent.updated", { workspaceId: result.workspaceId, sessionId: result.session.id });
     return result;
   }

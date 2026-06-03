@@ -36,21 +36,27 @@ type RoleLaunchResult =
   | { ok: true; workspaceId: string; checkoutId: string | null; session: AgentSession; warnings: string[] }
   | { ok: false; error: string; detail?: string };
 
-export async function launchStructuredRoleAgent(deps: Deps, launch: RoleLaunchInput): Promise<RoleLaunchResult> {
+export async function launchStructuredRoleAgent(
+  deps: Deps,
+  launch: RoleLaunchInput,
+  options: { actor?: Actor } = {},
+): Promise<RoleLaunchResult> {
+  const actor = options.actor ?? "mcp";
   const template = await findRoleTemplate(deps.config.dataDir, launch.role);
   if (!template) return { ok: false, error: "role_template_not_found", detail: launch.role };
   const runtime = resolveRuntime(deps.config, template.launchSettings);
   if (!runtime) return { ok: false, error: "runtime_unavailable", detail: template.launchSettings.runtimeId };
 
-  if (launch.role === "pm") return launchPm(deps, launch.input, template, runtime);
-  if (launch.role === "architect") return launchArchitect(deps, launch.input, template, runtime);
-  if (launch.role === "implementation") return launchImplementation(deps, launch.input, template, runtime);
-  return launchPrototype(deps, launch.input, template, runtime);
+  if (launch.role === "pm") return launchPm(deps, launch.input, actor, template, runtime);
+  if (launch.role === "architect") return launchArchitect(deps, launch.input, actor, template, runtime);
+  if (launch.role === "implementation") return launchImplementation(deps, launch.input, actor, template, runtime);
+  return launchPrototype(deps, launch.input, actor, template, runtime);
 }
 
 async function launchPm(
   deps: Deps,
   input: LaunchPmAgentInput,
+  actor: Actor,
   template: RoleTemplate,
   runtime: ResolvedRuntime,
 ): Promise<RoleLaunchResult> {
@@ -65,7 +71,7 @@ async function launchPm(
     workspace,
     checkout: null,
     role: "pm",
-    actor: input.actor,
+    actor,
     template,
     runtime,
     prompt: [
@@ -79,6 +85,7 @@ async function launchPm(
 async function launchArchitect(
   deps: Deps,
   input: LaunchArchitectAgentInput,
+  actor: Actor,
   template: RoleTemplate,
   runtime: ResolvedRuntime,
 ): Promise<RoleLaunchResult> {
@@ -91,7 +98,7 @@ async function launchArchitect(
     workspace,
     checkout: null,
     role: "architect",
-    actor: input.actor,
+    actor,
     template,
     runtime,
     prompt: [template.systemPrompt, `Plan approval mode: ${input.planApprovalMode}`],
@@ -101,6 +108,7 @@ async function launchArchitect(
 async function launchImplementation(
   deps: Deps,
   input: LaunchImplementationAgentInput,
+  actor: Actor,
   template: RoleTemplate,
   runtime: ResolvedRuntime,
 ): Promise<RoleLaunchResult> {
@@ -115,12 +123,14 @@ async function launchImplementation(
       return { ok: false, error: "approved_plan_required" };
     if (!workspace.parentIssue && !workspace.issueKey) return { ok: false, error: "parent_issue_required" };
     if (!checkout.issue) return { ok: false, error: "child_ticket_required" };
+    const provider = workspaceParentIssueProvider(workspace);
+    if (provider && checkout.issue.provider !== provider) return { ok: false, error: "ticket_provider_mismatch" };
   }
   return launchRoleSession(deps, {
     workspace,
     checkout,
     role: "implementation",
-    actor: input.actor,
+    actor,
     template,
     runtime,
     plan: activePlan,
@@ -136,6 +146,7 @@ async function launchImplementation(
 async function launchPrototype(
   deps: Deps,
   input: LaunchPrototypeAgentInput,
+  actor: Actor,
   template: RoleTemplate,
   runtime: ResolvedRuntime,
 ): Promise<RoleLaunchResult> {
@@ -145,7 +156,7 @@ async function launchPrototype(
     workspace: target.workspace,
     checkout: target.checkout,
     role: "prototype",
-    actor: input.actor,
+    actor,
     template,
     runtime,
     prompt: [template.systemPrompt, input.prompt ?? null],
@@ -296,4 +307,10 @@ function activitySource(actor: Actor): ActivityEvent["source"] {
   if (actor === "human") return "user";
   if (actor === "manager") return "automatic-rule";
   return actor;
+}
+
+function workspaceParentIssueProvider(workspace: Workspace): string | null {
+  if (workspace.parentIssue) return workspace.parentIssue.provider;
+  if (workspace.issueKey) return "jira";
+  return null;
 }

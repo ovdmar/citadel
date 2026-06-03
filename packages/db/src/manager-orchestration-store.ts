@@ -210,7 +210,9 @@ export const managerOrchestrationStoreMethods = {
         action.updatedAt,
       );
     if (!result.changes && action.leaseOwnerId) {
-      const existing = this.findManagerActionByKey(action.idempotencyKey);
+      const existing =
+        this.findManagerActionByKey(action.idempotencyKey) ??
+        findActiveManagerActionByScopeAction(this, action.workspaceId, action.scopeKey, action.actionKey);
       if (existing?.status === "queued" && existing.attemptCount < existing.maxAttempts) {
         this.database
           .prepare(
@@ -229,7 +231,9 @@ export const managerOrchestrationStoreMethods = {
           );
       }
     }
-    const claimed = this.findManagerActionByKey(action.idempotencyKey);
+    const claimed =
+      this.findManagerActionByKey(action.idempotencyKey) ??
+      findActiveManagerActionByScopeAction(this, action.workspaceId, action.scopeKey, action.actionKey);
     if (!claimed) throw new Error(`manager action claim disappeared: ${action.idempotencyKey}`);
     return claimed;
   },
@@ -699,5 +703,23 @@ export const managerOrchestrationStoreMethods = {
 
 function findManagerActionById(store: SqliteStore, id: string): ManagerActionLedgerEntry | null {
   const row = store.database.prepare("SELECT * FROM manager_action_ledger WHERE id = ?").get(id);
+  return row ? managerActionFromRow(row as Record<string, unknown>) : null;
+}
+
+function findActiveManagerActionByScopeAction(
+  store: SqliteStore,
+  workspaceId: string,
+  scopeKey: string,
+  actionKey: string,
+): ManagerActionLedgerEntry | null {
+  const row = store.database
+    .prepare(
+      `SELECT * FROM manager_action_ledger
+       WHERE workspace_id = ? AND scope_key = ? AND action_key = ?
+         AND status IN ('queued', 'claimed', 'running', 'blocked')
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+    )
+    .get(workspaceId, scopeKey, actionKey);
   return row ? managerActionFromRow(row as Record<string, unknown>) : null;
 }

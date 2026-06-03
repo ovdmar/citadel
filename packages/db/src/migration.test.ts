@@ -630,6 +630,7 @@ describe("workspace home/checkouts/manager migration (v16)", () => {
       | { name: string }
       | undefined;
     expect(migration?.name).toBe("workspace-home-checkouts-manager");
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
   it("backfills one checkout for existing worktree workspaces", () => {

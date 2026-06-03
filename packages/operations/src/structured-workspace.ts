@@ -125,6 +125,8 @@ export async function createWorkspaceCheckoutImpl(
       intendedPr: null,
       stackParentCheckoutId: input.upstreamCheckoutId ?? null,
       inferredPurpose: null,
+      deliveryUnitKey: input.deliveryUnitKey ?? null,
+      deliveryPlanVersionId: input.deliveryPlanVersionId ?? null,
       gateStatus: "not_started",
       createdAt: now,
       updatedAt: now,

@@ -5,6 +5,7 @@ import type {
   ActivityEvent,
   AgentSession,
   HookOutput,
+  IssueBinding,
   Namespace,
   Operation,
   OperationLogEntry,
@@ -268,6 +269,29 @@ export class SqliteStore {
     values.push(new Date().toISOString());
     values.push(workspaceId);
     this.database.prepare(`UPDATE workspaces SET ${fields.join(", ")} WHERE id = ?`).run(...(values as unknown[]));
+  }
+
+  updateWorkspaceParentIssue(workspaceId: string, issue: IssueBinding | null): Workspace | null {
+    this.database
+      .prepare(
+        `UPDATE workspaces
+         SET parent_issue_provider = ?, parent_issue_key = ?, parent_issue_url = ?, parent_issue_title = ?,
+           parent_issue_status = ?, issue_key = ?, issue_title = ?, issue_url = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        issue?.provider ?? null,
+        issue?.key ?? null,
+        issue?.url ?? null,
+        issue?.title ?? null,
+        issue?.status ?? null,
+        issue?.key ?? null,
+        issue?.title ?? null,
+        issue?.url ?? null,
+        new Date().toISOString(),
+        workspaceId,
+      );
+    return this.listWorkspaces().find((workspace) => workspace.id === workspaceId) ?? null;
   }
 
   updateWorkspaceLayout(

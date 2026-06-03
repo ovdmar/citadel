@@ -85,6 +85,9 @@ export function migrateManagerOrchestrationLedger(
     );
     CREATE INDEX IF NOT EXISTS idx_manager_action_ledger_workspace_status
       ON manager_action_ledger(workspace_id, status, updated_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_manager_action_ledger_active_scope_action
+      ON manager_action_ledger(workspace_id, scope_key, action_key)
+      WHERE status IN ('queued', 'claimed', 'running', 'blocked');
     CREATE TABLE IF NOT EXISTS provider_issue_facts (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,

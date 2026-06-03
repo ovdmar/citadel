@@ -286,6 +286,73 @@ describe("workspace manager operations", () => {
         artifactPath: null,
       }),
     ).toMatchObject({ ok: false, error: "review_action_mismatch" });
+
+    expect(
+      service.registerCheckoutReviewArtifact(
+        {
+          checkoutId: "co_api",
+          result: "approve",
+          findingsStatus: "none",
+          blockingFindings: [],
+          artifactPath: null,
+        },
+        { actor: "mcp" },
+      ),
+    ).toMatchObject({ ok: false, error: "review_authority_required" });
+  });
+
+  it("requires trusted human waiver evidence for waived review findings", () => {
+    const { store, service } = setup();
+
+    expect(
+      service.registerCheckoutReviewArtifact(
+        {
+          checkoutId: "co_api",
+          result: "approve",
+          findingsStatus: "waived",
+          blockingFindings: ["Needs follow-up"],
+          artifactPath: null,
+          humanWaivedBy: "operator",
+          humanWaiverReason: "Accepted for local prototype",
+        },
+        { actor: "mcp" },
+      ),
+    ).toMatchObject({ ok: false, error: "human_waiver_required" });
+
+    expect(
+      service.registerCheckoutReviewArtifact({
+        checkoutId: "co_api",
+        result: "request_changes",
+        findingsStatus: "open_blocking",
+        blockingFindings: ["Needs follow-up"],
+        artifactPath: null,
+      }),
+    ).toMatchObject({ ok: true, gate: { ok: true, status: "review_blocked" } });
+
+    expect(
+      service.registerCheckoutReviewArtifact(
+        {
+          checkoutId: "co_api",
+          result: "approve",
+          findingsStatus: "waived",
+          blockingFindings: ["Needs follow-up"],
+          artifactPath: null,
+          humanWaivedBy: "operator",
+          humanWaiverReason: "Accepted for local prototype",
+        },
+        { actor: "human" },
+      ),
+    ).toMatchObject({
+      ok: true,
+      artifact: { findingsStatus: "waived", humanWaivedBy: "operator" },
+      gate: { ok: true, status: "ready_for_human_review" },
+    });
+    expect(store.listReviewArtifacts("co_api")).toHaveLength(1);
+    expect(store.listReviewArtifacts("co_api")[0]).toMatchObject({
+      findingsStatus: "waived",
+      humanWaivedBy: "operator",
+      invalidatedAt: null,
+    });
   });
 
   it("invalidates stale review artifacts when the PR head changes", () => {
@@ -425,6 +492,22 @@ describe("workspace manager operations", () => {
       }),
     ).toMatchObject({ ok: true, issue: { status: "in_review" }, externalUpdate: "not_configured" });
     expect(store.findWorkspaceCheckout("co_api")?.issue).toMatchObject({ key: "CIT-2", status: "in_review" });
+  });
+
+  it("updates provider-neutral workspace parent ticket status locally", () => {
+    const { store, service } = setup();
+
+    expect(
+      service.updateTicketStatus({
+        workspaceId: "ws_manager",
+        issue: { provider: "jira", key: "CIT-1", url: null, title: "Parent", status: "To Do", fetchedAt: null },
+        targetState: "in_qa",
+      }),
+    ).toMatchObject({ ok: true, issue: { status: "in_qa" }, workspace: { parentIssue: { status: "in_qa" } } });
+    expect(store.listWorkspaces().find((workspace) => workspace.id === "ws_manager")).toMatchObject({
+      parentIssue: { key: "CIT-1", status: "in_qa" },
+      issueKey: "CIT-1",
+    });
   });
 
   it("does not update a checkout ticket through another workspace id", () => {

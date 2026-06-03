@@ -443,7 +443,7 @@ export async function createDaemonApp(input: {
   registerMcpRoutes(app, asyncRoute, {
     config,
     store,
-    callDaemonMcpTool: (call) => callDaemonMcpTool(mcpDeps, call),
+    callDaemonMcpTool: (call, context) => callDaemonMcpTool(mcpDeps, call, context),
     readMcpResource: (uri) => readMcpResource(store, config, uri),
   });
 

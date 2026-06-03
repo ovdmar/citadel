@@ -54,7 +54,7 @@ describe("structured role launchers", () => {
       { config, store, operations },
       {
         role: "pm",
-        input: { idea: "Coordinate a checkout workflow", workspaceName: "Checkout Workflow", actor: "mcp" },
+        input: { idea: "Coordinate a checkout workflow", workspaceName: "Checkout Workflow" },
       },
     );
 
@@ -114,7 +114,7 @@ describe("structured role launchers", () => {
     await expect(
       launchStructuredRoleAgent(
         { config, store, operations },
-        { role: "implementation", input: { checkoutId: "co_api", actor: "mcp" } },
+        { role: "implementation", input: { checkoutId: "co_api" } },
       ),
     ).resolves.toMatchObject({ ok: false, error: "approved_plan_required" });
 
@@ -130,7 +130,7 @@ describe("structured role launchers", () => {
 
     const launched = await launchStructuredRoleAgent(
       { config, store, operations },
-      { role: "implementation", input: { checkoutId: "co_api", actor: "mcp" } },
+      { role: "implementation", input: { checkoutId: "co_api" } },
     );
 
     expect(launched).toMatchObject({
@@ -139,6 +139,67 @@ describe("structured role launchers", () => {
       session: { role: "implementation", targetType: "worktree_checkout", checkoutId: "co_api", managed: true },
     });
     if (launched.ok) operations.stopWorkspaceSession({ sessionId: launched.session.id });
+  });
+
+  it("rejects structured implementation launches with a mismatched child issue provider", async () => {
+    const { config, store, operations } = createDeps();
+    const rootPath = path.join(config.dataDir, "mixed-provider-feature");
+    const workspace = await operations.createWorkspace({
+      mode: "structured",
+      rootPath,
+      name: "Mixed Provider Feature",
+      source: "scratch",
+      parentIssue: { provider: "jira", key: "CIT-1", url: null, title: "Feature", status: "To Do", fetchedAt: null },
+    });
+    const timestamp = "2026-06-01T00:00:00.000Z";
+    store.insertRepo({
+      id: "repo_mixed",
+      name: "API",
+      rootPath: path.join(config.dataDir, "repo-mixed"),
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      deployHookCommand: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      archivedAt: null,
+    });
+    store.insertWorkspaceCheckout({
+      id: "co_mixed",
+      workspaceId: workspace.workspaceId,
+      repoId: "repo_mixed",
+      name: "api",
+      path: path.join(rootPath, "api"),
+      branch: "feature/api",
+      baseBranch: "main",
+      issue: { provider: "github", key: "12", url: null, title: "API", status: "To Do", fetchedAt: null },
+      intendedPr: null,
+      stackParentCheckoutId: null,
+      inferredPurpose: "implementation",
+      gateStatus: "not_started",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      archivedAt: null,
+    });
+    fs.mkdirSync(path.join(rootPath, "api"), { recursive: true });
+    const planPath = path.join(rootPath, "plan.md");
+    fs.writeFileSync(planPath, validPlan);
+    operations.registerWorkspacePlan({
+      workspaceId: workspace.workspaceId,
+      path: planPath,
+      status: "approved",
+      approvalMode: "manual",
+    });
+
+    await expect(
+      launchStructuredRoleAgent(
+        { config, store, operations },
+        { role: "implementation", input: { checkoutId: "co_mixed" } },
+      ),
+    ).resolves.toMatchObject({ ok: false, error: "ticket_provider_mismatch" });
   });
 
   it("blocks automated role launches while the workspace manager is paused", async () => {
@@ -154,13 +215,14 @@ describe("structured role launchers", () => {
     await expect(
       launchStructuredRoleAgent(
         { config, store, operations },
-        { role: "pm", input: { workspaceId: workspace.workspaceId, actor: "mcp" } },
+        { role: "pm", input: { workspaceId: workspace.workspaceId } },
       ),
     ).resolves.toMatchObject({ ok: false, error: "automation_paused" });
 
     const manual = await launchStructuredRoleAgent(
       { config, store, operations },
-      { role: "pm", input: { workspaceId: workspace.workspaceId, actor: "human" } },
+      { role: "pm", input: { workspaceId: workspace.workspaceId } },
+      { actor: "human" },
     );
     expect(manual).toMatchObject({ ok: true, session: { role: "pm" } });
     if (manual.ok) operations.stopWorkspaceSession({ sessionId: manual.session.id });
@@ -179,7 +241,7 @@ describe("structured role launchers", () => {
     await expect(
       launchStructuredRoleAgent(
         { config, store, operations },
-        { role: "architect", input: { workspaceId: workspace.workspaceId, planApprovalMode: "manual", actor: "mcp" } },
+        { role: "architect", input: { workspaceId: workspace.workspaceId, planApprovalMode: "manual" } },
       ),
     ).resolves.toMatchObject({ ok: false, error: "discovery_not_ready" });
 
@@ -188,16 +250,13 @@ describe("structured role launchers", () => {
       .run(workspace.workspaceId);
     const architect = await launchStructuredRoleAgent(
       { config, store, operations },
-      { role: "architect", input: { workspaceId: workspace.workspaceId, planApprovalMode: "manual", actor: "mcp" } },
+      { role: "architect", input: { workspaceId: workspace.workspaceId, planApprovalMode: "manual" } },
     );
     expect(architect).toMatchObject({ ok: true, checkoutId: null, session: { role: "architect" } });
     if (architect.ok) operations.stopWorkspaceSession({ sessionId: architect.session.id });
 
     await expect(
-      launchStructuredRoleAgent(
-        { config, store, operations },
-        { role: "prototype", input: { cwd: rootPath, actor: "mcp" } },
-      ),
+      launchStructuredRoleAgent({ config, store, operations }, { role: "prototype", input: { cwd: rootPath } }),
     ).resolves.toMatchObject({ ok: false, error: "checkout_required" });
 
     const checkoutPath = path.join(rootPath, "prototype");
@@ -236,7 +295,7 @@ describe("structured role launchers", () => {
     });
     const prototype = await launchStructuredRoleAgent(
       { config, store, operations },
-      { role: "prototype", input: { checkoutId: "co_proto", actor: "mcp" } },
+      { role: "prototype", input: { checkoutId: "co_proto" } },
     );
     expect(prototype).toMatchObject({ ok: true, checkoutId: "co_proto", session: { role: "prototype" } });
     if (prototype.ok) operations.stopWorkspaceSession({ sessionId: prototype.session.id });

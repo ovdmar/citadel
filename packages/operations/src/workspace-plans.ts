@@ -35,6 +35,8 @@ export type WorkspacePlanDeps = {
   ) => void;
 };
 
+export type TrustedToolActor = "human" | "manager" | "agent" | "mcp" | "system";
+
 export type WorkspaceScope =
   | { ok: true; workspace: Workspace; checkout: WorktreeCheckout | null; cwd: string | null }
   | { ok: false; error: "workspace_required" | "workspace_not_found" | "cwd_not_registered"; workspaceId?: string };
@@ -95,7 +97,9 @@ export type ReportPlanDeviationResult =
 export function registerWorkspacePlan(
   deps: WorkspacePlanDeps,
   input: RegisterWorkspacePlanInput,
+  options: { actor?: TrustedToolActor } = {},
 ): RegisterWorkspacePlanResult {
+  const actor = options.actor ?? "human";
   const scope = resolveWorkspaceScope(deps.store, input);
   if (!scope.ok) return mapScopeError(scope);
   const resolvedPlan = resolvePlanPath(scope.workspace, input.path, scope.cwd);
@@ -105,6 +109,7 @@ export function registerWorkspacePlan(
   if (input.status === "approved") {
     if (input.createdBySessionId && input.approvalMode !== "auto")
       return { ok: false, error: "plan_approval_required" };
+    if (actor !== "human" && input.approvalMode !== "auto") return { ok: false, error: "plan_approval_required" };
     const structure = validateApprovedPlanStructure(content.toString("utf8"));
     if (!structure.ok) return structure;
     const parsed = validateApprovedPlanDeliveryUnits(content.toString("utf8"), deps.store.listRepos());
@@ -144,13 +149,13 @@ export function registerWorkspacePlan(
       planVersionId: planVersion.id,
       decision: "approve",
       reason: "Registered as approved plan",
-      actor: input.createdBySessionId ? "system" : "human",
+      actor: actor === "human" ? "human" : actor === "manager" ? "manager" : "system",
       createdAt: now,
     });
   }
   deps.activity(
     "workspace.plan.registered",
-    input.createdBySessionId ? "agent" : "mcp",
+    activitySource(actor),
     `Registered workspace plan v${planVersion.version}`,
     scope.workspace.repoId,
     scope.workspace.id,
@@ -162,6 +167,12 @@ export function registerWorkspacePlan(
     deliveryUnits: materializedUnits?.deliveryUnits ?? [],
     dependencyEdges: materializedUnits?.dependencyEdges ?? [],
   };
+}
+
+function activitySource(actor: TrustedToolActor): ActivityEvent["source"] {
+  if (actor === "human") return "user";
+  if (actor === "manager") return "automatic-rule";
+  return actor;
 }
 
 export function getWorkspacePlan(
