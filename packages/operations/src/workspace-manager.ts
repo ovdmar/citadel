@@ -1,17 +1,14 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import type {
   ActivityEvent,
   AgentSession,
   CheckoutContextInput,
   CheckoutGateStatus,
-  CheckoutPrFact,
   IssueBinding,
   LocalNotificationEvent,
   ManagerActionLedgerEntry,
   ManagerEvent,
   MarkCheckoutReadyForReviewInput,
-  ProviderIssueFact,
   RegisterCheckoutReviewArtifactInput,
   ReviewArtifact,
   UpdateTicketStatusInput,
@@ -24,7 +21,9 @@ import type {
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { type ManagerDecision, evaluateManagerDecisions } from "./manager-decision.js";
+import { stableId } from "./stable-id.js";
 import { resolveExecutionTargetForCwd } from "./workspace-layout.js";
+import { issueFactFromBinding, prFactFromBinding } from "./workspace-manager-provider-facts.js";
 
 export type WorkspaceManagerDeps = {
   store: SqliteStore;
@@ -628,92 +627,8 @@ function recordManagerDecisionEvent(
   });
 }
 
-function issueFactFromBinding(
-  workspace: Workspace,
-  checkout: WorktreeCheckout | null,
-  deliveryUnitKey: string | null | undefined,
-  issue: IssueBinding,
-  timestamp: string,
-): ProviderIssueFact {
-  const sourceBindingType = checkout
-    ? "checkout_child_issue"
-    : deliveryUnitKey
-      ? "plan_delivery_unit"
-      : "workspace_parent_issue";
-  const sourceBindingId = checkout?.id ?? deliveryUnitKey ?? workspace.id;
-  return {
-    id: stableId(
-      "pif",
-      workspace.id,
-      checkout?.id ?? "workspace",
-      deliveryUnitKey ?? "no_unit",
-      issue.provider,
-      issue.key,
-    ),
-    workspaceId: workspace.id,
-    checkoutId: checkout?.id ?? null,
-    deliveryUnitKey: deliveryUnitKey ?? null,
-    identity: {
-      providerType: issue.provider,
-      providerInstanceId: issue.provider,
-      accountId: null,
-      hostUrl: null,
-      externalUrl: issue.url,
-      workspaceBindingId: workspace.id,
-      sourceBindingType,
-      sourceBindingId,
-    },
-    issueId: null,
-    issueKey: issue.key,
-    title: issue.title ?? null,
-    status: issue.status ?? null,
-    acceptanceSnapshot: null,
-    fetchedAt: issue.fetchedAt ?? timestamp,
-    staleAt: null,
-    degradedReason: null,
-    cooldownUntil: null,
-  };
-}
-
-function prFactFromBinding(workspace: Workspace, checkout: WorktreeCheckout, timestamp: string): CheckoutPrFact {
-  const pr = checkout.intendedPr;
-  if (!pr) throw new Error("pr_required");
-  return {
-    id: stableId("cpf", workspace.id, checkout.id, pr.provider, String(pr.number ?? pr.url ?? "pr")),
-    workspaceId: workspace.id,
-    checkoutId: checkout.id,
-    identity: {
-      providerType: pr.provider,
-      providerInstanceId: pr.provider,
-      accountId: null,
-      hostUrl: null,
-      externalUrl: pr.url,
-      workspaceBindingId: workspace.id,
-      sourceBindingType: "checkout_pr",
-      sourceBindingId: checkout.id,
-      repositoryId: checkout.repoId,
-      providerRepositoryKey: null,
-    },
-    prId: null,
-    prNumber: pr.number ?? null,
-    prUrl: pr.url ?? null,
-    headSha: pr.headSha ?? null,
-    baseRef: pr.baseRef ?? null,
-    mergeStateStatus: pr.mergeStateStatus ?? null,
-    hasConflicts: pr.hasConflicts ?? null,
-    fetchedAt: pr.fetchedAt ?? timestamp,
-    staleAt: null,
-    degradedReason: null,
-    cooldownUntil: null,
-  };
-}
-
 function issueMatches(left: IssueBinding | null | undefined, right: IssueBinding | null | undefined): boolean {
   return Boolean(left && right && left.provider === right.provider && left.key === right.key);
-}
-
-function stableId(prefix: string, ...parts: string[]): string {
-  return `${prefix}_${createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 24)}`;
 }
 
 function managerEventStatus(status: ManagerActionLedgerEntry["status"]): ManagerEvent["status"] {
