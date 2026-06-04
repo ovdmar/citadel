@@ -92,7 +92,7 @@
 [ ] 1. Archive workspace keeps history while hiding the workspace from active cockpit views.
 [ ] 2. Remove workspace explains root directory, checkouts, sessions, operations, hooks, plan artifacts, manager state, and provider bindings affected by cleanup.
 [ ] 3. Remove workspace requires explicit confirmation when active sessions, active manager actions, dirty checkout files, or unpushed checkout commits exist.
-[~] 4. Remove workspace runs repo teardown hooks before tmux/worktree cleanup; both `repo.teardownHookIds` and an executable `.citadel/hooks/teardown` are honored (file first, then configured).
+[~] 4. Remove workspace runs repo teardown hooks before terminal-owner/worktree cleanup; both `repo.teardownHookIds` and an executable `.citadel/hooks/teardown` are honored (file first, then configured).
 [ ] 5. Remove workspace can preserve the root/checkouts on disk when selected. Checkout archive/remove paths retain dirty-worktree protection.
 [ ] 6. Workspace lifecycle is tracked separately from agent session, terminal, git, PR, and deployment state.
 [ ] 7. Archived/removed workspaces remain visible from the *History* navigator entry.

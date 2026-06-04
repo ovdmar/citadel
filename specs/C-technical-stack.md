@@ -11,7 +11,7 @@
 [~] 3. Citadel targets Node.js 24+.
 [~] 4. Citadel uses ESM modules.
 [ ] 5. The first supported runtime is direct local Linux host install.
-[~] 6. Required local tools are git and tmux. Browser terminal attach uses the in-process daemon bridge plus the native `node-pty` dependency; no separate terminal renderer binary is required.
+[~] 6. Required local tools are git and native PTY support through `node-pty`. Tmux remains a supported migration/fallback dependency for legacy terminal sessions. Browser terminal attach uses the in-process daemon WebSocket bridge plus either legacy tmux attach or the Citadel PTY daemon; no separate terminal renderer binary is required.
 [ ] 7. Optional shell-backed providers rely on their own installed CLIs and auth.
 
 ## Applications
@@ -19,7 +19,7 @@
 [~] 1. apps/daemon is the local Citadel daemon.
 [~] 2. apps/web is the browser operator cockpit.
 [~] 3. apps/cli is reserved for thin local helpers.
-[ ] 4. The daemon is the owner of filesystem, git, tmux, operations, providers, hooks, persistence, terminal routing, and MCP.
+[ ] 4. The daemon is the owner of filesystem, git, operations, providers, hooks, persistence, terminal routing, MCP, and terminal backend adoption. A separate PTY daemon may own long-running PTY processes; tmux remains owned for legacy/fallback sessions.
 [ ] 5. The web app is a client over typed contracts and daemon APIs.
 [ ] 6. Future desktop, CLI, and MCP clients use the same daemon product boundary.
 
@@ -40,7 +40,7 @@
 [~] 1. The daemon uses Express for HTTP APIs.
 [~] 2. The daemon uses REST for commands and snapshots.
 [~] 3. The daemon uses SSE for app-state/events.
-[~] 4. The daemon serves interactive terminal I/O through `/terminal/:sessionId` WebSocket upgrades backed by node-pty running `tmux attach-session`. Terminal bytes move as binary frames; JSON is used for control messages.
+[~] 4. The daemon serves interactive terminal I/O through `/terminal/:sessionId` WebSocket upgrades. Legacy tmux-backed rows attach through node-pty running `tmux attach-session`; PTY-daemon-backed rows bridge over a private Unix socket to a long-running PTY owner process. Terminal bytes move as binary frames; JSON is used for control messages.
 [~] 5. The daemon uses Zod-backed contracts for shared request/response/event schemas.
 [ ] 6. Long-running or side-effectful work is represented as operations.
 [ ] 7. Terminal transport remains separate from app-state transport.
@@ -58,14 +58,14 @@
 
 ## Terminal And Runtime Stack
 
-[~] 1. Agent runtimes launch through tmux using the configured terminal profile as the base shell.
-[~] 2. Citadel persists tmux session identity.
-[~] 3. Browser attach/reconnect is owned by packages/terminal: the xterm/WebSocket bridge uses node-pty `tmux attach-session` at `/terminal/:sessionId`.
+[~] 1. Agent runtimes launch through a backend-owned terminal session using the configured terminal profile as the base shell. During migration this can be a legacy tmux pane or a PTY-daemon-owned node-pty session.
+[~] 2. Citadel persists terminal backend identity. Tmux-backed rows persist tmux session identity; PTY-daemon-backed rows persist PTY session and owner socket identity.
+[~] 3. Browser attach/reconnect is owned by packages/terminal: the xterm/WebSocket bridge uses node-pty `tmux attach-session` for legacy rows and a Unix-socket PTY-daemon client for PTY-daemon rows at `/terminal/:sessionId`.
 [~] 4. Browser terminal traffic is scoped by session ID through `/terminal/:sessionId` WebSocket upgrades; there is no daemon-managed per-session terminal renderer process or secondary proxy route.
-[~] 5. The cockpit shows an explicit, actionable error (`session_not_found`, `tmux_session_missing`, `terminal_unavailable`, `spawn_failed`) when a terminal cannot be served — never a blank black surface.
+[~] 5. The cockpit shows an explicit, actionable error (`session_not_found`, `tmux_session_missing`, `pty_session_missing`, `pty_owner_missing`, `terminal_unavailable`, `spawn_failed`) when a terminal cannot be served — never a blank black surface.
 [ ] 6. Agent runtime adapters live behind capability-based contracts.
 [ ] 7. Runtime health is visible before session start.
-[~] 8. Trade-offs of using xterm.js over node-pty/tmux attach are accepted: Citadel owns the bridge, but preserves real PTY semantics while avoiding per-session external renderer processes for normal navigation.
+[~] 8. Trade-offs of using xterm.js over node-pty are accepted: Citadel owns the bridge, but preserves real PTY semantics while avoiding per-session external renderer processes for normal navigation. Tmux attach remains a compatibility backend until PTY-daemon coverage and migration gates pass.
 
 ## Package Boundaries
 
@@ -74,7 +74,7 @@
 [~] 3. packages/config contains versioned config loading and validation.
 [~] 4. packages/db contains SQLite schema, migrations, repositories, and transaction helpers.
 [~] 5. packages/operations contains side-effectful workflows.
-[~] 6. packages/terminal contains the tmux gateway, node-pty WebSocket bridge, input helpers, capture utilities, and pane/log lifecycle helpers.
+[~] 6. packages/terminal contains terminal backend adapters, the legacy tmux gateway, the PTY-daemon client/gateway, input helpers, capture utilities, and pane/log lifecycle helpers.
 [~] 7. packages/runtimes contains agent runtime provider contracts and adapters.
 [~] 8. packages/providers contains version-control, PR, CI, issue tracker, usage, and notification providers.
 [~] 9. packages/hooks contains hook contracts, command execution, and event dispatch.
@@ -135,4 +135,4 @@
 
 ---
 
-keywords: tech stack, architecture, typescript, pnpm, node, react, vite, tanstack, express, sqlite, tmux, node-pty, xterm, websocket, sse, zod, biome, vitest, playwright
+keywords: tech stack, architecture, typescript, pnpm, node, react, vite, tanstack, express, sqlite, pty daemon, tmux, node-pty, xterm, websocket, sse, zod, biome, vitest, playwright

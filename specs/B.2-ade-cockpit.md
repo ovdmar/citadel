@@ -60,9 +60,9 @@
 [ ] 7. Selecting a freestyle runtime creates a `kind: "agent"` session with no role/action metadata in the selected target cwd.
 [ ] 8. Selecting a specialized role or action creates a `kind: "agent"` session with role/action/managed metadata and any launch warnings from runtime capability resolution.
 [ ] 9. Each session tab has an editable title. Default titles include role/action names for specialized sessions, runtime display name for freestyle agents, and `Terminal` for terminal sessions.
-[ ] 10. Closing a tab kills the backing tmux session and marks the live tab closed, but durable session history, runtime session id, artifacts, role/action metadata, and resume information remain inspectable.
+[ ] 10. Closing a tab stops the backing terminal-owner session and marks the live tab closed, but durable session history, runtime session id, artifacts, role/action metadata, and resume information remain inspectable.
 [ ] 11. The selected session occupies the rest of the column height.
-[x] 12. Terminal keyboard shortcuts pass through to the active terminal by default. The terminal pane intercepts a small, named allow-list of cockpit shortcuts (see §Keyboard Shortcuts) before xterm consumes them and posts the same terminal shortcut message path used by the cockpit; everything else is delivered to xterm/tmux unchanged.
+[x] 12. Terminal keyboard shortcuts pass through to the active terminal by default. The terminal pane intercepts a small, named allow-list of cockpit shortcuts (see §Keyboard Shortcuts) before xterm consumes them and posts the same terminal shortcut message path used by the cockpit; everything else is delivered to the backing terminal unchanged.
 [ ] 13. Selecting a target in the navigator focuses that target's currently-active xterm pane directly. If the target has no live session, focusing is a no-op.
 [ ] 14. Closing the active tab immediately focuses the left sibling, falling back to the right sibling. Closing the only remaining tab leaves the target selected and shows its history/empty state.
 [ ] 15. The Stage's `+` add-session button is disabled when the selected target is not ready for local execution.
