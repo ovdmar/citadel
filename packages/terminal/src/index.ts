@@ -27,6 +27,25 @@ export {
   clampSize as clampTerminalPtySize,
   parseTerminalSocketMessage,
 } from "./tmux-pty-bridge.js";
+export {
+  MAX_PTY_DAEMON_HEADER_BYTES,
+  MAX_PTY_DAEMON_PAYLOAD_BYTES,
+  PTY_DAEMON_PROTOCOL_VERSION,
+  PtyDaemonFrameReader,
+  encodePtyDaemonFrame,
+} from "./pty-daemon-protocol.js";
+export type {
+  PtyDaemonCaptureResult,
+  PtyDaemonFrame,
+  PtyDaemonMessage,
+  PtyDaemonSessionInfo,
+} from "./pty-daemon-protocol.js";
+export { connectPtyDaemonClient, PtyDaemonClient } from "./pty-daemon-client.js";
+export type { ConnectPtyDaemonClientOptions, PtyDaemonClientSubscription } from "./pty-daemon-client.js";
+export { PtyDaemonServer } from "./pty-daemon-server.js";
+export type { PtyDaemonServerOptions } from "./pty-daemon-server.js";
+export { PtySessionStore } from "./pty-daemon-store.js";
+export type { PtyLike, PtySessionOpenRequest, PtySessionStoreOptions } from "./pty-daemon-store.js";
 
 const execFileAsync = promisify(execFile);
 
