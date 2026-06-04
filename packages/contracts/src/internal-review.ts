@@ -178,17 +178,22 @@ export const CreateReviewThreadInputSchema = z.object({
   reviewScopeId: IdSchema.optional(),
   bucket: ReviewDiffBucketSchema,
   path: z.string().min(1),
-  oldPath: z.string().min(1).optional(),
+  oldPath: z.string().min(1).nullable().optional(),
   anchorKind: ReviewAnchorKindSchema,
   side: ReviewDiffSideSchema.optional(),
   startLine: z.number().int().positive().optional(),
   endLine: z.number().int().positive().optional(),
+  selectedText: z.string().optional(),
+  authorKind: ReviewAuthorKindSchema.default("user"),
+  authorLabel: z.string().min(1).optional(),
   body: z.string().min(1),
 });
 
 export const ReplyReviewThreadInputSchema = z.object({
   threadId: IdSchema,
   body: z.string().min(1),
+  authorKind: ReviewAuthorKindSchema.default("user"),
+  authorLabel: z.string().min(1).optional(),
 });
 
 export const ReviewThreadIdInputSchema = z.object({

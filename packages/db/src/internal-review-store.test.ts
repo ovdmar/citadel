@@ -212,6 +212,9 @@ describe("internal review migration and store", () => {
     };
     store.markInternalReviewFileViewed(viewed, timestamp);
     store.markInternalReviewFileViewed({ ...viewed, viewed: false }, "2026-06-04T00:02:00.000Z");
+    expect(store.listInternalReviewViewedFiles(scope.id)).toEqual([
+      { ...viewed, viewed: false, updatedAt: "2026-06-04T00:02:00.000Z" },
+    ]);
     const db = (store as unknown as { database: DatabaseSync }).database;
     const rows = db.prepare("SELECT viewed FROM internal_review_viewed_files").all() as Array<{ viewed: number }>;
     expect(rows).toEqual([{ viewed: 0 }]);

@@ -9,6 +9,8 @@ import type {
 import type { SqliteStore } from "./index.js";
 import { asString } from "./rows.js";
 
+export type InternalReviewViewedFile = MarkReviewFileViewedInput & { updatedAt: string };
+
 declare module "./index.js" {
   interface SqliteStore {
     upsertInternalReviewScope(scope: InternalReviewScopeSummary): InternalReviewScopeSummary;
@@ -31,6 +33,7 @@ declare module "./index.js" {
       resolvedAt?: string | null,
     ): InternalReviewThread | null;
     setInternalReviewThreadAnchorState(threadId: string, anchorState: ReviewAnchorState): InternalReviewThread | null;
+    listInternalReviewViewedFiles(reviewScopeId: string): InternalReviewViewedFile[];
     markInternalReviewFileViewed(input: MarkReviewFileViewedInput, updatedAt: string): void;
     countOpenCurrentInternalReviewThreads(reviewScopeId: string): number;
     pruneMergedInternalReviewScopes(): number;
@@ -178,6 +181,13 @@ export const internalReviewStoreMethods = {
     return this.findInternalReviewThread(threadId);
   },
 
+  listInternalReviewViewedFiles(this: SqliteStore, reviewScopeId: string): InternalReviewViewedFile[] {
+    const rows = this.database
+      .prepare("SELECT * FROM internal_review_viewed_files WHERE review_scope_id = ?")
+      .all(reviewScopeId) as Array<Record<string, unknown>>;
+    return rows.map(viewedFromRow);
+  },
+
   markInternalReviewFileViewed(this: SqliteStore, input: MarkReviewFileViewedInput, updatedAt: string) {
     this.database
       .prepare(
@@ -286,6 +296,19 @@ function replyFromRow(row: Record<string, unknown>): InternalReviewThreadReply {
     authorLabel: row.author_label ? asString(row, "author_label") : null,
     providerCommentId: row.provider_comment_id ? asString(row, "provider_comment_id") : null,
     createdAt: asString(row, "created_at"),
+    updatedAt: asString(row, "updated_at"),
+  };
+}
+
+function viewedFromRow(row: Record<string, unknown>): InternalReviewViewedFile {
+  return {
+    reviewScopeId: asString(row, "review_scope_id"),
+    fileId: asString(row, "file_id"),
+    bucket: asString(row, "bucket") as InternalReviewViewedFile["bucket"],
+    path: asString(row, "path"),
+    oldPath: row.old_path ? asString(row, "old_path") : null,
+    diffIdentity: asString(row, "diff_identity"),
+    viewed: Number(row.viewed) === 1,
     updatedAt: asString(row, "updated_at"),
   };
 }

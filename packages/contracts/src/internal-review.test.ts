@@ -78,17 +78,19 @@ describe("internal review contracts", () => {
       includeOutdated: false,
     });
 
-    expect(
-      CreateReviewThreadInputSchema.parse({
-        checkoutId: "checkout_test",
-        bucket: "staged",
-        path: "src/app.ts",
-        anchorKind: "line",
-        side: "new",
-        startLine: 12,
-        body: "Please simplify this.",
-      }).endLine,
-    ).toBeUndefined();
+    const threadInput = CreateReviewThreadInputSchema.parse({
+      checkoutId: "checkout_test",
+      bucket: "staged",
+      path: "src/app.ts",
+      anchorKind: "line",
+      side: "new",
+      startLine: 12,
+      selectedText: "const value = true;",
+      body: "Please simplify this.",
+    });
+    expect(threadInput.endLine).toBeUndefined();
+    expect(threadInput.authorKind).toBe("user");
+    expect(threadInput.selectedText).toBe("const value = true;");
   });
 
   it("validates persisted threads and PR action results", () => {
