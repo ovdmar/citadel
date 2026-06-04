@@ -1,0 +1,226 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { SpeechRecognitionController, detectSpeechRecognitionSupport } from "./lib/speech-recognition-controller.js";
+import { type VoiceCommitResult, type VoiceTarget, VoiceTargetRegistry } from "./lib/voice-targets.js";
+import { matchShortcut } from "./shortcuts.js";
+import { getTerminalHandle } from "./terminal-pane.js";
+import { VoiceModeOverlay } from "./voice-mode-overlay.js";
+
+const AUTO_SUBMIT_KEY = "citadel.voice.autoSubmit";
+
+type StartDictationOptions = {
+  target?: VoiceTarget | null;
+  terminalSessionId?: string;
+};
+
+export type VoiceModeContextValue = {
+  autoSubmit: boolean;
+  speechSupported: boolean;
+  registerTarget: (element: HTMLElement, target: VoiceTarget) => () => void;
+  startDictation: (options?: StartDictationOptions) => boolean;
+  setAutoSubmit: (next: boolean) => void;
+};
+
+const VoiceModeContext = createContext<VoiceModeContextValue | null>(null);
+
+export function VoiceModeProvider(props: { children: ReactNode }) {
+  const registryRef = useRef(new VoiceTargetRegistry());
+  const controllerRef = useRef<SpeechRecognitionController | null>(null);
+  const targetRef = useRef<VoiceTarget | null>(null);
+  const lastStartRef = useRef<StartDictationOptions | undefined>(undefined);
+  const [autoSubmit, setAutoSubmitState] = useState(readAutoSubmit);
+  const autoSubmitRef = useRef(autoSubmit);
+  const [overlayActive, setOverlayActive] = useState(false);
+  const [status, setStatus] = useState("idle");
+  const [interim, setInterim] = useState("");
+  const [buffer, setBuffer] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const speechSupported = typeof window !== "undefined" ? detectSpeechRecognitionSupport(window).supported : false;
+
+  useEffect(() => {
+    autoSubmitRef.current = autoSubmit;
+  }, [autoSubmit]);
+
+  useEffect(
+    () => () => {
+      controllerRef.current?.dispose();
+    },
+    [],
+  );
+
+  const setAutoSubmit = useCallback((next: boolean) => {
+    setAutoSubmitState(next);
+    try {
+      if (typeof window !== "undefined") window.localStorage?.setItem(AUTO_SUBMIT_KEY, next ? "1" : "0");
+    } catch {
+      /* local persistence is best-effort */
+    }
+  }, []);
+
+  const registerTarget = useCallback((element: HTMLElement, target: VoiceTarget) => {
+    return registryRef.current.register(element, target);
+  }, []);
+
+  const commitFinal = useCallback((text: string) => {
+    const target = targetRef.current;
+    if (!target || !target.canAcceptVoiceCommit()) {
+      setBuffer(text);
+      setStatus("no-target");
+      setError("No focused input is available. Copy the dictated text and paste it where you need it.");
+      return;
+    }
+    const result = commitToTarget(target, text, autoSubmitRef.current);
+    if (result.status === "buffered") {
+      setBuffer(result.text);
+      setStatus("no-target");
+      setError(result.reason);
+      return;
+    }
+    setBuffer(result.text);
+    setStatus(result.status === "submitted" ? "submitted" : "inserted");
+    setError(result.status === "inserted-not-submitted" ? "Inserted, not submitted." : null);
+  }, []);
+
+  const startDictation = useCallback(
+    (options?: StartDictationOptions): boolean => {
+      lastStartRef.current = options;
+      const target =
+        options?.target !== undefined
+          ? options.target
+          : options?.terminalSessionId
+            ? createTerminalVoiceTarget(options.terminalSessionId)
+            : registryRef.current.resolve(document.activeElement);
+      targetRef.current = target;
+      setOverlayActive(true);
+      setStatus("listening");
+      setInterim("");
+      setBuffer("");
+      setError(null);
+      controllerRef.current?.dispose();
+      const controller = new SpeechRecognitionController({
+        onInterim: setInterim,
+        onFinal: commitFinal,
+        onState: (state) => {
+          if (state.type === "listening") {
+            setStatus("listening");
+          } else if (state.type === "start-retry-required") {
+            setStatus("retry");
+            setError(state.message);
+          } else if (state.type === "permission-denied") {
+            setStatus("permission-denied");
+            setError("Microphone permission was denied.");
+          } else if (state.type === "capture-error") {
+            setStatus("error");
+            setError(state.message);
+          } else if (state.type === "no-result-timeout") {
+            setStatus("error");
+            setError("No speech was detected.");
+          }
+        },
+      });
+      controllerRef.current = controller;
+      return controller.start();
+    },
+    [commitFinal],
+  );
+
+  const stop = useCallback(() => {
+    controllerRef.current?.stop();
+    setOverlayActive(false);
+    setStatus("idle");
+    setInterim("");
+  }, []);
+
+  const cancel = useCallback(() => {
+    controllerRef.current?.abort();
+    setOverlayActive(false);
+    setStatus("idle");
+    setInterim("");
+    setBuffer("");
+    setError(null);
+  }, []);
+
+  const retry = useCallback(() => {
+    startDictation(lastStartRef.current);
+  }, [startDictation]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const match = matchShortcut(event);
+      if (match?.id !== "voice-dictation") return;
+      event.preventDefault();
+      event.stopPropagation();
+      startDictation();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [startDictation]);
+
+  const value = useMemo<VoiceModeContextValue>(
+    () => ({
+      autoSubmit,
+      speechSupported,
+      registerTarget,
+      startDictation,
+      setAutoSubmit,
+    }),
+    [autoSubmit, speechSupported, registerTarget, startDictation, setAutoSubmit],
+  );
+
+  return (
+    <VoiceModeContext.Provider value={value}>
+      {props.children}
+      <VoiceModeOverlay
+        active={overlayActive}
+        status={status}
+        interim={interim}
+        buffer={buffer}
+        error={error}
+        autoSubmit={autoSubmit}
+        onAutoSubmitChange={setAutoSubmit}
+        onStop={stop}
+        onCancel={cancel}
+        onRetry={retry}
+      />
+    </VoiceModeContext.Provider>
+  );
+}
+
+export function useVoiceMode(): VoiceModeContextValue {
+  const value = useContext(VoiceModeContext);
+  if (!value) throw new Error("useVoiceMode must be used inside VoiceModeProvider");
+  return value;
+}
+
+function readAutoSubmit(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    return window.localStorage?.getItem(AUTO_SUBMIT_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+
+function commitToTarget(target: VoiceTarget, text: string, autoSubmit: boolean): VoiceCommitResult {
+  if (target.commit) return target.commit(text, { autoSubmit });
+  target.insertText(text);
+  if (autoSubmit && target.submit) {
+    void target.submit();
+    return { status: "submitted", text };
+  }
+  return { status: "inserted-not-submitted", text };
+}
+
+function createTerminalVoiceTarget(sessionId: string): VoiceTarget | null {
+  return {
+    kind: "terminal",
+    insertText: (text) => {
+      getTerminalHandle(sessionId)?.sendVoiceInput?.(text, { submit: false });
+    },
+    commit: (text, options) => {
+      const ok = getTerminalHandle(sessionId)?.sendVoiceInput?.(text, { submit: options.autoSubmit }) ?? false;
+      if (!ok) return { status: "buffered", text, reason: "The terminal is not connected. Copy the dictated text." };
+      return { status: options.autoSubmit ? "submitted" : "inserted-not-submitted", text };
+    },
+    canAcceptVoiceCommit: () => Boolean(getTerminalHandle(sessionId)?.sendVoiceInput),
+  };
+}

@@ -30,6 +30,7 @@ import { parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
 import { ToastProvider } from "./toast.js";
 import { installUiDiagnostics } from "./ui-diagnostics.js";
 import { applyThemePreference, readThemePreference } from "./use-resolved-theme.js";
+import { useVoiceMode, VoiceModeProvider } from "./voice-mode-provider.js";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 import "./chrome.css";
@@ -151,6 +152,15 @@ const scheduledAgentsRoute = createRoute({
 });
 
 function Shell() {
+  return (
+    <VoiceModeProvider>
+      <ShellContent />
+    </VoiceModeProvider>
+  );
+}
+
+function ShellContent() {
+  const { startDictation } = useVoiceMode();
   // Initialize the drawer from the `?scratchpad=1` query param on cold mount,
   // so deep-link refreshes (e.g. /settings?scratchpad=1) restore the drawer
   // exactly as it was. Subsequent toggles update the URL via syncDrawerToUrl
@@ -178,6 +188,7 @@ function Shell() {
       const message = parseTerminalShortcutMessage(event);
       if (!message || !isRegisteredTerminalMessageSource(event.source, message.sessionId)) return;
       if (message.action === "scratchpad-toggle") toggleScratchpad();
+      if (message.action === "voice-dictation") startDictation({ terminalSessionId: message.sessionId });
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("message", onMessage);
@@ -185,7 +196,7 @@ function Shell() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("message", onMessage);
     };
-  }, []);
+  }, [startDictation]);
 
   return (
     <OptimisticRemoveProvider>

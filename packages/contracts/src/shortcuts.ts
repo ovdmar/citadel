@@ -14,6 +14,7 @@ export type ShortcutId =
   | "nav-session"
   | "spawn-terminal"
   | "spawn-agent"
+  | "voice-dictation"
   | "close-overlay";
 
 // "primary" matches metaKey OR ctrlKey (Mac cmd / Linux+Win ctrl).
@@ -55,6 +56,7 @@ export const SHORTCUT_CHORDS: ReadonlyArray<ShortcutChord> = Object.freeze([
   { id: "command-palette", modifier: "primary", shift: false, key: "k" },
   { id: "spawn-terminal", modifier: "primary", shift: false, key: "t" },
   { id: "spawn-agent", modifier: "primary", shift: false, key: "e" },
+  { id: "voice-dictation", modifier: "primary", shift: true, key: "d" },
   ...digitNavChords("nav-workspace", "ctrl", false),
   ...digitNavChords("nav-session", "primary", true),
   { id: "close-overlay", modifier: null, shift: false, key: "Escape" },
@@ -68,6 +70,7 @@ export const FORWARDABLE_SHORTCUT_IDS: ReadonlySet<ShortcutId> = new Set<Shortcu
   "nav-session",
   "spawn-terminal",
   "spawn-agent",
+  "voice-dictation",
   "close-overlay",
 ]);
 

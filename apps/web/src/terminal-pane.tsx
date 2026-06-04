@@ -52,6 +52,7 @@ export type TerminalHandle = {
   // Historical name kept for Stage callers; now focuses the in-process xterm.
   focusIframe: () => void;
   recoverIfDisconnected: () => boolean;
+  sendVoiceInput: (text: string, options: { submit: boolean }) => boolean;
 };
 
 const REGISTRY = new Map<string, TerminalHandle>();
@@ -153,6 +154,14 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     terminalRef.current?.focus();
     recordTerminalClientEvent(sessionId, "terminal.focus");
   }, [sessionId]);
+
+  const sendVoiceInput = useCallback((text: string, options: { submit: boolean }) => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    sendTerminalInput(ws, text);
+    if (options.submit) sendTerminalInput(ws, "\r");
+    return true;
+  }, []);
 
   const recoverIfDisconnected = useCallback(() => {
     if (!error || !["terminal_disconnected", "terminal_closed", "terminal_socket_error"].includes(error.code)) {
@@ -365,9 +374,9 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
   // The status bar used to render these affordances inside the pane; that was
   // removed in favour of the tab actions, but the state still lives here.
   useEffect(() => {
-    publish(sessionId, { reload, focusIframe, recoverIfDisconnected });
+    publish(sessionId, { reload, focusIframe, recoverIfDisconnected, sendVoiceInput });
     return () => publish(sessionId, null);
-  }, [sessionId, reload, focusIframe, recoverIfDisconnected]);
+  }, [sessionId, reload, focusIframe, recoverIfDisconnected, sendVoiceInput]);
   return (
     <div className="terminal-shell">
       <div className="terminal-surface">

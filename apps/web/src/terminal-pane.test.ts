@@ -285,11 +285,15 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const spawnAgent = term.emitKey(
       new KeyboardEvent("keydown", { key: "e", metaKey: true, bubbles: true, cancelable: true }),
     );
+    const voiceDictation = term.emitKey(
+      new KeyboardEvent("keydown", { key: "d", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }),
+    );
 
     expect(navWorkspace).toBe(false);
     expect(navSession).toBe(false);
     expect(spawnTerminal).toBe(false);
     expect(spawnAgent).toBe(false);
+    expect(voiceDictation).toBe(false);
     expect(postMessage).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ action: "nav-workspace", sessionId: "sess_1", index: 1 }),
@@ -310,6 +314,24 @@ describe("TerminalPane xterm WebSocket renderer", () => {
       expect.objectContaining({ action: "spawn-agent", sessionId: "sess_1" }),
       window.location.origin,
     );
+    expect(postMessage).toHaveBeenNthCalledWith(
+      5,
+      expect.objectContaining({ action: "voice-dictation", sessionId: "sess_1" }),
+      window.location.origin,
+    );
+  });
+
+  it("sends voice input through the terminal WebSocket with one Enter on submit", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    if (!ws) throw new Error("terminal rig missing");
+    await flushReactUpdate(async () => ws.open());
+
+    const handle = getTerminalHandle("sess_1");
+    expect(handle?.sendVoiceInput("hello", { submit: false })).toBe(true);
+    expect(handle?.sendVoiceInput("run it", { submit: true })).toBe(true);
+
+    expect(decodeBinarySent(ws.sent)).toEqual(expect.arrayContaining(["hello", "run it", "\r"]));
   });
 
   it("only forwards Escape to the cockpit bridge while an overlay is open", async () => {

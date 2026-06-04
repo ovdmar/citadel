@@ -33,6 +33,20 @@ describe("parseTerminalShortcutMessage", () => {
     expect(parseTerminalShortcutMessage(event)).toEqual({ action: "nav-workspace", sessionId: "sess_1", index: 2 });
   });
 
+  it("accepts terminal-origin voice dictation messages", () => {
+    const event = new MessageEvent("message", {
+      origin: window.location.origin,
+      data: {
+        source: "citadel-terminal",
+        type: "citadel.terminal-shortcut",
+        action: "voice-dictation",
+        sessionId: "sess_1",
+      },
+    });
+
+    expect(parseTerminalShortcutMessage(event)).toEqual({ action: "voice-dictation", sessionId: "sess_1" });
+  });
+
   it("rejects wrong origins, sources, and actions", () => {
     expect(
       parseTerminalShortcutMessage(
@@ -94,6 +108,7 @@ describe("terminalShortcutMatch", () => {
 
   it("ignores messages that are terminal-only or missing their required index", () => {
     expect(terminalShortcutMatch({ action: "new-workspace", sessionId: "sess_1" })).toBeNull();
+    expect(terminalShortcutMatch({ action: "voice-dictation", sessionId: "sess_1" })).toBeNull();
     expect(terminalShortcutMatch({ action: "nav-workspace", sessionId: "sess_1" })).toBeNull();
   });
 });
