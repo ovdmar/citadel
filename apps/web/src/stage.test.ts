@@ -107,6 +107,7 @@ function sessionFixture(overrides: Partial<TerminalSession> = {}): TerminalSessi
     displayName: "Terminal",
     status: "idle",
     transport: "connected",
+    terminalBackend: "tmux",
     tmuxSessionName: "citadel_sess_1",
     tmuxSessionId: "tmux_1",
     createdAt: "2026-05-28T19:00:00.000Z",

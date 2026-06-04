@@ -68,6 +68,7 @@ function session(over: Partial<AgentSession>): AgentSession {
     endedAt: null,
     exitCode: null,
     transport: "connected",
+    terminalBackend: "tmux",
     tmuxSessionName: "tmux_1",
     tmuxSessionId: "$1",
     runtimeSessionId: null,

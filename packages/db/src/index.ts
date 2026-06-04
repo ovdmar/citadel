@@ -23,23 +23,15 @@ import {
   getWorkspacePrSnapshot,
   updateWorkspacePrSnapshot,
 } from "./workspace-pr-snapshot.js";
+import type { LegacyAgentSessionInput, WorkspaceSessionInput } from "./workspace-session-input.js";
 
 export type { WorkspacePrSnapshot };
-
-// Avoid a static `import "node:sqlite"` so vite-based test runners do not
-// try to bundle the built-in. Resolved through `createRequire` at runtime.
 type DatabaseSyncCtor = new (path: string, options?: { open?: boolean; readOnly?: boolean }) => SqliteDatabase;
 export type SqliteDatabase = {
   exec(sql: string): void;
   prepare(sql: string): SqliteStatement;
   close(): void;
 };
-type TerminalBackendInputKeys = "terminalBackend" | "ptySessionId" | "ptyOwnerSocket" | "ptyOwnerPid" | "ptyLastSeenAt";
-type LegacyAgentSessionInput = Omit<AgentSession, "kind" | TerminalBackendInputKeys> &
-  Partial<Pick<AgentSession, TerminalBackendInputKeys>> & { kind?: "agent" };
-type WorkspaceSessionInput =
-  | (Omit<WorkspaceSession, TerminalBackendInputKeys> & Partial<Pick<WorkspaceSession, TerminalBackendInputKeys>>)
-  | LegacyAgentSessionInput;
 export type SqliteStatement = {
   all(...params: unknown[]): unknown[];
   get(...params: unknown[]): unknown;
@@ -81,9 +73,7 @@ export class SqliteStore {
     if (this.db) {
       try {
         this.db.close();
-      } catch {
-        // best-effort
-      }
+      } catch {}
       this.db = null;
       this.columns.clear();
     }

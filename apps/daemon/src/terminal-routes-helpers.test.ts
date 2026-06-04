@@ -58,6 +58,7 @@ function session(overrides: Partial<AgentSession> = {}): AgentSession {
     displayName: "Claude",
     status: "running",
     transport: "connected",
+    terminalBackend: "tmux",
     tmuxSessionName: "citadel_existing",
     tmuxSessionId: "$1",
     tmuxSocketName: "citadel-ws-ws_1",

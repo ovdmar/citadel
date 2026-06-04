@@ -3,9 +3,28 @@ import type http from "node:http";
 import type { Duplex } from "node:stream";
 import { type IPty, spawn } from "node-pty";
 import { WebSocket, WebSocketServer } from "ws";
+import { type PtyDaemonClient, connectPtyDaemonClient } from "./pty-daemon-client.js";
+import type { PtyDaemonSessionInfo } from "./pty-daemon-protocol.js";
 import { ensureTmuxExtendedKeys, setTmuxMouseForSession, tmuxPrefix } from "./tmux.js";
 
-export type TerminalPtyTarget = { sessionName: string; socketName?: string | null; enableTmuxMouse?: boolean };
+export type TmuxTerminalPtyTarget = {
+  backend?: "tmux";
+  sessionName: string;
+  socketName?: string | null;
+  enableTmuxMouse?: boolean;
+};
+export type PtyDaemonTerminalTarget = {
+  backend: "pty-daemon";
+  sessionId: string;
+  socketPath: string;
+  cwd: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  kind?: string;
+  onSessionReady?: (session: PtyDaemonSessionInfo) => void | Promise<void>;
+};
+export type TerminalPtyTarget = TmuxTerminalPtyTarget | PtyDaemonTerminalTarget;
 type ResolveTerminalSession = (
   id: string,
 ) => TerminalPtyTarget | string | null | Promise<TerminalPtyTarget | string | null>;
@@ -44,6 +63,7 @@ export function attachTerminalWebSocket(
   const wss = new WebSocketServer({ noServer: true });
   const ptys = new Set<IPty>();
   const clients = new Map<WebSocket, IPty>();
+  const ptyDaemonClients = new Map<WebSocket, PtyDaemonClient>();
   const maxBufferedBytes = normalizeMaxBufferedBytes(options.maxBufferedBytes);
   const getBufferedAmount = options.getBufferedAmount ?? ((ws: WebSocket) => ws.bufferedAmount);
   let shuttingDown = false;
@@ -60,10 +80,21 @@ export function attachTerminalWebSocket(
         ws.terminate();
       }
     }
+    for (const [ws, client] of ptyDaemonClients) {
+      client.dispose();
+      if (
+        ws.readyState === WebSocket.CONNECTING ||
+        ws.readyState === WebSocket.OPEN ||
+        ws.readyState === WebSocket.CLOSING
+      ) {
+        ws.terminate();
+      }
+    }
     for (const pty of ptys) closePty(pty);
     for (const ws of wss.clients) ws.terminate();
     ptys.clear();
     clients.clear();
+    ptyDaemonClients.clear();
     wss.close();
   };
   const originalClose = server.close.bind(server);
@@ -90,6 +121,15 @@ export function attachTerminalWebSocket(
           return;
         }
         wss.handleUpgrade(request, socket, head, (ws) => {
+          if (tmuxTarget.backend === "pty-daemon") {
+            void attachPtyDaemonWebSocketClient(ws, tmuxTarget, {
+              maxBufferedBytes,
+              getBufferedAmount,
+              onClient: (client) => ptyDaemonClients.set(ws, client),
+              onCleanup: () => ptyDaemonClients.delete(ws),
+            });
+            return;
+          }
           let pty: IPty;
           try {
             pty = attachTmuxPty(tmuxTarget.sessionName, DEFAULT_COLS, DEFAULT_ROWS, tmuxTarget.socketName, {
@@ -235,6 +275,135 @@ export function attachTmuxPty(
 function normalizeTarget(target: TerminalPtyTarget | string | null): TerminalPtyTarget | null {
   if (!target) return null;
   return typeof target === "string" ? { sessionName: target } : target;
+}
+
+async function attachPtyDaemonWebSocketClient(
+  ws: WebSocket,
+  target: PtyDaemonTerminalTarget,
+  options: {
+    maxBufferedBytes: number;
+    getBufferedAmount: (ws: WebSocket) => number;
+    onClient: (client: PtyDaemonClient) => void;
+    onCleanup: () => void;
+  },
+): Promise<void> {
+  let client: PtyDaemonClient;
+  try {
+    client = await connectPtyDaemonClient({ socketPath: target.socketPath });
+  } catch (error) {
+    sendControl(ws, { type: "error", data: error instanceof Error ? error.message : "pty_owner_missing" });
+    ws.close(1011, "pty_owner_missing");
+    return;
+  }
+  options.onClient(client);
+  let cleanedUp = false;
+  let unsubscribe: (() => void) | null = null;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    unsubscribe?.();
+    options.onCleanup();
+    client.dispose();
+  };
+  const closeForBackpressure = () => {
+    cleanup();
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      ws.close(BACKPRESSURE_CLOSE_CODE, BACKPRESSURE_CLOSE_REASON);
+      const terminateTimer = setTimeout(() => {
+        if (ws.readyState !== WebSocket.CLOSED) ws.terminate();
+      }, 1000);
+      terminateTimer.unref();
+    } else if (ws.readyState !== WebSocket.CLOSED) {
+      ws.terminate();
+    }
+  };
+  try {
+    const session = await ensurePtyDaemonSession(client, target);
+    await Promise.resolve(target.onSessionReady?.(session));
+    unsubscribe = await client.subscribe(target.sessionId, {
+      replay: true,
+      onOutput: (chunk) => {
+        if (ws.readyState !== WebSocket.OPEN || cleanedUp) return;
+        if (options.getBufferedAmount(ws) > options.maxBufferedBytes) {
+          closeForBackpressure();
+          return;
+        }
+        ws.send(chunk, { binary: true }, (error) => {
+          if (error) cleanup();
+        });
+        if (options.getBufferedAmount(ws) > options.maxBufferedBytes) closeForBackpressure();
+      },
+      onExit: ({ exitCode, signal }) => {
+        cleanup();
+        if (ws.readyState === WebSocket.OPEN) {
+          sendControl(ws, { type: "exit", data: signal ? `signal:${signal}` : `exit:${exitCode}` });
+          ws.close(1000, "pty_exit");
+        }
+      },
+    });
+  } catch (error) {
+    cleanup();
+    sendControl(ws, { type: "error", data: error instanceof Error ? error.message : "pty_session_missing" });
+    ws.close(1011, "pty_session_missing");
+    return;
+  }
+  ws.on("message", (raw, isBinary) => {
+    if (isBinary) {
+      client.input(target.sessionId, rawWebSocketDataToBuffer(raw));
+      return;
+    }
+    const message = parseTerminalSocketMessage(raw.toString());
+    if (!message) {
+      sendControl(ws, { type: "error", data: "invalid_message" });
+      return;
+    }
+    if (message.type === "resize" && typeof message.cols === "number" && typeof message.rows === "number") {
+      const { cols, rows } = clampSize(message.cols, message.rows);
+      client.resize(target.sessionId, cols, rows);
+    } else if (message.type === "input" && typeof message.data === "string") {
+      client.input(target.sessionId, Buffer.from(message.data, "utf8"));
+    } else if (message.type === "key" && typeof message.key === "string") {
+      const control = controlBytesForKey(message.key);
+      if (!control) {
+        sendControl(ws, { type: "error", data: "invalid_key" });
+        return;
+      }
+      client.input(target.sessionId, control);
+    }
+  });
+  ws.on("close", cleanup);
+  ws.on("error", cleanup);
+}
+
+async function ensurePtyDaemonSession(
+  client: PtyDaemonClient,
+  target: PtyDaemonTerminalTarget,
+): Promise<PtyDaemonSessionInfo> {
+  const existing = (await client.list()).find((session) => session.sessionId === target.sessionId);
+  if (existing) return existing;
+  return client.open({
+    sessionId: target.sessionId,
+    cwd: target.cwd,
+    command: target.command,
+    args: target.args ?? [],
+    env: target.env ?? {},
+    cols: DEFAULT_COLS,
+    rows: DEFAULT_ROWS,
+    kind: target.kind ?? "terminal",
+  });
+}
+
+function controlBytesForKey(key: string): Buffer | null {
+  if (key === "C-a") return Buffer.from("\u0001", "utf8");
+  if (key === "C-e") return Buffer.from("\u0005", "utf8");
+  if (key === "C-u") return Buffer.from("\u0015", "utf8");
+  return null;
+}
+
+function rawWebSocketDataToBuffer(raw: WebSocket.RawData): Buffer {
+  if (Buffer.isBuffer(raw)) return raw;
+  if (Array.isArray(raw)) return Buffer.concat(raw);
+  return Buffer.from(raw);
 }
 
 function writeHttpError(socket: Duplex, status: number, body: unknown) {
