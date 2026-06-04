@@ -17,6 +17,7 @@ export type VoiceModeContextValue = {
   speechSupported: boolean;
   registerTarget: (element: HTMLElement, target: VoiceTarget) => () => void;
   startDictation: (options?: StartDictationOptions) => boolean;
+  stopDictation: () => void;
   setAutoSubmit: (next: boolean) => void;
 };
 
@@ -179,9 +180,10 @@ export function VoiceModeProvider(props: { children: ReactNode }) {
       speechSupported,
       registerTarget,
       startDictation,
+      stopDictation: stop,
       setAutoSubmit,
     }),
-    [autoSubmit, speechSupported, registerTarget, startDictation, setAutoSubmit],
+    [autoSubmit, speechSupported, registerTarget, startDictation, stop, setAutoSubmit],
   );
 
   return (

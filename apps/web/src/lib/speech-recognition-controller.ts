@@ -183,6 +183,7 @@ export class SpeechRecognitionController {
       this.finalTimer = null;
       this.finalTranscript = "";
       this.clearInterimTranscript();
+      this.clearSilenceTimer();
       if (text) this.options.onFinal?.(text);
       this.stopRecognition();
     }, FINAL_AUTO_SUBMIT_DELAY_MS);

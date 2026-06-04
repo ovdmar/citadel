@@ -169,6 +169,27 @@ describe("VoiceModeProvider", () => {
     expect(commit).toHaveBeenCalledWith("hello", { autoSubmit: false });
   });
 
+  it("cancels pending final text without committing it", async () => {
+    const commit = vi.fn(() => ({ status: "submitted" as const, text: "cancelled" }));
+    const target: VoiceTarget = {
+      kind: "registered",
+      insertText: vi.fn(),
+      commit,
+      canAcceptVoiceCommit: () => true,
+    };
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation({ target });
+    });
+    FakeSpeechRecognition.instances[0]?.final("cancelled");
+    await flushReact(() => cancelButton().click());
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+
+    expect(commit).not.toHaveBeenCalled();
+    expect(document.querySelector(".voice-mode-overlay")).toBeNull();
+  });
+
   it("loads persisted auto-submit preference on startup", async () => {
     window.localStorage.setItem("citadel.voice.autoSubmit", "0");
     const commit = vi.fn(() => ({ status: "inserted-not-submitted" as const, text: "hello" }));
@@ -355,6 +376,45 @@ describe("VoiceModeProvider", () => {
     expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("orphaned transcript");
   });
 
+  it.each([
+    [
+      "disabled",
+      (input: HTMLInputElement) => {
+        input.disabled = true;
+      },
+    ],
+    [
+      "read-only",
+      (input: HTMLInputElement) => {
+        input.readOnly = true;
+      },
+    ],
+    [
+      "hidden",
+      (input: HTMLInputElement) => {
+        input.hidden = true;
+      },
+    ],
+  ])("buffers in-flight dictation when a snapshotted generic input becomes %s", async (_label, invalidate) => {
+    await renderProvider();
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+
+    await flushReact(() => {
+      dispatchVoiceShortcut(input);
+    });
+    invalidate(input);
+    await flushReact(() => {
+      FakeSpeechRecognition.instances[0]?.final("orphaned transcript");
+      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+    });
+
+    expect(input.value).toBe("");
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("No input target");
+    expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("orphaned transcript");
+  });
+
   it("commits pending final text when Stop is clicked during the final delay", async () => {
     const commit = vi.fn(() => ({ status: "submitted" as const, text: "stop final" }));
     const target: VoiceTarget = {
@@ -389,6 +449,21 @@ describe("VoiceModeProvider", () => {
     expect(document.querySelector(".voice-mode-overlay")).not.toBeNull();
     expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Dictation needs attention");
     expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("interim only");
+  });
+
+  it("keeps interim text copyable and clears timers when route cleanup stops dictation", async () => {
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation({ target: registeredTarget() });
+    });
+    FakeSpeechRecognition.instances[0]?.interim("route partial");
+    await flushReact(() => voiceApi?.stopDictation());
+    vi.advanceTimersByTime(NO_RESULT_SILENCE_TIMEOUT_MS);
+
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Dictation needs attention");
+    expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("route partial");
+    expect(FakeSpeechRecognition.instances[0]?.stop).toHaveBeenCalledOnce();
   });
 
   it("copies buffered transcript text to the clipboard", async () => {
@@ -492,6 +567,21 @@ describe("VoiceModeProvider", () => {
     });
 
     expect(sendVoiceInput).toHaveBeenCalledWith("run tests", { submit: false });
+  });
+
+  it("commits terminal dictation with default auto-submit enabled", async () => {
+    const sendVoiceInput = vi.fn(() => true);
+    terminalMocks.handles.set("sess_1", { sendVoiceInput, canAcceptVoiceInput: vi.fn(() => true) });
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation({ terminalSessionId: "sess_1" });
+      FakeSpeechRecognition.instances[0]?.final("run tests");
+      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+    });
+
+    expect(sendVoiceInput).toHaveBeenCalledWith("run tests", { submit: true });
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Submitted");
   });
 
   it("buffers terminal dictation when the session handle cannot write", async () => {

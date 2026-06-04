@@ -8,7 +8,7 @@ import {
   createRouter,
   useLocation,
 } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
 import { OptimisticRemoveProvider } from "./app-state.js";
@@ -161,7 +161,9 @@ function Shell() {
 }
 
 function ShellContent() {
-  const { startDictation } = useVoiceMode();
+  const { startDictation, stopDictation } = useVoiceMode();
+  const location = useLocation();
+  const voiceRouteHrefRef = useRef(location.href);
   // Initialize the drawer from the `?scratchpad=1` query param on cold mount,
   // so deep-link refreshes (e.g. /settings?scratchpad=1) restore the drawer
   // exactly as it was. Subsequent toggles update the URL via syncDrawerToUrl
@@ -170,6 +172,12 @@ function ShellContent() {
     const params = new URLSearchParams(window.location.search);
     if (params.get("scratchpad") === "1") setScratchpadDrawerOpen(true);
   }, []);
+
+  useEffect(() => {
+    if (voiceRouteHrefRef.current === location.href) return;
+    voiceRouteHrefRef.current = location.href;
+    stopDictation();
+  }, [location.href, stopDictation]);
 
   // Shell-level keydown: cmd/ctrl+shift+s toggles the drawer from every route.
   // Cockpit-specific shortcuts (cmd+k, c, ctrl+n) stay in Cockpit so they're

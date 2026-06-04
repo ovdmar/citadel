@@ -56,7 +56,7 @@ describe("detectSpeechRecognitionSupport", () => {
   });
 
   it("detects prefixed webkitSpeechRecognition", () => {
-    const win = makeWindow({ secure: true, webkitCtor: FakeSpeechRecognition });
+    const win = makeWindow({ secure: true, ctor: null, webkitCtor: FakeSpeechRecognition });
     expect(detectSpeechRecognitionSupport(win).supported).toBe(true);
   });
 });
@@ -81,6 +81,21 @@ describe("SpeechRecognitionController", () => {
     expect(onState).toHaveBeenCalledWith({ type: "listening" });
   });
 
+  it("starts with prefixed recognition when unprefixed recognition is absent", () => {
+    const onState = vi.fn();
+    const controller = new SpeechRecognitionController({
+      win: makeWindow({ ctor: null, webkitCtor: FakeSpeechRecognition }),
+      onState,
+    });
+
+    expect(controller.start()).toBe(true);
+
+    const recognition = FakeSpeechRecognition.instances[0];
+    expect(recognition).toBeInstanceOf(FakeSpeechRecognition);
+    expect(recognition?.lang).toBe("en-US");
+    expect(onState).toHaveBeenCalledWith({ type: "listening" });
+  });
+
   it("emits interim text without committing it, then commits final after the delay", () => {
     const onInterim = vi.fn();
     const onFinal = vi.fn();
@@ -99,6 +114,20 @@ describe("SpeechRecognitionController", () => {
 
     expect(onFinal).toHaveBeenCalledWith("hello world");
     expect(FakeSpeechRecognition.instances[0]?.stop).toHaveBeenCalled();
+  });
+
+  it("does not emit a no-result timeout after final auto-submit", () => {
+    const onState = vi.fn();
+    const onFinal = vi.fn();
+    const controller = new SpeechRecognitionController({ win: makeWindow(), onState, onFinal });
+    controller.start();
+
+    FakeSpeechRecognition.instances[0]?.result([{ transcript: "done", isFinal: true }]);
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+    vi.advanceTimersByTime(NO_RESULT_SILENCE_TIMEOUT_MS);
+
+    expect(onFinal).toHaveBeenCalledWith("done");
+    expect(onState).not.toHaveBeenCalledWith(expect.objectContaining({ type: "no-result-timeout" }));
   });
 
   it("commits a pending final transcript immediately when stopped", () => {
