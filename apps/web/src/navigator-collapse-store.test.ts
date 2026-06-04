@@ -2,11 +2,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   COLLAPSE_STORAGE_KEY,
+  GROUP_STORAGE_KEY,
   NAVIGATOR_COLLAPSE_EVENT,
   NAVIGATOR_GROUPING_EVENT,
   expandGroupPath,
   publishNavigatorGroupingChanged,
   readCollapsedMap,
+  readNavigatorGrouping,
   subscribeToCollapseChanges,
   subscribeToGroupingChanges,
 } from "./navigator-collapse-store.js";
@@ -43,6 +45,7 @@ describe("navigator-collapse-store", () => {
 
   afterEach(() => {
     window.localStorage.removeItem(COLLAPSE_STORAGE_KEY);
+    window.localStorage.removeItem(GROUP_STORAGE_KEY);
   });
 
   it("readCollapsedMap returns {} when localStorage is empty", () => {
@@ -57,6 +60,38 @@ describe("navigator-collapse-store", () => {
   it("readCollapsedMap returns {} on malformed JSON", () => {
     window.localStorage.setItem(COLLAPSE_STORAGE_KEY, "not json");
     expect(readCollapsedMap()).toEqual({});
+  });
+
+  it("readNavigatorGrouping defaults to workspace grouping", () => {
+    expect(readNavigatorGrouping()).toEqual(["workspace"]);
+  });
+
+  it("readNavigatorGrouping accepts legacy single-value grouping", () => {
+    window.localStorage.setItem(GROUP_STORAGE_KEY, "workspace");
+    expect(readNavigatorGrouping()).toEqual(["workspace"]);
+    window.localStorage.setItem(GROUP_STORAGE_KEY, "repo");
+    expect(readNavigatorGrouping()).toEqual(["repo"]);
+    window.localStorage.setItem(GROUP_STORAGE_KEY, "namespace");
+    expect(readNavigatorGrouping()).toEqual(["namespace", "workspace"]);
+  });
+
+  it("readNavigatorGrouping accepts ordered multi-field grouping", () => {
+    window.localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify(["repo", "status"]));
+    expect(readNavigatorGrouping()).toEqual(["repo", "status"]);
+  });
+
+  it("readNavigatorGrouping keeps workspace plus namespace but drops workspace before repo/status", () => {
+    window.localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify(["workspace", "namespace"]));
+    expect(readNavigatorGrouping()).toEqual(["namespace", "workspace"]);
+    window.localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify(["workspace", "repo", "status"]));
+    expect(readNavigatorGrouping()).toEqual(["repo", "status"]);
+  });
+
+  it("readNavigatorGrouping drops namespace from invalid repo/status combinations", () => {
+    window.localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify(["repo", "namespace"]));
+    expect(readNavigatorGrouping()).toEqual(["repo"]);
+    window.localStorage.setItem(GROUP_STORAGE_KEY, JSON.stringify(["status", "namespace"]));
+    expect(readNavigatorGrouping()).toEqual(["status"]);
   });
 
   it("expandGroupPath is a no-op when the path is not currently collapsed", () => {

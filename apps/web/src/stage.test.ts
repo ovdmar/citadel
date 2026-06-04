@@ -1,8 +1,14 @@
 // @vitest-environment happy-dom
 
-import type { TerminalSession } from "@citadel/contracts";
+import type { RoleTemplate, TerminalSession, Workspace } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
-import { retainRecentTerminalIds, stableVisitedSessions, stableWorkspaceSessionIdsKey } from "./stage.js";
+import {
+  freestyleStageActions,
+  retainRecentTerminalIds,
+  stableVisitedSessions,
+  stableWorkspaceSessionIdsKey,
+  structuredStageActions,
+} from "./stage.js";
 
 describe("Stage terminal pane ordering", () => {
   it("keeps visited terminal panes in visit order when state polling reorders sessions", () => {
@@ -40,6 +46,56 @@ describe("Stage terminal pane ordering", () => {
 
     expect([...retainRecentTerminalIds(visited, "sess_b", live)]).toEqual(["sess_d", "sess_e", "sess_f", "sess_b"]);
   });
+
+  it("offers structured Home roles on Home and checkout roles on checkouts", () => {
+    const workspace = workspaceFixture({ mode: "structured" });
+
+    expect(
+      structuredStageActions({ workspace, targetType: "workspace_home", checkoutId: null }).map((action) => [
+        action.label,
+        action.toolName,
+      ]),
+    ).toEqual([
+      ["PM", "launch_pm_agent"],
+      ["Architect", "launch_architect_agent"],
+      ["Manager", "start_workspace_manager"],
+    ]);
+    expect(
+      structuredStageActions({ workspace, targetType: "worktree_checkout", checkoutId: "co_1" }).map((action) => [
+        action.label,
+        action.arguments,
+      ]),
+    ).toEqual([
+      ["Implementation", { checkoutId: "co_1" }],
+      ["Prototype", { checkoutId: "co_1" }],
+    ]);
+  });
+
+  it("keeps structured role actions out of freestyle workspaces", () => {
+    expect(
+      structuredStageActions({
+        workspace: workspaceFixture({ mode: "freestyle" }),
+        targetType: "workspace_home",
+        checkoutId: null,
+      }),
+    ).toEqual([]);
+  });
+
+  it("offers PM and Prototype specialized actions for freestyle workspaces", () => {
+    expect(
+      freestyleStageActions({
+        workspace: workspaceFixture({ mode: "freestyle" }),
+        templates: [
+          roleTemplate("pm", "PM"),
+          roleTemplate("prototype", "Prototype"),
+          roleTemplate("manager", "Manager"),
+        ],
+      }).map((action) => [action.id, action.label]),
+    ).toEqual([
+      ["pm", "PM"],
+      ["prototype", "Prototype"],
+    ]);
+  });
 });
 
 function sessionFixture(overrides: Partial<TerminalSession> = {}): TerminalSession {
@@ -56,5 +112,54 @@ function sessionFixture(overrides: Partial<TerminalSession> = {}): TerminalSessi
     createdAt: "2026-05-28T19:00:00.000Z",
     updatedAt: "2026-05-28T19:00:00.000Z",
     ...overrides,
+  };
+}
+
+function workspaceFixture(overrides: Partial<Workspace> = {}): Workspace {
+  return {
+    id: "ws_1",
+    repoId: null,
+    name: "Workspace",
+    path: "/work/ws",
+    rootPath: "/work/ws",
+    mode: "structured",
+    branch: "home",
+    baseBranch: "main",
+    source: "scratch",
+    kind: "root",
+    lifecyclePhase: "architecture",
+    prUrl: null,
+    issueKey: null,
+    issueTitle: null,
+    issueUrl: null,
+    slackThreadUrl: null,
+    section: "backlog",
+    pinned: false,
+    lifecycle: "ready",
+    dirty: false,
+    namespaceId: null,
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
+    archivedAt: null,
+    ...overrides,
+  };
+}
+
+function roleTemplate(role: RoleTemplate["role"], displayName: string): RoleTemplate {
+  return {
+    role,
+    displayName,
+    systemPrompt: `${displayName} prompt`,
+    launchSettings: {
+      runtimeId: "codex",
+      model: "gpt-5.4",
+      effort: "high",
+      fastMode: null,
+      contextMode: null,
+    },
+    actions: [],
+    builtIn: true,
+    resettable: true,
+    updatedAt: null,
   };
 }

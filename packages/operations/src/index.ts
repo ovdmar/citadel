@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import type { ActivityEvent, AgentSession, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, Namespace, Operation, Repo, UpdateNamespaceInput, Workspace } from "@citadel/contracts";
+import type { ActivityEvent, AgentSession, CheckoutContextInput, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceCheckoutInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, MarkCheckoutReadyForReviewInput, Namespace, Operation, PlanDeviationReport, RegisterCheckoutReviewArtifactInput, RegisterWorkspacePlanInput, Repo, UpdateNamespaceInput, UpdateTicketStatusInput, Workspace, WorkspaceManagerControlInput } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
@@ -19,6 +19,7 @@ import * as namespaceOps from "./namespaces.js";
 import { registerRepo as registerRepoImpl } from "./register-repo.js";
 import { checkWorkspaceRemovalImpl, removeWorkspaceImpl } from "./remove-workspace.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
+export type { RuntimeDescriptor } from "./create-agent-session.js";
 export type { LaunchAgentResult } from "./launch-agent.js";
 export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
 export type { AgentHistoryResult, AgentHistoryErrorResult } from "./agent-history.js";
@@ -33,6 +34,26 @@ export {
 export { MAX_QUEUED_RUNS_PER_AGENT } from "./scheduled-agents.js";
 export type { CronExpression, ScheduledAgentRunResult, ScheduledAgentDeps } from "./scheduled-agents.js";
 export { createBackgroundAgentSession } from "./create-background-agent-session.js";
+export { executionTargetCwd, resolveExecutionTargetForCwd, workspaceRootPath } from "./workspace-layout.js";
+export {
+  executeWorkspaceLayoutMigration,
+  hasWorkspaceLayoutMigrationCandidates,
+  planWorkspaceLayoutMigration,
+  runWorkspaceLayoutMigrations,
+} from "./workspace-layout-migration.js";
+export type {
+  CheckoutGateSnapshot,
+  MarkCheckoutReadyForReviewResult,
+  RegisterCheckoutReviewArtifactResult,
+  WorkspaceManagerControlResult,
+  WorkspaceManagerTickResult,
+} from "./workspace-manager.js";
+export type { CitadelContextResult, RegisterWorkspacePlanResult, WorkspacePlanSnapshot } from "./workspace-plans.js";
+export type {
+  WorkspaceGitSnapshot,
+  WorkspaceLayoutMigrationPlan,
+  WorkspaceLayoutMigrationSkipReason,
+} from "./workspace-layout-migration.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export { createDiagnosticsLogger, noopDiagnosticsLogger, type DiagnosticEvent, type DiagnosticsLogger, type DiagnosticsLoggerOptions } from "./diagnostics.js";
 export { parseUsageLimitResetFromReason, deriveAccountUsageLimit, type AccountRateLimitInfo } from "./usage-limit.js";
@@ -46,8 +67,15 @@ import { cancelOperationInStore, listHookDiagnostics, reconcileStore, tryRunGit 
 export { BranchInUseByWorktreeError, RemoteRefMissingError, WorkspaceInUseError, WorkspaceNameTakenError } from "./helpers.js";
 import { buildDispatchAgentHookDeps, dispatchAgentHook as dispatchAgentHookImpl } from "./dispatch-agent-hook.js";
 import { type DispatchAgentHook, runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
+import { createWorkspaceCheckoutImpl } from "./structured-workspace.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 import { type WorkspaceAppsDeps, discoverWorkspaceApps as discoverWorkspaceAppsImpl, runWorkspaceAction as runWorkspaceActionImpl } from "./workspace-apps.js";
+import {
+  hasWorkspaceLayoutMigrationCandidates,
+  runWorkspaceLayoutMigrations as runWorkspaceLayoutMigrationsImpl,
+} from "./workspace-layout-migration.js";
+import * as workspaceManager from "./workspace-manager.js";
+import * as workspacePlans from "./workspace-plans.js";
 
 // Daemon-constructed callback that fires lifecycle-event-driven Jira
 // transitions. Optional — when not wired (e.g., unit tests that don't
@@ -102,6 +130,99 @@ export class OperationService {
 
   createWorkspace = (input: CreateWorkspaceInput, options?: CreateWorkspaceOptions) =>
     createWorkspaceImpl(this.workspaceOpsDeps(), input, options);
+
+  createWorkspaceCheckout = (input: CreateWorkspaceCheckoutInput) =>
+    createWorkspaceCheckoutImpl(this.workspaceOpsDeps(), input);
+
+  registerWorkspacePlan = (input: RegisterWorkspacePlanInput, options?: { actor?: workspacePlans.TrustedToolActor }) =>
+    workspacePlans.registerWorkspacePlan(this.planDeps(), input, options);
+
+  getWorkspacePlan = (input: { workspaceId?: string | undefined; cwd?: string | undefined }) =>
+    workspacePlans.getWorkspacePlan(this.planDeps(), input);
+
+  getCitadelContext = (input: { cwd: string }) => workspacePlans.getCitadelContext(this.planDeps(), input);
+
+  reportPlanDeviation = (input: {
+    workspaceId?: string | undefined;
+    checkoutId?: string | undefined;
+    cwd?: string | undefined;
+    planVersionId?: string | undefined;
+    severity?: PlanDeviationReport["severity"] | undefined;
+    description: string;
+    reportedBySessionId?: string | undefined;
+  }) => workspacePlans.reportPlanDeviation(this.planDeps(), input);
+
+  startWorkspaceManager = (input: WorkspaceManagerControlInput) =>
+    workspaceManager.startWorkspaceManager(this.managerDeps(), input);
+
+  pauseWorkspaceManager = (input: WorkspaceManagerControlInput) =>
+    workspaceManager.pauseWorkspaceManager(this.managerDeps(), input);
+
+  resumeWorkspaceManager = (input: WorkspaceManagerControlInput) =>
+    workspaceManager.resumeWorkspaceManager(this.managerDeps(), input);
+
+  runWorkspaceManagerTick = (input: { workspaceId: string; leaseOwnerId?: string; leaseSeconds?: number }) =>
+    workspaceManager.runWorkspaceManagerTick(this.managerDeps(), input);
+
+  getCheckoutGateStatus = (input: CheckoutContextInput) =>
+    workspaceManager.getCheckoutGateStatus(this.managerDeps(), input);
+
+  markCheckoutReadyForReview = (input: MarkCheckoutReadyForReviewInput) =>
+    workspaceManager.markCheckoutReadyForReview(this.managerDeps(), input);
+
+  registerCheckoutReviewArtifact = (
+    input: RegisterCheckoutReviewArtifactInput,
+    options?: { actor?: workspaceManager.TrustedToolActor },
+  ) => workspaceManager.registerCheckoutReviewArtifact(this.managerDeps(), input, options);
+
+  updateTicketStatus = (input: UpdateTicketStatusInput) =>
+    workspaceManager.updateTicketStatus(this.managerDeps(), input);
+
+  runWorkspaceLayoutMigrations = () => {
+    if (!hasWorkspaceLayoutMigrationCandidates(this.store)) {
+      return { operationId: null, considered: 0, migrated: 0, skipped: [] };
+    }
+    const operation = this.operation(
+      "workspace.layout_migration",
+      "running",
+      null,
+      null,
+      5,
+      "Migrating legacy workspace layouts",
+    );
+    const summary = runWorkspaceLayoutMigrationsImpl({
+      store: this.store,
+      log: (level, message) => this.logOp(operation.id, level, message),
+    });
+    const failed = summary.skipped.filter((entry) => entry.reason === "migration_failed");
+    this.finalizeOperation(operation.id, {
+      status: failed.length ? "failed" : "succeeded",
+      progress: 100,
+      message: `Workspace layout migration: ${summary.migrated} migrated, ${summary.skipped.length} skipped`,
+      error: failed.length ? `${failed.length} workspace layout migration(s) failed` : null,
+    });
+    if (summary.migrated > 0) {
+      this.activity(
+        "workspace.layout_migration.migrated",
+        "system",
+        `Migrated ${summary.migrated} workspace layout(s)`,
+        null,
+        null,
+        operation.id,
+      );
+    }
+    if (summary.skipped.length > 0) {
+      this.activity(
+        "workspace.layout_migration.skipped",
+        "system",
+        `Skipped ${summary.skipped.length} workspace layout migration(s)`,
+        null,
+        null,
+        operation.id,
+      );
+    }
+    return { operationId: operation.id, ...summary };
+  };
 
   createAgentSession = (
     input: CreateAgentSessionInput,
@@ -181,7 +302,7 @@ export class OperationService {
     const session = this.store.listWorkspaceSessions().find((candidate) => candidate.id === input.sessionId);
     if (!session) return { stopped: false, reason: "session_not_found" as const };
     if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
-    this.store.deleteWorkspaceSession(session.id);
+    this.store.closeWorkspaceSession(session.id);
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     const activityType = session.kind === "agent" ? "agent.stopped" : "terminal.stopped";
     this.activity(
@@ -192,7 +313,7 @@ export class OperationService {
       session.workspaceId,
       null,
     );
-    return { stopped: true, removed: true, reason: "ok" as const };
+    return { stopped: true, removed: false, closed: true, reason: "ok" as const };
   }
 
   cancelOperation(operationId: string) {
@@ -585,6 +706,20 @@ export class OperationService {
       runWorkspaceHooks: (...args) => this.runWorkspaceHooks(...args),
       runNotificationHooks: (...args) => this.runNotificationHooks(...args),
       runAutoTransitions: this.runAutoTransitionsDep,
+    };
+  }
+
+  private planDeps(): workspacePlans.WorkspacePlanDeps {
+    return {
+      store: this.store,
+      activity: (...args) => this.activity(...args),
+    };
+  }
+
+  private managerDeps(): workspaceManager.WorkspaceManagerDeps {
+    return {
+      store: this.store,
+      activity: (...args) => this.activity(...args),
     };
   }
 }

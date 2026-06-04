@@ -283,6 +283,7 @@ function collectHydrateRows(
     if (ws.archivedAt) continue;
     const snap = store.getWorkspacePrSnapshot(ws.id);
     if (!snap || snap.prNumber === null || snap.prState === null) continue;
+    if (!ws.repoId) continue;
     const repoFullName = resolveRepoFullName(ws.repoId);
     if (!repoFullName) continue;
     rows.push({

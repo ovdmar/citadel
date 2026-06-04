@@ -80,6 +80,12 @@ if (
 const store = new SqliteStore(config.databasePath);
 store.migrate();
 const operations = new OperationService(store, config);
+const layoutMigration = operations.runWorkspaceLayoutMigrations();
+if (layoutMigration.operationId && (layoutMigration.migrated > 0 || layoutMigration.skipped.length > 0)) {
+  console.log(
+    `[workspace-layout-migration] migrated=${layoutMigration.migrated} skipped=${layoutMigration.skipped.length}`,
+  );
+}
 operations.reconcile();
 const daemon = await createDaemonApp({ config, configPath, store, operations });
 const { server, protocol } = daemon;

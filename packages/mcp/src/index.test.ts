@@ -23,6 +23,28 @@ describe("mcp helpers", () => {
     expect(status.tools).toContain("list_workspace_links");
     expect(status.tools).toContain("read_agent_output");
     expect(status.tools).toContain("send_agent_message");
+    for (const name of [
+      "get_citadel_context",
+      "list_workspace_checkouts",
+      "create_workspace_checkout",
+      "register_workspace_plan",
+      "get_workspace_plan",
+      "report_plan_deviation",
+      "start_workspace_manager",
+      "pause_workspace_manager",
+      "resume_workspace_manager",
+      "mark_checkout_ready_for_review",
+      "get_checkout_ticket",
+      "get_checkout_pr",
+      "get_checkout_gate_status",
+      "update_ticket_status",
+      "launch_pm_agent",
+      "launch_architect_agent",
+      "launch_implementation_agent",
+      "launch_prototype_agent",
+    ]) {
+      expect(status.tools).toContain(name);
+    }
     const launch = mcpToolDefinitions().find((tool) => tool.name === "launch_agent");
     expect(launch).toBeDefined();
     expect(launch?.destructive).toBe(false);
@@ -286,6 +308,7 @@ describe("mcp helpers", () => {
     expect(callMcpTool({ name: "list_provider_health" }, context)).toEqual({
       providerHealth: context.providerHealth,
     });
+    expect(callMcpTool({ name: "list_agent_runtimes" }, context)).toEqual({ runtimes: context.runtimes });
     expect(callMcpTool({ name: "list_runtimes" }, context)).toEqual({ runtimes: context.runtimes });
     expect(callMcpTool({ name: "list_scheduled_agents" }, context)).toEqual({ scheduledAgents: [] });
     expect(callMcpTool({ name: "create_scheduled_agent" }, context)).toEqual({
@@ -309,13 +332,79 @@ describe("mcp helpers", () => {
     ).toEqual({
       error: "mutating_tool_requires_daemon",
     });
+    expect(callMcpTool({ name: "launch_pm_agent", arguments: { idea: "Build it" } }, context)).toEqual({
+      error: "mutating_tool_requires_daemon",
+    });
     expect(callMcpTool({ name: "read_agent_output", arguments: { sessionId: "sess_test" } }, context)).toEqual({
       error: "session_tool_requires_daemon",
+    });
+    expect(callMcpTool({ name: "get_citadel_context", arguments: { cwd: "/tmp" } }, context)).toEqual({
+      error: "context_tool_requires_daemon",
+    });
+    expect(callMcpTool({ name: "get_checkout_gate_status", arguments: { checkoutId: "co_api" } }, context)).toEqual({
+      error: "context_tool_requires_daemon",
     });
     expect(
       callMcpTool({ name: "send_agent_message", arguments: { sessionId: "sess_test", message: "hi" } }, context),
     ).toEqual({
       error: "session_tool_requires_daemon",
+    });
+  });
+
+  it("can read checkouts and workspace plans from a rich snapshot", () => {
+    const context: McpToolContext = {
+      repos: [],
+      workspaces: [],
+      sessions: [],
+      operations: [],
+      activity: [],
+      providerHealth: [],
+      runtimes: [],
+      namespaces: [],
+      scratchpadPath: "/tmp/scratchpad.md",
+      checkouts: [
+        {
+          id: "co_api",
+          workspaceId: "ws_plan",
+          repoId: "repo_api",
+          name: "api",
+          path: "/tmp/workspace/api",
+          branch: "feature/api",
+          baseBranch: "main",
+          issue: null,
+          intendedPr: null,
+          stackParentCheckoutId: null,
+          inferredPurpose: "implementation",
+          gateStatus: "not_started",
+          createdAt: "2026-06-01T00:00:00.000Z",
+          updatedAt: "2026-06-01T00:00:00.000Z",
+          archivedAt: null,
+        },
+      ],
+      workspacePlanVersions: [
+        {
+          id: "plan_1",
+          workspaceId: "ws_plan",
+          version: 1,
+          status: "approved",
+          path: "/tmp/workspace/plan.md",
+          hash: "hash",
+          active: true,
+          approvalMode: "manual",
+          createdBySessionId: null,
+          createdAt: "2026-06-01T00:00:00.000Z",
+          updatedAt: "2026-06-01T00:00:00.000Z",
+        },
+      ],
+    };
+
+    expect(callMcpTool({ name: "list_workspace_checkouts", arguments: { workspaceId: "ws_plan" } }, context)).toEqual({
+      checkouts: [expect.objectContaining({ id: "co_api" })],
+    });
+    expect(callMcpTool({ name: "get_workspace_plan", arguments: { workspaceId: "ws_plan" } }, context)).toEqual({
+      workspaceId: "ws_plan",
+      activePlan: expect.objectContaining({ id: "plan_1" }),
+      planVersions: [expect.objectContaining({ id: "plan_1" })],
     });
   });
 });

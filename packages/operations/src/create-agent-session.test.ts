@@ -91,6 +91,33 @@ describe("createAgentSession session-id wiring", () => {
     }
   }, 15_000);
 
+  it("closing a tab kills tmux but keeps durable session history", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = makeService(store, fixture.dir);
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "sid-close", source: "scratch" });
+
+    const scriptPath = writeLongRunningNodeScript(fixture.dir, "sid-close-runtime.js");
+    const session = await service.createAgentSession(
+      { workspaceId: created.workspaceId, runtimeId: "test-agent" },
+      { command: "node", args: [scriptPath], displayName: "Test Agent" },
+    );
+
+    const result = service.stopAgentSession({ sessionId: session.id });
+    const row = store.listSessions(created.workspaceId).find((candidate) => candidate.id === session.id);
+
+    expect(result).toMatchObject({ stopped: true, closed: true });
+    expect(row).toMatchObject({
+      id: session.id,
+      status: "stopped",
+      closedAt: expect.stringMatching(/Z$/),
+      tmuxSessionName: null,
+      runtimeId: "test-agent",
+    });
+  }, 15_000);
+
   it("creates terminal sessions through the terminal profile without firing agent hooks", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
@@ -148,6 +175,137 @@ describe("createAgentSession session-id wiring", () => {
       service.stopAgentSession({ sessionId: session.id });
     }
   }, 15_000);
+
+  it("applies launch settings through the runtime launch profile and persists warnings", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = makeService(store, fixture.dir);
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const created = await service.createWorkspace({ repoId: repo.id, name: "launch-profile", source: "scratch" });
+    const argvPath = path.join(fixture.dir, "launch-profile-argv.json");
+    const scriptPath = path.join(fixture.dir, "fake-profile-runtime.js");
+    fs.writeFileSync(
+      scriptPath,
+      [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(argvPath)}, JSON.stringify(process.argv.slice(2)));`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+    );
+
+    const session = await service.createAgentSession(
+      {
+        workspaceId: created.workspaceId,
+        runtimeId: "test-agent",
+        launchSettings: {
+          runtimeId: "test-agent",
+          model: "old-model",
+          effort: "extreme",
+          fastMode: true,
+          contextMode: null,
+        },
+      },
+      {
+        command: "node",
+        args: [scriptPath],
+        displayName: "Profile Runtime",
+        launchOptions: {
+          models: [
+            { id: "stable-model", label: "Stable", default: true },
+            { id: "old-model", label: "Old", deprecated: true },
+          ],
+          defaultModel: "stable-model",
+          effortValues: ["low", "high"],
+          modelArgv: { argv: ["--model", "{value}"] },
+        },
+      },
+    );
+    try {
+      const deadline = Date.now() + 3000;
+      while (!fs.existsSync(argvPath) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(JSON.parse(fs.readFileSync(argvPath, "utf8"))).toEqual(["--model", "stable-model"]);
+      expect(store.listSessions(created.workspaceId).find((s) => s.id === session.id)?.launchWarnings).toEqual([
+        "Runtime test-agent model old-model is unavailable; using stable-model",
+        "effort extreme is not supported; dropping effort",
+        "Runtime test-agent does not support fast mode; dropping fastMode",
+      ]);
+      expect(
+        store.listActivity(created.workspaceId).filter((event) => event.type === "agent.launch_warning"),
+      ).toHaveLength(3);
+    } finally {
+      service.stopAgentSession({ sessionId: session.id });
+    }
+  }, 15_000);
+
+  it("launches sessions in the selected workspace Home or checkout cwd", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = makeService(store, fixture.dir);
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const workspace = await service.createWorkspace({
+      mode: "structured",
+      rootPath: path.join(fixture.dir, "feature"),
+      name: "Feature",
+      source: "scratch",
+    });
+    const checkout = await service.createWorkspaceCheckout({
+      workspaceId: workspace.workspaceId,
+      repoId: repo.id,
+      name: "api",
+      source: "default_branch",
+      branch: "feature/api",
+    });
+    const cwdPath = path.join(fixture.dir, "target-cwd.txt");
+    const scriptPath = path.join(fixture.dir, "target-cwd-runtime.js");
+    fs.writeFileSync(
+      scriptPath,
+      [
+        "const fs = require('node:fs');",
+        `fs.appendFileSync(${JSON.stringify(cwdPath)}, process.cwd() + '\\n');`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+    );
+
+    const home = await service.createAgentSession(
+      { workspaceId: workspace.workspaceId, runtimeId: "test-agent", targetType: "workspace_home" },
+      { command: "node", args: [scriptPath], displayName: "Home Agent" },
+    );
+    const checkoutSession = await service.createAgentSession(
+      {
+        workspaceId: workspace.workspaceId,
+        runtimeId: "test-agent",
+        targetType: "worktree_checkout",
+        checkoutId: checkout.checkoutId,
+      },
+      { command: "node", args: [scriptPath], displayName: "Checkout Agent" },
+    );
+    try {
+      const deadline = Date.now() + 3000;
+      while (
+        (!fs.existsSync(cwdPath) || fs.readFileSync(cwdPath, "utf8").trim().split("\n").length < 2) &&
+        Date.now() < deadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(fs.readFileSync(cwdPath, "utf8").trim().split("\n")).toEqual([
+        path.join(fixture.dir, "feature"),
+        path.join(fixture.dir, "feature", "api"),
+      ]);
+      expect(
+        store.listSessions(workspace.workspaceId).find((session) => session.id === checkoutSession.id),
+      ).toMatchObject({
+        targetType: "worktree_checkout",
+        checkoutId: checkout.checkoutId,
+      });
+    } finally {
+      service.stopAgentSession({ sessionId: home.id });
+      service.stopAgentSession({ sessionId: checkoutSession.id });
+    }
+  }, 20_000);
 
   it("launches Codex with an isolated workspace CODEX_SQLITE_HOME", async () => {
     const fixture = createGitFixture();

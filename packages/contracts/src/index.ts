@@ -1,4 +1,13 @@
 import { z } from "zod";
+import {
+  ExecutionTargetTypeSchema,
+  IssueBindingSchema,
+  LaunchSettingsSchema,
+  RoleIdSchema,
+  RuntimeLaunchOptionCapabilitiesSchema,
+  WorkspaceLifecyclePhaseSchema,
+  WorkspaceModeSchema,
+} from "./agents-system.js";
 import { ParentPrSchema, PrCommitSchema, PrMergeStrategySchema } from "./pr-routes.js";
 import { IdSchema } from "./primitives.js";
 export { IdSchema } from "./primitives.js";
@@ -39,13 +48,17 @@ export const RepoSchema = z.object({
 
 export const WorkspaceSchema = z.object({
   id: IdSchema,
-  repoId: IdSchema,
+  repoId: IdSchema.nullable().default(null),
   name: z.string().min(1),
   path: z.string().min(1),
+  rootPath: z.string().min(1).nullable().optional(),
+  mode: WorkspaceModeSchema.optional(),
   branch: z.string().min(1),
   baseBranch: z.string().min(1),
   source: WorkspaceSourceSchema,
   kind: WorkspaceKindSchema.default("worktree"),
+  lifecyclePhase: WorkspaceLifecyclePhaseSchema.optional(),
+  parentIssue: IssueBindingSchema.nullable().optional(),
   prUrl: z.string().nullable().default(null),
   issueKey: z.string().nullable().default(null),
   issueTitle: z.string().nullable().default(null),
@@ -94,6 +107,7 @@ export const AgentRuntimeSchema = z.object({
   health: ProviderStatusSchema,
   healthReason: z.string().nullable().default(null),
   capabilities: RuntimeCapabilitySchema,
+  launchCapabilities: RuntimeLaunchOptionCapabilitiesSchema.optional(),
 });
 
 export const TerminalProfileSchema = z.object({
@@ -105,6 +119,8 @@ export const TerminalProfileSchema = z.object({
 const WorkspaceSessionBaseSchema = z.object({
   id: IdSchema,
   workspaceId: IdSchema,
+  targetType: ExecutionTargetTypeSchema.optional(),
+  checkoutId: IdSchema.nullable().optional(),
   displayName: z.string(),
   status: AgentSessionStatusSchema,
   // Status-tracking fields written by the DB layer; optional at the TS level
@@ -141,6 +157,14 @@ const WorkspaceSessionBaseSchema = z.object({
   // spawn time so we can resume the same conversation across daemon and machine
   // restarts, and so the Settings restore flow has a stable handle.
   runtimeSessionId: z.string().nullable().optional(),
+  role: RoleIdSchema.nullable().optional(),
+  actionId: z.string().nullable().optional(),
+  managed: z.boolean().optional(),
+  parentSessionId: IdSchema.nullable().optional(),
+  planVersionId: IdSchema.nullable().optional(),
+  managerActionId: IdSchema.nullable().optional(),
+  closedAt: z.string().nullable().optional(),
+  launchWarnings: z.array(z.string()).optional(),
   // Auto-resume bookkeeping for sessions that hit a global API rate limit.
   // The daemon's auto-resume loop populates these so backoff state survives
   // daemon restarts: `rateLimitResumeAttempts` is the consecutive resume-send
@@ -483,9 +507,12 @@ export const CreateRepoInputSchema = z.object({
 });
 
 export const CreateWorkspaceInputSchema = z.object({
-  repoId: IdSchema,
-  // Empty `name` → daemon generates a funny-name (e.g. funny-cat).
+  repoId: IdSchema.optional(),
+  // Empty `name` lets the daemon generate a memorable unique name.
   name: z.string().default(""),
+  mode: WorkspaceModeSchema.optional(),
+  rootPath: z.string().min(1).optional(),
+  parentIssue: IssueBindingSchema.optional(),
   source: WorkspaceSourceSchema.default("scratch"),
   issueKey: z.string().min(2).optional(),
   issueTitle: z.string().min(1).optional(),
@@ -500,9 +527,18 @@ export const CreateWorkspaceInputSchema = z.object({
 
 export const CreateAgentSessionInputSchema = z.object({
   workspaceId: IdSchema,
+  targetType: ExecutionTargetTypeSchema.optional(),
+  checkoutId: IdSchema.optional(),
   runtimeId: IdSchema,
   displayName: z.string().min(1).optional(),
   prompt: z.string().optional(),
+  role: RoleIdSchema.optional(),
+  actionId: z.string().optional(),
+  managed: z.boolean().optional(),
+  parentSessionId: IdSchema.optional(),
+  planVersionId: IdSchema.optional(),
+  managerActionId: IdSchema.optional(),
+  launchSettings: LaunchSettingsSchema.optional(),
   namespaceId: IdSchema.optional(),
   // operationId lets hook-dispatched sessions link their activity back to the
   // firing operation. Always optional — user-launched sessions don't have a
@@ -522,6 +558,8 @@ export const CreateAgentSessionInputSchema = z.object({
 
 export const CreateTerminalSessionInputSchema = z.object({
   workspaceId: IdSchema,
+  targetType: ExecutionTargetTypeSchema.optional(),
+  checkoutId: IdSchema.optional(),
   displayName: z.string().min(1).optional(),
   namespaceId: IdSchema.optional(),
 });
@@ -671,3 +709,5 @@ export * from "./shortcuts.js";
 export type ApiError = { error: string; detail?: string; fieldErrors?: Record<string, string[]> };
 export * from "./scheduled-agents.js";
 export type { WorkspacePrStateEntry, WorkspacesPrStateResponse } from "./workspaces-pr-state.js";
+export * from "./agents-system.js";
+export * from "./manager-orchestration.js";

@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import os from "node:os";
 import type { AgentRuntimeConfig } from "@citadel/config";
 import type { AgentRuntime } from "@citadel/contracts";
+import { runtimeLaunchOptionCapabilities } from "./launch-profile.js";
 
 export {
   claudeProjectsDir,
@@ -59,6 +60,12 @@ export type {
   ActiveElapsedTimerProbe,
 } from "./status/index.js";
 
+export {
+  resolveRuntimeLaunchProfile,
+  runtimeLaunchOptionCapabilities,
+} from "./launch-profile.js";
+export type { ResolvedLaunchProfile, RuntimeLaunchOptionsInput, RuntimeWithLaunchOptions } from "./launch-profile.js";
+
 const baseCapabilities = {
   supportsPrompt: false,
   supportsResume: false,
@@ -89,6 +96,7 @@ const builtinCapabilities: Record<string, Partial<typeof baseCapabilities>> = {
   codex: {
     supportsPrompt: true,
     supportsResume: true,
+    supportsModelSelection: true,
     supportsNonInteractiveGoal: true,
     supportsTui: true,
     supportsUsage: true,
@@ -184,6 +192,7 @@ export function listRuntimeHealth(
       health: healthState.health,
       healthReason: healthState.healthReason,
       capabilities: capabilitiesForRuntime(runtime),
+      launchCapabilities: runtimeLaunchOptionCapabilities(runtime),
     };
   });
 }

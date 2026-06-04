@@ -4,23 +4,26 @@
 // component. The bridge stores the truth in localStorage (same key Navigator
 // reads on mount) AND broadcasts an in-tab custom event so Navigator can
 // react immediately without waiting for a remount.
+import { type NavigatorGrouping, normalizeNavigatorGrouping } from "./navigator-groups.js";
 
 export const COLLAPSE_STORAGE_KEY = "citadel.navigator-group-collapsed";
 export const GROUP_STORAGE_KEY = "citadel.navigator-group";
 export const NAVIGATOR_COLLAPSE_EVENT = "citadel:navigator-collapse-changed";
 export const NAVIGATOR_GROUPING_EVENT = "citadel:navigator-grouping-changed";
 
-type NavigatorGrouping = "repo" | "status" | "namespace" | "none";
-
 export function readNavigatorGrouping(): NavigatorGrouping {
-  if (typeof window === "undefined") return "none";
+  if (typeof window === "undefined") return ["workspace"];
   try {
     const raw = window.localStorage.getItem(GROUP_STORAGE_KEY) ?? "";
-    if (raw === "repo" || raw === "status" || raw === "namespace" || raw === "none") return raw;
+    if (raw === "none") return ["workspace"];
+    if (raw === "workspace" || raw === "repo" || raw === "status" || raw === "namespace") {
+      return normalizeNavigatorGrouping(raw);
+    }
+    if (raw.startsWith("[")) return normalizeNavigatorGrouping(JSON.parse(raw) as unknown);
   } catch {
     // fall through
   }
-  return "none";
+  return ["workspace"];
 }
 
 // In-tab broadcast for grouping changes. The browser's native `storage` event

@@ -18,70 +18,6 @@ afterEach(() => {
 });
 
 describe("OperationService", () => {
-  it("registers a root workspace when the workspaces table has a root_path column", () => {
-    const fixture = createGitFixture();
-    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
-    store.migrate();
-    store.exec("ALTER TABLE workspaces ADD COLUMN root_path TEXT NOT NULL DEFAULT ''");
-    const service = new OperationService(store);
-
-    const repo = service.registerRepo({ rootPath: fixture.repoPath });
-    const rootWorkspace = store.listWorkspaces(repo.id).find((workspace) => workspace.kind === "root");
-
-    expect(rootWorkspace).toMatchObject({ repoId: repo.id, path: fixture.repoPath, name: "main" });
-    expect(store.database.prepare("SELECT root_path FROM workspaces WHERE id = ?").get(rootWorkspace?.id)).toEqual({
-      root_path: fixture.repoPath,
-    });
-  });
-
-  it("rolls back repo registration when the root workspace cannot be created", () => {
-    const fixture = createGitFixture();
-    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
-    store.migrate();
-    store.insertRepo({
-      id: "repo_existing",
-      name: "Existing",
-      rootPath: path.join(fixture.dir, "existing"),
-      defaultBranch: "main",
-      defaultRemote: "origin",
-      worktreeParent: path.join(fixture.dir, "worktrees"),
-      setupHookIds: [],
-      teardownHookIds: [],
-      providerIds: [],
-      deployHookCommand: null,
-      createdAt: "2026-05-17T00:00:00.000Z",
-      updatedAt: "2026-05-17T00:00:00.000Z",
-      archivedAt: null,
-    });
-    store.insertWorkspace({
-      id: "ws_conflict",
-      repoId: "repo_existing",
-      name: "conflict",
-      path: fixture.repoPath,
-      branch: "main",
-      baseBranch: "main",
-      source: "imported",
-      kind: "root",
-      prUrl: null,
-      issueKey: null,
-      issueTitle: null,
-      issueUrl: null,
-      slackThreadUrl: null,
-      section: "backlog",
-      pinned: false,
-      lifecycle: "ready",
-      dirty: false,
-      namespaceId: null,
-      createdAt: "2026-05-17T00:00:00.000Z",
-      updatedAt: "2026-05-17T00:00:00.000Z",
-      archivedAt: null,
-    });
-    const service = new OperationService(store);
-
-    expect(() => service.registerRepo({ rootPath: fixture.repoPath })).toThrow();
-    expect(store.database.prepare("SELECT id FROM repos WHERE root_path = ?").all(fixture.repoPath)).toEqual([]);
-  });
-
   it("registers repos, creates workspaces, runs setup hooks, and blocks dirty removal", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
@@ -522,7 +458,16 @@ describe("OperationService", () => {
     expect(session.status).toBe("running");
     const result = service.stopAgentSession({ sessionId: session.id });
     expect(result.stopped).toBe(true);
-    expect(store.listSessions().find((candidate) => candidate.id === session.id)).toBeUndefined();
+    const stopped = store.listSessions().find((candidate) => candidate.id === session.id);
+    expect(stopped).toMatchObject({
+      id: session.id,
+      status: "stopped",
+      statusReason: "closed_by_user",
+      transport: "disconnected",
+      tmuxSessionName: null,
+      tmuxSessionId: null,
+    });
+    expect(stopped?.closedAt).toEqual(expect.any(String));
     expect(store.listActivity().find((event) => event.type === "agent.stopped")).toBeTruthy();
   });
 

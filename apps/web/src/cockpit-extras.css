@@ -137,6 +137,16 @@
   color: var(--c-fg-1);
 }
 
+.nav-section-icons > button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.nav-section-icons > button:disabled:hover {
+  background: transparent;
+  color: var(--c-fg-3);
+}
+
 .nav-group {
   padding: 2px 6px 4px;
   /* Shared right-edge slot for the group count and the workspace approval
@@ -180,11 +190,31 @@
   transform: rotate(90deg);
 }
 
-.nav-group-label {
+.nav-group-label-stack {
   flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+}
+
+.nav-group-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nav-group-sub {
+  min-width: 0;
+  margin-top: 1px;
+  overflow: hidden;
+  color: var(--c-fg-5);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  text-transform: none;
   white-space: nowrap;
 }
 
@@ -242,6 +272,11 @@
 
 .workspace-card-wrap {
   position: relative;
+}
+
+.nav-workspace-target-wrap {
+  display: grid;
+  gap: 2px;
 }
 
 /* Intra-group drag-reorder indicator: a thin accent line above or below
@@ -320,6 +355,11 @@
 .workspace-card-wrap:hover .workspace-card,
 .workspace-card-wrap:focus-within .workspace-card {
   padding-right: 28px;
+}
+
+.workspace-card-wrap.has-right-control:hover .workspace-card,
+.workspace-card-wrap.has-right-control:focus-within .workspace-card {
+  padding-right: 10px;
 }
 
 .drop-workspace-backdrop {
@@ -416,55 +456,6 @@
   gap: 8px;
 }
 
-/* Toast surface (AC4 rollback path + future create-error notifications).
- * Bottom-right stack, each entry auto-dismisses after 6s. */
-.cit-toast-stack {
-  position: fixed;
-  bottom: 16px;
-  right: 16px;
-  display: grid;
-  gap: 8px;
-  z-index: 9000;
-  pointer-events: none;
-}
-
-.cit-toast {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: center;
-  min-width: 240px;
-  max-width: 360px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: var(--panel);
-  color: CanvasText;
-  font-size: 13px;
-  line-height: 1.4;
-  box-shadow: 0 16px 48px rgb(var(--shadow-color) / 0.18);
-  pointer-events: auto;
-}
-
-.cit-toast-error {
-  border-color: var(--color-danger, #c64646);
-  color: var(--color-danger, #c64646);
-}
-
-.cit-toast-message {
-  word-wrap: break-word;
-}
-
-.cit-toast-dismiss {
-  background: transparent;
-  border: 0;
-  color: inherit;
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 4px 6px;
-}
-
 .drop-workspace-cancel,
 .drop-workspace-confirm {
   min-height: 32px;
@@ -493,6 +484,11 @@
 
 .workspace-card:hover {
   background: var(--c-line-1);
+}
+
+.workspace-card:focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: 2px;
 }
 
 .workspace-card.active {
@@ -634,6 +630,61 @@
    * right edge inside the same .nav-group. */
   min-width: var(--right-slot);
   justify-content: flex-end;
+}
+
+.workspace-card-right-control {
+  position: absolute;
+  top: 50%;
+  right: 27px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  transform: translateY(-50%);
+}
+
+.workspace-card-right-control-spacer {
+  width: 38px;
+  height: 18px;
+  flex: 0 0 38px;
+}
+
+.workspace-card-collapse {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--c-fg-4);
+  cursor: pointer;
+}
+
+.workspace-card-collapse:hover,
+.workspace-card-collapse:focus-visible {
+  background: var(--c-line-1);
+  color: var(--c-fg-1);
+  outline: none;
+}
+
+.workspace-card.active .workspace-card-collapse {
+  color: var(--c-on-dark-d);
+}
+
+.workspace-card.active .workspace-card-collapse:hover,
+.workspace-card.active .workspace-card-collapse:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--c-on-dark);
+}
+
+.workspace-card-collapse-icon {
+  transition: transform 120ms ease;
+}
+
+.workspace-card-collapse-icon.open {
+  transform: rotate(90deg);
 }
 
 .workspace-card-diff {

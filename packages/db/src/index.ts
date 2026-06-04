@@ -5,6 +5,7 @@ import type {
   ActivityEvent,
   AgentSession,
   HookOutput,
+  IssueBinding,
   Namespace,
   Operation,
   OperationLogEntry,
@@ -203,7 +204,7 @@ export class SqliteStore {
     ];
     const values: unknown[] = [
       workspace.id,
-      workspace.repoId,
+      workspace.repoId ?? null,
       workspace.name,
       workspace.path,
       workspace.branch,
@@ -224,12 +225,21 @@ export class SqliteStore {
       workspace.updatedAt,
       workspace.archivedAt ?? null,
     ];
-    // Some installed DBs briefly carried workspaces.root_path; populate it
-    // when present so those schemas keep accepting new workspace rows.
-    if (this.hasColumn("workspaces", "root_path")) {
-      const pathIndex = columns.indexOf("path") + 1;
-      columns.splice(pathIndex, 0, "root_path");
-      values.splice(pathIndex, 0, workspace.path);
+    const optionalColumns: Array<[string, unknown]> = [
+      ["root_path", workspace.rootPath ?? workspace.path],
+      ["mode", workspace.mode ?? "freestyle"],
+      ["lifecycle_phase", workspace.lifecyclePhase ?? "implementation"],
+      ["parent_issue_provider", workspace.parentIssue?.provider ?? (workspace.issueKey ? "jira" : null)],
+      ["parent_issue_key", workspace.parentIssue?.key ?? workspace.issueKey ?? null],
+      ["parent_issue_url", workspace.parentIssue?.url ?? workspace.issueUrl ?? null],
+      ["parent_issue_title", workspace.parentIssue?.title ?? workspace.issueTitle ?? null],
+      ["parent_issue_status", workspace.parentIssue?.status ?? null],
+    ];
+    for (const [column, value] of optionalColumns) {
+      if (this.hasColumn("workspaces", column)) {
+        columns.push(column);
+        values.push(value);
+      }
     }
     this.database
       .prepare(`INSERT INTO workspaces (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`)
@@ -288,6 +298,40 @@ export class SqliteStore {
     values.push(new Date().toISOString());
     values.push(workspaceId);
     this.database.prepare(`UPDATE workspaces SET ${fields.join(", ")} WHERE id = ?`).run(...(values as unknown[]));
+  }
+
+  updateWorkspaceParentIssue(workspaceId: string, issue: IssueBinding | null): Workspace | null {
+    this.database
+      .prepare(
+        `UPDATE workspaces
+         SET parent_issue_provider = ?, parent_issue_key = ?, parent_issue_url = ?, parent_issue_title = ?,
+           parent_issue_status = ?, issue_key = ?, issue_title = ?, issue_url = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(
+        issue?.provider ?? null,
+        issue?.key ?? null,
+        issue?.url ?? null,
+        issue?.title ?? null,
+        issue?.status ?? null,
+        issue?.key ?? null,
+        issue?.title ?? null,
+        issue?.url ?? null,
+        new Date().toISOString(),
+        workspaceId,
+      );
+    return this.listWorkspaces().find((workspace) => workspace.id === workspaceId) ?? null;
+  }
+
+  updateWorkspaceLayout(
+    workspaceId: string,
+    patch: Pick<Workspace, "path"> & { rootPath: string; mode?: Workspace["mode"] },
+  ): Workspace | null {
+    this.database
+      .prepare("UPDATE workspaces SET path = ?, root_path = ?, mode = ?, updated_at = ? WHERE id = ?")
+      .run(patch.path, patch.rootPath, patch.mode ?? "freestyle", new Date().toISOString(), workspaceId);
+    const row = this.database.prepare("SELECT * FROM workspaces WHERE id = ?").get(workspaceId);
+    return row ? workspaceFromRow(row as Record<string, unknown>) : null;
   }
 
   archiveWorkspace(workspaceId: string, lifecycle: Workspace["lifecycle"], dirty = false) {
@@ -400,12 +444,13 @@ export class SqliteStore {
     this.database
       .prepare(
         `INSERT INTO workspace_sessions (id, workspace_id, kind, runtime_id, display_name, status, status_reason,
-          status_reason_at,
+          status_reason_at, target_type, checkout_id, role, action_id, managed, parent_session_id, plan_version_id,
+          manager_action_id, closed_at, launch_warnings,
           last_status_at, last_output_at, ended_at, exit_code, transport,
           tmux_session_name, tmux_session_id, tmux_socket_name, tab_id, runtime_session_id,
           rate_limit_resume_attempts, next_resume_at, last_resume_from_rate_limit_at,
           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -416,6 +461,16 @@ export class SqliteStore {
         session.status,
         session.statusReason ?? null,
         session.statusReasonAt ?? null,
+        session.targetType ?? "worktree_checkout",
+        session.checkoutId ?? null,
+        session.role ?? null,
+        session.actionId ?? null,
+        session.managed ? 1 : 0,
+        session.parentSessionId ?? null,
+        session.planVersionId ?? null,
+        session.managerActionId ?? null,
+        session.closedAt ?? null,
+        JSON.stringify(session.launchWarnings ?? []),
         // Optional in the schema (older test fixtures + out-of-band callers
         // may omit these); the DB layer normalizes to sensible defaults so
         // the column constraints are still satisfied.
@@ -554,6 +609,18 @@ export class SqliteStore {
     this.database.prepare("DELETE FROM workspace_sessions WHERE id = ?").run(sessionId);
   }
 
+  closeWorkspaceSession(sessionId: string, closedAt = new Date().toISOString()) {
+    this.database
+      .prepare(
+        `UPDATE workspace_sessions
+         SET status = 'stopped', status_reason = 'closed_by_user', status_reason_at = ?,
+             transport = 'disconnected', tmux_session_name = NULL, tmux_session_id = NULL, tmux_socket_name = NULL,
+             closed_at = ?, ended_at = COALESCE(ended_at, ?), updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(closedAt, closedAt, closedAt, closedAt, sessionId);
+  }
+
   deleteSession(sessionId: string) {
     this.deleteWorkspaceSession(sessionId);
   }
@@ -678,3 +745,9 @@ Object.assign(SqliteStore.prototype, scheduledAgentStoreMethods);
 // hoisting would run it before this class declaration completes.
 import { scheduledRunStoreMethods } from "./scheduled-run-store.js";
 Object.assign(SqliteStore.prototype, scheduledRunStoreMethods);
+
+import { agentsSystemStoreMethods } from "./agents-system-store.js";
+Object.assign(SqliteStore.prototype, agentsSystemStoreMethods);
+
+import { managerOrchestrationStoreMethods } from "./manager-orchestration-store.js";
+Object.assign(SqliteStore.prototype, managerOrchestrationStoreMethods);

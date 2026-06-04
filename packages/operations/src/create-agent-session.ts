@@ -5,15 +5,22 @@ import type {
   AgentSession,
   CreateAgentSessionInput,
   CreateTerminalSessionInput,
+  ExecutionTarget,
   JiraAutoTransitionEvent,
   Repo,
   TerminalProfile,
   Workspace,
   WorkspaceSession,
+  WorktreeCheckout,
 } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
-import { discoverCodexSessionId, prepareCodexSqliteHomeForWorkspace } from "@citadel/runtimes";
+import {
+  type RuntimeLaunchOptionsInput,
+  discoverCodexSessionId,
+  prepareCodexSqliteHomeForWorkspace,
+  resolveRuntimeLaunchProfile,
+} from "@citadel/runtimes";
 import {
   type AgentExitHint,
   COMM_TRUNCATION,
@@ -25,6 +32,7 @@ import {
   submitPrompt,
   tmuxSocketNameForWorkspace,
 } from "@citadel/terminal";
+import { executionTargetCwd } from "./workspace-layout.js";
 
 const CODEX_STATE_DB_LOCKED = /(?:database is locked|failed to initialize state runtime)/i;
 const CODEX_LAUNCH_MAX_ATTEMPTS = 5;
@@ -36,6 +44,7 @@ type RuntimeLaunchEnv = Record<string, string | null | undefined>;
 type RuntimeLaunchOptions = { exitHint: AgentExitHint; env?: RuntimeLaunchEnv };
 
 export type RuntimeDescriptor = {
+  id?: string;
   command: string;
   args: string[];
   displayName: string;
@@ -47,6 +56,7 @@ export type RuntimeDescriptor = {
   // CLI flag for resuming a previous conversation by UUID (e.g. "--resume").
   // Used in the restore path when input.resumeRuntimeSessionId is set.
   resumeArg?: string | null;
+  launchOptions?: RuntimeLaunchOptionsInput;
 };
 
 export type CreateAgentSessionDeps = {
@@ -92,13 +102,35 @@ export async function createAgentSession(
   const { store } = deps;
   const workspace = store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
   if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+  const checkout = input.checkoutId ? store.findWorkspaceCheckout(input.checkoutId) : null;
+  if (input.checkoutId && !checkout) throw new Error(`Unknown checkout: ${input.checkoutId}`);
+  if (checkout && checkout.workspaceId !== workspace.id) {
+    throw new Error(`Checkout ${checkout.id} does not belong to workspace ${workspace.id}`);
+  }
+  const targetType =
+    input.targetType ??
+    (checkout ? "worktree_checkout" : workspace.mode === "structured" ? "workspace_home" : "worktree_checkout");
+  const cwd = resolveSessionCwd({ workspace, checkout, targetType });
   const now = nowIso();
   const sessionName = `citadel_${workspace.id}_${createId("agent").slice(-8)}`;
   const tmuxSocketName = tmuxSocketNameForWorkspace(workspace.id);
   // Prefer runtime-native initial-prompt argv when available. Codex accepts
   // the prompt as a positional argument; Claude Code's interactive mode does
   // not, so for runtimes without argv support we paste once the TUI is ready.
-  const runtimeArgs = ensureCodexGoalsFeatureArgs(input.runtimeId, runtime.args);
+  const launchProfile = resolveRuntimeLaunchProfile({
+    runtime: {
+      id: runtime.id ?? input.runtimeId,
+      command: runtime.command,
+      args: ensureCodexGoalsFeatureArgs(input.runtimeId, runtime.args),
+      displayName: runtime.displayName,
+      promptArg: runtime.promptArg ?? undefined,
+      sessionIdArg: runtime.sessionIdArg ?? undefined,
+      resumeArg: runtime.resumeArg ?? undefined,
+      launchOptions: runtime.launchOptions,
+    },
+    settings: input.launchSettings,
+  });
+  const runtimeArgs = [...launchProfile.args];
   let promptForKeys: string | null = null;
   if (input.prompt?.length) {
     if (runtime.promptArg) runtimeArgs.push(runtime.promptArg, input.prompt);
@@ -149,7 +181,7 @@ export async function createAgentSession(
   try {
     tmux = await ensureTmuxSession({
       sessionName,
-      cwd: workspace.path,
+      cwd,
       socketName: tmuxSocketName,
       terminal: deps.terminal ?? DEFAULT_TERMINAL_PROFILE,
     });
@@ -204,6 +236,14 @@ export async function createAgentSession(
     workspaceId: workspace.id,
     runtimeId: input.runtimeId,
     displayName: input.displayName || runtime.displayName,
+    targetType,
+    checkoutId: input.checkoutId ?? null,
+    role: input.role ?? null,
+    actionId: input.actionId ?? null,
+    managed: input.managed ?? false,
+    parentSessionId: input.parentSessionId ?? null,
+    planVersionId: input.planVersionId ?? null,
+    managerActionId: input.managerActionId ?? null,
     status: "running",
     statusReason: "launched",
     lastStatusAt: now,
@@ -220,6 +260,7 @@ export async function createAgentSession(
     // identical to ordering by createdAt.
     tabId: input.tabId ?? createId("tab"),
     runtimeSessionId,
+    launchWarnings: launchProfile.launchWarnings,
     createdAt: now,
     updatedAt: now,
   };
@@ -236,7 +277,7 @@ export async function createAgentSession(
     void (async () => {
       try {
         const found = await discoverCodexSessionId({
-          workspacePath: workspace.path,
+          workspacePath: cwd,
           spawnTimeMs,
           timeoutMs: 120_000,
           ...(paneRootPid ? { rootPid: paneRootPid } : {}),
@@ -264,6 +305,16 @@ export async function createAgentSession(
     workspace.id,
     launchedFromOperation,
   );
+  for (const warning of launchProfile.launchWarnings) {
+    deps.activity(
+      "agent.launch_warning",
+      activitySource,
+      warning,
+      workspace.repoId,
+      workspace.id,
+      launchedFromOperation,
+    );
+  }
   const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
   if (repo) {
     await deps.runNotificationHooks("agent.started", repo, workspace, launchedFromOperation, {
@@ -293,13 +344,22 @@ export async function createTerminalSession(
   const { store } = deps;
   const workspace = store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
   if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+  const checkout = input.checkoutId ? store.findWorkspaceCheckout(input.checkoutId) : null;
+  if (input.checkoutId && !checkout) throw new Error(`Unknown checkout: ${input.checkoutId}`);
+  if (checkout && checkout.workspaceId !== workspace.id) {
+    throw new Error(`Checkout ${checkout.id} does not belong to workspace ${workspace.id}`);
+  }
+  const targetType =
+    input.targetType ??
+    (checkout ? "worktree_checkout" : workspace.mode === "structured" ? "workspace_home" : "worktree_checkout");
+  const cwd = resolveSessionCwd({ workspace, checkout, targetType });
   const now = nowIso();
   const terminal = deps.terminal ?? DEFAULT_TERMINAL_PROFILE;
   const sessionName = `citadel_${workspace.id}_${createId("term").slice(-8)}`;
   const tmuxSocketName = tmuxSocketNameForWorkspace(workspace.id);
   let tmux: Awaited<ReturnType<typeof ensureTmuxSession>>;
   try {
-    tmux = await ensureTmuxSession({ sessionName, cwd: workspace.path, terminal, socketName: tmuxSocketName });
+    tmux = await ensureTmuxSession({ sessionName, cwd, terminal, socketName: tmuxSocketName });
   } catch (error) {
     killTmuxSession(sessionName, tmuxSocketName);
     throw error;
@@ -310,6 +370,8 @@ export async function createTerminalSession(
     workspaceId: workspace.id,
     runtimeId: null,
     displayName: input.displayName || terminal.displayName,
+    targetType,
+    checkoutId: input.checkoutId ?? null,
     status: "running",
     statusReason: "launched",
     lastStatusAt: now,
@@ -431,4 +493,17 @@ function codexRetryDelayMs(attempt: number): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function resolveSessionCwd(input: {
+  workspace: Workspace;
+  checkout: WorktreeCheckout | null;
+  targetType: ExecutionTarget["type"];
+}): string {
+  if (input.checkout) return executionTargetCwd(input);
+  if (input.targetType === "workspace_home") {
+    return executionTargetCwd({ workspace: input.workspace, targetType: "workspace_home" });
+  }
+  if (input.workspace.mode === "structured") throw new Error("checkout_required");
+  return input.workspace.path;
 }

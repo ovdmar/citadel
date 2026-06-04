@@ -16,7 +16,9 @@ function walk(dir: string): string[] {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
   return entries.flatMap((entry) => {
     const absolute = path.join(dir, entry.name);
-    if (["node_modules", ".git", "dist", "coverage", "test-results", "playwright-report"].includes(entry.name))
+    if (
+      ["node_modules", ".git", ".agents", "dist", "coverage", "test-results", "playwright-report"].includes(entry.name)
+    )
       return [];
     if (entry.isDirectory()) return walk(absolute);
     if (!/\.(ts|tsx|js|jsx|css|md)$/.test(entry.name)) return [];

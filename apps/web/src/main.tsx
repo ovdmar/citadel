@@ -14,6 +14,7 @@ import { queryClient } from "./api.js";
 import { OptimisticRemoveProvider } from "./app-state.js";
 import { Cockpit } from "./cockpit.js";
 import { bootstrapLastRoute, clearLastRoute, saveLastRoute } from "./lib/last-route.js";
+import { AgentTemplatesView } from "./routes/agents.js";
 import { DashboardView } from "./routes/dashboard.js";
 import { HistoryView } from "./routes/history.js";
 import { OnboardingView } from "./routes/onboarding.js";
@@ -33,6 +34,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 import "./chrome.css";
 import "./stage-terminal.css";
+import "./structured-home-summary.css";
 import "./cockpit-extras.css";
 import "./pr-card-actions.css";
 import "./inspector-stats.css";
@@ -93,6 +95,12 @@ const settingsRoute = createRoute({
   getParentRoute: () => cockpitLayoutRoute,
   path: "/settings",
   component: SettingsView,
+});
+
+const agentsRoute = createRoute({
+  getParentRoute: () => cockpitLayoutRoute,
+  path: "/agents",
+  component: AgentTemplatesView,
 });
 
 const repoSettingsRoute = createRoute({
@@ -260,6 +268,7 @@ const router = createRouter({
     cockpitLayoutRoute.addChildren([
       indexRoute,
       settingsRoute,
+      agentsRoute,
       repoSettingsRoute,
       operationsRoute,
       onboardingRoute,

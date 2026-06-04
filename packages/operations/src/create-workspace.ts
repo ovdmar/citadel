@@ -28,6 +28,7 @@ import {
   isUniqueWorkspacePathViolation,
   tryRunGit,
 } from "./helpers.js";
+import { createStructuredWorkspaceShell } from "./structured-workspace.js";
 
 // Shared dep surface for the extracted workspace lifecycle modules. The
 // service class in `index.ts` binds these to its private methods.
@@ -97,6 +98,7 @@ export async function createWorkspaceImpl(
   input: CreateWorkspaceInput,
   options: CreateWorkspaceOptions = {},
 ): Promise<{ operationId: string; workspaceId: string }> {
+  if (input.mode === "structured" && !input.repoId) return createStructuredWorkspaceShell(deps, input);
   const repo = deps.store.listRepos().find((candidate) => candidate.id === input.repoId);
   if (!repo) throw new Error(`Unknown repo: ${input.repoId}`);
   const namespaceId = input.namespaceId ?? null;

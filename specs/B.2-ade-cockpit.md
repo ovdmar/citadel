@@ -51,16 +51,40 @@
 
 ## Center Stage Sessions
 
-[ ] 1. The center column shows the workspace's sessions/chats as tabs along the top.
-[ ] 2. A plus button next to the tabs adds a new workspace session: pick the configured `Terminal` profile or one of the configured agent runtimes. The button is rendered immediately to the right of the last tab (not pushed to the far edge), and the button + menu sit outside the horizontally scrollable tab strip so the menu is never clipped. Keyboard equivalents are `Cmd+T` (Terminal) and `Cmd+E` (default agent runtime); the menu item next to each runtime displays the chord.
-[ ] 3. Selecting `Terminal` calls the terminal-session REST endpoint and creates a `kind: "terminal"` workspace session in the workspace worktree.
-[ ] 4. Selecting an agent runtime calls the agent-session REST endpoint and creates a `kind: "agent"` workspace session. Each session tab has an editable title. Default titles are the agent runtime display name or `Terminal`.
-[ ] 5. When a workspace is created with an associated default agent, the cockpit opens that agent automatically in a new session tab.
-[ ] 6. The selected session occupies the rest of the column height.
-[x] 7. Terminal keyboard shortcuts pass through to the active terminal by default. The terminal pane intercepts a small, named allow-list of cockpit shortcuts (see §Keyboard Shortcuts) before xterm consumes them and posts the same terminal shortcut message path used by the cockpit; everything else is delivered to xterm/tmux unchanged.
-[ ] 8. Selecting a workspace in the navigator focuses that workspace's currently-active xterm pane directly. If the workspace has no active session, focusing the workspace is a no-op (no error).
-[ ] 9. Closing the active agent session tab immediately focuses the LEFT-sibling tab (falling back to the right sibling if none) — no blank-grace window. Closing the only remaining tab leaves the active-session pointer untouched.
-[ ] 10. The Stage's `+` add-session button is disabled while `workspace.lifecycle === "creating"` — starting a session requires a ready worktree.
+[ ] 1. The center column shows tabs for the selected execution target, not all workspace sessions at once.
+[ ] 2. Selecting a workspace row defaults to Home. Selecting `Home` or a checkout child switches the tab strip to that target's live tabs.
+[~] 3. A plus button next to tabs adds a new session valid for the selected target. Home offers PM, Architect when discovery is ready, Manager/manual, freestyle runtimes, and Terminal. Checkout offers Implementation when structured gates pass, Prototype, freestyle runtimes, and Terminal. Disabled role/action options show exact precondition reasons from daemon-derived launch rules.
+[~] 4. Specialized role sessions and freestyle runtime sessions are visually distinct. Specialized role sessions are manager-tracked by default; freestyle runtime sessions are not manager-tracked.
+[~] 5. Role target rules are enforced in the UI: `pm`, `architect`, and `manager` run on Home; `implementation` and `prototype` run on checkouts.
+[ ] 6. Selecting `Terminal` calls the terminal-session REST endpoint and creates a `kind: "terminal"` session in the selected target cwd.
+[ ] 7. Selecting a freestyle runtime creates a `kind: "agent"` session with no role/action metadata in the selected target cwd.
+[ ] 8. Selecting a specialized role or action creates a `kind: "agent"` session with role/action/managed metadata and any launch warnings from runtime capability resolution.
+[ ] 9. Each session tab has an editable title. Default titles include role/action names for specialized sessions, runtime display name for freestyle agents, and `Terminal` for terminal sessions.
+[ ] 10. Closing a tab kills the backing tmux session and marks the live tab closed, but durable session history, runtime session id, artifacts, role/action metadata, and resume information remain inspectable.
+[ ] 11. The selected session occupies the rest of the column height.
+[x] 12. Terminal keyboard shortcuts pass through to the active terminal by default. The terminal pane intercepts a small, named allow-list of cockpit shortcuts (see §Keyboard Shortcuts) before xterm consumes them and posts the same terminal shortcut message path used by the cockpit; everything else is delivered to xterm/tmux unchanged.
+[ ] 13. Selecting a target in the navigator focuses that target's currently-active xterm pane directly. If the target has no live session, focusing is a no-op.
+[ ] 14. Closing the active tab immediately focuses the left sibling, falling back to the right sibling. Closing the only remaining tab leaves the target selected and shows its history/empty state.
+[ ] 15. The Stage's `+` add-session button is disabled when the selected target is not ready for local execution.
+[~] 16. Global shortcut session creation respects the selected execution target and uses the Home or checkout cwd consistently with explicit target-scoped launches.
+
+## Global Agents Configuration
+
+[ ] 1. The global Agents nav is configuration only. It does not show workspace-specific manager state or history.
+[ ] 2. Agents config edits exactly five predefined non-deletable roles: `pm`, `architect`, `implementation`, `prototype`, and `manager`.
+[ ] 3. Each role editor exposes system prompt, runtime id, model, effort/reasoning, fast mode, context mode, validation warnings, and reset-to-Citadel-defaults.
+[ ] 4. Built-in action templates are edited under their owning role. The UI does not expose arbitrary trigger creation in v1.
+[ ] 5. Role/action selectors are driven by runtime capability/model discovery and show recorded fallbacks when a configured model or option is unavailable.
+
+## Workspace Automation And History
+
+[ ] 1. Workspace Home shows lifecycle, parent issue binding, discovery readiness, active plan version, manager pause state, manager decisions, manager action ledger/history, local notifications, and next actions.
+[~] 2. Workspace-level agent history lists closed/restorable sessions across Home and all checkouts without reopening every tab.
+[~] 3. Manager pause controls exist globally and per workspace. Pause blocks automated manager/agent-triggered actions, not human manual launches or important local notifications.
+[ ] 4. Local notifications surface ready-for-human-review and human-input-needed events through in-app activity/alert plus optional browser notification and sound.
+[ ] 5. Checkout detail shows delivery unit, child issue, PR identity/head/checks/mergeability/conflicts, current and stale review artifacts, deviations, stack parent/children, gate reasons, and related action history.
+[ ] 6. Home and checkout detail render as the selected target's useful empty state before any live terminal/session is open.
+[ ] 7. Plan registration UI previews parsed delivery units, dependency graph, unsafe identifiers, missing/ambiguous repos, missing child issues, and manager-blocking parser errors before approval.
 
 ## Inspector Tabs
 
@@ -109,6 +133,7 @@
 [ ] 9. Waiting-review state is explicit.
 [ ] 10. Failed operation state is explicit.
 [ ] 11. Ready-to-merge or ready-to-deploy state is explicit when provider data supports it.
+[ ] 12. Browser notification unsupported/denied and sound disabled/playback-failed states are explicit and do not break in-app notification delivery.
 
 ## Operator Actions
 

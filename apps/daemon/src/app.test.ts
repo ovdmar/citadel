@@ -137,11 +137,8 @@ describe("createDaemonApp", () => {
       expect(await getJson<{ activity: unknown[] }>(`${baseUrl}/api/mcp/resources/activity`)).toEqual({
         activity: [],
       });
-      expect(
-        await getJson<{ repos: unknown[]; workspaces: unknown[]; sessions: unknown[] }>(
-          `${baseUrl}/api/mcp/resources/workspaces`,
-        ),
-      ).toEqual({ repos: [], workspaces: [], sessions: [] });
+      const workspacesResource = await getJson(`${baseUrl}/api/mcp/resources/workspaces`);
+      expect(workspacesResource).toEqual({ repos: [], workspaces: [], sessions: [], checkouts: [] });
       expect(
         await postJson<{ result: { repos: number; workspaces: number; sessions: number } }>(
           `${baseUrl}/api/mcp/tools/call`,
@@ -231,7 +228,7 @@ describe("createDaemonApp", () => {
           contents: [
             expect.objectContaining({
               mimeType: "application/json",
-              text: JSON.stringify({ repos: [], workspaces: [], sessions: [] }),
+              text: JSON.stringify({ repos: [], workspaces: [], checkouts: [], sessions: [] }),
             }),
           ],
         },
@@ -688,9 +685,10 @@ describe("createDaemonApp", () => {
       });
       const stop = await fetch(`${baseUrl}/api/agent-sessions/${sessionResp.session.id}`, { method: "DELETE" });
       expect(stop.status).toBe(202);
-      const state = await getJson<{ sessions: Array<{ id: string; status: string }> }>(`${baseUrl}/api/state`);
+      const state = await getJson<{ sessions: Array<{ closedAt: string | null; id: string }> }>(`${baseUrl}/api/state`);
       const updated = state.sessions.find((s) => s.id === sessionResp.session.id);
-      expect(updated).toBeUndefined();
+      expect(updated).toMatchObject({ id: sessionResp.session.id, status: "stopped", statusReason: "closed_by_user" });
+      expect(updated?.closedAt).toEqual(expect.any(String));
     } finally {
       await closeServer(server);
     }

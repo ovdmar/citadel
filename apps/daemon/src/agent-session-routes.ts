@@ -35,6 +35,7 @@ export function registerAgentSessionRoutes(app: express.Express, deps: Deps) {
         promptArg: runtime.promptArg ?? null,
         sessionIdArg: runtime.sessionIdArg ?? null,
         resumeArg: runtime.resumeArg ?? null,
+        ...(runtime.launchOptions ? { launchOptions: runtime.launchOptions } : {}),
       });
       emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
       res.status(202).json({ session });

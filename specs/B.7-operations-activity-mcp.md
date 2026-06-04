@@ -22,6 +22,10 @@
 [~] 14. Operation rows are deep-linkable from elsewhere in the cockpit via `?id=…` on `/operations` (the deep link highlights and scrolls the target row).
 [~] 15. When a workspace's PR has failing CI and no agent session has been active for the configured idle window, Citadel may auto-launch a `fix-ci` agent. The automation is visible/configurable in Settings -> Automations, resolves a healthy configured primary runtime before launching, and may use a configured fallback runtime when the primary is not healthy. Auto-launches are deduplicated per-PR-head-SHA and debounced by a minimum-interval window; activity events emitted by such launches use `source: "automatic-rule"`.
 [~] 16. `AutoRecoveryMonitorOptions` accepts an optional `shouldRun?: () => boolean` predicate. When provided, the monitor consults it at the top of every tick and short-circuits the tick (no provider calls, no agent spawn decisions) when it returns false. The daemon wires this to its viewer-gate predicate so auto-recovery doesn't consume GitHub quota when no cockpit tab is connected.
+[~] 17. Manager-triggered side effects are operations or activity-backed events with actor/source, idempotency key, target scope, related plan version, and related checkout when applicable.
+[~] 18. Automated actions respect global and per-workspace pause state. Human manual launches and important local notifications remain allowed while paused.
+[ ] 19. Manager side effects are claimed through a durable action ledger with stable scope/action/fact keys, lease owner/generation fencing, expiry, attempt count, max attempts, related operation/session/artifact ids, PR head, plan version, timestamps, and error state.
+[ ] 20. Manager startup reconciliation handles expired leases and side effects that were created before their ledger row was completed. Existing sessions, operations, artifacts, notifications, and ticket transitions are relinked before any retry.
 
 ## Activity
 
@@ -53,12 +57,48 @@
 Read-only:
 - `inspect_status`, `list_repos`, `list_workspaces`, `list_agent_sessions`,
   `list_provider_health`, `list_agent_runtimes`, `list_workspace_links`,
-  `inspect_readiness`, `read_agent_output`.
+  `inspect_readiness`, `read_agent_output`, `get_citadel_context`,
+  `get_workspace_plan`, `get_checkout_ticket`, `get_checkout_pr`,
+  `get_checkout_gate_status`, `list_workspace_checkouts`.
 
 Daemon-mediated (run through the operation service so they obey the same hook, activity, and safety model as the UI):
 - `create_workspace`, `start_agent_session`, `send_agent_message`,
   `stop_agent_session` (destructive), `archive_workspace`,
-  `remove_workspace` (destructive), `reconcile` (destructive).
+  `remove_workspace` (destructive), `reconcile` (destructive),
+  `launch_pm_agent`, `launch_architect_agent`, `launch_implementation_agent`,
+  `launch_prototype_agent`, `start_workspace_manager`, `pause_workspace_manager`,
+  `resume_workspace_manager`, `register_workspace_plan`, `report_plan_deviation`,
+  `mark_checkout_ready_for_review`, `register_checkout_review_artifact`,
+  `create_workspace_checkout`, `update_ticket_status`.
+
+V1 does not expose `list_custom_agents` or `launch_custom_agent`.
+
+### Workspace Context And Role Launchers
+
+[~] 1. Agent-facing MCP tools accept `cwd` where appropriate. The daemon realpaths the input and resolves it to a registered workspace root or checkout, most-specific-first.
+[~] 2. Unknown paths and symlink escapes return errors. Checkout exact/descendant paths beat workspace Home; Home matches the workspace root or non-checkout descendants only.
+[~] 3. `launch_pm_agent` can bootstrap a structured workspace shell from an idea or parent issue, or target an existing structured Home.
+[~] 4. `launch_architect_agent` targets Home and requires discovery marked ready by a human plus `planApprovalMode`.
+[~] 5. `launch_implementation_agent` targets a checkout and enforces active approved plan, parent issue, and exactly one child ticket binding in structured mode.
+[~] 6. `launch_prototype_agent` targets a checkout and can run before an active plan.
+[~] 7. MCP launchers called by agents enforce pause for automated actors. Human UI launch routes pass explicit manual actor metadata or use a separate path so pause cannot be bypassed accidentally.
+[ ] 8. Side-effectful agent-facing MCP/API tools derive actor, session, target, plan, checkout, role/action, and manager-action ownership from server-held context or session-scoped authority records. Body-supplied actor or ownership fields are ignored or rejected on mismatch.
+[ ] 9. Authority records are short-lived, hash-stored, constant-time validated, scoped to allowed tools, and revoked on session close, action completion, plan supersession, lease abandonment, checkout archive, manager pause policy changes that invalidate the action, and daemon-admin revocation.
+
+### Workspace Plans And Manager State
+
+[~] 1. `register_workspace_plan` accepts workspace id or validated cwd, validates local plan paths under workspace root, computes hash, allocates the next workspace-local version, and records status/review/decision.
+[~] 2. Architect plan registration requires `/do-tech-plan` structure plus `Delivery Units`, `Dependencies / Timeline`, `Manager Handoff`, and `Plan Version Notes`.
+[~] 3. Exactly one approved plan version is active. New approved versions supersede older active versions and notify active implementation sessions.
+[~] 4. Plan deviations are reported through a structured tool. Manager pauses affected delivery units where possible and can launch architect replan using the workspace approval policy.
+[~] 5. The manager state machine is deterministic and uses durable state, not transcript parsing, as source of truth.
+[ ] 6. Manager wakes on workspace/provider/gate/session/plan events and a low-frequency configurable tick, coalesces wakeups by workspace, dedupes active actions by scope/action key, and writes manager events/activity for every decision.
+[~] 7. One structured manager row exists per structured workspace. One active manager action per scope/action key, one checkout per active plan delivery-unit key, and one review gate attempt per checkout/head/plan are enforced.
+[ ] 8. Approved plan registration validates and snapshots a `citadel.delivery_units.v1` machine-readable block. Missing blocks, parser errors, unsafe identifiers, dependency self-edges/cycles, ambiguous repos, missing child issues, branch collisions, or ambiguous refs block approval with repair guidance.
+[ ] 9. The pure manager decision reducer consumes workspace, manager, active plan, parsed delivery units, checkouts, sessions, gate snapshots, deviations, provider freshness, durable PR/check facts, and action ledger state, then emits ordered decisions such as sync issue, create checkout, launch implementation, launch review, restack, notify, human input needed, or noop.
+[ ] 10. Active plan supersession supersedes pending old-plan actions, marks old sessions/checkouts as plan-stale, maps delivery units only when stable key/child issue identity remain safe, and emits human input needed for incompatible repo, branch, child issue, or dependency changes.
+[ ] 11. A managed implementation session that exits without a completion signal is reconciled to blocked/failed and emits human input needed with the missing completion signal reason, rather than leaving the action running indefinitely.
+[ ] 12. Local notification facts for ready-for-human-review and human-input-needed have active/resolved/rearmed lifecycle, triggering fact fingerprint, resolved timestamp, dedupe key, SSE invalidation, and `/api/state` or notification endpoint visibility.
 
 For interactive runtimes like Claude Code, both `start_agent_session` (with a `prompt`) and `send_agent_message` deliver text into the backing tmux pane via a paste buffer followed by Enter. This guarantees the agent actually receives and processes the prompt; it is not just typed into the input box. `start_agent_session` is a four-step sequence in the shell-first model: spawn the configured terminal profile (default `bash -l`), wait for the shell prompt (`waitForTerminalIdle`), send the agent runtime launch argv via `tmux send-keys` and wait for the agent's TUI to become foreground (positive `runtimeReadyPredicate` matching the runtime binary name with 15-char `comm` truncation), then paste the initial prompt. Without the positive predicate, a transient subprocess (`direnv` during shell startup, `git`/`rg` mid-session) could be mistaken for the agent and cause the prompt to be pasted before the agent's TUI is ready.
 

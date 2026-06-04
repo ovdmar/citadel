@@ -26,6 +26,7 @@ import cors from "cors";
 import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
+import { registerAgentTemplateRoutes } from "./agent-templates-routes.js";
 import { asyncRoute, cachedProviderValue, cachedProviderWithStaleFallback, parsePositiveInt } from "./app-helpers.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
@@ -442,7 +443,7 @@ export async function createDaemonApp(input: {
   registerMcpRoutes(app, asyncRoute, {
     config,
     store,
-    callDaemonMcpTool: (call) => callDaemonMcpTool(mcpDeps, call),
+    callDaemonMcpTool: (call, context) => callDaemonMcpTool(mcpDeps, call, context),
     readMcpResource: (uri) => readMcpResource(store, config, uri),
   });
 
@@ -451,6 +452,7 @@ export async function createDaemonApp(input: {
   registerNamespaceRoutes({ app, store, operations, emit, asyncRoute });
   registerScratchpadRoutes({ app, config, emit, store, operations, providerHealth: cachedProviderHealth });
   registerCitadelActionRoutes({ app, config, emit });
+  registerAgentTemplateRoutes({ app, config, emit });
   backfillScratchpadOnStartup(config);
 
   const refreshJob =

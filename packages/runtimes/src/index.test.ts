@@ -118,9 +118,36 @@ describe("runtime health", () => {
     });
     expect(claude.supportsModelSelection).toBe(true);
     expect(claude.supportsTranscript).toBe(true);
-    expect(codex.supportsModelSelection).toBe(false);
+    expect(codex.supportsModelSelection).toBe(true);
     expect(codex.supportsResume).toBe(true);
     expect(unknown.supportsPrompt).toBe(false);
+  });
+
+  it("includes launch option capabilities on runtime health rows", () => {
+    const runtimes = listRuntimeHealth(
+      [
+        {
+          id: "codex",
+          displayName: "Codex",
+          command: "codex",
+          args: [],
+          launchOptions: {
+            models: [{ id: "gpt-5.4", label: "GPT-5.4", default: true, deprecated: false }],
+            defaultModel: "gpt-5.4",
+            effortValues: ["low", "high"],
+            supportsFastMode: false,
+            contextModes: [],
+          },
+        },
+      ],
+      { commandExists: () => true },
+    );
+
+    expect(runtimes[0]?.launchCapabilities).toMatchObject({
+      runtimeId: "codex",
+      defaultModel: "gpt-5.4",
+      effortValues: ["low", "high"],
+    });
   });
 
   it("honors operator-specified supports* overrides", () => {

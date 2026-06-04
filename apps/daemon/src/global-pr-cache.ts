@@ -21,6 +21,7 @@ export function globalPrCacheKeyForWorkspace(
 ): GlobalPrCacheKey | null {
   const snapshot = deps.getSnapshot(workspace.id);
   if (snapshot?.prNumber == null) return null;
+  if (!workspace.repoId) return null;
   const nameWithOwner = deps.resolveRepoFullName(workspace.repoId);
   if (!nameWithOwner) return null;
   return globalPrCacheKey(nameWithOwner, snapshot.prNumber);

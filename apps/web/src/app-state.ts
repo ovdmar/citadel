@@ -1,14 +1,22 @@
 import type {
   ActivityEvent,
   AgentRuntime,
+  LocalNotificationEvent,
+  ManagerActionLedgerEntry,
   Namespace,
   Operation,
+  PlanDeviationReport,
   ProviderHealth,
   Repo,
   ScheduledAgent,
   TerminalProfile,
   Workspace,
+  WorkspaceManager,
+  WorkspacePlanDeliveryUnit,
+  WorkspacePlanDependencyEdge,
+  WorkspacePlanVersion,
   WorkspaceSession,
+  WorktreeCheckout,
 } from "@citadel/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, createContext, createElement, useContext, useEffect, useMemo, useState } from "react";
@@ -34,6 +42,14 @@ export type BootRestoreSummary = {
 export type StateResponse = {
   repos: Repo[];
   workspaces: Workspace[];
+  checkouts: WorktreeCheckout[];
+  workspacePlans: WorkspacePlanVersion[];
+  workspacePlanDeliveryUnits: WorkspacePlanDeliveryUnit[];
+  workspacePlanDependencyEdges: WorkspacePlanDependencyEdge[];
+  workspaceManagers: WorkspaceManager[];
+  managerActions: ManagerActionLedgerEntry[];
+  localNotifications: LocalNotificationEvent[];
+  planDeviations: PlanDeviationReport[];
   sessions: WorkspaceSession[];
   operations: Operation[];
   activity: ActivityEvent[];
@@ -112,7 +128,22 @@ export function applyOptimisticRemoveFilter(
   ids: ReadonlySet<string>,
 ): StateResponse | undefined {
   if (!state || ids.size === 0) return state;
-  return { ...state, workspaces: state.workspaces.filter((w) => !ids.has(w.id)) };
+  return {
+    ...state,
+    workspaces: state.workspaces.filter((w) => !ids.has(w.id)),
+    checkouts: state.checkouts.filter((checkout) => !ids.has(checkout.workspaceId)),
+    workspacePlans: state.workspacePlans.filter((plan) => !ids.has(plan.workspaceId)),
+    workspacePlanDeliveryUnits: state.workspacePlanDeliveryUnits.filter(
+      (unit) => !unit.workspaceId || !ids.has(unit.workspaceId),
+    ),
+    workspacePlanDependencyEdges: state.workspacePlanDependencyEdges.filter(
+      (edge) => !edge.workspaceId || !ids.has(edge.workspaceId),
+    ),
+    workspaceManagers: state.workspaceManagers.filter((manager) => !ids.has(manager.workspaceId)),
+    managerActions: state.managerActions.filter((action) => !ids.has(action.workspaceId)),
+    localNotifications: state.localNotifications.filter((event) => !ids.has(event.workspaceId)),
+    planDeviations: state.planDeviations.filter((report) => !ids.has(report.workspaceId)),
+  };
 }
 
 // Wrapper hook for consumers that render the workspace list: subtracts
@@ -132,6 +163,11 @@ export function useEventRefresh() {
     events.onmessage = () => queryClient.invalidateQueries({ queryKey: ["state"] });
     events.addEventListener("repo.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("workspace.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("workspace.manager.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("workspace.plan.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("workspace.plan.deviation", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("checkout.gate.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("ticket.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("agent.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("scheduled-agent.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("scheduled-agent.run", () => queryClient.invalidateQueries({ queryKey: ["state"] }));

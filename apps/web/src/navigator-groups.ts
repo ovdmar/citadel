@@ -1,21 +1,42 @@
-import type { Namespace, Operation, Repo, Workspace, WorkspaceSession } from "@citadel/contracts";
+import type { Namespace, Operation, Repo, Workspace, WorkspaceSession, WorktreeCheckout } from "@citadel/contracts";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { formatLabel } from "./labels.js";
-import type { GroupKey } from "./modals.js";
 
 export const SECTION_ORDER = ["blocked", "needs-review", "working", "dirty", "idle", "done"];
 
-// Subset of GroupKey that actually participates in the bucket tree. "none" is
-// the navigator's flat-list mode and never reaches buildGroupTree.
-export type GroupableKey = Exclude<GroupKey, "none">;
+export type GroupKey = "workspace" | "repo" | "status" | "namespace";
+export type NavigatorGrouping = GroupKey[];
 
-// Translate the user-facing grouping mode into the level sequence buildGroupTree
-// consumes. Mirrors the inline mapping inside navigator.tsx so cockpit-side
-// callers (Ctrl+1..9 workspace nav) can derive the exact same tree.
-export function treeGroupingFor(grouping: GroupKey): GroupableKey[] {
-  if (grouping === "none") return [];
-  if (grouping === "namespace") return ["repo", "namespace"];
-  return [grouping];
+// Subset of GroupKey that actually participates in the bucket tree. "workspace"
+// is rendered as the workspace-root list and never reaches buildGroupTree.
+export type GroupableKey = Exclude<GroupKey, "workspace">;
+
+export function normalizeNavigatorGrouping(value: unknown): NavigatorGrouping {
+  const raw = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  const out: NavigatorGrouping = [];
+  for (const key of raw) {
+    if (key !== "workspace" && key !== "repo" && key !== "status" && key !== "namespace") continue;
+    if (!out.includes(key)) out.push(key);
+  }
+  if (!out.length) return ["workspace"];
+  if (out.includes("namespace") && (out.includes("repo") || out.includes("status"))) {
+    return out.filter((key) => key !== "workspace" && key !== "namespace");
+  }
+  if (out.includes("workspace") && (out.includes("repo") || out.includes("status"))) {
+    return out.filter((key) => key !== "workspace");
+  }
+  if (out.includes("namespace")) {
+    return [...out.filter((key) => key !== "workspace"), "workspace"];
+  }
+  return out;
+}
+
+// Translate the user-facing grouping sequence into the level sequence
+// buildGroupTree consumes. "workspace" is the leaf/root workspace card mode,
+// so combining it with namespace means "namespace groups containing workspace
+// rows"; combining it with repo/status is normalized away above.
+export function treeGroupingFor(grouping: NavigatorGrouping | GroupKey | "none"): GroupableKey[] {
+  return normalizeNavigatorGrouping(grouping).filter((key): key is GroupableKey => key !== "workspace");
 }
 
 export type WorkspaceEntry = { workspace: Workspace; sessions: WorkspaceSession[] };
@@ -89,21 +110,29 @@ export function buildGroupTree(
   operations: Operation[],
   grouping: GroupableKey[],
   namespaces: Namespace[] = [],
+  checkouts: WorktreeCheckout[] = [],
 ): GroupNode[] {
   if (!grouping.length) return [];
 
-  const enriched: EnrichedWorkspace[] = workspaces.map((workspace) => {
+  const groupByRepo = grouping.includes("repo");
+  const enriched: EnrichedWorkspace[] = workspaces.flatMap((workspace) => {
     const workspaceSessions = sessions.filter((session) => session.workspaceId === workspace.id);
     const workspaceOps = operations.filter((operation) => operation.workspaceId === workspace.id);
     const attention = readinessForWorkspace(workspace, {
       sessions: workspaceSessions,
       operations: workspaceOps,
     });
-    const repo = repos.find((entry) => entry.id === workspace.repoId);
     const namespace = workspace.namespaceId
       ? (namespaces.find((entry) => entry.id === workspace.namespaceId) ?? null)
       : null;
-    return { workspace, sessions: workspaceSessions, repo, namespace, section: attention.section };
+    const repoIds = groupByRepo ? repoIdsForWorkspace(workspace, checkouts) : [workspace.repoId];
+    return repoIds.map((repoId) => ({
+      workspace,
+      sessions: workspaceSessions,
+      repo: repos.find((entry) => entry.id === repoId),
+      namespace,
+      section: attention.section,
+    }));
   });
 
   const build = (entries: EnrichedWorkspace[], levels: GroupableKey[], parentPath: string): GroupNode[] => {
@@ -160,6 +189,15 @@ export function buildGroupTree(
   };
 
   return build(enriched, grouping, "");
+}
+
+function repoIdsForWorkspace(workspace: Workspace, checkouts: WorktreeCheckout[]): Array<string | null> {
+  if (workspace.repoId) return [workspace.repoId];
+  const liveRepoIds = new Set<string>();
+  for (const checkout of checkouts) {
+    if (checkout.workspaceId === workspace.id && !checkout.archivedAt) liveRepoIds.add(checkout.repoId);
+  }
+  return liveRepoIds.size ? Array.from(liveRepoIds) : [];
 }
 
 export function collectGroupPaths(nodes: GroupNode[]): Set<string> {

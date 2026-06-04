@@ -1,8 +1,8 @@
-import type { AgentRuntime, TerminalProfile, Workspace, WorkspaceSession } from "@citadel/contracts";
+import type { AgentRuntime, RoleTemplate, TerminalProfile, Workspace, WorkspaceSession } from "@citadel/contracts";
 import { deriveAgentLifecycleTone } from "@citadel/core";
-import { useMutation } from "@tanstack/react-query";
-import { Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { Bot, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import {
   applySessionOrder,
@@ -17,6 +17,24 @@ import { lifecycleToneClass } from "./workspace-card.js";
 type StageTab = {
   session: WorkspaceSession;
   label: string;
+};
+
+export type StageStructuredAction = {
+  id: string;
+  label: string;
+  toolName:
+    | "launch_pm_agent"
+    | "launch_architect_agent"
+    | "launch_implementation_agent"
+    | "launch_prototype_agent"
+    | "start_workspace_manager";
+  arguments: Record<string, unknown>;
+};
+
+export type StageDirectRoleAction = {
+  id: string;
+  label: string;
+  template: RoleTemplate;
 };
 
 const WORKSPACE_SESSION_CAP = 20;
@@ -63,6 +81,62 @@ export function stableWorkspaceSessionIdsKey(sessions: WorkspaceSession[]): stri
     .join("\0");
 }
 
+export function structuredStageActions(input: {
+  workspace: Workspace;
+  targetType: "workspace_home" | "worktree_checkout";
+  checkoutId: string | null;
+}): StageStructuredAction[] {
+  if (input.workspace.mode !== "structured") return [];
+  if (input.targetType === "workspace_home") {
+    return [
+      {
+        id: "pm",
+        label: "PM",
+        toolName: "launch_pm_agent",
+        arguments: { workspaceId: input.workspace.id },
+      },
+      {
+        id: "architect",
+        label: "Architect",
+        toolName: "launch_architect_agent",
+        arguments: { workspaceId: input.workspace.id, planApprovalMode: "manual" },
+      },
+      {
+        id: "manager",
+        label: "Manager",
+        toolName: "start_workspace_manager",
+        arguments: { workspaceId: input.workspace.id },
+      },
+    ];
+  }
+  if (!input.checkoutId) return [];
+  return [
+    {
+      id: "implementation",
+      label: "Implementation",
+      toolName: "launch_implementation_agent",
+      arguments: { checkoutId: input.checkoutId },
+    },
+    {
+      id: "prototype",
+      label: "Prototype",
+      toolName: "launch_prototype_agent",
+      arguments: { checkoutId: input.checkoutId },
+    },
+  ];
+}
+
+export function freestyleStageActions(input: {
+  workspace: Workspace;
+  templates: RoleTemplate[];
+}): StageDirectRoleAction[] {
+  if (input.workspace.mode === "structured") return [];
+  return ["pm", "prototype"].flatMap((role) => {
+    const template = input.templates.find((entry) => entry.role === role);
+    return template ? [{ id: role, label: template.displayName, template }] : [];
+  });
+}
+
 function sameOrderedIds(a: Set<string>, b: Set<string>): boolean {
   if (a.size !== b.size) return false;
   const aIds = [...a];
@@ -77,6 +151,10 @@ export function Stage(props: {
   workspace: Workspace;
   sessions: WorkspaceSession[];
   allSessions?: WorkspaceSession[];
+  targetKey: string;
+  targetType: "workspace_home" | "worktree_checkout";
+  checkoutId: string | null;
+  targetLabel: string;
   runtimes: AgentRuntime[];
   terminal: TerminalProfile;
   activeSessionId: string | undefined;
@@ -93,14 +171,17 @@ export function Stage(props: {
   useEffect(() => saveSessionOrder(sessionOrder), [sessionOrder]);
   useEffect(() => {
     const live = new Set(
-      props.allSessions?.map((session) => session.id) ?? props.sessions.map((session) => session.id),
+      props.allSessions?.filter((session) => !session.closedAt).map((session) => session.id) ??
+        props.sessions.map((session) => session.id),
     );
     setSessionOrder((prev) => pruneSessionOrder(prev, live));
   }, [props.allSessions, props.sessions]);
-  const sortedSessions = applySessionOrder(defaultSortedSessions, sessionOrder[props.workspace.id]);
+  const orderKey = `${props.workspace.id}:${props.targetKey}`;
+  const sortedSessions = applySessionOrder(defaultSortedSessions, sessionOrder[orderKey]);
   const tabs: StageTab[] = sortedSessions.map((session) => ({ session, label: session.displayName }));
   const visibleTabIds = tabs.map((tab) => tab.session.id);
   const allSessions = props.allSessions ?? props.sessions;
+  const liveSessions = useMemo(() => allSessions.filter((session) => !session.closedAt), [allSessions]);
 
   // If the caller just selected a session that hasn't shown up in props.sessions
   // yet (mutation responded, query refetch in flight), keep that ID even though
@@ -142,12 +223,12 @@ export function Stage(props: {
   useEffect(() => {
     const activeId = activeSession?.session.id ?? null;
     setVisitedIds((prev) => {
-      const live = new Set(allSessions.map((session) => session.id));
+      const live = new Set(liveSessions.map((session) => session.id));
       const next = retainRecentTerminalIds(prev, activeId, live);
       return sameOrderedIds(prev, next) ? prev : next;
     });
-  }, [activeSession?.session.id, allSessions]);
-  const visitedPanes = stableVisitedSessions(allSessions, visitedIds);
+  }, [activeSession?.session.id, liveSessions]);
+  const visitedPanes = stableVisitedSessions(liveSessions, visitedIds);
   const workspaceSessionIdsKey = stableWorkspaceSessionIdsKey(props.sessions);
 
   useEffect(() => {
@@ -182,6 +263,8 @@ export function Stage(props: {
         method: "POST",
         body: JSON.stringify({
           workspaceId: props.workspace.id,
+          targetType: props.targetType,
+          ...(props.checkoutId ? { checkoutId: props.checkoutId } : {}),
           runtimeId: input.runtimeId,
           displayName: input.displayName,
         }),
@@ -197,11 +280,62 @@ export function Stage(props: {
     mutationFn: () =>
       api<{ session: WorkspaceSession }>(`/api/workspaces/${props.workspace.id}/terminal-sessions`, {
         method: "POST",
-        body: JSON.stringify({ displayName: props.terminal.displayName }),
+        body: JSON.stringify({
+          displayName: props.terminal.displayName,
+          targetType: props.targetType,
+          ...(props.checkoutId ? { checkoutId: props.checkoutId } : {}),
+        }),
       }),
     onSuccess: ({ session }) => {
       queryClient.invalidateQueries({ queryKey: ["state"] });
       props.onActiveSession(session.id);
+      setAddMenuOpen(false);
+    },
+  });
+
+  const agentTemplates = useQuery({
+    queryKey: ["agent-templates"],
+    queryFn: () => api<{ roles: RoleTemplate[] }>("/api/agent-templates"),
+    staleTime: 30_000,
+  });
+
+  const startDirectRoleSession = useMutation({
+    mutationFn: (action: StageDirectRoleAction) =>
+      api<{ session: WorkspaceSession }>("/api/agent-sessions", {
+        method: "POST",
+        body: JSON.stringify({
+          workspaceId: props.workspace.id,
+          targetType: props.targetType,
+          ...(props.checkoutId ? { checkoutId: props.checkoutId } : {}),
+          runtimeId: action.template.launchSettings.runtimeId,
+          displayName: action.template.displayName,
+          prompt: action.template.systemPrompt,
+          role: action.template.role,
+          managed: true,
+          launchSettings: action.template.launchSettings,
+        }),
+      }),
+    onSuccess: ({ session }) => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      props.onActiveSession(session.id);
+      setAddMenuOpen(false);
+    },
+  });
+
+  const startStructuredAction = useMutation({
+    mutationFn: async (action: StageStructuredAction) => {
+      const response = await api<{ result: StructuredToolResult }>("/api/mcp/tools/call", {
+        method: "POST",
+        body: JSON.stringify({ name: action.toolName, arguments: action.arguments }),
+      });
+      if (response.result?.error || response.result?.ok === false) {
+        throw new Error(structuredToolError(response.result));
+      }
+      return response.result;
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      if (result.session?.id) props.onActiveSession(result.session.id);
       setAddMenuOpen(false);
     },
   });
@@ -230,7 +364,11 @@ export function Stage(props: {
       ? startAgentSession.error.message
       : startTerminalSession.error instanceof Error
         ? startTerminalSession.error.message
-        : null;
+        : startDirectRoleSession.error instanceof Error
+          ? startDirectRoleSession.error.message
+          : startStructuredAction.error instanceof Error
+            ? startStructuredAction.error.message
+            : null;
   const atSessionCap = props.sessions.length >= WORKSPACE_SESSION_CAP;
   // Per spec B.2 §Center Stage Sessions #10: starting a session needs a
   // ready worktree, so the "+" button is gated off while the workspace is
@@ -239,12 +377,27 @@ export function Stage(props: {
   // during the synchronous setup window.
   const lifecycleCreating = props.workspace.lifecycle === "creating";
   const addDisabled =
-    startAgentSession.isPending || startTerminalSession.isPending || atSessionCap || lifecycleCreating;
+    startAgentSession.isPending ||
+    startTerminalSession.isPending ||
+    startDirectRoleSession.isPending ||
+    startStructuredAction.isPending ||
+    atSessionCap ||
+    lifecycleCreating;
   const addTitle = atSessionCap
     ? `Workspace is at the ${WORKSPACE_SESSION_CAP}-session cap. Close a session to start another.`
     : lifecycleCreating
       ? "Workspace is still being set up."
       : "Add session";
+  const structuredActions = structuredStageActions({
+    workspace: props.workspace,
+    targetType: props.targetType,
+    checkoutId: props.checkoutId,
+  });
+  const directRoleActions = freestyleStageActions({
+    workspace: props.workspace,
+    templates: agentTemplates.data?.roles ?? [],
+  });
+  const hasSpecializedActions = structuredActions.length > 0 || directRoleActions.length > 0;
   return (
     <>
       <div className="stage-tabbar">
@@ -289,7 +442,7 @@ export function Stage(props: {
                   const insertIndex = tabDropIndicator?.side === "after" ? targetIndex + 1 : targetIndex;
                   setSessionOrder((prev) => ({
                     ...prev,
-                    [props.workspace.id]: spliceSessionOrder(visibleTabIds, draggedId, insertIndex),
+                    [orderKey]: spliceSessionOrder(visibleTabIds, draggedId, insertIndex),
                   }));
                   setTabDropIndicator(null);
                 }}
@@ -336,7 +489,10 @@ export function Stage(props: {
                         }}
                       />
                     ) : (
-                      <span className="stage-tab-label">{tab.label}</span>
+                      <>
+                        {tab.session.role ? <span className="stage-tab-role">{tab.session.role}</span> : null}
+                        <span className="stage-tab-label">{tab.label}</span>
+                      </>
                     )}
                   </span>
                 </button>
@@ -396,13 +552,39 @@ export function Stage(props: {
           {addMenuOpen ? (
             <div className="stage-add-menu" role="menu">
               <div className="stage-add-menu-label">
-                New session
+                New session in {props.targetLabel}
                 {atSessionCap ? (
                   <output className="stage-add-cap">
                     {props.sessions.length}/{WORKSPACE_SESSION_CAP} — cap reached
                   </output>
                 ) : null}
               </div>
+              {hasSpecializedActions ? <div className="stage-add-menu-label">Specialized</div> : null}
+              {structuredActions.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  role="menuitem"
+                  title={atSessionCap ? `Cap reached (${WORKSPACE_SESSION_CAP}). Close a session first.` : action.label}
+                  onClick={() => startStructuredAction.mutate(action)}
+                  disabled={addDisabled}
+                >
+                  <Bot size={12} /> {action.label}
+                </button>
+              ))}
+              {directRoleActions.map((action) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  role="menuitem"
+                  title={atSessionCap ? `Cap reached (${WORKSPACE_SESSION_CAP}). Close a session first.` : action.label}
+                  onClick={() => startDirectRoleSession.mutate(action)}
+                  disabled={addDisabled}
+                >
+                  <Bot size={12} /> {action.label}
+                </button>
+              ))}
+              <div className="stage-add-menu-label">Freestyle</div>
               <button
                 type="button"
                 role="menuitem"
@@ -473,4 +655,17 @@ export function Stage(props: {
       </div>
     </>
   );
+}
+
+type StructuredToolResult = {
+  ok?: boolean;
+  error?: string;
+  detail?: string;
+  session?: WorkspaceSession;
+};
+
+function structuredToolError(result: StructuredToolResult): string {
+  return result.detail
+    ? `${result.error ?? "structured_action_failed"}: ${result.detail}`
+    : (result.error ?? "structured_action_failed");
 }

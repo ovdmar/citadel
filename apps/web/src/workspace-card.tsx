@@ -9,6 +9,7 @@ import type {
 import { type LifecycleTone, deriveWorkspaceLifecycleTone } from "@citadel/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
+import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { type StateResponse, useOptimisticRemove, useStateQuery } from "./app-state.js";
@@ -82,14 +83,23 @@ export function WorkspaceCard(
     // `draggable={true}`) doesn't have to change in this PR. Internally
     // treated as `dropTarget: "namespace"` to preserve existing behavior.
     draggable?: boolean;
+    hideBranch?: boolean;
+    branchLabel?: string | null;
+    branchTitle?: string;
+    cardTitle?: string;
+    rightControl?: ReactNode;
+    disableDrop?: boolean;
+    prToneOverride?: PrTone;
   },
 ) {
   const { workspace, pullRequest } = props;
   const titleDisplay = workspaceDisplayTitle(workspace);
-  const prTone = pullRequest ? prToneFor(pullRequest) : "missing";
+  const prTone = props.prToneOverride ?? (pullRequest ? prToneFor(pullRequest) : "missing");
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
   const lifecycleTone = deriveWorkspaceLifecycleTone({ sessions: props.sessions, pullRequest: pullRequest ?? null });
   const agentToneSuffix = lifecycleToneAriaSuffix(lifecycleTone);
+  const branchLabel = props.branchLabel ?? workspace.branch;
+  const branchTitle = props.branchTitle ?? branchLabel;
   const additions = pullRequest?.additions ?? null;
   const deletions = pullRequest?.deletions ?? null;
   const hasDiff = additions !== null || deletions !== null;
@@ -212,6 +222,7 @@ export function WorkspaceCard(
 
   const wrapClassName = [
     "workspace-card-wrap",
+    props.rightControl ? "has-right-control" : null,
     reorderIndicator === "above" ? "is-drop-above" : null,
     reorderIndicator === "below" ? "is-drop-below" : null,
   ]
@@ -238,6 +249,7 @@ export function WorkspaceCard(
           setShowNamespaceMenu(true);
         }}
         aria-label={`Open workspace ${workspace.name}${agentToneSuffix}`}
+        title={props.cardTitle}
       >
         <span
           className={`workspace-card-agent tone-${prTone} ${workspace.kind === "root" ? "root" : ""}`}
@@ -292,9 +304,11 @@ export function WorkspaceCard(
               </strong>
             )}
           </span>
-          <span className="workspace-card-branch" title={workspace.branch}>
-            {workspace.branch}
-          </span>
+          {!props.hideBranch && branchLabel ? (
+            <span className="workspace-card-branch" title={branchTitle}>
+              {branchLabel}
+            </span>
+          ) : null}
           {lifecycleText ? (
             <span className={`workspace-card-lifecycle ${workspace.lifecycle}`} title={lifecycleText}>
               {lifecycleText}
@@ -321,6 +335,7 @@ export function WorkspaceCard(
               <span className="diff-del">-{deletions ?? 0}</span>
             </span>
           ) : null}
+          {props.rightControl ? <span className="workspace-card-right-control-spacer" /> : null}
           <span className={`approval-pill tone-${approvalTone}`} title={`Approval: ${approvalTone}`}>
             {approvalTone === "approved" ? (
               <ShieldCheck size={13} />
@@ -334,7 +349,8 @@ export function WorkspaceCard(
           </span>
         </span>
       </button>
-      {workspace.kind === "root" ? null : (
+      {props.rightControl ? <span className="workspace-card-right-control">{props.rightControl}</span> : null}
+      {workspace.kind === "root" || props.disableDrop ? null : (
         <button
           type="button"
           className="workspace-card-drop"

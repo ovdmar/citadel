@@ -1,14 +1,27 @@
 import { type CitadelConfig, effectiveNotesPath } from "@citadel/config";
 import {
   AssignWorkspaceToNamespaceInputSchema,
+  CheckoutContextInputSchema,
   CreateAgentSessionInputSchema,
   CreateNamespaceInputSchema,
   CreateRepoInputSchema,
   CreateScheduledAgentInputSchema,
+  CreateWorkspaceCheckoutInputSchema,
   CreateWorkspaceInputSchema,
+  CwdContextInputSchema,
   LaunchAgentInputSchema,
+  LaunchArchitectAgentInputSchema,
+  LaunchImplementationAgentInputSchema,
+  LaunchPmAgentInputSchema,
+  LaunchPrototypeAgentInputSchema,
+  MarkCheckoutReadyForReviewInputSchema,
+  RegisterCheckoutReviewArtifactInputSchema,
+  RegisterWorkspacePlanInputSchema,
+  ReportPlanDeviationInputSchema,
   UpdateNamespaceInputSchema,
   UpdateScheduledAgentInputSchema,
+  UpdateTicketStatusInputSchema,
+  WorkspaceManagerControlInputSchema,
 } from "@citadel/contracts";
 import { fuzzySearchBlocks } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
@@ -38,6 +51,7 @@ import {
   updateBlock,
   writeScratchpad,
 } from "./scratchpad.js";
+import { launchStructuredRoleAgent } from "./structured-role-launchers.js";
 
 export type DaemonMcpDeps = {
   config: CitadelConfig;
@@ -49,10 +63,17 @@ export type DaemonMcpDeps = {
   emit: (type: string, payload: unknown) => void;
 };
 
+export type DaemonMcpCaller = "human" | "mcp" | "manager" | "agent" | "system";
+export type DaemonMcpCallContext = {
+  actor?: DaemonMcpCaller;
+};
+
 export function workspaceResource(store: SqliteStore) {
+  const workspaces = store.listWorkspaces();
   return serializeWorkspaceResource({
     repos: store.listRepos(),
-    workspaces: store.listWorkspaces(),
+    workspaces,
+    checkouts: workspaces.flatMap((workspace) => store.listWorkspaceCheckouts(workspace.id)),
     sessions: store.listSessions(),
   });
 }
@@ -78,8 +99,9 @@ function structuredWorkspaceError(error: unknown): { error: string; [key: string
   return null;
 }
 
-export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) {
+export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall, context: DaemonMcpCallContext = {}) {
   const { config, store, operations, scheduledAgents, scheduledAgentService, providerCache, emit } = deps;
+  const actor = context.actor ?? "mcp";
   if (call.name === "register_repo") {
     const input = CreateRepoInputSchema.parse(call.arguments ?? {});
     const repo = operations.registerRepo(input);
@@ -97,6 +119,116 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
       throw error;
     }
   }
+  if (call.name === "list_workspace_checkouts") {
+    const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";
+    if (!workspaceId) return { error: "workspace_id_required" };
+    return { checkouts: store.listWorkspaceCheckouts(workspaceId) };
+  }
+  if (call.name === "create_workspace_checkout") {
+    try {
+      const result = await operations.createWorkspaceCheckout(
+        CreateWorkspaceCheckoutInputSchema.parse(call.arguments ?? {}),
+      );
+      emit("workspace.updated", { workspaceId: call.arguments?.workspaceId, checkoutId: result.checkoutId });
+      return result;
+    } catch (error) {
+      const structured = structuredWorkspaceError(error);
+      if (structured) return structured;
+      throw error;
+    }
+  }
+  if (call.name === "register_workspace_plan") {
+    const result = operations.registerWorkspacePlan(RegisterWorkspacePlanInputSchema.parse(call.arguments ?? {}), {
+      actor,
+    });
+    if (result.ok)
+      emit("workspace.plan.updated", {
+        workspaceId: result.planVersion.workspaceId,
+        planVersionId: result.planVersion.id,
+      });
+    return result;
+  }
+  if (call.name === "get_workspace_plan") {
+    return operations.getWorkspacePlan(call.arguments ?? {});
+  }
+  if (call.name === "get_citadel_context") {
+    const input = CwdContextInputSchema.parse(call.arguments ?? {});
+    return operations.getCitadelContext(input);
+  }
+  if (call.name === "report_plan_deviation") {
+    const result = operations.reportPlanDeviation(ReportPlanDeviationInputSchema.parse(call.arguments ?? {}));
+    if (result.ok)
+      emit("workspace.plan.deviation", { workspaceId: result.deviation.workspaceId, deviationId: result.deviation.id });
+    return result;
+  }
+  if (call.name === "start_workspace_manager") {
+    const result = operations.startWorkspaceManager(WorkspaceManagerControlInputSchema.parse(call.arguments ?? {}));
+    if (result.ok) emit("workspace.manager.updated", { workspaceId: result.manager.workspaceId });
+    return result;
+  }
+  if (call.name === "pause_workspace_manager") {
+    const result = operations.pauseWorkspaceManager(WorkspaceManagerControlInputSchema.parse(call.arguments ?? {}));
+    if (result.ok) emit("workspace.manager.updated", { workspaceId: result.manager?.workspaceId });
+    return result;
+  }
+  if (call.name === "resume_workspace_manager") {
+    const result = operations.resumeWorkspaceManager(WorkspaceManagerControlInputSchema.parse(call.arguments ?? {}));
+    if (result.ok) emit("workspace.manager.updated", { workspaceId: result.manager?.workspaceId });
+    return result;
+  }
+  if (call.name === "get_checkout_gate_status") {
+    return operations.getCheckoutGateStatus(CheckoutContextInputSchema.parse(call.arguments ?? {}));
+  }
+  if (call.name === "get_checkout_ticket") {
+    const gate = operations.getCheckoutGateStatus(CheckoutContextInputSchema.parse(call.arguments ?? {}));
+    return gate.ok ? { ok: true, checkoutId: gate.checkout.id, issue: gate.checkout.issue } : gate;
+  }
+  if (call.name === "get_checkout_pr") {
+    const gate = operations.getCheckoutGateStatus(CheckoutContextInputSchema.parse(call.arguments ?? {}));
+    return gate.ok ? { ok: true, checkoutId: gate.checkout.id, pr: gate.checkout.intendedPr } : gate;
+  }
+  if (call.name === "mark_checkout_ready_for_review") {
+    const result = operations.markCheckoutReadyForReview(
+      MarkCheckoutReadyForReviewInputSchema.parse(call.arguments ?? {}),
+    );
+    if (result.ok) emit("checkout.gate.updated", { checkoutId: result.checkout.id });
+    return result;
+  }
+  if (call.name === "register_checkout_review_artifact") {
+    const result = operations.registerCheckoutReviewArtifact(
+      RegisterCheckoutReviewArtifactInputSchema.parse(call.arguments ?? {}),
+      { actor },
+    );
+    if (result.ok) emit("checkout.gate.updated", { checkoutId: result.artifact.checkoutId });
+    return result;
+  }
+  if (call.name === "update_ticket_status") {
+    const result = operations.updateTicketStatus(UpdateTicketStatusInputSchema.parse(call.arguments ?? {}));
+    if (result.ok)
+      emit("ticket.updated", { workspaceId: call.arguments?.workspaceId, checkoutId: call.arguments?.checkoutId });
+    return result;
+  }
+  if (
+    call.name === "launch_pm_agent" ||
+    call.name === "launch_architect_agent" ||
+    call.name === "launch_implementation_agent" ||
+    call.name === "launch_prototype_agent"
+  ) {
+    const parsed =
+      call.name === "launch_pm_agent"
+        ? { role: "pm" as const, input: LaunchPmAgentInputSchema.parse(call.arguments ?? {}) }
+        : call.name === "launch_architect_agent"
+          ? { role: "architect" as const, input: LaunchArchitectAgentInputSchema.parse(call.arguments ?? {}) }
+          : call.name === "launch_implementation_agent"
+            ? {
+                role: "implementation" as const,
+                input: LaunchImplementationAgentInputSchema.parse(call.arguments ?? {}),
+              }
+            : { role: "prototype" as const, input: LaunchPrototypeAgentInputSchema.parse(call.arguments ?? {}) };
+    const result = await launchStructuredRoleAgent({ config, store, operations }, parsed, { actor });
+    if (result.ok) emit("agent.updated", { workspaceId: result.workspaceId, sessionId: result.session.id });
+    return result;
+  }
   if (call.name === "start_agent_session") {
     const input = CreateAgentSessionInputSchema.parse(call.arguments ?? {});
     const runtime = config.agentRuntimes.find((candidate) => candidate.id === input.runtimeId);
@@ -108,6 +240,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
       promptArg: runtime.promptArg ?? null,
       sessionIdArg: runtime.sessionIdArg ?? null,
       resumeArg: runtime.resumeArg ?? null,
+      ...(runtime.launchOptions ? { launchOptions: runtime.launchOptions } : {}),
     });
     emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
     return { session };
@@ -124,6 +257,7 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
         promptArg: runtime.promptArg ?? null,
         sessionIdArg: runtime.sessionIdArg ?? null,
         resumeArg: runtime.resumeArg ?? null,
+        ...(runtime.launchOptions ? { launchOptions: runtime.launchOptions } : {}),
       });
       emit("workspace.updated", { workspaceId: result.workspaceId, operationId: result.operationId });
       if (result.sessionId) emit("agent.updated", { workspaceId: result.workspaceId, sessionId: result.sessionId });
@@ -410,15 +544,21 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall) 
     return slice;
   }
   const providerHealth = await collectProviderHealth(config.providers);
+  const workspaces = store.listWorkspaces();
   return callMcpTool(call, {
     repos: store.listRepos(),
-    workspaces: store.listWorkspaces(),
+    workspaces,
     sessions: store.listSessions(),
     operations: store.listOperations(),
     activity: store.listActivity(),
     providerHealth,
     runtimes: listRuntimeHealth(config.agentRuntimes),
     scheduledAgents: scheduledAgents.list(),
+    checkouts: workspaces.flatMap((workspace) => store.listWorkspaceCheckouts(workspace.id)),
+    workspacePlanVersions: workspaces.flatMap((workspace) => store.listWorkspacePlanVersions(workspace.id)),
+    managers: workspaces
+      .map((workspace) => store.getWorkspaceManager(workspace.id))
+      .filter((manager): manager is NonNullable<typeof manager> => Boolean(manager)),
     namespaces: store.listNamespaces(),
     scratchpadPath: effectiveNotesPath(config),
     // Per-session summary comes from the runtime's own transcript via the

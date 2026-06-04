@@ -25,11 +25,33 @@ export function registerStateRoute(input: {
     asyncRoute(async (_req, res) => {
       const repos = store.listRepos();
       const workspaces = store.listWorkspaces();
+      const checkouts = workspaces.flatMap((workspace) => store.listWorkspaceCheckouts(workspace.id));
+      const workspacePlans = workspaces.flatMap((workspace) => store.listWorkspacePlanVersions(workspace.id));
+      const workspacePlanDeliveryUnits = workspacePlans.flatMap((plan) =>
+        store.listWorkspacePlanDeliveryUnits(plan.id),
+      );
+      const workspacePlanDependencyEdges = workspacePlans.flatMap((plan) =>
+        store.listWorkspacePlanDependencyEdges(plan.id),
+      );
+      const workspaceManagers = workspaces
+        .map((workspace) => store.getWorkspaceManager(workspace.id))
+        .filter((manager) => manager !== null);
+      const managerActions = workspaces.flatMap((workspace) => store.listManagerActions(workspace.id));
+      const localNotifications = workspaces.flatMap((workspace) => store.listLocalNotificationEvents(workspace.id));
+      const planDeviations = workspaces.flatMap((workspace) => store.listPlanDeviationReports(workspace.id));
       const sessions = store.listWorkspaceSessions();
       const providerHealth = await cachedProviderHealth();
       res.json({
         repos,
         workspaces,
+        checkouts,
+        workspacePlans,
+        workspacePlanDeliveryUnits,
+        workspacePlanDependencyEdges,
+        workspaceManagers,
+        managerActions,
+        localNotifications,
+        planDeviations,
         sessions,
         operations: store.listOperations(),
         activity: store.listActivity(),
