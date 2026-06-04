@@ -1,6 +1,45 @@
-import type { AgentSession, PullRequestSummary, Workspace } from "@citadel/contracts";
-import { describe, expect, it } from "vitest";
-import { aggregateNavigatorTone } from "./navigator.js";
+// @vitest-environment happy-dom
+
+import type { AgentRuntime, AgentSession, PullRequestSummary, Workspace, WorktreeCheckout } from "@citadel/contracts";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { type ReactNode, createElement } from "react";
+import { flushSync } from "react-dom";
+import { type Root, createRoot } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { queryClient } from "./api.js";
+import type { CheckoutPrStateByWorkspace } from "./navigator-pr-state.js";
+import { Navigator, aggregateNavigatorTone } from "./navigator.js";
+
+vi.mock("@tanstack/react-router", () => ({
+  Link: (props: { to: string; className?: string; title?: string; children?: ReactNode }) =>
+    createElement("a", { href: props.to, className: props.className, title: props.title }, props.children),
+  useLocation: () => ({ pathname: "/" }),
+}));
+
+const roots: Root[] = [];
+
+beforeEach(() => {
+  const storage = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+      clear: () => storage.clear(),
+    },
+  });
+});
+
+afterEach(() => {
+  flushSync(() => {
+    for (const root of roots.splice(0)) root.unmount();
+  });
+  document.body.innerHTML = "";
+  window.localStorage?.clear();
+  queryClient.clear();
+  vi.restoreAllMocks();
+});
 
 function makeWorkspace(over: Partial<Workspace> = {}): Workspace {
   return {
@@ -176,3 +215,162 @@ describe("aggregateNavigatorTone", () => {
     ).toBe("running");
   });
 });
+
+describe("Navigator checkout aggregation", () => {
+  it("renders hidden main-only checkout PR state on the parent workspace row", () => {
+    const workspace = makeWorkspace({
+      id: "ws_main",
+      repoId: null,
+      name: "Home",
+      path: "/work/home",
+      rootPath: "/work/home",
+      branch: "home",
+      kind: "root",
+      mode: "structured",
+    });
+    const checkout = makeCheckout({
+      id: "co_main",
+      workspaceId: workspace.id,
+      path: workspace.path,
+      intendedPr: intendedPr(17),
+    });
+    const checkoutPrByWorkspaceId: CheckoutPrStateByWorkspace = new Map([
+      [
+        workspace.id,
+        new Map([
+          [
+            checkout.id,
+            {
+              pullRequest: makePr({
+                number: 17,
+                url: "https://example/pr/17",
+                additions: 25,
+                deletions: 9,
+                mergeable: "conflicting",
+                reviewDecision: "CHANGES_REQUESTED",
+              }),
+              ciRuns: [],
+              checkedAt: null,
+              cachedAt: null,
+            },
+          ],
+        ]),
+      ],
+    ]);
+
+    const container = renderNavigator({
+      workspaces: [workspace],
+      checkouts: [checkout],
+      prByWorkspaceId: new Map([[workspace.id, null]]),
+      checkoutPrByWorkspaceId,
+    });
+
+    expect(container.querySelector(".nav-checkout-card")).toBeNull();
+    expect(container.querySelector(".workspace-card-branch")?.textContent).toBe(
+      "1 repo · 1 worktree · 1 PR · 0 sessions",
+    );
+    expect(container.querySelector(".workspace-card-branch")?.getAttribute("title")).toBe("Workspace aggregate");
+    expect(container.querySelector(".workspace-card-agent")?.className).toContain("tone-conflicting");
+    expect(container.querySelector(".workspace-card-diff")?.textContent).toBe("+25-9");
+    expect(container.querySelector(".approval-pill")?.getAttribute("title")).toBe("Approval: changes");
+  });
+});
+
+function renderNavigator(overrides: {
+  workspaces?: Workspace[];
+  checkouts?: WorktreeCheckout[];
+  prByWorkspaceId?: Map<string, PullRequestSummary | null>;
+  checkoutPrByWorkspaceId?: CheckoutPrStateByWorkspace;
+}) {
+  const rootElement = document.createElement("div");
+  document.body.appendChild(rootElement);
+  const root = createRoot(rootElement);
+  roots.push(root);
+  flushSync(() => {
+    root.render(
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(Navigator, {
+          repos: [],
+          workspaces: overrides.workspaces ?? [],
+          checkouts: overrides.checkouts ?? [],
+          sessions: [],
+          operations: [],
+          prByWorkspaceId: overrides.prByWorkspaceId ?? new Map(),
+          checkoutPrByWorkspaceId: overrides.checkoutPrByWorkspaceId ?? new Map(),
+          activeWorkspaceId: "",
+          activeTargetKey: "home",
+          runtimes: [makeRuntime()],
+          namespaces: [],
+          lastRepoId: undefined,
+          createWorkspaceOpen: false,
+          onOpenCreateWorkspace: () => undefined,
+          onCloseCreateWorkspace: () => undefined,
+          onCollapse: () => undefined,
+          onPickWorkspace: () => undefined,
+          onPickWorkspaceId: () => undefined,
+          onPickTarget: () => undefined,
+        }),
+      ),
+    );
+  });
+  return rootElement;
+}
+
+function makeCheckout(overrides: Partial<WorktreeCheckout> = {}): WorktreeCheckout {
+  return {
+    id: "co_a",
+    workspaceId: "ws_a",
+    repoId: "repo_a",
+    name: "main",
+    path: "/tmp/test",
+    branch: "feature/test",
+    baseBranch: "main",
+    issue: null,
+    intendedPr: null,
+    stackParentCheckoutId: null,
+    inferredPurpose: null,
+    gateStatus: "not_started",
+    createdAt: "2026-05-26T00:00:00.000Z",
+    updatedAt: "2026-05-26T00:00:00.000Z",
+    archivedAt: null,
+    ...overrides,
+  };
+}
+
+function intendedPr(number: number) {
+  return {
+    provider: "github" as const,
+    number,
+    url: `https://example/pr/${number}`,
+    headSha: null,
+    baseRef: null,
+    fetchedAt: null,
+    checksGreen: null,
+    mergeStateStatus: null,
+    hasConflicts: null,
+  };
+}
+
+function makeRuntime(): AgentRuntime {
+  return {
+    id: "codex",
+    displayName: "Codex",
+    command: "codex",
+    args: [],
+    health: "healthy",
+    healthReason: null,
+    capabilities: {
+      supportsPrompt: true,
+      supportsResume: true,
+      supportsModelSelection: true,
+      supportsTranscript: true,
+      supportsStatusDetection: true,
+      supportsNonInteractiveGoal: true,
+      supportsShell: true,
+      supportsUsage: false,
+      supportsTui: true,
+    },
+  };
+}

@@ -293,6 +293,10 @@ export function ciCacheKey(id: string, updatedAt: string): string {
   return `ci:${id}:${updatedAt}`;
 }
 
+export function checkoutVcCacheKey(workspaceId: string, checkoutId: string, checkoutUpdatedAt: string): string {
+  return `vc:${workspaceId}:checkout:${checkoutId}:${checkoutUpdatedAt}`;
+}
+
 export function issueCacheKey(issueKey: string): string {
   return `issue:${issueKey}`;
 }

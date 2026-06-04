@@ -9,6 +9,7 @@ import type express from "express";
 import {
   AgentTemplateNotFoundError,
   StaleAgentTemplateUpdatedAtError,
+  agentTemplateDefaultsFromRuntimes,
   listAgentTemplates,
   resetActionTemplate,
   resetRoleTemplate,
@@ -20,9 +21,10 @@ type Emit = (type: string, payload: unknown) => void;
 
 export function registerAgentTemplateRoutes(input: { app: express.Express; config: CitadelConfig; emit: Emit }) {
   const { app, config, emit } = input;
+  const templateDefaults = () => agentTemplateDefaultsFromRuntimes(config.agentRuntimes);
 
   app.get("/api/agent-templates", async (_req, res) => {
-    const roles = await listAgentTemplates(config.dataDir);
+    const roles = await listAgentTemplates(config.dataDir, templateDefaults());
     res.json({ roles });
   });
 
@@ -35,7 +37,7 @@ export function registerAgentTemplateRoutes(input: { app: express.Express; confi
         .json({ error: "invalid_input", detail: role.success ? body.error?.message : role.error.message });
     }
     try {
-      const updated = await updateRoleTemplate(config.dataDir, role.data, body.data);
+      const updated = await updateRoleTemplate(config.dataDir, role.data, body.data, templateDefaults());
       emit("agent-templates.updated", { role: updated.role });
       res.json({ role: updated });
     } catch (error) {
@@ -47,7 +49,7 @@ export function registerAgentTemplateRoutes(input: { app: express.Express; confi
     const role = RoleIdSchema.safeParse(req.params.role);
     if (!role.success) return res.status(400).json({ error: "invalid_input", detail: role.error.message });
     try {
-      const updated = await resetRoleTemplate(config.dataDir, role.data);
+      const updated = await resetRoleTemplate(config.dataDir, role.data, templateDefaults());
       emit("agent-templates.updated", { role: updated.role });
       res.json({ role: updated });
     } catch (error) {
@@ -64,7 +66,7 @@ export function registerAgentTemplateRoutes(input: { app: express.Express; confi
         .json({ error: "invalid_input", detail: id.success ? body.error?.message : id.error.message });
     }
     try {
-      const action = await updateActionTemplate(config.dataDir, id.data, body.data);
+      const action = await updateActionTemplate(config.dataDir, id.data, body.data, templateDefaults());
       emit("agent-templates.updated", { actionId: action.id });
       res.json({ action });
     } catch (error) {
@@ -76,7 +78,7 @@ export function registerAgentTemplateRoutes(input: { app: express.Express; confi
     const id = ActionTemplateIdSchema.safeParse(req.params.id);
     if (!id.success) return res.status(400).json({ error: "invalid_input", detail: id.error.message });
     try {
-      const action = await resetActionTemplate(config.dataDir, id.data);
+      const action = await resetActionTemplate(config.dataDir, id.data, templateDefaults());
       emit("agent-templates.updated", { actionId: action.id });
       res.json({ action });
     } catch (error) {

@@ -408,6 +408,16 @@ a:hover {
   grid-template-columns: 56px 4px minmax(0, 1fr) 4px 36px;
 }
 
+.cockpit-body.right-hidden,
+.cockpit-body.right-hidden.right-collapsed {
+  grid-template-columns: var(--col-left, 252px) 4px minmax(0, 1fr);
+}
+
+.cockpit-body.left-collapsed.right-hidden,
+.cockpit-body.left-collapsed.right-collapsed.right-hidden {
+  grid-template-columns: 56px 4px minmax(0, 1fr);
+}
+
 /* Hide the resize handle on a collapsed side — there's nothing to resize. */
 .cockpit-body.left-collapsed .col-divider:first-of-type,
 .cockpit-body.right-collapsed .col-divider:last-of-type {

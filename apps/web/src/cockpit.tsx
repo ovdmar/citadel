@@ -10,6 +10,7 @@ import { readinessForWorkspace } from "./cockpit-readiness.js";
 import {
   checkoutIdFromTargetKey,
   sessionMatchesTarget,
+  shouldShowInspectorPanel,
   targetKeyForSession,
   targetLabel,
 } from "./cockpit-session-targets.js";
@@ -33,6 +34,7 @@ import {
   subscribeToGroupingChanges,
 } from "./navigator-collapse-store.js";
 import { buildGroupTree, flattenWorkspaceOrder, treeGroupingFor } from "./navigator-groups.js";
+import { checkoutPrStateMap } from "./navigator-pr-state.js";
 import { Navigator } from "./navigator.js";
 import { RestoreBanner } from "./restore-banner.js";
 import { type ShortcutMatch, matchShortcut } from "./shortcuts.js";
@@ -103,11 +105,6 @@ export function Cockpit() {
     if (activeWorkspace?.repoId && activeWorkspace.repoId !== lastRepoId) setLastRepoId(activeWorkspace.repoId);
   }, [activeWorkspace, activeWorkspaceId, lastRepoId, setActiveWorkspaceId, setLastRepoId]);
 
-  // Order matters: the batch poll + sticky cache must run before the single-
-  // workspace fetch so we can hand the cached summary to React Query as
-  // `placeholderData`. That makes the inspector render the last-known PR
-  // state instantly on workspace switch (otherwise the 10s `gh pr view`
-  // round-trip leaves the PR section blank for several seconds).
   const batchPrSummary = useAllWorkspacesPrSummary(data?.workspaces ?? []);
   const { summaries: stickySummaries, rememberSummary } = useStickyWorkspaceSummaries(
     data?.workspaces ?? [],
@@ -122,8 +119,6 @@ export function Cockpit() {
   useEffect(() => {
     invalidateActiveWorkspaceFromBatch(queryClient, activeWorkspace?.id, batchPrSummary.dataUpdatedAt);
   }, [activeWorkspace?.id, batchPrSummary.dataUpdatedAt, queryClient]);
-  // On focus, refresh the active workspace plus the cache-only and batch PR
-  // maps when cached data is older than focusRefreshThresholdMs (default 30s).
   const focusConfig = useQuery({
     queryKey: ["config"],
     queryFn: () => api<{ config: { providerRefresh?: { focusRefreshThresholdMs?: number } } }>("/api/config"),
@@ -134,13 +129,6 @@ export function Cockpit() {
     thresholdMs: focusThresholdMs,
     queryClient,
   });
-  // Feed the active workspace result back into the sticky cache by recomputing
-  // the PR map from all sources. Cache-only pr-state gives the navigator an
-  // instant warm snapshot after daemon restart; the sticky batch cache keeps
-  // richer PR-display data stable through transient GitHub failures. The
-  // active query is preferred for the selected workspace only when it is
-  // healthy; degraded reads are non-authoritative and should not erase the
-  // last-known navbar PR/check tone.
   const prByWorkspaceId = useMemo(() => {
     const map = new Map<string, PullRequestSummary | null>();
     for (const [workspaceId, entry] of Object.entries(prStateQuery.data?.workspacePrState ?? {})) {
@@ -154,6 +142,10 @@ export function Cockpit() {
     }
     return map;
   }, [prStateQuery.data, stickySummaries, cockpitSummary.data]);
+  const checkoutPrByWorkspaceId = useMemo(
+    () => checkoutPrStateMap(prStateQuery.data?.checkoutPrState),
+    [prStateQuery.data?.checkoutPrState],
+  );
   const selectedRepo = activeWorkspace?.repoId
     ? (data?.repos.find((repo) => repo.id === activeWorkspace.repoId) ?? null)
     : (data?.repos[0] ?? null);
@@ -165,6 +157,7 @@ export function Cockpit() {
   const activeTargetKey = activeWorkspace ? (activeTargetByWorkspace[activeWorkspace.id] ?? "home") : "home";
   const activeCheckoutId = checkoutIdFromTargetKey(activeTargetKey, activeWorkspaceCheckouts);
   const activeTargetType = activeCheckoutId ? "worktree_checkout" : "workspace_home";
+  const showInspectorPanel = shouldShowInspectorPanel(activeWorkspace, activeTargetType);
   const activeWorkspaceAllSessions = activeWorkspace
     ? allSessions.filter((session) => session.workspaceId === activeWorkspace.id)
     : [];
@@ -179,15 +172,10 @@ export function Cockpit() {
   const activeSession = activeSessionId
     ? (activeWorkspaceSessions.find((session) => session.id === activeSessionId) ?? null)
     : (activeWorkspaceSessions[0] ?? null);
+  useEffect(() => {
+    if (!showInspectorPanel && mobileView === "inspector") setMobileView("stage");
+  }, [showInspectorPanel, mobileView]);
 
-  // Grouping mode read from the Navigator's localStorage key. Lives in a piece
-  // of state so the cockpit re-renders (and re-derives the workspace flat
-  // order) when the user changes grouping from inside the Navigator.
-  // Two synchronization sources:
-  //  - `storage` event: cross-tab changes (user switches grouping in another tab).
-  //  - NAVIGATOR_GROUPING_EVENT: same-tab changes (Navigator publishes via the
-  //    custom event whenever its grouping state changes — the native `storage`
-  //    event does NOT fire on same-tab writes).
   const [navigatorGrouping, setNavigatorGrouping] = useState(() => readNavigatorGrouping());
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -262,7 +250,6 @@ export function Cockpit() {
     },
   });
 
-  // Auto-dismiss transient shortcut errors after a short window.
   useEffect(() => {
     if (!shortcutError) return;
     const timer = setTimeout(() => setShortcutError(null), 4000);
@@ -432,10 +419,6 @@ export function Cockpit() {
       const sessions = data?.sessions.filter((session) => session.workspaceId === workspace.id) ?? [];
       const operations = data?.operations.filter((operation) => operation.workspaceId === workspace.id) ?? [];
       const attention = readinessForWorkspace(workspace, { sessions, operations });
-      // Active workspace gets the richer single-workspace summary (10s poll);
-      // every other workspace gets its PR from the 30s batch poll. Falls back
-      // to the batch map for the active workspace too while the inspector
-      // summary is still loading.
       const pr =
         workspace.id === cockpitSummary.data?.workspaceId
           ? (cockpitSummary.data.versionControl.pullRequest ?? null)
@@ -475,8 +458,8 @@ export function Cockpit() {
       ) : null}
       <div
         className={`cockpit-body ${layout.state.leftCollapsed ? "left-collapsed" : ""} ${
-          layout.state.rightCollapsed ? "right-collapsed" : ""
-        }`}
+          showInspectorPanel && layout.state.rightCollapsed ? "right-collapsed" : ""
+        } ${showInspectorPanel ? "" : "right-hidden"}`}
         style={
           {
             "--col-left": `${layout.state.leftWidth}px`,
@@ -485,7 +468,10 @@ export function Cockpit() {
         }
       >
         <nav className="mobile-switcher" aria-label="Workspace layout">
-          {(["navigator", "stage", "inspector"] as MobileView[]).map((view) => (
+          {(showInspectorPanel
+            ? (["navigator", "stage", "inspector"] as MobileView[])
+            : (["navigator", "stage"] as MobileView[])
+          ).map((view) => (
             <button
               key={view}
               type="button"
@@ -516,6 +502,7 @@ export function Cockpit() {
               sessions={data?.sessions ?? []}
               operations={data?.operations ?? []}
               prByWorkspaceId={prByWorkspaceId}
+              checkoutPrByWorkspaceId={checkoutPrByWorkspaceId}
               activeWorkspaceId={activeWorkspace?.id ?? ""}
               activeTargetKey={activeTargetKey}
               runtimes={data?.agentRuntimes ?? []}
@@ -562,45 +549,49 @@ export function Cockpit() {
             <EmptyStage hasRepos={Boolean(data?.repos.length)} />
           )}
         </main>
-        <div
-          className="col-divider"
-          onMouseDown={startColumnDrag({
-            side: "right",
-            initial: layout.state.rightWidth,
-            onChange: layout.setRightWidth,
-          })}
-          aria-hidden
-        />
-        {layout.state.rightCollapsed ? (
-          <div className="collapsed-rail col-right">
-            <button
-              type="button"
-              className="collapse-toggle"
-              onClick={layout.toggleRight}
-              aria-label="Expand inspector"
-              title="Expand inspector"
-            >
-              <ChevronsLeft size={14} />
-            </button>
-          </div>
-        ) : (
-          <aside
-            className={`column col-right ${mobileView === "inspector" ? "" : "mobile-hidden"}`}
-            aria-label="Inspector"
-          >
-            {activeWorkspace ? (
-              <Inspector
-                workspace={activeWorkspace}
-                repo={selectedRepo}
-                sessions={activeWorkspaceSessions}
-                summary={cockpitSummary.data}
-                onCollapse={layout.toggleRight}
-              />
+        {showInspectorPanel ? (
+          <>
+            <div
+              className="col-divider"
+              onMouseDown={startColumnDrag({
+                side: "right",
+                initial: layout.state.rightWidth,
+                onChange: layout.setRightWidth,
+              })}
+              aria-hidden
+            />
+            {layout.state.rightCollapsed ? (
+              <div className="collapsed-rail col-right">
+                <button
+                  type="button"
+                  className="collapse-toggle"
+                  onClick={layout.toggleRight}
+                  aria-label="Expand inspector"
+                  title="Expand inspector"
+                >
+                  <ChevronsLeft size={14} />
+                </button>
+              </div>
             ) : (
-              <EmptyInspector onCollapse={layout.toggleRight} />
+              <aside
+                className={`column col-right ${mobileView === "inspector" ? "" : "mobile-hidden"}`}
+                aria-label="Inspector"
+              >
+                {activeWorkspace ? (
+                  <Inspector
+                    workspace={activeWorkspace}
+                    repo={selectedRepo}
+                    sessions={activeWorkspaceSessions}
+                    summary={cockpitSummary.data}
+                    onCollapse={layout.toggleRight}
+                  />
+                ) : (
+                  <EmptyInspector onCollapse={layout.toggleRight} />
+                )}
+              </aside>
             )}
-          </aside>
-        )}
+          </>
+        ) : null}
       </div>
       <BottomBar activeWorkspace={activeWorkspace} activeSession={activeSession} sessions={activeWorkspaceSessions} />
       {commandOpen ? (

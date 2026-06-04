@@ -708,6 +708,7 @@ export * from "./teardown.js";
 export * from "./shortcuts.js";
 export type ApiError = { error: string; detail?: string; fieldErrors?: Record<string, string[]> };
 export * from "./scheduled-agents.js";
+export { WorkspacePrStateEntrySchema, WorkspacesPrStateResponseSchema } from "./workspaces-pr-state.js";
 export type { WorkspacePrStateEntry, WorkspacesPrStateResponse } from "./workspaces-pr-state.js";
 export * from "./agents-system.js";
 export * from "./manager-orchestration.js";

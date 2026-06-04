@@ -20,9 +20,19 @@ const DEFAULT_LAUNCH: LaunchSettings = {
   contextMode: null,
 };
 
-type StoredAgentTemplates = { roles: RoleTemplate[] };
-type RawRole = Partial<RoleTemplate> & { role: RoleId; actions?: RawAction[] };
-type RawAction = Partial<ActionTemplate> & { id: ActionTemplateId };
+type AgentTemplateDefaults = {
+  runtimeId?: string | null | undefined;
+};
+type StoredAgentTemplates = { roles: StoredRole[] };
+type StoredRole = Omit<RoleTemplate, "actions"> & {
+  launchSettingsExplicit?: boolean | undefined;
+  actions: StoredAction[];
+};
+type StoredAction = ActionTemplate & {
+  launchSettingsExplicit?: boolean | undefined;
+};
+type RawRole = Partial<StoredRole> & { role: RoleId; actions?: RawAction[] };
+type RawAction = Partial<StoredAction> & { id: ActionTemplateId };
 
 export class AgentTemplateNotFoundError extends Error {
   constructor(public readonly id: string) {
@@ -67,7 +77,7 @@ function readRaw(dataDir: string): StoredAgentTemplates {
   const raw = readFileSync(filePath, "utf8");
   if (!raw.trim()) return { roles: [] };
   const parsed = JSON.parse(raw) as Partial<StoredAgentTemplates>;
-  return { roles: Array.isArray(parsed.roles) ? (parsed.roles as RoleTemplate[]) : [] };
+  return { roles: Array.isArray(parsed.roles) ? (parsed.roles as StoredRole[]) : [] };
 }
 
 function writeRaw(dataDir: string, store: StoredAgentTemplates): void {
@@ -78,13 +88,15 @@ function writeRaw(dataDir: string, store: StoredAgentTemplates): void {
   renameSync(tmp, filePath);
 }
 
-function defaultAgentTemplates(): RoleTemplate[] {
-  return DEFAULT_ROLES.map((role) => cloneRole(role, nowIso()));
+export function agentTemplateDefaultsFromRuntimes(
+  runtimes: ReadonlyArray<{ id: string }> | null | undefined,
+): AgentTemplateDefaults {
+  return { runtimeId: runtimes?.[0]?.id ?? DEFAULT_RUNTIME };
 }
 
-export async function listAgentTemplates(dataDir: string): Promise<RoleTemplate[]> {
+export async function listAgentTemplates(dataDir: string, defaults?: AgentTemplateDefaults): Promise<RoleTemplate[]> {
   return withMutex(dataDir, () => {
-    const normalized = normalizeStore(readRaw(dataDir));
+    const normalized = normalizeStore(readRaw(dataDir), defaults);
     if (normalized.mutated) writeRaw(dataDir, normalized.store);
     return normalized.store.roles.map((role) => cloneRole(role));
   });
@@ -94,16 +106,18 @@ export async function updateRoleTemplate(
   dataDir: string,
   roleId: RoleId,
   input: UpdateRoleTemplateInput,
+  defaults?: AgentTemplateDefaults,
 ): Promise<RoleTemplate> {
   return withMutex(dataDir, () => {
-    const normalized = normalizeStore(readRaw(dataDir));
+    const normalized = normalizeStore(readRaw(dataDir), defaults);
     const role = normalized.store.roles.find((entry) => entry.role === roleId);
     if (!role) throw new AgentTemplateNotFoundError(roleId);
     if (role.updatedAt !== input.updatedAt) throw new StaleAgentTemplateUpdatedAtError();
-    const next: RoleTemplate = {
+    const next: StoredRole = {
       ...role,
       systemPrompt: input.systemPrompt ?? role.systemPrompt,
       launchSettings: input.launchSettings ?? role.launchSettings,
+      launchSettingsExplicit: input.launchSettings ? true : role.launchSettingsExplicit,
       updatedAt: nowIso(),
     };
     normalized.store.roles = normalized.store.roles.map((entry) => (entry.role === roleId ? next : entry));
@@ -112,18 +126,23 @@ export async function updateRoleTemplate(
   });
 }
 
-export async function resetRoleTemplate(dataDir: string, roleId: RoleId): Promise<RoleTemplate> {
+export async function resetRoleTemplate(
+  dataDir: string,
+  roleId: RoleId,
+  defaults?: AgentTemplateDefaults,
+): Promise<RoleTemplate> {
   return withMutex(dataDir, () => {
-    const normalized = normalizeStore(readRaw(dataDir));
-    const defaults = defaultRole(roleId);
-    if (!defaults) throw new AgentTemplateNotFoundError(roleId);
+    const normalized = normalizeStore(readRaw(dataDir), defaults);
+    const roleDefaults = defaultRole(roleId, defaults);
+    if (!roleDefaults) throw new AgentTemplateNotFoundError(roleId);
     const existing = normalized.store.roles.find((entry) => entry.role === roleId);
     if (!existing) throw new AgentTemplateNotFoundError(roleId);
-    const next: RoleTemplate = {
+    const next: StoredRole = {
       ...existing,
-      displayName: defaults.displayName,
-      systemPrompt: defaults.systemPrompt,
-      launchSettings: { ...defaults.launchSettings },
+      displayName: roleDefaults.displayName,
+      systemPrompt: roleDefaults.systemPrompt,
+      launchSettings: { ...roleDefaults.launchSettings },
+      launchSettingsExplicit: undefined,
       updatedAt: nowIso(),
     };
     normalized.store.roles = normalized.store.roles.map((entry) => (entry.role === roleId ? next : entry));
@@ -136,44 +155,58 @@ export async function updateActionTemplate(
   dataDir: string,
   actionId: ActionTemplateId,
   input: UpdateActionTemplateInput,
+  defaults?: AgentTemplateDefaults,
 ): Promise<ActionTemplate> {
   return withMutex(dataDir, () => {
-    const normalized = normalizeStore(readRaw(dataDir));
+    const normalized = normalizeStore(readRaw(dataDir), defaults);
     const located = findAction(normalized.store.roles, actionId);
     if (!located) throw new AgentTemplateNotFoundError(actionId);
     if (located.action.updatedAt !== input.updatedAt) throw new StaleAgentTemplateUpdatedAtError();
-    const next: ActionTemplate = {
+    const next: StoredAction = {
       ...located.action,
       prompt: input.prompt ?? located.action.prompt,
       launchSettings: input.launchSettings ?? located.action.launchSettings,
+      launchSettingsExplicit: input.launchSettings ? true : located.action.launchSettingsExplicit,
       executionMode: input.executionMode ?? located.action.executionMode,
       updatedAt: nowIso(),
     };
     located.role.actions = located.role.actions.map((action) => (action.id === actionId ? next : action));
     writeRaw(dataDir, normalized.store);
-    return { ...next, launchSettings: { ...next.launchSettings } };
+    return cloneAction(next);
   });
 }
 
-export async function resetActionTemplate(dataDir: string, actionId: ActionTemplateId): Promise<ActionTemplate> {
+export async function resetActionTemplate(
+  dataDir: string,
+  actionId: ActionTemplateId,
+  defaults?: AgentTemplateDefaults,
+): Promise<ActionTemplate> {
   return withMutex(dataDir, () => {
-    const normalized = normalizeStore(readRaw(dataDir));
-    const defaults = defaultAction(actionId);
-    if (!defaults) throw new AgentTemplateNotFoundError(actionId);
+    const normalized = normalizeStore(readRaw(dataDir), defaults);
+    const actionDefaults = defaultAction(actionId, defaults);
+    if (!actionDefaults) throw new AgentTemplateNotFoundError(actionId);
     const located = findAction(normalized.store.roles, actionId);
     if (!located) throw new AgentTemplateNotFoundError(actionId);
-    const next: ActionTemplate = { ...defaults, launchSettings: { ...defaults.launchSettings }, updatedAt: nowIso() };
+    const next: StoredAction = {
+      ...actionDefaults,
+      launchSettings: { ...actionDefaults.launchSettings },
+      launchSettingsExplicit: undefined,
+      updatedAt: nowIso(),
+    };
     located.role.actions = located.role.actions.map((action) => (action.id === actionId ? next : action));
     writeRaw(dataDir, normalized.store);
-    return { ...next, launchSettings: { ...next.launchSettings } };
+    return cloneAction(next);
   });
 }
 
-function normalizeStore(raw: StoredAgentTemplates): { store: StoredAgentTemplates; mutated: boolean } {
+function normalizeStore(
+  raw: StoredAgentTemplates,
+  defaults?: AgentTemplateDefaults,
+): { store: StoredAgentTemplates; mutated: boolean } {
   let mutated = false;
   const byRole = new Map((raw.roles as RawRole[]).map((role) => [role.role, role] as const));
-  const roles = DEFAULT_ROLES.map((defaults) => {
-    const normalized = normalizeRole(defaults, byRole.get(defaults.role));
+  const roles = DEFAULT_ROLES.map((roleDefaults) => {
+    const normalized = normalizeRole(roleDefaults, byRole.get(roleDefaults.role), defaults);
     if (normalized.mutated) mutated = true;
     return normalized.role;
   });
@@ -181,47 +214,71 @@ function normalizeStore(raw: StoredAgentTemplates): { store: StoredAgentTemplate
   return { store: { roles }, mutated };
 }
 
-function normalizeRole(defaults: RoleTemplate, raw: RawRole | undefined): { role: RoleTemplate; mutated: boolean } {
+function normalizeRole(
+  defaults: RoleTemplate,
+  raw: RawRole | undefined,
+  templateDefaults?: AgentTemplateDefaults,
+): { role: StoredRole; mutated: boolean } {
   const rawActions = new Map((raw?.actions ?? []).map((action) => [action.id, action] as const));
   let mutated = !raw;
-  const actions = defaults.actions.map((actionDefaults) => {
-    const normalized = normalizeAction(actionDefaults, rawActions.get(actionDefaults.id));
+  const roleDefaults = withDefaultLaunchSettings(defaults, templateDefaults);
+  const actions = roleDefaults.actions.map((actionDefaults) => {
+    const normalized = normalizeAction(actionDefaults, rawActions.get(actionDefaults.id), templateDefaults);
     if (normalized.mutated) mutated = true;
     return normalized.action;
   });
-  const role: RoleTemplate = {
-    role: defaults.role,
-    displayName: defaults.displayName,
-    systemPrompt: raw?.systemPrompt ?? defaults.systemPrompt,
-    launchSettings: raw?.launchSettings ?? defaults.launchSettings,
+  const launch = normalizeLaunchSettings(
+    raw?.launchSettings,
+    roleDefaults.launchSettings,
+    raw?.launchSettingsExplicit === true,
+  );
+  if (launch.mutated) mutated = true;
+  const role: StoredRole = {
+    role: roleDefaults.role,
+    displayName: roleDefaults.displayName,
+    systemPrompt: raw?.systemPrompt ?? roleDefaults.systemPrompt,
+    launchSettings: launch.settings,
+    launchSettingsExplicit: launch.explicit ? true : undefined,
     actions,
     builtIn: true,
     resettable: true,
     updatedAt: raw?.updatedAt ?? nowIso(),
   };
   if (raw && raw.actions?.length !== actions.length) mutated = true;
-  return { role: cloneRole(role), mutated };
+  if (raw && raw.launchSettingsExplicit !== role.launchSettingsExplicit) mutated = true;
+  return { role, mutated };
 }
 
 function normalizeAction(
   defaults: ActionTemplate,
   raw: RawAction | undefined,
-): { action: ActionTemplate; mutated: boolean } {
-  const action: ActionTemplate = {
-    id: defaults.id,
-    role: defaults.role,
-    displayName: defaults.displayName,
-    prompt: raw?.prompt ?? defaults.prompt,
-    launchSettings: raw?.launchSettings ?? defaults.launchSettings,
-    executionMode: raw?.executionMode ?? defaults.executionMode,
+  templateDefaults?: AgentTemplateDefaults,
+): { action: StoredAction; mutated: boolean } {
+  const actionDefaults = withDefaultActionLaunchSettings(defaults, templateDefaults);
+  const launch = normalizeLaunchSettings(
+    raw?.launchSettings,
+    actionDefaults.launchSettings,
+    raw?.launchSettingsExplicit === true,
+  );
+  const action: StoredAction = {
+    id: actionDefaults.id,
+    role: actionDefaults.role,
+    displayName: actionDefaults.displayName,
+    prompt: raw?.prompt ?? actionDefaults.prompt,
+    launchSettings: launch.settings,
+    launchSettingsExplicit: launch.explicit ? true : undefined,
+    executionMode: raw?.executionMode ?? actionDefaults.executionMode,
     builtIn: true,
     resettable: true,
     updatedAt: raw?.updatedAt ?? nowIso(),
   };
-  return { action: { ...action, launchSettings: { ...action.launchSettings } }, mutated: !raw };
+  return {
+    action: { ...action, launchSettings: { ...action.launchSettings } },
+    mutated: !raw || launch.mutated || raw.launchSettingsExplicit !== action.launchSettingsExplicit,
+  };
 }
 
-function findAction(roles: RoleTemplate[], actionId: ActionTemplateId) {
+function findAction(roles: StoredRole[], actionId: ActionTemplateId) {
   for (const role of roles) {
     const action = role.actions.find((entry) => entry.id === actionId);
     if (action) return { role, action };
@@ -229,28 +286,47 @@ function findAction(roles: RoleTemplate[], actionId: ActionTemplateId) {
   return null;
 }
 
-function defaultRole(roleId: RoleId): RoleTemplate | null {
+function defaultRole(roleId: RoleId, defaults?: AgentTemplateDefaults): RoleTemplate | null {
   const role = DEFAULT_ROLES.find((entry) => entry.role === roleId);
-  return role ? cloneRole(role) : null;
+  return role ? cloneRole(withDefaultLaunchSettings(role, defaults)) : null;
 }
 
-function defaultAction(actionId: ActionTemplateId): ActionTemplate | null {
+function defaultAction(actionId: ActionTemplateId, defaults?: AgentTemplateDefaults): ActionTemplate | null {
   for (const role of DEFAULT_ROLES) {
     const action = role.actions.find((entry) => entry.id === actionId);
-    if (action) return { ...action, launchSettings: { ...action.launchSettings } };
+    if (action) {
+      const withDefaults = withDefaultActionLaunchSettings(action, defaults);
+      return { ...withDefaults, launchSettings: { ...withDefaults.launchSettings } };
+    }
   }
   return null;
 }
 
 function cloneRole(role: RoleTemplate, updatedAt = role.updatedAt): RoleTemplate {
   return {
-    ...role,
+    role: role.role,
+    displayName: role.displayName,
+    systemPrompt: role.systemPrompt,
     launchSettings: { ...role.launchSettings },
     actions: role.actions.map((action) => ({
-      ...action,
-      launchSettings: { ...action.launchSettings },
-      updatedAt: action.updatedAt ?? updatedAt,
+      ...cloneAction(action, action.updatedAt ?? updatedAt),
     })),
+    builtIn: role.builtIn,
+    resettable: role.resettable,
+    updatedAt,
+  };
+}
+
+function cloneAction(action: ActionTemplate, updatedAt = action.updatedAt): ActionTemplate {
+  return {
+    id: action.id,
+    role: action.role,
+    displayName: action.displayName,
+    prompt: action.prompt,
+    launchSettings: { ...action.launchSettings },
+    executionMode: action.executionMode,
+    builtIn: action.builtIn,
+    resettable: action.resettable,
     updatedAt,
   };
 }
@@ -273,6 +349,62 @@ function action(
     resettable: true,
     updatedAt: null,
   };
+}
+
+function defaultLaunchSettings(defaults?: AgentTemplateDefaults): LaunchSettings {
+  const runtimeId = defaults?.runtimeId?.trim() || DEFAULT_RUNTIME;
+  return { ...DEFAULT_LAUNCH, runtimeId };
+}
+
+function withDefaultLaunchSettings(role: RoleTemplate, defaults?: AgentTemplateDefaults): RoleTemplate {
+  const launchSettings = defaultLaunchSettings(defaults);
+  return {
+    ...role,
+    launchSettings,
+    actions: role.actions.map((entry) => withDefaultActionLaunchSettings(entry, defaults)),
+  };
+}
+
+function withDefaultActionLaunchSettings(action: ActionTemplate, defaults?: AgentTemplateDefaults): ActionTemplate {
+  return { ...action, launchSettings: defaultLaunchSettings(defaults) };
+}
+
+function normalizeLaunchSettings(
+  raw: LaunchSettings | Partial<LaunchSettings> | null | undefined,
+  defaults: LaunchSettings,
+  explicit: boolean,
+): { settings: LaunchSettings; explicit: boolean; mutated: boolean } {
+  if (!raw) return { settings: { ...defaults }, explicit: false, mutated: true };
+  const normalized: LaunchSettings = {
+    runtimeId: raw.runtimeId?.trim() || defaults.runtimeId,
+    model: raw.model ?? null,
+    effort: raw.effort ?? null,
+    fastMode: raw.fastMode ?? null,
+    contextMode: raw.contextMode ?? null,
+  };
+  if (!explicit && isMigratableLegacyDefault(normalized, defaults)) {
+    return { settings: { ...defaults }, explicit: false, mutated: true };
+  }
+  return {
+    settings: normalized,
+    explicit,
+    mutated:
+      normalized.runtimeId !== raw.runtimeId ||
+      normalized.model !== (raw.model ?? null) ||
+      normalized.effort !== (raw.effort ?? null) ||
+      normalized.fastMode !== (raw.fastMode ?? null) ||
+      normalized.contextMode !== (raw.contextMode ?? null),
+  };
+}
+
+function isMigratableLegacyDefault(settings: LaunchSettings, defaults: LaunchSettings): boolean {
+  const legacyDefault =
+    settings.runtimeId === DEFAULT_LAUNCH.runtimeId &&
+    settings.model === DEFAULT_LAUNCH.model &&
+    settings.effort === DEFAULT_LAUNCH.effort &&
+    settings.fastMode === DEFAULT_LAUNCH.fastMode &&
+    settings.contextMode === DEFAULT_LAUNCH.contextMode;
+  return legacyDefault && defaults.runtimeId !== DEFAULT_RUNTIME;
 }
 
 const DEFAULT_ROLES: RoleTemplate[] = [

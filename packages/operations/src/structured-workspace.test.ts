@@ -125,6 +125,88 @@ describe("structured workspace operations", () => {
     expect(fs.existsSync(path.join(row?.path ?? "", ".git"))).toBe(true);
   });
 
+  it("removes a zero-checkout structured workspace Home and its root directory", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-structured-"));
+    dirs.push(dir);
+    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    store.migrate();
+    const rootPath = path.join(dir, "feature");
+    const service = serviceFor(dir, store);
+    const created = await service.createWorkspace({
+      mode: "structured",
+      rootPath,
+      name: "Feature",
+      source: "scratch",
+    });
+
+    const removed = await service.removeWorkspace({ workspaceId: created.workspaceId });
+
+    expect(removed).toMatchObject({ removed: true, archived: false, dirty: false });
+    expect(store.listWorkspaces().find((workspace) => workspace.id === created.workspaceId)).toBeUndefined();
+    expect(fs.existsSync(rootPath)).toBe(false);
+  });
+
+  it("blocks structured workspace Home removal while checkouts remain", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = serviceFor(fixture.dir, store);
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const workspace = await service.createWorkspace({
+      mode: "structured",
+      rootPath: path.join(fixture.dir, "feature"),
+      name: "Feature",
+      source: "scratch",
+    });
+    await service.createWorkspaceCheckout({
+      workspaceId: workspace.workspaceId,
+      repoId: repo.id,
+      name: "api",
+      source: "default_branch",
+      branch: "feature/api",
+    });
+
+    expect(service.checkWorkspaceRemoval({ workspaceId: workspace.workspaceId })).toMatchObject({
+      removable: false,
+      reason: "non_empty_workspace",
+    });
+    const blocked = await service.removeWorkspace({ workspaceId: workspace.workspaceId });
+    expect(blocked.removed).toBe(false);
+    expect(store.listWorkspaces().find((entry) => entry.id === workspace.workspaceId)).toBeTruthy();
+  });
+
+  it("removes an individual structured workspace checkout without removing Home", async () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = serviceFor(fixture.dir, store);
+    const repo = service.registerRepo({ rootPath: fixture.repoPath });
+    const workspace = await service.createWorkspace({
+      mode: "structured",
+      rootPath: path.join(fixture.dir, "feature"),
+      name: "Feature",
+      source: "scratch",
+    });
+    const checkout = await service.createWorkspaceCheckout({
+      workspaceId: workspace.workspaceId,
+      repoId: repo.id,
+      name: "api",
+      source: "default_branch",
+      branch: "feature/api",
+    });
+    const checkoutPath = store.findWorkspaceCheckout(checkout.checkoutId)?.path ?? "";
+
+    const removed = await service.removeWorkspaceCheckout({
+      workspaceId: workspace.workspaceId,
+      checkoutId: checkout.checkoutId,
+    });
+
+    expect(removed).toMatchObject({ removed: true, dirty: false });
+    expect(store.findWorkspaceCheckout(checkout.checkoutId)).toBeNull();
+    expect(store.listWorkspaces().find((entry) => entry.id === workspace.workspaceId)).toBeTruthy();
+    expect(fs.existsSync(checkoutPath)).toBe(false);
+  });
+
   it("rejects checkout names that would escape the workspace root", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));

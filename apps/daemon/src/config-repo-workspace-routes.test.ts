@@ -105,6 +105,42 @@ describe("config/repo/workspace routes", () => {
     }
   });
 
+  it("removes an individual structured checkout through REST", async () => {
+    const fixture = createFixtureBase(dirs);
+    const { repoPath } = createGitFixtureWithRemote(fixture.config.dataDir);
+    const { server } = await createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const registered = await postJson<{ repo: Repo }>(`${baseUrl}/api/repos`, {
+        rootPath: repoPath,
+        name: "citadel",
+      });
+      const home = await postJson<{ workspaceId: string }>(`${baseUrl}/api/workspaces/home`, {
+        name: "Feature Home",
+        source: "scratch",
+      });
+      const checkout = await postJson<{ workspaceId: string; checkoutId: string }>(
+        `${baseUrl}/api/workspaces/${home.workspaceId}/checkouts`,
+        {
+          repoId: registered.repo.id,
+          name: "api",
+          branch: "feature/api",
+          source: "default_branch",
+        },
+      );
+
+      const response = await fetch(`${baseUrl}/api/workspaces/${home.workspaceId}/checkouts/${checkout.checkoutId}`, {
+        method: "DELETE",
+      });
+      expect(response.status).toBe(202);
+      const state = await getJson<{ workspaces: Workspace[]; checkouts: WorktreeCheckout[] }>(`${baseUrl}/api/state`);
+      expect(state.workspaces.find((workspace) => workspace.id === home.workspaceId)).toBeTruthy();
+      expect(state.checkouts.find((candidate) => candidate.id === checkout.checkoutId)).toBeUndefined();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("generates unique names and branches for repeated blank structured worktree creates", async () => {
     const fixture = createFixtureBase(dirs);
     const { repoPath } = createGitFixtureWithRemote(fixture.config.dataDir);
