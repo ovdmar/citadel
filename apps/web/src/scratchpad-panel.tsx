@@ -24,7 +24,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { api } from "./api.js";
 import { VoiceCaptureButton } from "./components/voice-capture-button.js";
 import { formatBytes, pillLabel, pillSlug } from "./routes/scratchpad-helpers.js";
-import { createScratchpadComposerVoiceTarget } from "./scratchpad-composer-voice-target.js";
+import { useScratchpadComposerVoiceTarget } from "./scratchpad-composer-voice-hook.js";
 import { ScratchpadComposer } from "./scratchpad-composer.js";
 import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { BlockItem, type UiBlock } from "./scratchpad-panel-block.js";
@@ -372,22 +372,14 @@ export function ScratchpadPanel() {
     [loadBlocks],
   );
 
-  const composerVoiceTarget = useMemo(
-    () =>
-      createScratchpadComposerVoiceTarget({
-        getElement: () => composerRef.current,
-        isLoaded: () => loaded,
-        onDraftChange: setComposer,
-        submitDraft: submitComposer,
-      }),
-    [loaded, submitComposer],
-  );
-
-  useEffect(() => {
-    const element = composerRef.current;
-    if (!element) return;
-    return registerTarget(element, composerVoiceTarget);
-  }, [composerVoiceTarget, registerTarget]);
+  const composerVoiceTarget = useScratchpadComposerVoiceTarget({
+    composerRef,
+    loaded,
+    open,
+    onDraftChange: setComposer,
+    registerTarget,
+    submitDraft: submitComposer,
+  });
 
   const requestDelete = useCallback(
     async (id: string) => {

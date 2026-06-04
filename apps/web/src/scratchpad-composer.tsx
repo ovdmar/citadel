@@ -1,4 +1,4 @@
-import type { ReactNode, Ref } from "react";
+import { type MouseEvent, type PointerEvent, type ReactNode, type Ref, useRef } from "react";
 
 type ScratchpadComposerProps = {
   value: string;
@@ -11,9 +11,13 @@ type ScratchpadComposerProps = {
 };
 
 export function ScratchpadComposer(props: ScratchpadComposerProps) {
+  const actionsRef = useRef<HTMLDivElement | null>(null);
   const submit = (text: string) => {
     if (text.trim().length === 0) return;
     void props.onSubmit(text);
+  };
+  const preventPointerFocusSteal = (event: MouseEvent | PointerEvent) => {
+    event.preventDefault();
   };
   return (
     <div className="scratchpad-composer">
@@ -41,11 +45,24 @@ export function ScratchpadComposer(props: ScratchpadComposerProps) {
               submit(event.currentTarget.value);
             }
           }}
-          onBlur={(event) => submit(event.currentTarget.value)}
+          onBlur={(event) => {
+            const nextFocus = event.relatedTarget;
+            if (nextFocus instanceof Node && actionsRef.current?.contains(nextFocus)) return;
+            submit(event.currentTarget.value);
+          }}
           disabled={!props.loaded}
           rows={2}
         />
-        {props.actions}
+        {props.actions ? (
+          <div
+            ref={actionsRef}
+            className="scratchpad-composer-actions"
+            onMouseDown={preventPointerFocusSteal}
+            onPointerDown={preventPointerFocusSteal}
+          >
+            {props.actions}
+          </div>
+        ) : null}
       </div>
     </div>
   );

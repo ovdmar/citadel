@@ -42,6 +42,10 @@ beforeEach(() => {
   FakeSpeechRecognition.instances = [];
   vi.useFakeTimers();
   Object.defineProperty(window, "isSecureContext", { configurable: true, value: true });
+  Object.defineProperty(window, "SpeechRecognition", {
+    configurable: true,
+    value: FakeSpeechRecognition,
+  });
   Object.defineProperty(window, "webkitSpeechRecognition", {
     configurable: true,
     value: FakeSpeechRecognition,
@@ -84,6 +88,70 @@ describe("VoiceModeProvider", () => {
     expect(commit).toHaveBeenCalledWith("hello", { autoSubmit: true });
   });
 
+  it("uses the current auto-submit toggle when the final commit delay fires", async () => {
+    const commit = vi.fn(() => ({ status: "inserted-not-submitted" as const, text: "hello" }));
+    const target: VoiceTarget = {
+      kind: "registered",
+      insertText: vi.fn(),
+      commit,
+      canAcceptVoiceCommit: () => true,
+    };
+    await renderProvider();
+
+    voiceApi?.startDictation({ target });
+    FakeSpeechRecognition.instances[0]?.final("hello");
+    await flushReact(() => voiceApi?.setAutoSubmit(false));
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+
+    expect(commit).toHaveBeenCalledWith("hello", { autoSubmit: false });
+  });
+
+  it("starts from the global shortcut and inserts into the focused text input", async () => {
+    await renderProvider();
+    const input = document.createElement("input");
+    input.value = "before after";
+    document.body.appendChild(input);
+    input.setSelectionRange(7, 12);
+    input.focus();
+
+    await flushReact(() => dispatchVoiceShortcut());
+    FakeSpeechRecognition.instances[0]?.final("now");
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+
+    expect(input.value).toBe("before now");
+    expect(input.selectionStart).toBe(10);
+  });
+
+  it("keeps the snapshotted shortcut target when start needs a click retry", async () => {
+    class ThrowOnceRecognition extends FakeSpeechRecognition {
+      static starts = 0;
+      override start = vi.fn(() => {
+        ThrowOnceRecognition.starts += 1;
+        if (ThrowOnceRecognition.starts === 1) throw new DOMException("activation rejected", "NotAllowedError");
+      });
+    }
+    Object.defineProperty(window, "SpeechRecognition", {
+      configurable: true,
+      value: ThrowOnceRecognition,
+    });
+    await renderProvider();
+    const first = document.createElement("input");
+    const second = document.createElement("input");
+    document.body.append(first, second);
+    first.focus();
+
+    await flushReact(() => dispatchVoiceShortcut());
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("retry");
+
+    second.focus();
+    await flushReact(() => retryButton().click());
+    FakeSpeechRecognition.instances[1]?.final("dictated");
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+
+    expect(first.value).toBe("dictated");
+    expect(second.value).toBe("");
+  });
+
   it("keeps final transcript copyable when no target is focused", async () => {
     await renderProvider();
 
@@ -110,6 +178,16 @@ async function renderProvider() {
 function Harness() {
   voiceApi = useVoiceMode();
   return createElement("div", null, "ready");
+}
+
+function dispatchVoiceShortcut() {
+  window.dispatchEvent(new KeyboardEvent("keydown", { key: "d", metaKey: true, shiftKey: true, bubbles: true }));
+}
+
+function retryButton(): HTMLButtonElement {
+  const button = [...document.querySelectorAll("button")].find((candidate) => candidate.textContent === "Retry");
+  if (!(button instanceof HTMLButtonElement)) throw new Error("retry button missing");
+  return button;
 }
 
 async function settle() {

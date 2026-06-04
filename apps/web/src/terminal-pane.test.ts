@@ -21,6 +21,7 @@ import {
 import {
   TerminalPane,
   focusActiveTerminal,
+  getFocusedTerminalSessionId,
   getTerminalHandle,
   isRegisteredTerminalMessageSource,
   terminalWebSocketUrl,
@@ -331,7 +332,18 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(handle?.sendVoiceInput("hello", { submit: false })).toBe(true);
     expect(handle?.sendVoiceInput("run it", { submit: true })).toBe(true);
 
-    expect(decodeBinarySent(ws.sent)).toEqual(expect.arrayContaining(["hello", "run it", "\r"]));
+    expect(decodeBinarySent(ws.sent)).toEqual(["hello", "run it", "\r"]);
+  });
+
+  it("resolves focused xterm descendants to their session id", async () => {
+    await renderTerminal();
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!(host instanceof HTMLElement)) throw new Error("terminal host missing");
+    const innerInput = document.createElement("textarea");
+    host.appendChild(innerInput);
+    innerInput.focus();
+
+    expect(getFocusedTerminalSessionId()).toBe("sess_1");
   });
 
   it("only forwards Escape to the cockpit bridge while an overlay is open", async () => {

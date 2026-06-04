@@ -107,6 +107,24 @@ describe("SpeechRecognitionController", () => {
     expect(onState).toHaveBeenCalledWith({ type: "no-result-timeout" });
   });
 
+  it("restarts the silence timer after each recognition result", () => {
+    const onState = vi.fn();
+    const controller = new SpeechRecognitionController({ win: makeWindow(), onState });
+    controller.start();
+
+    vi.advanceTimersByTime(NO_RESULT_SILENCE_TIMEOUT_MS - 1);
+    FakeSpeechRecognition.instances[0]?.result([{ transcript: "still listening", isFinal: false }]);
+    vi.advanceTimersByTime(1);
+
+    expect(onState).not.toHaveBeenCalledWith({ type: "no-result-timeout" });
+    expect(FakeSpeechRecognition.instances[0]?.stop).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(NO_RESULT_SILENCE_TIMEOUT_MS);
+
+    expect(FakeSpeechRecognition.instances[0]?.stop).toHaveBeenCalled();
+    expect(onState).toHaveBeenCalledWith({ type: "no-result-timeout" });
+  });
+
   it("surfaces start failures as retry-required while preserving the target outside the controller", () => {
     const onState = vi.fn();
     class ThrowingRecognition extends FakeSpeechRecognition {

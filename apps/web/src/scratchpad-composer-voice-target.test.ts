@@ -64,4 +64,26 @@ describe("createScratchpadComposerVoiceTarget", () => {
       reason: "The scratchpad composer is not available. Copy the dictated text.",
     });
   });
+
+  it("buffers text when the composer is hidden", () => {
+    const wrapper = document.createElement("div");
+    wrapper.hidden = true;
+    const textarea = document.createElement("textarea");
+    wrapper.appendChild(textarea);
+    document.body.appendChild(wrapper);
+    const target = createScratchpadComposerVoiceTarget({
+      getElement: () => textarea,
+      isLoaded: () => true,
+      isVisible: () => true,
+      onDraftChange: vi.fn(),
+      submitDraft: vi.fn(),
+    });
+
+    expect(target.canAcceptVoiceCommit()).toBe(false);
+    expect(target.commit?.("loose", { autoSubmit: true })).toEqual({
+      status: "buffered",
+      text: "loose",
+      reason: "The scratchpad composer is not available. Copy the dictated text.",
+    });
+  });
 });

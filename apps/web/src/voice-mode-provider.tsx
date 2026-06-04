@@ -2,7 +2,7 @@ import { type ReactNode, createContext, useCallback, useContext, useEffect, useM
 import { SpeechRecognitionController, detectSpeechRecognitionSupport } from "./lib/speech-recognition-controller.js";
 import { type VoiceCommitResult, type VoiceTarget, VoiceTargetRegistry } from "./lib/voice-targets.js";
 import { matchShortcut } from "./shortcuts.js";
-import { getTerminalHandle } from "./terminal-pane.js";
+import { getFocusedTerminalSessionId, getTerminalHandle } from "./terminal-pane.js";
 import { VoiceModeOverlay } from "./voice-mode-overlay.js";
 
 const AUTO_SUBMIT_KEY = "citadel.voice.autoSubmit";
@@ -82,13 +82,9 @@ export function VoiceModeProvider(props: { children: ReactNode }) {
 
   const startDictation = useCallback(
     (options?: StartDictationOptions): boolean => {
-      lastStartRef.current = options;
-      const target =
-        options?.target !== undefined
-          ? options.target
-          : options?.terminalSessionId
-            ? createTerminalVoiceTarget(options.terminalSessionId)
-            : registryRef.current.resolve(document.activeElement);
+      const resolved = resolveStartDictation(options, registryRef.current);
+      lastStartRef.current = resolved.retryOptions;
+      const target = resolved.target;
       targetRef.current = target;
       setOverlayActive(true);
       setStatus("listening");
@@ -208,6 +204,26 @@ function commitToTarget(target: VoiceTarget, text: string, autoSubmit: boolean):
     return { status: "submitted", text };
   }
   return { status: "inserted-not-submitted", text };
+}
+
+function resolveStartDictation(
+  options: StartDictationOptions | undefined,
+  registry: VoiceTargetRegistry,
+): { target: VoiceTarget | null; retryOptions: StartDictationOptions } {
+  if (options?.target !== undefined) {
+    return { target: options.target, retryOptions: { target: options.target } };
+  }
+  if (options?.terminalSessionId) {
+    const target = createTerminalVoiceTarget(options.terminalSessionId);
+    return { target, retryOptions: { terminalSessionId: options.terminalSessionId } };
+  }
+  const focusedTerminalSessionId = getFocusedTerminalSessionId(document.activeElement);
+  if (focusedTerminalSessionId) {
+    const target = createTerminalVoiceTarget(focusedTerminalSessionId);
+    return { target, retryOptions: { terminalSessionId: focusedTerminalSessionId } };
+  }
+  const target = registry.resolve(document.activeElement);
+  return { target, retryOptions: { target } };
 }
 
 function createTerminalVoiceTarget(sessionId: string): VoiceTarget | null {

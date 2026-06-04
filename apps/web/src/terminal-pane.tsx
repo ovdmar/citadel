@@ -56,6 +56,7 @@ export type TerminalHandle = {
 };
 
 const REGISTRY = new Map<string, TerminalHandle>();
+const HOST_REGISTRY = new Map<string, HTMLElement>();
 const LISTENERS = new Set<(id: string) => void>();
 
 function publish(id: string, handle: TerminalHandle | null) {
@@ -69,6 +70,15 @@ function publish(id: string, handle: TerminalHandle | null) {
 
 export function getTerminalHandle(sessionId: string): TerminalHandle | undefined {
   return REGISTRY.get(sessionId);
+}
+
+export function getFocusedTerminalSessionId(activeElement: Element | null = document.activeElement): string | null {
+  if (!(activeElement instanceof HTMLElement)) return null;
+  for (const [sessionId, host] of HOST_REGISTRY) {
+    if (!host.isConnected) continue;
+    if (host === activeElement || host.contains(activeElement)) return sessionId;
+  }
+  return null;
 }
 
 export function subscribeTerminalHandle(listener: (sessionId: string) => void): () => void {
@@ -189,6 +199,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     if (!active) return;
     const host = containerRef.current;
     if (!host) return;
+    HOST_REGISTRY.set(sessionId, host);
     let disposed = false;
     let resizeFrame: number | null = null;
     let wheelFrame: number | null = null;
@@ -366,6 +377,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
       if (terminalRef.current === terminal) terminalRef.current = null;
       if (fitRef.current === fit) fitRef.current = null;
       if (wsRef.current === ws) wsRef.current = null;
+      if (HOST_REGISTRY.get(sessionId) === host) HOST_REGISTRY.delete(sessionId);
     };
   }, [sessionId, generation, active, clearAutoRetryTimer, scheduleAutoRetry, forwardWheelToRuntime]);
 

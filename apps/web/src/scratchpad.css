@@ -248,6 +248,12 @@
   gap: 8px;
 }
 
+.scratchpad-composer-actions {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
 .scratchpad-composer-input {
   display: block;
   width: 100%;

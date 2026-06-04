@@ -21,6 +21,8 @@ type RegisteredEntry = {
   target: VoiceTarget;
 };
 
+const TEXT_EDITABLE_INPUT_TYPES = new Set(["text", "search", "tel", "url", "password"]);
+
 export class VoiceTargetRegistry {
   private readonly entries: RegisteredEntry[] = [];
 
@@ -61,7 +63,17 @@ export function createGenericEditableVoiceTarget(element: Element): VoiceTarget 
 function canAcceptGenericEditableCommit(element: HTMLInputElement | HTMLTextAreaElement): boolean {
   if (!element.isConnected) return false;
   if (element.disabled || element.readOnly) return false;
-  if (element instanceof HTMLInputElement && element.type === "hidden") return false;
+  if (!isElementVoiceVisible(element)) return false;
+  if (element instanceof HTMLInputElement && !TEXT_EDITABLE_INPUT_TYPES.has(element.type)) return false;
+  return true;
+}
+
+export function isElementVoiceVisible(element: HTMLElement): boolean {
+  if (element.hidden) return false;
+  if (element.closest("[hidden]")) return false;
+  if (element.closest('[aria-hidden="true"]')) return false;
+  const style = window.getComputedStyle?.(element);
+  if (style && (style.display === "none" || style.visibility === "hidden")) return false;
   return true;
 }
 

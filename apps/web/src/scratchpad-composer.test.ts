@@ -53,6 +53,28 @@ describe("ScratchpadComposer", () => {
     expect(input.style.height).toBe("200px");
   });
 
+  it("does not blur-submit an existing draft when a composer action is clicked", async () => {
+    const onSubmit = vi.fn();
+    const onAction = vi.fn();
+    await renderComposer({
+      value: "existing draft",
+      onSubmit,
+      actions: createElement("button", { type: "button", onClick: onAction }, "Action"),
+    });
+
+    const input = screenComposer();
+    const button = document.querySelector("button");
+    if (!(button instanceof HTMLButtonElement)) throw new Error("action button missing");
+    const mouseDown = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    button.dispatchEvent(mouseDown);
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: button }));
+    button.click();
+
+    expect(mouseDown.defaultPrevented).toBe(true);
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(onAction).toHaveBeenCalled();
+  });
+
   it("forwards the textarea ref and renders error/disabled state", async () => {
     const ref = createRef<HTMLTextAreaElement>();
     await renderComposer({ value: "", error: "save_failed", loaded: false, inputRef: ref });

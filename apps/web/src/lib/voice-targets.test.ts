@@ -58,6 +58,22 @@ describe("generic editable voice targets", () => {
     expect(createGenericEditableVoiceTarget(disabled)).toBeNull();
   });
 
+  it("rejects non-text input types and hidden controls", () => {
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    const number = document.createElement("input");
+    number.type = "number";
+    const wrapper = document.createElement("div");
+    wrapper.hidden = true;
+    const hiddenText = document.createElement("input");
+    wrapper.appendChild(hiddenText);
+    document.body.append(checkbox, number, wrapper);
+
+    expect(createGenericEditableVoiceTarget(checkbox)).toBeNull();
+    expect(createGenericEditableVoiceTarget(number)).toBeNull();
+    expect(createGenericEditableVoiceTarget(hiddenText)).toBeNull();
+  });
+
   it("reports generic targets as insertion-only even when auto-submit is enabled", () => {
     const input = document.createElement("input");
     document.body.appendChild(input);
