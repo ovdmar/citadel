@@ -26,6 +26,7 @@ import {
   setGhCooldown,
 } from "./gh-cooldown.js";
 export { pLimit } from "./p-limit.js";
+export * from "./pr-actions.js";
 
 // Re-export the cooldown surface so existing consumers (apps/daemon,
 // gh-quota-wiring, tests) keep their import paths. setGhCooldown is
