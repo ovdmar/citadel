@@ -129,7 +129,8 @@ export class SpeechRecognitionController {
     const start = event.resultIndex ?? 0;
     for (let index = start; index < event.results.length; index += 1) {
       const result = event.results[index];
-      const transcript = result?.[0]?.transcript ?? "";
+      if (!result) continue;
+      const transcript = result[0]?.transcript ?? "";
       if (!transcript) continue;
       if (result.isFinal) {
         final += transcript;

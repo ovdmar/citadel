@@ -62,7 +62,9 @@ describe("generic editable voice targets", () => {
     const input = document.createElement("input");
     document.body.appendChild(input);
 
-    const result = createGenericEditableVoiceTarget(input)?.commit("hello", { autoSubmit: true });
+    const target = createGenericEditableVoiceTarget(input);
+    if (!target?.commit) throw new Error("expected generic target with commit");
+    const result = target.commit("hello", { autoSubmit: true });
 
     expect(result).toEqual({ status: "inserted-not-submitted", text: "hello" });
   });
