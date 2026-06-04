@@ -3,7 +3,7 @@ import { SpeechRecognitionController, detectSpeechRecognitionSupport } from "./l
 import { type VoiceCommitResult, type VoiceTarget, VoiceTargetRegistry } from "./lib/voice-targets.js";
 import { matchShortcut } from "./shortcuts.js";
 import { getFocusedTerminalSessionId, getTerminalHandle } from "./terminal-pane.js";
-import { VoiceModeOverlay } from "./voice-mode-overlay.js";
+import { VoiceModeOverlay, type VoiceModeOverlayStatus } from "./voice-mode-overlay.js";
 
 const AUTO_SUBMIT_KEY = "citadel.voice.autoSubmit";
 
@@ -30,7 +30,8 @@ export function VoiceModeProvider(props: { children: ReactNode }) {
   const [autoSubmit, setAutoSubmitState] = useState(readAutoSubmit);
   const autoSubmitRef = useRef(autoSubmit);
   const [overlayActive, setOverlayActive] = useState(false);
-  const [status, setStatus] = useState("idle");
+  const [status, setStatusState] = useState<VoiceModeOverlayStatus>("idle");
+  const statusRef = useRef<VoiceModeOverlayStatus>("idle");
   const [interim, setInterim] = useState("");
   const [buffer, setBuffer] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -47,6 +48,11 @@ export function VoiceModeProvider(props: { children: ReactNode }) {
     [],
   );
 
+  const setStatus = useCallback((next: VoiceModeOverlayStatus) => {
+    statusRef.current = next;
+    setStatusState(next);
+  }, []);
+
   const setAutoSubmit = useCallback((next: boolean) => {
     setAutoSubmitState(next);
     try {
@@ -60,25 +66,28 @@ export function VoiceModeProvider(props: { children: ReactNode }) {
     return registryRef.current.register(element, target);
   }, []);
 
-  const commitFinal = useCallback((text: string) => {
-    const target = targetRef.current;
-    if (!target || !target.canAcceptVoiceCommit()) {
-      setBuffer(text);
-      setStatus("no-target");
-      setError("No focused input is available. Copy the dictated text and paste it where you need it.");
-      return;
-    }
-    const result = commitToTarget(target, text, autoSubmitRef.current);
-    if (result.status === "buffered") {
+  const commitFinal = useCallback(
+    (text: string) => {
+      const target = targetRef.current;
+      if (!target || !target.canAcceptVoiceCommit()) {
+        setBuffer(text);
+        setStatus("no-target");
+        setError("No focused input is available. Copy the dictated text and paste it where you need it.");
+        return;
+      }
+      const result = commitToTarget(target, text, autoSubmitRef.current);
+      if (result.status === "buffered") {
+        setBuffer(result.text);
+        setStatus("no-target");
+        setError(result.reason);
+        return;
+      }
       setBuffer(result.text);
-      setStatus("no-target");
-      setError(result.reason);
-      return;
-    }
-    setBuffer(result.text);
-    setStatus(result.status === "submitted" ? "submitted" : "inserted");
-    setError(result.status === "inserted-not-submitted" ? "Inserted, not submitted." : null);
-  }, []);
+      setStatus(result.status === "submitted" ? "submitted" : "inserted");
+      setError(result.status === "inserted-not-submitted" ? "Inserted, not submitted." : null);
+    },
+    [setStatus],
+  );
 
   const startDictation = useCallback(
     (options?: StartDictationOptions): boolean => {
@@ -102,21 +111,32 @@ export function VoiceModeProvider(props: { children: ReactNode }) {
             setStatus("retry");
             setError(state.message);
           } else if (state.type === "permission-denied") {
+            keepPartialTranscript(state.transcript, setBuffer, setInterim);
             setStatus("permission-denied");
             setError("Microphone permission was denied.");
           } else if (state.type === "capture-error") {
+            keepPartialTranscript(state.transcript, setBuffer, setInterim);
             setStatus("error");
             setError(state.message);
           } else if (state.type === "no-result-timeout") {
+            keepPartialTranscript(state.transcript, setBuffer, setInterim);
             setStatus("error");
             setError("No speech was detected.");
+          } else if (state.type === "stopped" && statusRef.current === "listening") {
+            keepPartialTranscript(state.transcript, setBuffer, setInterim);
+            setStatus("error");
+            setError(
+              state.transcript
+                ? "Dictation ended before submission. Copy the dictated text."
+                : "No speech was detected.",
+            );
           }
         },
       });
       controllerRef.current = controller;
       return controller.start();
     },
-    [commitFinal],
+    [commitFinal, setStatus],
   );
 
   const stop = useCallback(() => {
@@ -124,7 +144,7 @@ export function VoiceModeProvider(props: { children: ReactNode }) {
     setOverlayActive(false);
     setStatus("idle");
     setInterim("");
-  }, []);
+  }, [setStatus]);
 
   const cancel = useCallback(() => {
     controllerRef.current?.abort();
@@ -133,7 +153,7 @@ export function VoiceModeProvider(props: { children: ReactNode }) {
     setInterim("");
     setBuffer("");
     setError(null);
-  }, []);
+  }, [setStatus]);
 
   const retry = useCallback(() => {
     startDictation(lastStartRef.current);
@@ -204,6 +224,16 @@ function commitToTarget(target: VoiceTarget, text: string, autoSubmit: boolean):
     return { status: "submitted", text };
   }
   return { status: "inserted-not-submitted", text };
+}
+
+function keepPartialTranscript(
+  transcript: string | undefined,
+  setBuffer: (text: string) => void,
+  setInterim: (text: string) => void,
+): void {
+  if (!transcript) return;
+  setBuffer(transcript);
+  setInterim("");
 }
 
 function resolveStartDictation(

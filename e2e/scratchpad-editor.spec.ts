@@ -112,7 +112,7 @@ test.describe("scratchpad drawer", () => {
     await page.keyboard.press("Control+Shift+D");
 
     await expect(page.locator(".voice-mode-overlay")).toBeVisible();
-    await expect(page.locator(".voice-mode-status")).toContainText("listening");
+    await expect(page.locator(".voice-mode-status")).toContainText("Listening");
   });
 
   test("preserves angle-bracket text in rendered blocks (regression)", async ({ page, request }) => {

@@ -3,11 +3,28 @@ import { createElement } from "react";
 import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FINAL_AUTO_SUBMIT_DELAY_MS } from "./lib/speech-recognition-controller.js";
+import { FINAL_AUTO_SUBMIT_DELAY_MS, NO_RESULT_SILENCE_TIMEOUT_MS } from "./lib/speech-recognition-controller.js";
 import type { VoiceTarget } from "./lib/voice-targets.js";
 import { VoiceModeProvider, useVoiceMode } from "./voice-mode-provider.js";
 
 type RecognitionHandler = ((event: unknown) => void) | null;
+type TerminalHandleMock = {
+  sendVoiceInput: ReturnType<typeof vi.fn>;
+};
+
+const terminalMocks = vi.hoisted(() => {
+  const handles = new Map<string, TerminalHandleMock>();
+  return {
+    handles,
+    getFocusedTerminalSessionId: vi.fn(() => null),
+    getTerminalHandle: vi.fn((sessionId: string) => handles.get(sessionId)),
+  };
+});
+
+vi.mock("./terminal-pane.js", () => ({
+  getFocusedTerminalSessionId: terminalMocks.getFocusedTerminalSessionId,
+  getTerminalHandle: terminalMocks.getTerminalHandle,
+}));
 
 class FakeSpeechRecognition {
   static instances: FakeSpeechRecognition[] = [];
@@ -31,6 +48,21 @@ class FakeSpeechRecognition {
       results: [{ isFinal: true, 0: { transcript: text } }],
     });
   }
+
+  interim(text: string) {
+    this.onresult?.({
+      resultIndex: 0,
+      results: [{ isFinal: false, 0: { transcript: text } }],
+    });
+  }
+
+  error(error: string) {
+    this.onerror?.({ error });
+  }
+
+  end() {
+    this.onend?.();
+  }
 }
 
 const roots: Root[] = [];
@@ -40,6 +72,9 @@ beforeEach(() => {
   document.body.innerHTML = "";
   installLocalStorageMock();
   FakeSpeechRecognition.instances = [];
+  terminalMocks.handles.clear();
+  terminalMocks.getFocusedTerminalSessionId.mockReturnValue(null);
+  terminalMocks.getTerminalHandle.mockClear();
   vi.useFakeTimers();
   Object.defineProperty(window, "isSecureContext", { configurable: true, value: true });
   Object.defineProperty(window, "SpeechRecognition", {
@@ -141,7 +176,7 @@ describe("VoiceModeProvider", () => {
     first.focus();
 
     await flushReact(() => dispatchVoiceShortcut());
-    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("retry");
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Ready to retry");
 
     second.focus();
     await flushReact(() => retryButton().click());
@@ -162,6 +197,109 @@ describe("VoiceModeProvider", () => {
     });
 
     expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("loose idea");
+  });
+
+  it("copies buffered transcript text to the clipboard", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation();
+      FakeSpeechRecognition.instances[0]?.final("loose idea");
+      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+    });
+    await flushReact(() => copyButton().click());
+
+    expect(writeText).toHaveBeenCalledWith("loose idea");
+  });
+
+  it("keeps pending final transcript copyable and retryable after permission errors", async () => {
+    const target = registeredTarget();
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation({ target });
+      FakeSpeechRecognition.instances[0]?.final("permission partial");
+      FakeSpeechRecognition.instances[0]?.error("not-allowed");
+    });
+
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Microphone permission needed");
+    expect(document.querySelector(".voice-mode-error")?.textContent).toContain("Microphone permission was denied");
+    expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("permission partial");
+    expect(retryButton()).toBeInstanceOf(HTMLButtonElement);
+  });
+
+  it("keeps interim transcript copyable after capture errors", async () => {
+    const target = registeredTarget();
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation({ target });
+      FakeSpeechRecognition.instances[0]?.interim("interim partial");
+      FakeSpeechRecognition.instances[0]?.error("network");
+    });
+
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Dictation needs attention");
+    expect(document.querySelector(".voice-mode-error")?.textContent).toBe("network");
+    expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("interim partial");
+  });
+
+  it("surfaces no-result timeout through the provider overlay", async () => {
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation({ target: registeredTarget() });
+      vi.advanceTimersByTime(NO_RESULT_SILENCE_TIMEOUT_MS);
+    });
+
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Dictation needs attention");
+    expect(document.querySelector(".voice-mode-error")?.textContent).toBe("No speech was detected.");
+  });
+
+  it("does not leave the overlay listening when recognition ends without text", async () => {
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation({ target: registeredTarget() });
+      FakeSpeechRecognition.instances[0]?.end();
+    });
+
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Dictation needs attention");
+    expect(document.querySelector(".voice-mode-error")?.textContent).toBe("No speech was detected.");
+  });
+
+  it("commits terminal dictation through the session handle with the current auto-submit value", async () => {
+    const sendVoiceInput = vi.fn(() => true);
+    terminalMocks.handles.set("sess_1", { sendVoiceInput });
+    await renderProvider();
+
+    await flushReact(() => voiceApi?.setAutoSubmit(false));
+    await flushReact(() => {
+      voiceApi?.startDictation({ terminalSessionId: "sess_1" });
+      FakeSpeechRecognition.instances[0]?.final("run tests");
+      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+    });
+
+    expect(sendVoiceInput).toHaveBeenCalledWith("run tests", { submit: false });
+  });
+
+  it("buffers terminal dictation when the session handle cannot write", async () => {
+    const sendVoiceInput = vi.fn(() => false);
+    terminalMocks.handles.set("sess_1", { sendVoiceInput });
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation({ terminalSessionId: "sess_1" });
+      FakeSpeechRecognition.instances[0]?.final("lost command");
+      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+    });
+
+    expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("lost command");
+    expect(document.querySelector(".voice-mode-error")?.textContent).toContain("terminal is not connected");
   });
 });
 
@@ -188,6 +326,21 @@ function retryButton(): HTMLButtonElement {
   const button = [...document.querySelectorAll("button")].find((candidate) => candidate.textContent === "Retry");
   if (!(button instanceof HTMLButtonElement)) throw new Error("retry button missing");
   return button;
+}
+
+function copyButton(): HTMLButtonElement {
+  const button = [...document.querySelectorAll("button")].find((candidate) => candidate.textContent === "Copy");
+  if (!(button instanceof HTMLButtonElement)) throw new Error("copy button missing");
+  return button;
+}
+
+function registeredTarget(): VoiceTarget {
+  return {
+    kind: "registered",
+    insertText: vi.fn(),
+    commit: vi.fn((text: string) => ({ status: "submitted" as const, text })),
+    canAcceptVoiceCommit: () => true,
+  };
 }
 
 async function settle() {

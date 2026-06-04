@@ -11,7 +11,6 @@ export type VoiceTarget = {
   kind: "registered" | "generic" | "terminal";
   insertText: (text: string) => void;
   commit?: (text: string, options: VoiceCommitOptions) => VoiceCommitResult;
-  getDraft?: () => string;
   submit?: () => void | Promise<void>;
   canAcceptVoiceCommit: () => boolean;
 };
@@ -21,7 +20,7 @@ type RegisteredEntry = {
   target: VoiceTarget;
 };
 
-const TEXT_EDITABLE_INPUT_TYPES = new Set(["text", "search", "tel", "url", "password"]);
+const TEXT_EDITABLE_INPUT_TYPES = new Set(["text", "search", "tel", "url"]);
 
 export class VoiceTargetRegistry {
   private readonly entries: RegisteredEntry[] = [];

@@ -41,10 +41,15 @@ export type SpeechRecognitionControllerState =
   | { type: "idle" }
   | { type: "listening" }
   | { type: "start-retry-required"; message: string }
-  | { type: "permission-denied"; message: string }
-  | { type: "capture-error"; message: string }
-  | { type: "no-result-timeout" }
-  | { type: "stopped" };
+  | { type: "permission-denied"; message: string; transcript?: string }
+  | { type: "capture-error"; message: string; transcript?: string }
+  | { type: "no-result-timeout"; transcript?: string }
+  | { type: "stopped"; transcript?: string };
+
+type TranscriptControllerState = Extract<
+  SpeechRecognitionControllerState,
+  { type: "permission-denied" | "capture-error" | "no-result-timeout" | "stopped" }
+>;
 
 export type SpeechRecognitionControllerOptions = {
   win?: Window;
@@ -66,6 +71,7 @@ export class SpeechRecognitionController {
   private finalTimer: ReturnType<typeof setTimeout> | null = null;
   private silenceTimer: ReturnType<typeof setTimeout> | null = null;
   private finalTranscript = "";
+  private interimTranscript = "";
   private readonly win: Window;
 
   constructor(private readonly options: SpeechRecognitionControllerOptions = {}) {
@@ -75,6 +81,7 @@ export class SpeechRecognitionController {
   start(): boolean {
     this.clearTimers();
     this.finalTranscript = "";
+    this.interimTranscript = "";
     const support = detectSpeechRecognitionSupport(this.win);
     if (!support.supported) {
       this.options.onState?.({
@@ -91,7 +98,8 @@ export class SpeechRecognitionController {
     recognition.onerror = (event) => this.handleError(event);
     recognition.onend = () => {
       this.clearSilenceTimer();
-      this.options.onState?.({ type: "stopped" });
+      if (this.finalTimer !== null) return;
+      this.options.onState?.(withTranscript({ type: "stopped" }, this.consumePartialTranscript()));
     };
     this.recognition = recognition;
     try {
@@ -138,13 +146,18 @@ export class SpeechRecognitionController {
         interim += transcript;
       }
     }
-    if (interim) this.options.onInterim?.(interim);
+    if (interim) {
+      this.interimTranscript = interim;
+      this.options.onInterim?.(interim);
+    }
     if (!final) return;
     this.finalTranscript += final;
+    this.interimTranscript = "";
     this.clearFinalTimer();
     this.finalTimer = setTimeout(() => {
       const text = this.finalTranscript;
       this.finalTranscript = "";
+      this.interimTranscript = "";
       if (text) this.options.onFinal?.(text);
       this.stop();
     }, FINAL_AUTO_SUBMIT_DELAY_MS);
@@ -153,19 +166,27 @@ export class SpeechRecognitionController {
   private handleError(event: SpeechRecognitionErrorEventLike): void {
     this.clearTimers();
     const message = event.error || event.message || "capture_error";
+    const transcript = this.consumePartialTranscript();
     if (message === "not-allowed" || message === "service-not-allowed") {
-      this.options.onState?.({ type: "permission-denied", message });
+      this.options.onState?.(withTranscript({ type: "permission-denied", message }, transcript));
     } else {
-      this.options.onState?.({ type: "capture-error", message });
+      this.options.onState?.(withTranscript({ type: "capture-error", message }, transcript));
     }
   }
 
   private armSilenceTimer(): void {
     this.clearSilenceTimer();
     this.silenceTimer = setTimeout(() => {
-      this.options.onState?.({ type: "no-result-timeout" });
+      this.options.onState?.(withTranscript({ type: "no-result-timeout" }, this.consumePartialTranscript()));
       this.recognition?.stop();
     }, NO_RESULT_SILENCE_TIMEOUT_MS);
+  }
+
+  private consumePartialTranscript(): string | undefined {
+    const transcript = `${this.finalTranscript}${this.interimTranscript}`;
+    this.finalTranscript = "";
+    this.interimTranscript = "";
+    return transcript.length > 0 ? transcript : undefined;
   }
 
   private clearTimers(): void {
@@ -186,4 +207,8 @@ export class SpeechRecognitionController {
       this.silenceTimer = null;
     }
   }
+}
+
+function withTranscript(state: TranscriptControllerState, transcript: string | undefined): TranscriptControllerState {
+  return transcript ? { ...state, transcript } : state;
 }

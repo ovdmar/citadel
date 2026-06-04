@@ -15,7 +15,6 @@ export function createScratchpadComposerVoiceTarget(options: ScratchpadComposerV
     insertText: (text) => {
       insertIntoComposer(options, text);
     },
-    getDraft: () => options.getElement()?.value ?? "",
     commit: (text, commitOptions) => {
       const draft = insertIntoComposer(options, text);
       if (draft === null) {

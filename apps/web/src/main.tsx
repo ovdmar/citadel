@@ -26,8 +26,7 @@ import { ScratchpadView } from "./routes/scratchpad.js";
 import { SettingsView } from "./routes/settings.js";
 import { getScratchpadDrawerOpen, setScratchpadDrawerOpen, toggleScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { ScratchpadPanel } from "./scratchpad-panel.js";
-import { isRegisteredTerminalMessageSource } from "./terminal-pane.js";
-import { parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
+import { handleShellTerminalShortcutMessage } from "./shell-terminal-shortcuts.js";
 import { ToastProvider } from "./toast.js";
 import { installUiDiagnostics } from "./ui-diagnostics.js";
 import { applyThemePreference, readThemePreference } from "./use-resolved-theme.js";
@@ -187,10 +186,7 @@ function ShellContent() {
       }
     };
     const onMessage = (event: MessageEvent) => {
-      const message = parseTerminalShortcutMessage(event);
-      if (!message || !isRegisteredTerminalMessageSource(event.source, message.sessionId)) return;
-      if (message.action === "scratchpad-toggle") toggleScratchpad();
-      if (message.action === "voice-dictation") startDictation({ terminalSessionId: message.sessionId });
+      handleShellTerminalShortcutMessage(event, { startDictation, toggleScratchpad });
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("message", onMessage);
@@ -269,9 +265,9 @@ function NotFoundView() {
   );
 }
 
-// Restore the last visited route BEFORE the router boots so it picks the
-// correct initial location off the URL bar. The decision logic lives in
-// bootstrapLastRoute so it can be unit-tested independently.
+// Bootstrap the URL before the router boots so it picks the correct initial
+// location. Mobile scratchpad default-open runs first, then last-route restore
+// handles ordinary bare-root reloads.
 if (typeof window !== "undefined") {
   if (!bootstrapMobileScratchpad(window.location, window.history)) {
     bootstrapLastRoute(window.location, window.history);

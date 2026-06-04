@@ -38,6 +38,10 @@ class FakeSpeechRecognition {
   error(error: string) {
     this.onerror?.({ error });
   }
+
+  end() {
+    this.onend?.({});
+  }
 }
 
 describe("detectSpeechRecognitionSupport", () => {
@@ -122,7 +126,7 @@ describe("SpeechRecognitionController", () => {
     vi.advanceTimersByTime(NO_RESULT_SILENCE_TIMEOUT_MS);
 
     expect(FakeSpeechRecognition.instances[0]?.stop).toHaveBeenCalled();
-    expect(onState).toHaveBeenCalledWith({ type: "no-result-timeout" });
+    expect(onState).toHaveBeenCalledWith({ type: "no-result-timeout", transcript: "still listening" });
   });
 
   it("surfaces start failures as retry-required while preserving the target outside the controller", () => {
@@ -149,6 +153,35 @@ describe("SpeechRecognitionController", () => {
     controller.start();
     FakeSpeechRecognition.instances[1]?.error("network");
     expect(onState).toHaveBeenCalledWith({ type: "capture-error", message: "network" });
+  });
+
+  it("keeps a pending final transcript copyable when a recognition error fires before commit", () => {
+    const onState = vi.fn();
+    const onFinal = vi.fn();
+    const controller = new SpeechRecognitionController({ win: makeWindow(), onState, onFinal });
+    controller.start();
+
+    FakeSpeechRecognition.instances[0]?.result([{ transcript: "captured text", isFinal: true }]);
+    FakeSpeechRecognition.instances[0]?.error("network");
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+
+    expect(onFinal).not.toHaveBeenCalled();
+    expect(onState).toHaveBeenCalledWith({
+      type: "capture-error",
+      message: "network",
+      transcript: "captured text",
+    });
+  });
+
+  it("keeps interim transcript copyable when recognition ends without final text", () => {
+    const onState = vi.fn();
+    const controller = new SpeechRecognitionController({ win: makeWindow(), onState });
+    controller.start();
+
+    FakeSpeechRecognition.instances[0]?.result([{ transcript: "partial thought", isFinal: false }]);
+    FakeSpeechRecognition.instances[0]?.end();
+
+    expect(onState).toHaveBeenCalledWith({ type: "stopped", transcript: "partial thought" });
   });
 });
 

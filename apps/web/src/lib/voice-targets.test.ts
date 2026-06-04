@@ -63,14 +63,17 @@ describe("generic editable voice targets", () => {
     checkbox.type = "checkbox";
     const number = document.createElement("input");
     number.type = "number";
+    const password = document.createElement("input");
+    password.type = "password";
     const wrapper = document.createElement("div");
     wrapper.hidden = true;
     const hiddenText = document.createElement("input");
     wrapper.appendChild(hiddenText);
-    document.body.append(checkbox, number, wrapper);
+    document.body.append(checkbox, number, password, wrapper);
 
     expect(createGenericEditableVoiceTarget(checkbox)).toBeNull();
     expect(createGenericEditableVoiceTarget(number)).toBeNull();
+    expect(createGenericEditableVoiceTarget(password)).toBeNull();
     expect(createGenericEditableVoiceTarget(hiddenText)).toBeNull();
   });
 
