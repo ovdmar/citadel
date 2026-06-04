@@ -100,6 +100,8 @@
 [ ] 9. The `Diff` tab shows the changed files in the current workspace/PR with additions/deletions per file. Changed files are accessed here, not in Stats.
 [ ] 10. The `Diff` tab is structured so a future full-screen *Human Review* mode (GitHub-style code review with comments visible to the agent) can be added without redesigning the panel.
 [ ] 11. The Stats tab does not duplicate the per-session list — sessions live in the center column's tab strip only.
+[ ] 12. The `Diff` tab links to checkout-scoped Human Review. If Home is selected and exactly one checkout exists, it may link directly; if multiple checkouts exist, it must show a compact checkout choice rather than guessing.
+[ ] 13. Full-screen Human Review renders as a cockpit overlay route so the cockpit, terminal panes, scratchpad drawer, and global shortcuts remain mounted while the operator reviews code.
 
 ## Readiness
 
