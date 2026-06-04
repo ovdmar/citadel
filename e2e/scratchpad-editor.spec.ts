@@ -119,6 +119,24 @@ test.describe("scratchpad drawer", () => {
     await expect(page.locator(".scratchpad-block-list").getByText("desktop voice idea")).toBeVisible();
   });
 
+  test("desktop voice shortcut inserts into a focused non-scratchpad input", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name === "mobile", "hardware shortcut coverage is desktop/tablet");
+    await installFakeSpeechRecognition(page);
+    await page.goto("/settings");
+    await page.getByRole("button", { name: "Notes" }).click();
+    const notesInput = page.locator('[data-testid="notes-location-input"]');
+    await expect(notesInput).toBeVisible();
+    await notesInput.fill("");
+    await notesInput.focus();
+
+    await page.keyboard.press("Control+Shift+D");
+
+    await expect(page.locator(".voice-mode-overlay")).toBeVisible();
+    expect(await emitFakeSpeechFinal(page, "/tmp/voice-notes.md")).toBe(true);
+    await expect(notesInput).toHaveValue("/tmp/voice-notes.md");
+    await expect(page.locator(".scratchpad-drawer")).toBeHidden();
+  });
+
   test("preserves angle-bracket text in rendered blocks (regression)", async ({ page, request }) => {
     await page.goto("/?scratchpad=1");
     const composer = page.locator(".scratchpad-composer-input");

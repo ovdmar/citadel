@@ -129,9 +129,19 @@ export class SpeechRecognitionController {
   }
 
   stop(): void {
+    const finalTranscript = this.finalTranscript;
+    if (finalTranscript) {
+      this.finalTranscript = "";
+      this.clearInterimTranscript();
+      this.clearTimers();
+      this.stopRecognition();
+      this.options.onFinal?.(finalTranscript);
+      return;
+    }
+    const transcript = this.consumePartialTranscript();
     this.clearTimers();
-    const recognition = this.releaseRecognition();
-    recognition?.stop();
+    this.stopRecognition();
+    this.options.onState?.(withTranscript({ type: "stopped" }, transcript));
   }
 
   abort(): void {
@@ -170,10 +180,11 @@ export class SpeechRecognitionController {
     this.clearFinalTimer();
     this.finalTimer = setTimeout(() => {
       const text = this.finalTranscript;
+      this.finalTimer = null;
       this.finalTranscript = "";
       this.clearInterimTranscript();
       if (text) this.options.onFinal?.(text);
-      this.stop();
+      this.stopRecognition();
     }, FINAL_AUTO_SUBMIT_DELAY_MS);
   }
 
@@ -193,7 +204,8 @@ export class SpeechRecognitionController {
     this.clearSilenceTimer();
     this.silenceTimer = setTimeout(() => {
       this.options.onState?.(withTranscript({ type: "no-result-timeout" }, this.consumePartialTranscript()));
-      this.stop();
+      this.clearTimers();
+      this.stopRecognition();
     }, NO_RESULT_SILENCE_TIMEOUT_MS);
   }
 
@@ -240,6 +252,11 @@ export class SpeechRecognitionController {
     this.recognition = null;
     this.generation += 1;
     return recognition;
+  }
+
+  private stopRecognition(): void {
+    const recognition = this.releaseRecognition();
+    recognition?.stop();
   }
 
   private detachRecognition(): void {

@@ -1,4 +1,8 @@
-import { type VoiceTarget, createGenericEditableVoiceTarget, isElementVoiceVisible } from "./lib/voice-targets.js";
+import {
+  type VoiceTarget,
+  canAcceptTextEditableVoiceCommit,
+  createGenericEditableVoiceTarget,
+} from "./lib/voice-targets.js";
 
 type ScratchpadComposerVoiceTargetOptions = {
   getElement: () => HTMLTextAreaElement | null;
@@ -36,12 +40,7 @@ export function createScratchpadComposerVoiceTarget(options: ScratchpadComposerV
 function canAcceptComposerCommit(options: ScratchpadComposerVoiceTargetOptions): boolean {
   const element = options.getElement();
   return Boolean(
-    element?.isConnected &&
-      options.isLoaded() &&
-      options.isVisible?.() !== false &&
-      !element.disabled &&
-      !element.readOnly &&
-      isElementVoiceVisible(element),
+    element && options.isLoaded() && options.isVisible?.() !== false && canAcceptTextEditableVoiceCommit(element),
   );
 }
 

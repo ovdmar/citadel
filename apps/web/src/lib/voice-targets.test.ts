@@ -106,6 +106,16 @@ describe("generic editable voice targets", () => {
     expect(createGenericEditableVoiceTarget(hiddenText)).toBeNull();
   });
 
+  it("rejects controls inside display-none ancestors", () => {
+    const wrapper = document.createElement("div");
+    wrapper.style.display = "none";
+    const input = document.createElement("input");
+    wrapper.appendChild(input);
+    document.body.appendChild(wrapper);
+
+    expect(createGenericEditableVoiceTarget(input)).toBeNull();
+  });
+
   it("reports generic targets as insertion-only even when auto-submit is enabled", () => {
     const input = document.createElement("input");
     document.body.appendChild(input);

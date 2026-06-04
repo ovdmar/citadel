@@ -339,6 +339,43 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(agentMessageCalls).toEqual([]);
   });
 
+  it("sends agent-session voice input through the same terminal WebSocket path", async () => {
+    await renderTerminal({
+      ...sessionFixture(),
+      kind: "agent",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
+    });
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    if (!ws) throw new Error("terminal rig missing");
+    await flushReactUpdate(async () => ws.open());
+
+    const handle = getTerminalHandle("sess_1");
+    expect(handle?.sendVoiceInput("agent text", { submit: false })).toBe(true);
+    expect(handle?.sendVoiceInput("agent run", { submit: true })).toBe(true);
+
+    expect(decodeBinarySent(ws.sent)).toEqual(["agent text", "agent run", "\r"]);
+    const agentMessageCalls = vi
+      .mocked(window.fetch)
+      .mock.calls.filter(([input]) => /\/api\/agent-sessions\/sess_1\/(?:messages?|follow-up)/.test(String(input)));
+    expect(agentMessageCalls).toEqual([]);
+  });
+
+  it("rejects terminal voice input when the terminal host is hidden", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+    await flushReactUpdate(async () => ws.open());
+    const handle = getTerminalHandle("sess_1");
+
+    expect(handle?.canAcceptVoiceInput()).toBe(true);
+    host.closest(".terminal-shell")?.setAttribute("aria-hidden", "true");
+
+    expect(handle?.canAcceptVoiceInput()).toBe(false);
+    expect(getFocusedTerminalSessionId(host)).toBeNull();
+  });
+
   it("resolves focused xterm descendants to their session id", async () => {
     await renderTerminal();
     const host = document.querySelector(".terminal-xterm-host");

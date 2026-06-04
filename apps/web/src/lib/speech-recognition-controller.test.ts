@@ -101,6 +101,34 @@ describe("SpeechRecognitionController", () => {
     expect(FakeSpeechRecognition.instances[0]?.stop).toHaveBeenCalled();
   });
 
+  it("commits a pending final transcript immediately when stopped", () => {
+    const onState = vi.fn();
+    const onFinal = vi.fn();
+    const controller = new SpeechRecognitionController({ win: makeWindow(), onState, onFinal });
+    controller.start();
+
+    FakeSpeechRecognition.instances[0]?.result([{ transcript: "captured final", isFinal: true }]);
+    controller.stop();
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+
+    expect(onFinal).toHaveBeenCalledOnce();
+    expect(onFinal).toHaveBeenCalledWith("captured final");
+    expect(onState).not.toHaveBeenCalledWith(expect.objectContaining({ type: "stopped" }));
+  });
+
+  it("keeps interim transcript copyable when stopped before a final result", () => {
+    const onState = vi.fn();
+    const onFinal = vi.fn();
+    const controller = new SpeechRecognitionController({ win: makeWindow(), onState, onFinal });
+    controller.start();
+
+    FakeSpeechRecognition.instances[0]?.result([{ transcript: "partial text", isFinal: false }]);
+    controller.stop();
+
+    expect(onFinal).not.toHaveBeenCalled();
+    expect(onState).toHaveBeenCalledWith({ type: "stopped", transcript: "partial text" });
+  });
+
   it("hard-stops after 10s without recognition results", () => {
     const onState = vi.fn();
     const controller = new SpeechRecognitionController({ win: makeWindow(), onState });

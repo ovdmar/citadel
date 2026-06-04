@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "./components/ui/button.js";
+import { isElementVoiceVisible } from "./lib/voice-targets.js";
 import { matchShortcut } from "./shortcuts.js";
 import { postTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
 import { readOverlayCount } from "./use-overlay-present.js";
@@ -53,6 +54,7 @@ export type TerminalHandle = {
   focusIframe: () => void;
   recoverIfDisconnected: () => boolean;
   sendVoiceInput: (text: string, options: { submit: boolean }) => boolean;
+  canAcceptVoiceInput: () => boolean;
 };
 
 const REGISTRY = new Map<string, TerminalHandle>();
@@ -76,6 +78,7 @@ export function getFocusedTerminalSessionId(activeElement: Element | null = docu
   if (!(activeElement instanceof HTMLElement)) return null;
   for (const [sessionId, host] of HOST_REGISTRY) {
     if (!host.isConnected) continue;
+    if (!isElementVoiceVisible(host)) continue;
     if (host === activeElement || host.contains(activeElement)) return sessionId;
   }
   return null;
@@ -171,6 +174,12 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     sendTerminalInput(ws, text);
     if (options.submit) sendTerminalInput(ws, "\r");
     return true;
+  }, []);
+
+  const canAcceptVoiceInput = useCallback(() => {
+    const host = containerRef.current;
+    const ws = wsRef.current;
+    return Boolean(host && ws && ws.readyState === WebSocket.OPEN && isElementVoiceVisible(host));
   }, []);
 
   const recoverIfDisconnected = useCallback(() => {
@@ -386,9 +395,9 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
   // The status bar used to render these affordances inside the pane; that was
   // removed in favour of the tab actions, but the state still lives here.
   useEffect(() => {
-    publish(sessionId, { reload, focusIframe, recoverIfDisconnected, sendVoiceInput });
+    publish(sessionId, { reload, focusIframe, recoverIfDisconnected, sendVoiceInput, canAcceptVoiceInput });
     return () => publish(sessionId, null);
-  }, [sessionId, reload, focusIframe, recoverIfDisconnected, sendVoiceInput]);
+  }, [sessionId, reload, focusIframe, recoverIfDisconnected, sendVoiceInput, canAcceptVoiceInput]);
   return (
     <div className="terminal-shell">
       <div className="terminal-surface">

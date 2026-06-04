@@ -144,10 +144,8 @@ export function VoiceModeProvider(props: { children: ReactNode }) {
 
   const stop = useCallback(() => {
     controllerRef.current?.stop();
-    setOverlayActive(false);
-    setStatus("idle");
     setInterim("");
-  }, [setStatus]);
+  }, []);
 
   const cancel = useCallback(() => {
     controllerRef.current?.abort();
@@ -276,6 +274,6 @@ function createTerminalVoiceTarget(sessionId: string): VoiceTarget | null {
       if (!ok) return { status: "buffered", text, reason: "The terminal is not connected. Copy the dictated text." };
       return { status: options.autoSubmit ? "submitted" : "inserted-not-submitted", text };
     },
-    canAcceptVoiceCommit: () => Boolean(getTerminalHandle(sessionId)?.sendVoiceInput),
+    canAcceptVoiceCommit: () => getTerminalHandle(sessionId)?.canAcceptVoiceInput() ?? false,
   };
 }

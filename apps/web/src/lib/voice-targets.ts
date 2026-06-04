@@ -56,7 +56,7 @@ export class VoiceTargetRegistry {
 
 export function createGenericEditableVoiceTarget(element: Element): VoiceTarget | null {
   if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) return null;
-  if (!canAcceptGenericEditableCommit(element)) return null;
+  if (!canAcceptTextEditableVoiceCommit(element)) return null;
   return {
     kind: "generic",
     insertText: (text) => insertTextIntoControl(element, text),
@@ -64,11 +64,11 @@ export function createGenericEditableVoiceTarget(element: Element): VoiceTarget 
       insertTextIntoControl(element, text);
       return { status: "inserted-not-submitted", text };
     },
-    canAcceptVoiceCommit: () => canAcceptGenericEditableCommit(element),
+    canAcceptVoiceCommit: () => canAcceptTextEditableVoiceCommit(element),
   };
 }
 
-function canAcceptGenericEditableCommit(element: HTMLInputElement | HTMLTextAreaElement): boolean {
+export function canAcceptTextEditableVoiceCommit(element: HTMLInputElement | HTMLTextAreaElement): boolean {
   if (!element.isConnected) return false;
   if (element.disabled || element.readOnly) return false;
   if (!isElementVoiceVisible(element)) return false;
@@ -77,11 +77,12 @@ function canAcceptGenericEditableCommit(element: HTMLInputElement | HTMLTextArea
 }
 
 export function isElementVoiceVisible(element: HTMLElement): boolean {
-  if (element.hidden) return false;
-  if (element.closest("[hidden]")) return false;
-  if (element.closest('[aria-hidden="true"]')) return false;
-  const style = window.getComputedStyle?.(element);
-  if (style && (style.display === "none" || style.visibility === "hidden")) return false;
+  for (let current: HTMLElement | null = element; current; current = current.parentElement) {
+    if (current.hidden) return false;
+    if (current.getAttribute("aria-hidden") === "true") return false;
+    const style = window.getComputedStyle?.(current);
+    if (style && (style.display === "none" || style.visibility === "hidden")) return false;
+  }
   return true;
 }
 

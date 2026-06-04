@@ -10,6 +10,7 @@ import { VoiceModeProvider, useVoiceMode } from "./voice-mode-provider.js";
 type RecognitionHandler = ((event: unknown) => void) | null;
 type TerminalHandleMock = {
   sendVoiceInput: ReturnType<typeof vi.fn>;
+  canAcceptVoiceInput: ReturnType<typeof vi.fn>;
 };
 
 const terminalMocks = vi.hoisted(() => {
@@ -116,7 +117,9 @@ describe("VoiceModeProvider", () => {
     };
     await renderProvider();
 
-    voiceApi?.startDictation({ target });
+    await flushReact(() => {
+      voiceApi?.startDictation({ target });
+    });
     FakeSpeechRecognition.instances[0]?.final("hello");
     vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
 
@@ -133,9 +136,56 @@ describe("VoiceModeProvider", () => {
     };
     await renderProvider();
 
-    voiceApi?.startDictation({ target });
+    await flushReact(() => {
+      voiceApi?.startDictation({ target });
+    });
     FakeSpeechRecognition.instances[0]?.final("hello");
     await flushReact(() => voiceApi?.setAutoSubmit(false));
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+
+    expect(commit).toHaveBeenCalledWith("hello", { autoSubmit: false });
+  });
+
+  it("uses the overlay auto-submit checkbox for commit options and local persistence", async () => {
+    const commit = vi.fn(() => ({ status: "inserted-not-submitted" as const, text: "hello" }));
+    const target: VoiceTarget = {
+      kind: "registered",
+      insertText: vi.fn(),
+      commit,
+      canAcceptVoiceCommit: () => true,
+    };
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation({ target });
+    });
+    const checkbox = autoSubmitCheckbox();
+    expect(checkbox.checked).toBe(true);
+    await flushReact(() => checkbox.click());
+    FakeSpeechRecognition.instances[0]?.final("hello");
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+
+    expect(window.localStorage.getItem("citadel.voice.autoSubmit")).toBe("0");
+    expect(commit).toHaveBeenCalledWith("hello", { autoSubmit: false });
+  });
+
+  it("loads persisted auto-submit preference on startup", async () => {
+    window.localStorage.setItem("citadel.voice.autoSubmit", "0");
+    const commit = vi.fn(() => ({ status: "inserted-not-submitted" as const, text: "hello" }));
+    const target: VoiceTarget = {
+      kind: "registered",
+      insertText: vi.fn(),
+      commit,
+      canAcceptVoiceCommit: () => true,
+    };
+    await renderProvider();
+
+    expect(voiceApi?.autoSubmit).toBe(false);
+    await flushReact(() => {
+      voiceApi?.startDictation({ target });
+    });
+    expect(autoSubmitCheckbox().checked).toBe(false);
+    FakeSpeechRecognition.instances[0]?.final("hello");
     vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
 
     expect(commit).toHaveBeenCalledWith("hello", { autoSubmit: false });
@@ -285,6 +335,62 @@ describe("VoiceModeProvider", () => {
     expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("orphaned transcript");
   });
 
+  it("buffers in-flight dictation when a snapshotted generic input disappears before final commit", async () => {
+    await renderProvider();
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+
+    await flushReact(() => {
+      dispatchVoiceShortcut(input);
+    });
+    input.remove();
+    await flushReact(() => {
+      FakeSpeechRecognition.instances[0]?.final("orphaned transcript");
+      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+    });
+
+    expect(input.value).toBe("");
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("No input target");
+    expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("orphaned transcript");
+  });
+
+  it("commits pending final text when Stop is clicked during the final delay", async () => {
+    const commit = vi.fn(() => ({ status: "submitted" as const, text: "stop final" }));
+    const target: VoiceTarget = {
+      kind: "registered",
+      insertText: vi.fn(),
+      commit,
+      canAcceptVoiceCommit: () => true,
+    };
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation({ target });
+    });
+    FakeSpeechRecognition.instances[0]?.final("stop final");
+    await flushReact(() => stopButton().click());
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+
+    expect(commit).toHaveBeenCalledOnce();
+    expect(commit).toHaveBeenCalledWith("stop final", { autoSubmit: true });
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Submitted");
+  });
+
+  it("keeps interim text copyable when Stop is clicked before a final result", async () => {
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation({ target: registeredTarget() });
+    });
+    FakeSpeechRecognition.instances[0]?.interim("interim only");
+    await flushReact(() => stopButton().click());
+
+    expect(document.querySelector(".voice-mode-overlay")).not.toBeNull();
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Dictation needs attention");
+    expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("interim only");
+  });
+
   it("copies buffered transcript text to the clipboard", async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.defineProperty(navigator, "clipboard", {
@@ -375,7 +481,7 @@ describe("VoiceModeProvider", () => {
 
   it("commits terminal dictation through the session handle with the current auto-submit value", async () => {
     const sendVoiceInput = vi.fn(() => true);
-    terminalMocks.handles.set("sess_1", { sendVoiceInput });
+    terminalMocks.handles.set("sess_1", { sendVoiceInput, canAcceptVoiceInput: vi.fn(() => true) });
     await renderProvider();
 
     await flushReact(() => voiceApi?.setAutoSubmit(false));
@@ -390,7 +496,7 @@ describe("VoiceModeProvider", () => {
 
   it("buffers terminal dictation when the session handle cannot write", async () => {
     const sendVoiceInput = vi.fn(() => false);
-    terminalMocks.handles.set("sess_1", { sendVoiceInput });
+    terminalMocks.handles.set("sess_1", { sendVoiceInput, canAcceptVoiceInput: vi.fn(() => true) });
     await renderProvider();
 
     await flushReact(() => {
@@ -401,6 +507,22 @@ describe("VoiceModeProvider", () => {
 
     expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("lost command");
     expect(document.querySelector(".voice-mode-error")?.textContent).toContain("terminal is not connected");
+  });
+
+  it("buffers terminal dictation when the snapshotted terminal is hidden before final commit", async () => {
+    const sendVoiceInput = vi.fn(() => true);
+    terminalMocks.handles.set("sess_1", { sendVoiceInput, canAcceptVoiceInput: vi.fn(() => false) });
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation({ terminalSessionId: "sess_1" });
+      FakeSpeechRecognition.instances[0]?.final("hidden command");
+      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+    });
+
+    expect(sendVoiceInput).not.toHaveBeenCalled();
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("No input target");
+    expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("hidden command");
   });
 });
 
@@ -447,6 +569,18 @@ function cancelButton(): HTMLButtonElement {
   const button = [...document.querySelectorAll("button")].find((candidate) => candidate.textContent === "Cancel");
   if (!(button instanceof HTMLButtonElement)) throw new Error("cancel button missing");
   return button;
+}
+
+function stopButton(): HTMLButtonElement {
+  const button = [...document.querySelectorAll("button")].find((candidate) => candidate.textContent === "Stop");
+  if (!(button instanceof HTMLButtonElement)) throw new Error("stop button missing");
+  return button;
+}
+
+function autoSubmitCheckbox(): HTMLInputElement {
+  const checkbox = document.querySelector('.voice-mode-toggle input[type="checkbox"]');
+  if (!(checkbox instanceof HTMLInputElement)) throw new Error("auto-submit checkbox missing");
+  return checkbox;
 }
 
 function registeredTarget(): VoiceTarget {
