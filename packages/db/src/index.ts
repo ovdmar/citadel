@@ -751,3 +751,6 @@ Object.assign(SqliteStore.prototype, agentsSystemStoreMethods);
 
 import { managerOrchestrationStoreMethods } from "./manager-orchestration-store.js";
 Object.assign(SqliteStore.prototype, managerOrchestrationStoreMethods);
+
+import { internalReviewStoreMethods } from "./internal-review-store.js";
+Object.assign(SqliteStore.prototype, internalReviewStoreMethods);
