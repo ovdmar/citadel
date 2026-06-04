@@ -48,6 +48,7 @@ export function ScratchpadComposer(props: ScratchpadComposerProps) {
           onBlur={(event) => {
             const nextFocus = event.relatedTarget;
             if (nextFocus instanceof Node && actionsRef.current?.contains(nextFocus)) return;
+            if (nextFocus instanceof Element && nextFocus.closest("[data-voice-mode-overlay]")) return;
             submit(event.currentTarget.value);
           }}
           disabled={!props.loaded}

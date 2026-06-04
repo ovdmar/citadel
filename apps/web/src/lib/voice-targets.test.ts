@@ -1,10 +1,23 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { type ChangeEvent, createElement, useState } from "react";
+import { flushSync } from "react-dom";
+import { type Root, createRoot } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceTargetRegistry, createGenericEditableVoiceTarget } from "./voice-targets.js";
+
+const roots: Root[] = [];
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 describe("generic editable voice targets", () => {
   beforeEach(() => {
     document.body.innerHTML = "";
+  });
+
+  afterEach(() => {
+    flushSync(() => {
+      for (const root of roots.splice(0)) root.unmount();
+    });
   });
 
   it("inserts text into a textarea at the caret and dispatches input", () => {
@@ -24,28 +37,32 @@ describe("generic editable voice targets", () => {
     expect(inputEvents[0]?.inputType).toBe("insertText");
   });
 
-  it("replaces selected input text and uses the native setter path for controlled inputs", () => {
-    const input = document.createElement("input");
-    input.value = "before after";
+  it("replaces selected text without losing React-controlled input state on rerender", async () => {
+    let latestState = "";
+    function ControlledInput() {
+      const [value, setValue] = useState("before after");
+      latestState = value;
+      return createElement("input", {
+        value,
+        onChange: (event: ChangeEvent<HTMLInputElement>) => setValue(event.currentTarget.value),
+      });
+    }
+    const rootElement = document.createElement("div");
+    document.body.appendChild(rootElement);
+    const root = createRoot(rootElement);
+    roots.push(root);
+    await flushReact(() => root.render(createElement(ControlledInput)));
+    const input = document.querySelector("input");
+    if (!(input instanceof HTMLInputElement)) throw new Error("input missing");
     input.setSelectionRange(7, 12);
-    const setterCalls: string[] = [];
-    const prototypeDescriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
-    Object.defineProperty(input, "value", {
-      configurable: true,
-      get: () => prototypeDescriptor?.get?.call(input) ?? "",
-      set: (value: string) => {
-        setterCalls.push(value);
-        prototypeDescriptor?.set?.call(input, value);
-      },
-    });
-    document.body.appendChild(input);
 
     const target = createGenericEditableVoiceTarget(input);
-    target?.insertText("now");
+    await flushReact(() => target?.insertText("now"));
+    await flushReact(() => root.render(createElement(ControlledInput)));
 
     expect(input.value).toBe("before now");
     expect(input.selectionStart).toBe(10);
-    expect(setterCalls).toContain("before now");
+    expect(latestState).toBe("before now");
   });
 
   it("does not create generic targets for contenteditable or disabled controls", () => {
@@ -88,6 +105,20 @@ describe("generic editable voice targets", () => {
     expect(result).toEqual({ status: "inserted-not-submitted", text: "hello" });
   });
 });
+
+async function settle() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+const flushReact = async (callback: () => void | Promise<void>) => {
+  let result: void | Promise<void> = undefined;
+  flushSync(() => {
+    result = callback();
+  });
+  await result;
+  await settle();
+};
 
 describe("VoiceTargetRegistry", () => {
   beforeEach(() => {

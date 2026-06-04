@@ -103,7 +103,7 @@ test.describe("scratchpad drawer", () => {
     await expect(page.locator(".scratchpad-drawer")).toBeHidden();
   });
 
-  test("desktop voice shortcut opens the voice overlay for the focused composer", async ({ page }, testInfo) => {
+  test("desktop voice shortcut commits final transcript into the focused composer", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name === "mobile", "hardware shortcut coverage is desktop/tablet");
     await installFakeSpeechRecognition(page);
     await page.goto("/?scratchpad=1");
@@ -113,6 +113,8 @@ test.describe("scratchpad drawer", () => {
 
     await expect(page.locator(".voice-mode-overlay")).toBeVisible();
     await expect(page.locator(".voice-mode-status")).toContainText("Listening");
+    expect(await emitFakeSpeechFinal(page, "desktop voice idea")).toBe(true);
+    await expect(page.locator(".scratchpad-block-list").getByText("desktop voice idea")).toBeVisible();
   });
 
   test("preserves angle-bracket text in rendered blocks (regression)", async ({ page, request }) => {

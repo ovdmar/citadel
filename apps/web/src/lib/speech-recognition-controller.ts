@@ -40,6 +40,7 @@ export type SpeechRecognitionSupport =
 export type SpeechRecognitionControllerState =
   | { type: "idle" }
   | { type: "listening" }
+  | { type: "unavailable"; reason: "insecure-context" | "unavailable" }
   | { type: "start-retry-required"; message: string }
   | { type: "permission-denied"; message: string; transcript?: string }
   | { type: "capture-error"; message: string; transcript?: string }
@@ -72,6 +73,7 @@ export class SpeechRecognitionController {
   private silenceTimer: ReturnType<typeof setTimeout> | null = null;
   private finalTranscript = "";
   private interimTranscript = "";
+  private generation = 0;
   private readonly win: Window;
 
   constructor(private readonly options: SpeechRecognitionControllerOptions = {}) {
@@ -80,13 +82,16 @@ export class SpeechRecognitionController {
 
   start(): boolean {
     this.clearTimers();
+    this.detachRecognition();
     this.finalTranscript = "";
     this.interimTranscript = "";
+    this.generation += 1;
+    const generation = this.generation;
     const support = detectSpeechRecognitionSupport(this.win);
     if (!support.supported) {
       this.options.onState?.({
-        type: "capture-error",
-        message: support.reason,
+        type: "unavailable",
+        reason: support.reason,
       });
       return false;
     }
@@ -94,12 +99,19 @@ export class SpeechRecognitionController {
     recognition.lang = "en-US";
     recognition.interimResults = true;
     recognition.continuous = false;
-    recognition.onresult = (event) => this.handleResult(event);
-    recognition.onerror = (event) => this.handleError(event);
+    recognition.onresult = (event) => {
+      if (this.isCurrentRecognition(recognition, generation)) this.handleResult(event);
+    };
+    recognition.onerror = (event) => {
+      if (this.isCurrentRecognition(recognition, generation)) this.handleError(event);
+    };
     recognition.onend = () => {
+      if (!this.isCurrentRecognition(recognition, generation)) return;
       this.clearSilenceTimer();
       if (this.finalTimer !== null) return;
-      this.options.onState?.(withTranscript({ type: "stopped" }, this.consumePartialTranscript()));
+      const transcript = this.consumePartialTranscript();
+      this.releaseRecognition();
+      this.options.onState?.(withTranscript({ type: "stopped" }, transcript));
     };
     this.recognition = recognition;
     try {
@@ -107,6 +119,7 @@ export class SpeechRecognitionController {
     } catch (error) {
       const message = error instanceof Error ? error.message : "start_failed";
       this.options.onState?.({ type: "start-retry-required", message });
+      clearRecognitionHandlers(recognition);
       this.recognition = null;
       return false;
     }
@@ -117,17 +130,18 @@ export class SpeechRecognitionController {
 
   stop(): void {
     this.clearTimers();
-    this.recognition?.stop();
+    const recognition = this.releaseRecognition();
+    recognition?.stop();
   }
 
   abort(): void {
     this.clearTimers();
-    this.recognition?.abort();
+    const recognition = this.releaseRecognition();
+    recognition?.abort();
   }
 
   dispose(): void {
     this.abort();
-    this.recognition = null;
   }
 
   private handleResult(event: SpeechRecognitionResultEventLike): void {
@@ -167,6 +181,7 @@ export class SpeechRecognitionController {
     this.clearTimers();
     const message = event.error || event.message || "capture_error";
     const transcript = this.consumePartialTranscript();
+    this.releaseRecognition();
     if (message === "not-allowed" || message === "service-not-allowed") {
       this.options.onState?.(withTranscript({ type: "permission-denied", message }, transcript));
     } else {
@@ -178,7 +193,7 @@ export class SpeechRecognitionController {
     this.clearSilenceTimer();
     this.silenceTimer = setTimeout(() => {
       this.options.onState?.(withTranscript({ type: "no-result-timeout" }, this.consumePartialTranscript()));
-      this.recognition?.stop();
+      this.stop();
     }, NO_RESULT_SILENCE_TIMEOUT_MS);
   }
 
@@ -207,8 +222,34 @@ export class SpeechRecognitionController {
       this.silenceTimer = null;
     }
   }
+
+  private isCurrentRecognition(recognition: SpeechRecognitionLike, generation: number): boolean {
+    return this.recognition === recognition && this.generation === generation;
+  }
+
+  private releaseRecognition(): SpeechRecognitionLike | null {
+    const recognition = this.recognition;
+    if (!recognition) return null;
+    clearRecognitionHandlers(recognition);
+    this.recognition = null;
+    this.generation += 1;
+    return recognition;
+  }
+
+  private detachRecognition(): void {
+    const recognition = this.recognition;
+    if (!recognition) return;
+    clearRecognitionHandlers(recognition);
+    this.recognition = null;
+  }
 }
 
 function withTranscript(state: TranscriptControllerState, transcript: string | undefined): TranscriptControllerState {
   return transcript ? { ...state, transcript } : state;
+}
+
+function clearRecognitionHandlers(recognition: SpeechRecognitionLike): void {
+  recognition.onresult = null;
+  recognition.onerror = null;
+  recognition.onend = null;
 }

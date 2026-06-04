@@ -107,6 +107,9 @@ export function VoiceModeProvider(props: { children: ReactNode }) {
         onState: (state) => {
           if (state.type === "listening") {
             setStatus("listening");
+          } else if (state.type === "unavailable") {
+            setStatus("unavailable");
+            setError(speechUnavailableMessage(state.reason));
           } else if (state.type === "start-retry-required") {
             setStatus("retry");
             setError(state.message);
@@ -163,6 +166,7 @@ export function VoiceModeProvider(props: { children: ReactNode }) {
     const onKeyDown = (event: KeyboardEvent) => {
       const match = matchShortcut(event);
       if (match?.id !== "voice-dictation") return;
+      if (getFocusedTerminalSessionId(document.activeElement)) return;
       event.preventDefault();
       event.stopPropagation();
       startDictation();
@@ -234,6 +238,11 @@ function keepPartialTranscript(
   if (!transcript) return;
   setBuffer(transcript);
   setInterim("");
+}
+
+function speechUnavailableMessage(reason: "insecure-context" | "unavailable"): string {
+  if (reason === "insecure-context") return "Voice dictation requires a secure browser context.";
+  return "Voice dictation is not available in this browser.";
 }
 
 function resolveStartDictation(

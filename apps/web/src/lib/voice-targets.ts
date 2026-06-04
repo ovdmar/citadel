@@ -95,12 +95,16 @@ function insertTextIntoControl(element: HTMLInputElement | HTMLTextAreaElement, 
 }
 
 function setNativeValue(element: HTMLInputElement | HTMLTextAreaElement, value: string): void {
-  const ownSetter = Object.getOwnPropertyDescriptor(element, "value")?.set;
   const prototype = Object.getPrototypeOf(element) as HTMLInputElement | HTMLTextAreaElement;
   const prototypeSetter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
-  if (ownSetter && ownSetter !== prototypeSetter) {
+  if (prototypeSetter) {
+    prototypeSetter.call(element, value);
+    return;
+  }
+  const ownSetter = Object.getOwnPropertyDescriptor(element, "value")?.set;
+  if (ownSetter) {
     ownSetter.call(element, value);
     return;
   }
-  prototypeSetter?.call(element, value);
+  element.value = value;
 }

@@ -16,7 +16,7 @@ const terminalMocks = vi.hoisted(() => {
   const handles = new Map<string, TerminalHandleMock>();
   return {
     handles,
-    getFocusedTerminalSessionId: vi.fn(() => null),
+    getFocusedTerminalSessionId: vi.fn<(_activeElement?: Element | null) => string | null>(() => null),
     getTerminalHandle: vi.fn((sessionId: string) => handles.get(sessionId)),
   };
 });
@@ -157,6 +157,23 @@ describe("VoiceModeProvider", () => {
     expect(input.selectionStart).toBe(10);
   });
 
+  it("lets terminal-focused voice shortcuts flow through the terminal shortcut bridge", async () => {
+    terminalMocks.getFocusedTerminalSessionId.mockReturnValue("sess_1");
+    await renderProvider();
+
+    const event = new KeyboardEvent("keydown", {
+      key: "d",
+      metaKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(FakeSpeechRecognition.instances).toHaveLength(0);
+  });
+
   it("keeps the snapshotted shortcut target when start needs a click retry", async () => {
     class ThrowOnceRecognition extends FakeSpeechRecognition {
       static starts = 0;
@@ -231,6 +248,21 @@ describe("VoiceModeProvider", () => {
     expect(document.querySelector(".voice-mode-error")?.textContent).toContain("Microphone permission was denied");
     expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("permission partial");
     expect(retryButton()).toBeInstanceOf(HTMLButtonElement);
+  });
+
+  it("surfaces unavailable speech recognition as a non-retryable overlay state", async () => {
+    Object.defineProperty(window, "SpeechRecognition", { configurable: true, value: undefined });
+    Object.defineProperty(window, "webkitSpeechRecognition", { configurable: true, value: undefined });
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation({ target: registeredTarget() });
+    });
+
+    expect(voiceApi?.speechSupported).toBe(false);
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Voice unavailable");
+    expect(document.querySelector(".voice-mode-error")?.textContent).toContain("not available");
+    expect([...document.querySelectorAll("button")].some((button) => button.textContent === "Retry")).toBe(false);
   });
 
   it("keeps interim transcript copyable after capture errors", async () => {

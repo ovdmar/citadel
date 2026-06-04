@@ -75,6 +75,22 @@ describe("ScratchpadComposer", () => {
     expect(onAction).toHaveBeenCalled();
   });
 
+  it("does not blur-submit an existing draft when voice overlay controls are clicked", async () => {
+    const onSubmit = vi.fn();
+    await renderComposer({ value: "existing draft", onSubmit });
+    const input = screenComposer();
+    const overlay = document.createElement("output");
+    overlay.dataset.voiceModeOverlay = "true";
+    const toggle = document.createElement("input");
+    toggle.type = "checkbox";
+    overlay.appendChild(toggle);
+    document.body.appendChild(overlay);
+
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true, relatedTarget: toggle }));
+
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it("forwards the textarea ref and renders error/disabled state", async () => {
     const ref = createRef<HTMLTextAreaElement>();
     await renderComposer({ value: "", error: "save_failed", loaded: false, inputRef: ref });

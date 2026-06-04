@@ -142,6 +142,15 @@ describe("SpeechRecognitionController", () => {
     expect(onState).toHaveBeenCalledWith({ type: "start-retry-required", message: "activation rejected" });
   });
 
+  it("surfaces unsupported speech recognition as unavailable", () => {
+    const onState = vi.fn();
+    const controller = new SpeechRecognitionController({ win: makeWindow({ ctor: null }), onState });
+
+    expect(controller.start()).toBe(false);
+
+    expect(onState).toHaveBeenCalledWith({ type: "unavailable", reason: "unavailable" });
+  });
+
   it("distinguishes permission errors from capture errors", () => {
     const onState = vi.fn();
     const controller = new SpeechRecognitionController({ win: makeWindow(), onState });
@@ -153,6 +162,28 @@ describe("SpeechRecognitionController", () => {
     controller.start();
     FakeSpeechRecognition.instances[1]?.error("network");
     expect(onState).toHaveBeenCalledWith({ type: "capture-error", message: "network" });
+  });
+
+  it("detaches disposed recognition callbacks and cancels pending commits", () => {
+    const onState = vi.fn();
+    const onFinal = vi.fn();
+    const controller = new SpeechRecognitionController({ win: makeWindow(), onState, onFinal });
+    controller.start();
+    const staleRecognition = FakeSpeechRecognition.instances[0];
+    if (!staleRecognition) throw new Error("recognition instance missing");
+
+    staleRecognition.result([{ transcript: "stale final", isFinal: true }]);
+    controller.dispose();
+    staleRecognition.result([{ transcript: "late final", isFinal: true }]);
+    staleRecognition.error("network");
+    staleRecognition.end();
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+
+    expect(staleRecognition.onresult).toBeNull();
+    expect(staleRecognition.onerror).toBeNull();
+    expect(staleRecognition.onend).toBeNull();
+    expect(onFinal).not.toHaveBeenCalled();
+    expect(onState).not.toHaveBeenCalledWith(expect.objectContaining({ type: "capture-error" }));
   });
 
   it("keeps a pending final transcript copyable when a recognition error fires before commit", () => {
@@ -186,11 +217,15 @@ describe("SpeechRecognitionController", () => {
 });
 
 function makeWindow(
-  options: { secure?: boolean; ctor?: typeof FakeSpeechRecognition; webkitCtor?: typeof FakeSpeechRecognition } = {},
+  options: {
+    secure?: boolean;
+    ctor?: typeof FakeSpeechRecognition | null;
+    webkitCtor?: typeof FakeSpeechRecognition | null;
+  } = {},
 ) {
   return {
     isSecureContext: options.secure ?? true,
-    SpeechRecognition: options.ctor ?? FakeSpeechRecognition,
-    webkitSpeechRecognition: options.webkitCtor,
+    SpeechRecognition: options.ctor === null ? undefined : (options.ctor ?? FakeSpeechRecognition),
+    webkitSpeechRecognition: options.webkitCtor === null ? undefined : options.webkitCtor,
   } as unknown as Window;
 }

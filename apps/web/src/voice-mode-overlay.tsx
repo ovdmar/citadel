@@ -1,6 +1,7 @@
 export type VoiceModeOverlayStatus =
   | "idle"
   | "listening"
+  | "unavailable"
   | "retry"
   | "permission-denied"
   | "error"
@@ -29,7 +30,7 @@ export function VoiceModeOverlay(props: VoiceModeOverlayProps) {
     void navigator.clipboard?.writeText(props.buffer).catch(() => undefined);
   };
   return (
-    <output className="voice-mode-overlay" aria-live="polite">
+    <output className="voice-mode-overlay" data-voice-mode-overlay="true" aria-live="polite">
       <div className="voice-mode-status">{statusLabel(props.status)}</div>
       {props.interim ? <div className="voice-mode-interim">{props.interim}</div> : null}
       {props.buffer ? <div className="voice-mode-buffer">{props.buffer}</div> : null}
@@ -68,6 +69,8 @@ function statusLabel(status: VoiceModeOverlayStatus): string {
   switch (status) {
     case "listening":
       return "Listening";
+    case "unavailable":
+      return "Voice unavailable";
     case "retry":
       return "Ready to retry";
     case "permission-denied":
