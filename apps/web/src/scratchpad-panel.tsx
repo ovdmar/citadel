@@ -23,6 +23,7 @@ import { History, Wand2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import { formatBytes, pillLabel, pillSlug } from "./routes/scratchpad-helpers.js";
+import { ScratchpadComposer } from "./scratchpad-composer.js";
 import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { BlockItem, type UiBlock } from "./scratchpad-panel-block.js";
 import { ScratchpadPanelSearch } from "./scratchpad-panel-search.js";
@@ -367,20 +368,6 @@ export function ScratchpadPanel() {
     [loadBlocks],
   );
 
-  const onComposerKey = useCallback(
-    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-        event.preventDefault();
-        void submitComposer(event.currentTarget.value);
-      }
-    },
-    [submitComposer],
-  );
-
-  const onComposerBlur = useCallback(() => {
-    if (composer.trim().length > 0) void submitComposer(composer);
-  }, [composer, submitComposer]);
-
   const requestDelete = useCallback(
     async (id: string) => {
       const block = blocksRef.current.find((b) => b.id === id);
@@ -673,30 +660,14 @@ export function ScratchpadPanel() {
                     />
                   ))}
                 </div>
-                <div className="scratchpad-composer">
-                  {composerError ? (
-                    <p className="scratchpad-composer-error" role="alert">
-                      {composerError}
-                    </p>
-                  ) : null}
-                  <textarea
-                    ref={composerRef}
-                    className="scratchpad-composer-input"
-                    aria-label="New scratchpad block"
-                    placeholder="Add a note. ⌘/Ctrl-Enter creates a new block."
-                    value={composer}
-                    onChange={(event) => setComposer(event.target.value)}
-                    onInput={(event) => {
-                      const el = event.currentTarget;
-                      el.style.height = "auto";
-                      el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
-                    }}
-                    onKeyDown={onComposerKey}
-                    onBlur={onComposerBlur}
-                    disabled={!loaded}
-                    rows={2}
-                  />
-                </div>
+                <ScratchpadComposer
+                  inputRef={composerRef}
+                  value={composer}
+                  loaded={loaded}
+                  error={composerError}
+                  onChange={setComposer}
+                  onSubmit={submitComposer}
+                />
                 {undo ? (
                   <output className="scratchpad-undo-toast">
                     <span>Block deleted.</span>
