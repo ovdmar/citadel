@@ -287,24 +287,34 @@ async function attachPtyDaemonWebSocketClient(
     onCleanup: () => void;
   },
 ): Promise<void> {
-  let client: PtyDaemonClient;
-  try {
-    client = await connectPtyDaemonClient({ socketPath: target.socketPath });
-  } catch (error) {
-    sendControl(ws, { type: "error", data: error instanceof Error ? error.message : "pty_owner_missing" });
-    ws.close(1011, "pty_owner_missing");
-    return;
-  }
-  options.onClient(client);
+  let client: PtyDaemonClient | null = null;
+  let registeredClient = false;
   let cleanedUp = false;
   let unsubscribe: (() => void) | null = null;
   const cleanup = () => {
     if (cleanedUp) return;
     cleanedUp = true;
     unsubscribe?.();
-    options.onCleanup();
-    client.dispose();
+    if (registeredClient) options.onCleanup();
+    client?.dispose();
   };
+  ws.on("close", cleanup);
+  ws.on("error", cleanup);
+  try {
+    client = await connectPtyDaemonClient({ socketPath: target.socketPath });
+  } catch (error) {
+    if (!cleanedUp) {
+      sendControl(ws, { type: "error", data: error instanceof Error ? error.message : "pty_owner_missing" });
+      ws.close(1011, "pty_owner_missing");
+    }
+    return;
+  }
+  if (cleanedUp || ws.readyState === WebSocket.CLOSED) {
+    client.dispose();
+    return;
+  }
+  options.onClient(client);
+  registeredClient = true;
   const closeForBackpressure = () => {
     cleanup();
     if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
@@ -319,7 +329,9 @@ async function attachPtyDaemonWebSocketClient(
   };
   try {
     const session = await ensurePtyDaemonSession(client, target);
+    if (cleanedUp) return;
     await Promise.resolve(target.onSessionReady?.(session));
+    if (cleanedUp) return;
     unsubscribe = await client.subscribe(target.sessionId, {
       replay: true,
       onOutput: (chunk) => {
@@ -341,13 +353,17 @@ async function attachPtyDaemonWebSocketClient(
         }
       },
     });
+    if (cleanedUp) unsubscribe();
   } catch (error) {
     cleanup();
-    sendControl(ws, { type: "error", data: error instanceof Error ? error.message : "pty_session_missing" });
-    ws.close(1011, "pty_session_missing");
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      sendControl(ws, { type: "error", data: error instanceof Error ? error.message : "pty_session_missing" });
+      ws.close(1011, "pty_session_missing");
+    }
     return;
   }
   ws.on("message", (raw, isBinary) => {
+    if (cleanedUp || !client) return;
     if (isBinary) {
       client.input(target.sessionId, rawWebSocketDataToBuffer(raw));
       return;
@@ -371,8 +387,6 @@ async function attachPtyDaemonWebSocketClient(
       client.input(target.sessionId, control);
     }
   });
-  ws.on("close", cleanup);
-  ws.on("error", cleanup);
 }
 
 async function ensurePtyDaemonSession(

@@ -124,6 +124,60 @@ describe("PTY daemon WebSocket bridge", () => {
       await closeServer(restartedServer.server);
     }
   });
+
+  it("does not subscribe a viewer that closes while attach is still starting", async () => {
+    const fake = new FakePty();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-pty-ws-"));
+    dirs.push(dir);
+    const socketPath = path.join(dir, "pty.sock");
+    const store = new CountingPtySessionStore({ replayLimitBytes: 1024, spawnPty: () => fake });
+    const ptyDaemon = new PtyDaemonServer({ socketPath, store });
+    servers.push(ptyDaemon);
+    await ptyDaemon.start();
+
+    let readyStarted = false;
+    let releaseReady!: () => void;
+    const readyHold = new Promise<void>((resolve) => {
+      releaseReady = resolve;
+    });
+    const httpServer = http.createServer();
+    attachTerminalWebSocket(httpServer, (id) =>
+      id === "pty"
+        ? {
+            backend: "pty-daemon",
+            sessionId: "pty-1",
+            socketPath,
+            cwd: dir,
+            command: "bash",
+            args: ["-l"],
+            env: { TERM: "xterm-256color" },
+            kind: "terminal",
+            onSessionReady: () => {
+              readyStarted = true;
+              return readyHold;
+            },
+          }
+        : null,
+    );
+    await listen(httpServer);
+    try {
+      const address = httpServer.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP test server address");
+      const ws = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/pty`);
+      await waitForOpen(ws);
+      await waitFor(() => readyStarted);
+
+      ws.close();
+      await waitForClose(ws);
+      releaseReady();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(store.subscribeCalls).toBe(0);
+      expect(store.activeSubscribers).toBe(0);
+    } finally {
+      await closeServer(httpServer);
+    }
+  });
 });
 
 class FakePty extends EventEmitter implements PtyLike {
@@ -160,6 +214,21 @@ class FakePty extends EventEmitter implements PtyLike {
 
   emitData(data: string): void {
     this.emit("data", data);
+  }
+}
+
+class CountingPtySessionStore extends PtySessionStore {
+  subscribeCalls = 0;
+  activeSubscribers = 0;
+
+  override subscribe(...args: Parameters<PtySessionStore["subscribe"]>): ReturnType<PtySessionStore["subscribe"]> {
+    this.subscribeCalls += 1;
+    this.activeSubscribers += 1;
+    const unsubscribe = super.subscribe(...args);
+    return () => {
+      this.activeSubscribers -= 1;
+      unsubscribe();
+    };
   }
 }
 
