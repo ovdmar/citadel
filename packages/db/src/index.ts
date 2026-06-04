@@ -34,8 +34,12 @@ export type SqliteDatabase = {
   prepare(sql: string): SqliteStatement;
   close(): void;
 };
-type LegacyAgentSessionInput = Omit<AgentSession, "kind"> & { kind?: "agent" };
-type WorkspaceSessionInput = WorkspaceSession | LegacyAgentSessionInput;
+type TerminalBackendInputKeys = "terminalBackend" | "ptySessionId" | "ptyOwnerSocket" | "ptyOwnerPid" | "ptyLastSeenAt";
+type LegacyAgentSessionInput = Omit<AgentSession, "kind" | TerminalBackendInputKeys> &
+  Partial<Pick<AgentSession, TerminalBackendInputKeys>> & { kind?: "agent" };
+type WorkspaceSessionInput =
+  | (Omit<WorkspaceSession, TerminalBackendInputKeys> & Partial<Pick<WorkspaceSession, TerminalBackendInputKeys>>)
+  | LegacyAgentSessionInput;
 export type SqliteStatement = {
   all(...params: unknown[]): unknown[];
   get(...params: unknown[]): unknown;
@@ -447,10 +451,12 @@ export class SqliteStore {
           status_reason_at, target_type, checkout_id, role, action_id, managed, parent_session_id, plan_version_id,
           manager_action_id, closed_at, launch_warnings,
           last_status_at, last_output_at, ended_at, exit_code, transport,
-          tmux_session_name, tmux_session_id, tmux_socket_name, tab_id, runtime_session_id,
+          terminal_backend, tmux_session_name, tmux_session_id, tmux_socket_name,
+          pty_session_id, pty_owner_socket, pty_owner_pid, pty_last_seen_at,
+          tab_id, runtime_session_id,
           rate_limit_resume_attempts, next_resume_at, last_resume_from_rate_limit_at,
           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -479,9 +485,14 @@ export class SqliteStore {
         session.endedAt ?? null,
         session.exitCode ?? null,
         session.transport,
+        session.terminalBackend ?? "tmux",
         session.tmuxSessionName ?? null,
         session.tmuxSessionId ?? null,
         session.tmuxSocketName ?? null,
+        session.ptySessionId ?? null,
+        session.ptyOwnerSocket ?? null,
+        session.ptyOwnerPid ?? null,
+        session.ptyLastSeenAt ?? null,
         // Default tab_id to the row id so callers that forget to supply one
         // still get sensible tab ordering (each session becomes its own tab,
         // matching pre-migration behaviour). Restore paths supply the source
@@ -508,6 +519,45 @@ export class SqliteStore {
     this.database
       .prepare("UPDATE workspace_sessions SET runtime_session_id = ?, updated_at = ? WHERE id = ?")
       .run(runtimeSessionId, new Date().toISOString(), sessionId);
+  }
+
+  updateWorkspaceSessionTerminalOwner(
+    sessionId: string,
+    update: {
+      terminalBackend?: WorkspaceSession["terminalBackend"];
+      ptySessionId?: string | null;
+      ptyOwnerSocket?: string | null;
+      ptyOwnerPid?: number | null;
+      ptyLastSeenAt?: string | null;
+    },
+  ) {
+    const sets: string[] = [];
+    const values: Array<string | number | null> = [];
+    if (update.terminalBackend !== undefined) {
+      sets.push("terminal_backend = ?");
+      values.push(update.terminalBackend);
+    }
+    if (update.ptySessionId !== undefined) {
+      sets.push("pty_session_id = ?");
+      values.push(update.ptySessionId);
+    }
+    if (update.ptyOwnerSocket !== undefined) {
+      sets.push("pty_owner_socket = ?");
+      values.push(update.ptyOwnerSocket);
+    }
+    if (update.ptyOwnerPid !== undefined) {
+      sets.push("pty_owner_pid = ?");
+      values.push(update.ptyOwnerPid);
+    }
+    if (update.ptyLastSeenAt !== undefined) {
+      sets.push("pty_last_seen_at = ?");
+      values.push(update.ptyLastSeenAt);
+    }
+    if (sets.length === 0) return;
+    sets.push("updated_at = ?");
+    values.push(new Date().toISOString());
+    values.push(sessionId);
+    this.database.prepare(`UPDATE workspace_sessions SET ${sets.join(", ")} WHERE id = ?`).run(...values);
   }
 
   // Partial update accepting any subset of mutable status-tracking fields.
@@ -615,6 +665,7 @@ export class SqliteStore {
         `UPDATE workspace_sessions
          SET status = 'stopped', status_reason = 'closed_by_user', status_reason_at = ?,
              transport = 'disconnected', tmux_session_name = NULL, tmux_session_id = NULL, tmux_socket_name = NULL,
+             pty_session_id = NULL, pty_owner_socket = NULL, pty_owner_pid = NULL, pty_last_seen_at = NULL,
              closed_at = ?, ended_at = COALESCE(ended_at, ?), updated_at = ?
          WHERE id = ?`,
       )

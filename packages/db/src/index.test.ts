@@ -54,6 +54,7 @@ describe("SqliteStore", () => {
       { version: 17 },
       { version: 18 },
       { version: 19 },
+      { version: 20 },
     ]);
   });
 
@@ -274,14 +275,23 @@ describe("SqliteStore", () => {
       endedAt: null,
       exitCode: null,
       transport: "connected",
-      tmuxSessionName: "citadel_terminal",
-      tmuxSessionId: "$2",
+      terminalBackend: "pty-daemon",
+      tmuxSessionName: null,
+      tmuxSessionId: null,
+      ptySessionId: "pty_sess_terminal",
+      ptyOwnerSocket: "/tmp/citadel/pty.sock",
+      ptyOwnerPid: 1234,
+      ptyLastSeenAt: "2026-05-17T00:02:01.000Z",
       createdAt: "2026-05-17T00:02:00.000Z",
       updatedAt: "2026-05-17T00:02:00.000Z",
     });
     expect(store.listWorkspaceSessions("ws_test").find((s) => s.id === "sess_terminal")).toMatchObject({
       kind: "terminal",
       runtimeId: null,
+      terminalBackend: "pty-daemon",
+      ptySessionId: "pty_sess_terminal",
+      ptyOwnerSocket: "/tmp/citadel/pty.sock",
+      ptyOwnerPid: 1234,
     });
     expect(store.listOperations()).toMatchObject([{ id: "op_test", status: "succeeded", progress: 100 }]);
     expect(store.listActivity("ws_test")).toMatchObject([

@@ -86,6 +86,8 @@ export function workspaceFromRow(row: Record<string, unknown>): Workspace {
 
 export function sessionFromRow(row: Record<string, unknown>): WorkspaceSession {
   const kind = asString(row, "kind") === "terminal" ? "terminal" : "agent";
+  const terminalBackend: WorkspaceSession["terminalBackend"] =
+    asString(row, "terminal_backend") === "pty-daemon" ? "pty-daemon" : "tmux";
   const base = {
     id: asString(row, "id"),
     kind,
@@ -103,9 +105,14 @@ export function sessionFromRow(row: Record<string, unknown>): WorkspaceSession {
     endedAt: row.ended_at ? asString(row, "ended_at") : null,
     exitCode: row.exit_code === null || row.exit_code === undefined ? null : Number(row.exit_code),
     transport: asString(row, "transport") as WorkspaceSession["transport"],
+    terminalBackend,
     tmuxSessionName: row.tmux_session_name ? asString(row, "tmux_session_name") : null,
     tmuxSessionId: row.tmux_session_id ? asString(row, "tmux_session_id") : null,
     tmuxSocketName: row.tmux_socket_name ? asString(row, "tmux_socket_name") : null,
+    ptySessionId: row.pty_session_id ? asString(row, "pty_session_id") : null,
+    ptyOwnerSocket: row.pty_owner_socket ? asString(row, "pty_owner_socket") : null,
+    ptyOwnerPid: row.pty_owner_pid === null || row.pty_owner_pid === undefined ? null : Number(row.pty_owner_pid),
+    ptyLastSeenAt: row.pty_last_seen_at ? asString(row, "pty_last_seen_at") : null,
     // Fall back to the row id when tab_id is unset (older rows from before
     // migration 11, or in-memory fixtures that skip the migration). Treats
     // every legacy row as its own tab — matches pre-migration ordering.
