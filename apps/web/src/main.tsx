@@ -14,6 +14,7 @@ import { queryClient } from "./api.js";
 import { OptimisticRemoveProvider } from "./app-state.js";
 import { Cockpit } from "./cockpit.js";
 import { bootstrapLastRoute, clearLastRoute, saveLastRoute } from "./lib/last-route.js";
+import { bootstrapMobileScratchpad } from "./lib/mobile-scratchpad-bootstrap.js";
 import { AgentTemplatesView } from "./routes/agents.js";
 import { DashboardView } from "./routes/dashboard.js";
 import { HistoryView } from "./routes/history.js";
@@ -30,9 +31,10 @@ import { parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
 import { ToastProvider } from "./toast.js";
 import { installUiDiagnostics } from "./ui-diagnostics.js";
 import { applyThemePreference, readThemePreference } from "./use-resolved-theme.js";
-import { useVoiceMode, VoiceModeProvider } from "./voice-mode-provider.js";
+import { VoiceModeProvider, useVoiceMode } from "./voice-mode-provider.js";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
+import "./voice-mode.css";
 import "./chrome.css";
 import "./stage-terminal.css";
 import "./structured-home-summary.css";
@@ -271,7 +273,9 @@ function NotFoundView() {
 // correct initial location off the URL bar. The decision logic lives in
 // bootstrapLastRoute so it can be unit-tested independently.
 if (typeof window !== "undefined") {
-  bootstrapLastRoute(window.location, window.history);
+  if (!bootstrapMobileScratchpad(window.location, window.history)) {
+    bootstrapLastRoute(window.location, window.history);
+  }
 }
 
 const router = createRouter({

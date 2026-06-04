@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
-import { createElement, createRef, type ComponentProps } from "react";
+import { type ComponentProps, createElement, createRef } from "react";
 import { flushSync } from "react-dom";
-import { createRoot, type Root } from "react-dom/client";
+import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ScratchpadComposer } from "./scratchpad-composer.js";
 

@@ -18,7 +18,7 @@ export function VoiceModeOverlay(props: VoiceModeOverlayProps) {
     void navigator.clipboard?.writeText(props.buffer).catch(() => undefined);
   };
   return (
-    <div className="voice-mode-overlay" role="status" aria-live="polite">
+    <output className="voice-mode-overlay" aria-live="polite">
       <div className="voice-mode-status">{props.status}</div>
       {props.interim ? <div className="voice-mode-interim">{props.interim}</div> : null}
       {props.buffer ? <div className="voice-mode-buffer">{props.buffer}</div> : null}
@@ -49,6 +49,6 @@ export function VoiceModeOverlay(props: VoiceModeOverlayProps) {
           </button>
         ) : null}
       </div>
-    </div>
+    </output>
   );
 }

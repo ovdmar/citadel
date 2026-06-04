@@ -22,13 +22,16 @@ import { useNavigate } from "@tanstack/react-router";
 import { History, Wand2, X } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
+import { VoiceCaptureButton } from "./components/voice-capture-button.js";
 import { formatBytes, pillLabel, pillSlug } from "./routes/scratchpad-helpers.js";
+import { createScratchpadComposerVoiceTarget } from "./scratchpad-composer-voice-target.js";
 import { ScratchpadComposer } from "./scratchpad-composer.js";
 import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { BlockItem, type UiBlock } from "./scratchpad-panel-block.js";
 import { ScratchpadPanelSearch } from "./scratchpad-panel-search.js";
 import { ScratchpadVersionDiffDialog } from "./scratchpad-version-diff-dialog.js";
 import { useOverlayPresent } from "./use-overlay-present.js";
+import { useVoiceMode } from "./voice-mode-provider.js";
 
 // Matches cockpit.tsx's STORAGE_LAST_WORKSPACE constant — duplicated to avoid
 // importing the cockpit module just for a single string.
@@ -56,6 +59,7 @@ const BOTTOM_TOLERANCE = 4;
 
 export function ScratchpadPanel() {
   const { open, setOpen } = useScratchpadDrawer();
+  const { registerTarget, speechSupported, startDictation } = useVoiceMode();
   useOverlayPresent(open);
   const navigate = useNavigate();
   const [blocks, setBlocks] = useState<UiBlock[]>([]);
@@ -368,6 +372,23 @@ export function ScratchpadPanel() {
     [loadBlocks],
   );
 
+  const composerVoiceTarget = useMemo(
+    () =>
+      createScratchpadComposerVoiceTarget({
+        getElement: () => composerRef.current,
+        isLoaded: () => loaded,
+        onDraftChange: setComposer,
+        submitDraft: submitComposer,
+      }),
+    [loaded, submitComposer],
+  );
+
+  useEffect(() => {
+    const element = composerRef.current;
+    if (!element) return;
+    return registerTarget(element, composerVoiceTarget);
+  }, [composerVoiceTarget, registerTarget]);
+
   const requestDelete = useCallback(
     async (id: string) => {
       const block = blocksRef.current.find((b) => b.id === id);
@@ -667,6 +688,14 @@ export function ScratchpadPanel() {
                   error={composerError}
                   onChange={setComposer}
                   onSubmit={submitComposer}
+                  actions={
+                    <VoiceCaptureButton
+                      speechSupported={speechSupported}
+                      target={composerVoiceTarget}
+                      startDictation={startDictation}
+                      disabled={!loaded}
+                    />
+                  }
                 />
                 {undo ? (
                   <output className="scratchpad-undo-toast">

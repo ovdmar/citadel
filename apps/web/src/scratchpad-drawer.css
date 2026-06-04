@@ -40,12 +40,22 @@
   overflow: hidden;
 }
 
-@media (max-width: 767px) {
+@media (max-width: 820px) {
   .scratchpad-modal {
     width: 100vw;
     height: 100vh;
     max-height: 100vh;
     border-radius: 0;
+  }
+
+  .scratchpad-drawer-header {
+    grid-template-columns: 1fr auto auto auto;
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .scratchpad-drawer-status {
+    display: none;
   }
 }
 

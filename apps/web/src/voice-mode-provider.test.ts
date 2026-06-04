@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { createElement } from "react";
 import { flushSync } from "react-dom";
-import { createRoot, type Root } from "react-dom/client";
+import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FINAL_AUTO_SUBMIT_DELAY_MS } from "./lib/speech-recognition-controller.js";
 import type { VoiceTarget } from "./lib/voice-targets.js";

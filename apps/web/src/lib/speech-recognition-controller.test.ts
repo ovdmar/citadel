@@ -134,7 +134,9 @@ describe("SpeechRecognitionController", () => {
   });
 });
 
-function makeWindow(options: { secure?: boolean; ctor?: typeof FakeSpeechRecognition; webkitCtor?: typeof FakeSpeechRecognition } = {}) {
+function makeWindow(
+  options: { secure?: boolean; ctor?: typeof FakeSpeechRecognition; webkitCtor?: typeof FakeSpeechRecognition } = {},
+) {
   return {
     isSecureContext: options.secure ?? true,
     SpeechRecognition: options.ctor ?? FakeSpeechRecognition,

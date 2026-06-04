@@ -35,7 +35,11 @@ export function parseTerminalShortcutMessage(event: MessageEvent): TerminalShort
 }
 
 export function terminalShortcutMatch(message: TerminalShortcutMessage): ShortcutMatch | null {
-  if (message.action === "scratchpad-toggle" || message.action === "new-workspace" || message.action === "voice-dictation") {
+  if (
+    message.action === "scratchpad-toggle" ||
+    message.action === "new-workspace" ||
+    message.action === "voice-dictation"
+  ) {
     return null;
   }
   if ((message.action === "nav-workspace" || message.action === "nav-session") && message.index === undefined) {

@@ -242,9 +242,17 @@
   gap: 6px;
 }
 
+.scratchpad-composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
 .scratchpad-composer-input {
   display: block;
   width: 100%;
+  flex: 1;
+  min-width: 0;
   min-height: 1.55em;
   background: transparent;
   color: inherit;
@@ -271,6 +279,31 @@
   margin: 0;
   font-size: 11px;
   color: var(--color-danger, #f08097);
+}
+
+.voice-capture-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 6px;
+  background: var(--c-elev, var(--panel-strong));
+  color: inherit;
+  cursor: pointer;
+}
+
+.voice-capture-button:hover:not(:disabled),
+.voice-capture-button:focus-visible {
+  background: var(--c-line-1, rgba(255, 255, 255, 0.06));
+  outline: none;
+}
+
+.voice-capture-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Undo toast for optimistic-delete. */
