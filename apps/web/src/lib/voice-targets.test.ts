@@ -65,6 +65,18 @@ describe("generic editable voice targets", () => {
     expect(latestState).toBe("before now");
   });
 
+  it("accepts text-like input controls including email inputs", () => {
+    const email = document.createElement("input");
+    email.type = "email";
+    email.value = "before";
+    document.body.appendChild(email);
+
+    const target = createGenericEditableVoiceTarget(email);
+    target?.insertText(" after");
+
+    expect(email.value).toBe("before after");
+  });
+
   it("does not create generic targets for contenteditable or disabled controls", () => {
     const editable = document.createElement("div");
     editable.contentEditable = "true";
@@ -104,6 +116,29 @@ describe("generic editable voice targets", () => {
 
     expect(result).toEqual({ status: "inserted-not-submitted", text: "hello" });
   });
+
+  it("does not submit a wrapping form when auto-submit is enabled", () => {
+    const form = document.createElement("form");
+    const input = document.createElement("input");
+    const requestSubmit = vi.fn();
+    const submit = vi.fn();
+    const submitEvent = vi.fn((event: SubmitEvent) => event.preventDefault());
+    Object.defineProperty(form, "requestSubmit", { configurable: true, value: requestSubmit });
+    Object.defineProperty(form, "submit", { configurable: true, value: submit });
+    form.addEventListener("submit", submitEvent);
+    form.appendChild(input);
+    document.body.appendChild(form);
+
+    const target = createGenericEditableVoiceTarget(input);
+    if (!target?.commit) throw new Error("expected generic target with commit");
+    const result = target.commit("hello", { autoSubmit: true });
+
+    expect(result).toEqual({ status: "inserted-not-submitted", text: "hello" });
+    expect(input.value).toBe("hello");
+    expect(requestSubmit).not.toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
+    expect(submitEvent).not.toHaveBeenCalled();
+  });
 });
 
 async function settle() {
@@ -136,7 +171,11 @@ describe("VoiceTargetRegistry", () => {
     };
     registry.register(input, registered);
 
-    expect(registry.resolve(input)).toBe(registered);
+    const resolved = registry.resolve(input);
+    resolved?.insertText("hello");
+
+    expect(resolved?.kind).toBe("registered");
+    expect(registered.insertText).toHaveBeenCalledWith("hello");
   });
 
   it("ignores disconnected registered targets", () => {
@@ -153,5 +192,23 @@ describe("VoiceTargetRegistry", () => {
     unregister();
     document.body.appendChild(input);
     expect(registry.resolve(input)?.kind).toBe("generic");
+  });
+
+  it("invalidates already resolved registered targets when they unregister", () => {
+    const input = document.createElement("textarea");
+    document.body.appendChild(input);
+    const registry = new VoiceTargetRegistry();
+    const registered = {
+      kind: "registered" as const,
+      insertText: vi.fn(),
+      canAcceptVoiceCommit: () => true,
+    };
+    const unregister = registry.register(input, registered);
+    const resolved = registry.resolve(input);
+
+    expect(resolved?.canAcceptVoiceCommit()).toBe(true);
+    unregister();
+
+    expect(resolved?.canAcceptVoiceCommit()).toBe(false);
   });
 });

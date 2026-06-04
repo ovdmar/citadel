@@ -333,6 +333,10 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(handle?.sendVoiceInput("run it", { submit: true })).toBe(true);
 
     expect(decodeBinarySent(ws.sent)).toEqual(["hello", "run it", "\r"]);
+    const agentMessageCalls = vi
+      .mocked(window.fetch)
+      .mock.calls.filter(([input]) => /\/api\/agent-sessions\/sess_1\/(?:messages?|follow-up)/.test(String(input)));
+    expect(agentMessageCalls).toEqual([]);
   });
 
   it("resolves focused xterm descendants to their session id", async () => {

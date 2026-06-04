@@ -42,7 +42,7 @@ test.describe("scratchpad drawer", () => {
     await expect(page.locator(".scratchpad-drawer-refine")).toBeVisible();
   });
 
-  test("mobile bare-root opens scratchpad and mic auto-submits dictated text", async ({ page }, testInfo) => {
+  test("mobile bare-root opens scratchpad and mic targets the composer while unfocused", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== "mobile", "mobile quick idea path");
     await installFakeSpeechRecognition(page);
 
@@ -58,6 +58,8 @@ test.describe("scratchpad drawer", () => {
     const box = await mic.boundingBox();
     expect(box?.width ?? 0).toBeGreaterThanOrEqual(36);
     expect(box?.height ?? 0).toBeGreaterThanOrEqual(36);
+    await page.locator(".scratchpad-drawer-history-toggle").focus();
+    await expect(page.locator(".scratchpad-drawer-history-toggle")).toBeFocused();
 
     await mic.click();
     await expect

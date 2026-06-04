@@ -141,20 +141,45 @@ describe("VoiceModeProvider", () => {
     expect(commit).toHaveBeenCalledWith("hello", { autoSubmit: false });
   });
 
-  it("starts from the global shortcut and inserts into the focused text input", async () => {
+  it("starts from the global shortcut and keeps the accepted target snapshot", async () => {
     await renderProvider();
     const input = document.createElement("input");
+    const second = document.createElement("input");
     input.value = "before after";
-    document.body.appendChild(input);
+    document.body.append(input, second);
     input.setSelectionRange(7, 12);
     input.focus();
 
-    await flushReact(() => dispatchVoiceShortcut());
+    await flushReact(() => {
+      dispatchVoiceShortcut(input);
+    });
+    second.focus();
     FakeSpeechRecognition.instances[0]?.final("now");
     vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
 
     expect(input.value).toBe("before now");
     expect(input.selectionStart).toBe(10);
+    expect(second.value).toBe("");
+  });
+
+  it("prevents default and stops propagation for non-terminal voice shortcuts", async () => {
+    await renderProvider();
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+    const downstream = vi.fn();
+    document.addEventListener("keydown", downstream);
+
+    let event: KeyboardEvent | undefined;
+    await flushReact(() => {
+      event = dispatchVoiceShortcut(input);
+    });
+    document.removeEventListener("keydown", downstream);
+    if (!event) throw new Error("voice shortcut event was not dispatched");
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(downstream).not.toHaveBeenCalled();
+    expect(FakeSpeechRecognition.instances).toHaveLength(1);
   });
 
   it("lets terminal-focused voice shortcuts flow through the terminal shortcut bridge", async () => {
@@ -192,7 +217,9 @@ describe("VoiceModeProvider", () => {
     document.body.append(first, second);
     first.focus();
 
-    await flushReact(() => dispatchVoiceShortcut());
+    await flushReact(() => {
+      dispatchVoiceShortcut(first);
+    });
     expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Ready to retry");
 
     second.focus();
@@ -205,6 +232,11 @@ describe("VoiceModeProvider", () => {
   });
 
   it("keeps final transcript copyable when no target is focused", async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
     await renderProvider();
 
     await flushReact(() => {
@@ -213,7 +245,44 @@ describe("VoiceModeProvider", () => {
       vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
     });
 
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("No input target");
     expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("loose idea");
+    expect(document.querySelector(".voice-mode-error")?.textContent).toContain("No focused input is available");
+    expect(document.querySelector(".voice-mode-status")?.textContent).not.toBe("Submitted");
+    expect(copyButton()).toBeInstanceOf(HTMLButtonElement);
+    await flushReact(() => copyButton().click());
+    expect(writeText).toHaveBeenCalledWith("loose idea");
+    expect(document.querySelector(".voice-mode-overlay")).not.toBeNull();
+    await flushReact(() => cancelButton().click());
+    expect(document.querySelector(".voice-mode-overlay")).toBeNull();
+  });
+
+  it("buffers in-flight dictation when a registered target unregisters before final commit", async () => {
+    await renderProvider();
+    const element = document.createElement("textarea");
+    document.body.appendChild(element);
+    const commit = vi.fn(() => ({ status: "submitted" as const, text: "should not commit" }));
+    const target: VoiceTarget = {
+      kind: "registered",
+      insertText: vi.fn(),
+      commit,
+      canAcceptVoiceCommit: () => true,
+    };
+    const unregister = voiceApi?.registerTarget(element, target);
+    element.focus();
+
+    await flushReact(() => {
+      dispatchVoiceShortcut(element);
+    });
+    unregister?.();
+    await flushReact(() => {
+      FakeSpeechRecognition.instances[0]?.final("orphaned transcript");
+      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+    });
+
+    expect(commit).not.toHaveBeenCalled();
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("No input target");
+    expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("orphaned transcript");
   });
 
   it("copies buffered transcript text to the clipboard", async () => {
@@ -350,8 +419,16 @@ function Harness() {
   return createElement("div", null, "ready");
 }
 
-function dispatchVoiceShortcut() {
-  window.dispatchEvent(new KeyboardEvent("keydown", { key: "d", metaKey: true, shiftKey: true, bubbles: true }));
+function dispatchVoiceShortcut(target: EventTarget = window): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key: "d",
+    metaKey: true,
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  target.dispatchEvent(event);
+  return event;
 }
 
 function retryButton(): HTMLButtonElement {
@@ -363,6 +440,12 @@ function retryButton(): HTMLButtonElement {
 function copyButton(): HTMLButtonElement {
   const button = [...document.querySelectorAll("button")].find((candidate) => candidate.textContent === "Copy");
   if (!(button instanceof HTMLButtonElement)) throw new Error("copy button missing");
+  return button;
+}
+
+function cancelButton(): HTMLButtonElement {
+  const button = [...document.querySelectorAll("button")].find((candidate) => candidate.textContent === "Cancel");
+  if (!(button instanceof HTMLButtonElement)) throw new Error("cancel button missing");
   return button;
 }
 

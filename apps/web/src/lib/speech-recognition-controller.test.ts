@@ -92,6 +92,7 @@ describe("SpeechRecognitionController", () => {
     expect(onFinal).not.toHaveBeenCalled();
 
     FakeSpeechRecognition.instances[0]?.result([{ transcript: "hello world", isFinal: true }]);
+    expect(onInterim).toHaveBeenLastCalledWith("");
     vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS - 1);
     expect(onFinal).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);

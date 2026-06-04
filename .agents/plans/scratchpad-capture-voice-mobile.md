@@ -20,7 +20,7 @@ Requirements come from the grilling session for "Scratchpad capture — voice, m
 - [ ] Scratchpad mic button and desktop shortcut use the same global voice-mode engine.
 - [ ] A mic button explicitly targets its associated field even when that field was not previously focused.
 - [ ] Voice target is snapshotted when dictation starts.
-- [ ] Valid v1 targets are normal `input`/`textarea` editables, explicitly registered Citadel edit surfaces, and focused terminal/session panes.
+- [ ] Valid v1 targets are `textarea` editables, text-like non-sensitive `input` editables (`text`, `search`, `email`, `tel`, `url`), explicitly registered Citadel edit surfaces, and focused terminal/session panes.
 - [ ] Generic `contenteditable` is not a v1 fallback target unless the Citadel surface explicitly registers a voice adapter.
 - [ ] If no valid target exists, do not fall back to scratchpad; capture into a temporary copyable buffer and show a clear no-target state.
 - [ ] In no-target state, final transcript is committed to the buffer, recognition stops, auto-submit is ignored, and the overlay remains until copied or dismissed.
@@ -88,13 +88,13 @@ Spec updates are the first implementation step because the requested behavior ad
 
 ## Implementation Approach
 
-Implement one web-only voice-mode system, mounted at Shell level, with target adapters for registered Citadel surfaces, generic `input`/`textarea` editables, and terminal handles.
+Implement one web-only voice-mode system, mounted at Shell level, with target adapters for registered Citadel surfaces, generic text-like `input`/`textarea` editables, and terminal handles.
 
 The core pieces:
 
 - A pure Web Speech controller wrapping `SpeechRecognition` / `webkitSpeechRecognition`. It requires `window.isSecureContext`, sets `lang = "en-US"`, separates interim and final transcripts, commits only final transcript, arms `FINAL_AUTO_SUBMIT_DELAY_MS = 900` after final text, and stops after one commit. It also keeps `NO_RESULT_SILENCE_TIMEOUT_MS = 10_000`, measured from start until the first recognition result and then from the most recent recognition result.
 - A `VoiceModeProvider` mounted in `apps/web/src/main.tsx` near `ScratchpadPanel`. It owns recording state, persisted `autoSubmit` setting, snapshotted target, final/interim transcript, copyable fallback buffer, and global floating control.
-- A voice target registry in web code. Components can register explicit insert/submit behavior for their DOM node. If no registered target matches, the engine falls back only to generic `input`/`textarea` insertion. Generic `contenteditable` is excluded from v1 unless a Citadel surface registers a voice adapter.
+- A voice target registry in web code. Components can register explicit insert/submit behavior for their DOM node. If no registered target matches, the engine falls back only to generic `textarea` and text-like non-sensitive `input` insertion (`text`, `search`, `email`, `tel`, `url`). Generic `contenteditable` is excluded from v1 unless a Citadel surface registers a voice adapter.
 - Shortcut integration through the current canonical shortcut path. Add a `voice-dictation` shortcut id to `packages/contracts/src/shortcuts.ts` with `modifier: "primary"`, `shift: true`, `key: "d"`, and include it in `FORWARDABLE_SHORTCUT_IDS`.
 - Non-terminal shortcut handling lives in Shell/VoiceProvider, not Cockpit. The provider listens at capture phase, recognizes only `voice-dictation`, prevents default, snapshots the focused target, and starts voice mode.
 - Terminal focus reuses the existing terminal shortcut bridge only to notify Shell that `voice-dictation` was pressed while xterm had focus. Dictated text delivery goes through the registered `TerminalHandle`, which writes to the terminal WebSocket; auto-submit appends exactly the same Enter-equivalent sequence as keyboard Enter.
@@ -147,9 +147,9 @@ No server transcription, audio upload, native desktop helper, OS-global shortcut
 ### 4. Voice target registry and insertion semantics
 
 - Add `apps/web/src/lib/voice-targets.ts`.
-- Define target kinds: registered editable target, generic `input`/`textarea` target, terminal target, and no-target buffer.
+- Define target kinds: registered editable target, generic text-like `input`/`textarea` target, terminal target, and no-target buffer.
 - Registered target API supports `insertText(text)`, `getDraft()`, optional `submit()`, and `canAcceptVoiceCommit()`.
-- Generic `input`/`textarea` insertion uses the native `HTMLInputElement` / `HTMLTextAreaElement` value setter, `setRangeText` where appropriate, dispatches `InputEvent`/`input`, replaces selected text, and preserves caret after inserted text.
+- Generic text-like `input`/`textarea` insertion uses the native `HTMLInputElement` / `HTMLTextAreaElement` value setter, `setRangeText` where appropriate, dispatches `InputEvent`/`input`, replaces selected text where browser selection APIs exist, and preserves caret after inserted text where supported.
 - Generic editables never call nearest-form `requestSubmit()` in v1. They always report inserted-not-submitted when auto-submit is enabled.
 - Contenteditable support is limited to explicitly registered Citadel surfaces with a concrete adapter.
 - Registered submit-safe targets submit from a computed post-insertion draft or DOM value, not stale React state.
@@ -210,7 +210,7 @@ No database schema changes. No DDL, no `schema_migrations` row, no foreign-key p
 ### New tests to add
 
 - `apps/web/src/lib/speech-recognition-controller.test.ts` — support detection, secure-context gating, prefixed API, `en-US`, interim/final handling, timers, start errors, permission errors, retry state, disposal.
-- `apps/web/src/lib/voice-targets.test.ts` — input/textarea insertion, selected replacement, native setter updates React-controlled inputs, input event dispatch, generic no-submit behavior, no-target fallback, disconnected/disabled/read-only/hidden fallback, registered submit-safe draft submission.
+- `apps/web/src/lib/voice-targets.test.ts` — text-like input/textarea insertion, selected replacement, native setter updates React-controlled inputs, input event dispatch, generic no-submit behavior, no-target fallback, disconnected/disabled/read-only/hidden fallback, registered submit-safe draft submission.
 - `apps/web/src/voice-mode-provider.test.tsx` — auto-submit default true, localStorage persistence, shortcut target snapshot, start rejection retry, button explicit target, no-target buffer, cleanup on unmount/route change/target unregister, cancel/stop behavior.
 - `apps/web/src/voice-mode-overlay.test.tsx` — listening/interim/final/error/copy/toggle/retry states, keyboard operability, labels, `aria-live`, non-autofocused overlay policy.
 - `apps/web/src/components/voice-capture-button.test.tsx` — hides when unsupported or insecure, click starts provider with explicit target, accessible label/pressed state.
@@ -246,7 +246,7 @@ No database schema changes. No DDL, no `schema_migrations` row, no foreign-key p
 - Auto-submit default is true before any localStorage value exists.
 - Turning auto-submit off during recording affects the current commit.
 - No-target capture never writes to scratchpad.
-- Generic `input`/`textarea` targets never submit forms.
+- Generic text-like `input`/`textarea` targets never submit forms.
 - React controlled inputs receive native setter plus input event and retain dictated value.
 - Shortcut-start rejection keeps the snapshotted target and exposes click-to-retry.
 - Provider unmount, route change, target unregister, and controller disposal clear timers/listeners and do not commit later.

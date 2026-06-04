@@ -18,17 +18,26 @@ export type VoiceTarget = {
 type RegisteredEntry = {
   element: HTMLElement;
   target: VoiceTarget;
+  active: boolean;
 };
 
-const TEXT_EDITABLE_INPUT_TYPES = new Set(["text", "search", "tel", "url"]);
+const TEXT_EDITABLE_INPUT_TYPES = new Set(["text", "search", "email", "tel", "url"]);
 
 export class VoiceTargetRegistry {
   private readonly entries: RegisteredEntry[] = [];
 
   register(element: HTMLElement, target: VoiceTarget): () => void {
-    const entry = { element, target };
+    const entry: RegisteredEntry = {
+      element,
+      target: {
+        ...target,
+        canAcceptVoiceCommit: () => entry.active && target.canAcceptVoiceCommit(),
+      },
+      active: true,
+    };
     this.entries.unshift(entry);
     return () => {
+      entry.active = false;
       const index = this.entries.indexOf(entry);
       if (index !== -1) this.entries.splice(index, 1);
     };
@@ -83,7 +92,11 @@ function insertTextIntoControl(element: HTMLInputElement | HTMLTextAreaElement, 
   const next = `${value.slice(0, start)}${text}${value.slice(end)}`;
   setNativeValue(element, next);
   const caret = start + text.length;
-  element.setSelectionRange(caret, caret);
+  try {
+    element.setSelectionRange(caret, caret);
+  } catch {
+    /* Some text-like input types, such as email, do not expose selection APIs in every browser. */
+  }
   element.dispatchEvent(
     new InputEvent("input", {
       bubbles: true,

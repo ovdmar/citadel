@@ -166,12 +166,12 @@ export class SpeechRecognitionController {
     }
     if (!final) return;
     this.finalTranscript += final;
-    this.interimTranscript = "";
+    this.clearInterimTranscript();
     this.clearFinalTimer();
     this.finalTimer = setTimeout(() => {
       const text = this.finalTranscript;
       this.finalTranscript = "";
-      this.interimTranscript = "";
+      this.clearInterimTranscript();
       if (text) this.options.onFinal?.(text);
       this.stop();
     }, FINAL_AUTO_SUBMIT_DELAY_MS);
@@ -200,8 +200,14 @@ export class SpeechRecognitionController {
   private consumePartialTranscript(): string | undefined {
     const transcript = `${this.finalTranscript}${this.interimTranscript}`;
     this.finalTranscript = "";
-    this.interimTranscript = "";
+    this.clearInterimTranscript();
     return transcript.length > 0 ? transcript : undefined;
+  }
+
+  private clearInterimTranscript(): void {
+    if (!this.interimTranscript) return;
+    this.interimTranscript = "";
+    this.options.onInterim?.("");
   }
 
   private clearTimers(): void {
