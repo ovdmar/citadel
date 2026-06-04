@@ -5,6 +5,7 @@ import {
   CreateAgentSessionInputSchema,
   CreateNamespaceInputSchema,
   CreateRepoInputSchema,
+  CreateReviewThreadInputSchema,
   CreateScheduledAgentInputSchema,
   CreateWorkspaceCheckoutInputSchema,
   CreateWorkspaceInputSchema,
@@ -18,12 +19,16 @@ import {
   RegisterCheckoutReviewArtifactInputSchema,
   RegisterWorkspacePlanInputSchema,
   ReportPlanDeviationInputSchema,
+  ReplyReviewThreadInputSchema,
+  ReviewThreadIdInputSchema,
   UpdateNamespaceInputSchema,
   UpdateScheduledAgentInputSchema,
   UpdateTicketStatusInputSchema,
   WorkspaceManagerControlInputSchema,
+  type ReviewAuthorKind,
+  type ReviewDiffMetadata,
 } from "@citadel/contracts";
-import { fuzzySearchBlocks } from "@citadel/core";
+import { createId, fuzzySearchBlocks } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { type McpToolCall, callMcpTool, serializeWorkspaceResource } from "@citadel/mcp";
 import {
@@ -51,6 +56,7 @@ import {
   updateBlock,
   writeScratchpad,
 } from "./scratchpad.js";
+import { readReviewDiffMetadata } from "./review-diff.js";
 import { launchStructuredRoleAgent } from "./structured-role-launchers.js";
 
 export type DaemonMcpDeps = {
@@ -97,6 +103,25 @@ function structuredWorkspaceError(error: unknown): { error: string; [key: string
   if (error instanceof WorkspaceInUseError)
     return { error: "workspace_in_use", workspaceId: error.workspaceId, lifecycle: error.lifecycle };
   return null;
+}
+
+function reviewAuthorKind(actor: DaemonMcpCaller): ReviewAuthorKind {
+  if (actor === "human") return "user";
+  if (actor === "system") return "system";
+  return "agent";
+}
+
+function findReviewMetadataFile(
+  metadata: ReviewDiffMetadata,
+  bucket: string,
+  filePath: string,
+  oldPath: string | null,
+) {
+  return (
+    metadata.sections
+      .flatMap((section) => section.files)
+      .find((file) => file.bucket === bucket && file.path === filePath && file.oldPath === oldPath) ?? null
+  );
 }
 
 export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall, context: DaemonMcpCallContext = {}) {
@@ -178,6 +203,117 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall, 
   }
   if (call.name === "get_checkout_gate_status") {
     return operations.getCheckoutGateStatus(CheckoutContextInputSchema.parse(call.arguments ?? {}));
+  }
+  if (call.name === "list_review_threads") {
+    const checkoutId = typeof call.arguments?.checkoutId === "string" ? call.arguments.checkoutId : "";
+    if (!checkoutId) return { error: "checkout_id_required" };
+    const checkout = store.findWorkspaceCheckout(checkoutId);
+    if (!checkout) return { error: "checkout_not_found" };
+    const metadata = readReviewDiffMetadata(store, checkoutId);
+    if (!metadata.reviewScope) return { reviewScope: null, threads: [] };
+    return {
+      reviewScope: metadata.reviewScope,
+      threads: store.listInternalReviewThreads(metadata.reviewScope.id, {
+        includeResolved: call.arguments?.includeResolved === true,
+        includeOutdated: call.arguments?.includeOutdated === true,
+      }),
+    };
+  }
+  if (call.name === "create_review_thread") {
+    const checkoutId = typeof call.arguments?.checkoutId === "string" ? call.arguments.checkoutId : "";
+    if (!checkoutId) return { error: "checkout_id_required" };
+    const checkout = store.findWorkspaceCheckout(checkoutId);
+    if (!checkout) return { error: "checkout_not_found" };
+    const metadata = readReviewDiffMetadata(store, checkoutId);
+    if (!metadata.reviewScope) return { error: "review_scope_required" };
+    const parsed = CreateReviewThreadInputSchema.parse({
+      authorKind: reviewAuthorKind(actor),
+      ...call.arguments,
+      checkoutId,
+    });
+    const file = findReviewMetadataFile(metadata, parsed.bucket, parsed.path, parsed.oldPath ?? null);
+    if (!file) return { error: "review_anchor_not_current" };
+    if (parsed.anchorKind === "line" && (!parsed.side || !parsed.startLine)) {
+      return { error: "line_anchor_requires_side_and_line" };
+    }
+    const now = new Date().toISOString();
+    const threadId = createId("thread");
+    const thread = store.createInternalReviewThread(
+      {
+        id: threadId,
+        reviewScopeId: metadata.reviewScope.id,
+        kind: "internal",
+        status: "open",
+        anchorState: "current",
+        anchorKind: parsed.anchorKind,
+        bucket: parsed.bucket,
+        path: parsed.path,
+        oldPath: parsed.oldPath ?? null,
+        side: parsed.side ?? null,
+        startLine: parsed.startLine ?? null,
+        endLine: parsed.endLine ?? parsed.startLine ?? null,
+        diffIdentity: file.id,
+        selectedText: parsed.selectedText ?? null,
+        authorKind: parsed.authorKind,
+        authorLabel: parsed.authorLabel ?? null,
+        providerThreadId: null,
+        resolvedAt: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      {
+        id: createId("reply"),
+        threadId,
+        body: parsed.body,
+        authorKind: parsed.authorKind,
+        authorLabel: parsed.authorLabel ?? null,
+        providerCommentId: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+    );
+    emit("review.thread.created", { checkoutId, reviewScopeId: metadata.reviewScope.id, threadId: thread.id });
+    return { thread };
+  }
+  if (call.name === "reply_review_thread") {
+    const threadId = typeof call.arguments?.threadId === "string" ? call.arguments.threadId : "";
+    if (!threadId) return { error: "thread_id_required" };
+    const thread = store.findInternalReviewThread(threadId);
+    if (!thread) return { error: "review_thread_not_found" };
+    const parsed = ReplyReviewThreadInputSchema.parse({
+      authorKind: reviewAuthorKind(actor),
+      ...call.arguments,
+      threadId,
+    });
+    const now = new Date().toISOString();
+    const reply = store.addInternalReviewThreadReply({
+      id: createId("reply"),
+      threadId,
+      body: parsed.body,
+      authorKind: parsed.authorKind,
+      authorLabel: parsed.authorLabel ?? null,
+      providerCommentId: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const nextThread =
+      call.arguments?.resolve === true ? store.setInternalReviewThreadStatus(threadId, "resolved", now) : null;
+    emit("review.thread.replied", { reviewScopeId: thread.reviewScopeId, threadId });
+    return { reply, thread: nextThread ?? store.findInternalReviewThread(threadId) };
+  }
+  if (call.name === "resolve_review_thread" || call.name === "reopen_review_thread") {
+    const parsed = ReviewThreadIdInputSchema.parse(call.arguments ?? {});
+    const thread = store.setInternalReviewThreadStatus(
+      parsed.threadId,
+      call.name === "resolve_review_thread" ? "resolved" : "open",
+      call.name === "resolve_review_thread" ? new Date().toISOString() : null,
+    );
+    if (!thread) return { error: "review_thread_not_found" };
+    emit(call.name === "resolve_review_thread" ? "review.thread.resolved" : "review.thread.reopened", {
+      reviewScopeId: thread.reviewScopeId,
+      threadId: thread.id,
+    });
+    return { thread };
   }
   if (call.name === "get_checkout_ticket") {
     const gate = operations.getCheckoutGateStatus(CheckoutContextInputSchema.parse(call.arguments ?? {}));

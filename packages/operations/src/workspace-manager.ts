@@ -218,6 +218,8 @@ export function getCheckoutGateStatus(
             artifact.headSha === currentHead && artifact.planVersionId === activePlan.id && !artifact.invalidatedAt,
         ) ?? null)
       : null;
+  const reviewScope = deps.store.findInternalReviewScopeForCheckout(checkout.id);
+  const openInternalReviewThreads = reviewScope ? deps.store.countOpenCurrentInternalReviewThreads(reviewScope.id) : 0;
   const openDeviations = deps.store
     .listPlanDeviationReports(workspace.id)
     .filter(
@@ -278,6 +280,9 @@ export function getCheckoutGateStatus(
   ) {
     status = "review_blocked";
     reasons.push("human_waiver_required");
+  } else if (openInternalReviewThreads > 0) {
+    status = "review_blocked";
+    reasons.push(`open_internal_review_threads:${openInternalReviewThreads}`);
   } else {
     status = "ready_for_human_review";
     reasons.push("ready");
