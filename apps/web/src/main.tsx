@@ -20,6 +20,7 @@ import { HistoryView } from "./routes/history.js";
 import { OnboardingView } from "./routes/onboarding.js";
 import { OperationsView } from "./routes/operations.js";
 import { RepoSettingsView } from "./routes/repo-settings.js";
+import { ReviewDiffView } from "./routes/review-diff.js";
 import { ScheduledAgentsView } from "./routes/scheduled-agents.js";
 import { ScratchpadView } from "./routes/scratchpad.js";
 import { SettingsView } from "./routes/settings.js";
@@ -55,6 +56,7 @@ import "./scheduled-agents-shell.css";
 import "./runtime-usage.css";
 import "./scratchpad.css";
 import "./scratchpad-drawer.css";
+import "./review-diff.css";
 import "./responsive.css";
 
 // Seed data-theme on <html> BEFORE React renders so any component that
@@ -107,6 +109,12 @@ const repoSettingsRoute = createRoute({
   getParentRoute: () => cockpitLayoutRoute,
   path: "/repos/$repoId",
   component: RepoSettingsView,
+});
+
+const reviewDiffRoute = createRoute({
+  getParentRoute: () => cockpitLayoutRoute,
+  path: "/workspaces/$workspaceId/checkouts/$checkoutId/review",
+  component: ReviewDiffView,
 });
 
 const operationsRoute = createRoute({
@@ -270,6 +278,7 @@ const router = createRouter({
       settingsRoute,
       agentsRoute,
       repoSettingsRoute,
+      reviewDiffRoute,
       operationsRoute,
       onboardingRoute,
       dashboardRoute,

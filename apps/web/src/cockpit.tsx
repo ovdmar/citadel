@@ -594,6 +594,7 @@ export function Cockpit() {
                 repo={selectedRepo}
                 sessions={activeWorkspaceSessions}
                 summary={cockpitSummary.data}
+                activeCheckoutId={activeCheckoutId}
                 onCollapse={layout.toggleRight}
               />
             ) : (

@@ -401,7 +401,7 @@ function viewedFiles(scope: InternalReviewScopeSummary | null, store: SqliteStor
     store
       .listInternalReviewViewedFiles(scope.id)
       .filter((file) => file.viewed)
-      .map((file) => fileKey(file.bucket, file.path, file.oldPath) + `\0${file.diffIdentity}`),
+      .map((file) => `${fileKey(file.bucket, file.path, file.oldPath)}\0${file.diffIdentity}`),
   );
 }
 

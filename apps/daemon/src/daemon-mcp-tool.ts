@@ -18,15 +18,15 @@ import {
   MarkCheckoutReadyForReviewInputSchema,
   RegisterCheckoutReviewArtifactInputSchema,
   RegisterWorkspacePlanInputSchema,
-  ReportPlanDeviationInputSchema,
   ReplyReviewThreadInputSchema,
+  ReportPlanDeviationInputSchema,
+  type ReviewAuthorKind,
+  type ReviewDiffMetadata,
   ReviewThreadIdInputSchema,
   UpdateNamespaceInputSchema,
   UpdateScheduledAgentInputSchema,
   UpdateTicketStatusInputSchema,
   WorkspaceManagerControlInputSchema,
-  type ReviewAuthorKind,
-  type ReviewDiffMetadata,
 } from "@citadel/contracts";
 import { createId, fuzzySearchBlocks } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
@@ -43,6 +43,7 @@ import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
 import type { ProviderCache } from "./app-helpers.js";
 import { readLogSlice } from "./log-slice.js";
+import { readReviewDiffMetadata } from "./review-diff.js";
 import type { ScheduledAgentService } from "./scheduled-agent-service.js";
 import { refineScratchpad } from "./scratchpad-refine.js";
 import {
@@ -56,7 +57,6 @@ import {
   updateBlock,
   writeScratchpad,
 } from "./scratchpad.js";
-import { readReviewDiffMetadata } from "./review-diff.js";
 import { launchStructuredRoleAgent } from "./structured-role-launchers.js";
 
 export type DaemonMcpDeps = {
