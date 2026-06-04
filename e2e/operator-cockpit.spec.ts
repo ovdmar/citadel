@@ -15,7 +15,7 @@ const API_BASE =
   process.env.CITADEL_API_BASE || `http://127.0.0.1:${process.env.CITADEL_PLAYWRIGHT_DAEMON_PORT || "14012"}`;
 
 test("cockpit renders top bar, navigator, stage, and inspector", async ({ page }, testInfo) => {
-  await page.goto("/");
+  await page.goto(cockpitRootForProject(testInfo.project.name));
   await expect(page.locator(".cit-brand")).toContainText("Citadel");
   await expect(page.getByRole("button", { name: "Search workspaces" })).toBeVisible();
   if (testInfo.project.name === "mobile") {
@@ -47,7 +47,7 @@ test("cockpit lists registered workspaces in the navigator", async ({ page, requ
     await waitForWorkspace(request, first.workspaceId, "ready");
     await waitForWorkspace(request, second.workspaceId, "ready");
 
-    await page.goto("/");
+    await page.goto(cockpitRootForProject(testInfo.project.name));
     const navigator = page.locator("aside[aria-label='Navigator']");
     await expect(navigator.getByRole("button", { name: new RegExp(firstName, "i") })).toBeVisible();
     await expect(navigator.getByRole("button", { name: new RegExp(secondName, "i") })).toBeVisible();
@@ -72,7 +72,7 @@ test("mobile cockpit toggles between navigator/stage/inspector", async ({ page, 
     workspaceId = (await createWorkspace(request, repo.id, workspaceName)).workspaceId;
     await waitForWorkspace(request, workspaceId, "ready");
 
-    await page.goto("/");
+    await page.goto(cockpitRootForProject(testInfo.project.name));
     const switcher = page.getByRole("navigation", { name: "Workspace layout" });
     await switcher.getByRole("button", { name: "Navigator" }).click();
     await expect(page.getByRole("button", { name: new RegExp(workspaceName, "i") })).toBeVisible();
@@ -582,4 +582,8 @@ function createGitFixture() {
 
 function run(command: string, args: string[], cwd: string) {
   execFileSync(command, args, { cwd, stdio: "pipe" });
+}
+
+function cockpitRootForProject(projectName: string) {
+  return projectName === "mobile" ? "/#cockpit" : "/";
 }

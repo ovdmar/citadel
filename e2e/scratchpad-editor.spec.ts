@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { type Page, expect, test } from "@playwright/test";
 import { apiGet, apiPut } from "./helpers/api-request.js";
 import { assertDaemonIsSandbox } from "./helpers/sandbox-guard.js";
 import { acquireSharedStateLock } from "./helpers/shared-state-lock.js";
@@ -42,6 +42,50 @@ test.describe("scratchpad drawer", () => {
     await expect(page.locator(".scratchpad-drawer-refine")).toBeVisible();
   });
 
+  test("mobile bare-root opens scratchpad and mic auto-submits dictated text", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile", "mobile quick idea path");
+    await installFakeSpeechRecognition(page);
+
+    await page.goto("/");
+
+    await expect.poll(() => new URL(page.url()).searchParams.get("scratchpad")).toBe("1");
+    await expect(page.locator(".scratchpad-drawer")).toBeVisible();
+    const composer = page.locator(".scratchpad-composer-input");
+    await expect(composer).toBeVisible();
+    await expect(composer).toBeFocused();
+    const mic = page.getByRole("button", { name: "Start voice dictation" });
+    await expect(mic).toBeVisible();
+    const box = await mic.boundingBox();
+    expect(box?.width ?? 0).toBeGreaterThanOrEqual(36);
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(36);
+
+    await mic.click();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const typedWindow = window as typeof window & {
+            __citadelFakeSpeechRecognitionInstances?: Array<unknown>;
+          };
+          return typedWindow.__citadelFakeSpeechRecognitionInstances?.length ?? 0;
+        }),
+      )
+      .toBeGreaterThan(0);
+    expect(await emitFakeSpeechFinal(page, "voice idea")).toBe(true);
+    await expect(page.locator(".scratchpad-block-list").getByText("voice idea")).toBeVisible();
+  });
+
+  test("mobile root deeplinks do not auto-open scratchpad", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "mobile", "mobile bootstrap coverage");
+
+    await page.goto("/?modal=new-workspace");
+    await expect.poll(() => new URL(page.url()).searchParams.get("scratchpad")).toBeNull();
+    await expect(page.locator(".scratchpad-drawer")).toBeHidden();
+
+    await page.goto("/#hash");
+    await expect.poll(() => new URL(page.url()).searchParams.get("scratchpad")).toBeNull();
+    await expect(page.locator(".scratchpad-drawer")).toBeHidden();
+  });
+
   test("close button hides the drawer and clears the query param", async ({ page }) => {
     await page.goto("/?scratchpad=1");
     await expect(page.locator(".scratchpad-drawer")).toBeVisible();
@@ -49,13 +93,26 @@ test.describe("scratchpad drawer", () => {
     await expect(page.locator(".scratchpad-drawer")).toBeHidden();
   });
 
-  test("cmd+shift+s toggles the drawer from any route", async ({ page }) => {
+  test("cmd+shift+s toggles the drawer from any route", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name === "mobile", "mobile has no hardware shortcut requirement");
     await page.goto("/");
     await expect(page.locator(".scratchpad-drawer")).toBeHidden();
     await page.keyboard.press("ControlOrMeta+Shift+s");
     await expect(page.locator(".scratchpad-drawer")).toBeVisible();
     await page.keyboard.press("ControlOrMeta+Shift+s");
     await expect(page.locator(".scratchpad-drawer")).toBeHidden();
+  });
+
+  test("desktop voice shortcut opens the voice overlay for the focused composer", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name === "mobile", "hardware shortcut coverage is desktop/tablet");
+    await installFakeSpeechRecognition(page);
+    await page.goto("/?scratchpad=1");
+    await page.locator(".scratchpad-composer-input").focus();
+
+    await page.keyboard.press("Control+Shift+D");
+
+    await expect(page.locator(".voice-mode-overlay")).toBeVisible();
+    await expect(page.locator(".voice-mode-status")).toContainText("listening");
   });
 
   test("preserves angle-bracket text in rendered blocks (regression)", async ({ page, request }) => {
@@ -80,3 +137,60 @@ test.describe("scratchpad drawer", () => {
     await expect(anchor).toBeVisible();
   });
 });
+
+async function installFakeSpeechRecognition(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    type FakeSpeechRecognitionResultEvent = {
+      resultIndex: number;
+      results: Array<{ isFinal: boolean; 0: { transcript: string } }>;
+    };
+    class FakeSpeechRecognition {
+      static instances: FakeSpeechRecognition[] = [];
+      lang = "";
+      interimResults = false;
+      continuous = false;
+      onresult: ((event: FakeSpeechRecognitionResultEvent) => void) | null = null;
+      onend: (() => void) | null = null;
+
+      constructor() {
+        FakeSpeechRecognition.instances.push(this);
+      }
+
+      start() {}
+      stop() {
+        this.onend?.();
+      }
+      abort() {
+        this.onend?.();
+      }
+      emitFinal(text: string) {
+        this.onresult?.({
+          resultIndex: 0,
+          results: [{ isFinal: true, 0: { transcript: text } }],
+        });
+      }
+    }
+    const typedWindow = window as typeof window & {
+      __citadelFakeSpeechRecognitionInstances: FakeSpeechRecognition[];
+      SpeechRecognition: typeof FakeSpeechRecognition;
+      webkitSpeechRecognition: typeof FakeSpeechRecognition;
+    };
+    Object.defineProperty(typedWindow, "isSecureContext", { configurable: true, value: true });
+    Object.defineProperty(typedWindow, "SpeechRecognition", { configurable: true, value: FakeSpeechRecognition });
+    Object.defineProperty(typedWindow, "webkitSpeechRecognition", { configurable: true, value: FakeSpeechRecognition });
+    typedWindow.__citadelFakeSpeechRecognitionInstances = FakeSpeechRecognition.instances;
+  });
+}
+
+async function emitFakeSpeechFinal(page: Page, text: string): Promise<boolean> {
+  return page.evaluate((finalText) => {
+    const typedWindow = window as typeof window & {
+      __citadelFakeSpeechRecognitionInstances: Array<{ emitFinal: (text: string) => void }>;
+    };
+    const instances = typedWindow.__citadelFakeSpeechRecognitionInstances;
+    const instance = instances[instances.length - 1];
+    if (!instance) return false;
+    instance.emitFinal(finalText);
+    return true;
+  }, text);
+}
