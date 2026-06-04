@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CiRunSummarySchema, PullRequestSummarySchema } from "./index.js";
+import { CiRunSummarySchema, PullRequestSummarySchema } from "./pr-summary.js";
 
 // Lightweight per-workspace PR/CI snapshot served by GET /api/workspaces/pr-state.
 // Built from cache only; entries with no cached value are omitted (the
