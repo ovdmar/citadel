@@ -56,6 +56,24 @@ describe("daemon launch_agent MCP tool", () => {
       expect(first.sessionId).toBeTruthy();
       expect(first.branchName).toBe("fb-brand-new-mcp");
       expect(first.resumed).toBeUndefined();
+      expect(fixture.store.listWorkspaces().find((workspace) => workspace.id === first.workspaceId)).toMatchObject({
+        repoId: null,
+        kind: "root",
+        mode: "structured",
+        branch: "home",
+      });
+      expect(fixture.store.listWorkspaceCheckouts(first.workspaceId)).toMatchObject([
+        {
+          repoId: repoResp.repo.id,
+          branch: "fb-brand-new-mcp",
+        },
+      ]);
+      expect(
+        fixture.store.listSessions(first.workspaceId).find((session) => session.id === first.sessionId),
+      ).toMatchObject({
+        targetType: "worktree_checkout",
+        checkoutId: fixture.store.listWorkspaceCheckouts(first.workspaceId)[0]?.id,
+      });
 
       const secondResp = await postJson<{
         result: { workspaceId: string; sessionId: string; resumed?: boolean };

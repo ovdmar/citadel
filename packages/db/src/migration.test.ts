@@ -468,7 +468,7 @@ describe("tmux socket migration (version 13)", () => {
   });
 });
 
-describe("terminal backend migration (version 20)", () => {
+describe("terminal backend migration (version 21)", () => {
   it("adds terminal backend and nullable PTY owner columns to workspace_sessions", () => {
     const dbPath = makeTempPath();
     const store = new SqliteStore(dbPath);
@@ -492,7 +492,7 @@ describe("terminal backend migration (version 20)", () => {
     expect(byName.get("pty_owner_pid")).toMatchObject({ type: "INTEGER", notnull: 0 });
     expect(byName.get("pty_last_seen_at")).toMatchObject({ type: "TEXT", notnull: 0 });
 
-    const migration = db.prepare("SELECT name FROM schema_migrations WHERE version = 20").get() as
+    const migration = db.prepare("SELECT name FROM schema_migrations WHERE version = 21").get() as
       | { name: string }
       | undefined;
     expect(migration?.name).toBe("workspace-sessions-terminal-backend");

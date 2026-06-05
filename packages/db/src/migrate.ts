@@ -1,4 +1,5 @@
 import process from "node:process";
+import { migrateInternalReviewThreads } from "./internal-review-migration.js";
 import { migrateManagerOrchestrationLedger } from "./manager-orchestration-migration.js";
 import { migrateWorkspaceHomeCheckoutsManager } from "./workspace-structure-migration.js";
 
@@ -25,7 +26,7 @@ type SessionTableName = "agent_sessions" | "workspace_sessions";
 // the new version below. Consumed by the doctor's database-schema check so
 // `make doctor` can flag an installed daemon whose code is newer than the
 // database it's been given.
-export const CURRENT_SCHEMA_VERSION = 20;
+export const CURRENT_SCHEMA_VERSION = 21;
 
 function tmuxSocketBase(): string {
   const configured = process.env.CITADEL_TMUX_SOCKET?.trim();
@@ -383,6 +384,7 @@ export function runMigrations(
       (18, 'checkout-pr-gate-facts', datetime('now'));
   `);
   migrateManagerOrchestrationLedger(db, ensureColumn);
+  migrateInternalReviewThreads(db);
   ensureColumn("workspace_sessions", "terminal_backend", "TEXT NOT NULL DEFAULT 'tmux'");
   ensureColumn("workspace_sessions", "pty_session_id", "TEXT");
   ensureColumn("workspace_sessions", "pty_owner_socket", "TEXT");
@@ -391,7 +393,7 @@ export function runMigrations(
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_workspace_sessions_pty_session ON workspace_sessions(pty_session_id);
     INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
-      (20, 'workspace-sessions-terminal-backend', datetime('now'));
+      (21, 'workspace-sessions-terminal-backend', datetime('now'));
   `);
 }
 

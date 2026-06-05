@@ -58,6 +58,7 @@ import { wireRateLimitBackgroundResume } from "./rate-limit-background-resume.js
 import { workspaceAppHookSample } from "./readiness.js";
 import { registerRepoDiscoveryRoutes } from "./repo-discovery-routes.js";
 import { registerRestoreRoutes } from "./restore-routes.js";
+import { registerReviewRoutes } from "./review-routes.js";
 import { registerRuntimeUsageRoutes } from "./runtime-usage-routes.js";
 import { registerScaffoldHookRoutes } from "./scaffold-hook-routes.js";
 import { registerScheduledAgentRoutes } from "./scheduled-agent-routes.js";
@@ -326,6 +327,7 @@ export async function createDaemonApp(input: {
     resolveRepoFullName,
     operations,
   });
+  registerReviewRoutes({ app, store, config, asyncRoute, emit });
 
   registerAgentSessionRoutes(app, { operations, emit, asyncRoute, config });
   registerRestoreRoutes(app, { store, operations, config, emit, asyncRoute });

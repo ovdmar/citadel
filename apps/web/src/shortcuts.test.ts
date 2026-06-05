@@ -76,6 +76,17 @@ describe("matchShortcut", () => {
     expect(matchShortcut(ev({ key: "e", ctrlKey: true }))?.id).toBe("spawn-agent");
   });
 
+  it("matches Shift+Cmd/Ctrl+D as voice-dictation", () => {
+    expect(matchShortcut(ev({ key: "d", metaKey: true, shiftKey: true }))?.id).toBe("voice-dictation");
+    expect(matchShortcut(ev({ key: "d", ctrlKey: true, shiftKey: true }))?.id).toBe("voice-dictation");
+  });
+
+  it("does NOT match nearby voice shortcut collisions", () => {
+    expect(matchShortcut(ev({ key: "d", metaKey: true }))).toBeNull();
+    expect(matchShortcut(ev({ key: "v", metaKey: true, shiftKey: true }))).toBeNull();
+    expect(matchShortcut(ev({ key: "d", metaKey: true, shiftKey: true, altKey: true }))).toBeNull();
+  });
+
   it("matches plain Escape as close-overlay", () => {
     expect(matchShortcut(ev({ key: "Escape" }))?.id).toBe("close-overlay");
   });

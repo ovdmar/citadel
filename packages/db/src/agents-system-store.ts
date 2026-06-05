@@ -4,6 +4,7 @@ import type {
   PlanDeviationReport,
   PullRequestBinding,
   ReviewArtifact,
+  Workspace,
   WorkspaceManager,
   WorkspacePlanDecision,
   WorkspacePlanReview,
@@ -11,7 +12,7 @@ import type {
   WorktreeCheckout,
 } from "@citadel/contracts";
 import type { SqliteStore } from "./index.js";
-import { asString, jsonArray } from "./rows.js";
+import { asString, jsonArray, workspaceFromRow } from "./rows.js";
 
 declare module "./index.js" {
   interface SqliteStore {
@@ -33,6 +34,10 @@ declare module "./index.js" {
     insertWorkspaceManager(manager: WorkspaceManager): void;
     getWorkspaceManager(workspaceId: string): WorkspaceManager | null;
     setWorkspaceManagerPause(workspaceId: string, pauseState: WorkspaceManager["pauseState"]): WorkspaceManager | null;
+    promoteLegacyWorkspaceToStructuredHome(
+      workspaceId: string,
+      input?: { checkoutIdForLegacySessions?: string | null },
+    ): Workspace | null;
     insertManagerEvent(event: ManagerEvent): void;
     listManagerEvents(workspaceId: string): ManagerEvent[];
     insertPlanDeviationReport(report: PlanDeviationReport): void;
@@ -472,6 +477,58 @@ export const agentsSystemStoreMethods = {
       .prepare("UPDATE workspace_managers SET pause_state = ?, updated_at = ? WHERE workspace_id = ?")
       .run(pauseState, new Date().toISOString(), workspaceId);
     return this.getWorkspaceManager(workspaceId);
+  },
+
+  promoteLegacyWorkspaceToStructuredHome(
+    this: SqliteStore,
+    workspaceId: string,
+    input: { checkoutIdForLegacySessions?: string | null } = {},
+  ): Workspace | null {
+    const now = new Date().toISOString();
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database
+        .prepare(
+          `UPDATE workspaces
+           SET repo_id = NULL,
+             kind = 'root',
+             mode = 'structured',
+             branch = 'home',
+             root_path = COALESCE(NULLIF(root_path, ''), path),
+             lifecycle_phase = CASE
+               WHEN lifecycle_phase IS NULL OR lifecycle_phase = '' THEN 'discovery_inputs'
+               ELSE lifecycle_phase
+             END,
+             updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(now, workspaceId);
+      if (input.checkoutIdForLegacySessions) {
+        this.database
+          .prepare(
+            `UPDATE workspace_sessions
+             SET target_type = 'worktree_checkout', checkout_id = ?, updated_at = ?
+             WHERE workspace_id = ?
+               AND target_type = 'worktree_checkout'
+               AND (checkout_id IS NULL OR checkout_id = '')`,
+          )
+          .run(input.checkoutIdForLegacySessions, now, workspaceId);
+      }
+      this.database
+        .prepare(
+          `INSERT OR IGNORE INTO workspace_managers (
+            id, workspace_id, pause_state, heartbeat_interval_seconds, last_heartbeat_at, created_at, updated_at
+          )
+          VALUES (?, ?, 'running', 300, NULL, ?, ?)`,
+        )
+        .run(`mgr_${workspaceId}`, workspaceId, now, now);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+    const row = this.database.prepare("SELECT * FROM workspaces WHERE id = ?").get(workspaceId);
+    return row ? workspaceFromRow(row as Record<string, unknown>) : null;
   },
 
   insertManagerEvent(this: SqliteStore, event: ManagerEvent) {

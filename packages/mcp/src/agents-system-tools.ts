@@ -198,6 +198,85 @@ export const AGENTS_SYSTEM_TOOL_DEFINITIONS = [
     destructive: false,
   },
   {
+    name: "list_review_threads",
+    description:
+      "List internal review threads for a checkout's PR-scoped internal review. Defaults to open/current threads; includeResolved and includeOutdated can broaden the result.",
+    inputSchema: {
+      type: "object",
+      required: ["checkoutId"],
+      properties: {
+        checkoutId: { type: "string" },
+        includeResolved: { type: "boolean" },
+        includeOutdated: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    destructive: false,
+  },
+  {
+    name: "create_review_thread",
+    description:
+      "Create an internal PR-scoped review thread on a file or line in the current checkout diff. Use bucket/path/oldPath from local context; agents do not need diff content through MCP.",
+    inputSchema: {
+      type: "object",
+      required: ["checkoutId", "bucket", "path", "anchorKind", "body"],
+      properties: {
+        checkoutId: { type: "string" },
+        bucket: { type: "string", enum: ["against-base", "staged", "unstaged"] },
+        path: { type: "string", minLength: 1 },
+        oldPath: { type: ["string", "null"] },
+        anchorKind: { type: "string", enum: ["line", "file"] },
+        side: { type: "string", enum: ["old", "new"] },
+        startLine: { type: "integer", minimum: 1 },
+        endLine: { type: "integer", minimum: 1 },
+        selectedText: { type: "string" },
+        authorLabel: { type: "string", minLength: 1 },
+        body: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
+    destructive: false,
+  },
+  {
+    name: "reply_review_thread",
+    description:
+      "Reply to an internal review thread. Pass resolve=true when the reply is the final fix confirmation and the thread should be resolved.",
+    inputSchema: {
+      type: "object",
+      required: ["threadId", "body"],
+      properties: {
+        threadId: { type: "string" },
+        body: { type: "string", minLength: 1 },
+        authorLabel: { type: "string", minLength: 1 },
+        resolve: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    destructive: false,
+  },
+  {
+    name: "resolve_review_thread",
+    description: "Mark an internal review thread resolved after the requested change has been addressed.",
+    inputSchema: {
+      type: "object",
+      required: ["threadId"],
+      properties: { threadId: { type: "string" } },
+      additionalProperties: false,
+    },
+    destructive: false,
+  },
+  {
+    name: "reopen_review_thread",
+    description: "Reopen a resolved internal review thread when the fix is not accepted.",
+    inputSchema: {
+      type: "object",
+      required: ["threadId"],
+      properties: { threadId: { type: "string" } },
+      additionalProperties: false,
+    },
+    destructive: false,
+  },
+  {
     name: "update_ticket_status",
     description:
       "Update the local provider-neutral ticket binding status for a workspace or checkout. External provider writes are best-effort and reported separately.",
@@ -277,3 +356,5 @@ export const AGENTS_SYSTEM_TOOL_DEFINITIONS = [
     destructive: false,
   },
 ] as const;
+
+export type AgentsSystemToolName = (typeof AGENTS_SYSTEM_TOOL_DEFINITIONS)[number]["name"];

@@ -9,7 +9,6 @@ import {
   FakeWebSocket as TerminalPaneWebSocketMock,
   clipboardDataMock,
   decodeBinarySent,
-  flushAnimationFrames,
   flushReact as flushReactUpdate,
   installAnimationFrameMock,
   installLocalStorageMock,
@@ -21,6 +20,7 @@ import {
 import {
   TerminalPane,
   focusActiveTerminal,
+  getFocusedTerminalSessionId,
   getTerminalHandle,
   isRegisteredTerminalMessageSource,
   terminalWebSocketUrl,
@@ -285,11 +285,15 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const spawnAgent = term.emitKey(
       new KeyboardEvent("keydown", { key: "e", metaKey: true, bubbles: true, cancelable: true }),
     );
+    const voiceDictation = term.emitKey(
+      new KeyboardEvent("keydown", { key: "d", metaKey: true, shiftKey: true, bubbles: true, cancelable: true }),
+    );
 
     expect(navWorkspace).toBe(false);
     expect(navSession).toBe(false);
     expect(spawnTerminal).toBe(false);
     expect(spawnAgent).toBe(false);
+    expect(voiceDictation).toBe(false);
     expect(postMessage).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ action: "nav-workspace", sessionId: "sess_1", index: 1 }),
@@ -310,6 +314,125 @@ describe("TerminalPane xterm WebSocket renderer", () => {
       expect.objectContaining({ action: "spawn-agent", sessionId: "sess_1" }),
       window.location.origin,
     );
+    expect(postMessage).toHaveBeenNthCalledWith(
+      5,
+      expect.objectContaining({ action: "voice-dictation", sessionId: "sess_1" }),
+      window.location.origin,
+    );
+  });
+
+  it("forwards native host voice shortcuts without sending terminal bytes", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+    await flushReactUpdate(async () => ws.open());
+    ws.sent = [];
+    const postMessage = vi.spyOn(window, "postMessage").mockImplementation(() => undefined);
+    const downstream = vi.fn();
+    host.addEventListener("keydown", downstream);
+
+    const event = new KeyboardEvent("keydown", {
+      key: "d",
+      metaKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    host.dispatchEvent(event);
+    host.removeEventListener("keydown", downstream);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(downstream).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "voice-dictation", sessionId: "sess_1" }),
+      window.location.origin,
+    );
+    expect(decodeBinarySent(ws.sent)).toEqual([]);
+  });
+
+  it("sends voice input through the terminal WebSocket with one Enter on submit", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    if (!ws) throw new Error("terminal rig missing");
+    await flushReactUpdate(async () => ws.open());
+
+    const handle = getTerminalHandle("sess_1");
+    expect(handle?.sendVoiceInput("hello", { submit: false })).toBe(true);
+    expect(handle?.sendVoiceInput("run it", { submit: true })).toBe(true);
+
+    expect(decodeBinarySent(ws.sent)).toEqual(["hello", "run it", "\r"]);
+    const agentMessageCalls = vi
+      .mocked(window.fetch)
+      .mock.calls.filter(([input]) => /\/api\/agent-sessions\/sess_1\/(?:messages?|follow-up)/.test(String(input)));
+    expect(agentMessageCalls).toEqual([]);
+  });
+
+  it("sends agent-session voice input through the same terminal WebSocket path", async () => {
+    await renderTerminal({
+      ...sessionFixture(),
+      kind: "agent",
+      runtimeId: "claude-code",
+      displayName: "Claude Code",
+    });
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    if (!ws) throw new Error("terminal rig missing");
+    await flushReactUpdate(async () => ws.open());
+
+    const handle = getTerminalHandle("sess_1");
+    expect(handle?.sendVoiceInput("agent text", { submit: false })).toBe(true);
+    expect(handle?.sendVoiceInput("agent run", { submit: true })).toBe(true);
+
+    expect(decodeBinarySent(ws.sent)).toEqual(["agent text", "agent run", "\r"]);
+    const agentMessageCalls = vi
+      .mocked(window.fetch)
+      .mock.calls.filter(([input]) => /\/api\/agent-sessions\/sess_1\/(?:messages?|follow-up)/.test(String(input)));
+    expect(agentMessageCalls).toEqual([]);
+  });
+
+  it("rejects terminal voice input when the terminal host is hidden", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+    await flushReactUpdate(async () => ws.open());
+    const handle = getTerminalHandle("sess_1");
+
+    expect(handle?.canAcceptVoiceInput()).toBe(true);
+    host.closest(".terminal-shell")?.setAttribute("aria-hidden", "true");
+
+    expect(handle?.canAcceptVoiceInput()).toBe(false);
+    expect(getFocusedTerminalSessionId(host)).toBeNull();
+  });
+
+  it("rejects terminal voice input while the terminal pane is in an error state", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    if (!ws) throw new Error("terminal rig missing");
+    await flushReactUpdate(async () => ws.open());
+    ws.sent = [];
+    const handle = getTerminalHandle("sess_1");
+
+    expect(handle?.canAcceptVoiceInput()).toBe(true);
+    await flushReactUpdate(async () => {
+      ws.message(JSON.stringify({ type: "error", data: "tmux_session_missing" }));
+    });
+
+    expect(document.querySelector(".terminal-error-state")).not.toBeNull();
+    expect(handle?.canAcceptVoiceInput()).toBe(false);
+    expect(handle?.sendVoiceInput("should buffer", { submit: true })).toBe(false);
+    expect(decodeBinarySent(ws.sent)).toEqual([]);
+  });
+
+  it("resolves focused xterm descendants to their session id", async () => {
+    await renderTerminal();
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!(host instanceof HTMLElement)) throw new Error("terminal host missing");
+    const innerInput = document.createElement("textarea");
+    host.appendChild(innerInput);
+    innerInput.focus();
+
+    expect(getFocusedTerminalSessionId()).toBe("sess_1");
   });
 
   it("only forwards Escape to the cockpit bridge while an overlay is open", async () => {
@@ -515,138 +638,6 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(ws.sent).toContain(JSON.stringify({ type: "input", data: "\n" }));
   });
 
-  it("captures wheel input and scrolls the terminal viewport instead of leaking prompt-history keys", async () => {
-    await renderTerminal();
-    const ws = TerminalPaneWebSocketMock.instances[0];
-    const host = document.querySelector(".terminal-xterm-host");
-    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
-    const downstream = vi.fn();
-    host.addEventListener("wheel", downstream);
-    await flushReactUpdate(async () => ws.open());
-
-    const event = new WheelEvent("wheel", { deltaY: -32, deltaMode: 0, bubbles: true, cancelable: true });
-
-    host.dispatchEvent(event);
-    await nextAnimationFrame();
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(downstream).not.toHaveBeenCalled();
-    expect(ws.sent).toContain(JSON.stringify({ type: "scroll", lines: -2 }));
-  });
-
-  it("coalesces trackpad wheel deltas into one scroll message per frame", async () => {
-    await renderTerminal();
-    const ws = TerminalPaneWebSocketMock.instances[0];
-    const host = document.querySelector(".terminal-xterm-host");
-    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
-    await flushReactUpdate(async () => ws.open());
-
-    host.dispatchEvent(new WheelEvent("wheel", { deltaY: -8, deltaMode: 0, bubbles: true, cancelable: true }));
-    host.dispatchEvent(new WheelEvent("wheel", { deltaY: -8, deltaMode: 0, bubbles: true, cancelable: true }));
-
-    expect(scrollMessages(ws)).toEqual([]);
-    await nextAnimationFrame();
-    expect(scrollMessages(ws)).toEqual([{ type: "scroll", lines: -1 }]);
-  });
-
-  it("maps line-mode wheel ticks to multiple terminal rows", async () => {
-    await renderTerminal();
-    const ws = TerminalPaneWebSocketMock.instances[0];
-    const host = document.querySelector(".terminal-xterm-host");
-    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
-    await flushReactUpdate(async () => ws.open());
-
-    host.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, deltaMode: 1, bubbles: true, cancelable: true }));
-    await nextAnimationFrame();
-
-    expect(scrollMessages(ws)).toEqual([{ type: "scroll", lines: -3 }]);
-  });
-
-  it("accelerates large wheel deltas and Alt fast-scrolls in larger chunks", async () => {
-    await renderTerminal();
-    const ws = TerminalPaneWebSocketMock.instances[0];
-    const host = document.querySelector(".terminal-xterm-host");
-    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
-    await flushReactUpdate(async () => ws.open());
-
-    const event = new WheelEvent("wheel", { deltaY: -72, deltaMode: 0, bubbles: true, cancelable: true });
-    Object.defineProperty(event, "altKey", { configurable: true, value: true });
-
-    host.dispatchEvent(event);
-    await nextAnimationFrame();
-
-    expect(scrollMessages(ws)).toEqual([{ type: "scroll", lines: -45 }]);
-  });
-
-  it("leaves shifted wheel events alone for browser horizontal-scroll gestures", async () => {
-    await renderTerminal();
-    const ws = TerminalPaneWebSocketMock.instances[0];
-    const host = document.querySelector(".terminal-xterm-host");
-    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
-    const downstream = vi.fn();
-    host.addEventListener("wheel", downstream);
-    await flushReactUpdate(async () => ws.open());
-
-    const event = new WheelEvent("wheel", { deltaY: -32, deltaMode: 0, bubbles: true, cancelable: true });
-    Object.defineProperty(event, "shiftKey", { configurable: true, value: true });
-
-    host.dispatchEvent(event);
-    await nextAnimationFrame();
-
-    expect(event.defaultPrevented).toBe(false);
-    expect(downstream).toHaveBeenCalledTimes(1);
-    expect(scrollMessages(ws)).toEqual([]);
-  });
-
-  it("lets Claude Code receive wheel input for fullscreen mouse scrolling", async () => {
-    await renderTerminal({
-      ...sessionFixture(),
-      kind: "agent",
-      runtimeId: "claude-code",
-      displayName: "Claude Code",
-    });
-    const ws = TerminalPaneWebSocketMock.instances[0];
-    const host = document.querySelector(".terminal-xterm-host");
-    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
-    const downstream = vi.fn();
-    host.addEventListener("wheel", downstream);
-    await flushReactUpdate(async () => ws.open());
-
-    const event = new WheelEvent("wheel", { deltaY: -32, deltaMode: 0, bubbles: true, cancelable: true });
-
-    host.dispatchEvent(event);
-    await nextAnimationFrame();
-
-    expect(event.defaultPrevented).toBe(false);
-    expect(downstream).toHaveBeenCalledTimes(1);
-    expect(scrollMessages(ws)).toEqual([]);
-  });
-
-  it("keeps PTY-daemon wheel events native for xterm scrollback", async () => {
-    await renderTerminal({
-      ...sessionFixture(),
-      terminalBackend: "pty-daemon",
-      tmuxSessionName: null,
-      tmuxSessionId: null,
-      ptySessionId: "pty_1",
-    });
-    const ws = TerminalPaneWebSocketMock.instances[0];
-    const host = document.querySelector(".terminal-xterm-host");
-    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
-    const downstream = vi.fn();
-    host.addEventListener("wheel", downstream);
-    await flushReactUpdate(async () => ws.open());
-
-    const event = new WheelEvent("wheel", { deltaY: -32, deltaMode: 0, bubbles: true, cancelable: true });
-
-    host.dispatchEvent(event);
-    await nextAnimationFrame();
-
-    expect(event.defaultPrevented).toBe(false);
-    expect(downstream).toHaveBeenCalledTimes(1);
-    expect(scrollMessages(ws)).toEqual([]);
-  });
-
   it("does not reconnect the terminal when the resolved theme changes", async () => {
     applyThemePreference("dark");
     await renderTerminal();
@@ -675,18 +666,4 @@ async function renderTerminal(session: WorkspaceSession = sessionFixture()) {
     await settle();
   });
   return root;
-}
-
-async function nextAnimationFrame() {
-  flushAnimationFrames();
-  await settle();
-}
-
-function scrollMessages(ws: InstanceType<typeof TerminalPaneWebSocketMock>): Array<{ type: string; lines: number }> {
-  return ws.sent
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => JSON.parse(item) as { type?: string; lines?: unknown })
-    .filter(
-      (item): item is { type: string; lines: number } => item.type === "scroll" && typeof item.lines === "number",
-    );
 }

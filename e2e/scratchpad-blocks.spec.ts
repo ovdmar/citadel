@@ -150,7 +150,8 @@ test.describe("scratchpad blocks", () => {
       .toBe(0);
   });
 
-  test("hover-delete removes a block; undo restores it", async ({ page, request }) => {
+  test("hover-delete removes a block; undo restores it", async ({ page, request }, testInfo) => {
+    test.skip(testInfo.project.name === "mobile", "hover-delete affordance is covered on desktop/tablet");
     await apiPost(request, `${API_BASE}/api/scratchpad/blocks`, { data: { text: "block to delete" } });
     await page.goto("/scratchpad");
     const block = page.locator(".scratchpad-block").first();

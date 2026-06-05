@@ -1,10 +1,11 @@
-import type { PullRequestSummary, Workspace, WorkspaceRecentCommits, WorkspaceSession } from "@citadel/contracts";
+import type { PullRequestSummary, Workspace, WorkspaceSession } from "@citadel/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearch } from "@tanstack/react-router";
 import { ChevronsLeft, Search as SearchIcon, Settings as SettingsIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "./api.js";
 import { useEventRefresh, useFilteredStateQuery } from "./app-state.js";
+import { BottomBar } from "./cockpit-bottom-bar.js";
 import { CollapsedLeftRail } from "./cockpit-rails.js";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import {
@@ -40,7 +41,7 @@ import { RestoreBanner } from "./restore-banner.js";
 import { type ShortcutMatch, matchShortcut } from "./shortcuts.js";
 import { Stage } from "./stage.js";
 import { focusActiveTerminal, isRegisteredTerminalMessageSource } from "./terminal-pane.js";
-import { parseTerminalShortcutMessage, terminalShortcutMatch } from "./terminal-shortcut-bridge.js";
+import { parseRegisteredTerminalShortcutMessage, terminalShortcutMatch } from "./terminal-shortcut-bridge.js";
 import { ThemeControls } from "./theme-controls.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
@@ -58,6 +59,20 @@ function focusTerminalSoon(sessionId: string) {
   for (const delay of TERMINAL_FOCUS_DELAYS_MS) {
     window.setTimeout(() => focusActiveTerminal(sessionId), delay);
   }
+}
+
+function homeReviewCheckoutId(
+  workspace: Workspace | null,
+  checkouts: Array<{
+    id: string;
+    repoId: string;
+    path: string;
+  }>,
+): string | null {
+  if (!workspace) return null;
+  const exact = checkouts.find((checkout) => checkout.path === workspace.path && checkout.repoId === workspace.repoId);
+  if (exact) return exact.id;
+  return checkouts.length === 1 ? (checkouts[0]?.id ?? null) : null;
 }
 
 export function Cockpit() {
@@ -156,6 +171,7 @@ export function Cockpit() {
     : [];
   const activeTargetKey = activeWorkspace ? (activeTargetByWorkspace[activeWorkspace.id] ?? "home") : "home";
   const activeCheckoutId = checkoutIdFromTargetKey(activeTargetKey, activeWorkspaceCheckouts);
+  const reviewCheckoutId = activeCheckoutId ?? homeReviewCheckoutId(activeWorkspace, activeWorkspaceCheckouts);
   const activeTargetType = activeCheckoutId ? "worktree_checkout" : "workspace_home";
   const showInspectorPanel = shouldShowInspectorPanel(activeWorkspace, activeTargetType);
   const activeWorkspaceAllSessions = activeWorkspace
@@ -353,8 +369,8 @@ export function Cockpit() {
       applyShortcutMatch(match, () => event.preventDefault());
     };
     const onMessage = (event: MessageEvent) => {
-      const message = parseTerminalShortcutMessage(event);
-      if (!message || !isRegisteredTerminalMessageSource(event.source, message.sessionId)) return;
+      const message = parseRegisteredTerminalShortcutMessage(event, isRegisteredTerminalMessageSource);
+      if (!message) return;
       if (message.action === "new-workspace") {
         openCreateWorkspace();
         return;
@@ -583,6 +599,7 @@ export function Cockpit() {
                     repo={selectedRepo}
                     sessions={activeWorkspaceSessions}
                     summary={cockpitSummary.data}
+                    reviewCheckoutId={reviewCheckoutId}
                     onCollapse={layout.toggleRight}
                   />
                 ) : (
@@ -661,67 +678,6 @@ function TopBar(props: {
       </div>
     </header>
   );
-}
-
-function BottomBar(props: {
-  activeWorkspace: Workspace | null;
-  activeSession: WorkspaceSession | null;
-  sessions: WorkspaceSession[];
-}) {
-  const [now, setNow] = useState(() => formatClock(new Date()));
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(formatClock(new Date())), 30_000);
-    return () => window.clearInterval(id);
-  }, []);
-
-  const terminalCount = props.sessions.filter((session) => session.kind === "terminal").length;
-  const autoMode = props.sessions.some(
-    (s) =>
-      s.kind === "agent" && (s.status === "running" || s.status === "starting" || s.status === "waiting_for_input"),
-  );
-
-  // Read the head commit of the active workspace so the status bar mirrors the
-  // redesign's "* <message>" hint. Falls back silently if the workspace isn't
-  // yet usable.
-  const recent = useQuery<WorkspaceRecentCommits>({
-    queryKey: ["recent-commits", props.activeWorkspace?.id, 1],
-    queryFn: () => api<WorkspaceRecentCommits>(`/api/workspaces/${props.activeWorkspace?.id}/recent-commits?limit=1`),
-    enabled: Boolean(props.activeWorkspace?.id),
-    staleTime: 30_000,
-  });
-  const headCommitMessage = recent.data?.commits[0]?.message ?? "";
-  const tmuxLabel = props.activeSession?.tmuxSessionName ?? null;
-
-  return (
-    <footer className="cit-bottombar" aria-label="Status bar">
-      <div className="cit-bb-left">
-        <span className="cit-bb-pill">
-          <span className={`cit-pulse ${autoMode ? "cit-pulse-run" : "cit-pulse-ok"}`} aria-hidden="true" />
-          auto mode {autoMode ? "running" : "on"}
-        </span>
-        <span className="cit-bb-divider" aria-hidden="true" />
-        <span className="cit-bb-item">
-          <span className="cit-bb-mono">{terminalCount}</span> {terminalCount === 1 ? "terminal" : "terminals"}
-        </span>
-        <span className="cit-bb-divider" aria-hidden="true" />
-        <span className="cit-bb-item cit-bb-muted">
-          <kbd>ctrl</kbd>+<kbd>k</kbd> palette
-        </span>
-        <span className="cit-bb-item cit-bb-muted">
-          <kbd>c</kbd> new workspace
-        </span>
-      </div>
-      <div className="cit-bb-right">
-        {tmuxLabel ? <span className="cit-bb-tmux">[{tmuxLabel}]</span> : null}
-        {headCommitMessage ? <span className="cit-bb-commit">* {headCommitMessage}</span> : null}
-        <span className="cit-bb-time">{now}</span>
-      </div>
-    </footer>
-  );
-}
-
-function formatClock(d: Date) {
-  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
 function EmptyStage(props: { hasRepos: boolean }) {

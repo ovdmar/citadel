@@ -7,6 +7,7 @@ import type {
   WorkspaceSession,
 } from "@citadel/contracts";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { PanelRightClose, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api.js";
@@ -25,6 +26,7 @@ export function Inspector(props: {
   repo: Repo | null;
   sessions: WorkspaceSession[];
   summary: WorkspaceCockpitSummary | undefined;
+  reviewCheckoutId: string | null;
   onCollapse: () => void;
 }) {
   const [tab, setTab] = useState<InspectorTab>("stats");
@@ -68,7 +70,12 @@ export function Inspector(props: {
         {tab === "stats" ? (
           <StatsTab workspace={props.workspace} repo={props.repo} summary={props.summary} diff={diff.data} />
         ) : (
-          <DiffTab workspace={props.workspace} summary={props.summary} diff={diff.data} />
+          <DiffTab
+            workspace={props.workspace}
+            summary={props.summary}
+            diff={diff.data}
+            reviewCheckoutId={props.reviewCheckoutId}
+          />
         )}
       </div>
     </>
@@ -221,6 +228,7 @@ function DiffTab(props: {
   workspace: Workspace;
   summary: WorkspaceCockpitSummary | undefined;
   diff: WorkspaceDiff | undefined;
+  reviewCheckoutId: string | null;
 }) {
   const diff = useQuery<WorkspaceDiff>({
     queryKey: ["diff", props.workspace.id],
@@ -265,9 +273,17 @@ function DiffTab(props: {
       </section>
       <section className="inspector-block">
         <h4>Human review</h4>
-        <div className="empty compact">
-          Full-screen review with inline comments visible to the agent is planned. Open the PR for now.
-        </div>
+        {props.reviewCheckoutId ? (
+          <Link
+            className="settings-link"
+            to="/workspaces/$workspaceId/checkouts/$checkoutId/review"
+            params={{ workspaceId: props.workspace.id, checkoutId: props.reviewCheckoutId }}
+          >
+            Open review
+          </Link>
+        ) : (
+          <div className="empty compact">Pick a checkout to review.</div>
+        )}
       </section>
     </div>
   );

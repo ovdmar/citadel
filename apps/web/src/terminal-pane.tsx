@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "./components/ui/button.js";
+import { isElementVoiceVisible } from "./lib/voice-targets.js";
 import { matchShortcut } from "./shortcuts.js";
 import { postTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
 import { readOverlayCount } from "./use-overlay-present.js";
@@ -40,10 +41,10 @@ export type TerminalSocketMessage = {
 };
 
 /**
- * Per-session handle used by Stage tabs to drive a live terminal WebSocket.
- * The in-pane status bar was removed; these affordances live on the tab now
- * and need access to state owned by TerminalPane, so we publish a tiny
- * registry on the window.
+ * Per-session handle used by Stage tabs and Shell-level voice dictation to
+ * drive a live terminal WebSocket. The in-pane status bar was removed; these
+ * affordances live outside TerminalPane and need access to socket state owned
+ * by TerminalPane, so module-level registries expose the active handles.
  *
  * Keyed by session id. TerminalPane registers on mount and clears on unmount.
  */
@@ -52,9 +53,12 @@ export type TerminalHandle = {
   // Historical name kept for Stage callers; now focuses the in-process xterm.
   focusIframe: () => void;
   recoverIfDisconnected: () => boolean;
+  sendVoiceInput: (text: string, options: { submit: boolean }) => boolean;
+  canAcceptVoiceInput: () => boolean;
 };
 
 const REGISTRY = new Map<string, TerminalHandle>();
+const HOST_REGISTRY = new Map<string, HTMLElement>();
 const LISTENERS = new Set<(id: string) => void>();
 
 function publish(id: string, handle: TerminalHandle | null) {
@@ -68,6 +72,16 @@ function publish(id: string, handle: TerminalHandle | null) {
 
 export function getTerminalHandle(sessionId: string): TerminalHandle | undefined {
   return REGISTRY.get(sessionId);
+}
+
+export function getFocusedTerminalSessionId(activeElement: Element | null = document.activeElement): string | null {
+  if (!(activeElement instanceof HTMLElement)) return null;
+  for (const [sessionId, host] of HOST_REGISTRY) {
+    if (!host.isConnected) continue;
+    if (!isElementVoiceVisible(host)) continue;
+    if (host === activeElement || host.contains(activeElement)) return sessionId;
+  }
+  return null;
 }
 
 export function subscribeTerminalHandle(listener: (sessionId: string) => void): () => void {
@@ -115,6 +129,12 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
   const [connectionState, setConnectionState] = useState<"connecting" | "attached" | "disconnected">("connecting");
   const [error, setError] = useState<TerminalError | null>(null);
   const [generation, setGeneration] = useState(0);
+  const activeRef = useRef(active);
+  const connectionStateRef = useRef(connectionState);
+  const errorRef = useRef(error);
+  activeRef.current = active;
+  connectionStateRef.current = connectionState;
+  errorRef.current = error;
 
   const clearAutoRetryTimer = useCallback(() => {
     if (autoRetryTimerRef.current !== null) {
@@ -154,6 +174,34 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     recordTerminalClientEvent(sessionId, "terminal.focus");
   }, [sessionId]);
 
+  const sendVoiceInput = useCallback((text: string, options: { submit: boolean }) => {
+    const ws = wsRef.current;
+    if (
+      !canAcceptTerminalVoiceInput(
+        containerRef.current,
+        ws,
+        activeRef.current,
+        connectionStateRef.current,
+        errorRef.current,
+      )
+    ) {
+      return false;
+    }
+    sendTerminalInput(ws, text);
+    if (options.submit) sendTerminalInput(ws, "\r");
+    return true;
+  }, []);
+
+  const canAcceptVoiceInput = useCallback(() => {
+    return canAcceptTerminalVoiceInput(
+      containerRef.current,
+      wsRef.current,
+      activeRef.current,
+      connectionStateRef.current,
+      errorRef.current,
+    );
+  }, []);
+
   const recoverIfDisconnected = useCallback(() => {
     if (!error || !["terminal_disconnected", "terminal_closed", "terminal_socket_error"].includes(error.code)) {
       return false;
@@ -180,6 +228,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     if (!active) return;
     const host = containerRef.current;
     if (!host) return;
+    HOST_REGISTRY.set(sessionId, host);
     let disposed = false;
     let resizeFrame: number | null = null;
     let wheelFrame: number | null = null;
@@ -357,6 +406,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
       if (terminalRef.current === terminal) terminalRef.current = null;
       if (fitRef.current === fit) fitRef.current = null;
       if (wsRef.current === ws) wsRef.current = null;
+      if (HOST_REGISTRY.get(sessionId) === host) HOST_REGISTRY.delete(sessionId);
     };
   }, [sessionId, generation, active, clearAutoRetryTimer, scheduleAutoRetry, forwardWheelToRuntime]);
 
@@ -365,9 +415,9 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
   // The status bar used to render these affordances inside the pane; that was
   // removed in favour of the tab actions, but the state still lives here.
   useEffect(() => {
-    publish(sessionId, { reload, focusIframe, recoverIfDisconnected });
+    publish(sessionId, { reload, focusIframe, recoverIfDisconnected, sendVoiceInput, canAcceptVoiceInput });
     return () => publish(sessionId, null);
-  }, [sessionId, reload, focusIframe, recoverIfDisconnected]);
+  }, [sessionId, reload, focusIframe, recoverIfDisconnected, sendVoiceInput, canAcceptVoiceInput]);
   return (
     <div className="terminal-shell">
       <div className="terminal-surface">
@@ -390,6 +440,24 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
 export function terminalWebSocketUrl(sessionId: string, location: Location = window.location): string {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${location.host}/terminal/${encodeURIComponent(sessionId)}`;
+}
+
+function canAcceptTerminalVoiceInput(
+  host: HTMLElement | null,
+  ws: WebSocket | null,
+  active: boolean,
+  connectionState: "connecting" | "attached" | "disconnected",
+  error: TerminalError | null,
+): ws is WebSocket {
+  return Boolean(
+    active &&
+      !error &&
+      connectionState === "attached" &&
+      host &&
+      ws &&
+      ws.readyState === WebSocket.OPEN &&
+      isElementVoiceVisible(host),
+  );
 }
 
 function TerminalErrorState(props: { error: TerminalError; onRetry: () => void; retrying: boolean }) {

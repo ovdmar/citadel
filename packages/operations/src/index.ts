@@ -276,6 +276,8 @@ export class OperationService {
         store: this.store,
         createWorkspace: (workspaceInput) => this.createWorkspace(workspaceInput),
         createAgentSession: (sessionInput, sessionRuntime) => this.createAgentSession(sessionInput, sessionRuntime),
+        createWorkspaceCheckout: (checkoutInput) => this.createWorkspaceCheckout(checkoutInput),
+        ...(this.config?.dataDir ? { dataDir: this.config.dataDir } : {}),
         activity: ({ type, source, message, repoId, workspaceId, operationId }) =>
           this.activity(type, source, message, repoId, workspaceId, operationId),
       },

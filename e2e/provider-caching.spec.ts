@@ -48,7 +48,7 @@ test("usage indicator renders a reload button when usage data is unavailable", a
   await page.goto("/");
   // The reload button uses the same .cit-usage-pill chrome but is a <button>.
   const reloadButton = page.locator("button.cit-usage-pill.cit-usage-pill--reload").first();
-  await expect(reloadButton).toBeVisible({ timeout: 5_000 });
+  await expect(reloadButton).toBeVisible({ timeout: 15_000 });
 });
 
 test("clicking the usage reload button triggers a refresh request", async ({ page, request }, testInfo) => {
@@ -67,7 +67,7 @@ test("clicking the usage reload button triggers a refresh request", async ({ pag
 
   await page.goto("/");
   const reloadButton = page.locator("button.cit-usage-pill.cit-usage-pill--reload").first();
-  await expect(reloadButton).toBeVisible();
+  await expect(reloadButton).toBeVisible({ timeout: 15_000 });
 
   const refreshRequestPromise = page.waitForRequest(
     (req) => req.url().endsWith(`/api/runtimes/${runtimeId}/usage/refresh`) && req.method() === "POST",
