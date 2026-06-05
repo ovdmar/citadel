@@ -1,4 +1,5 @@
 import type {
+  PullRequestSummary,
   Repo,
   Workspace,
   WorkspaceCockpitSummary,
@@ -27,6 +28,11 @@ export function Inspector(props: {
   sessions: WorkspaceSession[];
   summary: WorkspaceCockpitSummary | undefined;
   reviewCheckoutId: string | null;
+  targetCheckoutId: string | null;
+  targetPullRequest: PullRequestSummary | null;
+  targetPullRequestCheckedAt: string | undefined;
+  targetBranch: string;
+  targetBaseBranch: string;
   onCollapse: () => void;
 }) {
   const [tab, setTab] = useState<InspectorTab>("stats");
@@ -68,7 +74,17 @@ export function Inspector(props: {
       </div>
       <div className="column-body">
         {tab === "stats" ? (
-          <StatsTab workspace={props.workspace} repo={props.repo} summary={props.summary} diff={diff.data} />
+          <StatsTab
+            workspace={props.workspace}
+            repo={props.repo}
+            summary={props.summary}
+            diff={diff.data}
+            checkoutId={props.targetCheckoutId}
+            targetPullRequest={props.targetPullRequest}
+            targetPullRequestCheckedAt={props.targetPullRequestCheckedAt}
+            targetBranch={props.targetBranch}
+            targetBaseBranch={props.targetBaseBranch}
+          />
         ) : (
           <DiffTab
             workspace={props.workspace}
@@ -87,8 +103,13 @@ function StatsTab(props: {
   repo: Repo | null;
   summary: WorkspaceCockpitSummary | undefined;
   diff: WorkspaceDiff | undefined;
+  checkoutId: string | null;
+  targetPullRequest: PullRequestSummary | null;
+  targetPullRequestCheckedAt: string | undefined;
+  targetBranch: string;
+  targetBaseBranch: string;
 }) {
-  const pr = props.summary?.versionControl.pullRequest ?? null;
+  const pr = props.targetPullRequest;
   const additions = pr?.additions ?? 0;
   const deletions = pr?.deletions ?? 0;
   const apps = props.summary?.apps;
@@ -128,7 +149,10 @@ function StatsTab(props: {
           diffFiles={diffFiles}
           diffAdded={diffAdded}
           diffRemoved={diffRemoved}
-          checkedAt={props.summary?.versionControl.checkedAt}
+          checkedAt={props.targetPullRequestCheckedAt}
+          checkoutId={props.checkoutId}
+          targetBranch={props.targetBranch}
+          targetBaseBranch={props.targetBaseBranch}
         />
 
         {apps?.applications.length ? (
@@ -158,7 +182,7 @@ function StatsTab(props: {
           </section>
         ) : null}
 
-        <DeployedAppsPanel workspaceId={props.workspace.id} repo={props.repo} />
+        <DeployedAppsPanel workspaceId={props.workspace.id} repo={props.repo} checkoutId={props.checkoutId} />
 
         <section className="ins-section">
           <div className="ins-section-head">

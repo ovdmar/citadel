@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import type { ActivityEvent, AgentSession, CheckoutContextInput, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceCheckoutInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, MarkCheckoutReadyForReviewInput, Namespace, Operation, PlanDeviationReport, RegisterCheckoutReviewArtifactInput, RegisterWorkspacePlanInput, Repo, UpdateNamespaceInput, UpdateTicketStatusInput, Workspace, WorkspaceManagerControlInput } from "@citadel/contracts";
+import type { ActivityEvent, AgentSession, CheckoutContextInput, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceCheckoutInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, MarkCheckoutReadyForReviewInput, Namespace, Operation, PlanDeviationReport, RegisterCheckoutReviewArtifactInput, RegisterWorkspacePlanInput, Repo, UpdateNamespaceInput, UpdateTicketStatusInput, Workspace, WorkspaceManagerControlInput, WorktreeCheckout } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
@@ -92,6 +92,26 @@ export function defaultWorktreeParent(rootPathInput: string, dataDir?: string): 
   const repoDir = path.basename(rootPath);
   if (dataDir) return path.join(dataDir, "worktrees", repoDir);
   return path.join(path.dirname(rootPath), `${repoDir}-worktrees`);
+}
+
+function redeployInflightKey(workspaceId: string, checkoutId: string | null | undefined): string {
+  return checkoutId ? `${workspaceId}:checkout:${checkoutId}` : `${workspaceId}:home`;
+}
+
+function workspaceForCheckout(workspace: Workspace, checkout: WorktreeCheckout): Workspace {
+  return {
+    ...workspace,
+    repoId: checkout.repoId,
+    name: checkout.displayName ?? checkout.name,
+    path: checkout.path,
+    branch: checkout.branch,
+    baseBranch: checkout.baseBranch,
+    kind: "worktree",
+    issueKey: checkout.issue?.key ?? workspace.issueKey,
+    issueTitle: checkout.issue?.title ?? workspace.issueTitle,
+    issueUrl: checkout.issue?.url ?? workspace.issueUrl,
+    updatedAt: checkout.updatedAt,
+  };
 }
 
 export class OperationService {
@@ -350,7 +370,8 @@ export class OperationService {
     if (kind === "deploy.redeploy") {
       const workspaceId = operation.retryInput.workspaceId as string;
       const appName = (operation.retryInput.appName as string | null) ?? undefined;
-      const result = await this.redeployApp({ workspaceId, appName });
+      const checkoutId = (operation.retryInput.checkoutId as string | null) ?? undefined;
+      const result = await this.redeployApp({ workspaceId, checkoutId, appName });
       return { retried: true, operationId: result.operationId, status: result.status };
     }
     return { retried: false, reason: "unknown_kind" as const };
@@ -502,21 +523,44 @@ export class OperationService {
     return runWorkspaceActionImpl(this.workspaceAppsDeps(), input);
   }
 
-  listDeployedApps = (input: { workspaceId: string }) =>
-    listDeployedAppsImpl(this.deployOpsDeps(), this.resolveRepoWorkspace(input.workspaceId));
+  listDeployedApps = (input: { workspaceId: string; checkoutId?: string | null | undefined }) =>
+    listDeployedAppsImpl(this.deployOpsDeps(), this.resolveRepoWorkspaceTarget(input));
   private redeployInflight = new Map<string, ReturnType<typeof redeployAppImpl>>();
-  redeployApp = (input: { workspaceId: string; appName?: string | undefined }) => {
-    const existing = this.redeployInflight.get(input.workspaceId);
+  redeployApp = (input: {
+    workspaceId: string;
+    checkoutId?: string | null | undefined;
+    appName?: string | undefined;
+  }) => {
+    const key = redeployInflightKey(input.workspaceId, input.checkoutId);
+    const existing = this.redeployInflight.get(key);
     if (existing) return existing;
+    const target = this.resolveRepoWorkspaceTarget(input);
     const promise = redeployAppImpl(this.deployOpsDeps(), {
-      ...this.resolveRepoWorkspace(input.workspaceId),
+      ...target,
+      checkoutId: input.checkoutId ?? undefined,
       appName: input.appName,
     }).finally(() => {
-      this.redeployInflight.delete(input.workspaceId);
+      this.redeployInflight.delete(key);
     });
-    this.redeployInflight.set(input.workspaceId, promise);
+    this.redeployInflight.set(key, promise);
     return promise;
   };
+
+  private resolveRepoWorkspaceTarget(input: {
+    workspaceId: string;
+    checkoutId?: string | null | undefined;
+  }): { repo: Repo; workspace: Workspace } {
+    if (!input.checkoutId) return this.resolveRepoWorkspace(input.workspaceId);
+    const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+    if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+    const checkout = this.store.findWorkspaceCheckout(input.checkoutId);
+    if (!checkout || checkout.workspaceId !== workspace.id || checkout.archivedAt) {
+      throw new Error(`Unknown checkout: ${input.checkoutId}`);
+    }
+    const repo = this.store.listRepos().find((candidate) => candidate.id === checkout.repoId);
+    if (!repo) throw new Error(`Checkout repo is missing: ${checkout.repoId}`);
+    return { repo, workspace: workspaceForCheckout(workspace, checkout) };
+  }
 
   private resolveRepoWorkspace(workspaceId: string): { repo: Repo; workspace: Workspace } {
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === workspaceId);

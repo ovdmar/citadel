@@ -27,6 +27,7 @@ import {
 import { CommandPalette } from "./command-palette.js";
 import { GhCooldownBanner } from "./gh-cooldown-banner.js";
 import { useFocusRefresh } from "./hooks/use-focus-refresh.js";
+import { resolveInspectorTargetState } from "./inspector-target-state.js";
 import { Inspector } from "./inspector.js";
 import {
   expandGroupPath,
@@ -178,6 +179,23 @@ export function Cockpit() {
   const activeCheckoutId = checkoutIdFromTargetKey(activeTargetKey, activeWorkspaceCheckouts);
   const reviewCheckoutId = activeCheckoutId ?? homeReviewCheckoutId(activeWorkspace, activeWorkspaceCheckouts);
   const activeTargetType = activeCheckoutId ? "worktree_checkout" : "workspace_home";
+  const workspacePrEntry = activeWorkspace ? prStateQuery.data?.workspacePrState?.[activeWorkspace.id] : undefined;
+  const workspacePullRequest = activeWorkspace ? (prByWorkspaceId.get(activeWorkspace.id) ?? null) : null;
+  const workspacePrCheckedAt =
+    activeWorkspace && cockpitSummary.data?.workspaceId === activeWorkspace.id
+      ? cockpitSummary.data.versionControl.checkedAt
+      : (workspacePrEntry?.checkedAt ?? workspacePrEntry?.cachedAt ?? undefined);
+  const inspectorTarget = activeWorkspace
+    ? resolveInspectorTargetState({
+        workspace: activeWorkspace,
+        repos: data?.repos ?? [],
+        checkouts: activeWorkspaceCheckouts,
+        activeCheckoutId,
+        workspacePullRequest,
+        workspaceCheckedAt: workspacePrCheckedAt,
+        checkoutPrState: checkoutPrByWorkspaceId.get(activeWorkspace.id),
+      })
+    : null;
   const showInspectorPanel = shouldShowInspectorPanel(activeWorkspace, activeTargetType);
   const activeWorkspaceAllSessions = activeWorkspace
     ? allSessions.filter((session) => session.workspaceId === activeWorkspace.id)
@@ -601,10 +619,15 @@ export function Cockpit() {
                 {activeWorkspace ? (
                   <Inspector
                     workspace={activeWorkspace}
-                    repo={selectedRepo}
+                    repo={inspectorTarget?.repo ?? selectedRepo}
                     sessions={activeWorkspaceSessions}
                     summary={cockpitSummary.data}
                     reviewCheckoutId={reviewCheckoutId}
+                    targetCheckoutId={activeCheckoutId}
+                    targetPullRequest={inspectorTarget?.pullRequest ?? null}
+                    targetPullRequestCheckedAt={inspectorTarget?.checkedAt}
+                    targetBranch={inspectorTarget?.branch ?? activeWorkspace.branch}
+                    targetBaseBranch={inspectorTarget?.baseBranch ?? activeWorkspace.baseBranch}
                     onCollapse={layout.toggleRight}
                   />
                 ) : (

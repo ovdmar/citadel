@@ -242,6 +242,101 @@ describe("PR routes", () => {
     }
   });
 
+  it("POST /api/workspaces/:id/pr-refresh can refresh an active checkout target", async () => {
+    const fixture = createFixture();
+    const now = "2026-06-05T00:00:00.000Z";
+    const checkoutPath = path.join(fixture.config.dataDir, "structured", "api");
+    fixture.store.insertRepo({
+      id: "repo_api",
+      name: "API",
+      rootPath: path.join(fixture.config.dataDir, "repo"),
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      providerRepositoryKey: "owner/api",
+      showMainWorkspace: false,
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: ["github-gh"],
+      deployHookCommand: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fixture.store.insertWorkspace({
+      id: "ws_structured",
+      repoId: null,
+      name: "Structured",
+      path: path.join(fixture.config.dataDir, "structured"),
+      rootPath: path.join(fixture.config.dataDir, "structured"),
+      mode: "structured",
+      branch: "home",
+      baseBranch: "main",
+      source: "scratch",
+      kind: "root",
+      lifecyclePhase: "implementation",
+      parentIssue: null,
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      namespaceId: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    fixture.store.insertWorkspaceCheckout({
+      id: "co_api",
+      workspaceId: "ws_structured",
+      repoId: "repo_api",
+      name: "api",
+      displayName: "API",
+      path: checkoutPath,
+      branch: "feature/api",
+      baseBranch: "main",
+      issue: null,
+      intendedPr: null,
+      stackParentCheckoutId: null,
+      inferredPurpose: "implementation",
+      gateStatus: "not_started",
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    let seenRootPath = "";
+    const { server } = await createDaemonApp({
+      ...fixture,
+      providers: {
+        collectGitHubVersionControlSummary: async (rootPath) => {
+          seenRootPath = rootPath;
+          const summary = makeVcSummary(now);
+          return {
+            ...summary,
+            currentBranch: "feature/api",
+          };
+        },
+      },
+    });
+    const baseUrl = await listen(server);
+    try {
+      const refresh = await postJson<{ versionControl: { currentBranch: string; pullRequest: { number: number } } }>(
+        `${baseUrl}/api/workspaces/ws_structured/pr-refresh`,
+        { checkoutId: "co_api" },
+      );
+
+      expect(seenRootPath).toBe(checkoutPath);
+      expect(refresh.versionControl.currentBranch).toBe("feature/api");
+      expect(refresh.versionControl.pullRequest.number).toBe(42);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("repo CI route caches under repo identity with 180s TTL", async () => {
     const now = new Date("2026-05-27T00:00:00.000Z").toISOString();
     const providerCache = new Map<string, { expiresAt: number; value: unknown }>();

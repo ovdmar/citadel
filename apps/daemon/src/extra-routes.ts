@@ -47,8 +47,9 @@ export function registerWorkspaceExtraRoutes(input: {
     asyncRoute(async (req: express.Request, res: express.Response) => {
       const workspaceId = req.params.workspaceId;
       if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      const checkoutId = requestString(req.query.checkoutId);
       try {
-        const summary = await operations.listDeployedApps({ workspaceId });
+        const summary = await operations.listDeployedApps({ workspaceId, checkoutId });
         res.json(summary);
       } catch (error) {
         const message = error instanceof Error ? error.message : "deploy_hook_list_failed";
@@ -62,7 +63,8 @@ export function registerWorkspaceExtraRoutes(input: {
     asyncRoute(async (req: express.Request, res: express.Response) => {
       const workspaceId = req.params.workspaceId;
       if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
-      const body = (req.body ?? {}) as { name?: unknown };
+      const body = (req.body ?? {}) as { name?: unknown; checkoutId?: unknown };
+      const checkoutId = requestString(body.checkoutId);
       let appName: string | undefined;
       if (body.name !== undefined && body.name !== null && body.name !== "") {
         if (typeof body.name !== "string" || !/^[a-zA-Z0-9_.-]{1,80}$/.test(body.name.trim())) {
@@ -71,8 +73,13 @@ export function registerWorkspaceExtraRoutes(input: {
         appName = body.name.trim();
       }
       try {
-        const result = await operations.redeployApp({ workspaceId, appName });
-        emit("workspace.deploy.redeploy", { workspaceId, operationId: result.operationId, status: result.status });
+        const result = await operations.redeployApp({ workspaceId, checkoutId, appName });
+        emit("workspace.deploy.redeploy", {
+          workspaceId,
+          checkoutId,
+          operationId: result.operationId,
+          status: result.status,
+        });
         res.status(result.status === "succeeded" ? 202 : 424).json(result);
       } catch (error) {
         const message = error instanceof Error ? error.message : "deploy_hook_redeploy_failed";
@@ -392,6 +399,10 @@ export function registerWorkspaceExtraRoutes(input: {
       res.status(202).json({ hooked: true, operationId: hookResult.operationId });
     }),
   );
+}
+
+function requestString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 async function readGitHubQuota(

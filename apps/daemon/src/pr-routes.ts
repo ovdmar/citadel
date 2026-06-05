@@ -26,6 +26,7 @@ import {
   globalPrCacheKeyForWorkspace,
   writeGlobalPrSummary,
 } from "./global-pr-cache.js";
+import { checkoutVcCacheKey } from "./provider-cache.js";
 import { bustCacheByPrefixes } from "./workspace-fs-watcher.js";
 
 type ProviderCollectors = {
@@ -55,6 +56,10 @@ type HookEventRunner = {
     operationMessage?: string;
   }): Promise<{ operationId: string; ran: number }>;
 };
+
+function requestString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
 
 // Repo-level PR/CI routes + workspace-level batch poll, force-refresh, and
 // merge endpoints.
@@ -181,8 +186,18 @@ export function registerPrRoutes(input: {
       if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
       const workspace = store.listWorkspaces().find((candidate) => candidate.id === workspaceId);
       if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
-      const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+      const checkoutId = requestString((req.body as { checkoutId?: unknown } | null | undefined)?.checkoutId);
+      const checkout = checkoutId ? store.findWorkspaceCheckout(checkoutId) : null;
+      if (checkoutId && (!checkout || checkout.workspaceId !== workspace.id || checkout.archivedAt)) {
+        return res.status(404).json({ error: "checkout_not_found" });
+      }
+      const repoId = checkout?.repoId ?? workspace.repoId;
+      const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
+      const targetPath = checkout?.path ?? workspace.path;
+      const targetCacheKey = checkout
+        ? checkoutVcCacheKey(workspace.id, checkout.id, checkout.updatedAt)
+        : `vc:${workspace.id}:${workspace.updatedAt}`;
       // During gh cooldown, skip the cache-bust + fetch — serve whatever's in
       // cache decorated with cooldownUntil so the FE banner can render. No 503;
       // the response shape stays uniform across cooldown / normal.
@@ -190,19 +205,19 @@ export function registerPrRoutes(input: {
         const nameWithOwner = resolveRepoFullName(repo.id);
         bustCacheByPrefixes(
           providerCache,
-          [`vc:${workspace.id}`, `ci:${repo.id}`, nameWithOwner ? `ci:${nameWithOwner}` : null].filter(
-            Boolean,
-          ) as string[],
+          [targetCacheKey, `ci:${repo.id}`, nameWithOwner ? `ci:${nameWithOwner}` : null].filter(Boolean) as string[],
         );
-        const key = globalPrCacheKeyForWorkspace(workspace, {
-          resolveRepoFullName,
-          getSnapshot: (id) => store.getWorkspacePrSnapshot(id),
-        });
-        if (key) providerCache.delete(key);
+        if (!checkout) {
+          const key = globalPrCacheKeyForWorkspace(workspace, {
+            resolveRepoFullName,
+            getSnapshot: (id) => store.getWorkspacePrSnapshot(id),
+          });
+          if (key) providerCache.delete(key);
+        }
       }
       const versionControl: VersionControlSummary = await cachedProvider(
-        `vc:${workspace.id}:${workspace.updatedAt}`,
-        () => providers.collectGitHubVersionControlSummary(workspace.path, providerDepsForRepo(repo.id)),
+        targetCacheKey,
+        () => providers.collectGitHubVersionControlSummary(targetPath, providerDepsForRepo(repo.id)),
         VC_PROVIDER_CACHE_TTL_MS,
       );
       res.json({ versionControl: decorateWithCooldown(versionControl) });
