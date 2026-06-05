@@ -6,9 +6,46 @@ on:
     branches: [main]
 
 jobs:
-  check:
+  static:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Architecture and file-size checks
+        run: |
+          pnpm run check:arch
+          pnpm run check:size
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Dependency policy
+        run: pnpm run check:deps
+
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -16,21 +53,29 @@ jobs:
       - name: Install host tools
         run: sudo apt-get update && sudo apt-get install -y sqlite3 tmux
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+          run_install: false
+
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-
-      - name: Enable pnpm
-        run: corepack enable
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Check
-        run: make check
+      - name: Build workspace packages
+        run: pnpm -r --filter './packages/*' build
 
-      - name: Clean tmux after checks
+      - name: Unit tests with coverage
+        run: pnpm run coverage
+
+      - name: Clean tmux after unit tests
         if: always()
         run: |
           dir="/tmp/tmux-$(id -u)"
@@ -43,14 +88,125 @@ jobs:
             done
           fi
 
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm run build
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [desktop, tablet, mobile]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: sudo apt-get update && sudo apt-get install -y sqlite3 tmux
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm -r --filter './packages/*' build
+
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
-      - name: End-to-end
+      - name: End-to-end (${{ matrix.project }})
+        run: pnpm e2e:isolated --project=${{ matrix.project }} --workers=1
+
+      - name: Clean tmux after e2e
+        if: always()
         run: |
-          pnpm e2e:isolated --project=desktop --workers=1
-          pnpm e2e:isolated --project=tablet --workers=1
-          pnpm e2e:isolated --project=mobile --workers=1
+          dir="/tmp/tmux-$(id -u)"
+          if [ -d "$dir" ]; then
+            for socket in "$dir"/*; do
+              [ -e "$socket" ] || continue
+              name="$(basename "$socket")"
+              tmux -L "$name" kill-server || true
+              rm -f "$socket" || true
+            done
+          fi
+
+      - name: Dump Playwright log on failure
+        if: failure()
+        run: |
+          echo "=== /tmp/citadel-playwright-daemon.log ==="
+          cat /tmp/citadel-playwright-daemon.log || echo "(no Playwright daemon log)"
+          echo "=== ss -tlnp ==="
+          ss -tlnp 2>/dev/null | head -20 || true
+          echo "=== ls .citadel ==="
+          ls -la .citadel 2>&1 || true
+
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: sudo apt-get update && sudo apt-get install -y sqlite3 tmux
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.2
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm -r --filter './packages/*' build
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
 
       - name: Startup and performance smoke
         env:
@@ -82,3 +238,29 @@ jobs:
           ss -tlnp 2>/dev/null | head -20 || true
           echo "=== ls .citadel ==="
           ls -la .citadel 2>&1 || true
+
+      - name: Clean tmux after smoke
+        if: always()
+        run: |
+          dir="/tmp/tmux-$(id -u)"
+          if [ -d "$dir" ]; then
+            for socket in "$dir"/*; do
+              [ -e "$socket" ] || continue
+              name="$(basename "$socket")"
+              tmux -L "$name" kill-server || true
+              rm -f "$socket" || true
+            done
+          fi
+
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [static, unit, build, e2e, smoke]
+    if: ${{ always() }}
+    steps:
+      - name: Require all CI jobs
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+        run: exit 1
+
+      - name: All CI jobs passed
+        run: echo "All CI jobs passed."

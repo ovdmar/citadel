@@ -595,6 +595,14 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall, 
     emit("workspace.deploy.redeploy", { workspaceId, operationId: result.operationId, status: result.status });
     return result;
   }
+  if (call.name === "undeploy_app") {
+    const workspaceId = typeof call.arguments?.workspaceId === "string" ? call.arguments.workspaceId : "";
+    if (!workspaceId) return { error: "workspace_id_required" };
+    const name = typeof call.arguments?.name === "string" ? call.arguments.name : undefined;
+    const result = await operations.undeployApp({ workspaceId, appName: name });
+    emit("workspace.deploy.undeploy", { workspaceId, operationId: result.operationId, status: result.status });
+    return result;
+  }
   if (call.name === "send_agent_message") {
     const sessionId = typeof call.arguments?.sessionId === "string" ? call.arguments.sessionId : "";
     const message = typeof call.arguments?.message === "string" ? call.arguments.message : "";

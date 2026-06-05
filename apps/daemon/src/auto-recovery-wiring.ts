@@ -16,6 +16,8 @@ import { parsePositiveInt } from "./app-helpers.js";
 import { FIX_CI_PROMPT, decideAutoRecoveryAction } from "./auto-recovery.js";
 import { cachedCiOrDisabled, githubCiCacheKey, shouldFetchGithubCi } from "./gh-automation.js";
 import type { GhScheduler } from "./gh-scheduler.js";
+import type { GitHubProviderStateService } from "./github-provider-state.js";
+import { ciCacheKey, vcCacheKey } from "./provider-cache.js";
 import { fetchVersionControlGated } from "./vc-fetch-gated.js";
 
 export type AutoRecoveryWiringDeps = {
@@ -30,6 +32,7 @@ export type AutoRecoveryWiringDeps = {
   shouldRun?: () => boolean;
   fetchVersionControl?: (workspacePath: string) => Promise<VersionControlSummary>;
   fetchCi?: (workspacePath: string) => Promise<CiProviderSummary>;
+  github?: GitHubProviderStateService;
   providerCache?: ProviderCache;
   scheduler?: GhScheduler;
   resolveRepoFullName?: (repoId: string) => string | null;
@@ -48,7 +51,8 @@ function readEnvKnobs(config: CitadelConfig) {
 }
 
 export function startDaemonAutoRecoveryMonitor(deps: AutoRecoveryWiringDeps): AutoRecoveryMonitorHandle | null {
-  const cachedFetchers = buildCachedAutoRecoveryFetchers(deps);
+  const githubFetchers = deps.github ? buildGitHubStateAutoRecoveryFetchers(deps, deps.github) : null;
+  const cachedFetchers = githubFetchers ? null : buildCachedAutoRecoveryFetchers(deps);
   return startAutoRecoveryMonitor(
     {
       store: deps.store,
@@ -56,9 +60,14 @@ export function startDaemonAutoRecoveryMonitor(deps: AutoRecoveryWiringDeps): Au
       decide: decideAutoRecoveryAction,
       fetchVersionControl:
         deps.fetchVersionControl ??
+        githubFetchers?.fetchVersionControl ??
         cachedFetchers?.fetchVersionControl ??
         ((workspacePath) => collectGitHubVersionControlSummary(workspacePath)),
-      fetchCi: deps.fetchCi ?? cachedFetchers?.fetchCi ?? ((workspacePath) => collectGitHubCiRuns(workspacePath)),
+      fetchCi:
+        deps.fetchCi ??
+        githubFetchers?.fetchCi ??
+        cachedFetchers?.fetchCi ??
+        ((workspacePath) => collectGitHubCiRuns(workspacePath)),
       spawnAutoRecoveryAgent: async ({ workspaceId, runtimeId, prompt }) => {
         const runtime = deps.config.agentRuntimes.find((candidate) => candidate.id === runtimeId);
         if (!runtime) throw new Error(`runtime_not_found:${runtimeId}`);
@@ -134,6 +143,31 @@ function uniqueRuntimeIds(ids: Array<string | null | undefined>): string[] {
   return result;
 }
 
+function buildGitHubStateAutoRecoveryFetchers(
+  deps: AutoRecoveryWiringDeps,
+  github: GitHubProviderStateService,
+): {
+  fetchVersionControl: (workspacePath: string) => Promise<VersionControlSummary>;
+  fetchCi: (workspacePath: string) => Promise<CiProviderSummary>;
+} {
+  return {
+    fetchVersionControl: (workspacePath) => {
+      const { workspace, repo } = findWorkspaceRepo(deps.store, workspacePath);
+      return github.fetchVersionControl(workspace, repo, vcCacheKey(workspace.id, workspace.updatedAt), {
+        intent: "automatic",
+      });
+    },
+    fetchCi: (workspacePath) => {
+      const { workspace, repo } = findWorkspaceRepo(deps.store, workspacePath);
+      return github.fetchCi(workspace, repo, {
+        cacheKey: ciCacheKey(workspace.id, workspace.updatedAt),
+        intent: "automatic",
+        ttlMs: 60_000,
+      });
+    },
+  };
+}
+
 function buildCachedAutoRecoveryFetchers(deps: AutoRecoveryWiringDeps): {
   fetchVersionControl: (workspacePath: string) => Promise<VersionControlSummary>;
   fetchCi: (workspacePath: string) => Promise<CiProviderSummary>;
@@ -152,20 +186,13 @@ function buildCachedAutoRecoveryFetchers(deps: AutoRecoveryWiringDeps): {
     resolveRepoFullName,
     cachedProvider,
   };
-  const findWorkspaceRepo = (workspacePath: string) => {
-    const workspace = deps.store.listWorkspaces().find((candidate) => candidate.path === workspacePath);
-    if (!workspace) throw new Error("workspace_not_found");
-    const repo = deps.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
-    if (!repo) throw new Error("repo_not_found");
-    return { workspace, repo };
-  };
   return {
     fetchVersionControl: (workspacePath) => {
-      const { workspace, repo } = findWorkspaceRepo(workspacePath);
+      const { workspace, repo } = findWorkspaceRepo(deps.store, workspacePath);
       return fetchVersionControlGated(gatedVcDeps, workspace, repo, `vc:${workspace.id}:${workspace.updatedAt}`);
     },
     fetchCi: (workspacePath) => {
-      const { workspace, repo } = findWorkspaceRepo(workspacePath);
+      const { workspace, repo } = findWorkspaceRepo(deps.store, workspacePath);
       const ciKey = githubCiCacheKey(
         workspace,
         repo,
@@ -180,4 +207,12 @@ function buildCachedAutoRecoveryFetchers(deps: AutoRecoveryWiringDeps): {
       return cachedProvider(ciKey, () => collectGitHubCiRuns(workspace.path), 60_000);
     },
   };
+}
+
+function findWorkspaceRepo(store: SqliteStore, workspacePath: string) {
+  const workspace = store.listWorkspaces().find((candidate) => candidate.path === workspacePath);
+  if (!workspace) throw new Error("workspace_not_found");
+  const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
+  if (!repo) throw new Error("repo_not_found");
+  return { workspace, repo };
 }

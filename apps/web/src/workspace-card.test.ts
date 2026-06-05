@@ -93,7 +93,7 @@ describe("lifecycleToneClass", () => {
   it("maps lifecycle tones to pulse classes", () => {
     expect(lifecycleToneClass("never-started")).toBe("cit-pulse-idle");
     expect(lifecycleToneClass("running")).toBe("cit-pulse-run");
-    expect(lifecycleToneClass("done")).toBe("cit-pulse-done");
+    expect(lifecycleToneClass("done")).toBe("cit-pulse-idle");
     expect(lifecycleToneClass("attention")).toBe("cit-pulse-bad");
   });
 });

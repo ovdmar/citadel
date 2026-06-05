@@ -4,7 +4,11 @@ import path from "node:path";
 import type { CitadelConfig } from "@citadel/config";
 import { SqliteStore } from "@citadel/db";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildStatusMonitorDeps, shouldReusePaneCaptureCache } from "./status-monitor-wiring.js";
+import {
+  DEFAULT_STATUS_MONITOR_INTERVAL_MS,
+  buildStatusMonitorDeps,
+  shouldReusePaneCaptureCache,
+} from "./status-monitor-wiring.js";
 
 // Shell-first wiring smoke tests. The legacy readSentinels stale-.exit guard
 // is gone (the wrapper that wrote those files is removed). The replacement
@@ -43,6 +47,10 @@ describe("buildStatusMonitorDeps — shell-first wiring", () => {
       terminal: { displayName: "Terminal", command: "bash", args: ["-l"] },
     } as unknown as CitadelConfig;
   }
+
+  it("uses a 2s default status-monitor cadence", () => {
+    expect(DEFAULT_STATUS_MONITOR_INTERVAL_MS).toBe(2000);
+  });
 
   it("exposes panePidProcess that returns null for a missing tmux session (the tmux_missing signal)", () => {
     const recent = new Map<string, number>();

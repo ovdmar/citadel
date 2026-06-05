@@ -185,6 +185,16 @@ Environment provided by Citadel: `CITADEL_WORKSPACE_ID`, `CITADEL_WORKSPACE_PATH
 
 The cockpit's deploy chip shows a spinner while the redeploy runs. If the redeploy hook restarts the daemon itself (as Citadel's own dev stack does — `make deploy` kills its own pgid), the cockpit keeps the spinner alive via a watchdog that polls `/api/state` until a newer `daemonStartedAt` token appears. Click-to-spinner latency is bounded to 1.5s even if the daemon is slow to answer the pre-fetch.
 
+### Undeploy hook
+
+The undeploy hook is an optional companion file at `.citadel/hooks/undeploy`. It has no repo-config fallback. When present and executable, Citadel shows an X beside redeploy controls for apps whose current probe status is `deployed`.
+
+Contract:
+
+- `<hook> [name]` → stops the named app, or all apps if no name. stdout/stderr stream back to the cockpit operation log.
+
+Environment and cwd match the deploy hook. A non-executable file surfaces a diagnostic note in the Local deploys panel.
+
 ### Teardown hook
 
 Teardown hooks run when a workspace is removed (not archived — archiving keeps the worktree on disk and skips both teardown paths). Like deploy, Citadel resolves teardown from two sources and runs both when both are present:

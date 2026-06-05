@@ -18,7 +18,6 @@ import {
   ClipboardList,
   FolderPlus,
   LayoutDashboard,
-  NotebookPen,
   PanelLeftClose,
   Plus,
   Settings2,
@@ -28,6 +27,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AddRepoModal } from "./add-repo-modal.js";
 import { api, queryClient } from "./api.js";
 import { type CreateWorkspaceIntent, CreateWorkspaceModal, GroupByMenu } from "./modals.js";
+import { NAMESPACE_REORDER_MIME, isNamespaceReorderDrag, namespaceIdsAfterMove } from "./namespace-order.js";
 import {
   COLLAPSE_STORAGE_KEY as COLLAPSE_STORAGE,
   GROUP_STORAGE_KEY as GROUP_STORAGE,
@@ -58,13 +58,14 @@ import {
   repoByGroupName,
   repoGroupNameFromPath,
 } from "./navigator-repo-groups.js";
+import { ScratchpadNavLink } from "./navigator-scratchpad-link.js";
 import {
   CheckoutNavCard,
   checkoutSessions,
   hasNestedCheckouts,
   workspaceCheckoutRows,
 } from "./navigator-workspace-cards.js";
-import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
+import type { AttentionSessionIds } from "./session-status-display.js";
 import { WorkspaceCard, lifecycleToneClass } from "./workspace-card.js";
 
 export { aggregateNavigatorTone };
@@ -97,6 +98,7 @@ export function Navigator(props: {
   onPickWorkspace: (workspace: Workspace) => void;
   onPickWorkspaceId: (workspaceId: string) => void;
   onPickTarget: (workspaceId: string, targetKey: string) => void;
+  unseenAttentionSessionIds?: AttentionSessionIds | undefined;
 }) {
   const location = useLocation();
   const path = location.pathname;
@@ -116,8 +118,6 @@ export function Navigator(props: {
   useEffect(() => {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(GROUP_STORAGE, JSON.stringify(grouping));
-    // Notify same-tab consumers (the cockpit's flatWorkspaceIds memo) that the
-    // grouping changed — the browser's `storage` event only fires across tabs.
     publishNavigatorGroupingChanged();
   }, [grouping]);
 
@@ -126,9 +126,6 @@ export function Navigator(props: {
     if (typeof window === "undefined") return;
     window.localStorage.setItem(COLLAPSE_STORAGE, JSON.stringify(collapsed));
   }, [collapsed]);
-  // External writers (e.g. cockpit nav shortcuts that auto-expand a group)
-  // mutate the same localStorage key and broadcast a custom event. Re-read
-  // and replace local state so the navigator visibly reflects the change.
   useEffect(() => subscribeToCollapseChanges(() => setCollapsed(readCollapsedMap())), []);
   const toggleCollapsed = useCallback((nodePath: string) => {
     setCollapsed((prev) => {
@@ -172,13 +169,8 @@ export function Navigator(props: {
   const groupByContainerRef = useRef<HTMLDivElement | null>(null);
   const [showAddRepo, setShowAddRepo] = useState(false);
 
-  // Per-group user-defined ordering, persisted in localStorage. Keyed by
-  // group path so switching grouping (repo ↔ status ↔ namespace ↔ none)
-  // selects a different order bucket and doesn't bleed across modes.
   const [navigatorOrder, setNavigatorOrder] = useState<Record<string, string[]>>(() => loadOrder());
   useEffect(() => saveOrder(navigatorOrder), [navigatorOrder]);
-  // Prune stale workspace ids on mount + whenever the workspace list
-  // changes, so dropped/removed workspaces don't linger in the order map.
   useEffect(() => {
     const liveIds = new Set(props.workspaces.map((w) => w.id));
     setNavigatorOrder((prev) => pruneOrder(prev, liveIds));
@@ -194,11 +186,6 @@ export function Navigator(props: {
     [],
   );
 
-  // Intentionally exclude props.activeSummary from buildGroupTree: status sections
-  // are derived from /api/state only, so the active workspace doesn't drift
-  // between sections each time the per-workspace cockpit-summary refetches.
-  // User-selected grouping levels nest in order. "workspace" is the default
-  // leaf/root workspace-card mode, so it is filtered out before tree building.
   const treeGrouping = useMemo<GroupableKey[]>(() => treeGroupingFor(grouping), [grouping]);
   const tree = useMemo(
     () =>
@@ -220,12 +207,10 @@ export function Navigator(props: {
     props.prByWorkspaceId,
     props.checkouts,
     props.checkoutPrByWorkspaceId,
+    props.unseenAttentionSessionIds,
   );
   const running = runningCount(props.sessions);
 
-  // Prune collapsed entries whose group no longer exists, so localStorage doesn't accumulate
-  // orphans across repo/workspace renames or deletions. Skip when grouping is off or the tree
-  // is empty, otherwise switching Group By off (or having no workspaces) would wipe everything.
   useEffect(() => {
     if (!treeGrouping.length || !tree.length) return;
     setCollapsed((prev) => {
@@ -256,6 +241,11 @@ export function Navigator(props: {
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
+  const reorderNamespaces = useMutation({
+    mutationFn: (namespaceIds: string[]) =>
+      api("/api/namespaces/reorder", { method: "POST", body: JSON.stringify({ namespaceIds }) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+  });
   const hideMainWorkspace = useMutation({
     mutationFn: (repoId: string) =>
       api(`/api/repos/${repoId}`, {
@@ -277,6 +267,13 @@ export function Navigator(props: {
       assignNamespace.mutate({ workspaceId, namespaceId });
     },
     [assignNamespace, props.workspaces],
+  );
+  const onReorderNamespace = useCallback(
+    (draggedId: string, targetId: string) => {
+      const namespaceIds = namespaceIdsAfterMove(props.namespaces, draggedId, targetId);
+      if (namespaceIds) reorderNamespaces.mutate(namespaceIds);
+    },
+    [props.namespaces, reorderNamespaces],
   );
 
   const renderWorkspace = useCallback(
@@ -328,6 +325,7 @@ export function Navigator(props: {
                   pullRequest={checkoutPullRequest({ checkout, workspacePullRequest, checkoutPrState })}
                   active={activeWorkspace && props.activeTargetKey === targetKey}
                   onSelect={() => props.onPickTarget(workspace.id, targetKey)}
+                  unseenAttentionSessionIds={props.unseenAttentionSessionIds}
                 />
               );
             })}
@@ -374,6 +372,7 @@ export function Navigator(props: {
             diffOverride={
               aggregateRow ? { additions: prAggregate.additions, deletions: prAggregate.deletions } : undefined
             }
+            unseenAttentionSessionIds={props.unseenAttentionSessionIds}
             allowRootDrop={structuredHome}
             rightControl={
               canHideMainWorkspace || canAttachCheckout || nested ? (
@@ -454,6 +453,7 @@ export function Navigator(props: {
                     pullRequest={checkoutPullRequest({ checkout, workspacePullRequest, checkoutPrState })}
                     active={activeWorkspace && props.activeTargetKey === targetKey}
                     onSelect={() => props.onPickTarget(workspace.id, targetKey)}
+                    unseenAttentionSessionIds={props.unseenAttentionSessionIds}
                   />
                 );
               })}
@@ -479,6 +479,7 @@ export function Navigator(props: {
       collapsedWorkspaceCheckouts,
       toggleWorkspaceCheckouts,
       hideMainWorkspace,
+      props.unseenAttentionSessionIds,
     ],
   );
   const flatEntries = useMemo<WorkspaceEntry[]>(
@@ -603,6 +604,7 @@ export function Navigator(props: {
                   dropTargetPath={dropTargetPath}
                   onDropTargetChange={setDropTargetPath}
                   onDropOnNamespace={onDropOnNamespace}
+                  onReorderNamespace={onReorderNamespace}
                   repos={props.repos}
                 />
               ))}
@@ -660,14 +662,11 @@ type GroupNodeViewProps = {
   collapsed: Record<string, boolean>;
   onToggle: (path: string) => void;
   renderWorkspace: (entry: WorkspaceEntry, groupPath: string, visibleIds: readonly string[]) => React.ReactNode;
-  // Per-group user-defined ordering map (keyed by node.path), consumed in
-  // the leaf branch via applyLocalOrder before rendering workspace cards.
   navigatorOrder: Record<string, string[]>;
-  // Namespace leaves accept workspace drops; non-namespace groupings simply
-  // ignore these.
   dropTargetPath: string | null;
   onDropTargetChange: (path: string | null) => void;
   onDropOnNamespace: (event: React.DragEvent, namespaceId: string | null) => void;
+  onReorderNamespace: (draggedId: string, targetId: string) => void;
   repos: Repo[];
 };
 
@@ -682,30 +681,43 @@ function GroupNodeView(props: GroupNodeViewProps) {
     dropTargetPath,
     onDropTargetChange,
     onDropOnNamespace,
+    onReorderNamespace,
     repos,
   } = props;
   const isCollapsed = collapsed[node.path] === true;
-  // encodeURIComponent keeps DOM ids unique even when group labels contain spaces,
-  // slashes, or other characters that would otherwise collapse to the same id.
   const headerId = `nav-group-${encodeURIComponent(node.path)}`;
   const bodyId = `${headerId}-body`;
   const style = depth > 0 ? { paddingLeft: depth * DEPTH_INDENT_PX } : undefined;
-  // Namespace leaves carry namespaceId (null === "Uncategorized" drop target).
   const acceptsDrop = node.kind === "leaf" && node.namespaceId !== undefined;
-  const isDropHover = acceptsDrop && dropTargetPath === node.path;
-  const dropHandlers = acceptsDrop
-    ? {
-        onDragOver: (event: React.DragEvent) => {
-          if (event.dataTransfer.types.includes("application/x-citadel-workspace-id")) {
-            event.preventDefault();
-            event.dataTransfer.dropEffect = "move";
-            onDropTargetChange(node.path);
-          }
-        },
-        onDragLeave: () => onDropTargetChange(null),
-        onDrop: (event: React.DragEvent) => onDropOnNamespace(event, node.namespaceId ?? null),
-      }
-    : {};
+  const acceptsNamespaceReorder = node.kind === "leaf" && typeof node.namespaceId === "string";
+  const isDropHover = (acceptsDrop || acceptsNamespaceReorder) && dropTargetPath === node.path;
+  const dropHandlers =
+    acceptsDrop || acceptsNamespaceReorder
+      ? {
+          onDragOver: (event: React.DragEvent) => {
+            const types = Array.from(event.dataTransfer.types);
+            if (
+              (acceptsNamespaceReorder && isNamespaceReorderDrag(types)) ||
+              (acceptsDrop && types.includes("application/x-citadel-workspace-id"))
+            ) {
+              event.preventDefault();
+              event.dataTransfer.dropEffect = "move";
+              onDropTargetChange(node.path);
+            }
+          },
+          onDragLeave: () => onDropTargetChange(null),
+          onDrop: (event: React.DragEvent) => {
+            const namespaceId = event.dataTransfer.getData(NAMESPACE_REORDER_MIME);
+            if (acceptsNamespaceReorder && namespaceId && typeof node.namespaceId === "string") {
+              event.preventDefault();
+              onDropTargetChange(null);
+              onReorderNamespace(namespaceId, node.namespaceId);
+              return;
+            }
+            if (acceptsDrop) onDropOnNamespace(event, node.namespaceId ?? null);
+          },
+        }
+      : {};
   const currentRepo = repoByGroupName(currentRepoGroupNameFromPath(node.path), repos);
   return (
     <div className={`nav-group ${isDropHover ? "drop-hover" : ""}`} style={style} {...dropHandlers}>
@@ -716,6 +728,12 @@ function GroupNodeView(props: GroupNodeViewProps) {
         aria-expanded={!isCollapsed}
         aria-controls={bodyId}
         onClick={() => onToggle(node.path)}
+        draggable={acceptsNamespaceReorder}
+        onDragStart={(event) => {
+          if (!acceptsNamespaceReorder || typeof node.namespaceId !== "string") return;
+          event.dataTransfer.setData(NAMESPACE_REORDER_MIME, node.namespaceId);
+          event.dataTransfer.effectAllowed = "move";
+        }}
       >
         <ChevronRight size={11} className={`nav-group-chevron ${isCollapsed ? "" : "open"}`} aria-hidden="true" />
         <span className="nav-group-label-stack">
@@ -745,14 +763,12 @@ function GroupNodeView(props: GroupNodeViewProps) {
                 dropTargetPath={dropTargetPath}
                 onDropTargetChange={onDropTargetChange}
                 onDropOnNamespace={onDropOnNamespace}
+                onReorderNamespace={onReorderNamespace}
                 repos={repos}
               />
             ))
           ) : node.workspaces.length ? (
             (() => {
-              // Apply the per-group user-defined order before rendering.
-              // The visibleIds list is recomputed here so card reorder
-              // callbacks have the current rendered sequence to splice into.
               const ordered = applyLocalOrder(node.workspaces, navigatorOrder[node.path]);
               const visibleIds = ordered.map((entry) => entry.workspace.id);
               return ordered.map((entry) => renderWorkspace(entry, node.path, visibleIds));
@@ -763,26 +779,5 @@ function GroupNodeView(props: GroupNodeViewProps) {
         </div>
       )}
     </div>
-  );
-}
-
-function ScratchpadNavLink() {
-  const { open, toggle } = useScratchpadDrawer();
-  const isMac =
-    typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
-  const hint = isMac ? "Shift+Cmd+S" : "Shift+Ctrl+S";
-  return (
-    <button
-      type="button"
-      className={`nav-link-button${open ? " active" : ""}`}
-      onClick={toggle}
-      title={`Scratchpad — markdown notes orchestrator agents can read via MCP (${hint})`}
-      aria-pressed={open}
-    >
-      <NotebookPen size={13} /> Scratchpad
-      <kbd className="nav-kbd-hint" aria-hidden>
-        {hint}
-      </kbd>
-    </button>
   );
 }

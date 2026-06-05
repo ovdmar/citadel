@@ -69,6 +69,23 @@ function backfillWorkspaceTmuxSocketNames(db: SqliteDatabase, tableName: Session
   }
 }
 
+function backfillNamespacePositions(db: SqliteDatabase): void {
+  const summary = db
+    .prepare("SELECT COUNT(*) AS total, COUNT(DISTINCT position) AS distinct_positions FROM namespaces")
+    .get() as { total: number; distinct_positions: number } | undefined;
+  if (!summary || summary.total <= 1 || summary.distinct_positions > 1) return;
+  const rows = db.prepare("SELECT id FROM namespaces ORDER BY name").all() as Array<{ id: string }>;
+  const update = db.prepare("UPDATE namespaces SET position = ? WHERE id = ?");
+  db.exec("BEGIN");
+  try {
+    for (const [index, row] of rows.entries()) update.run((index + 1) * 1024, row.id);
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw err;
+  }
+}
+
 export function runMigrations(
   db: SqliteDatabase,
   ensureColumn: (table: string, column: string, definition: string) => void,
@@ -187,11 +204,14 @@ export function runMigrations(
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL UNIQUE,
       color TEXT,
+      position INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       archived_at TEXT
     );
   `);
+  ensureColumn("namespaces", "position", "INTEGER NOT NULL DEFAULT 0");
+  backfillNamespacePositions(db);
   ensureColumn("workspaces", "namespace_id", "TEXT REFERENCES namespaces(id)");
   db.exec(`
     CREATE TABLE IF NOT EXISTS scheduled_agents (

@@ -161,7 +161,7 @@ describe("aggregateNavigatorTone", () => {
     ).toBe("running");
   });
 
-  it("attention short-circuits over both running and done", () => {
+  it("unseen attention short-circuits over both running and done", () => {
     expect(
       aggregateNavigatorTone(
         [makeWorkspace({ id: "w1" }), makeWorkspace({ id: "w2" }), makeWorkspace({ id: "w3" })],
@@ -171,8 +171,24 @@ describe("aggregateNavigatorTone", () => {
           makeAgent({ id: "c", workspaceId: "w3", status: "failed" }),
         ],
         undefined,
+        [],
+        undefined,
+        new Set(["c"]),
       ),
     ).toBe("attention");
+  });
+
+  it("acknowledged attention no longer short-circuits running workspaces", () => {
+    expect(
+      aggregateNavigatorTone(
+        [makeWorkspace({ id: "w1" }), makeWorkspace({ id: "w2" })],
+        [
+          makeAgent({ id: "a", workspaceId: "w1", status: "running" }),
+          makeAgent({ id: "b", workspaceId: "w2", status: "failed" }),
+        ],
+        undefined,
+      ),
+    ).toBe("running");
   });
 
   it("PR with a failing check on one workspace escalates the global tone to attention", () => {

@@ -346,10 +346,22 @@
   margin: 0;
 }
 
+.panel-title-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .app-chip .app-chip-link {
   color: inherit;
   text-decoration: none;
   font-weight: 600;
+}
+
+.app-chip .app-chip-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .app-chip .icon-button {
@@ -357,9 +369,12 @@
   border: 0;
   cursor: pointer;
   color: inherit;
-  padding: 0 2px;
+  padding: 0;
+  width: 18px;
+  height: 18px;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   opacity: 0.75;
 }
 

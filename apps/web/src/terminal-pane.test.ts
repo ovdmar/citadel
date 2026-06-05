@@ -36,6 +36,7 @@ const xtermMocks = vi.hoisted(() => {
     writes: string[] = [];
     focus = vi.fn();
     dispose = vi.fn();
+    refresh = vi.fn();
     selectAll = vi.fn();
     hasSelection = vi.fn(() => true);
     getSelection = vi.fn(() => "selected text");
@@ -185,7 +186,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     );
   });
 
-  it("keeps retained hidden panes dormant until they become active", async () => {
+  it("keeps retained panes attached while inactive so pane switches do not replay", async () => {
     const rootElement = document.createElement("div");
     document.body.appendChild(rootElement);
     const root = createRoot(rootElement);
@@ -193,12 +194,25 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const session = sessionFixture();
 
     await flushReactUpdate(async () => {
+      root.render(createElement(TerminalPane, { session, active: true }));
+    });
+
+    expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
+    expect(xtermMocks.FakeTerminal.instances).toHaveLength(1);
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    if (!ws) throw new Error("terminal rig missing");
+    await flushReactUpdate(async () => ws.open());
+    expect(getTerminalHandle("sess_1")?.canAcceptVoiceInput()).toBe(true);
+
+    await flushReactUpdate(async () => {
       root.render(createElement(TerminalPane, { session, active: false }));
     });
 
-    expect(TerminalPaneWebSocketMock.instances).toHaveLength(0);
-    expect(xtermMocks.FakeTerminal.instances).toHaveLength(0);
-    expect(getTerminalHandle("sess_1")).toBeDefined();
+    expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
+    expect(xtermMocks.FakeTerminal.instances).toHaveLength(1);
+    expect(TerminalPaneWebSocketMock.instances[0]?.readyState).toBe(TerminalPaneWebSocketMock.OPEN);
+    expect(xtermMocks.FakeTerminal.instances[0]?.dispose).not.toHaveBeenCalled();
+    expect(getTerminalHandle("sess_1")?.canAcceptVoiceInput()).toBe(false);
 
     await flushReactUpdate(async () => {
       root.render(createElement(TerminalPane, { session, active: true }));
@@ -206,13 +220,9 @@ describe("TerminalPane xterm WebSocket renderer", () => {
 
     expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
     expect(xtermMocks.FakeTerminal.instances).toHaveLength(1);
-
-    await flushReactUpdate(async () => {
-      root.render(createElement(TerminalPane, { session, active: false }));
-    });
-
-    expect(TerminalPaneWebSocketMock.instances[0]?.readyState).toBe(TerminalPaneWebSocketMock.CLOSED);
-    expect(xtermMocks.FakeTerminal.instances[0]?.dispose).toHaveBeenCalled();
+    expect(xtermMocks.FakeTerminal.instances[0]?.dispose).not.toHaveBeenCalled();
+    expect(getTerminalHandle("sess_1")).toBeDefined();
+    expect(getTerminalHandle("sess_1")?.canAcceptVoiceInput()).toBe(true);
   });
 
   it("writes WebSocket output to xterm and sends input over the same socket", async () => {

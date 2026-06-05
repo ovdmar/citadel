@@ -64,6 +64,17 @@
   font-size: 13px;
 }
 
+.namespace-card-drag {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+  cursor: grab;
+}
+
+.namespace-card-drag:active {
+  cursor: grabbing;
+}
+
 .namespace-card-count {
   font-size: 11px;
   color: var(--text-muted);

@@ -10,7 +10,9 @@ import { useMutation } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useState } from "react";
 import { api, queryClient } from "./api.js";
+import { type StateResponse, useOptimisticRemove } from "./app-state.js";
 import { repoNameWithOwner } from "./repo-labels.js";
+import type { AttentionSessionIds } from "./session-status-display.js";
 import { useToast } from "./toast.js";
 import { useOverlayPresent } from "./use-overlay-present.js";
 import { type PrTone, WorkspaceCard, approvalToneFor, prToneFor } from "./workspace-card.js";
@@ -24,6 +26,7 @@ type CheckoutNavCardProps = {
   pullRequest: PullRequestSummary | null;
   active: boolean;
   onSelect: () => void;
+  unseenAttentionSessionIds?: AttentionSessionIds | undefined;
 };
 
 export function hasNestedCheckouts(checkouts: readonly WorktreeCheckout[]): boolean {
@@ -80,7 +83,6 @@ export function workspaceCheckoutRows(
 export function CheckoutNavCard(props: CheckoutNavCardProps) {
   const [confirmDrop, setConfirmDrop] = useState(false);
   const displayName = props.checkout.displayName ?? props.checkout.name;
-  const repoLabel = repoNameWithOwner(props.repo);
   const workspaceForCard: Workspace = {
     ...props.workspace,
     repoId: props.checkout.repoId,
@@ -88,9 +90,9 @@ export function CheckoutNavCard(props: CheckoutNavCardProps) {
     branch: props.checkout.branch,
     baseBranch: props.checkout.baseBranch,
     kind: "worktree",
-    issueKey: props.checkout.issue?.key ?? props.workspace.issueKey,
-    issueTitle: props.checkout.issue?.title ?? props.workspace.issueTitle,
-    issueUrl: props.checkout.issue?.url ?? props.workspace.issueUrl,
+    issueKey: null,
+    issueTitle: null,
+    issueUrl: null,
   };
   const prTone = props.pullRequest ? prToneFor(props.pullRequest) : checkoutPrTone(props.checkout);
   const branchLabel = checkoutBranchLabel(props.checkout, props.repo);
@@ -110,7 +112,6 @@ export function CheckoutNavCard(props: CheckoutNavCardProps) {
         branchTitle={branchTitle}
         cardTitle={branchTitle}
         displayTitle={displayName}
-        titlePrefix={repoLabel}
         renameLabel="Rename worktree card"
         onRename={(nextName) =>
           api(`/api/workspaces/${props.workspace.id}/checkouts/${props.checkout.id}`, {
@@ -119,6 +120,7 @@ export function CheckoutNavCard(props: CheckoutNavCardProps) {
           })
         }
         prToneOverride={prTone}
+        unseenAttentionSessionIds={props.unseenAttentionSessionIds}
         disableDrop
       />
       <button
@@ -153,7 +155,9 @@ type DropCheckoutResult = {
 
 function DropCheckoutDialog(props: { workspace: Workspace; checkout: WorktreeCheckout; onClose: () => void }) {
   useOverlayPresent();
+  const optimistic = useOptimisticRemove();
   const toast = useToast();
+  const checkoutId = props.checkout.id;
   const drop = useMutation({
     mutationFn: async (): Promise<DropCheckoutResult> => {
       const response = await fetch(
@@ -169,21 +173,38 @@ function DropCheckoutDialog(props: { workspace: Workspace; checkout: WorktreeChe
         dirtySummary: body.dirtySummary ?? null,
       };
     },
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ["state"] });
+    onMutate: () => {
+      optimistic.addCheckout(checkoutId);
+      const previous = queryClient.getQueryData<StateResponse>(["state"]);
+      if (previous) {
+        queryClient.setQueryData<StateResponse>(["state"], {
+          ...previous,
+          checkouts: previous.checkouts.filter((checkout) => checkout.id !== checkoutId),
+        });
+      }
+      return { previous };
+    },
+    onSuccess: (result, _vars, context) => {
       if (result.removed) {
+        queryClient.invalidateQueries({ queryKey: ["state"] });
         props.onClose();
         return;
       }
+      if (context?.previous) queryClient.setQueryData(["state"], context.previous);
+      queryClient.invalidateQueries({ queryKey: ["state"] });
       const reason = result.dirty ? "uncommitted changes or unpushed commits" : (result.error ?? "teardown failed");
       toast.push({ tone: "error", message: `Drop "${props.checkout.name}" failed: ${reason}` });
     },
-    onError: (error) => {
+    onError: (error, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(["state"], context.previous);
       queryClient.invalidateQueries({ queryKey: ["state"] });
       toast.push({
         tone: "error",
         message: `Drop "${props.checkout.name}" failed: ${error instanceof Error ? error.message : "network error"}`,
       });
+    },
+    onSettled: () => {
+      optimistic.removeCheckout(checkoutId);
     },
   });
   const dirtySummary = drop.data?.dirtySummary ?? null;

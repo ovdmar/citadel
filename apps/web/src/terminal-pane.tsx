@@ -6,11 +6,23 @@ import { Button } from "./components/ui/button.js";
 import { isElementVoiceVisible } from "./lib/voice-targets.js";
 import { matchShortcut } from "./shortcuts.js";
 import { writeTerminalBinary } from "./terminal-binary-writer.js";
+import { type TerminalHandle, publishTerminalHandle, registerTerminalHost } from "./terminal-pane-registry.js";
 import { addTerminalResumeReconnectListeners } from "./terminal-resume-reconnect.js";
 import { postTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
+import { type TerminalSocketMessage, parseTerminalSocketMessage } from "./terminal-socket-message.js";
 import { xtermTheme } from "./terminal-theme.js";
 import { readOverlayCount } from "./use-overlay-present.js";
 import { useResolvedTheme } from "./use-resolved-theme.js";
+export {
+  focusActiveTerminal,
+  getDefaultVoiceTerminalSessionId,
+  getFocusedTerminalSessionId,
+  getTerminalHandle,
+  isRegisteredTerminalMessageSource,
+  setDefaultVoiceTerminalSession,
+  subscribeTerminalHandle,
+} from "./terminal-pane-registry.js";
+export type { TerminalHandle } from "./terminal-pane-registry.js";
 
 type TerminalError = {
   code: string;
@@ -35,14 +47,9 @@ const TERMINAL_AUTO_RETRY_BACKOFF_MS = 5_000;
 const TERMINAL_PTY_INPUT_FLUSH_MS = 4;
 const AUTO_RETRYABLE_TERMINAL_ERRORS = new Set(["terminal_disconnected", "terminal_socket_error"]);
 const RUNTIME_MOUSE_EVENT_RUNTIMES = new Set(["claude-code"]);
-type TerminalPaneKey = typeof LINE_START_KEY | typeof LINE_END_KEY | typeof LINE_KILL_KEY;
-
-export type TerminalSocketMessage = {
-  type?: string;
-  data?: string;
-  key?: TerminalPaneKey;
-  lines?: number;
-};
+export type TerminalPaneKey = typeof LINE_START_KEY | typeof LINE_END_KEY | typeof LINE_KILL_KEY;
+export { parseTerminalSocketMessage };
+export type { TerminalSocketMessage };
 
 /**
  * Per-session handle used by Stage tabs and Shell-level voice dictation to
@@ -52,69 +59,6 @@ export type TerminalSocketMessage = {
  *
  * Keyed by session id. TerminalPane registers on mount and clears on unmount.
  */
-export type TerminalHandle = {
-  reload: () => void;
-  // Historical name kept for Stage callers; now focuses the in-process xterm.
-  focusIframe: () => void;
-  recoverIfDisconnected: () => boolean;
-  sendVoiceInput: (text: string, options: { submit: boolean }) => boolean;
-  canAcceptVoiceInput: () => boolean;
-};
-
-const REGISTRY = new Map<string, TerminalHandle>();
-const HOST_REGISTRY = new Map<string, HTMLElement>();
-const LISTENERS = new Set<(id: string) => void>();
-
-function publish(id: string, handle: TerminalHandle | null) {
-  if (handle) {
-    REGISTRY.set(id, handle);
-  } else {
-    REGISTRY.delete(id);
-  }
-  for (const listener of LISTENERS) listener(id);
-}
-
-export function getTerminalHandle(sessionId: string): TerminalHandle | undefined {
-  return REGISTRY.get(sessionId);
-}
-
-export function getFocusedTerminalSessionId(activeElement: Element | null = document.activeElement): string | null {
-  if (!(activeElement instanceof HTMLElement)) return null;
-  for (const [sessionId, host] of HOST_REGISTRY) {
-    if (!host.isConnected) continue;
-    if (!isElementVoiceVisible(host)) continue;
-    if (host === activeElement || host.contains(activeElement)) return sessionId;
-  }
-  return null;
-}
-
-export function subscribeTerminalHandle(listener: (sessionId: string) => void): () => void {
-  LISTENERS.add(listener);
-  return () => LISTENERS.delete(listener);
-}
-
-export function isRegisteredTerminalMessageSource(
-  _source: MessageEventSource | null,
-  sessionId: string | null | undefined,
-): boolean {
-  return Boolean(sessionId && REGISTRY.has(sessionId));
-}
-
-// Focus the terminal of an active session. No-op when:
-//   - sessionId is null/undefined (workspace has no active session)
-//   - no handle is registered (session not yet mounted)
-//   - document.activeElement is a text input or contenteditable (don't steal
-//     focus while the user is typing — e.g. inline workspace-title rename).
-export function focusActiveTerminal(sessionId: string | null | undefined): void {
-  if (!sessionId) return;
-  const handle = REGISTRY.get(sessionId);
-  if (!handle) return;
-  const active = typeof document !== "undefined" ? document.activeElement : null;
-  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return;
-  if (active instanceof HTMLElement && active.isContentEditable) return;
-  handle.focusIframe();
-}
-
 export function TerminalPane(props: { session: WorkspaceSession; active?: boolean }) {
   const sessionId = props.session.id;
   const active = props.active ?? true;
@@ -127,6 +71,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
   const encoderRef = useRef(new TextEncoder());
   const autoRetryAttemptsRef = useRef(0);
   const autoRetryTimerRef = useRef<number | null>(null);
+  const requestResizeRef = useRef<(() => void) | null>(null);
   const forwardWheelToRuntime = shouldForwardWheelToRuntime(props.session);
   themeRef.current = theme;
   const [connectionState, setConnectionState] = useState<"connecting" | "attached" | "disconnected">("connecting");
@@ -242,10 +187,9 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
 
   useEffect(() => {
     void generation;
-    if (!active) return;
     const host = containerRef.current;
     if (!host) return;
-    HOST_REGISTRY.set(sessionId, host);
+    const unregisterTerminalHost = registerTerminalHost(sessionId, host);
     let disposed = false;
     let resizeFrame: number | null = null;
     let wheelFrame: number | null = null;
@@ -283,6 +227,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
 
     const runResize = () => {
       if (disposed) return;
+      if (!activeRef.current) return;
       try {
         fit.fit();
       } catch {
@@ -305,6 +250,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
         runResize();
       });
     };
+    requestResizeRef.current = scheduleResize;
     const flushWheelScroll = () => {
       wheelFrame = null;
       const lines = pendingWheelLines;
@@ -448,20 +394,34 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
       window.removeEventListener("resize", scheduleResize);
       ws.close();
       terminal.dispose();
+      if (requestResizeRef.current === scheduleResize) requestResizeRef.current = null;
       if (terminalRef.current === terminal) terminalRef.current = null;
       if (fitRef.current === fit) fitRef.current = null;
       if (wsRef.current === ws) wsRef.current = null;
-      if (HOST_REGISTRY.get(sessionId) === host) HOST_REGISTRY.delete(sessionId);
+      unregisterTerminalHost();
     };
-  }, [sessionId, generation, active, clearAutoRetryTimer, scheduleAutoRetry, forwardWheelToRuntime, coalesceInput]);
+  }, [sessionId, generation, clearAutoRetryTimer, scheduleAutoRetry, forwardWheelToRuntime, coalesceInput]);
+
+  useEffect(() => {
+    if (!active) return;
+    requestResizeRef.current?.();
+    const terminal = terminalRef.current;
+    if (terminal) terminal.refresh(0, Math.max(0, terminal.rows - 1));
+  }, [active]);
 
   // Publish the live URL + reload/focus/recover callbacks so nav selection and
   // tab actions can drive state owned by TerminalPane.
   // The status bar used to render these affordances inside the pane; that was
   // removed in favour of the tab actions, but the state still lives here.
   useEffect(() => {
-    publish(sessionId, { reload, focusIframe, recoverIfDisconnected, sendVoiceInput, canAcceptVoiceInput });
-    return () => publish(sessionId, null);
+    publishTerminalHandle(sessionId, {
+      reload,
+      focusIframe,
+      recoverIfDisconnected,
+      sendVoiceInput,
+      canAcceptVoiceInput,
+    });
+    return () => publishTerminalHandle(sessionId, null);
   }, [sessionId, reload, focusIframe, recoverIfDisconnected, sendVoiceInput, canAcceptVoiceInput]);
   return (
     <div className="terminal-shell">
@@ -744,16 +704,6 @@ async function pasteClipboardIntoTerminal(ws: WebSocket): Promise<void> {
 function isApplePlatform(): boolean {
   const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
   return /Mac|iPhone|iPad|iPod/.test(nav.userAgentData?.platform || navigator.platform || "");
-}
-
-export function parseTerminalSocketMessage(raw: unknown): TerminalSocketMessage | null {
-  if (typeof raw !== "string") return null;
-  try {
-    const parsed = JSON.parse(raw) as TerminalSocketMessage;
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
-  }
 }
 
 function recordTerminalClientEvent(sessionId: string, event: string, extra: Record<string, unknown> = {}) {

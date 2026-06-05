@@ -232,7 +232,6 @@ export function registerConfigRepoWorkspaceRoutes(input: {
       const issueKey = stringField(raw.issueKey);
       const name = uniqueCheckoutName({
         workspace,
-        repo,
         checkouts: store.listWorkspaceCheckouts(workspace.id),
         rawName: raw.name,
         issueKey,
@@ -322,24 +321,30 @@ function checkoutSource(value: unknown, branch: unknown): "default_branch" | "ex
   return stringField(branch) ? "existing_branch" : "default_branch";
 }
 
-function checkoutName(value: unknown, issueKey: string | null, fallbackName: string): string {
+function explicitCheckoutName(value: unknown, issueKey: string | null): string | null {
   const explicit = stringField(value);
   if (explicit) return slug(explicit);
   if (issueKey) return slug(issueKey);
-  return slug(fallbackName);
+  return null;
 }
 
 function uniqueCheckoutName(input: {
   workspace: { name: string; rootPath?: string | null | undefined; path: string };
-  repo: { name: string; providerRepositoryKey?: string | null | undefined; rootPath: string };
   checkouts: Array<{ name: string }>;
   rawName: unknown;
   issueKey: string | null;
 }): string {
   const existingNames = new Set(input.checkouts.map((checkout) => checkout.name));
   const rootPath = input.workspace.rootPath ?? input.workspace.path;
-  const defaultName = input.repo.providerRepositoryKey?.split("/").at(-1) ?? input.repo.name;
-  const base = checkoutName(input.rawName, input.issueKey, defaultName);
+  const base = explicitCheckoutName(input.rawName, input.issueKey);
+  if (!base) {
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const candidate = slug(generateFunnyName());
+      if (!existingNames.has(candidate) && !fs.existsSync(path.join(rootPath, candidate))) return candidate;
+    }
+    const fallback = slug(generateFunnyName());
+    return `${fallback}-${Date.now().toString(36)}`;
+  }
   for (let attempt = 0; attempt < 25; attempt += 1) {
     const candidate = attempt === 0 ? base : `${base}-${attempt + 1}`;
     if (!existingNames.has(candidate) && !fs.existsSync(path.join(rootPath, candidate))) return candidate;

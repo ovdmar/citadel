@@ -62,7 +62,7 @@ export { parseUsageLimitResetFromReason, deriveAccountUsageLimit, type AccountRa
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export { DEFAULT_AUTO_RESUME_INTERVAL_MS, startAutoResumeLoop, type AutoResumeDeps, type AutoResumeLoopHandle } from "./auto-resume.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import { type DeployOpsDeps, listDeployedApps as listDeployedAppsImpl, redeployApp as redeployAppImpl } from "./deploy.js";
+import { type DeployOpsDeps, listDeployedApps as listDeployedAppsImpl, redeployApp as redeployAppImpl, undeployApp as undeployAppImpl } from "./deploy.js";
 import { cancelOperationInStore, listHookDiagnostics, reconcileStore, tryRunGit } from "./helpers.js";
 
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
@@ -96,7 +96,7 @@ export function defaultWorktreeParent(rootPathInput: string, dataDir?: string): 
   return path.join(path.dirname(rootPath), `${repoDir}-worktrees`);
 }
 
-function redeployInflightKey(workspaceId: string, checkoutId: string | null | undefined): string {
+function deployActionInflightKey(workspaceId: string, checkoutId: string | null | undefined): string {
   return checkoutId ? `${workspaceId}:checkout:${checkoutId}` : `${workspaceId}:home`;
 }
 
@@ -371,11 +371,14 @@ export class OperationService {
       const result = await this.runWorkspaceAction({ repo, workspace, action });
       return { retried: true, operationId: result.operationId, status: result.status };
     }
-    if (kind === "deploy.redeploy") {
+    if (kind === "deploy.redeploy" || kind === "deploy.undeploy") {
       const workspaceId = operation.retryInput.workspaceId as string;
       const appName = (operation.retryInput.appName as string | null) ?? undefined;
       const checkoutId = (operation.retryInput.checkoutId as string | null) ?? undefined;
-      const result = await this.redeployApp({ workspaceId, checkoutId, appName });
+      const result =
+        kind === "deploy.redeploy"
+          ? await this.redeployApp({ workspaceId, checkoutId, appName })
+          : await this.undeployApp({ workspaceId, checkoutId, appName });
       return { retried: true, operationId: result.operationId, status: result.status };
     }
     return { retried: false, reason: "unknown_kind" as const };
@@ -529,26 +532,36 @@ export class OperationService {
 
   listDeployedApps = (input: { workspaceId: string; checkoutId?: string | null | undefined }) =>
     listDeployedAppsImpl(this.deployOpsDeps(), this.resolveRepoWorkspaceTarget(input));
-  private redeployInflight = new Map<string, ReturnType<typeof redeployAppImpl>>();
+  private deployActionInflight = new Map<string, ReturnType<typeof redeployAppImpl>>();
   redeployApp = (input: {
     workspaceId: string;
     checkoutId?: string | null | undefined;
     appName?: string | undefined;
-  }) => {
-    const key = redeployInflightKey(input.workspaceId, input.checkoutId);
-    const existing = this.redeployInflight.get(key);
+  }) => this.runDeployAction(input, redeployAppImpl);
+  undeployApp = (input: {
+    workspaceId: string;
+    checkoutId?: string | null | undefined;
+    appName?: string | undefined;
+  }) => this.runDeployAction(input, undeployAppImpl);
+
+  private runDeployAction(
+    input: { workspaceId: string; checkoutId?: string | null | undefined; appName?: string | undefined },
+    action: typeof redeployAppImpl,
+  ) {
+    const key = deployActionInflightKey(input.workspaceId, input.checkoutId);
+    const existing = this.deployActionInflight.get(key);
     if (existing) return existing;
     const target = this.resolveRepoWorkspaceTarget(input);
-    const promise = redeployAppImpl(this.deployOpsDeps(), {
+    const promise = action(this.deployOpsDeps(), {
       ...target,
       checkoutId: input.checkoutId ?? undefined,
       appName: input.appName,
     }).finally(() => {
-      this.redeployInflight.delete(key);
+      this.deployActionInflight.delete(key);
     });
-    this.redeployInflight.set(key, promise);
+    this.deployActionInflight.set(key, promise);
     return promise;
-  };
+  }
 
   private resolveRepoWorkspaceTarget(input: {
     workspaceId: string;
@@ -592,6 +605,7 @@ export class OperationService {
   renameNamespace = (id: string, patch: UpdateNamespaceInput) => namespaceOps.renameNamespace(this.nsDeps(), id, patch);
   archiveNamespace = (id: string) => namespaceOps.archiveNamespace(this.nsDeps(), id);
   restoreNamespace = (id: string) => namespaceOps.restoreNamespace(this.nsDeps(), id);
+  reorderNamespaces = (input: { namespaceIds: string[] }) => namespaceOps.reorderNamespaces(this.nsDeps(), input);
   assignWorkspaceToNamespace = (input: { workspaceId: string; namespaceId: string | null }) =>
     namespaceOps.assignWorkspaceToNamespace(this.nsDeps(), input);
   private nsDeps = (): namespaceOps.NamespaceServiceDeps => ({
