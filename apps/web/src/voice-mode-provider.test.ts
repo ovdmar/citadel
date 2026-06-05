@@ -253,6 +253,25 @@ describe("VoiceModeProvider", () => {
     expect(FakeSpeechRecognition.instances).toHaveLength(1);
   });
 
+  it("renders the overlay as a live region without stealing focus from the snapshotted input", async () => {
+    await renderProvider();
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    input.focus();
+
+    await flushReact(() => {
+      dispatchVoiceShortcut(input);
+    });
+
+    const overlay = document.querySelector(".voice-mode-overlay");
+    expect(overlay).toBeInstanceOf(HTMLOutputElement);
+    expect(overlay?.getAttribute("aria-live")).toBe("polite");
+    expect(document.activeElement).toBe(input);
+    expect(autoSubmitCheckbox()).toBeInstanceOf(HTMLInputElement);
+    expect(stopButton()).toBeInstanceOf(HTMLButtonElement);
+    expect(cancelButton()).toBeInstanceOf(HTMLButtonElement);
+  });
+
   it("lets terminal-focused voice shortcuts flow through the terminal shortcut bridge", async () => {
     terminalMocks.getFocusedTerminalSessionId.mockReturnValue("sess_1");
     await renderProvider();

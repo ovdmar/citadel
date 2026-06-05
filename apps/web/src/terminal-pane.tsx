@@ -41,10 +41,10 @@ export type TerminalSocketMessage = {
 };
 
 /**
- * Per-session handle used by Stage tabs to drive a live terminal WebSocket.
- * The in-pane status bar was removed; these affordances live on the tab now
- * and need access to state owned by TerminalPane, so we publish a tiny
- * registry on the window.
+ * Per-session handle used by Stage tabs and Shell-level voice dictation to
+ * drive a live terminal WebSocket. The in-pane status bar was removed; these
+ * affordances live outside TerminalPane and need access to its owned socket
+ * state, so we publish a tiny registry on the window.
  *
  * Keyed by session id. TerminalPane registers on mount and clears on unmount.
  */
