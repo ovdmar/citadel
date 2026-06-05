@@ -55,7 +55,6 @@ import {
   CheckoutNavCard,
   checkoutSessions,
   hasNestedCheckouts,
-  workspaceAggregateBranchLabel,
   workspaceCheckoutRows,
 } from "./navigator-workspace-cards.js";
 import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
@@ -297,9 +296,9 @@ export function Navigator(props: {
       const { visibleCheckouts, aggregateCheckouts } = workspaceCheckoutRows(workspace, checkouts);
       const nested = hasNestedCheckouts(visibleCheckouts);
       const aggregateRow = nested || (aggregateCheckouts.length > 0 && visibleCheckouts.length === 0);
-      const aggregateLabelCheckouts = visibleCheckouts.length > 0 ? visibleCheckouts : aggregateCheckouts;
       const workspaceCheckout = visibleCheckouts.length === 1 ? visibleCheckouts[0] : null;
       const activeWorkspace = workspace.id === props.activeWorkspaceId;
+      const structuredHome = workspace.kind === "root" && workspace.mode === "structured";
       const workspacePullRequest = props.prByWorkspaceId.get(workspace.id) ?? null;
       const checkoutPrState = props.checkoutPrByWorkspaceId.get(workspace.id);
       const prAggregate = aggregateWorkspacePrState({
@@ -376,19 +375,7 @@ export function Navigator(props: {
             }}
             active={cardActive}
             onSelect={() => props.onPickTarget(workspace.id, "home")}
-            branchLabel={
-              aggregateRow
-                ? workspaceAggregateBranchLabel({
-                    checkouts: aggregateLabelCheckouts,
-                    sessions,
-                    pullRequest: workspacePullRequest,
-                    prCount: prAggregate.prCount,
-                  })
-                : workspace.kind === "root" && workspace.mode === "structured"
-                  ? null
-                  : undefined
-            }
-            branchTitle={aggregateRow ? "Workspace aggregate" : undefined}
+            branchLabel={aggregateRow || structuredHome ? null : undefined}
             prToneOverride={aggregateRow ? prAggregate.prTone : undefined}
             diffOverride={
               aggregateRow ? { additions: prAggregate.additions, deletions: prAggregate.deletions } : undefined
@@ -485,7 +472,6 @@ export function Navigator(props: {
       toggleWorkspaceCheckouts,
     ],
   );
-
   const flatEntries = useMemo<WorkspaceEntry[]>(
     () =>
       props.workspaces.map((workspace) => ({

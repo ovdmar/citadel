@@ -65,6 +65,23 @@ describe("launchAgent", () => {
     // Auto-derived branch lives in the agent/ namespace, not on repo defaultBranch.
     expect(result.branchName).toMatch(/^agent\/auto-branch-[a-z0-9]{6}$/);
     expect(result.branchName).not.toBe(repo.defaultBranch);
+    expect(store.listWorkspaces().find((workspace) => workspace.id === result.workspaceId)).toMatchObject({
+      repoId: null,
+      kind: "root",
+      mode: "structured",
+      branch: "home",
+    });
+    expect(store.listWorkspaceCheckouts(result.workspaceId)).toMatchObject([
+      {
+        repoId: repo.id,
+        branch: result.branchName,
+        path: result.workspacePath,
+      },
+    ]);
+    expect(session).toMatchObject({
+      targetType: "worktree_checkout",
+      checkoutId: store.listWorkspaceCheckouts(result.workspaceId)[0]?.id,
+    });
   });
 
   it("auto-derives a fresh branch when caller passes the repo's default branch", async () => {
