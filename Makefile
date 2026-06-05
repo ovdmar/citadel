@@ -40,7 +40,19 @@ EFFECTIVE_WEB_PORT := $(shell v=$$([ -r $(DEV_STATE) ] && command -v jq >/dev/nu
 WORKTREE_MOCK_REPO       := $(CURDIR)/.citadel/mock-repo
 WORKTREE_MOCK_WORKTREES  := $(CURDIR)/.citadel/mock-worktrees
 
-.PHONY: help setup deploy install upgrade doctor tmux-service build check typecheck lint test coverage e2e smoke performance clean stop logs seed seed-reset
+CI_PORT                     ?= 4337
+CI_WEB_PORT                 ?= 5173
+CI_BASE_URL                 ?= http://127.0.0.1:$(CI_PORT)
+CI_DAEMON_URL               ?= http://127.0.0.1:$(CI_PORT)
+CI_E2E_PROJECTS             ?= desktop tablet mobile
+CI_PLAYWRIGHT_INSTALL_ARGS  ?= --with-deps chromium
+CI_DEV_LOG                  ?= /tmp/citadel-dev.log
+CI_PLAYWRIGHT_DAEMON_LOG    ?= /tmp/citadel-playwright-daemon.log
+CI_CLEAN_ALL_TMUX           ?= 0
+
+.NOTPARALLEL: ci
+
+.PHONY: help setup ci remote-checks ci-host-tools ci-setup ci-static ci-unit ci-build ci-install-playwright ci-e2e ci-smoke ci-clean-tmux ci-dump-playwright-log ci-dump-dev-log deploy install upgrade doctor tmux-service build check typecheck lint test coverage e2e smoke performance clean stop logs seed seed-reset
 
 help:
 	@echo "Citadel — scoped to: $(CURDIR)"
@@ -74,13 +86,152 @@ help:
 	@echo "                    re-seed from scratch. Use for a clean QA baseline."
 	@echo ""
 	@echo "Quality:"
-	@echo "  make check       typecheck + lint + test + build"
+	@echo "  make ci          Run every GitHub CI check locally (frozen install, static,"
+	@echo "                   coverage, build, e2e desktop/tablet/mobile, smoke, performance)"
+	@echo "  make check       typecheck + lint + coverage + build"
 	@echo "  make smoke       Local API smoke against a running daemon"
 	@echo "  make e2e         Playwright happy-path"
 	@echo "  make performance Local performance smoke"
 
 setup:
 	pnpm install
+
+remote-checks: ci
+
+ci: ci-host-tools ci-setup ci-static ci-unit ci-build ci-install-playwright ci-e2e ci-smoke
+
+ci-host-tools:
+	@missing=""; \
+	for bin in curl fuser git node pnpm setsid sqlite3 tmux; do \
+		if ! command -v "$$bin" >/dev/null 2>&1; then \
+			missing="$$missing $$bin"; \
+		fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "Missing tools required by GitHub CI:$$missing"; \
+		exit 127; \
+	fi; \
+	node_major="$$(FORCE_COLOR=0 node -p 'Number(process.versions.node.split(".")[0])')"; \
+	if [ "$$node_major" -lt 24 ]; then \
+		echo "GitHub CI uses Node 24; found $$(node --version)"; \
+		exit 1; \
+	fi
+
+ci-setup: ci-host-tools
+	pnpm install --frozen-lockfile
+
+ci-static:
+	pnpm run check:arch
+	pnpm run check:size
+	pnpm run typecheck
+	pnpm run lint
+	pnpm run check:deps
+
+ci-unit: ci-host-tools
+	@set -e; \
+	cleanup() { status=$$?; trap - EXIT INT TERM; bash scripts/dev/ci-clean-tmux.sh; exit $$status; }; \
+	trap cleanup EXIT INT TERM; \
+	pnpm run coverage
+
+ci-build:
+	pnpm run build
+
+ci-install-playwright:
+	pnpm exec playwright install $(CI_PLAYWRIGHT_INSTALL_ARGS)
+
+ci-e2e: ci-host-tools ci-install-playwright
+	@set -e; \
+	dump_playwright_log() { \
+		echo "=== $(CI_PLAYWRIGHT_DAEMON_LOG) ==="; \
+		cat "$(CI_PLAYWRIGHT_DAEMON_LOG)" || echo "(no Playwright daemon log)"; \
+		echo "=== ss -tlnp ==="; \
+		ss -tlnp 2>/dev/null | head -20 || true; \
+		echo "=== ls .citadel ==="; \
+		ls -la .citadel 2>&1 || true; \
+	}; \
+	for project in $(CI_E2E_PROJECTS); do \
+		echo "Running e2e ($$project)"; \
+		( \
+			set -e; \
+			cleanup() { \
+				status=$$?; \
+				trap - EXIT INT TERM; \
+				bash scripts/dev/ci-clean-tmux.sh; \
+				if [ "$$status" -ne 0 ]; then dump_playwright_log; fi; \
+				exit "$$status"; \
+			}; \
+			trap cleanup EXIT INT TERM; \
+			pnpm e2e:isolated --project="$$project" --workers=1 \
+		); \
+	done
+
+ci-smoke: ci-host-tools ci-install-playwright
+	@set -e; \
+	rm -f "$(CI_DEV_LOG)"; \
+	dump_dev_log() { \
+		echo "=== $(CI_PLAYWRIGHT_DAEMON_LOG) ==="; \
+		cat "$(CI_PLAYWRIGHT_DAEMON_LOG)" || echo "(no Playwright daemon log)"; \
+		echo "=== $(CI_DEV_LOG) ==="; \
+		cat "$(CI_DEV_LOG)" || echo "(no dev log)"; \
+		echo "=== ss -tlnp ==="; \
+		ss -tlnp 2>/dev/null | head -20 || true; \
+		echo "=== ls .citadel ==="; \
+		ls -la .citadel 2>&1 || true; \
+	}; \
+	cleanup() { \
+		status=$$?; \
+		trap - EXIT INT TERM; \
+		if [ -n "$${dev_pgid:-}" ] && kill -0 -- "-$$dev_pgid" 2>/dev/null; then \
+			kill -TERM -- "-$$dev_pgid" 2>/dev/null || true; \
+			sleep 1; \
+			kill -KILL -- "-$$dev_pgid" 2>/dev/null || true; \
+		fi; \
+		bash scripts/dev/ci-clean-tmux.sh; \
+		if [ "$$status" -ne 0 ]; then dump_dev_log; fi; \
+		exit "$$status"; \
+	}; \
+	trap cleanup EXIT INT TERM; \
+	setsid env \
+		CITADEL_PORT="$(CI_PORT)" \
+		CITADEL_WEB_PORT="$(CI_WEB_PORT)" \
+		CITADEL_DAEMON_URL="$(CI_DAEMON_URL)" \
+		CITADEL_BASE_URL="$(CI_BASE_URL)" \
+		pnpm dev >"$(CI_DEV_LOG)" 2>&1 & \
+	dev_pgid="$$!"; \
+	for attempt in {1..60}; do \
+		if curl -fsS "$(CI_BASE_URL)/api/health" >/dev/null && curl -fsS "http://127.0.0.1:$(CI_WEB_PORT)" >/dev/null; then \
+			ready=1; \
+			break; \
+		fi; \
+		sleep 1; \
+	done; \
+	if [ "$${ready:-0}" != "1" ]; then \
+		echo "CI smoke dev stack did not become ready"; \
+		exit 1; \
+	fi; \
+	CITADEL_BASE_URL="$(CI_BASE_URL)" pnpm smoke; \
+	CITADEL_BASE_URL="$(CI_BASE_URL)" pnpm performance
+
+ci-clean-tmux:
+	@bash scripts/dev/ci-clean-tmux.sh
+
+ci-dump-playwright-log:
+	@echo "=== $(CI_PLAYWRIGHT_DAEMON_LOG) ==="; \
+	cat "$(CI_PLAYWRIGHT_DAEMON_LOG)" || echo "(no Playwright daemon log)"; \
+	echo "=== ss -tlnp ==="; \
+	ss -tlnp 2>/dev/null | head -20 || true; \
+	echo "=== ls .citadel ==="; \
+	ls -la .citadel 2>&1 || true
+
+ci-dump-dev-log:
+	@echo "=== $(CI_PLAYWRIGHT_DAEMON_LOG) ==="; \
+	cat "$(CI_PLAYWRIGHT_DAEMON_LOG)" || echo "(no Playwright daemon log)"; \
+	echo "=== $(CI_DEV_LOG) ==="; \
+	cat "$(CI_DEV_LOG)" || echo "(no dev log)"; \
+	echo "=== ss -tlnp ==="; \
+	ss -tlnp 2>/dev/null | head -20 || true; \
+	echo "=== ls .citadel ==="; \
+	ls -la .citadel 2>&1 || true
 
 build:
 	pnpm build

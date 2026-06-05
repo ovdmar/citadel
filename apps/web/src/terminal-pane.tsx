@@ -137,6 +137,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
   const encoderRef = useRef(new TextEncoder());
   const autoRetryAttemptsRef = useRef(0);
   const autoRetryTimerRef = useRef<number | null>(null);
+  const requestResizeRef = useRef<(() => void) | null>(null);
   const forwardWheelToRuntime = shouldForwardWheelToRuntime(props.session);
   themeRef.current = theme;
   const [connectionState, setConnectionState] = useState<"connecting" | "attached" | "disconnected">("connecting");
@@ -252,7 +253,6 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
 
   useEffect(() => {
     void generation;
-    if (!active) return;
     const host = containerRef.current;
     if (!host) return;
     HOST_REGISTRY.set(sessionId, host);
@@ -293,6 +293,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
 
     const runResize = () => {
       if (disposed) return;
+      if (!activeRef.current) return;
       try {
         fit.fit();
       } catch {
@@ -315,6 +316,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
         runResize();
       });
     };
+    requestResizeRef.current = scheduleResize;
     const flushWheelScroll = () => {
       wheelFrame = null;
       const lines = pendingWheelLines;
@@ -458,12 +460,20 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
       window.removeEventListener("resize", scheduleResize);
       ws.close();
       terminal.dispose();
+      if (requestResizeRef.current === scheduleResize) requestResizeRef.current = null;
       if (terminalRef.current === terminal) terminalRef.current = null;
       if (fitRef.current === fit) fitRef.current = null;
       if (wsRef.current === ws) wsRef.current = null;
       if (HOST_REGISTRY.get(sessionId) === host) HOST_REGISTRY.delete(sessionId);
     };
-  }, [sessionId, generation, active, clearAutoRetryTimer, scheduleAutoRetry, forwardWheelToRuntime, coalesceInput]);
+  }, [sessionId, generation, clearAutoRetryTimer, scheduleAutoRetry, forwardWheelToRuntime, coalesceInput]);
+
+  useEffect(() => {
+    if (!active) return;
+    requestResizeRef.current?.();
+    const terminal = terminalRef.current;
+    if (terminal) terminal.refresh(0, Math.max(0, terminal.rows - 1));
+  }, [active]);
 
   // Publish the live URL + reload/focus/recover callbacks so nav selection and
   // tab actions can drive state owned by TerminalPane.
