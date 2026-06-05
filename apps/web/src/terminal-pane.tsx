@@ -64,6 +64,7 @@ export type TerminalHandle = {
 const REGISTRY = new Map<string, TerminalHandle>();
 const HOST_REGISTRY = new Map<string, HTMLElement>();
 const LISTENERS = new Set<(id: string) => void>();
+let defaultVoiceTerminalSessionId: string | null = null;
 
 function publish(id: string, handle: TerminalHandle | null) {
   if (handle) {
@@ -86,6 +87,15 @@ export function getFocusedTerminalSessionId(activeElement: Element | null = docu
     if (host === activeElement || host.contains(activeElement)) return sessionId;
   }
   return null;
+}
+
+export function setDefaultVoiceTerminalSession(sessionId: string | null | undefined): void {
+  defaultVoiceTerminalSessionId = sessionId ?? null;
+}
+
+export function getDefaultVoiceTerminalSessionId(): string | null {
+  if (!defaultVoiceTerminalSessionId) return null;
+  return REGISTRY.has(defaultVoiceTerminalSessionId) ? defaultVoiceTerminalSessionId : null;
 }
 
 export function subscribeTerminalHandle(listener: (sessionId: string) => void): () => void {

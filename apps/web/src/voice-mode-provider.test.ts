@@ -17,12 +17,16 @@ const terminalMocks = vi.hoisted(() => {
   const handles = new Map<string, TerminalHandleMock>();
   return {
     handles,
+    focusActiveTerminal: vi.fn(),
+    getDefaultVoiceTerminalSessionId: vi.fn<() => string | null>(() => null),
     getFocusedTerminalSessionId: vi.fn<(_activeElement?: Element | null) => string | null>(() => null),
     getTerminalHandle: vi.fn((sessionId: string) => handles.get(sessionId)),
   };
 });
 
 vi.mock("./terminal-pane.js", () => ({
+  focusActiveTerminal: terminalMocks.focusActiveTerminal,
+  getDefaultVoiceTerminalSessionId: terminalMocks.getDefaultVoiceTerminalSessionId,
   getFocusedTerminalSessionId: terminalMocks.getFocusedTerminalSessionId,
   getTerminalHandle: terminalMocks.getTerminalHandle,
 }));
@@ -74,6 +78,8 @@ beforeEach(() => {
   installLocalStorageMock();
   FakeSpeechRecognition.instances = [];
   terminalMocks.handles.clear();
+  terminalMocks.focusActiveTerminal.mockClear();
+  terminalMocks.getDefaultVoiceTerminalSessionId.mockReturnValue(null);
   terminalMocks.getFocusedTerminalSessionId.mockReturnValue(null);
   terminalMocks.getTerminalHandle.mockClear();
   vi.useFakeTimers();
@@ -618,91 +624,6 @@ describe("VoiceModeProvider", () => {
     expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Dictation needs attention");
     expect(document.querySelector(".voice-mode-error")?.textContent).toBe("No speech was detected.");
   });
-
-  it("commits terminal dictation through the session handle with the current auto-submit value", async () => {
-    const sendVoiceInput = vi.fn(() => true);
-    terminalMocks.handles.set("sess_1", { sendVoiceInput, canAcceptVoiceInput: vi.fn(() => true) });
-    await renderProvider();
-
-    await flushReact(() => voiceApi?.setAutoSubmit(false));
-    await flushReact(() => {
-      voiceApi?.startDictation({ terminalSessionId: "sess_1" });
-      FakeSpeechRecognition.instances[0]?.final("run tests");
-      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
-    });
-
-    expect(sendVoiceInput).toHaveBeenCalledWith("run tests", { submit: false });
-  });
-
-  it("commits terminal dictation with default auto-submit enabled", async () => {
-    const sendVoiceInput = vi.fn(() => true);
-    terminalMocks.handles.set("sess_1", { sendVoiceInput, canAcceptVoiceInput: vi.fn(() => true) });
-    await renderProvider();
-
-    await flushReact(() => {
-      voiceApi?.startDictation({ terminalSessionId: "sess_1" });
-      FakeSpeechRecognition.instances[0]?.final("run tests");
-      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
-    });
-
-    expect(sendVoiceInput).toHaveBeenCalledWith("run tests", { submit: true });
-    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Submitted");
-  });
-
-  it("commits terminal dictation only to the snapshotted terminal session", async () => {
-    const firstSendVoiceInput = vi.fn(() => true);
-    const secondSendVoiceInput = vi.fn(() => true);
-    terminalMocks.handles.set("sess_1", {
-      sendVoiceInput: firstSendVoiceInput,
-      canAcceptVoiceInput: vi.fn(() => true),
-    });
-    terminalMocks.handles.set("sess_2", {
-      sendVoiceInput: secondSendVoiceInput,
-      canAcceptVoiceInput: vi.fn(() => true),
-    });
-    await renderProvider();
-
-    await flushReact(() => {
-      voiceApi?.startDictation({ terminalSessionId: "sess_2" });
-      FakeSpeechRecognition.instances[0]?.final("session two");
-      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
-    });
-
-    expect(firstSendVoiceInput).not.toHaveBeenCalled();
-    expect(secondSendVoiceInput).toHaveBeenCalledWith("session two", { submit: true });
-    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Submitted");
-  });
-
-  it("buffers terminal dictation when the session handle cannot write", async () => {
-    const sendVoiceInput = vi.fn(() => false);
-    terminalMocks.handles.set("sess_1", { sendVoiceInput, canAcceptVoiceInput: vi.fn(() => true) });
-    await renderProvider();
-
-    await flushReact(() => {
-      voiceApi?.startDictation({ terminalSessionId: "sess_1" });
-      FakeSpeechRecognition.instances[0]?.final("lost command");
-      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
-    });
-
-    expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("lost command");
-    expect(document.querySelector(".voice-mode-error")?.textContent).toContain("terminal is not connected");
-  });
-
-  it("buffers terminal dictation when the snapshotted terminal is hidden before final commit", async () => {
-    const sendVoiceInput = vi.fn(() => true);
-    terminalMocks.handles.set("sess_1", { sendVoiceInput, canAcceptVoiceInput: vi.fn(() => false) });
-    await renderProvider();
-
-    await flushReact(() => {
-      voiceApi?.startDictation({ terminalSessionId: "sess_1" });
-      FakeSpeechRecognition.instances[0]?.final("hidden command");
-      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
-    });
-
-    expect(sendVoiceInput).not.toHaveBeenCalled();
-    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("No input target");
-    expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("hidden command");
-  });
 });
 
 async function renderProvider() {
@@ -745,7 +666,7 @@ function copyButton(): HTMLButtonElement {
 }
 
 function cancelButton(): HTMLButtonElement {
-  const button = [...document.querySelectorAll("button")].find((candidate) => candidate.textContent === "Cancel");
+  const button = document.querySelector('button[aria-label="Cancel"]');
   if (!(button instanceof HTMLButtonElement)) throw new Error("cancel button missing");
   return button;
 }

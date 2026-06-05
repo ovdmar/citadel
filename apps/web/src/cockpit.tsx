@@ -41,7 +41,11 @@ import { Navigator } from "./navigator.js";
 import { RestoreBanner } from "./restore-banner.js";
 import { type ShortcutMatch, matchShortcut } from "./shortcuts.js";
 import { Stage } from "./stage.js";
-import { focusActiveTerminal, isRegisteredTerminalMessageSource } from "./terminal-pane.js";
+import {
+  focusActiveTerminal,
+  isRegisteredTerminalMessageSource,
+  setDefaultVoiceTerminalSession,
+} from "./terminal-pane.js";
 import { parseRegisteredTerminalShortcutMessage, terminalShortcutMatch } from "./terminal-shortcut-bridge.js";
 import { ThemeControls } from "./theme-controls.js";
 import { UsageIndicator } from "./usage-indicator.js";
@@ -211,6 +215,10 @@ export function Cockpit() {
   const activeSession = activeSessionId
     ? (activeWorkspaceSessions.find((session) => session.id === activeSessionId) ?? null)
     : (activeWorkspaceSessions[0] ?? null);
+  useEffect(() => {
+    setDefaultVoiceTerminalSession(activeSession?.id ?? null);
+    return () => setDefaultVoiceTerminalSession(null);
+  }, [activeSession?.id]);
   useEffect(() => {
     if (!showInspectorPanel && mobileView === "inspector") setMobileView("stage");
   }, [showInspectorPanel, mobileView]);
