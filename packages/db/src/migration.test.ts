@@ -499,6 +499,62 @@ describe("terminal backend migration (version 21)", () => {
   });
 });
 
+describe("workspace session system prompt migration (version 23)", () => {
+  it("adds nullable system prompt metadata columns to workspace_sessions and records the migration row", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    const cols = db.prepare("PRAGMA table_info(workspace_sessions)").all() as Array<{
+      name: string;
+      type: string;
+      notnull: number;
+    }>;
+    const byName = new Map(cols.map((column) => [column.name, column]));
+
+    for (const name of [
+      "system_prompt_snapshot",
+      "system_prompt_sources",
+      "system_prompt_delivery",
+      "system_prompt_last_delivery",
+    ]) {
+      expect(byName.get(name), `column ${name} missing`).toMatchObject({ type: "TEXT", notnull: 0 });
+    }
+
+    const migration = db.prepare("SELECT name FROM schema_migrations WHERE version = 23").get() as
+      | { name: string }
+      | undefined;
+    expect(migration?.name).toBe("workspace-session-system-prompts");
+  });
+
+  it("leaves existing rows with nullable system prompt metadata", () => {
+    const dbPath = makeTempPath();
+    seedLegacySession(dbPath, { id: "sess_system_prompt_legacy", legacyStatus: "running" });
+
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const row = store.listSessions().find((session) => session.id === "sess_system_prompt_legacy");
+
+    expect(row?.systemPromptSources).toBeNull();
+    expect(row?.systemPromptDelivery).toBeNull();
+    expect(row?.systemPromptLastDelivery).toBeNull();
+    expect(
+      store
+        .query(
+          `SELECT system_prompt_snapshot, system_prompt_sources, system_prompt_delivery, system_prompt_last_delivery
+           FROM workspace_sessions
+           WHERE id = 'sess_system_prompt_legacy'`,
+        )
+        .at(0),
+    ).toEqual({
+      system_prompt_snapshot: null,
+      system_prompt_sources: null,
+      system_prompt_delivery: null,
+      system_prompt_last_delivery: null,
+    });
+  });
+});
+
 describe("workspace_sessions migration (version 15)", () => {
   it("moves legacy agent_sessions rows into workspace_sessions and drops the old table", () => {
     const dbPath = makeTempPath();

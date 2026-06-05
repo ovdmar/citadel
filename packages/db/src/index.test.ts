@@ -57,6 +57,7 @@ describe("SqliteStore", () => {
       { version: 20 },
       { version: 21 },
       { version: 22 },
+      { version: 23 },
     ]);
   });
 
@@ -197,6 +198,9 @@ describe("SqliteStore", () => {
       transport: "connected",
       tmuxSessionName: "citadel_test",
       tmuxSessionId: "$1",
+      systemPromptSources: ["settings_base", "role_template"],
+      systemPromptDelivery: { mode: "native_argv", runtimeId: "claude-code" },
+      systemPromptLastDelivery: { mode: "native_argv", runtimeId: "claude-code" },
       createdAt: "2026-05-17T00:02:00.000Z",
       updatedAt: "2026-05-17T00:02:00.000Z",
     });
@@ -263,7 +267,15 @@ describe("SqliteStore", () => {
     expect(store.query("SELECT kind, runtime_id FROM workspace_sessions WHERE id = 'sess_test'")).toEqual([
       { kind: "agent", runtime_id: "claude-code" },
     ]);
-    expect(store.listSessions("ws_test")).toMatchObject([{ id: "sess_test", transport: "connected" }]);
+    expect(store.listSessions("ws_test")).toMatchObject([
+      {
+        id: "sess_test",
+        transport: "connected",
+        systemPromptSources: ["settings_base", "role_template"],
+        systemPromptDelivery: { mode: "native_argv", runtimeId: "claude-code" },
+        systemPromptLastDelivery: { mode: "native_argv", runtimeId: "claude-code" },
+      },
+    ]);
     store.insertWorkspaceSession({
       id: "sess_terminal",
       kind: "terminal",

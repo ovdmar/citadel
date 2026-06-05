@@ -26,7 +26,7 @@ type SessionTableName = "agent_sessions" | "workspace_sessions";
 // the new version below. Consumed by the doctor's database-schema check so
 // `make doctor` can flag an installed daemon whose code is newer than the
 // database it's been given.
-export const CURRENT_SCHEMA_VERSION = 22;
+export const CURRENT_SCHEMA_VERSION = 23;
 
 function tmuxSocketBase(): string {
   const configured = process.env.CITADEL_TMUX_SOCKET?.trim();
@@ -393,11 +393,16 @@ export function runMigrations(
   ensureColumn("workspace_sessions", "pty_owner_socket", "TEXT");
   ensureColumn("workspace_sessions", "pty_owner_pid", "INTEGER");
   ensureColumn("workspace_sessions", "pty_last_seen_at", "TEXT");
+  ensureColumn("workspace_sessions", "system_prompt_snapshot", "TEXT");
+  ensureColumn("workspace_sessions", "system_prompt_sources", "TEXT");
+  ensureColumn("workspace_sessions", "system_prompt_delivery", "TEXT");
+  ensureColumn("workspace_sessions", "system_prompt_last_delivery", "TEXT");
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_workspace_sessions_pty_session ON workspace_sessions(pty_session_id);
     INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
       (21, 'workspace-sessions-terminal-backend', datetime('now')),
-      (22, 'repo-main-workspace-visibility-and-checkout-title', datetime('now'));
+      (22, 'repo-main-workspace-visibility-and-checkout-title', datetime('now')),
+      (23, 'workspace-session-system-prompts', datetime('now'));
   `);
 }
 
@@ -461,6 +466,10 @@ function workspaceSessionsTableSql() {
       pty_last_seen_at TEXT,
       tab_id TEXT,
       runtime_session_id TEXT,
+      system_prompt_snapshot TEXT,
+      system_prompt_sources TEXT,
+      system_prompt_delivery TEXT,
+      system_prompt_last_delivery TEXT,
       rate_limit_resume_attempts INTEGER NOT NULL DEFAULT 0,
       next_resume_at TEXT,
       last_resume_from_rate_limit_at TEXT,

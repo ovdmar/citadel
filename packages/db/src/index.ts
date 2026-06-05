@@ -363,9 +363,10 @@ export class SqliteStore {
           terminal_backend, tmux_session_name, tmux_session_id, tmux_socket_name,
           pty_session_id, pty_owner_socket, pty_owner_pid, pty_last_seen_at,
           tab_id, runtime_session_id,
+          system_prompt_snapshot, system_prompt_sources, system_prompt_delivery, system_prompt_last_delivery,
           rate_limit_resume_attempts, next_resume_at, last_resume_from_rate_limit_at,
           created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         session.id,
@@ -408,6 +409,10 @@ export class SqliteStore {
         // session's tabId so the restored row reuses the original slot.
         session.tabId ?? session.id,
         session.runtimeSessionId ?? null,
+        session.systemPromptSnapshot ?? null,
+        session.systemPromptSources ? JSON.stringify(session.systemPromptSources) : null,
+        session.systemPromptDelivery ? JSON.stringify(session.systemPromptDelivery) : null,
+        session.systemPromptLastDelivery ? JSON.stringify(session.systemPromptLastDelivery) : null,
         session.rateLimitResumeAttempts ?? 0,
         session.nextResumeAt ?? null,
         session.lastResumeFromRateLimitAt ?? null,
