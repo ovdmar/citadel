@@ -87,12 +87,11 @@ function compareKeys(a: string, b: string, field: GroupableKey, namespaces: Name
     return (ai < 0 ? SECTION_ORDER.length : ai) - (bi < 0 ? SECTION_ORDER.length : bi);
   }
   if (field === "namespace") {
-    // Float Uncategorized to the bottom; sort named namespaces by display name.
     if (a === UNCATEGORIZED_KEY) return 1;
     if (b === UNCATEGORIZED_KEY) return -1;
-    const an = namespaces.find((entry) => entry.id === a)?.name ?? a;
-    const bn = namespaces.find((entry) => entry.id === b)?.name ?? b;
-    return an.localeCompare(bn);
+    const an = namespaces.find((entry) => entry.id === a);
+    const bn = namespaces.find((entry) => entry.id === b);
+    return (an?.position ?? 0) - (bn?.position ?? 0) || (an?.name ?? a).localeCompare(bn?.name ?? b);
   }
   return a.localeCompare(b);
 }

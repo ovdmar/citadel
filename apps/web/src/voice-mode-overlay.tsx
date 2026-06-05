@@ -1,4 +1,4 @@
-import { AlertCircle, Copy, Mic, RotateCcw, Send, SlidersHorizontal, Square, X } from "lucide-react";
+import { AlertCircle, Copy, Mic, RotateCcw, Send, Square, X } from "lucide-react";
 
 export type VoiceModeOverlayStatus =
   | "idle"
@@ -18,9 +18,7 @@ type VoiceModeOverlayProps = {
   buffer: string;
   error: string | null;
   autoSubmit: boolean;
-  silenceTimeoutMs: number;
   onAutoSubmitChange: (next: boolean) => void;
-  onSilenceTimeoutChange: (nextMs: number) => void;
   onSendNow: () => void;
   onStop: () => void;
   onCancel: () => void;
@@ -31,8 +29,8 @@ export function VoiceModeOverlay(props: VoiceModeOverlayProps) {
   if (!props.active) return null;
   const canRetry = props.status === "retry" || props.status === "permission-denied" || props.status === "error";
   const canSendNow = props.status === "listening" && props.draft.length > 0;
+  const canStop = props.status === "listening";
   const transcript = props.buffer || props.draft;
-  const silenceSeconds = Math.round(props.silenceTimeoutMs / 1000);
   const copy = () => {
     if (!transcript) return;
     void navigator.clipboard?.writeText(transcript).catch(() => undefined);
@@ -49,7 +47,7 @@ export function VoiceModeOverlay(props: VoiceModeOverlayProps) {
         </span>
         <div className="voice-mode-title">
           <div className="voice-mode-status">{statusLabel(props.status)}</div>
-          <div className="voice-mode-meta">{metaLabel(props.status, silenceSeconds)}</div>
+          <div className="voice-mode-meta">{metaLabel(props.status)}</div>
         </div>
         <button
           type="button"
@@ -87,41 +85,21 @@ export function VoiceModeOverlay(props: VoiceModeOverlayProps) {
           </span>
           <span>Auto-submit</span>
         </label>
-        <label className="voice-mode-silence">
-          <SlidersHorizontal size={13} aria-hidden="true" />
-          <span>Silence</span>
-          <input
-            type="number"
-            min={3}
-            max={30}
-            step={1}
-            value={silenceSeconds}
-            aria-label="Silence window"
-            title="Silence window"
-            onChange={(event) => props.onSilenceTimeoutChange(Number(event.currentTarget.value) * 1000)}
-          />
-          <span>s</span>
-        </label>
       </div>
 
       <div className="voice-mode-actions">
-        <button
-          type="button"
-          className="voice-mode-action voice-mode-action--primary"
-          onClick={props.onSendNow}
-          disabled={!canSendNow}
-        >
-          <Send size={13} />
-          Send now
-        </button>
-        <button type="button" className="voice-mode-action" onClick={props.onStop}>
-          <Square size={12} />
-          Stop
-        </button>
-        <button type="button" className="voice-mode-action" onClick={props.onCancel}>
-          <X size={13} />
-          Cancel
-        </button>
+        {canSendNow ? (
+          <button type="button" className="voice-mode-action voice-mode-action--primary" onClick={props.onSendNow}>
+            <Send size={13} />
+            Send now
+          </button>
+        ) : null}
+        {canStop ? (
+          <button type="button" className="voice-mode-action" onClick={props.onStop}>
+            <Square size={12} />
+            Stop
+          </button>
+        ) : null}
         {transcript ? (
           <button type="button" className="voice-mode-action" onClick={copy}>
             <Copy size={13} />
@@ -162,10 +140,10 @@ function statusLabel(status: VoiceModeOverlayStatus): string {
   }
 }
 
-function metaLabel(status: VoiceModeOverlayStatus, silenceSeconds: number): string {
+function metaLabel(status: VoiceModeOverlayStatus): string {
   switch (status) {
     case "listening":
-      return `${silenceSeconds}s silence window`;
+      return "Speak naturally";
     case "submitted":
       return "Sent to target";
     case "inserted":

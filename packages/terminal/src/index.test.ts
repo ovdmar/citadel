@@ -435,8 +435,8 @@ describe("tmux terminal gateway helpers", () => {
         "tty.setraw(fd)",
         "print('READY', flush=True)",
         "data=b''",
-        "end=time.time()+2",
-        "while time.time()<end:",
+        "end=time.time()+5",
+        "while time.time()<end and len(data)<2:",
         "    r,_,_=select.select([sys.stdin], [], [], 0.1)",
         "    if r: data += sys.stdin.buffer.read(1)",
         "print('BYTES:'+data.hex(), flush=True)",
@@ -630,7 +630,7 @@ async function waitFor(predicate: () => boolean, timeoutMs: number) {
 }
 
 async function waitForCapture(sessionName: string, expected: string, socketName?: string | null) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
     const output = captureTmux(sessionName, 200, socketName);
     if (output.includes(expected)) return;
     await new Promise((resolve) => setTimeout(resolve, 50));

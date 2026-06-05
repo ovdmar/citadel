@@ -11,7 +11,6 @@ import { postTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
 import { xtermTheme } from "./terminal-theme.js";
 import { readOverlayCount } from "./use-overlay-present.js";
 import { useResolvedTheme } from "./use-resolved-theme.js";
-
 type TerminalError = {
   code: string;
   detail: string;
@@ -64,6 +63,7 @@ export type TerminalHandle = {
 const REGISTRY = new Map<string, TerminalHandle>();
 const HOST_REGISTRY = new Map<string, HTMLElement>();
 const LISTENERS = new Set<(id: string) => void>();
+let defaultVoiceTerminalSessionId: string | null = null;
 
 function publish(id: string, handle: TerminalHandle | null) {
   if (handle) {
@@ -86,6 +86,15 @@ export function getFocusedTerminalSessionId(activeElement: Element | null = docu
     if (host === activeElement || host.contains(activeElement)) return sessionId;
   }
   return null;
+}
+
+export function setDefaultVoiceTerminalSession(sessionId: string | null | undefined): void {
+  defaultVoiceTerminalSessionId = sessionId ?? null;
+}
+
+export function getDefaultVoiceTerminalSessionId(): string | null {
+  if (!defaultVoiceTerminalSessionId) return null;
+  return REGISTRY.has(defaultVoiceTerminalSessionId) ? defaultVoiceTerminalSessionId : null;
 }
 
 export function subscribeTerminalHandle(listener: (sessionId: string) => void): () => void {
@@ -127,6 +136,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
   const encoderRef = useRef(new TextEncoder());
   const autoRetryAttemptsRef = useRef(0);
   const autoRetryTimerRef = useRef<number | null>(null);
+  const requestResizeRef = useRef<(() => void) | null>(null);
   const forwardWheelToRuntime = shouldForwardWheelToRuntime(props.session);
   themeRef.current = theme;
   const [connectionState, setConnectionState] = useState<"connecting" | "attached" | "disconnected">("connecting");
@@ -242,7 +252,6 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
 
   useEffect(() => {
     void generation;
-    if (!active) return;
     const host = containerRef.current;
     if (!host) return;
     HOST_REGISTRY.set(sessionId, host);
@@ -283,6 +292,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
 
     const runResize = () => {
       if (disposed) return;
+      if (!activeRef.current) return;
       try {
         fit.fit();
       } catch {
@@ -305,6 +315,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
         runResize();
       });
     };
+    requestResizeRef.current = scheduleResize;
     const flushWheelScroll = () => {
       wheelFrame = null;
       const lines = pendingWheelLines;
@@ -448,12 +459,20 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
       window.removeEventListener("resize", scheduleResize);
       ws.close();
       terminal.dispose();
+      if (requestResizeRef.current === scheduleResize) requestResizeRef.current = null;
       if (terminalRef.current === terminal) terminalRef.current = null;
       if (fitRef.current === fit) fitRef.current = null;
       if (wsRef.current === ws) wsRef.current = null;
       if (HOST_REGISTRY.get(sessionId) === host) HOST_REGISTRY.delete(sessionId);
     };
-  }, [sessionId, generation, active, clearAutoRetryTimer, scheduleAutoRetry, forwardWheelToRuntime, coalesceInput]);
+  }, [sessionId, generation, clearAutoRetryTimer, scheduleAutoRetry, forwardWheelToRuntime, coalesceInput]);
+
+  useEffect(() => {
+    if (!active) return;
+    requestResizeRef.current?.();
+    const terminal = terminalRef.current;
+    if (terminal) terminal.refresh(0, Math.max(0, terminal.rows - 1));
+  }, [active]);
 
   // Publish the live URL + reload/focus/recover callbacks so nav selection and
   // tab actions can drive state owned by TerminalPane.

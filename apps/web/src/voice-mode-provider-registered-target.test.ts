@@ -11,11 +11,15 @@ import { VoiceModeProvider, useVoiceMode } from "./voice-mode-provider.js";
 type RecognitionHandler = ((event: unknown) => void) | null;
 
 const terminalMocks = vi.hoisted(() => ({
+  focusActiveTerminal: vi.fn(),
+  getDefaultVoiceTerminalSessionId: vi.fn<() => string | null>(() => null),
   getFocusedTerminalSessionId: vi.fn<(_activeElement?: Element | null) => string | null>(() => null),
   getTerminalHandle: vi.fn((_sessionId: string) => undefined),
 }));
 
 vi.mock("./terminal-pane.js", () => ({
+  focusActiveTerminal: terminalMocks.focusActiveTerminal,
+  getDefaultVoiceTerminalSessionId: terminalMocks.getDefaultVoiceTerminalSessionId,
   getFocusedTerminalSessionId: terminalMocks.getFocusedTerminalSessionId,
   getTerminalHandle: terminalMocks.getTerminalHandle,
 }));
@@ -64,6 +68,8 @@ beforeEach(() => {
   document.body.innerHTML = "";
   installLocalStorageMock();
   FakeSpeechRecognition.instances = [];
+  terminalMocks.focusActiveTerminal.mockClear();
+  terminalMocks.getDefaultVoiceTerminalSessionId.mockReturnValue(null);
   terminalMocks.getFocusedTerminalSessionId.mockReturnValue(null);
   terminalMocks.getTerminalHandle.mockClear();
   vi.useFakeTimers();

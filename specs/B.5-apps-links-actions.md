@@ -15,7 +15,7 @@
 [ ] 7. The inspector `Stats` tab renders deployed apps as clickable chips with red/green deploy/status color.
 [ ] 8. App discovery hooks must support monorepos by returning only the subset of services the current workspace actually touches.
 [ ] 9. The list of services is dynamic per workspace; no static list is hardcoded in Citadel.
-[ ] 10. App chips expose a redeploy action when the repo declares one; redeploy runs through Citadel operations.
+[~] 10. App chips expose redeploy and undeploy actions when the repo declares the corresponding hooks; both run through Citadel operations.
 
 ## Links
 
@@ -28,7 +28,7 @@
 ## Actions
 
 [ ] 1. A workspace can show executable actions returned by repo hooks. (Was partially shipped via an inspector chip row; the redesign removed that surface — the Local deploys section now shows only chip + per-chip Redeploy. A dedicated home for repo-level actions is TBD.)
-[ ] 2. Action examples include redeploy, restart, open logs, refresh provider, run setup, or run teardown.
+[ ] 2. Action examples include redeploy, undeploy, restart, open logs, refresh provider, run setup, or run teardown.
 [ ] 3. Executable actions run through Citadel operations.
 [ ] 4. Action execution captures stdout, stderr, result, duration, and failure text.
 [ ] 5. Latest action result is visible near the workspace.
@@ -41,11 +41,11 @@
 ## Deploy Workflow
 
 [ ] 1. A workspace with deployable apps shows preview/deploy status in the cockpit.
-[ ] 2. The operator can trigger redeploy for a returned app/action.
-[ ] 3. Redeploy output remains visible after completion.
-[ ] 4. Redeploy failure shows the failing command/output summary and full operation log access.
-[ ] 5. Redeploy success updates app status, activity, and readiness.
+[ ] 2. The operator can trigger redeploy or undeploy for a returned app/action.
+[ ] 3. Redeploy/undeploy output remains visible after completion.
+[ ] 4. Redeploy/undeploy failure shows the failing command/output summary and full operation log access.
+[ ] 5. Redeploy/undeploy success updates app status, activity, and readiness.
 
 ---
 
-keywords: applications, links, actions, deploy, redeploy, repo hooks, preview, logs, operation output
+keywords: applications, links, actions, deploy, redeploy, undeploy, repo hooks, preview, logs, operation output

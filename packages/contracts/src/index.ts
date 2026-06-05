@@ -96,6 +96,7 @@ export {
   CreateNamespaceInputSchema,
   NamespaceColorSchema,
   NamespaceSchema,
+  ReorderNamespacesInputSchema,
   UpdateNamespaceInputSchema,
 } from "./namespaces.js";
 
@@ -385,9 +386,20 @@ export const DeployHookResolutionSchema = z.object({
   note: z.string().nullable().default(null),
 });
 
+export const UndeployHookSourceSchema = z.enum(["repo-file", "none"]);
+
+export const UndeployHookResolutionSchema = z.object({
+  source: UndeployHookSourceSchema,
+  filePath: z.string().nullable().default(null),
+  // Diagnostic breadcrumb when resolution had to skip a candidate, e.g.
+  // "<path> exists but is not executable".
+  note: z.string().nullable().default(null),
+});
+
 export const DeployedAppsSummarySchema = z.object({
   workspaceId: IdSchema,
   resolution: DeployHookResolutionSchema,
+  undeployResolution: UndeployHookResolutionSchema.default({ source: "none", filePath: null, note: null }),
   apps: z.array(DeployedAppSchema),
   error: z.string().nullable().default(null),
   checkedAt: z.string(),
@@ -638,6 +650,8 @@ export type DeployedAppStatus = z.infer<typeof DeployedAppStatusSchema>;
 export type DeployHookListOutput = z.infer<typeof DeployHookListOutputSchema>;
 export type DeployHookResolution = z.infer<typeof DeployHookResolutionSchema>;
 export type DeployHookSource = z.infer<typeof DeployHookSourceSchema>;
+export type UndeployHookResolution = z.infer<typeof UndeployHookResolutionSchema>;
+export type UndeployHookSource = z.infer<typeof UndeployHookSourceSchema>;
 export type DeployedAppsSummary = z.infer<typeof DeployedAppsSummarySchema>;
 export type ActivityEvent = z.infer<typeof ActivityEventSchema>;
 export type AppEvent = z.infer<typeof AppEventSchema>;
@@ -652,6 +666,7 @@ export type {
   AssignWorkspaceToNamespaceInput,
   CreateNamespaceInput,
   Namespace,
+  ReorderNamespacesInput,
   UpdateNamespaceInput,
 } from "./namespaces.js";
 export type DiffFile = z.infer<typeof DiffFileSchema>;

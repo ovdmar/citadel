@@ -72,7 +72,7 @@ Daemon-mediated (run through the operation service so they obey the same hook, a
   `mark_checkout_ready_for_review`, `register_checkout_review_artifact`,
   `create_workspace_checkout`, `update_ticket_status`, `create_pull_request`,
   `push_branch`, `create_review_thread`, `reply_review_thread`,
-  `resolve_review_thread`, `reopen_review_thread`.
+  `resolve_review_thread`, `reopen_review_thread`, `undeploy_app`.
 
 V1 does not expose `list_custom_agents` or `launch_custom_agent`.
 

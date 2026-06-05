@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Citadel undeploy hook for Citadel worktrees.
+#
+# Contract:
+#   .citadel/hooks/undeploy [name]
+#     [name] omitted  → stop all exposed apps
+#     name=citadel    → stop the Citadel worktree dev stack
+
+set -euo pipefail
+
+APP_NAME="citadel"
+WORKTREE="${CITADEL_WORKSPACE_PATH:-$(pwd)}"
+name="${1:-}"
+
+if [[ -n "$name" && "$name" != "$APP_NAME" ]]; then
+  echo "unknown app: $name (only '${APP_NAME}' is exposed by this hook)" >&2
+  exit 2
+fi
+
+if ! command -v make >/dev/null 2>&1; then
+  echo "make not found in PATH — required to delegate to the canonical worktree stop" >&2
+  exit 127
+fi
+
+cd "$WORKTREE"
+echo "→ Delegating to 'make stop' (worktree=${WORKTREE})"
+make -s stop

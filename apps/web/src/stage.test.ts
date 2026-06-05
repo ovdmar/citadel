@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 
-import type { RoleTemplate, TerminalSession, Workspace } from "@citadel/contracts";
+import type { AgentRuntime, RoleTemplate, TerminalProfile, TerminalSession, Workspace } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  buildStageLaunchEntryGroups,
   freestyleStageActions,
   retainRecentTerminalIds,
   stableVisitedSessions,
@@ -96,6 +97,72 @@ describe("Stage terminal pane ordering", () => {
       ["prototype", "Prototype"],
     ]);
   });
+
+  it("builds shared launch entries for the add menu and empty stage", () => {
+    const groups = buildStageLaunchEntryGroups({
+      structuredActions: structuredStageActions({
+        workspace: workspaceFixture({ mode: "structured" }),
+        targetType: "workspace_home",
+        checkoutId: null,
+      }),
+      directRoleActions: [],
+      terminal: terminalProfileFixture(),
+      runtimes: [
+        runtimeFixture({ id: "claude-code", displayName: "Claude Code", health: "healthy" }),
+        runtimeFixture({
+          id: "codex",
+          displayName: "Codex",
+          health: "unavailable",
+          healthReason: "command missing",
+        }),
+      ],
+      addDisabled: false,
+      atSessionCap: false,
+    });
+
+    expect(
+      groups.map((group) => [
+        group.label,
+        group.entries.map((entry) => [entry.type, entry.label, entry.disabled, entry.detail]),
+      ]),
+    ).toEqual([
+      [
+        "Specialized",
+        [
+          ["structured", "PM", false, null],
+          ["structured", "Architect", false, null],
+          ["structured", "Manager", false, null],
+        ],
+      ],
+      [
+        "Freestyle",
+        [
+          ["terminal", "Shell", false, null],
+          ["runtime", "Claude Code", false, "healthy"],
+          ["runtime", "Codex", true, "unavailable"],
+        ],
+      ],
+    ]);
+  });
+
+  it("disables every launch entry when the session cap is reached", () => {
+    const groups = buildStageLaunchEntryGroups({
+      structuredActions: [],
+      directRoleActions: [],
+      terminal: terminalProfileFixture(),
+      runtimes: [runtimeFixture({ health: "healthy" })],
+      addDisabled: true,
+      atSessionCap: true,
+      sessionCap: 2,
+    });
+
+    expect(groups.flatMap((group) => group.entries).map((entry) => [entry.label, entry.disabled, entry.title])).toEqual(
+      [
+        ["Shell", true, "Cap reached (2). Close a session first."],
+        ["Claude Code", true, "Cap reached (2). Close a session first."],
+      ],
+    );
+  });
 });
 
 function sessionFixture(overrides: Partial<TerminalSession> = {}): TerminalSession {
@@ -162,5 +229,37 @@ function roleTemplate(role: RoleTemplate["role"], displayName: string): RoleTemp
     builtIn: true,
     resettable: true,
     updatedAt: null,
+  };
+}
+
+function terminalProfileFixture(overrides: Partial<TerminalProfile> = {}): TerminalProfile {
+  return {
+    displayName: "Shell",
+    command: "bash",
+    args: ["-l"],
+    ...overrides,
+  };
+}
+
+function runtimeFixture(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
+  return {
+    id: "claude-code",
+    displayName: "Claude Code",
+    command: "claude",
+    args: [],
+    health: "healthy",
+    healthReason: null,
+    capabilities: {
+      supportsPrompt: true,
+      supportsResume: true,
+      supportsModelSelection: false,
+      supportsTranscript: true,
+      supportsStatusDetection: true,
+      supportsNonInteractiveGoal: true,
+      supportsShell: true,
+      supportsUsage: false,
+      supportsTui: true,
+    },
+    ...overrides,
   };
 }

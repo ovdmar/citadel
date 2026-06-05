@@ -22,6 +22,7 @@ import type {
   WorktreeCheckout,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
+import type { GitHubProviderStateService } from "./github-provider-state.js";
 import {
   type PersistentProviderCache,
   checkoutVcCacheKey,
@@ -47,6 +48,7 @@ export type ProviderRefreshDeps = {
     }) => Promise<RuntimeUsageSummary>;
     listRuntimeHealth: () => AgentRuntime[];
   };
+  github?: GitHubProviderStateService;
   hasFocusedWindow?: () => boolean;
   now?: () => number;
   tickIntervalMs?: number;
@@ -169,6 +171,22 @@ export function startProviderRefreshJob(deps: ProviderRefreshDeps): ProviderRefr
           (c) => c.id === item.checkoutId,
         );
         if (!checkout) return;
+        if (deps.github) {
+          const repo = deps.store.listRepos().find((r) => r.id === checkout.repoId);
+          if (!repo) return;
+          await deps.github.fetchCheckoutVersionControl(ws, checkout, repo, item.cacheKey, { intent: "automatic" });
+          return;
+        }
+      }
+      if (deps.github) {
+        const repo = deps.store.listRepos().find((r) => r.id === ws.repoId);
+        if (!repo) return;
+        if (item.kind === "vc") {
+          await deps.github.fetchVersionControl(ws, repo, item.cacheKey, { intent: "automatic" });
+        } else {
+          await deps.github.fetchCi(ws, repo, { cacheKey: item.cacheKey, intent: "automatic", ttlMs: item.ttlMs });
+        }
+        return;
       }
       try {
         const value =
