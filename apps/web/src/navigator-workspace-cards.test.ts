@@ -222,6 +222,12 @@ describe("navigator workspace checkout cards", () => {
       displayName: "API Review",
       path: "/work/home/api-stable",
       branch: "feature/api",
+      issue: {
+        key: "MS-123",
+        title: "Checkout issue",
+        url: "https://jira.example/browse/MS-123",
+        provider: "jira",
+      },
     });
     const repo = repoFixture({ id: co.repoId, name: "citadel", providerRepositoryKey: "ovdmar/citadel" });
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -243,7 +249,7 @@ describe("navigator workspace checkout cards", () => {
     );
 
     const title = container.querySelector("strong");
-    expect(title?.textContent).toBe("ovdmar/citadel * API Review");
+    expect(title?.textContent).toBe("API Review");
     flushSync(() => {
       title?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     });
