@@ -7,9 +7,12 @@ export function deployedAppsUrl(workspaceId: string, checkoutId: string | null |
   return checkoutId ? `${base}?checkoutId=${encodeURIComponent(checkoutId)}` : base;
 }
 
-export function redeployPayload(name: string | undefined, checkoutId: string | null | undefined) {
+export function deployedAppActionPayload(name: string | undefined, checkoutId: string | null | undefined) {
   return {
     ...(name ? { name } : {}),
     ...(checkoutId ? { checkoutId } : {}),
   };
 }
+
+export const redeployPayload = deployedAppActionPayload;
+export const undeployPayload = deployedAppActionPayload;

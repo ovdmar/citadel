@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, queryClient } from "../api.js";
-import { deployedAppsQueryKey, redeployPayload } from "../deployed-apps-target.js";
+import { deployedAppActionPayload, deployedAppsQueryKey } from "../deployed-apps-target.js";
 import {
   MIN_SPIN_MS,
   PREFETCH_TIMEOUT_MS,
@@ -11,10 +11,11 @@ import {
   watchdogShouldClear,
 } from "./use-redeploy-helpers.js";
 
-type RedeployResponse = { operationId?: string };
+type DeployAction = "redeploy" | "undeploy";
+type DeployActionResponse = { operationId?: string };
 type StatePayload = { daemonStartedAt?: string };
 
-type UseRedeployResult = {
+type UseDeployActionResult = {
   inFlight: boolean;
   targetName: string | undefined;
   lastOperationId: string | null;
@@ -22,7 +23,15 @@ type UseRedeployResult = {
   trigger: (name?: string) => void;
 };
 
-export function useRedeploy(workspaceId: string, checkoutId?: string | null): UseRedeployResult {
+export function useRedeploy(workspaceId: string, checkoutId?: string | null): UseDeployActionResult {
+  return useDeployAction("redeploy", workspaceId, checkoutId);
+}
+
+export function useUndeploy(workspaceId: string, checkoutId?: string | null): UseDeployActionResult {
+  return useDeployAction("undeploy", workspaceId, checkoutId);
+}
+
+function useDeployAction(action: DeployAction, workspaceId: string, checkoutId?: string | null): UseDeployActionResult {
   const [inFlight, setInFlight] = useState(false);
   const [targetName, setTargetName] = useState<string | undefined>(undefined);
   const [lastOperationId, setLastOperationId] = useState<string | null>(null);
@@ -66,9 +75,9 @@ export function useRedeploy(workspaceId: string, checkoutId?: string | null): Us
 
   const mutation = useMutation({
     mutationFn: (name?: string) =>
-      api<RedeployResponse>(`/api/workspaces/${workspaceId}/deployed-apps/redeploy`, {
+      api<DeployActionResponse>(`/api/workspaces/${workspaceId}/deployed-apps/${action}`, {
         method: "POST",
-        body: JSON.stringify(redeployPayload(name, checkoutId)),
+        body: JSON.stringify(deployedAppActionPayload(name, checkoutId)),
       }),
   });
 
@@ -97,12 +106,12 @@ export function useRedeploy(workspaceId: string, checkoutId?: string | null): Us
         // Cap reached. Clear the spinner and surface a non-blocking warning.
         // The operator can check the operations log directly.
         console.warn(
-          "[redeploy] watchdog timed out — daemon did not return a newer daemonStartedAt within WATCHDOG_MAX_MS",
+          `[${action}] watchdog timed out — daemon did not return a newer daemonStartedAt within WATCHDOG_MAX_MS`,
         );
         finishInFlight();
       }, WATCHDOG_MAX_MS);
     },
-    [clearTimers, finishInFlight],
+    [action, clearTimers, finishInFlight],
   );
 
   const trigger = useCallback(

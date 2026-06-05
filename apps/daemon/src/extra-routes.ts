@@ -65,15 +65,10 @@ export function registerWorkspaceExtraRoutes(input: {
       if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
       const body = (req.body ?? {}) as { name?: unknown; checkoutId?: unknown };
       const checkoutId = requestString(body.checkoutId);
-      let appName: string | undefined;
-      if (body.name !== undefined && body.name !== null && body.name !== "") {
-        if (typeof body.name !== "string" || !/^[a-zA-Z0-9_.-]{1,80}$/.test(body.name.trim())) {
-          return res.status(400).json({ error: "invalid_app_name" });
-        }
-        appName = body.name.trim();
-      }
+      const parsedName = requestAppName(body.name);
+      if (!parsedName.ok) return res.status(400).json({ error: parsedName.error });
       try {
-        const result = await operations.redeployApp({ workspaceId, checkoutId, appName });
+        const result = await operations.redeployApp({ workspaceId, checkoutId, appName: parsedName.appName });
         emit("workspace.deploy.redeploy", {
           workspaceId,
           checkoutId,
@@ -83,6 +78,31 @@ export function registerWorkspaceExtraRoutes(input: {
         res.status(result.status === "succeeded" ? 202 : 424).json(result);
       } catch (error) {
         const message = error instanceof Error ? error.message : "deploy_hook_redeploy_failed";
+        res.status(404).json({ error: message });
+      }
+    }),
+  );
+
+  app.post(
+    "/api/workspaces/:workspaceId/deployed-apps/undeploy",
+    asyncRoute(async (req: express.Request, res: express.Response) => {
+      const workspaceId = req.params.workspaceId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      const body = (req.body ?? {}) as { name?: unknown; checkoutId?: unknown };
+      const checkoutId = requestString(body.checkoutId);
+      const parsedName = requestAppName(body.name);
+      if (!parsedName.ok) return res.status(400).json({ error: parsedName.error });
+      try {
+        const result = await operations.undeployApp({ workspaceId, checkoutId, appName: parsedName.appName });
+        emit("workspace.deploy.undeploy", {
+          workspaceId,
+          checkoutId,
+          operationId: result.operationId,
+          status: result.status,
+        });
+        res.status(result.status === "succeeded" ? 202 : 424).json(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "undeploy_hook_failed";
         res.status(404).json({ error: message });
       }
     }),
@@ -403,6 +423,14 @@ export function registerWorkspaceExtraRoutes(input: {
 
 function requestString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function requestAppName(value: unknown): { ok: true; appName: string | undefined } | { ok: false; error: string } {
+  if (value === undefined || value === null || value === "") return { ok: true, appName: undefined };
+  if (typeof value !== "string" || !/^[a-zA-Z0-9_.-]{1,80}$/.test(value.trim())) {
+    return { ok: false, error: "invalid_app_name" };
+  }
+  return { ok: true, appName: value.trim() };
 }
 
 async function readGitHubQuota(
