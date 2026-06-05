@@ -11,7 +11,6 @@ import { postTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
 import { xtermTheme } from "./terminal-theme.js";
 import { readOverlayCount } from "./use-overlay-present.js";
 import { useResolvedTheme } from "./use-resolved-theme.js";
-
 type TerminalError = {
   code: string;
   detail: string;
