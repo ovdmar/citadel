@@ -324,10 +324,9 @@ a:hover {
 .cit-pulse-idle {
   background: var(--c-fg-4);
 }
-/* Lifecycle "done" — distinct from cit-pulse-ok (solid green, used for
-   non-lifecycle indicators like the auto-mode pill and deploy-health badge).
-   cit-pulse-done is a pulsing green that signals "work has finished, awaits
-   review" per specs/B.3 item 14. */
+/* Retained for older markup/tests that may still reference the class directly.
+   Current lifecycle "done" indicators use cit-pulse-idle; fresh completions
+   request attention via cit-pulse-bad until that session has been viewed. */
 .cit-pulse-done {
   background: var(--c-ok);
   box-shadow: 0 0 0 3px var(--c-ok-bg);
@@ -636,11 +635,6 @@ a:hover {
   position: absolute;
   top: 4px;
   right: 4px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--c-ok);
-  box-shadow: 0 0 0 1.5px var(--c-canvas);
 }
 
 /* Generic blocks reused across views */

@@ -18,7 +18,6 @@ import {
   ClipboardList,
   FolderPlus,
   LayoutDashboard,
-  NotebookPen,
   PanelLeftClose,
   Plus,
   Settings2,
@@ -59,13 +58,14 @@ import {
   repoByGroupName,
   repoGroupNameFromPath,
 } from "./navigator-repo-groups.js";
+import { ScratchpadNavLink } from "./navigator-scratchpad-link.js";
 import {
   CheckoutNavCard,
   checkoutSessions,
   hasNestedCheckouts,
   workspaceCheckoutRows,
 } from "./navigator-workspace-cards.js";
-import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
+import type { AttentionSessionIds } from "./session-status-display.js";
 import { WorkspaceCard, lifecycleToneClass } from "./workspace-card.js";
 
 export { aggregateNavigatorTone };
@@ -98,6 +98,7 @@ export function Navigator(props: {
   onPickWorkspace: (workspace: Workspace) => void;
   onPickWorkspaceId: (workspaceId: string) => void;
   onPickTarget: (workspaceId: string, targetKey: string) => void;
+  unseenAttentionSessionIds?: AttentionSessionIds | undefined;
 }) {
   const location = useLocation();
   const path = location.pathname;
@@ -206,6 +207,7 @@ export function Navigator(props: {
     props.prByWorkspaceId,
     props.checkouts,
     props.checkoutPrByWorkspaceId,
+    props.unseenAttentionSessionIds,
   );
   const running = runningCount(props.sessions);
 
@@ -323,6 +325,7 @@ export function Navigator(props: {
                   pullRequest={checkoutPullRequest({ checkout, workspacePullRequest, checkoutPrState })}
                   active={activeWorkspace && props.activeTargetKey === targetKey}
                   onSelect={() => props.onPickTarget(workspace.id, targetKey)}
+                  unseenAttentionSessionIds={props.unseenAttentionSessionIds}
                 />
               );
             })}
@@ -369,6 +372,7 @@ export function Navigator(props: {
             diffOverride={
               aggregateRow ? { additions: prAggregate.additions, deletions: prAggregate.deletions } : undefined
             }
+            unseenAttentionSessionIds={props.unseenAttentionSessionIds}
             allowRootDrop={structuredHome}
             rightControl={
               canHideMainWorkspace || canAttachCheckout || nested ? (
@@ -449,6 +453,7 @@ export function Navigator(props: {
                     pullRequest={checkoutPullRequest({ checkout, workspacePullRequest, checkoutPrState })}
                     active={activeWorkspace && props.activeTargetKey === targetKey}
                     onSelect={() => props.onPickTarget(workspace.id, targetKey)}
+                    unseenAttentionSessionIds={props.unseenAttentionSessionIds}
                   />
                 );
               })}
@@ -474,6 +479,7 @@ export function Navigator(props: {
       collapsedWorkspaceCheckouts,
       toggleWorkspaceCheckouts,
       hideMainWorkspace,
+      props.unseenAttentionSessionIds,
     ],
   );
   const flatEntries = useMemo<WorkspaceEntry[]>(
@@ -773,26 +779,5 @@ function GroupNodeView(props: GroupNodeViewProps) {
         </div>
       )}
     </div>
-  );
-}
-
-function ScratchpadNavLink() {
-  const { open, toggle } = useScratchpadDrawer();
-  const isMac =
-    typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
-  const hint = isMac ? "Shift+Cmd+S" : "Shift+Ctrl+S";
-  return (
-    <button
-      type="button"
-      className={`nav-link-button${open ? " active" : ""}`}
-      onClick={toggle}
-      title={`Scratchpad — markdown notes orchestrator agents can read via MCP (${hint})`}
-      aria-pressed={open}
-    >
-      <NotebookPen size={13} /> Scratchpad
-      <kbd className="nav-kbd-hint" aria-hidden>
-        {hint}
-      </kbd>
-    </button>
   );
 }

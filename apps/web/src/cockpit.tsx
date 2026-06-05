@@ -39,6 +39,7 @@ import { buildGroupTree, flattenWorkspaceOrder, treeGroupingFor } from "./naviga
 import { checkoutPrStateMap } from "./navigator-pr-state.js";
 import { Navigator } from "./navigator.js";
 import { RestoreBanner } from "./restore-banner.js";
+import { useSessionAttentionAcknowledgement } from "./session-attention-ack.js";
 import { type ShortcutMatch, matchShortcut } from "./shortcuts.js";
 import { Stage } from "./stage.js";
 import {
@@ -215,6 +216,10 @@ export function Cockpit() {
   const activeSession = activeSessionId
     ? (activeWorkspaceSessions.find((session) => session.id === activeSessionId) ?? null)
     : (activeWorkspaceSessions[0] ?? null);
+  const { acknowledgeSessionAttention, unseenAttentionSessionIds } = useSessionAttentionAcknowledgement(
+    allSessions,
+    activeSession,
+  );
   useEffect(() => {
     setDefaultVoiceTerminalSession(activeSession?.id ?? null);
     return () => setDefaultVoiceTerminalSession(null);
@@ -534,6 +539,7 @@ export function Cockpit() {
             workspaces={navigatorWorkspaces}
             activeWorkspaceId={activeWorkspace?.id ?? ""}
             sessions={data?.sessions ?? []}
+            unseenAttentionSessionIds={unseenAttentionSessionIds}
             onExpand={layout.toggleLeft}
             onPickWorkspace={focusWorkspace}
           />
@@ -554,6 +560,7 @@ export function Cockpit() {
               activeTargetKey={activeTargetKey}
               runtimes={data?.agentRuntimes ?? []}
               namespaces={data?.namespaces ?? []}
+              unseenAttentionSessionIds={unseenAttentionSessionIds}
               lastRepoId={lastRepoId || undefined}
               createWorkspaceOpen={createWorkspaceOpen}
               onOpenCreateWorkspace={() => setCreateWorkspaceOpen(true)}
@@ -587,8 +594,10 @@ export function Cockpit() {
               runtimes={data?.agentRuntimes ?? []}
               terminal={data?.terminal ?? { displayName: "Terminal", command: "bash", args: ["-l"] }}
               activeSessionId={activeSessionId}
+              unseenAttentionSessionIds={unseenAttentionSessionIds}
               onActiveSession={(sessionId) => {
                 setActiveSessionByWorkspace((current) => ({ ...current, [activeSessionStorageKey]: sessionId }));
+                acknowledgeSessionAttention(activeWorkspaceSessions.find((session) => session.id === sessionId));
                 focusTerminalSoon(sessionId);
               }}
             />

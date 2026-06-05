@@ -6,7 +6,7 @@ import type {
   WorkspaceDirtySummary,
   WorkspaceSession,
 } from "@citadel/contracts";
-import { type LifecycleTone, deriveWorkspaceLifecycleTone } from "@citadel/core";
+import type { LifecycleTone } from "@citadel/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
 import type { ReactNode } from "react";
@@ -15,6 +15,7 @@ import { api, queryClient } from "./api.js";
 import { type StateResponse, useOptimisticRemove, useStateQuery } from "./app-state.js";
 import { pickReadableForeground } from "./color-contrast.js";
 import { encodeReorderMimeType, findReorderMimeType, parseReorderMimeType } from "./navigator-order.js";
+import { type AttentionSessionIds, deriveWorkspaceDisplayLifecycleTone } from "./session-status-display.js";
 import { useToast } from "./toast.js";
 import { useOverlayPresent } from "./use-overlay-present.js";
 import "./workspace-status-dot.css";
@@ -42,7 +43,7 @@ export function lifecycleToneClass(tone: LifecycleTone): string {
     case "running":
       return "cit-pulse-run";
     case "done":
-      return "cit-pulse-done";
+      return "cit-pulse-idle";
     case "attention":
       return "cit-pulse-bad";
   }
@@ -95,13 +96,18 @@ export function WorkspaceCard(
     allowRootDrop?: boolean;
     prToneOverride?: PrTone | undefined;
     diffOverride?: { additions: number | null; deletions: number | null } | undefined;
+    unseenAttentionSessionIds?: AttentionSessionIds | undefined;
   },
 ) {
   const { workspace, pullRequest } = props;
   const titleDisplay = props.displayTitle ?? workspaceDisplayTitle(workspace);
   const prTone = props.prToneOverride ?? (pullRequest ? prToneFor(pullRequest) : "missing");
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
-  const lifecycleTone = deriveWorkspaceLifecycleTone({ sessions: props.sessions, pullRequest: pullRequest ?? null });
+  const lifecycleTone = deriveWorkspaceDisplayLifecycleTone({
+    sessions: props.sessions,
+    pullRequest: pullRequest ?? null,
+    unseenAttentionSessionIds: props.unseenAttentionSessionIds,
+  });
   const agentToneSuffix = lifecycleToneAriaSuffix(lifecycleTone);
   const branchLabel = props.branchLabel === undefined ? workspace.branch : props.branchLabel;
   const branchTitle = props.branchTitle ?? branchLabel;

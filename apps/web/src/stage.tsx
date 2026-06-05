@@ -1,9 +1,9 @@
 import type { AgentRuntime, RoleTemplate, TerminalProfile, Workspace, WorkspaceSession } from "@citadel/contracts";
-import { deriveAgentLifecycleTone } from "@citadel/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Plus, RefreshCw, X } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
+import { type AttentionSessionIds, deriveSessionDisplayLifecycleTone } from "./session-status-display.js";
 import { StageEmptyLauncher, StageLaunchEntryIcon } from "./stage-empty-launcher.js";
 import {
   applySessionOrder,
@@ -288,6 +288,7 @@ export function Stage(props: {
   terminal: TerminalProfile;
   activeSessionId: string | undefined;
   onActiveSession: (id: string) => void;
+  unseenAttentionSessionIds?: AttentionSessionIds | undefined;
 }) {
   // Sort by tabId (time-encoded by createId on the daemon side), with createdAt
   // as a stable tie-breaker for legacy rows whose tab_id pre-dates migration 11.
@@ -556,7 +557,7 @@ export function Stage(props: {
         <div className="stage-tabs">
           {tabs.map((tab, index) => {
             const isActive = tab.session.id === activeSession?.session.id;
-            const lifecycleTone = deriveAgentLifecycleTone(tab.session);
+            const lifecycleTone = deriveSessionDisplayLifecycleTone(tab.session, props.unseenAttentionSessionIds);
             const dropSide = tabDropIndicator?.id === tab.session.id ? tabDropIndicator.side : null;
             return (
               <div

@@ -11,6 +11,7 @@ import { X } from "lucide-react";
 import { useState } from "react";
 import { api, queryClient } from "./api.js";
 import { repoNameWithOwner } from "./repo-labels.js";
+import type { AttentionSessionIds } from "./session-status-display.js";
 import { useToast } from "./toast.js";
 import { useOverlayPresent } from "./use-overlay-present.js";
 import { type PrTone, WorkspaceCard, approvalToneFor, prToneFor } from "./workspace-card.js";
@@ -24,6 +25,7 @@ type CheckoutNavCardProps = {
   pullRequest: PullRequestSummary | null;
   active: boolean;
   onSelect: () => void;
+  unseenAttentionSessionIds?: AttentionSessionIds | undefined;
 };
 
 export function hasNestedCheckouts(checkouts: readonly WorktreeCheckout[]): boolean {
@@ -117,6 +119,7 @@ export function CheckoutNavCard(props: CheckoutNavCardProps) {
           })
         }
         prToneOverride={prTone}
+        unseenAttentionSessionIds={props.unseenAttentionSessionIds}
         disableDrop
       />
       <button

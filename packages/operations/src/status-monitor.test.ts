@@ -1,4 +1,4 @@
-import type { AgentSession } from "@citadel/contracts";
+import type { AgentSession, TerminalSession } from "@citadel/contracts";
 import type { RuntimeStatusAdapter } from "@citadel/runtimes";
 import { REASON_ELAPSED_TIMER } from "@citadel/runtimes";
 import { describe, expect, it, vi } from "vitest";
@@ -41,6 +41,30 @@ function makeSession(over: Partial<AgentSession> = {}): AgentSession {
   };
 }
 
+function makeTerminalSession(over: Partial<TerminalSession> = {}): TerminalSession {
+  return {
+    id: "term_1",
+    workspaceId: "ws_1",
+    runtimeId: null,
+    displayName: "Shell",
+    status: "running",
+    statusReason: "launched",
+    statusReasonAt: null,
+    lastStatusAt: "2026-05-26T18:59:00.000Z",
+    lastOutputAt: null,
+    endedAt: null,
+    exitCode: null,
+    transport: "disconnected",
+    terminalBackend: "tmux",
+    tmuxSessionName: "citadel_term_1",
+    tmuxSessionId: "$2",
+    createdAt: "2026-05-26T18:59:00.000Z",
+    updatedAt: "2026-05-26T18:59:00.000Z",
+    ...over,
+    kind: "terminal",
+  };
+}
+
 function makeAdapter(observed: ReturnType<RuntimeStatusAdapter["observe"]>): RuntimeStatusAdapter {
   return {
     runtimeId: "claude-code",
@@ -51,6 +75,7 @@ function makeAdapter(observed: ReturnType<RuntimeStatusAdapter["observe"]>): Run
 
 interface DepsOver {
   sessions?: AgentSession[];
+  terminalSessions?: TerminalSession[];
   workspaces?: Array<{ id: string }>;
   // Shell-first: deps gives `panePidProcess` (foreground command, null when
   // tmux missing) instead of legacy sentinel reads. Map keys are tmux
@@ -96,6 +121,7 @@ function makeDeps(over: DepsOver = {}) {
   const deps: MonitorTickDeps = {
     now: () => FIXED_NOW,
     listSessions: () => sessions,
+    ...(over.terminalSessions ? { listTerminalSessions: () => over.terminalSessions ?? [] } : {}),
     listWorkspaceIds: () => new Set(workspaces.map((w) => w.id)),
     updateSession: (id, update) => updates.push({ id, update: update as unknown as Record<string, unknown> }),
     deleteSession: (id) => deleted.push(id),
@@ -350,6 +376,46 @@ describe("shell-first per-runtime status derivation", () => {
 
     expect(adapter.observe).toHaveBeenCalled();
     expect(updates[0]?.update).toMatchObject({ status: "waiting_for_input" });
+  });
+});
+
+describe("terminal shell foreground status derivation", () => {
+  it("marks a terminal idle when the pane foreground is the shell", async () => {
+    const { deps, updates, emitted } = makeDeps({
+      sessions: [],
+      terminalSessions: [makeTerminalSession({ status: "running", statusReason: "foreground_command" })],
+      panePidProcess: new Map([["citadel_term_1", { command: "bash", pid: 200 }]]),
+    });
+
+    await runStatusMonitorTick(deps, { source: "tick" });
+
+    expect(updates).toEqual([
+      {
+        id: "term_1",
+        update: expect.objectContaining({
+          status: "idle",
+          reason: "shell_foreground",
+          lastStatusAt: FIXED_NOW,
+        }),
+      },
+    ]);
+    expect(emitted).toEqual([{ event: "terminal.updated", payload: { workspaceId: "ws_1", sessionId: "term_1" } }]);
+  });
+
+  it("marks a terminal running only while a non-shell command is foreground", async () => {
+    const { deps, updates } = makeDeps({
+      sessions: [],
+      terminalSessions: [makeTerminalSession({ status: "idle", statusReason: "shell_foreground" })],
+      panePidProcess: new Map([["citadel_term_1", { command: "node", pid: 201 }]]),
+    });
+
+    await runStatusMonitorTick(deps, { source: "tick" });
+
+    expect(updates[0]?.update).toMatchObject({
+      status: "running",
+      reason: "foreground_command",
+      lastStatusAt: FIXED_NOW,
+    });
   });
 });
 

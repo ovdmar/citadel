@@ -1,11 +1,14 @@
 import type { Workspace, WorkspaceSession } from "@citadel/contracts";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { ChevronsRight, Search as SearchIcon, Settings as SettingsIcon } from "lucide-react";
+import { type AttentionSessionIds, deriveWorkspaceDisplayLifecycleTone } from "./session-status-display.js";
+import { lifecycleToneClass } from "./workspace-card.js";
 
 export function CollapsedLeftRail(props: {
   workspaces: Workspace[];
   activeWorkspaceId: string;
   sessions: WorkspaceSession[];
+  unseenAttentionSessionIds?: AttentionSessionIds | undefined;
   onExpand: () => void;
   onPickWorkspace: (workspace: Workspace) => void;
 }) {
@@ -44,9 +47,10 @@ export function CollapsedLeftRail(props: {
       <div className="collapsed-mini-stack">
         {recent.map((workspace) => {
           const isActive = workspace.id === props.activeWorkspaceId;
-          const running = props.sessions.some(
-            (session) => session.workspaceId === workspace.id && session.status === "running",
-          );
+          const tone = deriveWorkspaceDisplayLifecycleTone({
+            sessions: props.sessions.filter((session) => session.workspaceId === workspace.id),
+            unseenAttentionSessionIds: props.unseenAttentionSessionIds,
+          });
           const letter = (workspace.name.match(/[A-Za-z0-9]/)?.[0] ?? workspace.name[0] ?? "?").toUpperCase();
           return (
             <button
@@ -57,7 +61,9 @@ export function CollapsedLeftRail(props: {
               onClick={() => props.onPickWorkspace(workspace)}
             >
               <span className="collapsed-mini-letter">{letter}</span>
-              {running ? <span className="collapsed-mini-dot" aria-hidden /> : null}
+              {tone === "running" || tone === "attention" ? (
+                <span className={`cit-pulse cit-pulse-sm ${lifecycleToneClass(tone)} collapsed-mini-dot`} aria-hidden />
+              ) : null}
             </button>
           );
         })}
