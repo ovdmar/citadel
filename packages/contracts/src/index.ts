@@ -133,6 +133,34 @@ export const TerminalProfileSchema = z.object({
   args: z.array(z.string()).default([]),
 });
 
+export const SystemPromptSourceSchema = z.enum(["settings_base", "role_template", "caller"]);
+
+const SystemPromptDeliveryBaseSchema = z.object({
+  runtimeId: IdSchema.optional(),
+});
+
+export const SystemPromptDeliverySchema = z.discriminatedUnion("mode", [
+  SystemPromptDeliveryBaseSchema.extend({
+    mode: z.literal("native_argv"),
+  }).strict(),
+  SystemPromptDeliveryBaseSchema.extend({
+    mode: z.literal("pasted_wrapper"),
+    reason: z.enum(["native_unavailable", "argv_too_large"]),
+  }).strict(),
+  z
+    .object({
+      mode: z.literal("none"),
+      reason: z.literal("empty"),
+    })
+    .strict(),
+  z
+    .object({
+      mode: z.literal("skipped_resume"),
+      reason: z.literal("resume"),
+    })
+    .strict(),
+]);
+
 const WorkspaceSessionBaseSchema = z.object({
   id: IdSchema,
   workspaceId: IdSchema,
@@ -179,6 +207,9 @@ const WorkspaceSessionBaseSchema = z.object({
   // spawn time so we can resume the same conversation across daemon and machine
   // restarts, and so the Settings restore flow has a stable handle.
   runtimeSessionId: z.string().nullable().optional(),
+  systemPromptSources: z.array(SystemPromptSourceSchema).nullable().optional(),
+  systemPromptDelivery: SystemPromptDeliverySchema.nullable().optional(),
+  systemPromptLastDelivery: SystemPromptDeliverySchema.nullable().optional(),
   role: RoleIdSchema.nullable().optional(),
   actionId: z.string().nullable().optional(),
   managed: z.boolean().optional(),
@@ -493,6 +524,7 @@ export const CreateAgentSessionInputSchema = z.object({
   runtimeId: IdSchema,
   displayName: z.string().min(1).optional(),
   prompt: z.string().optional(),
+  systemPrompt: z.string().optional(),
   role: RoleIdSchema.optional(),
   actionId: z.string().optional(),
   managed: z.boolean().optional(),
@@ -515,7 +547,7 @@ export const CreateAgentSessionInputSchema = z.object({
   // the restored session reuses the original tab position in the cockpit's
   // tab strip. Non-restore callers leave this unset and get a fresh tabId.
   tabId: z.string().optional(),
-});
+}).strict();
 
 export const CreateTerminalSessionInputSchema = z.object({
   workspaceId: IdSchema,
@@ -534,6 +566,7 @@ export const LaunchAgentInputSchema = z
     repoId: IdSchema.optional(),
     repoName: z.string().min(1).optional(),
     prompt: z.string().min(1),
+    systemPrompt: z.string().optional(),
     runtimeId: IdSchema.default("claude-code"),
     displayName: z.string().min(1).max(80).optional(),
     workspaceName: z.string().min(1).max(80).optional(),
@@ -600,6 +633,8 @@ export type AgentSession = z.infer<typeof AgentSessionSchema>;
 export type TerminalSession = z.infer<typeof TerminalSessionSchema>;
 export type AgentPrompt = z.infer<typeof AgentPromptSchema>;
 export type AgentRuntime = z.infer<typeof AgentRuntimeSchema>;
+export type SystemPromptSource = z.infer<typeof SystemPromptSourceSchema>;
+export type SystemPromptDelivery = z.infer<typeof SystemPromptDeliverySchema>;
 export type TerminalProfile = z.infer<typeof TerminalProfileSchema>;
 export type ProviderHealth = z.infer<typeof ProviderHealthSchema>;
 export type CheckSummary = z.infer<typeof CheckSummarySchema>;
