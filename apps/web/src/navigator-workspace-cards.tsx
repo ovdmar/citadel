@@ -80,7 +80,6 @@ export function workspaceCheckoutRows(
 export function CheckoutNavCard(props: CheckoutNavCardProps) {
   const [confirmDrop, setConfirmDrop] = useState(false);
   const displayName = props.checkout.displayName ?? props.checkout.name;
-  const repoLabel = repoNameWithOwner(props.repo);
   const workspaceForCard: Workspace = {
     ...props.workspace,
     repoId: props.checkout.repoId,
@@ -88,9 +87,9 @@ export function CheckoutNavCard(props: CheckoutNavCardProps) {
     branch: props.checkout.branch,
     baseBranch: props.checkout.baseBranch,
     kind: "worktree",
-    issueKey: props.checkout.issue?.key ?? props.workspace.issueKey,
-    issueTitle: props.checkout.issue?.title ?? props.workspace.issueTitle,
-    issueUrl: props.checkout.issue?.url ?? props.workspace.issueUrl,
+    issueKey: null,
+    issueTitle: null,
+    issueUrl: null,
   };
   const prTone = props.pullRequest ? prToneFor(props.pullRequest) : checkoutPrTone(props.checkout);
   const branchLabel = checkoutBranchLabel(props.checkout, props.repo);
@@ -110,7 +109,6 @@ export function CheckoutNavCard(props: CheckoutNavCardProps) {
         branchTitle={branchTitle}
         cardTitle={branchTitle}
         displayTitle={displayName}
-        titlePrefix={repoLabel}
         renameLabel="Rename worktree card"
         onRename={(nextName) =>
           api(`/api/workspaces/${props.workspace.id}/checkouts/${props.checkout.id}`, {

@@ -44,14 +44,18 @@ type TerminalSocketMessage = {
   key?: string;
   lines?: number;
 };
+type PtyDaemonSocketInput = { kind: "binary"; data: Buffer } | { kind: "text"; data: string };
 
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
 const MAX_COLS = 400;
 const MAX_ROWS = 120;
 const DEFAULT_MAX_BUFFERED_BYTES = 16 * 1024 * 1024;
+const MAX_QUEUED_PTY_INPUT_BYTES = 256 * 1024;
 const BACKPRESSURE_CLOSE_CODE = 1013;
 const BACKPRESSURE_CLOSE_REASON = "terminal_backpressure";
+const INPUT_BACKLOG_CLOSE_CODE = 1009;
+const INPUT_BACKLOG_CLOSE_REASON = "terminal_input_backlog";
 const ALLOWED_TERMINAL_KEYS = new Set(["C-a", "C-e", "C-u"]);
 const MAX_SCROLL_LINES = 200;
 
@@ -290,16 +294,55 @@ async function attachPtyDaemonWebSocketClient(
   let client: PtyDaemonClient | null = null;
   let registeredClient = false;
   let cleanedUp = false;
+  let acceptingInput = false;
+  let queuedInputBytes = 0;
+  let queuedInput: PtyDaemonSocketInput[] = [];
   let unsubscribe: (() => void) | null = null;
   let unsubscribeDisconnect: (() => void) | null = null;
+  const handleInput = (input: PtyDaemonSocketInput) => {
+    if (cleanedUp || !client) return;
+    dispatchPtyDaemonSocketInput(ws, client, target.sessionId, input);
+  };
+  const flushQueuedInput = () => {
+    if (!acceptingInput || !client || queuedInput.length === 0) return;
+    const inputs = queuedInput;
+    queuedInput = [];
+    queuedInputBytes = 0;
+    for (const input of inputs) handleInput(input);
+  };
+  let handleSocketMessage: (raw: WebSocket.RawData, isBinary: boolean) => void = () => undefined;
   const cleanup = () => {
     if (cleanedUp) return;
     cleanedUp = true;
+    queuedInput = [];
+    queuedInputBytes = 0;
+    ws.off("message", handleSocketMessage);
     unsubscribe?.();
     unsubscribeDisconnect?.();
     if (registeredClient) options.onCleanup();
     client?.dispose();
   };
+  const closeForInputBacklog = () => {
+    cleanup();
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      sendControl(ws, { type: "error", data: INPUT_BACKLOG_CLOSE_REASON });
+      ws.close(INPUT_BACKLOG_CLOSE_CODE, INPUT_BACKLOG_CLOSE_REASON);
+    } else if (ws.readyState !== WebSocket.CLOSED) {
+      ws.terminate();
+    }
+  };
+  handleSocketMessage = (raw: WebSocket.RawData, isBinary: boolean) => {
+    if (cleanedUp) return;
+    const input = normalizePtyDaemonSocketInput(raw, isBinary);
+    if (!acceptingInput || !client) {
+      queuedInput.push(input);
+      queuedInputBytes += ptyDaemonSocketInputBytes(input);
+      if (queuedInputBytes > MAX_QUEUED_PTY_INPUT_BYTES) closeForInputBacklog();
+      return;
+    }
+    handleInput(input);
+  };
+  ws.on("message", handleSocketMessage);
   ws.on("close", cleanup);
   ws.on("error", cleanup);
   try {
@@ -341,6 +384,8 @@ async function attachPtyDaemonWebSocketClient(
     if (cleanedUp) return;
     await Promise.resolve(target.onSessionReady?.(session));
     if (cleanedUp) return;
+    acceptingInput = true;
+    flushQueuedInput();
     unsubscribe = await client.subscribe(target.sessionId, {
       replay: true,
       onOutput: (chunk) => {
@@ -371,31 +416,6 @@ async function attachPtyDaemonWebSocketClient(
     }
     return;
   }
-  ws.on("message", (raw, isBinary) => {
-    if (cleanedUp || !client) return;
-    if (isBinary) {
-      client.input(target.sessionId, rawWebSocketDataToBuffer(raw));
-      return;
-    }
-    const message = parseTerminalSocketMessage(raw.toString());
-    if (!message) {
-      sendControl(ws, { type: "error", data: "invalid_message" });
-      return;
-    }
-    if (message.type === "resize" && typeof message.cols === "number" && typeof message.rows === "number") {
-      const { cols, rows } = clampSize(message.cols, message.rows);
-      client.resize(target.sessionId, cols, rows);
-    } else if (message.type === "input" && typeof message.data === "string") {
-      client.input(target.sessionId, Buffer.from(message.data, "utf8"));
-    } else if (message.type === "key" && typeof message.key === "string") {
-      const control = controlBytesForKey(message.key);
-      if (!control) {
-        sendControl(ws, { type: "error", data: "invalid_key" });
-        return;
-      }
-      client.input(target.sessionId, control);
-    }
-  });
 }
 
 async function ensurePtyDaemonSession(
@@ -421,6 +441,45 @@ function controlBytesForKey(key: string): Buffer | null {
   if (key === "C-e") return Buffer.from("\u0005", "utf8");
   if (key === "C-u") return Buffer.from("\u0015", "utf8");
   return null;
+}
+
+function dispatchPtyDaemonSocketInput(
+  ws: WebSocket,
+  client: PtyDaemonClient,
+  sessionId: string,
+  input: PtyDaemonSocketInput,
+): void {
+  if (input.kind === "binary") {
+    client.input(sessionId, input.data);
+    return;
+  }
+  const message = parseTerminalSocketMessage(input.data);
+  if (!message) {
+    sendControl(ws, { type: "error", data: "invalid_message" });
+    return;
+  }
+  if (message.type === "resize" && typeof message.cols === "number" && typeof message.rows === "number") {
+    const { cols, rows } = clampSize(message.cols, message.rows);
+    client.resize(sessionId, cols, rows);
+  } else if (message.type === "input" && typeof message.data === "string") {
+    client.input(sessionId, Buffer.from(message.data, "utf8"));
+  } else if (message.type === "key" && typeof message.key === "string") {
+    const control = controlBytesForKey(message.key);
+    if (!control) {
+      sendControl(ws, { type: "error", data: "invalid_key" });
+      return;
+    }
+    client.input(sessionId, control);
+  }
+}
+
+function normalizePtyDaemonSocketInput(raw: WebSocket.RawData, isBinary: boolean): PtyDaemonSocketInput {
+  const data = rawWebSocketDataToBuffer(raw);
+  return isBinary ? { kind: "binary", data } : { kind: "text", data: data.toString("utf8") };
+}
+
+function ptyDaemonSocketInputBytes(input: PtyDaemonSocketInput): number {
+  return input.kind === "binary" ? input.data.byteLength : Buffer.byteLength(input.data, "utf8");
 }
 
 function rawWebSocketDataToBuffer(raw: WebSocket.RawData): Buffer {

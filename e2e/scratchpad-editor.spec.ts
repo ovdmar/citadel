@@ -184,7 +184,7 @@ test.describe("scratchpad drawer", () => {
     await expect(composer).toBeVisible();
     await composer.focus();
 
-    await page.keyboard.press("Control+Shift+D");
+    await page.getByRole("button", { name: "Start voice dictation" }).click();
     await page.locator(".voice-mode-toggle").click();
     await expect(page.getByRole("checkbox", { name: "Auto-submit" })).not.toBeChecked();
     expect(await emitFakeSpeechFinal(page, "draft only")).toBe(true);
