@@ -1,7 +1,8 @@
 .voice-mode-overlay {
   position: fixed;
-  right: 18px;
+  left: 50%;
   bottom: 18px;
+  transform: translateX(-50%);
   z-index: 1200;
   width: min(480px, calc(100vw - 24px));
   display: grid;
@@ -153,8 +154,7 @@
   justify-content: space-between;
 }
 
-.voice-mode-toggle,
-.voice-mode-silence {
+.voice-mode-toggle {
   display: inline-flex;
   align-items: center;
   min-height: 28px;
@@ -209,31 +209,9 @@
 }
 
 .voice-mode-toggle:focus-within .voice-mode-toggle-track,
-.voice-mode-silence:focus-within {
+.voice-mode-toggle:focus-within {
   outline: 2px solid color-mix(in srgb, var(--c-dark, var(--color-action)) 16%, transparent);
   outline-offset: 2px;
-}
-
-.voice-mode-silence {
-  padding: 3px 6px 3px 8px;
-  border: 0.5px solid var(--c-line-2, var(--line));
-  border-radius: 7px;
-  background: var(--c-line-1, transparent);
-  color: var(--c-fg-3, var(--muted));
-}
-
-.voice-mode-silence input {
-  width: 38px;
-  height: 22px;
-  padding: 0 4px;
-  border: 0;
-  border-radius: 5px;
-  background: var(--c-card, var(--panel));
-  color: var(--c-fg-1, inherit);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-  outline: none;
 }
 
 .voice-mode-actions {

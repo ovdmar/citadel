@@ -316,7 +316,7 @@ function spawnNodePty(request: PtySessionOpenRequest): PtyLike {
       return masterFd;
     },
     write(data: Buffer) {
-      pty.write(data as unknown as string);
+      pty.write(data);
     },
     resize(cols: number, rows: number) {
       pty.resize(cols, rows);
