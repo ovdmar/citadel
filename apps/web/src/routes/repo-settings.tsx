@@ -107,15 +107,17 @@ function ScaffoldInFlightBanner(props: { repoId: string }) {
 function RepoIdentitySection(props: { repo: Repo }) {
   const [name, setName] = useState(props.repo.name);
   const [worktreeParent, setWorktreeParent] = useState(props.repo.worktreeParent);
+  const [showMainWorkspace, setShowMainWorkspace] = useState(props.repo.showMainWorkspace === true);
   useEffect(() => {
     setName(props.repo.name);
     setWorktreeParent(props.repo.worktreeParent);
-  }, [props.repo.name, props.repo.worktreeParent]);
+    setShowMainWorkspace(props.repo.showMainWorkspace === true);
+  }, [props.repo.name, props.repo.worktreeParent, props.repo.showMainWorkspace]);
   const mutation = useMutation({
     mutationFn: () =>
       api(`/api/repos/${props.repo.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ name, worktreeParent }),
+        body: JSON.stringify({ name, worktreeParent, showMainWorkspace }),
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
@@ -144,6 +146,14 @@ function RepoIdentitySection(props: { repo: Repo }) {
         <label>
           Default branch (read-only)
           <input value={props.repo.defaultBranch} readOnly />
+        </label>
+        <label className="repo-main-workspace-toggle">
+          <input
+            type="checkbox"
+            checked={showMainWorkspace}
+            onChange={(event) => setShowMainWorkspace(event.currentTarget.checked)}
+          />
+          <span>Show main repo location in navigation</span>
         </label>
         <Button type="submit" disabled={mutation.isPending}>
           <Save size={14} /> Save identity

@@ -1,6 +1,13 @@
 // @vitest-environment happy-dom
 
-import type { AgentRuntime, AgentSession, PullRequestSummary, Workspace, WorktreeCheckout } from "@citadel/contracts";
+import type {
+  AgentRuntime,
+  AgentSession,
+  PullRequestSummary,
+  Repo,
+  Workspace,
+  WorktreeCheckout,
+} from "@citadel/contracts";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { type ReactNode, createElement } from "react";
 import { flushSync } from "react-dom";
@@ -272,9 +279,46 @@ describe("Navigator checkout aggregation", () => {
     expect(container.querySelector(".workspace-card-diff")?.textContent).toBe("+25-9");
     expect(container.querySelector(".approval-pill")?.getAttribute("title")).toBe("Approval: changes");
   });
+
+  it("hides a shown main repo workspace through the repo visibility flag", async () => {
+    const repo = makeRepo({ id: "repo_a", showMainWorkspace: true });
+    const workspace = makeWorkspace({
+      id: "ws_root",
+      repoId: repo.id,
+      name: "main",
+      path: "/repo/citadel",
+      rootPath: "/repo/citadel",
+      branch: "main",
+      kind: "root",
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (String(input) !== "/api/repos/repo_a") {
+        return Promise.reject(new Error(`unexpected fetch ${String(input)}`));
+      }
+      return Promise.resolve(jsonResponse({ repo: { ...repo, showMainWorkspace: false } }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = renderNavigator({ repos: [repo], workspaces: [workspace] });
+    const hide = container.querySelector('button[aria-label="Hide main from navigation"]');
+    expect(hide).toBeTruthy();
+    flushSync(() => {
+      hide?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    await waitFor(() => fetchMock.mock.calls.length === 1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/repos/repo_a",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ showMainWorkspace: false }),
+      }),
+    );
+  });
 });
 
 function renderNavigator(overrides: {
+  repos?: Repo[];
   workspaces?: Workspace[];
   checkouts?: WorktreeCheckout[];
   prByWorkspaceId?: Map<string, PullRequestSummary | null>;
@@ -290,7 +334,7 @@ function renderNavigator(overrides: {
         QueryClientProvider,
         { client: queryClient },
         createElement(Navigator, {
-          repos: [],
+          repos: overrides.repos ?? [],
           workspaces: overrides.workspaces ?? [],
           checkouts: overrides.checkouts ?? [],
           sessions: [],
@@ -314,6 +358,44 @@ function renderNavigator(overrides: {
     );
   });
   return rootElement;
+}
+
+async function waitFor(predicate: () => boolean) {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > 1000) break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  expect(predicate()).toBe(true);
+}
+
+function jsonResponse(body: unknown, init?: ResponseInit) {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
+}
+
+function makeRepo(overrides: Partial<Repo> = {}): Repo {
+  return {
+    id: "repo_a",
+    name: "citadel",
+    rootPath: "/repo/citadel",
+    defaultBranch: "main",
+    defaultRemote: "origin",
+    worktreeParent: "/worktrees",
+    providerRepositoryKey: "ovdmar/citadel",
+    showMainWorkspace: false,
+    setupHookIds: [],
+    teardownHookIds: [],
+    providerIds: [],
+    deployHookCommand: null,
+    createdAt: "2026-05-26T00:00:00.000Z",
+    updatedAt: "2026-05-26T00:00:00.000Z",
+    archivedAt: null,
+    ...overrides,
+  };
 }
 
 function makeCheckout(overrides: Partial<WorktreeCheckout> = {}): WorktreeCheckout {

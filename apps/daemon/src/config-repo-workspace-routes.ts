@@ -97,6 +97,7 @@ export function registerConfigRepoWorkspaceRoutes(input: {
         allowed.teardownHookIds = patch.teardownHookIds.filter((id: unknown) => typeof id === "string");
       if (Array.isArray(patch.providerIds))
         allowed.providerIds = patch.providerIds.filter((id: unknown) => typeof id === "string");
+      if (typeof patch.showMainWorkspace === "boolean") allowed.showMainWorkspace = patch.showMainWorkspace;
       if (typeof patch.deployHookCommand === "string")
         allowed.deployHookCommand = patch.deployHookCommand.trim() || null;
       else if (patch.deployHookCommand === null) allowed.deployHookCommand = null;
@@ -216,6 +217,7 @@ export function registerConfigRepoWorkspaceRoutes(input: {
       const issueKey = stringField(raw.issueKey);
       const name = uniqueCheckoutName({
         workspace,
+        repo,
         checkouts: store.listWorkspaceCheckouts(workspace.id),
         rawName: raw.name,
         issueKey,
@@ -230,10 +232,12 @@ export function registerConfigRepoWorkspaceRoutes(input: {
         store,
       });
       const issue = issueBinding(raw);
+      const displayName = stringField(raw.displayName) ?? stringField(raw.name);
       const parsed = CreateWorkspaceCheckoutInputSchema.parse({
         workspaceId,
         repoId: repo.id,
         name,
+        ...(displayName ? { displayName } : {}),
         branch,
         source,
         ...(stringField(raw.baseBranch) ? { baseBranch: stringField(raw.baseBranch) } : {}),
@@ -267,6 +271,24 @@ export function registerConfigRepoWorkspaceRoutes(input: {
     }),
   );
 
+  app.patch(
+    "/api/workspaces/:workspaceId/checkouts/:checkoutId",
+    asyncRoute(async (req, res) => {
+      const workspaceId = req.params.workspaceId;
+      const checkoutId = req.params.checkoutId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      if (typeof checkoutId !== "string") return res.status(400).json({ error: "checkout_id_required" });
+      const checkout = store.findWorkspaceCheckout(checkoutId);
+      if (!checkout || checkout.workspaceId !== workspaceId)
+        return res.status(404).json({ error: "checkout_not_found" });
+      const raw = asRecord(req.body);
+      const displayName = stringField(raw.displayName);
+      const next = store.updateWorkspaceCheckoutDisplayName(checkoutId, displayName ?? null);
+      emit("workspace.updated", { workspaceId, checkoutId });
+      res.json({ checkout: next });
+    }),
+  );
+
   app.get("/api/agent-runtimes", (_req, res) => {
     res.json({ agentRuntimes: listRuntimeHealth(config.agentRuntimes) });
   });
@@ -285,23 +307,24 @@ function checkoutSource(value: unknown, branch: unknown): "default_branch" | "ex
   return stringField(branch) ? "existing_branch" : "default_branch";
 }
 
-function checkoutName(value: unknown, issueKey: string | null, workspaceName: string, hasCheckouts: boolean): string {
+function checkoutName(value: unknown, issueKey: string | null, fallbackName: string): string {
   const explicit = stringField(value);
   if (explicit) return slug(explicit);
   if (issueKey) return slug(issueKey);
-  if (!hasCheckouts) return slug(workspaceName);
-  return slug(generateFunnyName());
+  return slug(fallbackName);
 }
 
 function uniqueCheckoutName(input: {
   workspace: { name: string; rootPath?: string | null | undefined; path: string };
+  repo: { name: string; providerRepositoryKey?: string | null | undefined; rootPath: string };
   checkouts: Array<{ name: string }>;
   rawName: unknown;
   issueKey: string | null;
 }): string {
   const existingNames = new Set(input.checkouts.map((checkout) => checkout.name));
   const rootPath = input.workspace.rootPath ?? input.workspace.path;
-  const base = checkoutName(input.rawName, input.issueKey, input.workspace.name, input.checkouts.length > 0);
+  const defaultName = input.repo.providerRepositoryKey?.split("/").at(-1) ?? input.repo.name;
+  const base = checkoutName(input.rawName, input.issueKey, defaultName);
   for (let attempt = 0; attempt < 25; attempt += 1) {
     const candidate = attempt === 0 ? base : `${base}-${attempt + 1}`;
     if (!existingNames.has(candidate) && !fs.existsSync(path.join(rootPath, candidate))) return candidate;

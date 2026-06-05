@@ -9,7 +9,6 @@ import type {
   Namespace,
   Operation,
   OperationLogEntry,
-  Repo,
   Workspace,
   WorkspaceSession,
 } from "@citadel/contracts";
@@ -17,7 +16,7 @@ import { runMigrations } from "./migrate.js";
 
 export { CURRENT_SCHEMA_VERSION } from "./migrate.js";
 import * as namespaces from "./namespaces.js";
-import { activityFromRow, operationFromRow, repoFromRow, sessionFromRow, workspaceFromRow } from "./rows.js";
+import { activityFromRow, operationFromRow, sessionFromRow, workspaceFromRow } from "./rows.js";
 import {
   type WorkspacePrSnapshot,
   getWorkspacePrSnapshot,
@@ -90,76 +89,6 @@ export class SqliteStore {
 
   query<T>(sql: string): T[] {
     return this.database.prepare(sql).all() as unknown as T[];
-  }
-
-  listRepos(): Repo[] {
-    return this.database
-      .prepare("SELECT * FROM repos WHERE archived_at IS NULL ORDER BY name")
-      .all()
-      .map((row) => repoFromRow(row as Record<string, unknown>));
-  }
-
-  insertRepo(repo: Repo) {
-    this.database
-      .prepare(
-        `INSERT INTO repos (id, name, root_path, default_branch, default_remote, worktree_parent,
-          setup_hook_ids, teardown_hook_ids, provider_ids, deploy_hook_command, created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        repo.id,
-        repo.name,
-        repo.rootPath,
-        repo.defaultBranch,
-        repo.defaultRemote,
-        repo.worktreeParent,
-        JSON.stringify(repo.setupHookIds),
-        JSON.stringify(repo.teardownHookIds),
-        JSON.stringify(repo.providerIds),
-        repo.deployHookCommand ?? null,
-        repo.createdAt,
-        repo.updatedAt,
-        repo.archivedAt ?? null,
-      );
-  }
-
-  updateRepo(
-    repoId: string,
-    patch: Partial<
-      Pick<Repo, "name" | "worktreeParent" | "setupHookIds" | "teardownHookIds" | "providerIds" | "deployHookCommand">
-    >,
-  ) {
-    const existing = this.database.prepare("SELECT * FROM repos WHERE id = ?").get(repoId) as
-      | Record<string, unknown>
-      | undefined;
-    if (!existing) return null;
-    const current = repoFromRow(existing);
-    const next: Repo = {
-      ...current,
-      name: patch.name ?? current.name,
-      worktreeParent: patch.worktreeParent ?? current.worktreeParent,
-      setupHookIds: patch.setupHookIds ?? current.setupHookIds,
-      teardownHookIds: patch.teardownHookIds ?? current.teardownHookIds,
-      providerIds: patch.providerIds ?? current.providerIds,
-      deployHookCommand: patch.deployHookCommand !== undefined ? patch.deployHookCommand : current.deployHookCommand,
-      updatedAt: new Date().toISOString(),
-    };
-    this.database
-      .prepare(
-        `UPDATE repos SET name = ?, worktree_parent = ?, setup_hook_ids = ?, teardown_hook_ids = ?,
-          provider_ids = ?, deploy_hook_command = ?, updated_at = ? WHERE id = ?`,
-      )
-      .run(
-        next.name,
-        next.worktreeParent,
-        JSON.stringify(next.setupHookIds),
-        JSON.stringify(next.teardownHookIds),
-        JSON.stringify(next.providerIds),
-        next.deployHookCommand ?? null,
-        next.updatedAt,
-        repoId,
-      );
-    return next;
   }
 
   listWorkspaces(repoId?: string): Workspace[] {
@@ -407,16 +336,6 @@ export class SqliteStore {
 
   updateWorkspacePrSnapshot(workspaceId: string, patch: Partial<WorkspacePrSnapshot>): void {
     updateWorkspacePrSnapshot(this.database, workspaceId, patch);
-  }
-
-  archiveRepo(repoId: string) {
-    const now = new Date().toISOString();
-    this.database.prepare("UPDATE repos SET archived_at = ?, updated_at = ? WHERE id = ?").run(now, now, repoId);
-    this.database
-      .prepare(
-        "UPDATE workspaces SET lifecycle = 'archived', archived_at = ?, updated_at = ? WHERE repo_id = ? AND archived_at IS NULL",
-      )
-      .run(now, now, repoId);
   }
 
   listWorkspaceSessions(workspaceId?: string): WorkspaceSession[] {
@@ -777,6 +696,9 @@ export class SqliteStore {
 }
 import { scheduledAgentStoreMethods } from "./scheduled-agent-store.js";
 Object.assign(SqliteStore.prototype, scheduledAgentStoreMethods);
+
+import { repoStoreMethods } from "./repo-store.js";
+Object.assign(SqliteStore.prototype, repoStoreMethods);
 
 // Attach the scheduled_agent_runs and background_sessions methods to
 // SqliteStore.prototype. The implementations live in scheduled-run-store.ts

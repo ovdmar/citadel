@@ -107,6 +107,7 @@ export function registerRepoRoutes({ app, store, operations, config, providerCac
         allowed.teardownHookIds = patch.teardownHookIds.filter((id: unknown) => typeof id === "string");
       if (Array.isArray(patch.providerIds))
         allowed.providerIds = patch.providerIds.filter((id: unknown) => typeof id === "string");
+      if (typeof patch.showMainWorkspace === "boolean") allowed.showMainWorkspace = patch.showMainWorkspace;
       if (typeof patch.deployHookCommand === "string")
         allowed.deployHookCommand = patch.deployHookCommand.trim() || null;
       else if (patch.deployHookCommand === null) allowed.deployHookCommand = null;

@@ -52,6 +52,8 @@ export const RepoSchema = z.object({
   defaultBranch: z.string().min(1).default("main"),
   defaultRemote: z.string().min(1).default("origin"),
   worktreeParent: z.string().min(1),
+  providerRepositoryKey: z.string().min(1).nullable().optional(),
+  showMainWorkspace: z.boolean().optional(),
   setupHookIds: z.array(z.string()).default([]),
   teardownHookIds: z.array(z.string()).default([]),
   providerIds: z.array(z.string()).default([]),

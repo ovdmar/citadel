@@ -118,6 +118,7 @@ export async function createWorkspaceCheckoutImpl(
       workspaceId: workspace.id,
       repoId: repo.id,
       name: checkoutName,
+      displayName: input.displayName ?? null,
       path: checkoutPath,
       branch,
       baseBranch,

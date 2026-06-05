@@ -22,6 +22,7 @@ import {
   PanelLeftClose,
   Plus,
   Settings2,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AddRepoModal } from "./add-repo-modal.js";
@@ -52,6 +53,12 @@ import {
   checkoutPullRequest,
 } from "./navigator-pr-state.js";
 import {
+  checkoutMatchesRepoGroup,
+  currentRepoGroupNameFromPath,
+  repoByGroupName,
+  repoGroupNameFromPath,
+} from "./navigator-repo-groups.js";
+import {
   CheckoutNavCard,
   checkoutSessions,
   hasNestedCheckouts,
@@ -68,30 +75,6 @@ function runningCount(sessions: WorkspaceSession[]): number {
 
 function groupingLabel(grouping: NavigatorGrouping): string {
   return grouping.map((key) => (key === "repo" ? "repository" : key)).join(" → ");
-}
-
-const UNKNOWN_REPO_LABEL = "Unknown repo";
-const REPO_GROUP_PREFIX = "repo=";
-
-function repoGroupNameFromPath(path: string): string | null {
-  const segment = path.split("/").find((part) => part.startsWith(REPO_GROUP_PREFIX));
-  return segment ? segment.slice(REPO_GROUP_PREFIX.length) : null;
-}
-
-function currentRepoGroupNameFromPath(path: string): string | null {
-  const segments = path.split("/");
-  const segment = segments[segments.length - 1];
-  return segment?.startsWith(REPO_GROUP_PREFIX) ? segment.slice(REPO_GROUP_PREFIX.length) : null;
-}
-
-function repoByGroupName(name: string | null, repos: readonly Repo[]): Repo | null {
-  if (!name || name === UNKNOWN_REPO_LABEL) return null;
-  return repos.find((repo) => repo.name === name) ?? null;
-}
-
-function checkoutMatchesRepoGroup(checkout: WorktreeCheckout, repoGroupName: string, repos: readonly Repo[]): boolean {
-  const repo = repos.find((entry) => entry.id === checkout.repoId) ?? null;
-  return repoGroupName === UNKNOWN_REPO_LABEL ? repo === null : repo?.name === repoGroupName;
 }
 
 export function Navigator(props: {
@@ -273,6 +256,14 @@ export function Navigator(props: {
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
+  const hideMainWorkspace = useMutation({
+    mutationFn: (repoId: string) =>
+      api(`/api/repos/${repoId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ showMainWorkspace: false }),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+  });
 
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null);
   const onDropOnNamespace = useCallback(
@@ -299,6 +290,8 @@ export function Navigator(props: {
       const workspaceCheckout = visibleCheckouts.length === 1 ? visibleCheckouts[0] : null;
       const activeWorkspace = workspace.id === props.activeWorkspaceId;
       const structuredHome = workspace.kind === "root" && workspace.mode === "structured";
+      const mainRepoWorkspace =
+        workspace.kind === "root" && workspace.repoId !== null && workspace.mode !== "structured";
       const workspacePullRequest = props.prByWorkspaceId.get(workspace.id) ?? null;
       const checkoutPrState = props.checkoutPrByWorkspaceId.get(workspace.id);
       const prAggregate = aggregateWorkspacePrState({
@@ -309,7 +302,8 @@ export function Navigator(props: {
       const checkoutsCollapsed = collapsedWorkspaceCheckouts[workspace.id] === true;
       const checkoutListId = `nav-workspace-checkouts-${encodeURIComponent(workspace.id)}`;
       const repoGroupName = repoGroupNameFromPath(groupPath);
-      const canAttachCheckout = workspace.kind === "root" && props.repos.length > 0;
+      const canAttachCheckout = structuredHome && props.repos.length > 0;
+      const canHideMainWorkspace = mainRepoWorkspace && workspace.repoId !== null;
       if (nested && repoGroupName) {
         const repoGroupedCheckouts = visibleCheckouts.filter((checkout) =>
           checkoutMatchesRepoGroup(checkout, repoGroupName, props.repos),
@@ -380,10 +374,24 @@ export function Navigator(props: {
             diffOverride={
               aggregateRow ? { additions: prAggregate.additions, deletions: prAggregate.deletions } : undefined
             }
-            allowRootDrop={workspace.kind === "root" && workspace.mode === "structured" && !nested}
+            allowRootDrop={structuredHome}
             rightControl={
-              canAttachCheckout || nested ? (
+              canHideMainWorkspace || canAttachCheckout || nested ? (
                 <>
+                  {canHideMainWorkspace ? (
+                    <button
+                      type="button"
+                      className="workspace-card-collapse"
+                      aria-label={`Hide ${workspace.name} from navigation`}
+                      title="Hide main repo location"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        hideMainWorkspace.mutate(workspace.repoId as string);
+                      }}
+                    >
+                      <X size={12} aria-hidden="true" />
+                    </button>
+                  ) : null}
                   {canAttachCheckout ? (
                     <button
                       type="button"
@@ -470,6 +478,7 @@ export function Navigator(props: {
       reorderWorkspace,
       collapsedWorkspaceCheckouts,
       toggleWorkspaceCheckouts,
+      hideMainWorkspace,
     ],
   );
   const flatEntries = useMemo<WorkspaceEntry[]>(
@@ -563,8 +572,8 @@ export function Navigator(props: {
             <button
               type="button"
               onClick={() => openCreateWorkspace()}
-              aria-label={grouping.includes("repo") ? "Create worktree" : "Create workspace"}
-              title={grouping.includes("repo") ? "New worktree (press c)" : "New workspace (press c)"}
+              aria-label="Create workspace"
+              title="New workspace (press c)"
             >
               <Plus size={12} />
             </button>
@@ -600,9 +609,7 @@ export function Navigator(props: {
           {!hasVisibleWorkspaceEntries ? (
             <div className="empty compact">
               {props.repos.length
-                ? grouping.includes("repo")
-                  ? "No worktrees in repository grouping. Use the plus button above to create one."
-                  : "No workspaces yet. Use the plus button above to create one."
+                ? "No workspaces yet. Use the plus button above to create one."
                 : "No repositories registered yet. Use the folder button above to register one."}
             </div>
           ) : null}
@@ -626,8 +633,6 @@ export function Navigator(props: {
         <CreateWorkspaceModal
           repos={props.repos}
           {...(props.lastRepoId ? { lastRepoId: props.lastRepoId } : {})}
-          runtimes={props.runtimes}
-          namespaces={props.namespaces}
           grouping={grouping}
           intent={createWorkspaceIntent}
           onClose={closeCreateWorkspace}

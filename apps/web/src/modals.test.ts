@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 
-import type { AgentRuntime, Namespace, Repo } from "@citadel/contracts";
+import type { Repo } from "@citadel/contracts";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createElement } from "react";
 import { flushSync } from "react-dom";
@@ -46,9 +46,9 @@ describe("resolveCreateWorkspaceContext", () => {
     expect(resolveCreateWorkspaceContext({ kind: "auto" }, ["namespace", "workspace"])).toBe("workspace-home");
   });
 
-  it("creates repo worktrees when repository grouping is active", () => {
-    expect(resolveCreateWorkspaceContext({ kind: "auto" }, ["repo"])).toBe("repo-worktree");
-    expect(resolveCreateWorkspaceContext({ kind: "auto" }, ["repo", "status"])).toBe("repo-worktree");
+  it("keeps repository grouping in workspace Home creation mode", () => {
+    expect(resolveCreateWorkspaceContext({ kind: "auto" }, ["repo"])).toBe("workspace-home");
+    expect(resolveCreateWorkspaceContext({ kind: "auto" }, ["repo", "status"])).toBe("workspace-home");
   });
 
   it("uses attach mode when opened from a workspace Home", () => {
@@ -63,7 +63,6 @@ describe("CreateWorkspaceModal", () => {
     const pendingHome: { resolve?: (value: Response) => void } = {};
     const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === "/api/agent-templates") return Promise.resolve(jsonResponse({ roles: [] }));
       if (url === "/api/workspaces/home") {
         return new Promise<Response>((resolve) => {
           pendingHome.resolve = resolve;
@@ -77,6 +76,7 @@ describe("CreateWorkspaceModal", () => {
     const onCreated = vi.fn();
     const container = renderCreateWorkspaceModal({ onClose, onCreated, grouping: ["workspace"] });
 
+    setInputByPlaceholder(container, "workspace-name", "Feature Home");
     await clickButton(container, "Create workspace");
 
     expect(onClose).not.toHaveBeenCalled();
@@ -90,11 +90,10 @@ describe("CreateWorkspaceModal", () => {
     expect(onCreated).toHaveBeenCalledWith("ws_new");
   });
 
-  it("leaves blank repo-group worktree names and branches for daemon-generated defaults", async () => {
+  it("creates selected initial worktrees with daemon-generated defaults", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       void init;
       const url = String(input);
-      if (url === "/api/agent-templates") return Promise.resolve(jsonResponse({ roles: [] }));
       if (url === "/api/workspaces/home") return Promise.resolve(jsonResponse({ workspaceId: "ws_new" }));
       if (url === "/api/workspaces/ws_new/checkouts")
         return Promise.resolve(jsonResponse({ workspaceId: "ws_new", checkoutId: "co_new" }));
@@ -104,22 +103,59 @@ describe("CreateWorkspaceModal", () => {
 
     const container = renderCreateWorkspaceModal({ grouping: ["repo"], repos: [repo()] });
 
-    await clickButton(container, "Create worktree");
+    setInputByPlaceholder(container, "workspace-name", "Feature Home");
+    clickCheckbox(container);
+    await clickButton(container, "Create workspace and worktrees");
     await waitFor(() => fetchMock.mock.calls.some(([input]) => String(input) === "/api/workspaces/ws_new/checkouts"));
 
     const checkoutCall = fetchMock.mock.calls.find(([input]) => String(input) === "/api/workspaces/ws_new/checkouts");
     expect(checkoutCall).toBeTruthy();
     const body = JSON.parse(String(checkoutCall?.[1]?.body));
-    expect(body).toMatchObject({ repoId: "repo_1", source: "default_branch", name: "" });
+    expect(body).toMatchObject({ repoId: "repo_1", source: "default_branch" });
+    expect(body).not.toHaveProperty("name");
     expect(body).not.toHaveProperty("branch");
+  });
+
+  it("adds a worktree without launching an agent when opened from workspace Home", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/workspaces/ws_home/checkouts")
+        return Promise.resolve(jsonResponse({ workspaceId: "ws_home", checkoutId: "co_new" }));
+      return Promise.reject(new Error(`unexpected fetch ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onCreated = vi.fn();
+    const container = renderCreateWorkspaceModal({
+      repos: [repo()],
+      onCreated,
+      intent: { kind: "attach-worktree", workspaceId: "ws_home", workspaceName: "Feature Home" },
+    });
+
+    setInputByPlaceholder(container, "Optional", "Payments UI");
+    await clickButton(container, "Add worktree");
+    await waitFor(() => onCreated.mock.calls.some(([workspaceId]) => workspaceId === "ws_home"));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/workspaces/ws_home/checkouts",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          repoId: "repo_1",
+          source: "default_branch",
+          name: "Payments UI",
+          displayName: "Payments UI",
+        }),
+      }),
+    );
   });
 });
 
 function renderCreateWorkspaceModal(overrides: {
   repos?: Repo[];
-  runtimes?: AgentRuntime[];
-  namespaces?: Namespace[];
   grouping?: Parameters<typeof CreateWorkspaceModal>[0]["grouping"];
+  intent?: Parameters<typeof CreateWorkspaceModal>[0]["intent"];
   onClose?: () => void;
   onCreated?: (workspaceId: string) => void;
 }) {
@@ -137,11 +173,10 @@ function renderCreateWorkspaceModal(overrides: {
           null,
           createElement(CreateWorkspaceModal, {
             repos: overrides.repos ?? [],
-            runtimes: overrides.runtimes ?? [],
-            namespaces: overrides.namespaces ?? [],
             onClose: overrides.onClose ?? (() => undefined),
             onCreated: overrides.onCreated ?? (() => undefined),
             ...(overrides.grouping !== undefined ? { grouping: overrides.grouping } : {}),
+            ...(overrides.intent !== undefined ? { intent: overrides.intent } : {}),
           }),
         ),
       ),
@@ -159,6 +194,31 @@ async function clickButton(container: HTMLElement, text: string) {
     button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
   await flushPromises();
+}
+
+function setInputByPlaceholder(container: HTMLElement, placeholder: string, value: string) {
+  const input = Array.from(container.querySelectorAll("input")).find(
+    (candidate) => candidate.getAttribute("placeholder") === placeholder,
+  );
+  expect(input).toBeTruthy();
+  setInputValue(input as HTMLInputElement, value);
+  flushSync(() => {
+    input?.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+function clickCheckbox(container: HTMLElement) {
+  const input = container.querySelector('input[type="checkbox"]');
+  expect(input).toBeTruthy();
+  flushSync(() => {
+    input?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (!setter) throw new Error("input value setter missing");
+  setter.call(input, value);
 }
 
 async function flushPromises() {

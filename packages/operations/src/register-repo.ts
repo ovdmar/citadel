@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { ActivityEvent, Repo, Workspace } from "@citadel/contracts";
@@ -35,6 +36,8 @@ export function registerRepo(
     defaultBranch: discoverDefaultBranch(rootPath),
     defaultRemote: "origin",
     worktreeParent: input.worktreeParent || path.join(path.dirname(rootPath), `${path.basename(rootPath)}-worktrees`),
+    providerRepositoryKey: resolveProviderRepositoryKey(rootPath, "origin"),
+    showMainWorkspace: false,
     setupHookIds: deps.repoDefaults?.setupHookIds ?? [],
     teardownHookIds: deps.repoDefaults?.teardownHookIds ?? [],
     providerIds: ["github-gh", "jira-jtk"],
@@ -85,4 +88,26 @@ export function registerRepo(
     throw error;
   }
   return repo;
+}
+
+function resolveProviderRepositoryKey(rootPath: string, remote: string): string | null {
+  try {
+    const remoteUrl = execFileSync("git", ["remote", "get-url", remote], {
+      cwd: rootPath,
+      encoding: "utf8",
+      stdio: "pipe",
+    });
+    return parseRemoteNameWithOwner(remoteUrl);
+  } catch {
+    return null;
+  }
+}
+
+function parseRemoteNameWithOwner(remoteUrl: string): string | null {
+  const trimmed = remoteUrl.trim();
+  const ssh = trimmed.match(/^git@[^:]+:([^/]+)\/([^/]+?)(?:\.git)?$/);
+  if (ssh?.[1] && ssh[2]) return `${ssh[1]}/${ssh[2]}`;
+  const https = trimmed.match(/^https?:\/\/[^/]+\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
+  if (https?.[1] && https[2]) return `${https[1]}/${https[2]}`;
+  return null;
 }

@@ -120,6 +120,14 @@ function RepoCard(props: {
     },
     onError: () => setConfirming(true),
   });
+  const visibility = useMutation({
+    mutationFn: (showMainWorkspace: boolean) =>
+      api(`/api/repos/${props.repo.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ showMainWorkspace }),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
+  });
   const needsConfirmation = activeSessions > 0 || runningOperations > 0;
   return (
     <div className="set-repo-card">
@@ -160,6 +168,15 @@ function RepoCard(props: {
         </div>
       </div>
       <div className="set-repo-card-foot">
+        <label className="repo-main-workspace-toggle">
+          <input
+            type="checkbox"
+            checked={props.repo.showMainWorkspace === true}
+            disabled={visibility.isPending}
+            onChange={(event) => visibility.mutate(event.currentTarget.checked)}
+          />
+          <span>Show main repo location in navigation</span>
+        </label>
         {confirming || (needsConfirmation && remove.isError) ? (
           <span style={{ fontSize: 11, color: "var(--c-fg-3)" }}>
             Removal preserves local repos/worktrees. Confirm to forget tracking.
