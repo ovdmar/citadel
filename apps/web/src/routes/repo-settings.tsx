@@ -287,7 +287,8 @@ function RepoDeployHookSection(props: { repo: Repo }) {
           Citadel resolves the deploy hook per-worktree. The repo-static file at <code>.citadel/hooks/deploy</code>{" "}
           takes priority; this command runs as a fallback. The hook is invoked with <code>$1=list|redeploy</code> and{" "}
           <code>$2=app-name</code>, cwd = the worktree path, and env <code>CITADEL_WORKSPACE_ID</code>,{" "}
-          <code>CITADEL_WORKSPACE_PATH</code>, <code>CITADEL_WORKSPACE_BRANCH</code>, <code>CITADEL_REPO_ID</code>.
+          <code>CITADEL_WORKSPACE_PATH</code>, <code>CITADEL_WORKSPACE_BRANCH</code>, <code>CITADEL_REPO_ID</code>. An
+          executable companion file at <code>.citadel/hooks/undeploy</code> enables undeploy buttons.
         </p>
         <label>
           Deploy command (bash)

@@ -2,7 +2,7 @@
 
 Hooks are the extension path for repo-specific behavior. They run as shell commands, receive structured JSON over stdin or env, and (for most events) emit structured JSON on stdout.
 
-This page covers the **deploy hook** (per-worktree, used by the cockpit's app/redeploy surface) and the **command-hook events** declared in the daemon's config (`workspace.setup`, `workspace.apps`, `workspace.action`, etc.).
+This page covers the **deploy hook** and its optional **undeploy hook** companion (per-worktree, used by the cockpit's app/redeploy/undeploy surface) and the **command-hook events** declared in the daemon's config (`workspace.setup`, `workspace.apps`, `workspace.action`, etc.).
 
 The cockpit's empty state in Settings → Repositories → `<repo>` has a "Scaffold with AI" button that launches an agent to author `.citadel/hooks/deploy` for you, primed with the canonical example below. See [install.md](./install.md) for the diagnosis surface (`make doctor`) that flags repos with no hooks bound.
 
@@ -67,6 +67,38 @@ Verify:
 
 ```bash
 ./.citadel/hooks/deploy list | jq .
+```
+
+## The undeploy hook — `.citadel/hooks/undeploy`
+
+Optional companion to the deploy hook. When an executable file exists at `<worktree>/.citadel/hooks/undeploy`, the cockpit shows an X beside the reload control for apps whose probe status is `deployed`. With multiple deployed apps, the panel header also shows an undeploy-all X beside the redeploy-all button.
+
+Contract:
+
+```
+$1 = app name, optional
+  omitted       → stop all deployed apps exposed by the deploy hook
+  app-name      → stop only that named app
+```
+
+Environment is the same as the deploy hook. stdout/stderr stream back to the cockpit operation log.
+
+Minimal example:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-all}" in
+  web|all) make stop-web ;;
+  *) echo "unknown app: $1" >&2; exit 2 ;;
+esac
+```
+
+Make it executable:
+
+```bash
+chmod +x .citadel/hooks/undeploy
 ```
 
 ## Command hooks (config-declared)

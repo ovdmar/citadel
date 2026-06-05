@@ -6,6 +6,7 @@ import type {
   DeployedAppsSummary,
   Operation,
   Repo,
+  UndeployHookResolution,
   Workspace,
 } from "@citadel/contracts";
 import { nowIso } from "@citadel/core";
@@ -14,8 +15,10 @@ import {
   buildDeployedApps,
   probeAppStatus,
   resolveDeployHook,
+  resolveUndeployHook,
   runDeployHookList,
   runDeployHookRedeploy,
+  runUndeployHook,
 } from "@citadel/hooks";
 
 export type DeployOpsDeps = {
@@ -45,6 +48,12 @@ function resolutionFor(repo: Repo, workspace: Workspace): DeployHookResolution {
   });
 }
 
+function undeployResolutionFor(workspace: Workspace): UndeployHookResolution {
+  return resolveUndeployHook({
+    workspacePath: workspace.path,
+  });
+}
+
 function envFor(repo: Repo, workspace: Workspace) {
   return {
     workspaceId: workspace.id,
@@ -60,10 +69,12 @@ export async function listDeployedApps(
 ): Promise<DeployedAppsSummary> {
   const checkedAt = nowIso();
   const resolution = resolutionFor(input.repo, input.workspace);
+  const undeployResolution = undeployResolutionFor(input.workspace);
   if (resolution.source === "none") {
     return {
       workspaceId: input.workspace.id,
       resolution,
+      undeployResolution,
       apps: [],
       error:
         "No deploy hook configured. Add .citadel/hooks/deploy in the worktree or set a deploy command in repo settings.",
@@ -92,6 +103,7 @@ export async function listDeployedApps(
   return {
     workspaceId: input.workspace.id,
     resolution,
+    undeployResolution,
     apps,
     error,
     checkedAt,
@@ -185,6 +197,103 @@ export async function redeployApp(
     });
     deps.activity(
       "deploy.redeploy.failed",
+      "user",
+      `${label} failed: ${message}`,
+      input.repo.id,
+      input.workspace.id,
+      operation.id,
+    );
+    return { operationId: operation.id, status: "failed", exitStatus: null };
+  }
+}
+
+export async function undeployApp(
+  deps: DeployOpsDeps,
+  input: { repo: Repo; workspace: Workspace; checkoutId?: string | undefined; appName?: string | undefined },
+): Promise<{ operationId: string; status: "succeeded" | "failed"; exitStatus: number | null }> {
+  const label = input.appName ? `Undeploy ${input.appName}` : "Undeploy all apps";
+  const operation = deps.newOperation(
+    "workspace.deploy.undeploy",
+    "running",
+    input.repo.id,
+    input.workspace.id,
+    10,
+    label,
+  );
+  const resolution = undeployResolutionFor(input.workspace);
+  if (resolution.source === "none") {
+    deps.store.upsertOperation({
+      ...operation,
+      status: "failed",
+      progress: 100,
+      error: "undeploy_hook_not_configured",
+      updatedAt: nowIso(),
+    });
+    return { operationId: operation.id, status: "failed", exitStatus: null };
+  }
+  try {
+    const result = await runUndeployHook({
+      resolution,
+      env: envFor(input.repo, input.workspace),
+      appName: input.appName,
+      onOutput: ({ stream, chunk }) => {
+        const text = chunk.replace(/\s+$/, "");
+        if (!text) return;
+        for (const line of text.split("\n")) {
+          if (!line.trim()) continue;
+          deps.store.appendOperationLog(operation.id, {
+            level: stream === "stderr" ? "warn" : "info",
+            message: line.slice(0, 4_000),
+            at: nowIso(),
+          });
+        }
+      },
+    });
+    const ok = result.exitStatus === 0;
+    deps.store.upsertOperation({
+      ...operation,
+      status: ok ? "succeeded" : "failed",
+      progress: 100,
+      message: ok ? `${label} dispatched` : `${label} exited ${result.exitStatus}`,
+      error: ok ? null : result.stderrTail.trim().slice(-1000) || `undeploy_hook_exit_${result.exitStatus}`,
+      retriable: !ok,
+      retryInput: ok
+        ? null
+        : {
+            kind: "deploy.undeploy",
+            workspaceId: input.workspace.id,
+            checkoutId: input.checkoutId ?? null,
+            appName: input.appName ?? null,
+          },
+      updatedAt: nowIso(),
+    });
+    deps.activity(
+      ok ? "deploy.undeploy" : "deploy.undeploy.failed",
+      "user",
+      ok ? `${label} dispatched via ${resolution.source}` : `${label} failed (exit ${result.exitStatus})`,
+      input.repo.id,
+      input.workspace.id,
+      operation.id,
+    );
+    return { operationId: operation.id, status: ok ? "succeeded" : "failed", exitStatus: result.exitStatus };
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : "undeploy_hook_failed";
+    deps.store.upsertOperation({
+      ...operation,
+      status: "failed",
+      progress: 100,
+      error: message,
+      retriable: true,
+      retryInput: {
+        kind: "deploy.undeploy",
+        workspaceId: input.workspace.id,
+        checkoutId: input.checkoutId ?? null,
+        appName: input.appName ?? null,
+      },
+      updatedAt: nowIso(),
+    });
+    deps.activity(
+      "deploy.undeploy.failed",
       "user",
       `${label} failed: ${message}`,
       input.repo.id,

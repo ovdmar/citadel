@@ -61,6 +61,7 @@ export type McpToolName =
   | ScratchpadToolName
   | "list_deployed_apps"
   | "redeploy_app"
+  | "undeploy_app"
   | "read_agent_history"
   | "list_scheduled_agents"
   | "create_scheduled_agent"
@@ -76,6 +77,23 @@ export type McpToolDefinition = {
   inputSchema: Record<string, unknown>;
   destructive: boolean;
 };
+
+function deployedAppActionTool(name: "redeploy_app" | "undeploy_app", description: string, allAction: string) {
+  return {
+    name,
+    description,
+    inputSchema: {
+      type: "object",
+      required: ["workspaceId"],
+      properties: {
+        workspaceId: { type: "string" },
+        name: { type: "string", maxLength: 80, description: `App name from list_deployed_apps. Omit to ${allAction}.` },
+      },
+      additionalProperties: false,
+    },
+    destructive: true,
+  } satisfies McpToolDefinition;
+}
 
 export type McpToolContext = {
   repos: Repo[];
@@ -436,25 +454,16 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
       },
       destructive: false,
     },
-    {
-      name: "redeploy_app",
-      description:
-        "Invoke the workspace's deploy hook with `redeploy [name]`. Omitting `name` redeploys all apps. The hook runs with cwd = workspace path and env CITADEL_WORKSPACE_ID/CITADEL_WORKSPACE_PATH/CITADEL_WORKSPACE_BRANCH/CITADEL_REPO_ID set. Returns { operationId, status, exitStatus } — stream the operation log via /api/operations/:id for live output.",
-      inputSchema: {
-        type: "object",
-        required: ["workspaceId"],
-        properties: {
-          workspaceId: { type: "string" },
-          name: {
-            type: "string",
-            maxLength: 80,
-            description: "App name from list_deployed_apps. Omit to redeploy all.",
-          },
-        },
-        additionalProperties: false,
-      },
-      destructive: true,
-    },
+    deployedAppActionTool(
+      "redeploy_app",
+      "Invoke the workspace's deploy hook with `redeploy [name]`. Omitting `name` redeploys all apps. The hook runs with cwd = workspace path and env CITADEL_WORKSPACE_ID/CITADEL_WORKSPACE_PATH/CITADEL_WORKSPACE_BRANCH/CITADEL_REPO_ID set. Returns { operationId, status, exitStatus } — stream the operation log via /api/operations/:id for live output.",
+      "redeploy all",
+    ),
+    deployedAppActionTool(
+      "undeploy_app",
+      "Invoke the workspace's undeploy hook (`<workspacePath>/.citadel/hooks/undeploy`) with `[name]`. Omitting `name` undeploys all apps. The hook runs with cwd = workspace path and env CITADEL_WORKSPACE_ID/CITADEL_WORKSPACE_PATH/CITADEL_WORKSPACE_BRANCH/CITADEL_REPO_ID set. Returns { operationId, status, exitStatus } — stream the operation log via /api/operations/:id for live output.",
+      "undeploy all",
+    ),
     {
       name: "list_scheduled_agents",
       description:
@@ -712,6 +721,7 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "append_scratchpad":
     case "list_deployed_apps":
     case "redeploy_app":
+    case "undeploy_app":
     case "create_scheduled_agent":
     case "update_scheduled_agent":
     case "delete_scheduled_agent":
