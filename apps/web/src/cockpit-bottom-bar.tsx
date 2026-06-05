@@ -21,7 +21,6 @@ export function BottomBar(props: {
     refetchInterval: 30_000,
   });
   const health = systemHealth.data?.systemHealth ?? null;
-  const watchLabel = resolveLiveWatchLabel(props.activeSession, props.sessions);
 
   return (
     <footer className="cit-bottombar" aria-label="Status bar">
@@ -59,7 +58,6 @@ export function BottomBar(props: {
         />
       </div>
       <div className="cit-bb-right">
-        {watchLabel ? <span className="cit-bb-watch">[{watchLabel}]</span> : null}
         <span className="cit-bb-time">{now}</span>
       </div>
     </footer>
@@ -157,27 +155,4 @@ function formatCheckedAt(checkedAt: string) {
 
 export function formatClock(date: Date) {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
-}
-
-export function resolveLiveWatchLabel(
-  activeSession: WorkspaceSession | null,
-  sessions: readonly WorkspaceSession[],
-): string | null {
-  if (isLiveWatchSession(activeSession)) return watchLabelForSession(activeSession);
-  const preferred = sessions.find((session) => isLiveWatchSession(session) && isActiveStatus(session.status));
-  if (preferred) return watchLabelForSession(preferred);
-  const fallback = sessions.find(isLiveWatchSession);
-  return fallback ? watchLabelForSession(fallback) : null;
-}
-
-function isLiveWatchSession(session: WorkspaceSession | null | undefined): session is WorkspaceSession {
-  return Boolean(session && !session.closedAt && watchLabelForSession(session));
-}
-
-function watchLabelForSession(session: WorkspaceSession): string | null {
-  return session.tmuxSessionName ?? session.ptySessionId ?? null;
-}
-
-function isActiveStatus(status: WorkspaceSession["status"]): boolean {
-  return status === "starting" || status === "running" || status === "waiting_for_input";
 }

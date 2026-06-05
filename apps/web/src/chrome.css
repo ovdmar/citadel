@@ -473,15 +473,6 @@
   color: var(--c-fg-4);
 }
 
-.cit-bb-watch {
-  color: var(--c-fg-3);
-  white-space: nowrap;
-}
-
-.cit-bb-watch:not(.cit-bb-muted) {
-  color: var(--c-fg-2);
-}
-
 .cit-bb-time {
   color: var(--c-fg-4);
   font-variant-numeric: tabular-nums;
