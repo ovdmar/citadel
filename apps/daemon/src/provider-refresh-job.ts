@@ -19,10 +19,12 @@ import type {
   RuntimeUsageSummary,
   VersionControlSummary,
   Workspace,
+  WorktreeCheckout,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import {
   type PersistentProviderCache,
+  checkoutVcCacheKey,
   ciCacheKey,
   issueCacheKey,
   resolveUsageRefreshInterval,
@@ -52,7 +54,14 @@ export type ProviderRefreshDeps = {
 };
 
 type RefreshItem =
-  | { kind: "vc"; workspaceId: string; cacheKey: string; ttlMs: number; rootPath: string }
+  | {
+      kind: "vc";
+      workspaceId: string;
+      cacheKey: string;
+      ttlMs: number;
+      rootPath: string;
+      checkoutId?: string | undefined;
+    }
   | { kind: "ci"; workspaceId: string; cacheKey: string; ttlMs: number; rootPath: string }
   | { kind: "issue"; issueKey: string; cacheKey: string; ttlMs: number }
   | { kind: "usage"; runtimeId: string; cacheKey: string; ttlMs: number };
@@ -66,6 +75,11 @@ export type ProviderRefreshJob = {
 
 const DEFAULT_TICK_MS = 15_000;
 const DEFAULT_JITTER_MS = 500;
+
+function listActiveWorkspaceCheckouts(store: SqliteStore, workspaceId: string): WorktreeCheckout[] {
+  if (typeof store.listWorkspaceCheckouts !== "function") return [];
+  return store.listWorkspaceCheckouts(workspaceId).filter((checkout) => !checkout.archivedAt);
+}
 
 export function startProviderRefreshJob(deps: ProviderRefreshDeps): ProviderRefreshJob {
   const tickIntervalMs = deps.tickIntervalMs ?? DEFAULT_TICK_MS;
@@ -108,6 +122,19 @@ export function startProviderRefreshJob(deps: ProviderRefreshDeps): ProviderRefr
     if (isStale(ciKey, prCiMs)) {
       items.push({ kind: "ci", workspaceId: workspace.id, cacheKey: ciKey, ttlMs: prCiMs, rootPath: workspace.path });
     }
+    for (const checkout of listActiveWorkspaceCheckouts(deps.store, workspace.id)) {
+      const checkoutVcKey = checkoutVcCacheKey(workspace.id, checkout.id, checkout.updatedAt);
+      if (isStale(checkoutVcKey, prCiMs)) {
+        items.push({
+          kind: "vc",
+          workspaceId: workspace.id,
+          checkoutId: checkout.id,
+          cacheKey: checkoutVcKey,
+          ttlMs: prCiMs,
+          rootPath: checkout.path,
+        });
+      }
+    }
     if (workspace.issueKey) {
       const key = issueCacheKey(workspace.issueKey);
       if (isStale(key, jiraMs)) {
@@ -137,6 +164,12 @@ export function startProviderRefreshJob(deps: ProviderRefreshDeps): ProviderRefr
     if (item.kind === "vc" || item.kind === "ci") {
       const ws = deps.store.listWorkspaces().find((w) => w.id === item.workspaceId);
       if (!ws || ws.archivedAt) return;
+      if (item.kind === "vc" && item.checkoutId) {
+        const checkout = listActiveWorkspaceCheckouts(deps.store, item.workspaceId).find(
+          (c) => c.id === item.checkoutId,
+        );
+        if (!checkout) return;
+      }
       try {
         const value =
           item.kind === "vc"

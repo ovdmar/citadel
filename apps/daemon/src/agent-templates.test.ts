@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AgentTemplateNotFoundError,
   StaleAgentTemplateUpdatedAtError,
+  agentTemplateDefaultsFromRuntimes,
   listAgentTemplates,
   resetActionTemplate,
   resetRoleTemplate,
@@ -35,6 +36,96 @@ describe("agent template storage", () => {
       "implementation.poke_idle_without_pr",
       "implementation.restack_checkout",
     ]);
+  });
+
+  it("uses the configured first runtime for uncustomized template defaults", async () => {
+    const roles = await listAgentTemplates(dataDir, { runtimeId: "codex" });
+
+    expect(roles.every((role) => role.launchSettings.runtimeId === "codex")).toBe(true);
+    expect(roles.flatMap((role) => role.actions).every((action) => action.launchSettings.runtimeId === "codex")).toBe(
+      true,
+    );
+
+    const reset = await resetRoleTemplate(dataDir, "architect", { runtimeId: "codex" });
+    expect(reset.launchSettings.runtimeId).toBe("codex");
+  });
+
+  it("migrates legacy uncustomized Claude defaults but preserves explicit agent settings", async () => {
+    const seeded = await listAgentTemplates(dataDir);
+    const architect = seeded.find((entry) => entry.role === "architect");
+    if (!architect) throw new Error("expected architect role");
+    await updateRoleTemplate(dataDir, "architect", {
+      launchSettings: { runtimeId: "claude-code", model: "opus", effort: null, fastMode: null, contextMode: null },
+      updatedAt: architect.updatedAt ?? "",
+    });
+
+    const roles = await listAgentTemplates(dataDir, { runtimeId: "codex" });
+
+    expect(roles.find((role) => role.role === "pm")?.launchSettings.runtimeId).toBe("codex");
+    expect(roles.find((role) => role.role === "architect")?.launchSettings).toEqual({
+      runtimeId: "claude-code",
+      model: "opus",
+      effort: null,
+      fastMode: null,
+      contextMode: null,
+    });
+  });
+
+  it("preserves explicit role Claude defaults saved through update paths", async () => {
+    const [pm] = await listAgentTemplates(dataDir, { runtimeId: "codex" });
+    if (!pm) throw new Error("expected pm role");
+
+    await updateRoleTemplate(dataDir, "pm", {
+      launchSettings: { runtimeId: "claude-code", model: null, effort: null, fastMode: null, contextMode: null },
+      updatedAt: pm.updatedAt ?? "",
+    });
+
+    const roles = await listAgentTemplates(dataDir, { runtimeId: "codex" });
+    const updated = roles.find((role) => role.role === "pm");
+    expect(updated?.launchSettings).toEqual({
+      runtimeId: "claude-code",
+      model: null,
+      effort: null,
+      fastMode: null,
+      contextMode: null,
+    });
+    expect(updated).not.toHaveProperty("launchSettingsExplicit");
+  });
+
+  it("preserves explicit action Claude defaults saved through update paths", async () => {
+    const roles = await listAgentTemplates(dataDir, { runtimeId: "codex" });
+    const review = roles.flatMap((role) => role.actions).find((action) => action.id === "implementation.review_pr");
+    if (!review) throw new Error("expected review action");
+
+    await updateActionTemplate(dataDir, "implementation.review_pr", {
+      launchSettings: { runtimeId: "claude-code", model: null, effort: null, fastMode: null, contextMode: null },
+      updatedAt: review.updatedAt ?? "",
+    });
+
+    const listed = await listAgentTemplates(dataDir, { runtimeId: "codex" });
+    const updated = listed.flatMap((role) => role.actions).find((action) => action.id === "implementation.review_pr");
+    expect(updated?.launchSettings).toEqual({
+      runtimeId: "claude-code",
+      model: null,
+      effort: null,
+      fastMode: null,
+      contextMode: null,
+    });
+    expect(updated).not.toHaveProperty("launchSettingsExplicit");
+  });
+
+  it("migrates legacy Claude defaults to the configured first runtime even when Claude is still configured", async () => {
+    await listAgentTemplates(dataDir);
+
+    const roles = await listAgentTemplates(
+      dataDir,
+      agentTemplateDefaultsFromRuntimes([{ id: "codex" }, { id: "claude-code" }]),
+    );
+
+    expect(roles.find((role) => role.role === "pm")?.launchSettings.runtimeId).toBe("codex");
+    expect(roles.flatMap((role) => role.actions).every((action) => action.launchSettings.runtimeId === "codex")).toBe(
+      true,
+    );
   });
 
   it("updates and resets role templates with stale-write protection", async () => {

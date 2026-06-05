@@ -17,7 +17,7 @@ import { type CreateWorkspaceOptions, type WorkspaceOpsDeps, createWorkspaceImpl
 import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 import * as namespaceOps from "./namespaces.js";
 import { registerRepo as registerRepoImpl } from "./register-repo.js";
-import { checkWorkspaceRemovalImpl, removeWorkspaceImpl } from "./remove-workspace.js";
+import { checkWorkspaceRemovalImpl, removeWorkspaceCheckoutImpl, removeWorkspaceImpl } from "./remove-workspace.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
 export type { RuntimeDescriptor } from "./create-agent-session.js";
 export type { LaunchAgentResult } from "./launch-agent.js";
@@ -362,6 +362,9 @@ export class OperationService {
 
   removeWorkspace = (input: { workspaceId: string; force?: boolean; archiveOnly?: boolean }) =>
     removeWorkspaceImpl(this.workspaceOpsDeps(), input);
+
+  removeWorkspaceCheckout = (input: { workspaceId: string; checkoutId: string; force?: boolean }) =>
+    removeWorkspaceCheckoutImpl(this.workspaceOpsDeps(), input);
 
   checkWorkspaceRemoval = (input: { workspaceId: string; archiveOnly?: boolean }) =>
     checkWorkspaceRemovalImpl(this.workspaceOpsDeps(), input);

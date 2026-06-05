@@ -54,6 +54,34 @@ describe("workspace layout helpers", () => {
     expect(executionTargetCwd({ workspace, checkout, targetType: "worktree_checkout" })).toBe("/work/feature/api");
   });
 
+  it("keeps workspace Home cwd on rootPath even when legacy path points at a checkout worktree", () => {
+    const workspaceWithLegacyWorktreePath: Workspace = {
+      ...workspace,
+      path: "/work/citadel-worktrees/feature",
+      rootPath: "/data/structured-workspaces/feature",
+    };
+    const customWorktreeCheckout: WorktreeCheckout = {
+      ...checkout,
+      path: "/work/citadel-worktrees/feature",
+    };
+
+    expect(workspaceRootPath(workspaceWithLegacyWorktreePath)).toBe("/data/structured-workspaces/feature");
+    expect(
+      executionTargetCwd({
+        workspace: workspaceWithLegacyWorktreePath,
+        checkout: customWorktreeCheckout,
+        targetType: "workspace_home",
+      }),
+    ).toBe("/data/structured-workspaces/feature");
+    expect(
+      executionTargetCwd({
+        workspace: workspaceWithLegacyWorktreePath,
+        checkout: customWorktreeCheckout,
+        targetType: "worktree_checkout",
+      }),
+    ).toBe("/work/citadel-worktrees/feature");
+  });
+
   it("resolves cwd most-specific-first and rejects escapes", () => {
     const realpath = (candidate: string) => candidate.replace("/link", "/work");
     expect(

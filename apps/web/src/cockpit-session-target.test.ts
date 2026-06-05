@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkoutIdFromTargetKey,
   sessionMatchesTarget,
+  shouldShowInspectorPanel,
   targetKeyForSession,
   targetLabel,
 } from "./cockpit-session-targets.js";
@@ -47,6 +48,15 @@ describe("cockpit session target helpers", () => {
     expect(targetLabel("workspace_home", null, checkouts)).toBe("Home");
     expect(targetLabel("worktree_checkout", "co_2", checkouts)).toBe("web");
     expect(targetLabel("worktree_checkout", "missing", checkouts)).toBe("Checkout");
+  });
+
+  it("hides the inspector only for structured workspace Home targets", () => {
+    const structured = workspaceFixture({ mode: "structured" });
+    const freestyle = workspaceFixture({ mode: "freestyle" });
+
+    expect(shouldShowInspectorPanel(structured, "workspace_home")).toBe(false);
+    expect(shouldShowInspectorPanel(structured, "worktree_checkout")).toBe(true);
+    expect(shouldShowInspectorPanel(freestyle, "workspace_home")).toBe(true);
   });
 });
 

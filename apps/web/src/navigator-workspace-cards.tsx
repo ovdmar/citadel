@@ -1,4 +1,17 @@
-import type { PullRequestSummary, Repo, Workspace, WorkspaceSession, WorktreeCheckout } from "@citadel/contracts";
+import type {
+  PullRequestSummary,
+  Repo,
+  Workspace,
+  WorkspaceDirtySummary,
+  WorkspaceSession,
+  WorktreeCheckout,
+} from "@citadel/contracts";
+import { useMutation } from "@tanstack/react-query";
+import { X } from "lucide-react";
+import { useState } from "react";
+import { queryClient } from "./api.js";
+import { useToast } from "./toast.js";
+import { useOverlayPresent } from "./use-overlay-present.js";
 import { type PrTone, WorkspaceCard, approvalToneFor, prToneFor } from "./workspace-card.js";
 import "./navigator-workspace-cards.css";
 
@@ -20,9 +33,10 @@ export function workspaceAggregateBranchLabel(input: {
   checkouts: readonly WorktreeCheckout[];
   sessions: readonly WorkspaceSession[];
   pullRequest: PullRequestSummary | null;
+  prCount?: number;
 }): string {
   const repoCount = new Set(input.checkouts.map((checkout) => checkout.repoId)).size;
-  const prCount = aggregatePrCount(input.checkouts, input.pullRequest);
+  const prCount = input.prCount ?? aggregatePrCount(input.checkouts, input.pullRequest);
   const sessionCount = input.sessions.filter((session) => !session.closedAt).length;
   return [
     plural(repoCount, "repo"),
@@ -46,7 +60,24 @@ export function pullRequestForCheckout(
   return null;
 }
 
+export function isWorkspaceMainCheckout(workspace: Workspace, checkout: WorktreeCheckout): boolean {
+  return (
+    checkout.workspaceId === workspace.id && (checkout.path === workspace.path || checkout.path === workspace.rootPath)
+  );
+}
+
+export function workspaceCheckoutRows(
+  workspace: Workspace,
+  checkouts: readonly WorktreeCheckout[],
+): { visibleCheckouts: WorktreeCheckout[]; aggregateCheckouts: readonly WorktreeCheckout[] } {
+  return {
+    visibleCheckouts: checkouts.filter((checkout) => !isWorkspaceMainCheckout(workspace, checkout)),
+    aggregateCheckouts: checkouts,
+  };
+}
+
 export function CheckoutNavCard(props: CheckoutNavCardProps) {
+  const [confirmDrop, setConfirmDrop] = useState(false);
   const workspaceForCard: Workspace = {
     ...props.workspace,
     repoId: props.checkout.repoId,
@@ -77,6 +108,134 @@ export function CheckoutNavCard(props: CheckoutNavCardProps) {
         prToneOverride={prTone}
         disableDrop
       />
+      <button
+        type="button"
+        className="workspace-card-drop nav-checkout-drop"
+        aria-label={`Drop checkout ${props.checkout.name}`}
+        title="Drop checkout"
+        onClick={(event) => {
+          event.stopPropagation();
+          setConfirmDrop(true);
+        }}
+      >
+        <X size={11} />
+      </button>
+      {confirmDrop ? (
+        <DropCheckoutDialog
+          workspace={props.workspace}
+          checkout={props.checkout}
+          onClose={() => setConfirmDrop(false)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+type DropCheckoutResult = {
+  removed: boolean;
+  dirty: boolean;
+  error?: string | null;
+  dirtySummary?: WorkspaceDirtySummary | null;
+};
+
+function DropCheckoutDialog(props: { workspace: Workspace; checkout: WorktreeCheckout; onClose: () => void }) {
+  useOverlayPresent();
+  const toast = useToast();
+  const drop = useMutation({
+    mutationFn: async (): Promise<DropCheckoutResult> => {
+      const response = await fetch(
+        `/api/workspaces/${encodeURIComponent(props.workspace.id)}/checkouts/${encodeURIComponent(props.checkout.id)}`,
+        { method: "DELETE", headers: { "Content-Type": "application/json" } },
+      );
+      const body = (await response.json().catch(() => ({}))) as Partial<DropCheckoutResult> & { error?: string };
+      if (!response.ok && !body.dirty) throw new Error(body.error ?? "checkout_remove_failed");
+      return {
+        removed: Boolean(body.removed),
+        dirty: Boolean(body.dirty),
+        error: body.error ?? null,
+        dirtySummary: body.dirtySummary ?? null,
+      };
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      if (result.removed) {
+        props.onClose();
+        return;
+      }
+      const reason = result.dirty ? "uncommitted changes or unpushed commits" : (result.error ?? "teardown failed");
+      toast.push({ tone: "error", message: `Drop "${props.checkout.name}" failed: ${reason}` });
+    },
+    onError: (error) => {
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      toast.push({
+        tone: "error",
+        message: `Drop "${props.checkout.name}" failed: ${error instanceof Error ? error.message : "network error"}`,
+      });
+    },
+  });
+  const dirtySummary = drop.data?.dirtySummary ?? null;
+  const dirtyBlocked = Boolean(drop.data && !drop.data.removed && drop.data.dirty);
+  return (
+    <div className="drop-workspace-backdrop" onMouseDown={props.onClose}>
+      <dialog
+        className="drop-workspace-dialog"
+        aria-label={`Drop checkout ${props.checkout.name}`}
+        open
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <strong>Drop checkout "{props.checkout.name}"?</strong>
+        <p>
+          This runs teardown for the checkout and removes its git worktree. Deletion is blocked if it has uncommitted
+          changes or unpushed commits.
+        </p>
+        {dirtyBlocked ? (
+          <p className="drop-workspace-error">Checkout has uncommitted changes or unpushed commits.</p>
+        ) : null}
+        {dirtySummary && (dirtySummary.files.length > 0 || dirtySummary.unpushedCommits.length > 0) ? (
+          <fieldset className="drop-workspace-summary" aria-label="Blocking changes">
+            {dirtySummary.files.length > 0 ? (
+              <details open>
+                <summary>Uncommitted changes ({dirtySummary.files.length})</summary>
+                <ul className="drop-workspace-summary-list">
+                  {dirtySummary.files.map((file) => (
+                    <li key={file.path}>
+                      <code className="drop-workspace-summary-status">{file.status}</code>
+                      <span className="drop-workspace-summary-path">{file.path}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+            {dirtySummary.unpushedCommits.length > 0 ? (
+              <details open>
+                <summary>Unpushed commits ({dirtySummary.unpushedCommits.length})</summary>
+                <ul className="drop-workspace-summary-list">
+                  {dirtySummary.unpushedCommits.map((commit) => (
+                    <li key={commit.sha}>
+                      <code className="drop-workspace-summary-sha">{commit.sha.slice(0, 7)}</code>
+                      <span className="drop-workspace-summary-subject">{commit.subject}</span>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+          </fieldset>
+        ) : null}
+        {drop.error instanceof Error ? <p className="drop-workspace-error">{drop.error.message}</p> : null}
+        <div className="drop-workspace-actions">
+          <button type="button" className="drop-workspace-cancel" onClick={props.onClose}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="drop-workspace-confirm"
+            onClick={() => drop.mutate()}
+            disabled={drop.isPending || dirtyBlocked}
+          >
+            {drop.isPending ? "Dropping..." : "Drop checkout"}
+          </button>
+        </div>
+      </dialog>
     </div>
   );
 }
