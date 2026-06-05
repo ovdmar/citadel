@@ -1,11 +1,16 @@
+import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
+import type { PtyDaemonHandoffMessage, PtyDaemonHandoffSnapshot } from "./pty-daemon-handoff.js";
+import { clearHandoffSnapshot, writeHandoffSnapshot } from "./pty-daemon-handoff.js";
 import {
   PTY_DAEMON_PROTOCOL_VERSION,
   type PtyDaemonFrame,
   PtyDaemonFrameReader,
   type PtyDaemonMessage,
+  type PtyDaemonUpgradePreparedResult,
   encodePtyDaemonFrame,
 } from "./pty-daemon-protocol.js";
 import { PtySessionStore } from "./pty-daemon-store.js";
@@ -58,6 +63,22 @@ export class PtyDaemonServer {
       server.listen(this.socketPath);
     });
     await fs.promises.chmod(this.socketPath, 0o600);
+  }
+
+  async startWithRetry(timeoutMs = 5000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    let lastError: unknown = null;
+    while (Date.now() < deadline) {
+      try {
+        await this.start();
+        return;
+      } catch (error) {
+        lastError = error;
+        if (!isNodeError(error) || error.code !== "EADDRINUSE") throw error;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    throw lastError ?? new Error("PTY daemon socket bind retry timed out");
   }
 
   async close(): Promise<void> {
@@ -223,9 +244,101 @@ export class PtyDaemonServer {
         this.store.close(message.sessionId);
         return;
       }
+      if (message.type === "prepare-upgrade") {
+        void this.prepareUpgrade()
+          .then((result) => {
+            sendFrame(
+              socket,
+              { type: "upgrade-prepared", requestId: message.requestId, result },
+              undefined,
+              this.#maxBufferedBytes,
+            );
+          })
+          .catch((error) => {
+            sendFrame(
+              socket,
+              {
+                type: "upgrade-prepared",
+                requestId: message.requestId,
+                result: { ok: false, reason: error instanceof Error ? error.message : "prepare_upgrade_failed" },
+              },
+              undefined,
+              this.#maxBufferedBytes,
+            );
+          });
+        return;
+      }
     } catch (error) {
       sendFrame(socket, toErrorMessage(error, requestIdFor(message)), undefined, this.#maxBufferedBytes);
     }
+  }
+
+  adoptSnapshot(snapshot: PtyDaemonHandoffSnapshot): void {
+    for (const session of snapshot.sessions) this.store.adopt(session);
+  }
+
+  async prepareUpgrade(): Promise<PtyDaemonUpgradePreparedResult> {
+    const liveFds = this.store.liveSessionMasterFds();
+    const fdIndexBySessionId = new Map<string, number>();
+    const handoffFdBase = 4;
+    const stdio: Array<"ignore" | "inherit" | "ipc" | number> = ["ignore", "inherit", "inherit", "ipc"];
+    for (const [index, session] of liveFds.entries()) {
+      const fdIndex = handoffFdBase + index;
+      fdIndexBySessionId.set(session.sessionId, fdIndex);
+      stdio.push(session.fd);
+    }
+
+    const snapshotPath = path.join(os.tmpdir(), `citadel-pty-daemon-handoff-${process.pid}-${Date.now()}.snap`);
+    try {
+      writeHandoffSnapshot(snapshotPath, this.store.handoffSnapshot(fdIndexBySessionId));
+    } catch (error) {
+      return { ok: false, reason: `snapshot write failed: ${stringifyError(error)}` };
+    }
+
+    const scriptPath = process.argv[1];
+    if (!scriptPath) {
+      clearHandoffSnapshot(snapshotPath);
+      return { ok: false, reason: "PTY daemon cannot self-spawn without process.argv[1]" };
+    }
+
+    let child: ChildProcess;
+    try {
+      child = spawn(
+        process.execPath,
+        [...process.execArgv, scriptPath, "--handoff", `--snapshot=${snapshotPath}`, `--socket=${this.socketPath}`],
+        {
+          detached: false,
+          env: { ...process.env },
+          stdio,
+        },
+      );
+    } catch (error) {
+      clearHandoffSnapshot(snapshotPath);
+      return { ok: false, reason: `successor spawn failed: ${stringifyError(error)}` };
+    }
+
+    const result = await waitForHandoffAck(child);
+    if (!result.ok) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+      clearHandoffSnapshot(snapshotPath);
+      return result;
+    }
+
+    setImmediate(() => {
+      void this.finalizeHandoff();
+    });
+    return { ok: true, successorPid: result.successorPid };
+  }
+
+  async finalizeHandoff(): Promise<void> {
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    await this.close();
+    setTimeout(() => process.exit(0), 50).unref();
   }
 }
 
@@ -277,4 +390,47 @@ function normalizeMaxBufferedBytes(value: number | undefined): number {
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
+}
+
+function stringifyError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function waitForHandoffAck(
+  child: ChildProcess,
+): Promise<{ ok: true; successorPid: number } | { ok: false; reason: string }> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve({ ok: false, reason: "successor handoff ack timed out" });
+    }, 5000);
+    timer.unref();
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.off("message", onMessage);
+      child.off("exit", onExit);
+      child.off("error", onError);
+    };
+    const onMessage = (message: unknown) => {
+      const handoff = message as PtyDaemonHandoffMessage;
+      if (handoff?.type === "upgrade-ack") {
+        cleanup();
+        resolve({ ok: true, successorPid: handoff.successorPid });
+      } else if (handoff?.type === "upgrade-nak") {
+        cleanup();
+        resolve({ ok: false, reason: handoff.reason });
+      }
+    };
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      cleanup();
+      resolve({ ok: false, reason: `successor exited before ack code=${code ?? "null"} signal=${signal ?? "null"}` });
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      resolve({ ok: false, reason: `successor error before ack: ${error.message}` });
+    };
+    child.on("message", onMessage);
+    child.once("exit", onExit);
+    child.once("error", onError);
+  });
 }

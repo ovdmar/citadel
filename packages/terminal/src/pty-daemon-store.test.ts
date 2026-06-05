@@ -35,7 +35,7 @@ describe("PTY daemon session store", () => {
     ]);
 
     store.input("pty-1", Buffer.from([0x03]));
-    expect(fake.writes).toEqual(["\u0003"]);
+    expect(writeText(fake)).toBe("\u0003");
 
     store.resize("pty-1", 120, 40);
     expect(fake.resizes).toEqual([{ cols: 120, rows: 40 }]);
@@ -96,6 +96,76 @@ describe("PTY daemon session store", () => {
     unsubscribeLive();
   });
 
+  it("preserves raw input and output bytes without UTF-8 replacement", () => {
+    const fake = new FakePty();
+    const store = new PtySessionStore({
+      replayLimitBytes: 64,
+      spawnPty: () => fake,
+    });
+    store.open({
+      sessionId: "pty-1",
+      cwd: "/tmp",
+      command: "bash",
+      args: [],
+      env: {},
+      cols: 80,
+      rows: 24,
+      kind: "terminal",
+    });
+
+    const input = Buffer.from([0xff, 0x00, 0x80, 0x1b]);
+    store.input("pty-1", input);
+    expect(Buffer.concat(fake.writes)).toEqual(input);
+
+    const replayed: Buffer[] = [];
+    store.subscribe("pty-1", {
+      replay: true,
+      onOutput: (chunk) => replayed.push(Buffer.from(chunk)),
+    });
+    const output = Buffer.from([0x80, 0x00, 0xff]);
+    fake.emitData(output);
+
+    expect(Buffer.concat(replayed)).toEqual(output);
+    expect(store.replay("pty-1")).toEqual(output);
+  });
+
+  it("builds byte-preserving handoff snapshots for live sessions", () => {
+    const fake = new FakePty();
+    const store = new PtySessionStore({
+      replayLimitBytes: 64,
+      spawnPty: () => fake,
+    });
+    store.open({
+      sessionId: "pty-1",
+      cwd: "/tmp",
+      command: "bash",
+      args: ["-l"],
+      env: { TERM: "xterm-256color" },
+      cols: 80,
+      rows: 24,
+      kind: "terminal",
+    });
+    const replay = Buffer.from([0xff, 0x00, 0x80]);
+    fake.emitData(replay);
+
+    expect(store.liveSessionMasterFds()).toEqual([{ sessionId: "pty-1", fd: 99 }]);
+    const snapshot = store.handoffSnapshot(new Map([["pty-1", 4]]));
+
+    expect(snapshot.sessions).toHaveLength(1);
+    expect(snapshot.sessions[0]).toEqual(
+      expect.objectContaining({
+        sessionId: "pty-1",
+        pid: fake.pid,
+        fdIndex: 4,
+        cwd: "/tmp",
+        command: "bash",
+        args: ["-l"],
+        env: { TERM: "xterm-256color" },
+      }),
+    );
+    expect(snapshot.sessions[0]?.replay).toEqual(replay);
+  });
+
   it("reports missing sessions without creating side effects", () => {
     const store = new PtySessionStore({ spawnPty: () => new FakePty() });
 
@@ -108,12 +178,16 @@ describe("PTY daemon session store", () => {
 class FakePty extends EventEmitter implements PtyLike {
   pid = 4242;
   process = "fake";
-  writes: string[] = [];
+  writes: Buffer[] = [];
   resizes: Array<{ cols: number; rows: number }> = [];
   kills: string[] = [];
 
-  write(data: string): void {
-    this.writes.push(data);
+  getMasterFd(): number {
+    return 99;
+  }
+
+  write(data: Buffer): void {
+    this.writes.push(Buffer.from(data));
   }
 
   resize(cols: number, rows: number): void {
@@ -125,7 +199,7 @@ class FakePty extends EventEmitter implements PtyLike {
     this.emit("exit", 0, 1);
   }
 
-  onData(callback: (data: string) => void): { dispose: () => void } {
+  onData(callback: (data: Buffer) => void): { dispose: () => void } {
     this.on("data", callback);
     return { dispose: () => this.off("data", callback) };
   }
@@ -137,7 +211,11 @@ class FakePty extends EventEmitter implements PtyLike {
     return { dispose: () => this.off("exit", listener) };
   }
 
-  emitData(data: string): void {
-    this.emit("data", data);
+  emitData(data: string | Buffer): void {
+    this.emit("data", Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8"));
   }
+}
+
+function writeText(fake: FakePty): string {
+  return Buffer.concat(fake.writes).toString("utf8");
 }

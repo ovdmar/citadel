@@ -5,6 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "./components/ui/button.js";
 import { isElementVoiceVisible } from "./lib/voice-targets.js";
 import { matchShortcut } from "./shortcuts.js";
+import { writeTerminalBinary } from "./terminal-binary-writer.js";
+import { addTerminalResumeReconnectListeners } from "./terminal-resume-reconnect.js";
 import { postTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
 import { readOverlayCount } from "./use-overlay-present.js";
 import { useResolvedTheme } from "./use-resolved-theme.js";
@@ -121,7 +123,6 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
   const wsRef = useRef<WebSocket | null>(null);
   const themeRef = useRef(theme);
   const encoderRef = useRef(new TextEncoder());
-  const decoderRef = useRef(new TextDecoder());
   const autoRetryAttemptsRef = useRef(0);
   const autoRetryTimerRef = useRef<number | null>(null);
   const forwardWheelToRuntime = shouldForwardWheelToRuntime(props.session);
@@ -146,6 +147,17 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
   const reconnect = useCallback(() => {
     setGeneration((value) => value + 1);
   }, []);
+
+  const reconnectOnResume = useCallback(() => {
+    if (!activeRef.current) return;
+    if (typeof document !== "undefined" && document.hidden) return;
+    const ws = wsRef.current;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    autoRetryAttemptsRef.current = 0;
+    clearAutoRetryTimer();
+    recordTerminalClientEvent(sessionId, "websocket.resume_reconnect");
+    reconnect();
+  }, [clearAutoRetryTimer, reconnect, sessionId]);
 
   const reload = useCallback(() => {
     autoRetryAttemptsRef.current = 0;
@@ -217,6 +229,8 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
   }, [clearAutoRetryTimer, sessionId]);
 
   useEffect(() => clearAutoRetryTimer, [clearAutoRetryTimer]);
+
+  useEffect(() => addTerminalResumeReconnectListeners(reconnectOnResume), [reconnectOnResume]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -348,7 +362,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     ws.addEventListener("message", (event) => {
       if (disposed) return;
       if (typeof event.data !== "string") {
-        void writeTerminalBinary(event.data, terminal, decoderRef.current);
+        void writeTerminalBinary(event.data, terminal);
         return;
       }
       const message = parseTerminalSocketMessage(event.data);
@@ -640,16 +654,6 @@ function sendTerminalScroll(ws: WebSocket, lines: number): void {
 function sendTerminalInterrupt(ws: WebSocket, sessionId: string): void {
   recordTerminalUserAction(sessionId, "ctrl_c");
   sendTerminalInput(ws, "\u0003");
-}
-
-async function writeTerminalBinary(data: unknown, terminal: Terminal, decoder: TextDecoder): Promise<void> {
-  if (data instanceof ArrayBuffer) {
-    terminal.write(decoder.decode(data));
-    return;
-  }
-  if (data instanceof Blob) {
-    terminal.write(decoder.decode(await data.arrayBuffer()));
-  }
 }
 
 function copyTerminalSelection(

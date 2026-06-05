@@ -44,7 +44,7 @@ describe("PTY daemon Unix socket client/server", () => {
 
     client.input("pty-1", Buffer.from("\u0003"));
     await waitFor(() => fake.writes.length === 1);
-    expect(fake.writes).toEqual(["\u0003"]);
+    expect(writeText(fake)).toBe("\u0003");
 
     client.resize("pty-1", 1000, 1);
     await waitFor(() => fake.resizes.length === 1);
@@ -100,6 +100,19 @@ describe("PTY daemon Unix socket client/server", () => {
 
     secondClient.dispose();
   });
+
+  it("notifies clients when the PTY daemon connection drops", async () => {
+    const fake = new FakePty();
+    const { server, socketPath } = await startServer(fake);
+    const client = await connectPtyDaemonClient({ socketPath });
+    const disconnect = new Promise<Error>((resolve) => {
+      client.onDisconnect(resolve);
+    });
+
+    await server.close();
+    expect((await disconnect).message).toBe("PTY daemon socket closed");
+    client.dispose();
+  });
 });
 
 async function startServer(fake: FakePty) {
@@ -118,12 +131,16 @@ async function startServer(fake: FakePty) {
 class FakePty extends EventEmitter implements PtyLike {
   pid = 4242;
   process = "fake";
-  writes: string[] = [];
+  writes: Buffer[] = [];
   resizes: Array<{ cols: number; rows: number }> = [];
   kills: string[] = [];
 
-  write(data: string): void {
-    this.writes.push(data);
+  getMasterFd(): number {
+    return 99;
+  }
+
+  write(data: Buffer): void {
+    this.writes.push(Buffer.from(data));
   }
 
   resize(cols: number, rows: number): void {
@@ -135,7 +152,7 @@ class FakePty extends EventEmitter implements PtyLike {
     this.emit("exit", 0, 1);
   }
 
-  onData(callback: (data: string) => void): { dispose: () => void } {
+  onData(callback: (data: Buffer) => void): { dispose: () => void } {
     this.on("data", callback);
     return { dispose: () => this.off("data", callback) };
   }
@@ -147,9 +164,13 @@ class FakePty extends EventEmitter implements PtyLike {
     return { dispose: () => this.off("exit", listener) };
   }
 
-  emitData(data: string): void {
-    this.emit("data", data);
+  emitData(data: string | Buffer): void {
+    this.emit("data", Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8"));
   }
+}
+
+function writeText(fake: FakePty): string {
+  return Buffer.concat(fake.writes).toString("utf8");
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {

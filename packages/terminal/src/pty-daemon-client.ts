@@ -6,6 +6,7 @@ import {
   PtyDaemonFrameReader,
   type PtyDaemonMessage,
   type PtyDaemonSessionInfo,
+  type PtyDaemonUpgradePreparedResult,
   encodePtyDaemonFrame,
 } from "./pty-daemon-protocol.js";
 
@@ -30,6 +31,8 @@ type Subscription = {
   onExit?: (event: { exitCode: number; signal?: number }) => void;
 };
 
+type DisconnectListener = (error: Error) => void;
+
 export async function connectPtyDaemonClient(options: ConnectPtyDaemonClientOptions): Promise<PtyDaemonClient> {
   const socket = net.createConnection(options.socketPath);
   await waitForSocketConnect(socket, options.timeoutMs ?? 3000);
@@ -51,14 +54,16 @@ export class PtyDaemonClient {
   #reader = new PtyDaemonFrameReader();
   #pending = new Map<string, PendingRequest>();
   #subscriptions = new Map<string, Subscription>();
+  #disconnectListeners = new Set<DisconnectListener>();
   #nextRequest = 0;
   #disposed = false;
+  #disconnectNotified = false;
 
   constructor(socket: net.Socket) {
     this.#socket = socket;
     socket.on("data", (chunk) => this.#handleData(chunk));
-    socket.on("close", () => this.#rejectPending("PTY daemon socket closed"));
-    socket.on("error", (error) => this.#rejectPending(error.message));
+    socket.on("close", () => this.#handleDisconnect(new Error("PTY daemon socket closed")));
+    socket.on("error", (error) => this.#handleDisconnect(error));
   }
 
   nextRequestId(): string {
@@ -152,6 +157,24 @@ export class PtyDaemonClient {
     this.#send({ type: "close", sessionId });
   }
 
+  async prepareUpgrade(): Promise<PtyDaemonUpgradePreparedResult> {
+    const requestId = this.nextRequestId();
+    const response = await this.request({ type: "prepare-upgrade", requestId });
+    if (response.type !== "upgrade-prepared") throw new Error(`Expected upgrade-prepared, received ${response.type}`);
+    return response.result;
+  }
+
+  onDisconnect(listener: DisconnectListener): () => void {
+    if (this.#disconnectNotified) {
+      listener(new Error("PTY daemon socket closed"));
+      return () => {};
+    }
+    this.#disconnectListeners.add(listener);
+    return () => {
+      this.#disconnectListeners.delete(listener);
+    };
+  }
+
   request(message: PtyDaemonMessage, payload?: Buffer): Promise<PtyDaemonMessage> {
     if (!("requestId" in message) || !message.requestId) {
       throw new Error(`PTY daemon request ${message.type} requires requestId`);
@@ -168,7 +191,7 @@ export class PtyDaemonClient {
     if (this.#disposed) return;
     this.#disposed = true;
     this.#subscriptions.clear();
-    this.#rejectPending("PTY daemon client disposed");
+    this.#rejectPending(new Error("PTY daemon client disposed"));
     this.#socket.destroy();
   }
 
@@ -177,7 +200,7 @@ export class PtyDaemonClient {
     try {
       frames = this.#reader.push(chunk);
     } catch (error) {
-      this.#rejectPending(error instanceof Error ? error.message : "Invalid PTY daemon frame");
+      this.#rejectPending(error instanceof Error ? error : new Error("Invalid PTY daemon frame"));
       this.dispose();
       return;
     }
@@ -217,13 +240,28 @@ export class PtyDaemonClient {
 
   #send(message: PtyDaemonMessage, payload?: Buffer): void {
     if (this.#disposed) return;
-    this.#socket.write(encodePtyDaemonFrame(message, payload));
+    if (this.#socket.destroyed || !this.#socket.writable) {
+      this.#handleDisconnect(new Error("PTY daemon socket closed"));
+      return;
+    }
+    this.#socket.write(encodePtyDaemonFrame(message, payload), (error) => {
+      if (error) this.#handleDisconnect(error);
+    });
   }
 
-  #rejectPending(reason: string): void {
+  #handleDisconnect(error: Error): void {
+    this.#rejectPending(error);
+    if (this.#disconnectNotified) return;
+    this.#disconnectNotified = true;
+    this.#subscriptions.clear();
+    for (const listener of [...this.#disconnectListeners]) listener(error);
+    this.#disconnectListeners.clear();
+  }
+
+  #rejectPending(error: Error): void {
     for (const [requestId, pending] of this.#pending) {
       this.#pending.delete(requestId);
-      pending.reject(new Error(reason));
+      pending.reject(error);
     }
   }
 }

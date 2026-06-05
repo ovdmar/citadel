@@ -32,8 +32,8 @@ const xtermMocks = vi.hoisted(() => {
     onData() {
       return { dispose: vi.fn() };
     }
-    write(data: string) {
-      this.writes.push(data);
+    write(data: string | Uint8Array) {
+      this.writes.push(typeof data === "string" ? data : new TextDecoder().decode(data));
     }
     attachCustomKeyEventHandler() {}
     onSelectionChange() {
@@ -205,6 +205,38 @@ describe("TerminalPane disconnect handling", () => {
     expect(FakeWebSocket.instances).toHaveLength(4);
     expect(document.body.textContent).toContain("terminal_disconnected");
     expect(document.body.textContent).toContain("exhausted");
+  });
+
+  it("reconnects immediately on page resume when the terminal socket already closed", async () => {
+    await renderTerminal();
+
+    const ws = FakeWebSocket.instances[0];
+    if (!ws) throw new Error("terminal websocket missing");
+    ws.readyState = FakeWebSocket.CLOSED;
+
+    await flushReact(() => {
+      window.dispatchEvent(new Event("pageshow"));
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it("bypasses pending retry backoff on page resume after a disconnect", async () => {
+    vi.useFakeTimers();
+    await renderTerminal();
+
+    await flushReact(() => FakeWebSocket.instances[0]?.closeFromServer(1006, "lost"));
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    await flushReact(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    await flushReact(() => {
+      vi.advanceTimersByTime(5_000);
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
   });
 });
 

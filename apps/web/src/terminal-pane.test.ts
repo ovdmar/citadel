@@ -56,8 +56,8 @@ const xtermMocks = vi.hoisted(() => {
       this.dataHandler = handler;
       return { dispose: vi.fn() };
     }
-    write(data: string) {
-      this.writes.push(data);
+    write(data: string | Uint8Array) {
+      this.writes.push(typeof data === "string" ? data : new TextDecoder().decode(data));
     }
     attachCustomKeyEventHandler(handler: (event: KeyboardEvent) => boolean) {
       this.keyHandler = handler;
