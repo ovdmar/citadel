@@ -31,6 +31,7 @@ const TERMINAL_FAST_SCROLL_MULTIPLIER = 5;
 const TERMINAL_MAX_SCROLL_LINES_PER_MESSAGE = 200;
 const TERMINAL_AUTO_RETRY_LIMIT = 3;
 const TERMINAL_AUTO_RETRY_BACKOFF_MS = 5_000;
+const TERMINAL_PTY_INPUT_FLUSH_MS = 4;
 const AUTO_RETRYABLE_TERMINAL_ERRORS = new Set(["terminal_disconnected", "terminal_socket_error"]);
 const RUNTIME_MOUSE_EVENT_RUNTIMES = new Set(["claude-code"]);
 type TerminalPaneKey = typeof LINE_START_KEY | typeof LINE_END_KEY | typeof LINE_KILL_KEY;
@@ -133,6 +134,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
   const activeRef = useRef(active);
   const connectionStateRef = useRef(connectionState);
   const errorRef = useRef(error);
+  const coalesceInput = props.session.terminalBackend === "pty-daemon";
   activeRef.current = active;
   connectionStateRef.current = connectionState;
   errorRef.current = error;
@@ -249,6 +251,8 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     let wheelRemainder = 0;
     let pendingWheelLines = 0;
     let lastSentResize: { cols: number; rows: number } | null = null;
+    let inputFlushTimer: number | null = null;
+    let pendingInput = "";
     const terminal = new Terminal({
       allowTransparency: false,
       convertEol: false,
@@ -306,6 +310,30 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
       pendingWheelLines = 0;
       sendTerminalScroll(ws, lines);
     };
+    const clearInputFlushTimer = () => {
+      if (inputFlushTimer !== null) {
+        window.clearTimeout(inputFlushTimer);
+        inputFlushTimer = null;
+      }
+    };
+    const flushInput = (suffix = "") => {
+      clearInputFlushTimer();
+      const data = pendingInput + suffix;
+      pendingInput = "";
+      if (data && ws.readyState === WebSocket.OPEN) ws.send(encoderRef.current.encode(data));
+    };
+    const sendInput = (data: string) => {
+      if (!shouldCoalesceTerminalInput(ws, data, coalesceInput)) {
+        flushInput(data);
+        return;
+      }
+      pendingInput += data;
+      if (inputFlushTimer !== null) return;
+      inputFlushTimer = window.setTimeout(() => {
+        inputFlushTimer = null;
+        flushInput();
+      }, TERMINAL_PTY_INPUT_FLUSH_MS);
+    };
     const scheduleWheelScroll = () => {
       if (disposed || wheelFrame !== null) return;
       wheelFrame = window.requestAnimationFrame(flushWheelScroll);
@@ -348,7 +376,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     );
     const inputDisposable = terminal.onData((data) => {
       if (data.includes("\u0003")) recordTerminalUserAction(sessionId, "ctrl_c");
-      if (ws.readyState === WebSocket.OPEN) ws.send(encoderRef.current.encode(data));
+      if (ws.readyState === WebSocket.OPEN) sendInput(data);
     });
 
     ws.addEventListener("open", () => {
@@ -399,7 +427,9 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     });
     window.setTimeout(scheduleResize, 0);
     return () => {
+      flushInput();
       disposed = true;
+      clearInputFlushTimer();
       if (resizeFrame !== null) {
         window.cancelAnimationFrame(resizeFrame);
         resizeFrame = null;
@@ -422,7 +452,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
       if (wsRef.current === ws) wsRef.current = null;
       if (HOST_REGISTRY.get(sessionId) === host) HOST_REGISTRY.delete(sessionId);
     };
-  }, [sessionId, generation, active, clearAutoRetryTimer, scheduleAutoRetry, forwardWheelToRuntime]);
+  }, [sessionId, generation, active, clearAutoRetryTimer, scheduleAutoRetry, forwardWheelToRuntime, coalesceInput]);
 
   // Publish the live URL + reload/focus/recover callbacks so nav selection and
   // tab actions can drive state owned by TerminalPane.
@@ -629,6 +659,18 @@ function accelerateWheelLineDelta(lineDelta: number, event: WheelEvent, terminal
 
 function sendTerminalInput(ws: WebSocket, data: string): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
+}
+
+function shouldFlushTerminalInputImmediately(data: string): boolean {
+  for (let index = 0; index < data.length; index += 1) {
+    const code = data.charCodeAt(index);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function shouldCoalesceTerminalInput(ws: WebSocket, data: string, enabled: boolean): boolean {
+  return enabled && ws.bufferedAmount > 0 && !shouldFlushTerminalInputImmediately(data);
 }
 
 function sendTerminalKey(ws: WebSocket, key: TerminalPaneKey): void {
