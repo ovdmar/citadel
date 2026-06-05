@@ -371,6 +371,40 @@ test("desktop terminal surface is opaque and stable in the cockpit", async ({ pa
     for (const [name, color] of Object.entries(backgrounds)) {
       expect(isTransparentCssColor(color), `${name} background should be opaque, got ${color}`).toBe(false);
     }
+
+    const terminalGeometry = await terminalHost.evaluate((element) => {
+      const surface = element.closest(".terminal-surface");
+      const xterm = element.querySelector(".xterm");
+      const screen = element.querySelector(".xterm-screen");
+      const viewportElement = element.querySelector(".xterm-viewport");
+      if (
+        !(surface instanceof HTMLElement) ||
+        !(xterm instanceof HTMLElement) ||
+        !(screen instanceof HTMLElement) ||
+        !(viewportElement instanceof HTMLElement)
+      ) {
+        throw new Error("terminal geometry elements missing");
+      }
+      const hostRect = element.getBoundingClientRect();
+      const xtermRect = xterm.getBoundingClientRect();
+      const screenRect = screen.getBoundingClientRect();
+      const viewportRect = viewportElement.getBoundingClientRect();
+      const surfaceStyle = getComputedStyle(surface);
+      const xtermStyle = getComputedStyle(xterm);
+      return {
+        hostRight: hostRect.right,
+        xtermRight: xtermRect.right,
+        screenRight: screenRect.right,
+        viewportRight: viewportRect.right,
+        surfacePaddingRight: Number.parseFloat(surfaceStyle.paddingRight),
+        xtermPaddingRight: Number.parseFloat(xtermStyle.paddingRight),
+      };
+    });
+    expect(terminalGeometry.surfacePaddingRight).toBe(0);
+    expect(terminalGeometry.xtermPaddingRight).toBeGreaterThan(0);
+    expect(terminalGeometry.xtermRight).toBeLessThanOrEqual(terminalGeometry.hostRight + 0.5);
+    expect(terminalGeometry.screenRight).toBeLessThanOrEqual(terminalGeometry.hostRight + 0.5);
+    expect(terminalGeometry.viewportRight).toBeLessThanOrEqual(terminalGeometry.hostRight + 0.5);
   } finally {
     if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
     fs.rmSync(fixture.dir, { recursive: true, force: true });
