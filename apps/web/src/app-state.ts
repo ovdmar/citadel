@@ -9,6 +9,7 @@ import type {
   ProviderHealth,
   Repo,
   ScheduledAgent,
+  SystemHealthSnapshot,
   TerminalProfile,
   Workspace,
   WorkspaceManager,
@@ -18,6 +19,7 @@ import type {
   WorkspaceSession,
   WorktreeCheckout,
 } from "@citadel/contracts";
+import { SystemHealthSnapshotSchema } from "@citadel/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, createContext, createElement, useContext, useEffect, useMemo, useState } from "react";
 import { api, queryClient } from "./api.js";
@@ -272,6 +274,20 @@ export function useEventRefresh() {
     events.addEventListener("scheduled-agent.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("scheduled-agent.run", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("namespace.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("system-health.updated", (ev) => {
+      const systemHealth = parseSseSystemHealth(ev as MessageEvent);
+      if (systemHealth) queryClient.setQueryData(["system-health"], { systemHealth });
+    });
     return () => events.close();
   }, []);
+}
+
+export function parseSseSystemHealth(event: MessageEvent): SystemHealthSnapshot | null {
+  try {
+    const data = JSON.parse(event.data) as { payload?: unknown };
+    const parsed = SystemHealthSnapshotSchema.safeParse(data.payload);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
 }

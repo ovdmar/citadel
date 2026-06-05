@@ -1,10 +1,11 @@
-import type { Repo, Workspace, WorktreeCheckout } from "@citadel/contracts";
+import type { Repo, SystemHealthSnapshot, Workspace, WorktreeCheckout } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
 import {
   type StateResponse,
   addOptimisticCheckout,
   applyOptimisticRemoveFilter,
   createOptimisticCheckout,
+  parseSseSystemHealth,
   reconcileOptimisticCheckout,
   removeOptimisticCheckout,
 } from "./app-state.js";
@@ -147,6 +148,42 @@ describe("applyOptimisticRemoveFilter", () => {
     expect(filtered?.workspaces.map((w) => w.id)).toEqual(["a", "b"]);
   });
 });
+
+describe("parseSseSystemHealth", () => {
+  it("extracts and validates the system-health.updated payload", () => {
+    expect(parseSseSystemHealth(message({ payload: systemHealthSnapshot }))).toEqual(systemHealthSnapshot);
+  });
+
+  it("returns null for malformed or invalid SSE payloads", () => {
+    expect(parseSseSystemHealth(message({ payload: { tone: "healthy" } }))).toBeNull();
+    expect(parseSseSystemHealth({ data: "not-json" } as MessageEvent)).toBeNull();
+  });
+});
+
+function message(data: unknown): MessageEvent {
+  return { data: JSON.stringify(data) } as MessageEvent;
+}
+
+const systemHealthSnapshot: SystemHealthSnapshot = {
+  tone: "healthy",
+  reason: null,
+  checkedAt: "2026-06-05T00:00:00.000Z",
+  machine: {
+    cpu: { percentUsed: 12, loadAverage1m: 0.5, cores: 8 },
+    memory: { totalBytes: 100, usedBytes: 50, freeBytes: 50, percentUsed: 50 },
+    disk: {
+      path: "/tmp/citadel",
+      device: "sda1",
+      totalBytes: 100,
+      usedBytes: 35,
+      freeBytes: 65,
+      percentUsed: 35,
+      ioUtilizationPercent: 10,
+      error: null,
+    },
+  },
+  process: { pid: 123, rssBytes: 40, heapUsedBytes: 20, heapTotalBytes: 30, percentOfMachineMemory: 1 },
+};
 
 describe("optimistic checkout state helpers", () => {
   it("builds and inserts a pending checkout under the workspace root", () => {
