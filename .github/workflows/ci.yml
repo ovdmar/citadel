@@ -208,6 +208,7 @@ jobs:
           CITADEL_WEB_PORT: "5173"
           CITADEL_DAEMON_URL: "http://127.0.0.1:4337"
           CITADEL_BASE_URL: "http://127.0.0.1:4337"
+          CITADEL_WEB_URL: "http://127.0.0.1:5173"
         run: |
           pnpm dev > /tmp/citadel-dev.log 2>&1 &
           for attempt in {1..60}; do
