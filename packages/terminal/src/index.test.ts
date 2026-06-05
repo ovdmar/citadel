@@ -290,8 +290,7 @@ describe("tmux terminal gateway helpers", () => {
     await waitForCapture(sessionName, "INTERRUPTED");
     expect(await waitForPaneCommand(sessionName, (cmd) => cmd === "bash")).toBe("bash");
 
-    sendKeys(sessionName, "cat > pasted.txt");
-    sendKeys(sessionName, "\r");
+    sendKeys(sessionName, "cat > pasted.txt\r");
     expect(await waitForPaneCommand(sessionName, (cmd) => cmd === "cat")).toBe("cat");
     pasteText(sessionName, "alpha\nbeta\n");
     await waitForCapture(sessionName, "beta");
