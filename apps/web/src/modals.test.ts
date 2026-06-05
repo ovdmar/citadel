@@ -106,6 +106,7 @@ describe("CreateWorkspaceModal", () => {
     const container = renderCreateWorkspaceModal({ grouping: ["repo"], repos: [repo()], onCreated });
 
     setInputByPlaceholder(container, "workspace-name", "Feature Home");
+    expect(checkboxes(container).map((checkbox) => checkbox.checked)).toEqual([false]);
     clickCheckbox(container);
     await clickButton(container, "Create workspace and worktrees");
     await waitFor(() => fetchMock.mock.calls.some(([input]) => String(input) === "/api/workspaces/ws_new/checkouts"));
@@ -140,6 +141,9 @@ describe("CreateWorkspaceModal", () => {
       intent: { kind: "attach-worktree", workspaceId: "ws_home", workspaceName: "Feature Home" },
     });
 
+    expect(checkboxes(container).map((checkbox) => checkbox.checked)).toEqual([false]);
+    expect(buttonByText(container, "Add worktree").disabled).toBe(true);
+    clickCheckbox(container);
     setInputByPlaceholder(container, "Optional", "Payments UI");
     await clickButton(container, "Add worktree");
     await waitFor(() =>
@@ -185,6 +189,7 @@ describe("CreateWorkspaceModal", () => {
       intent: { kind: "attach-worktree", workspaceId: "ws_home", workspaceName: "Feature Home" },
     });
 
+    clickCheckbox(container);
     setInputByPlaceholder(container, "Optional", "Payments UI");
     await clickButton(container, "Add worktree");
 
@@ -230,6 +235,7 @@ describe("CreateWorkspaceModal", () => {
       intent: { kind: "attach-worktree", workspaceId: "ws_home", workspaceName: "Feature Home" },
     });
 
+    clickCheckbox(container);
     setInputByPlaceholder(container, "Optional", "Payments UI");
     await clickButton(container, "Add worktree");
 
@@ -254,6 +260,7 @@ describe("CreateWorkspaceModal", () => {
       intent: { kind: "attach-worktree", workspaceId: "ws_home", workspaceName: "Feature Home" },
     });
 
+    clickCheckbox(container, 0);
     clickCheckbox(container, 1);
     await clickButton(container, "Add worktrees");
     await waitFor(() => onCreated.mock.calls.some(([workspaceId]) => workspaceId === "ws_home"));
@@ -302,13 +309,18 @@ function renderCreateWorkspaceModal(overrides: {
   return rootElement;
 }
 
-async function clickButton(container: HTMLElement, text: string) {
+function buttonByText(container: HTMLElement, text: string): HTMLButtonElement {
   const button = Array.from(container.querySelectorAll("button")).find((candidate) =>
     candidate.textContent?.includes(text),
   );
   expect(button).toBeTruthy();
+  return button as HTMLButtonElement;
+}
+
+async function clickButton(container: HTMLElement, text: string) {
+  const button = buttonByText(container, text);
   flushSync(() => {
-    button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
   await flushPromises();
 }
@@ -325,11 +337,15 @@ function setInputByPlaceholder(container: HTMLElement, placeholder: string, valu
 }
 
 function clickCheckbox(container: HTMLElement, index = 0) {
-  const input = Array.from(container.querySelectorAll('input[type="checkbox"]'))[index];
+  const input = checkboxes(container)[index];
   expect(input).toBeTruthy();
   flushSync(() => {
     input?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
+}
+
+function checkboxes(container: HTMLElement): HTMLInputElement[] {
+  return Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
 }
 
 function setInputValue(input: HTMLInputElement, value: string) {

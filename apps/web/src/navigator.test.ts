@@ -270,6 +270,8 @@ describe("Navigator checkout aggregation", () => {
       onPickWorkspaceId,
     });
     await clickButtonByLabel(container, "Add worktree to Feature Home");
+    expect(checkboxes(container).map((checkbox) => checkbox.checked)).toEqual([false]);
+    clickCheckbox(container);
     setInputByPlaceholder(container, "Optional", "Payments UI");
     await clickButton(container, "Add worktree");
 
@@ -419,7 +421,6 @@ function NavigatorHarness(props: {
     activeTargetKey: "home",
     runtimes: [makeRuntime()],
     namespaces: [],
-    lastRepoId: undefined,
     createWorkspaceOpen,
     onOpenCreateWorkspace: () => setCreateWorkspaceOpen(true),
     onCloseCreateWorkspace: () => setCreateWorkspaceOpen(false),
@@ -448,6 +449,18 @@ async function clickButtonByLabel(container: HTMLElement, label: string) {
     button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
   });
   await flushPromises();
+}
+
+function clickCheckbox(container: HTMLElement, index = 0) {
+  const input = checkboxes(container)[index];
+  expect(input).toBeTruthy();
+  flushSync(() => {
+    input?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
+function checkboxes(container: HTMLElement): HTMLInputElement[] {
+  return Array.from(container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
 }
 
 function setInputByPlaceholder(container: HTMLElement, placeholder: string, value: string) {
