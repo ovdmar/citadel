@@ -12,6 +12,11 @@
 #     redeploy [name]      → (re)starts the named app, or all apps if no name.
 #                           stdout/stderr stream back to the cockpit operation log.
 #
+# Optional companion:
+#   .citadel/hooks/undeploy [name] stops the named app, or all apps when no
+#   name is provided. Citadel shows undeploy buttons only when that file exists
+#   and is executable.
+#
 # Environment provided by Citadel:
 #   CITADEL_WORKSPACE_ID    — opaque workspace id
 #   CITADEL_WORKSPACE_PATH  — absolute path to the worktree (same as cwd)

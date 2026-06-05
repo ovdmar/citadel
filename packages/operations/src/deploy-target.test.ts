@@ -28,6 +28,10 @@ describe("deploy targets", () => {
       '#!/usr/bin/env sh\nprintf \'%s\\n\' \'{"apps":[{"name":"api","url":"http://127.0.0.1:1"}]}\'\n',
     );
     fs.chmodSync(hookPath, 0o755);
+    const undeployLog = path.join(dir, "undeploy.log");
+    const undeployHookPath = path.join(checkoutPath, ".citadel", "hooks", "undeploy");
+    fs.writeFileSync(undeployHookPath, `#!/usr/bin/env sh\nprintf '%s\\n' "\${1:-all}" > ${undeployLog}\n`);
+    fs.chmodSync(undeployHookPath, 0o755);
 
     store.insertRepo({
       id: "repo_api",
@@ -96,7 +100,12 @@ describe("deploy targets", () => {
     const summary = await service.listDeployedApps({ workspaceId: "ws_structured", checkoutId: "co_api" });
 
     expect(summary.resolution).toMatchObject({ source: "repo-file", filePath: hookPath });
+    expect(summary.undeployResolution).toMatchObject({ source: "repo-file", filePath: undeployHookPath });
     expect(summary.apps).toMatchObject([{ name: "api", url: "http://127.0.0.1:1" }]);
     expect(summary.error).toBeNull();
+
+    const undeploy = await service.undeployApp({ workspaceId: "ws_structured", checkoutId: "co_api", appName: "api" });
+    expect(undeploy.status).toBe("succeeded");
+    expect(fs.readFileSync(undeployLog, "utf8").trim()).toBe("api");
   });
 });

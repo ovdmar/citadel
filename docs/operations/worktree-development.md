@@ -188,6 +188,13 @@ It calls `.citadel/hooks/deploy redeploy` in the target workspace path, which
 runs `make -s deploy`. Same command, same isolation, same HMR. The chip is
 just a convenience trigger for `make deploy` in another worktree.
 
+**The cockpit's "Undeploy" X:**
+
+When `.citadel/hooks/undeploy` is executable, the Local deploys panel shows an
+X next to deployed apps. For Citadel itself, that hook calls `make -s stop`,
+which kills only the worktree-local dev stack recorded in
+`.citadel/logs/daemon.pid`; it does not touch the long-term systemd service.
+
 ## Troubleshooting
 
 **"My new backend route returns 404 in the cockpit."**

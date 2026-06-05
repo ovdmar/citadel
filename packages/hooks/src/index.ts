@@ -18,6 +18,18 @@ export type {
   RunDeployListResult,
   RunDeployRedeployResult,
 } from "./deploy.js";
+export {
+  UNDEPLOY_HOOK_RELATIVE_PATH,
+  resolveUndeployHook,
+  runUndeployHook,
+  undeployHookEnv,
+} from "./undeploy.js";
+export type {
+  ResolveUndeployHookInput,
+  RunUndeployHookResult,
+  UndeployHookEnv,
+  UndeployStreamHandler,
+} from "./undeploy.js";
 export { TEARDOWN_HOOK_RELATIVE_PATH, resolveTeardownHook, runTeardownHook } from "./teardown.js";
 export type {
   ResolveTeardownHookInput,

@@ -138,6 +138,12 @@ describe("buildHookScaffoldPrompt", () => {
     const prompt = buildHookScaffoldPrompt({ repo: fakeRepo(), template: TEST_TEMPLATE });
     expect(prompt).toMatch(/chmod \+x .*\.citadel\/hooks\/deploy/);
   });
+
+  it("mentions the optional undeploy companion hook", () => {
+    const prompt = buildHookScaffoldPrompt({ repo: fakeRepo(), template: TEST_TEMPLATE });
+    expect(prompt).toContain(".citadel/hooks/undeploy");
+    expect(prompt).toContain("no app name means undeploy all apps");
+  });
 });
 
 describe("findInFlightScaffold", () => {

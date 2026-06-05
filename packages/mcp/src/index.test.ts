@@ -23,6 +23,7 @@ describe("mcp helpers", () => {
     expect(status.tools).toContain("list_workspace_links");
     expect(status.tools).toContain("read_agent_output");
     expect(status.tools).toContain("send_agent_message");
+    expect(status.tools).toContain("undeploy_app");
     for (const name of [
       "get_citadel_context",
       "list_workspace_checkouts",

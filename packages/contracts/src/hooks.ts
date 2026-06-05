@@ -28,7 +28,7 @@ export const HookActionSchema = z.object({
   label: z.string().min(1).max(80),
   description: z.string().max(200).nullable().default(null),
   url: z.string().url().nullable().default(null),
-  kind: z.enum(["redeploy", "restart", "logs", "open", "custom"]).optional(),
+  kind: z.enum(["redeploy", "undeploy", "restart", "logs", "open", "custom"]).optional(),
   safety: z.enum(["safe", "confirm", "destructive"]).optional(),
   executable: z.boolean().optional(),
   hookId: z.string().nullable().optional(),
