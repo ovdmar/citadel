@@ -24,7 +24,7 @@ export type WorkspaceCardData = {
   sessions: WorkspaceSession[];
   operation?: Operation | null;
   pullRequest?: PullRequestSummary | null;
-  approval?: ApprovalTone;
+  approval?: ApprovalTone | undefined;
   // When provided, skip the global state lookup and use these directly.
   // Callers rendering many cards should build the namespace Map once at the
   // parent so we avoid O(n*m) lookups across a large list.
@@ -84,12 +84,14 @@ export function WorkspaceCard(
     // treated as `dropTarget: "namespace"` to preserve existing behavior.
     draggable?: boolean;
     hideBranch?: boolean;
-    branchLabel?: string | null;
-    branchTitle?: string;
-    cardTitle?: string;
+    branchLabel?: string | null | undefined;
+    branchTitle?: string | undefined;
+    cardTitle?: string | undefined;
     rightControl?: ReactNode;
     disableDrop?: boolean;
-    prToneOverride?: PrTone;
+    allowRootDrop?: boolean;
+    prToneOverride?: PrTone | undefined;
+    diffOverride?: { additions: number | null; deletions: number | null } | undefined;
   },
 ) {
   const { workspace, pullRequest } = props;
@@ -98,10 +100,10 @@ export function WorkspaceCard(
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
   const lifecycleTone = deriveWorkspaceLifecycleTone({ sessions: props.sessions, pullRequest: pullRequest ?? null });
   const agentToneSuffix = lifecycleToneAriaSuffix(lifecycleTone);
-  const branchLabel = props.branchLabel ?? workspace.branch;
+  const branchLabel = props.branchLabel === undefined ? workspace.branch : props.branchLabel;
   const branchTitle = props.branchTitle ?? branchLabel;
-  const additions = pullRequest?.additions ?? null;
-  const deletions = pullRequest?.deletions ?? null;
+  const additions = props.diffOverride ? props.diffOverride.additions : (pullRequest?.additions ?? null);
+  const deletions = props.diffOverride ? props.diffOverride.deletions : (pullRequest?.deletions ?? null);
   const hasDiff = additions !== null || deletions !== null;
   const lifecycleText =
     workspace.lifecycle === "creating"
@@ -305,7 +307,7 @@ export function WorkspaceCard(
             )}
           </span>
           {!props.hideBranch && branchLabel ? (
-            <span className="workspace-card-branch" title={branchTitle}>
+            <span className="workspace-card-branch" title={branchTitle ?? undefined}>
               {branchLabel}
             </span>
           ) : null}
@@ -350,7 +352,7 @@ export function WorkspaceCard(
         </span>
       </button>
       {props.rightControl ? <span className="workspace-card-right-control">{props.rightControl}</span> : null}
-      {workspace.kind === "root" || props.disableDrop ? null : (
+      {(workspace.kind === "root" && !props.allowRootDrop) || props.disableDrop ? null : (
         <button
           type="button"
           className="workspace-card-drop"
@@ -522,7 +524,7 @@ type DropResult = {
 type DropCheckResult = {
   removable: boolean;
   dirty: boolean;
-  reason: "ok" | "root_workspace" | "dirty";
+  reason: "ok" | "root_workspace" | "non_empty_workspace" | "dirty";
   dirtySummary?: WorkspaceDirtySummary | null;
   error?: string | null;
 };
@@ -543,7 +545,10 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
       return {
         removable: Boolean(body.removable),
         dirty: Boolean(body.dirty),
-        reason: body.reason === "root_workspace" || body.reason === "dirty" ? body.reason : "ok",
+        reason:
+          body.reason === "root_workspace" || body.reason === "non_empty_workspace" || body.reason === "dirty"
+            ? body.reason
+            : "ok",
         dirtySummary: body.dirtySummary ?? null,
         error: body.error ?? null,
       };
@@ -621,6 +626,7 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
   const dirtyBlocked =
     Boolean(preflight && !preflight.removable && preflight.dirty) || Boolean(result && !result.removed && result.dirty);
   const rootBlocked = Boolean(preflight && !preflight.removable && preflight.reason === "root_workspace");
+  const nonEmptyBlocked = Boolean(preflight && !preflight.removable && preflight.reason === "non_empty_workspace");
   const teardownBlocked = Boolean(result && !result.removed && !result.dirty);
   const dirtySummary = result?.dirtySummary ?? preflight?.dirtySummary ?? null;
   const hasStructuredSummary =
@@ -635,10 +641,14 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
         onMouseDown={(event) => event.stopPropagation()}
       >
         <strong>Drop "{props.workspace.name}"?</strong>
-        <p>
-          This runs the repo's teardown hook (if any) and removes the git worktree. Deletion is blocked if the worktree
-          has uncommitted changes or unpushed commits.
-        </p>
+        {props.workspace.kind === "root" && props.workspace.mode === "structured" ? (
+          <p>This removes the structured workspace Home directory. Remove any worktrees under it first.</p>
+        ) : (
+          <p>
+            This runs the repo's teardown hook (if any) and removes the git worktree. Deletion is blocked if the
+            worktree has uncommitted changes or unpushed commits.
+          </p>
+        )}
         {check.isLoading ? <p className="empty compact">Checking workspace status…</p> : null}
         {check.error instanceof Error ? <p className="drop-workspace-error">{check.error.message}</p> : null}
         {dirtyBlocked ? (
@@ -647,6 +657,9 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
           </p>
         ) : null}
         {rootBlocked ? <p className="drop-workspace-error">The root workspace is not removable.</p> : null}
+        {nonEmptyBlocked ? (
+          <p className="drop-workspace-error">Remove this workspace's worktrees before dropping the Home.</p>
+        ) : null}
         {hasStructuredSummary && dirtySummary ? (
           <fieldset className="drop-workspace-summary" aria-label="Blocking changes">
             {dirtySummary.files.length > 0 ? (

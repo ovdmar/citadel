@@ -18,6 +18,7 @@ declare module "./index.js" {
     listWorkspaceCheckouts(workspaceId: string): WorktreeCheckout[];
     findWorkspaceCheckout(id: string): WorktreeCheckout | null;
     insertWorkspaceCheckout(checkout: WorktreeCheckout): void;
+    deleteWorkspaceCheckout(id: string): void;
     updateWorkspaceCheckoutLayout(id: string, patch: Pick<WorktreeCheckout, "name" | "path">): WorktreeCheckout | null;
     updateWorkspaceCheckoutGate(id: string, gateStatus: WorktreeCheckout["gateStatus"]): WorktreeCheckout | null;
     updateWorkspaceCheckoutIssue(id: string, issue: IssueBinding | null): WorktreeCheckout | null;
@@ -262,6 +263,23 @@ export const agentsSystemStoreMethods = {
         checkout.updatedAt,
         checkout.archivedAt ?? null,
       );
+  },
+
+  deleteWorkspaceCheckout(this: SqliteStore, id: string) {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.prepare("DELETE FROM workspace_sessions WHERE checkout_id = ?").run(id);
+      this.database
+        .prepare(
+          "UPDATE workspace_checkouts SET stack_parent_checkout_id = NULL, updated_at = ? WHERE stack_parent_checkout_id = ?",
+        )
+        .run(new Date().toISOString(), id);
+      this.database.prepare("DELETE FROM workspace_checkouts WHERE id = ?").run(id);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
   },
 
   updateWorkspaceCheckoutLayout(

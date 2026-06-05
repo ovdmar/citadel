@@ -2,12 +2,14 @@
 // (`scripts/checks/file-size.ts`).
 
 import fs from "node:fs";
-import type { WorkspaceDirtySummary } from "@citadel/contracts";
+import path from "node:path";
+import type { Workspace, WorkspaceDirtySummary } from "@citadel/contracts";
 import { nowIso } from "@citadel/core";
 import { killTmuxSession } from "@citadel/terminal";
 import type { WorkspaceOpsDeps } from "./create-workspace.js";
 import { cleanupWorktree, workspaceDirtySummary, workspaceIsDirty } from "./helpers.js";
 import { runTeardownPhase } from "./remove-workspace-helpers.js";
+import { workspaceRootPath } from "./workspace-layout.js";
 
 export type RemoveWorkspaceInput = { workspaceId: string; force?: boolean; archiveOnly?: boolean };
 
@@ -24,8 +26,18 @@ export type RemoveWorkspaceResult = {
 export type WorkspaceRemovalCheckResult = {
   removable: boolean;
   dirty: boolean;
-  reason: "ok" | "root_workspace" | "dirty";
+  reason: "ok" | "root_workspace" | "non_empty_workspace" | "dirty";
   dirtySummary?: WorkspaceDirtySummary;
+};
+
+export type RemoveWorkspaceCheckoutInput = { workspaceId: string; checkoutId: string; force?: boolean };
+
+export type RemoveWorkspaceCheckoutResult = {
+  operationId: string;
+  removed: boolean;
+  dirty: boolean;
+  dirtySummary?: WorkspaceDirtySummary;
+  error?: string | null;
 };
 
 export function checkWorkspaceRemovalImpl(
@@ -34,6 +46,11 @@ export function checkWorkspaceRemovalImpl(
 ): WorkspaceRemovalCheckResult {
   const workspace = deps.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
   if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+  if (workspace.kind === "root" && workspace.mode === "structured" && workspace.repoId === null) {
+    const checkouts = deps.store.listWorkspaceCheckouts(workspace.id);
+    if (checkouts.length > 0) return { removable: false, dirty: false, reason: "non_empty_workspace" };
+    return { removable: true, dirty: false, reason: "ok" };
+  }
   if (workspace.kind === "root") {
     return { removable: false, dirty: false, reason: "root_workspace" };
   }
@@ -55,6 +72,9 @@ export async function removeWorkspaceImpl(
 ): Promise<RemoveWorkspaceResult> {
   const workspace = deps.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
   if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+  if (workspace.kind === "root" && workspace.mode === "structured" && workspace.repoId === null) {
+    return removeStructuredWorkspaceHome(deps, workspace, input);
+  }
   const repo = deps.store.listRepos().find((candidate) => candidate.id === workspace.repoId);
   if (!repo) throw new Error(`Workspace repo is missing: ${workspace.repoId}`);
   if (workspace.kind === "root") {
@@ -201,4 +221,161 @@ export async function removeWorkspaceImpl(
     }
   }
   return { operationId: operation.id, removed: !input.archiveOnly, archived: Boolean(input.archiveOnly), dirty };
+}
+
+export async function removeWorkspaceCheckoutImpl(
+  deps: WorkspaceOpsDeps,
+  input: RemoveWorkspaceCheckoutInput,
+): Promise<RemoveWorkspaceCheckoutResult> {
+  const workspace = deps.store.listWorkspaces().find((candidate) => candidate.id === input.workspaceId);
+  if (!workspace) throw new Error(`Unknown workspace: ${input.workspaceId}`);
+  const checkout = deps.store.findWorkspaceCheckout(input.checkoutId);
+  if (!checkout || checkout.workspaceId !== workspace.id) throw new Error(`Unknown checkout: ${input.checkoutId}`);
+  const repo = deps.store.listRepos().find((candidate) => candidate.id === checkout.repoId);
+  if (!repo) throw new Error(`Checkout repo is missing: ${checkout.repoId}`);
+  const operation = deps.operation(
+    "workspace.checkout.remove",
+    "running",
+    repo.id,
+    workspace.id,
+    10,
+    "Checking checkout status",
+  );
+  const finalizeOperation = (patch: Partial<typeof operation>) => {
+    const current = deps.store.findOperation(operation.id) ?? operation;
+    deps.store.upsertOperation({ ...current, ...patch, updatedAt: nowIso() });
+  };
+  const dirty = workspaceIsDirty(checkout.path);
+  if (dirty && !input.force) {
+    finalizeOperation({
+      status: "failed",
+      progress: 100,
+      error: "Checkout has uncommitted changes. Commit and push before removing.",
+    });
+    deps.activity(
+      "workspace.checkout.remove.blocked",
+      "system",
+      `Removal blocked because checkout ${checkout.name} has dirty git status`,
+      checkout.repoId,
+      workspace.id,
+      operation.id,
+    );
+    return { operationId: operation.id, removed: false, dirty, dirtySummary: workspaceDirtySummary(checkout.path) };
+  }
+
+  if (fs.existsSync(checkout.path)) {
+    const checkoutWorkspace = {
+      ...workspace,
+      repoId: repo.id,
+      name: checkout.name,
+      path: checkout.path,
+      branch: checkout.branch,
+      baseBranch: checkout.baseBranch,
+      kind: "worktree" as const,
+    };
+    const hookTimeoutMs = deps.config?.commandPolicy.hookTimeoutMs;
+    const teardownOutcome = await runTeardownPhase({
+      workspace: checkoutWorkspace,
+      repo,
+      operation,
+      force: input.force === true,
+      ...(hookTimeoutMs !== undefined ? { hookTimeoutMs } : {}),
+      deps: {
+        exists: fs.existsSync,
+        logOp: deps.logOp,
+        activity: deps.activity,
+        runConfiguredTeardown: async () => {
+          await deps.runWorkspaceHooks(
+            "workspace.teardown",
+            repo.teardownHookIds,
+            repo,
+            checkoutWorkspace,
+            operation.id,
+          );
+        },
+      },
+    });
+    if (teardownOutcome.kind === "blocked") {
+      finalizeOperation({ status: "failed", progress: 100, error: teardownOutcome.error });
+      deps.activity(
+        "workspace.checkout.remove.blocked",
+        "system",
+        teardownOutcome.activityMessage,
+        checkout.repoId,
+        workspace.id,
+        operation.id,
+      );
+      return { operationId: operation.id, removed: false, dirty, error: teardownOutcome.error };
+    }
+  }
+
+  const ownedSessions = deps.store
+    .listWorkspaceSessions(workspace.id)
+    .filter((session) => session.checkoutId === checkout.id);
+  for (const session of ownedSessions) {
+    if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
+  }
+  if (ownedSessions.length) deps.logOp(operation.id, "info", `Killed ${ownedSessions.length} checkout session(s)`);
+
+  const cleanup = cleanupWorktree(repo.rootPath, checkout.path);
+  deps.logOp(operation.id, "info", `${cleanup.action} checkout at ${checkout.path}`);
+  if (cleanup.warning) deps.logOp(operation.id, "warn", `git worktree prune failed: ${cleanup.warning}`);
+  deps.store.deleteWorkspaceCheckout(checkout.id);
+  finalizeOperation({ status: "succeeded", progress: 100, message: "Checkout removed" });
+  deps.activity(
+    "workspace.checkout.removed",
+    "user",
+    `Removed checkout ${checkout.name}`,
+    repo.id,
+    workspace.id,
+    operation.id,
+  );
+  return { operationId: operation.id, removed: true, dirty };
+}
+
+function removeStructuredWorkspaceHome(
+  deps: WorkspaceOpsDeps,
+  workspace: Workspace,
+  input: RemoveWorkspaceInput,
+): RemoveWorkspaceResult {
+  const operation = deps.operation("workspace.remove", "running", null, workspace.id, 10, "Checking workspace Home");
+  const checkouts = deps.store.listWorkspaceCheckouts(workspace.id);
+  if (checkouts.length > 0) {
+    deps.store.upsertOperation({
+      ...operation,
+      status: "failed",
+      progress: 100,
+      error: "Structured workspace still has checkouts. Remove its worktrees first.",
+      updatedAt: nowIso(),
+    });
+    return { operationId: operation.id, removed: false, archived: false, dirty: false };
+  }
+  if (input.archiveOnly) {
+    deps.store.archiveWorkspace(workspace.id, "archived", false);
+    deps.store.upsertOperation({
+      ...operation,
+      status: "succeeded",
+      progress: 100,
+      message: "Structured workspace metadata archived",
+      updatedAt: nowIso(),
+    });
+    return { operationId: operation.id, removed: false, archived: true, dirty: false };
+  }
+  const ownedSessions = deps.store.listWorkspaceSessions(workspace.id);
+  for (const session of ownedSessions) {
+    if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
+  }
+  const rootPath = workspaceRootPath(workspace);
+  const markerPath = path.join(rootPath, ".citadel", "workspace.json");
+  if (fs.existsSync(markerPath)) fs.rmSync(rootPath, { recursive: true, force: true });
+  deps.store.deleteWorkspace(workspace.id);
+  deps.store.upsertOperation({
+    ...operation,
+    status: "succeeded",
+    progress: 100,
+    message: "Structured workspace removed",
+    updatedAt: nowIso(),
+  });
+  deps.activity("workspace.removed", "user", `Removed ${workspace.name}`, null, workspace.id, operation.id);
+  return { operationId: operation.id, removed: true, archived: false, dirty: false };
 }

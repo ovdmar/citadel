@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeServer, createFixture, createGitFixtureWithRemote, getJson, listen } from "./app-test-helpers.js";
 import { createDaemonApp } from "./app.js";
+import { checkoutVcCacheKey } from "./provider-cache.js";
 
 const dirs: string[] = [];
 
@@ -136,6 +138,145 @@ describe("GET /api/workspaces/pr-state", () => {
       expect(entry?.cachedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
     } finally {
       await closeServer(boot2.server);
+    }
+  });
+
+  it("returns full cached checkout PR summaries keyed by checkout id", { timeout: 30_000 }, async () => {
+    const fixture = createFixture(dirs);
+    const timestamp = "2026-06-04T00:00:00.000Z";
+    fixture.store.insertRepo({
+      id: "repo_1",
+      name: "Repo",
+      rootPath: path.join(fixture.config.dataDir, "repo"),
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      deployHookCommand: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      archivedAt: null,
+    });
+    fixture.store.insertWorkspace({
+      id: "ws_structured",
+      repoId: null,
+      name: "Structured",
+      path: path.join(fixture.config.dataDir, "structured"),
+      rootPath: path.join(fixture.config.dataDir, "structured"),
+      mode: "structured",
+      branch: "home",
+      baseBranch: "main",
+      source: "scratch",
+      kind: "root",
+      lifecyclePhase: "implementation",
+      parentIssue: null,
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      namespaceId: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      archivedAt: null,
+    });
+    for (const checkoutId of ["co_api", "co_web"]) {
+      fixture.store.insertWorkspaceCheckout({
+        id: checkoutId,
+        workspaceId: "ws_structured",
+        repoId: "repo_1",
+        name: checkoutId === "co_api" ? "api" : "web",
+        path: path.join(fixture.config.dataDir, "structured", checkoutId),
+        branch: `feature/${checkoutId}`,
+        baseBranch: "main",
+        issue: null,
+        intendedPr: null,
+        stackParentCheckoutId: null,
+        inferredPurpose: "implementation",
+        gateStatus: "not_started",
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        archivedAt: null,
+      });
+    }
+    const cachedAtMs = Date.now();
+    fs.writeFileSync(
+      `${fixture.config.dataDir}/provider-cache.json`,
+      JSON.stringify({
+        version: 1,
+        savedAt: new Date().toISOString(),
+        entries: [
+          [
+            checkoutVcCacheKey("ws_structured", "co_api", timestamp),
+            {
+              expiresAt: Date.now() + 60_000,
+              cachedAt: cachedAtMs,
+              value: {
+                providerId: "github-gh",
+                status: "healthy",
+                reason: null,
+                checkedAt: timestamp,
+                defaultBranch: "main",
+                currentBranch: "feature/co_api",
+                remotes: [],
+                pullRequest: {
+                  number: 42,
+                  title: "Ship API",
+                  url: "https://github.example.test/org/repo/pull/42",
+                  state: "OPEN",
+                  draft: false,
+                  reviewDecision: "APPROVED",
+                  checks: [],
+                  additions: 123,
+                  deletions: 45,
+                  reviewers: [{ login: "reviewer", name: null, state: "approved" }],
+                  commits: [],
+                  headRefName: "feature/co_api",
+                  parentPr: null,
+                  mergeable: "mergeable",
+                  allowedMergeStrategies: [],
+                  mergeStateStatus: "CLEAN",
+                  headSha: "abc123",
+                },
+              },
+            },
+          ],
+        ],
+      }),
+    );
+    const { server } = await createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const body = await getJson<{
+        workspacePrState: Record<string, unknown>;
+        checkoutPrState: Record<
+          string,
+          Record<
+            string,
+            {
+              pullRequest: { additions: number | null; deletions: number | null; reviewDecision: string | null } | null;
+              cachedAt: string | null;
+            }
+          >
+        >;
+      }>(`${baseUrl}/api/workspaces/pr-state`);
+      expect(body.workspacePrState).toEqual({});
+      expect(body.checkoutPrState.ws_structured?.co_api?.pullRequest).toMatchObject({
+        number: 42,
+        reviewDecision: "APPROVED",
+        additions: 123,
+        deletions: 45,
+      });
+      expect(body.checkoutPrState.ws_structured?.co_api?.cachedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(body.checkoutPrState.ws_structured?.co_web?.pullRequest).toBeNull();
+    } finally {
+      await closeServer(server);
     }
   });
 });

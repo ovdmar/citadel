@@ -11,4 +11,10 @@
 .nav-checkout-card {
   min-height: 34px;
   border-left: 1px solid var(--c-line-1);
+  position: relative;
+}
+
+.nav-checkout-card:hover .nav-checkout-drop,
+.nav-checkout-card:focus-within .nav-checkout-drop {
+  display: inline-flex;
 }
