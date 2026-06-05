@@ -104,10 +104,10 @@ test.describe("cockpit theme audit", () => {
     await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe("light");
 
     await page.getByRole("button", { name: "Create workspace" }).click();
-    const select = page.locator(".modal-form select").first();
-    await expect(select).toBeVisible();
+    const control = page.locator(".modal-form input").first();
+    await expect(control).toBeVisible();
 
-    const color = await select.evaluate((element) => getComputedStyle(element).color);
+    const color = await control.evaluate((element) => getComputedStyle(element).color);
     const channels =
       color
         .match(/\d+(\.\d+)?/g)
@@ -116,7 +116,7 @@ test.describe("cockpit theme audit", () => {
     expect(channels, `expected parsable rgb color, got ${color}`).toHaveLength(3);
     expect(
       channels.reduce((sum, value) => sum + value, 0),
-      `expected light-theme select text to stay dark, got ${color}`,
+      `expected light-theme native control text to stay dark, got ${color}`,
     ).toBeLessThan(384);
   });
 
