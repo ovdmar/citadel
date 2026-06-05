@@ -160,7 +160,7 @@ function makeDeps(
   const cache = createProviderCache({ dataDir: tempDataDir(), listLiveIds: () => workspaces.map((w) => w.id) });
   const checkedAt = () => new Date().toISOString();
   const providers = {
-    collectGitHubVersionControlSummary: vi.fn(async () => ({
+    collectGitHubVersionControlSummary: vi.fn(async (_rootPath: string) => ({
       providerId: "github-gh",
       status: "healthy" as const,
       reason: null,
@@ -170,7 +170,7 @@ function makeDeps(
       remotes: [],
       pullRequest: null,
     })),
-    collectGitHubCiRuns: vi.fn(async () => ({
+    collectGitHubCiRuns: vi.fn(async (_rootPath: string) => ({
       providerId: "github-gh",
       status: "healthy" as const,
       reason: null,
@@ -201,11 +201,37 @@ function makeDeps(
     })),
     listRuntimeHealth: () => runtimes,
   };
+  const github = overrides.github ?? {
+    fetchVersionControl: vi.fn(async (workspace: Workspace, _repo: Repo, cacheKey: string) => {
+      const value = await providers.collectGitHubVersionControlSummary(workspace.path);
+      cache.set(cacheKey, { expiresAt: Date.now() + 90_000, value, cachedAt: Date.now() });
+      return value;
+    }),
+    fetchCheckoutVersionControl: vi.fn(
+      async (_workspace: Workspace, checkout: WorktreeCheckout, _repo: Repo, cacheKey: string) => {
+        const value = await providers.collectGitHubVersionControlSummary(checkout.path);
+        cache.set(cacheKey, { expiresAt: Date.now() + 90_000, value, cachedAt: Date.now() });
+        return value;
+      },
+    ),
+    fetchCi: vi.fn(async (workspace: Workspace, _repo: Repo, options?: { cacheKey?: string; ttlMs?: number }) => {
+      const value = await providers.collectGitHubCiRuns(workspace.path);
+      if (options?.cacheKey) {
+        cache.set(options.cacheKey, {
+          expiresAt: Date.now() + (options.ttlMs ?? 5 * 60_000),
+          value,
+          cachedAt: Date.now(),
+        });
+      }
+      return value;
+    }),
+  };
   return {
     config,
     store,
     cache,
     providers,
+    github,
     ...overrides,
   } as ProviderRefreshDeps;
 }

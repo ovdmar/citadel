@@ -85,6 +85,7 @@ describe("agents system store methods", () => {
         provider: "github",
         number: 12,
         url: "https://example.test/pr/12",
+        state: "open",
         headSha: "abc",
         baseRef: "main",
         fetchedAt: timestamp,
@@ -106,6 +107,7 @@ describe("agents system store methods", () => {
         issue: { key: "CIT-2" },
         intendedPr: {
           number: 12,
+          state: "open",
           fetchedAt: timestamp,
           checksGreen: true,
           mergeStateStatus: "CLEAN",
@@ -132,6 +134,7 @@ describe("agents system store methods", () => {
         provider: "github",
         number: 13,
         url: "https://example.test/pr/13",
+        state: "open",
         headSha: "def",
         baseRef: "main",
         fetchedAt: timestamp,
@@ -142,6 +145,7 @@ describe("agents system store methods", () => {
     ).toMatchObject({
       intendedPr: {
         number: 13,
+        state: "open",
         headSha: "def",
         fetchedAt: timestamp,
         checksGreen: false,

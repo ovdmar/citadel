@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Repo, VersionControlSummary, Workspace } from "@citadel/contracts";
+import type { Repo, VersionControlSummary, Workspace, WorktreeCheckout } from "@citadel/contracts";
 import type { SqliteStore, WorkspacePrSnapshot } from "@citadel/db";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GhScheduler } from "./gh-scheduler.js";
@@ -66,6 +66,27 @@ function makeRepo(overrides: Partial<Repo> = {}): Repo {
   };
 }
 
+function makeCheckout(overrides: Partial<WorktreeCheckout> = {}): WorktreeCheckout {
+  return {
+    id: "co_api",
+    workspaceId: "w1",
+    repoId: "repo",
+    name: "api",
+    path: "/tmp/w1/api",
+    branch: "feature/api",
+    baseBranch: "main",
+    issue: null,
+    intendedPr: null,
+    stackParentCheckoutId: null,
+    inferredPurpose: "implementation",
+    gateStatus: "not_started",
+    createdAt: "2026-05-25T00:00:00Z",
+    updatedAt: "2026-05-25T00:00:00Z",
+    archivedAt: null,
+    ...overrides,
+  };
+}
+
 function makeVc(title = "fresh"): VersionControlSummary {
   return {
     providerId: "github-gh",
@@ -121,11 +142,20 @@ function makeService(input: {
     runs: [];
   }>;
   snapshot?: Partial<WorkspacePrSnapshot> | null;
+  checkout?: WorktreeCheckout | null;
 }) {
   const cache = createProviderCache({ dataDir: tempDataDir(), listLiveIds: () => ["w1", "repo"] });
+  let checkout = input.checkout ?? null;
+  const checkoutPrUpdates: unknown[] = [];
   const store = {
     getWorkspacePrSnapshot: () => input.snapshot ?? null,
     updateWorkspacePrSnapshot: () => {},
+    findWorkspaceCheckout: () => checkout,
+    updateWorkspaceCheckoutPr: (_id: string, pr: unknown) => {
+      checkoutPrUpdates.push(pr);
+      if (checkout) checkout = { ...checkout, intendedPr: pr as WorktreeCheckout["intendedPr"] };
+      return checkout;
+    },
   } as unknown as SqliteStore;
   const collectVersionControl = vi.fn(input.collectVersionControl ?? (async () => makeVc()));
   const collectCi = vi.fn(
@@ -138,12 +168,22 @@ function makeService(input: {
         runs: [] as [],
       })),
   );
+  const collectCiRunLog = vi.fn(async (_rootPath: string, runId: string) => ({
+    providerId: "github-gh" as const,
+    status: "healthy" as const,
+    reason: null,
+    runId,
+    truncated: false,
+    log: "log",
+    checkedAt: new Date().toISOString(),
+  }));
   const service = createGitHubProviderStateService({
     store,
     scheduler: makeScheduler(),
     providerCache: cache,
     collectVersionControl,
     collectCi,
+    collectCiRunLog,
     resolveRepoFullName: () => "owner/repo",
     cachedProvider: async (key, load, ttlMs = 10_000) => {
       const value = await load();
@@ -159,7 +199,7 @@ function makeService(input: {
     hasViewers: () => input.hasViewers ?? false,
     msSinceLastViewer: () => Number.POSITIVE_INFINITY,
   });
-  return { service, cache, collectVersionControl, collectCi };
+  return { service, cache, collectVersionControl, collectCi, checkoutPrUpdates };
 }
 
 describe("GitHub provider state service", () => {
@@ -209,7 +249,7 @@ describe("GitHub provider state service", () => {
     const { service, collectCi } = makeService({});
     const ci = await service.fetchCi(makeWorkspace(), makeRepo(), { intent: "interactive" });
     expect(collectCi).not.toHaveBeenCalled();
-    expect(ci.status).toBe("unavailable");
+    expect(ci.status).toBe("healthy");
     expect(ci.reason).toContain("PR metadata");
   });
 
@@ -227,5 +267,58 @@ describe("GitHub provider state service", () => {
     expect(ci.status).toBe("healthy");
     expect(cache.get("ci:owner/repo:abc123")?.value).toMatchObject({ status: "healthy" });
     expect(cache.get("ci:w1:2026-05-25T00:00:00Z")?.value).toMatchObject({ status: "healthy" });
+  });
+
+  it("checkout version-control reads collect from the checkout path and persist the PR binding", async () => {
+    const checkout = makeCheckout();
+    const { service, collectVersionControl, checkoutPrUpdates } = makeService({ hasViewers: true, checkout });
+
+    const vc = await service.fetchCheckoutVersionControl(
+      makeWorkspace({ kind: "root" }),
+      checkout,
+      makeRepo(),
+      "vc:w1:checkout:co_api:2026-05-25T00:00:00Z",
+      { intent: "interactive", force: true, staleWhileRevalidate: false },
+    );
+
+    expect(collectVersionControl).toHaveBeenCalledWith(checkout.path, expect.any(Object));
+    expect(vc.pullRequest?.number).toBe(42);
+    expect(checkoutPrUpdates.at(-1)).toMatchObject({
+      provider: "github",
+      number: 42,
+      state: "open",
+      headSha: "abc123",
+      baseRef: "main",
+    });
+  });
+
+  it("checkout version-control serves the last checkout PR snapshot when automatic refreshes are paused", async () => {
+    const checkout = makeCheckout({
+      intendedPr: {
+        provider: "github",
+        number: 42,
+        url: "https://github.com/owner/repo/pull/42",
+        state: "open",
+        headSha: "abc123",
+        baseRef: "main",
+        fetchedAt: "2026-05-25T00:00:00Z",
+        checksGreen: null,
+        mergeStateStatus: null,
+        hasConflicts: null,
+      },
+    });
+    const { service, collectVersionControl } = makeService({ checkout });
+
+    const vc = await service.fetchCheckoutVersionControl(
+      makeWorkspace({ kind: "root" }),
+      checkout,
+      makeRepo(),
+      "vc:w1:checkout:co_api:2026-05-25T00:00:00Z",
+      { intent: "automatic" },
+    );
+
+    expect(collectVersionControl).not.toHaveBeenCalled();
+    expect(vc.pullRequest?.number).toBe(42);
+    expect(vc.reason).toContain("served from PR snapshot");
   });
 });

@@ -4,7 +4,12 @@ import type https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CitadelConfig } from "@citadel/config";
-import { type AppEvent, HookActionSchema } from "@citadel/contracts";
+import {
+  type AppEvent,
+  type CiProviderSummary,
+  HookActionSchema,
+  type VersionControlSummary,
+} from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { mcpStatus } from "@citadel/mcp";
 import {
@@ -40,6 +45,7 @@ import {
 } from "./app-helpers.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
+import { createCheckoutPrPrimeOnAgentFinish } from "./checkout-pr-primer.js";
 import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
 import { createWorkspaceCockpitSummaryBuilder, registerCockpitSummaryRoute } from "./cockpit-summary-route.js";
 import { registerConfigRepoWorkspaceRoutes } from "./config-repo-workspace-routes.js";
@@ -104,6 +110,29 @@ type ProviderCollectors = {
   transitionJiraIssue: typeof transitionJiraIssue;
   searchJiraIssues: typeof searchJiraIssues;
 };
+
+function unavailableProviderRefreshVc(rootPath: string): Promise<VersionControlSummary> {
+  return Promise.resolve({
+    providerId: "github-gh",
+    status: "unavailable",
+    reason: `GitHub provider refresh is routed through shared state service (${rootPath})`,
+    defaultBranch: null,
+    currentBranch: null,
+    remotes: [],
+    pullRequest: null,
+    checkedAt: new Date().toISOString(),
+  });
+}
+
+function unavailableProviderRefreshCi(rootPath: string): Promise<CiProviderSummary> {
+  return Promise.resolve({
+    providerId: "github-gh",
+    status: "unavailable",
+    reason: `GitHub provider refresh is routed through shared state service (${rootPath})`,
+    runs: [],
+    checkedAt: new Date().toISOString(),
+  });
+}
 
 export async function createDaemonApp(input: {
   config: CitadelConfig;
@@ -196,6 +225,7 @@ export async function createDaemonApp(input: {
     providerCache,
     collectVersionControl: (path, deps) => providers.collectGitHubVersionControlSummary(path, deps),
     collectCi: (path) => providers.collectGitHubCiRuns(path),
+    collectCiRunLog: (path, runId) => providers.collectGitHubCiRunLog(path, runId),
     resolveRepoFullName,
     cachedProvider: <T>(k: string, l: () => T | Promise<T>, t?: number) => cachedProvider(k, l, t),
     cachedProviderSwr: <T>(k: string, l: () => T | Promise<T>, t?: number) => cachedProviderSwr(k, l, t),
@@ -222,6 +252,13 @@ export async function createDaemonApp(input: {
     };
     writeSseEvent(sseClients, type, event, detachSseClient, diagnostics);
   };
+  const primeCheckoutPrOnAgentFinish = createCheckoutPrPrimeOnAgentFinish({
+    store,
+    github: githubState,
+    onRefreshed: (workspace, checkout) => {
+      emit("workspace.updated", { workspaceId: workspace.id, checkoutId: checkout.id });
+    },
+  });
 
   const recentUserAction = new Map<string, number>();
   let statusMonitor: ReturnType<typeof startDaemonStatusMonitor> = null;
@@ -331,9 +368,8 @@ export async function createDaemonApp(input: {
   registerPrRoutes({
     app,
     store,
-    providers,
+    github: githubState,
     asyncRoute,
-    cachedProvider,
     providerCache,
     buildWorkspaceCockpitSummary,
     resolveRepoFullName,
@@ -482,8 +518,8 @@ export async function createDaemonApp(input: {
           store,
           cache: providerCache,
           providers: {
-            collectGitHubVersionControlSummary: (rootPath) => providers.collectGitHubVersionControlSummary(rootPath),
-            collectGitHubCiRuns: (rootPath) => providers.collectGitHubCiRuns(rootPath),
+            collectGitHubVersionControlSummary: unavailableProviderRefreshVc,
+            collectGitHubCiRuns: unavailableProviderRefreshCi,
             collectJiraIssueSummary: (issueKey) => providers.collectJiraIssueSummary(issueKey),
             collectRuntimeUsage: (provider) =>
               import("@citadel/providers").then((mod) => mod.collectRuntimeUsage(provider)),
@@ -628,7 +664,9 @@ export async function createDaemonApp(input: {
   }
 
   // Status monitor / auto-recovery / auto-resume / terminal reaper: see their own modules for context.
-  statusMonitor = startDaemonStatusMonitor(store, emit, config, recentUserAction, diagnostics);
+  statusMonitor = startDaemonStatusMonitor(store, emit, config, recentUserAction, diagnostics, {
+    onAgentStatusTransition: primeCheckoutPrOnAgentFinish,
+  });
   if (statusMonitor) server.on("close", () => statusMonitor.stop());
   const autoRecoveryMonitor = startDaemonAutoRecoveryMonitor({
     store,

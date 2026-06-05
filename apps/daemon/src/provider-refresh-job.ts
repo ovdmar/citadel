@@ -49,7 +49,7 @@ export type ProviderRefreshDeps = {
     }) => Promise<RuntimeUsageSummary>;
     listRuntimeHealth: () => AgentRuntime[];
   };
-  github?: GitHubProviderStateService;
+  github?: Pick<GitHubProviderStateService, "fetchVersionControl" | "fetchCheckoutVersionControl" | "fetchCi">;
   hasFocusedWindow?: () => boolean;
   now?: () => number;
   tickIntervalMs?: number;
@@ -168,19 +168,18 @@ export function startProviderRefreshJob(deps: ProviderRefreshDeps): ProviderRefr
     if (item.kind === "vc" || item.kind === "ci") {
       const ws = deps.store.listWorkspaces().find((w) => w.id === item.workspaceId);
       if (!ws || ws.archivedAt) return;
-      if (item.kind === "vc" && item.checkoutId) {
-        const checkout = listActiveWorkspaceCheckouts(deps.store, item.workspaceId).find(
-          (c) => c.id === item.checkoutId,
-        );
-        if (!checkout) return;
-        if (deps.github) {
+      if (!deps.github) return;
+      try {
+        if (item.kind === "vc" && item.checkoutId) {
+          const checkout = listActiveWorkspaceCheckouts(deps.store, item.workspaceId).find(
+            (c) => c.id === item.checkoutId,
+          );
+          if (!checkout) return;
           const repo = deps.store.listRepos().find((r) => r.id === checkout.repoId);
           if (!repo) return;
           await deps.github.fetchCheckoutVersionControl(ws, checkout, repo, item.cacheKey, { intent: "automatic" });
           return;
         }
-      }
-      if (deps.github) {
         const repo = deps.store.listRepos().find((r) => r.id === ws.repoId);
         if (!repo) return;
         if (item.kind === "vc") {
@@ -188,14 +187,6 @@ export function startProviderRefreshJob(deps: ProviderRefreshDeps): ProviderRefr
         } else {
           await deps.github.fetchCi(ws, repo, { cacheKey: item.cacheKey, intent: "automatic", ttlMs: item.ttlMs });
         }
-        return;
-      }
-      try {
-        const value =
-          item.kind === "vc"
-            ? await deps.providers.collectGitHubVersionControlSummary(item.rootPath)
-            : await deps.providers.collectGitHubCiRuns(item.rootPath);
-        deps.cache.set(item.cacheKey, { expiresAt: now() + item.ttlMs, value, cachedAt: now() });
       } catch (error) {
         console.error(
           `[provider-refresh] ${item.kind} ${item.workspaceId} failed: ${error instanceof Error ? error.message : String(error)}`,

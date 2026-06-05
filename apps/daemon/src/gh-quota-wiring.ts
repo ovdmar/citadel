@@ -283,23 +283,44 @@ function collectHydrateRows(
   resolveRepoFullName: (repoId: string) => string | null,
 ): import("./gh-scheduler.js").HydrateRow[] {
   const rows: import("./gh-scheduler.js").HydrateRow[] = [];
+  const listCheckouts =
+    "listWorkspaceCheckouts" in store && typeof store.listWorkspaceCheckouts === "function"
+      ? (workspaceId: string) => store.listWorkspaceCheckouts(workspaceId)
+      : () => [];
   for (const ws of store.listWorkspaces()) {
     if (ws.archivedAt) continue;
     const snap = store.getWorkspacePrSnapshot(ws.id);
-    if (!snap || snap.prNumber === null || snap.prState === null) continue;
-    if (!ws.repoId) continue;
-    const repoFullName = resolveRepoFullName(ws.repoId);
-    if (!repoFullName) continue;
-    rows.push({
-      workspaceId: ws.id,
-      repoFullName,
-      prNumber: snap.prNumber,
-      prState: snap.prState,
-      lastHeadSha: snap.lastHeadSha,
-      lastHeadShaChangedAt: snap.lastHeadShaChangedAt,
-      lastChecksGreenAt: snap.lastChecksGreenAt,
-      lastMergeStateStatus: snap.lastMergeStateStatus,
-    });
+    if (snap && snap.prNumber !== null && snap.prState !== null && ws.repoId) {
+      const repoFullName = resolveRepoFullName(ws.repoId);
+      if (repoFullName) {
+        rows.push({
+          workspaceId: ws.id,
+          repoFullName,
+          prNumber: snap.prNumber,
+          prState: snap.prState,
+          lastHeadSha: snap.lastHeadSha,
+          lastHeadShaChangedAt: snap.lastHeadShaChangedAt,
+          lastChecksGreenAt: snap.lastChecksGreenAt,
+          lastMergeStateStatus: snap.lastMergeStateStatus,
+        });
+      }
+    }
+    for (const checkout of listCheckouts(ws.id)) {
+      const pr = checkout.intendedPr;
+      if (!pr?.number || pr.provider !== "github") continue;
+      const repoFullName = resolveRepoFullName(checkout.repoId);
+      if (!repoFullName) continue;
+      rows.push({
+        workspaceId: checkout.workspaceId,
+        repoFullName,
+        prNumber: pr.number,
+        prState: pr.state ?? "open",
+        lastHeadSha: pr.headSha,
+        lastHeadShaChangedAt: null,
+        lastChecksGreenAt: pr.checksGreen && pr.fetchedAt ? pr.fetchedAt : null,
+        lastMergeStateStatus: pr.mergeStateStatus,
+      });
+    }
   }
   return rows;
 }

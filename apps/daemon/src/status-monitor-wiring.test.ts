@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { CitadelConfig } from "@citadel/config";
 import { SqliteStore } from "@citadel/db";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_STATUS_MONITOR_INTERVAL_MS,
   buildStatusMonitorDeps,
@@ -83,6 +83,82 @@ describe("buildStatusMonitorDeps — shell-first wiring", () => {
     // The deps holds the SAME Map reference, so the status-monitor will see
     // the write on its next tick.
     expect(deps.recentUserAction.get("sess_x")).toBe(12345);
+  });
+
+  it("reports agent status transitions with the pre-update session row", () => {
+    const now = "2026-06-05T00:00:00.000Z";
+    store.insertRepo({
+      id: "repo_a",
+      name: "Repo",
+      rootPath: tmpDbDir,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: tmpDbDir,
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: ["github-gh"],
+      deployHookCommand: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    store.insertWorkspace({
+      id: "ws_a",
+      repoId: "repo_a",
+      name: "Workspace",
+      path: tmpDbDir,
+      branch: "main",
+      baseBranch: "main",
+      source: "scratch",
+      kind: "worktree",
+      prUrl: null,
+      issueKey: null,
+      issueTitle: null,
+      issueUrl: null,
+      slackThreadUrl: null,
+      section: "backlog",
+      pinned: false,
+      lifecycle: "ready",
+      dirty: false,
+      namespaceId: null,
+      createdAt: now,
+      updatedAt: now,
+      archivedAt: null,
+    });
+    store.insertWorkspaceSession({
+      id: "sess_agent",
+      kind: "agent",
+      workspaceId: "ws_a",
+      targetType: "worktree_checkout",
+      checkoutId: "co_api",
+      runtimeId: "codex",
+      displayName: "Agent",
+      status: "running",
+      statusReason: null,
+      lastStatusAt: now,
+      lastOutputAt: null,
+      endedAt: null,
+      exitCode: null,
+      transport: "connected",
+      terminalBackend: "tmux",
+      tmuxSessionName: "tmux_sess",
+      tmuxSessionId: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const onAgentStatusTransition = vi.fn();
+    const deps = buildStatusMonitorDeps(store, () => {}, makeConfig([]), new Map(), undefined, {
+      onAgentStatusTransition,
+    });
+
+    deps.updateSession("sess_agent", { status: "idle" });
+
+    expect(onAgentStatusTransition).toHaveBeenCalledWith({
+      session: expect.objectContaining({ id: "sess_agent", status: "running", checkoutId: "co_api" }),
+      previousStatus: "running",
+      nextStatus: "idle",
+    });
+    expect(store.listWorkspaceSessions().find((session) => session.id === "sess_agent")?.status).toBe("idle");
   });
 
   it("reuses pane captures only while activity and max-age agree", () => {

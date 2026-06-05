@@ -25,6 +25,7 @@ export const PullRequestBindingSchema = z.object({
   provider: z.string().min(1),
   number: z.number().int().positive().nullable().default(null),
   url: z.string().url().nullable().default(null),
+  state: z.enum(["open", "closed", "merged"]).nullable().optional(),
   headSha: z.string().nullable().default(null),
   baseRef: z.string().nullable().default(null),
   fetchedAt: z.string().nullable().default(null),

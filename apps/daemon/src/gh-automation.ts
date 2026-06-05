@@ -37,10 +37,26 @@ export function disabledCiSummary(reason = AUTOMATED_GH_DISABLED_REASON): CiProv
   };
 }
 
+export function skippedCiSummary(reason: string): CiProviderSummary {
+  return {
+    providerId: "github-gh",
+    status: "healthy",
+    reason,
+    runs: [],
+    checkedAt: new Date().toISOString(),
+  };
+}
+
 export function cachedCiOrDisabled(cache: ProviderCache, key: string, reason: string): CiProviderSummary {
   const cached = cache.get(key);
   if (cached) return cached.value as CiProviderSummary;
   return disabledCiSummary(reason);
+}
+
+export function cachedCiOrSkipped(cache: ProviderCache, key: string, reason: string): CiProviderSummary {
+  const cached = cache.get(key);
+  if (cached) return cached.value as CiProviderSummary;
+  return skippedCiSummary(reason);
 }
 
 export function githubCiCacheKey(

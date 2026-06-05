@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { CiProviderSummary, Workspace } from "@citadel/contracts";
 import { afterEach, describe, expect, it } from "vitest";
-import { automatedGhEnabled, cachedCiOrDisabled, shouldFetchGithubCi } from "./gh-automation.js";
+import { automatedGhEnabled, cachedCiOrDisabled, cachedCiOrSkipped, shouldFetchGithubCi } from "./gh-automation.js";
 
 const dirs: string[] = [];
 
@@ -144,5 +144,14 @@ describe("cachedCiOrDisabled", () => {
     ]);
 
     expect(cachedCiOrDisabled(cache, "ci:owner/repo:abc123", "disabled")).toBe(ci);
+  });
+});
+
+describe("cachedCiOrSkipped", () => {
+  it("returns a non-degrading empty summary when CI is intentionally skipped", () => {
+    const ci = cachedCiOrSkipped(new Map(), "ci:owner/repo:abc123", "GitHub CI is cached");
+    expect(ci.status).toBe("healthy");
+    expect(ci.reason).toContain("cached");
+    expect(ci.runs).toEqual([]);
   });
 });

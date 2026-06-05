@@ -61,7 +61,7 @@ export type GhSchedulerDeps = {
 };
 
 export type GhScheduler = {
-  shouldRefetch(key: SchedulerKey, opts?: { force?: boolean }): ShouldRefetchResult;
+  shouldRefetch(key: SchedulerKey, opts?: { force?: boolean | undefined }): ShouldRefetchResult;
   recordFetch(key: SchedulerKey, summary: PullRequestSummary, workspaceId: string): void;
   recordFetchError(key: SchedulerKey, error: unknown): void;
   markRepoMainMoved(repoFullName: string): void;
@@ -122,7 +122,7 @@ export function createGhScheduler(deps: GhSchedulerDeps): GhScheduler {
     return atMs + CADENCE_DEFAULT_MS;
   }
 
-  function shouldRefetch(key: SchedulerKey, opts: { force?: boolean } = {}): ShouldRefetchResult {
+  function shouldRefetch(key: SchedulerKey, opts: { force?: boolean | undefined } = {}): ShouldRefetchResult {
     // Precedence: cooldown > no-viewers > merged > backoff > not-due > force.
     // The order is documented in the plan; cooldown wins because it's the
     // most actionable signal for the operator.
