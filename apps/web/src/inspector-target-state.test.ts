@@ -62,6 +62,44 @@ describe("resolveInspectorTargetState", () => {
       baseBranch: "develop",
     });
   });
+
+  it("uses matching workspace PR state when the checkout cache is present but still empty", () => {
+    const checkout = worktreeCheckout({
+      id: "co_api",
+      repoId: "repo_api",
+      branch: "feature/api",
+      baseBranch: "develop",
+      intendedPr: intendedPr(2),
+    });
+    const state = resolveInspectorTargetState({
+      workspace: workspace({ repoId: null, branch: "home", baseBranch: "main" }),
+      repos: [repo("repo_web"), repo("repo_api")],
+      checkouts: [checkout],
+      activeCheckoutId: "co_api",
+      workspacePullRequest: pullRequest(2),
+      workspaceCheckedAt: "2026-06-05T01:00:00.000Z",
+      checkoutPrState: new Map([
+        [
+          "co_api",
+          {
+            pullRequest: null,
+            ciRuns: [],
+            checkedAt: "2026-06-05T02:00:00.000Z",
+            cachedAt: "2026-06-05T01:59:00.000Z",
+          },
+        ],
+      ]),
+    });
+
+    expect(state).toMatchObject({
+      checkout: { id: "co_api" },
+      repo: { id: "repo_api" },
+      pullRequest: { number: 2 },
+      checkedAt: "2026-06-05T02:00:00.000Z",
+      branch: "feature/api",
+      baseBranch: "develop",
+    });
+  });
 });
 
 function repo(id: string): Repo {

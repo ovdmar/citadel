@@ -353,20 +353,28 @@ function updateCheckoutSnapshot(
   const fetchedAt = "lastFetchAt" in patch ? (patch.lastFetchAt ?? null) : (previous?.fetchedAt ?? null);
   const headSha = "lastHeadSha" in patch ? (patch.lastHeadSha ?? null) : (previous?.headSha ?? null);
   const number = "prNumber" in patch ? (patch.prNumber ?? null) : (previous?.number ?? null);
-  const checksGreen = "lastChecksGreenAt" in patch ? Boolean(patch.lastChecksGreenAt) : (previous?.checksGreen ?? null);
+  const clearsPrIdentity = "prNumber" in patch && patch.prNumber == null && "prState" in patch && patch.prState == null;
+  const url = clearsPrIdentity ? null : (previous?.url ?? null);
+  const hasPrIdentity = Boolean(number || url);
+  const checksGreen =
+    "lastChecksGreenAt" in patch
+      ? hasPrIdentity
+        ? Boolean(patch.lastChecksGreenAt)
+        : null
+      : (previous?.checksGreen ?? null);
   const mergeStateStatus =
     "lastMergeStateStatus" in patch ? (patch.lastMergeStateStatus ?? null) : (previous?.mergeStateStatus ?? null);
   store.updateWorkspaceCheckoutPr(checkout.id, {
     provider: previous?.provider ?? "github",
     number,
-    url: previous?.url ?? null,
+    url,
     state: "prState" in patch ? (patch.prState ?? null) : (previous?.state ?? null),
     headSha,
     baseRef: previous?.baseRef ?? checkout.baseBranch,
     fetchedAt,
     checksGreen,
     mergeStateStatus,
-    hasConflicts: mergeStateStatus === "DIRTY" ? true : (previous?.hasConflicts ?? null),
+    hasConflicts: hasPrIdentity ? (mergeStateStatus === "DIRTY" ? true : (previous?.hasConflicts ?? null)) : null,
   });
 }
 

@@ -11,6 +11,7 @@ import { X } from "lucide-react";
 import { useState } from "react";
 import { api, queryClient } from "./api.js";
 import { type StateResponse, useOptimisticRemove } from "./app-state.js";
+import { hasIntendedPullRequestIdentity } from "./navigator-pr-state.js";
 import { repoNameWithOwner } from "./repo-labels.js";
 import type { AttentionSessionIds } from "./session-status-display.js";
 import { useToast } from "./toast.js";
@@ -59,7 +60,7 @@ export function pullRequestForCheckout(
   pullRequest: PullRequestSummary | null,
   checkout: WorktreeCheckout,
 ): PullRequestSummary | null {
-  if (!pullRequest || !checkout.intendedPr) return null;
+  if (!pullRequest || !hasIntendedPullRequestIdentity(checkout)) return null;
   if (checkout.intendedPr.url && checkout.intendedPr.url === pullRequest.url) return pullRequest;
   if (checkout.intendedPr.number && checkout.intendedPr.number === pullRequest.number) return pullRequest;
   return null;
@@ -306,14 +307,14 @@ function aggregatePrCount(checkouts: readonly WorktreeCheckout[], pullRequest: P
   const keys = new Set<string>();
   if (pullRequest) keys.add(pullRequest.url || `workspace-pr-${pullRequest.number}`);
   for (const checkout of checkouts) {
-    if (!checkout.intendedPr) continue;
+    if (!hasIntendedPullRequestIdentity(checkout)) continue;
     keys.add(checkout.intendedPr.url ?? `${checkout.id}:${checkout.intendedPr.number ?? "unknown"}`);
   }
   return keys.size;
 }
 
 function checkoutPrTone(checkout: WorktreeCheckout): PrTone {
-  if (!checkout.intendedPr) return "missing";
+  if (!hasIntendedPullRequestIdentity(checkout)) return "missing";
   if (checkout.intendedPr.hasConflicts) return "conflicting";
   if (checkout.intendedPr.checksGreen === true) return "passing";
   if (checkout.intendedPr.checksGreen === false) return "failing";

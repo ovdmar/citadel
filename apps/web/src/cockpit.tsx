@@ -180,7 +180,23 @@ export function Cockpit() {
     : [];
   const activeTargetKey = activeWorkspace ? (activeTargetByWorkspace[activeWorkspace.id] ?? "home") : "home";
   const activeCheckoutId = checkoutIdFromTargetKey(activeTargetKey, activeWorkspaceCheckouts);
-  useCheckoutPrOpenRefresh({ workspaceId: activeWorkspace?.id, checkoutId: activeCheckoutId, queryClient });
+  const activeCheckout = activeCheckoutId
+    ? (activeWorkspaceCheckouts.find((checkout) => checkout.id === activeCheckoutId) ?? null)
+    : null;
+  const activeCheckoutPrIdentity =
+    activeCheckout?.intendedPr?.number || activeCheckout?.intendedPr?.url
+      ? [
+          activeCheckout.intendedPr.number ?? "",
+          activeCheckout.intendedPr.url ?? "",
+          activeCheckout.intendedPr.headSha ?? "",
+        ].join(":")
+      : null;
+  useCheckoutPrOpenRefresh({
+    workspaceId: activeWorkspace?.id,
+    checkoutId: activeCheckoutId,
+    prIdentityKey: activeCheckoutPrIdentity,
+    queryClient,
+  });
   const reviewCheckoutId = activeCheckoutId ?? homeReviewCheckoutId(activeWorkspace, activeWorkspaceCheckouts);
   const activeTargetType = activeCheckoutId ? "worktree_checkout" : "workspace_home";
   const workspacePrEntry = activeWorkspace ? prStateQuery.data?.workspacePrState?.[activeWorkspace.id] : undefined;
