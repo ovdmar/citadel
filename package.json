@@ -13,7 +13,7 @@
     "dev:daemon": "pnpm --filter @citadel/daemon dev",
     "dev:web": "pnpm --filter @citadel/web dev",
     "build": "pnpm -r --filter './packages/*' --filter './apps/*' build",
-    "check": "pnpm run check:arch && pnpm run check:size && pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run coverage && pnpm run check:deps && pnpm run build",
+    "check": "pnpm run check:arch && pnpm run check:size && pnpm run typecheck && pnpm run lint && pnpm run coverage && pnpm run check:deps && pnpm run build",
     "typecheck": "tsc -b tsconfig.json",
     "lint": "biome check .",
     "format": "biome check --write .",
