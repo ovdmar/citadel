@@ -26,7 +26,7 @@
 [ ] 8. Terminal scrollback stays inside the terminal renderer, not the column scroll.
 [ ] 9. A slim top bar contains the product mark on the left, a centered search input that opens the command palette via click or Cmd+K, and the settings entry on the right. The product mark appears exactly once across the chrome — the navigator does not duplicate it. The settings entry sits next to a single cycling theme button (Light → Dark → System → Light) whose icon reflects the current state and whose aria-label names current + next mode.
 [ ] 10. Resizable widths and collapse state persist locally between sessions.
-[ ] 11. No bottom status bar is rendered in the cockpit; operations, MCP, and activity counts are surfaced from their dedicated panels and command-palette navigation only.
+[x] 11. A compact bottom status bar renders machine health indicators on the left (overall health, CPU, RAM, disk usage/free space, disk I/O load when available, and Citadel process RSS) and keeps only the clock on the right. Health values stream over SSE every 5s while a cockpit viewer is connected, with a slower HTTP poll as fallback.
 [ ] 12. The left navigator devotes its entire vertical space below primary nav to the workspaces list, which scrolls independently when content exceeds the column height.
 [ ] 13. Icon-only controls expose a native tooltip (title) and accessible label that describes their action or target.
 [ ] 14. Top-layer modals and overlays (command palette, create workspace, add repo) are centred both horizontally and vertically in the viewport; backdrop dismissal and `Esc` close them.
@@ -58,8 +58,8 @@
 [~] 4. Specialized role sessions and freestyle runtime sessions are visually distinct. Specialized role sessions are manager-tracked by default; freestyle runtime sessions are not manager-tracked.
 [~] 5. Role target rules are enforced in the UI: `pm`, `architect`, and `manager` run on Home; `implementation` and `prototype` run on checkouts.
 [ ] 6. Selecting `Terminal` calls the terminal-session REST endpoint and creates a `kind: "terminal"` session in the selected target cwd.
-[ ] 7. Selecting a freestyle runtime creates a `kind: "agent"` session with no role/action metadata in the selected target cwd.
-[ ] 8. Selecting a specialized role or action creates a `kind: "agent"` session with role/action/managed metadata and any launch warnings from runtime capability resolution.
+[ ] 7. Selecting a freestyle runtime creates a `kind: "agent"` session with no role/action metadata in the selected target cwd. The session receives the global Settings base system prompt, when configured, through the agent-session system-prompt delivery channel.
+[ ] 8. Selecting a specialized role or action creates a `kind: "agent"` session with role/action/managed metadata and any launch warnings from runtime capability resolution. The daemon resolves the role template server-side and composes the global Settings base system prompt first, then the role template system prompt; the browser never sends trusted role prompt text.
 [ ] 9. Each session tab has an editable title. Default titles include role/action names for specialized sessions, runtime display name for freestyle agents, and `Terminal` for terminal sessions.
 [ ] 10. Closing a tab stops the backing terminal-owner session and marks the live tab closed, but durable session history, runtime session id, artifacts, role/action metadata, and resume information remain inspectable.
 [ ] 11. The selected session occupies the rest of the column height.
@@ -76,6 +76,7 @@
 [ ] 3. Each role editor exposes system prompt, runtime id, model, effort/reasoning, fast mode, context mode, validation warnings, and reset-to-Citadel-defaults.
 [ ] 4. Built-in action templates are edited under their owning role. The UI does not expose arbitrary trigger creation in v1.
 [ ] 5. Role/action selectors are driven by runtime capability/model discovery and show recorded fallbacks when a configured model or option is unavailable.
+[ ] 6. Agents settings expose one global base system prompt outside the per-runtime cards. It applies to all future freestyle agent sessions and is prepended to specialized role prompts.
 
 ## Workspace Automation And History
 

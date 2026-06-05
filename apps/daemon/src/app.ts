@@ -85,6 +85,8 @@ import { createDaemonServer } from "./server-factory.js";
 import { attachSseClientErrorHandler, writeSseEvent } from "./sse-broadcast.js";
 import { registerStateRoute } from "./state-route.js";
 import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
+import { startSystemHealthEvents } from "./system-health-events.js";
+import { registerSystemHealthRoute } from "./system-health-route.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
 import { buildRespawnTmux } from "./terminal-routes-helpers.js";
 import { createUiActivityTracker } from "./ui-activity.js";
@@ -484,6 +486,7 @@ export async function createDaemonApp(input: {
   // /api/state handler can close over a fully-initialized runner. app.ts hit
   // the 800-line size gate, hence the extraction.
   registerStateRoute({ app, store, config, scheduledAgents, daemonStartedAt, cachedProviderHealth, asyncRoute });
+  registerSystemHealthRoute({ app, config, asyncRoute });
   registerWorkspacesPrStateRoute({ app, store, providerCache, asyncRoute });
   // Boot-sweep: close any 'running' run rows that were in flight when the
   // daemon last died, sync the denormalized lastRunStatus cache on the
@@ -682,6 +685,12 @@ export async function createDaemonApp(input: {
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
   const autoResume = startDaemonAutoResumeLoop(store, operations, config);
   if (autoResume) server.on("close", () => autoResume.stop());
+  const systemHealthEvents = startSystemHealthEvents({
+    config,
+    emit,
+    hasViewers: () => sseClients.size > 0,
+  });
+  server.on("close", () => systemHealthEvents.stop());
   const terminalReaper = startTerminalReaper({
     listSocketNames: () => {
       const sockets = new Set<string | null>([null]);

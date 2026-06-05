@@ -55,6 +55,34 @@ describe("agent template routes", () => {
       await closeServer(server);
     }
   });
+
+  it("rejects raw authority tokens in role system prompts without echoing them", async () => {
+    const fixture = createFixtureBase(dirs);
+    const { server } = await createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const listed = await getJson<{ roles: Array<{ role: string; updatedAt: string }> }>(
+        `${baseUrl}/api/agent-templates`,
+      );
+      const pm = listed.roles.find((role) => role.role === "pm");
+      const rawToken = "citadel_agent_authority_abcdefghijklmnopqrstuvwxyz0123456789";
+      const response = await fetch(`${baseUrl}/api/agent-templates/roles/pm`, {
+        method: "PUT",
+        body: JSON.stringify({ systemPrompt: `custom ${rawToken}`, updatedAt: pm?.updatedAt }),
+        headers: { "content-type": "application/json" },
+      });
+      const text = await response.text();
+
+      expect(response.status).toBe(400);
+      expect(text).not.toContain(rawToken);
+      expect(JSON.parse(text)).toMatchObject({
+        error: "raw_authority_token_present",
+        component: "roleTemplate.systemPrompt",
+      });
+    } finally {
+      await closeServer(server);
+    }
+  });
 });
 
 async function putJson<T>(url: string, body: unknown): Promise<T> {

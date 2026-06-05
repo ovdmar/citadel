@@ -26,6 +26,7 @@ type CheckoutNavCardProps = {
   pullRequest: PullRequestSummary | null;
   active: boolean;
   onSelect: () => void;
+  onDropFocus?: (() => void) | undefined;
   unseenAttentionSessionIds?: AttentionSessionIds | undefined;
 };
 
@@ -80,6 +81,16 @@ export function workspaceCheckoutRows(
   };
 }
 
+export function focusTargetAfterCheckoutDrop(
+  checkouts: readonly Pick<WorktreeCheckout, "id">[],
+  checkoutId: string,
+): string {
+  const index = checkouts.findIndex((checkout) => checkout.id === checkoutId);
+  if (index === -1) return "home";
+  const replacement = checkouts[index + 1] ?? null;
+  return replacement ? `checkout:${replacement.id}` : "home";
+}
+
 export function CheckoutNavCard(props: CheckoutNavCardProps) {
   const [confirmDrop, setConfirmDrop] = useState(false);
   const displayName = props.checkout.displayName ?? props.checkout.name;
@@ -120,6 +131,7 @@ export function CheckoutNavCard(props: CheckoutNavCardProps) {
           })
         }
         prToneOverride={prTone}
+        lifecyclePullRequest={null}
         unseenAttentionSessionIds={props.unseenAttentionSessionIds}
         disableDrop
       />
@@ -139,6 +151,7 @@ export function CheckoutNavCard(props: CheckoutNavCardProps) {
         <DropCheckoutDialog
           workspace={props.workspace}
           checkout={props.checkout}
+          onDropFocus={props.onDropFocus}
           onClose={() => setConfirmDrop(false)}
         />
       ) : null}
@@ -153,7 +166,12 @@ type DropCheckoutResult = {
   dirtySummary?: WorkspaceDirtySummary | null;
 };
 
-function DropCheckoutDialog(props: { workspace: Workspace; checkout: WorktreeCheckout; onClose: () => void }) {
+function DropCheckoutDialog(props: {
+  workspace: Workspace;
+  checkout: WorktreeCheckout;
+  onDropFocus?: (() => void) | undefined;
+  onClose: () => void;
+}) {
   useOverlayPresent();
   const optimistic = useOptimisticRemove();
   const toast = useToast();
@@ -174,6 +192,7 @@ function DropCheckoutDialog(props: { workspace: Workspace; checkout: WorktreeChe
       };
     },
     onMutate: () => {
+      props.onDropFocus?.();
       optimistic.addCheckout(checkoutId);
       const previous = queryClient.getQueryData<StateResponse>(["state"]);
       if (previous) {

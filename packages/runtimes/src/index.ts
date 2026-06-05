@@ -61,10 +61,16 @@ export type {
 } from "./status/index.js";
 
 export {
+  renderSystemPromptArgv,
   resolveRuntimeLaunchProfile,
   runtimeLaunchOptionCapabilities,
 } from "./launch-profile.js";
-export type { ResolvedLaunchProfile, RuntimeLaunchOptionsInput, RuntimeWithLaunchOptions } from "./launch-profile.js";
+export type {
+  ResolvedLaunchProfile,
+  RuntimeLaunchOptionsInput,
+  RuntimeWithLaunchOptions,
+  SystemPromptArgvMapping,
+} from "./launch-profile.js";
 
 const baseCapabilities = {
   supportsPrompt: false,

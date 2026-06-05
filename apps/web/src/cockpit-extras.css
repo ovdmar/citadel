@@ -732,8 +732,7 @@
   text-decoration: none;
 }
 
-.pr-pill.tone-pending,
-.approval-pill.tone-pending {
+.pr-pill.tone-pending {
   background: transparent;
   color: var(--c-warn);
 }

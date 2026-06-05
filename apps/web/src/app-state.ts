@@ -9,6 +9,7 @@ import type {
   ProviderHealth,
   Repo,
   ScheduledAgent,
+  SystemHealthSnapshot,
   TerminalProfile,
   Workspace,
   WorkspaceManager,
@@ -18,6 +19,7 @@ import type {
   WorkspaceSession,
   WorktreeCheckout,
 } from "@citadel/contracts";
+import { SystemHealthSnapshotSchema } from "@citadel/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, createContext, createElement, useContext, useEffect, useMemo, useState } from "react";
 import { api, queryClient } from "./api.js";
@@ -61,6 +63,72 @@ export type StateResponse = {
   namespaces: Namespace[];
   bootRestore: BootRestoreSummary | null;
 };
+
+export type OptimisticCheckoutInput = {
+  id: string;
+  workspace: Workspace;
+  repo: Repo;
+  name: string;
+  displayName?: string | null;
+  branch: string;
+  now: string;
+};
+
+export function createOptimisticCheckout(input: OptimisticCheckoutInput): WorktreeCheckout {
+  const root = input.workspace.rootPath ?? input.workspace.path;
+  return {
+    id: input.id,
+    workspaceId: input.workspace.id,
+    repoId: input.repo.id,
+    name: input.name,
+    displayName: input.displayName ?? null,
+    path: `${root.replace(/\/+$/, "")}/${input.name}`,
+    branch: input.branch,
+    baseBranch: input.repo.defaultBranch,
+    issue: null,
+    intendedPr: null,
+    stackParentCheckoutId: null,
+    inferredPurpose: null,
+    gateStatus: "not_started",
+    createdAt: input.now,
+    updatedAt: input.now,
+    archivedAt: null,
+  };
+}
+
+export function addOptimisticCheckout(
+  state: StateResponse | undefined,
+  checkout: WorktreeCheckout,
+): StateResponse | undefined {
+  if (!state) return state;
+  if (state.checkouts.some((entry) => entry.id === checkout.id)) return state;
+  return { ...state, checkouts: [...state.checkouts, checkout] };
+}
+
+export function reconcileOptimisticCheckout(
+  state: StateResponse | undefined,
+  optimisticId: string,
+  checkoutId: string,
+): StateResponse | undefined {
+  if (!state) return state;
+  const serverCheckoutExists = state.checkouts.some((entry) => entry.id === checkoutId);
+  let changed = false;
+  const checkouts = state.checkouts.flatMap((checkout) => {
+    if (checkout.id !== optimisticId) return [checkout];
+    changed = true;
+    return serverCheckoutExists ? [] : [{ ...checkout, id: checkoutId }];
+  });
+  return changed ? { ...state, checkouts } : state;
+}
+
+export function removeOptimisticCheckout(
+  state: StateResponse | undefined,
+  optimisticId: string,
+): StateResponse | undefined {
+  if (!state) return state;
+  const checkouts = state.checkouts.filter((checkout) => checkout.id !== optimisticId);
+  return checkouts.length === state.checkouts.length ? state : { ...state, checkouts };
+}
 
 export function useStateQuery(options?: { enabled?: boolean }) {
   return useQuery({
@@ -206,6 +274,20 @@ export function useEventRefresh() {
     events.addEventListener("scheduled-agent.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("scheduled-agent.run", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("namespace.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("system-health.updated", (ev) => {
+      const systemHealth = parseSseSystemHealth(ev as MessageEvent);
+      if (systemHealth) queryClient.setQueryData(["system-health"], { systemHealth });
+    });
     return () => events.close();
   }, []);
+}
+
+export function parseSseSystemHealth(event: MessageEvent): SystemHealthSnapshot | null {
+  try {
+    const data = JSON.parse(event.data) as { payload?: unknown };
+    const parsed = SystemHealthSnapshotSchema.safeParse(data.payload);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
 }

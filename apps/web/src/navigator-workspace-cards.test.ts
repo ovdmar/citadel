@@ -14,6 +14,7 @@ import {
   checkoutBranchLabel,
   checkoutBranchTitle,
   checkoutPrLabel,
+  focusTargetAfterCheckoutDrop,
   hasNestedCheckouts,
   isWorkspaceMainCheckout,
   pullRequestForCheckout,
@@ -36,6 +37,15 @@ afterEach(() => {
 });
 
 describe("navigator workspace checkout cards", () => {
+  it("picks the next checkout target after a checkout drop, falling back to Home", () => {
+    expect(focusTargetAfterCheckoutDrop([checkout("co_a"), checkout("co_b"), checkout("co_c")], "co_b")).toBe(
+      "checkout:co_c",
+    );
+    expect(focusTargetAfterCheckoutDrop([checkout("co_a"), checkout("co_b")], "co_b")).toBe("home");
+    expect(focusTargetAfterCheckoutDrop([checkout("co_a")], "co_a")).toBe("home");
+    expect(focusTargetAfterCheckoutDrop([checkout("co_a")], "co_missing")).toBe("home");
+  });
+
   it("switches to nested checkout rendering whenever a workspace has checkouts", () => {
     expect(hasNestedCheckouts([])).toBe(false);
     expect(hasNestedCheckouts([checkout("co_1")])).toBe(true);
@@ -216,6 +226,42 @@ describe("navigator workspace checkout cards", () => {
     );
   });
 
+  it("keeps the checkout lifecycle dot idle after agent attention is acknowledged even when the PR is failing", () => {
+    const ws = workspace({ id: "ws_checkout", name: "Readable API" });
+    const co = checkout("co_api", {
+      workspaceId: ws.id,
+      name: "api-stable",
+      path: "/work/home/api-stable",
+      branch: "feature/api",
+    });
+    const repo = repoFixture({ id: co.repoId, name: "citadel" });
+    const failingPr = pr(12, {
+      checks: [
+        { name: "ci", status: "completed", conclusion: "failure", url: null, startedAt: null, completedAt: null },
+      ],
+    });
+
+    const container = renderCheckoutCard({
+      workspace: ws,
+      checkout: co,
+      repo,
+      sessions: [
+        session("sess_seen", {
+          checkoutId: co.id,
+          status: "idle",
+          lastStatusAt: "2026-06-05T10:00:00.000Z",
+        }),
+      ],
+      pullRequest: failingPr,
+      unseenAttentionSessionIds: new Set(),
+    });
+
+    const dot = container.querySelector(".workspace-status-dot");
+    expect(dot?.classList.contains("cit-pulse-idle")).toBe(true);
+    expect(dot?.classList.contains("cit-pulse-bad")).toBe(false);
+    expect(container.querySelector(".workspace-card-agent")?.classList.contains("tone-failing")).toBe(true);
+  });
+
   it("edits the checkout card display title without renaming the git worktree", async () => {
     const ws = workspace({ id: "ws_checkout", name: "Readable API" });
     const co = checkout("co_api", {
@@ -294,7 +340,8 @@ describe("navigator workspace checkout cards", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const container = renderCheckoutCard({ workspace: ws, checkout: co, repo });
+    const onDropFocus = vi.fn();
+    const container = renderCheckoutCard({ workspace: ws, checkout: co, repo, onDropFocus });
     const dropButton = container.querySelector('button[aria-label="Drop checkout api-stable"]');
     expect(dropButton).toBeTruthy();
     flushSync(() => {
@@ -310,6 +357,7 @@ describe("navigator workspace checkout cards", () => {
     });
 
     await waitFor(() => fetchMock.mock.calls.length === 1);
+    expect(onDropFocus).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/workspaces/ws_checkout/checkouts/co_api",
       expect.objectContaining({ method: "DELETE" }),
@@ -387,6 +435,10 @@ function renderCheckoutCard(input: {
   workspace: Workspace;
   checkout: WorktreeCheckout;
   repo: Repo;
+  sessions?: AgentSession[];
+  pullRequest?: PullRequestSummary | null;
+  unseenAttentionSessionIds?: ReadonlySet<string>;
+  onDropFocus?: () => void;
 }) {
   const rootElement = document.createElement("div");
   document.body.appendChild(rootElement);
@@ -407,10 +459,12 @@ function renderCheckoutCard(input: {
               workspace: input.workspace,
               checkout: input.checkout,
               repo: input.repo,
-              sessions: [],
-              pullRequest: null,
+              sessions: input.sessions ?? [],
+              pullRequest: input.pullRequest ?? null,
               active: false,
               onSelect: () => undefined,
+              unseenAttentionSessionIds: input.unseenAttentionSessionIds,
+              onDropFocus: input.onDropFocus,
             }),
           ),
         ),

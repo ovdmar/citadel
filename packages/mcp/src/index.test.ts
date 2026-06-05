@@ -54,7 +54,13 @@ describe("mcp helpers", () => {
     const launch = mcpToolDefinitions().find((tool) => tool.name === "launch_agent");
     expect(launch).toBeDefined();
     expect(launch?.destructive).toBe(false);
-    expect(launch?.inputSchema).toMatchObject({ required: ["prompt"] });
+    expect(launch?.inputSchema).toMatchObject({
+      required: ["prompt"],
+      properties: { systemPrompt: { type: "string" } },
+    });
+    expect(mcpToolDefinitions().find((tool) => tool.name === "start_agent_session")?.inputSchema).toMatchObject({
+      properties: { role: { type: "string" }, systemPrompt: { type: "string" } },
+    });
     expect(status.resources).toContain("citadel://activity");
     expect(mcpToolDefinitions().find((tool) => tool.name === "archive_workspace")).toMatchObject({
       destructive: false,

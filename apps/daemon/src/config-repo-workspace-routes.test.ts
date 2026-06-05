@@ -26,6 +26,29 @@ process.env.CITADEL_DISABLE_SCHEDULER = "1";
 process.env.CITADEL_DISABLE_TERMINAL_REAPER = "1";
 
 describe("config/repo/workspace routes", () => {
+  it("rejects raw authority tokens in the base system prompt without echoing them", async () => {
+    const fixture = createFixtureBase(dirs);
+    const { server } = await createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const rawToken = "citadel_agent_authority_abcdefghijklmnopqrstuvwxyz0123456789";
+      const response = await fetch(`${baseUrl}/api/config`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentSessions: { baseSystemPrompt: `base ${rawToken}` } }),
+      });
+      const text = await response.text();
+      expect(response.status).toBe(400);
+      expect(text).not.toContain(rawToken);
+      expect(JSON.parse(text)).toMatchObject({
+        error: "raw_authority_token_present",
+        component: "agentSessions.baseSystemPrompt",
+      });
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("completes filesystem paths for the add-repo autocomplete", async () => {
     const fixture = createFixtureBase(dirs);
     const { repoPath } = createGitRepo(fixture.config.dataDir);

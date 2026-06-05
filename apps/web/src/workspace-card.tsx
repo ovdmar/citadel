@@ -8,7 +8,7 @@ import type {
 } from "@citadel/contracts";
 import type { LifecycleTone } from "@citadel/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Folder, GitBranch, Home, MessageSquare, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
+import { Folder, GitBranch, Home, ShieldAlert, ShieldCheck, ShieldQuestion, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
@@ -96,7 +96,9 @@ export function WorkspaceCard(
     allowRootDrop?: boolean;
     prToneOverride?: PrTone | undefined;
     diffOverride?: { additions: number | null; deletions: number | null } | undefined;
+    lifecyclePullRequest?: PullRequestSummary | null | undefined;
     unseenAttentionSessionIds?: AttentionSessionIds | undefined;
+    onDropFocus?: (() => void) | undefined;
   },
 ) {
   const { workspace, pullRequest } = props;
@@ -105,7 +107,7 @@ export function WorkspaceCard(
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
   const lifecycleTone = deriveWorkspaceDisplayLifecycleTone({
     sessions: props.sessions,
-    pullRequest: pullRequest ?? null,
+    pullRequest: props.lifecyclePullRequest === undefined ? (pullRequest ?? null) : props.lifecyclePullRequest,
     unseenAttentionSessionIds: props.unseenAttentionSessionIds,
   });
   const agentToneSuffix = lifecycleToneAriaSuffix(lifecycleTone);
@@ -349,17 +351,17 @@ export function WorkspaceCard(
             </span>
           ) : null}
           {props.rightControl ? <span className="workspace-card-right-control-spacer" /> : null}
-          <span className={`approval-pill tone-${approvalTone}`} title={`Approval: ${approvalTone}`}>
-            {approvalTone === "approved" ? (
-              <ShieldCheck size={13} />
-            ) : approvalTone === "changes" ? (
-              <ShieldAlert size={13} />
-            ) : approvalTone === "pending" ? (
-              <MessageSquare size={13} />
-            ) : (
-              <ShieldQuestion size={13} />
-            )}
-          </span>
+          {approvalTone === "pending" ? null : (
+            <span className={`approval-pill tone-${approvalTone}`} title={`Approval: ${approvalTone}`}>
+              {approvalTone === "approved" ? (
+                <ShieldCheck size={13} />
+              ) : approvalTone === "changes" ? (
+                <ShieldAlert size={13} />
+              ) : (
+                <ShieldQuestion size={13} />
+              )}
+            </span>
+          )}
         </span>
       </button>
       {props.rightControl ? <span className="workspace-card-right-control">{props.rightControl}</span> : null}
@@ -374,7 +376,13 @@ export function WorkspaceCard(
           <X size={11} />
         </button>
       )}
-      {confirmDrop ? <DropWorkspaceDialog workspace={workspace} onClose={() => setConfirmDrop(false)} /> : null}
+      {confirmDrop ? (
+        <DropWorkspaceDialog
+          workspace={workspace}
+          onDropFocus={props.onDropFocus}
+          onClose={() => setConfirmDrop(false)}
+        />
+      ) : null}
       {showNamespaceMenu ? (
         <NamespacePickerDialog
           workspace={workspace}
@@ -540,7 +548,11 @@ type DropCheckResult = {
   error?: string | null;
 };
 
-function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void }) {
+function DropWorkspaceDialog(props: {
+  workspace: Workspace;
+  onDropFocus?: (() => void) | undefined;
+  onClose: () => void;
+}) {
   useOverlayPresent();
   const optimistic = useOptimisticRemove();
   const toast = useToast();
@@ -592,6 +604,7 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
     // active-workspace selector and the navigator) subtracts blacklisted
     // ids on read, so the workspace disappears for every consumer.
     onMutate: () => {
+      props.onDropFocus?.();
       optimistic.add(workspaceId);
       const previous = queryClient.getQueryData<StateResponse>(["state"]);
       if (previous) {

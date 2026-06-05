@@ -36,6 +36,7 @@ import {
   readNavigatorGrouping,
   subscribeToCollapseChanges,
 } from "./navigator-collapse-store.js";
+import { focusWorkspaceIdAfterDrop, renderedWorkspaceIdsFromTree } from "./navigator-drop-focus.js";
 import {
   type GroupNode,
   type GroupableKey,
@@ -62,18 +63,16 @@ import { ScratchpadNavLink } from "./navigator-scratchpad-link.js";
 import {
   CheckoutNavCard,
   checkoutSessions,
+  focusTargetAfterCheckoutDrop,
   hasNestedCheckouts,
   workspaceCheckoutRows,
 } from "./navigator-workspace-cards.js";
 import type { AttentionSessionIds } from "./session-status-display.js";
 import { WorkspaceCard, lifecycleToneClass } from "./workspace-card.js";
-
 export { aggregateNavigatorTone };
-
 function runningCount(sessions: WorkspaceSession[]): number {
   return sessions.filter((session) => session.kind === "agent" && session.status === "running").length;
 }
-
 function groupingLabel(grouping: NavigatorGrouping): string {
   return grouping.map((key) => (key === "repo" ? "repository" : key)).join(" → ");
 }
@@ -90,7 +89,6 @@ export function Navigator(props: {
   activeTargetKey: string;
   runtimes: import("@citadel/contracts").AgentRuntime[];
   namespaces: Namespace[];
-  lastRepoId: string | undefined;
   createWorkspaceOpen: boolean;
   onOpenCreateWorkspace: () => void;
   onCloseCreateWorkspace: () => void;
@@ -276,6 +274,21 @@ export function Navigator(props: {
     [props.namespaces, reorderNamespaces],
   );
 
+  const flatEntries = useMemo<WorkspaceEntry[]>(
+    () =>
+      props.workspaces.map((workspace) => ({
+        workspace,
+        sessions: props.sessions.filter((session) => session.workspaceId === workspace.id),
+      })),
+    [props.workspaces, props.sessions],
+  );
+  const renderedWorkspaceIds = useMemo(() => {
+    if (treeGrouping.length === 0) {
+      return applyLocalOrder(flatEntries, navigatorOrder.__flat).map((entry) => entry.workspace.id);
+    }
+    return renderedWorkspaceIdsFromTree(tree, navigatorOrder);
+  }, [flatEntries, navigatorOrder, tree, treeGrouping.length]);
+
   const renderWorkspace = useCallback(
     ({ workspace, sessions }: WorkspaceEntry, groupPath: string, visibleIds: readonly string[]) => {
       const checkouts = props.checkouts.filter(
@@ -325,6 +338,9 @@ export function Navigator(props: {
                   pullRequest={checkoutPullRequest({ checkout, workspacePullRequest, checkoutPrState })}
                   active={activeWorkspace && props.activeTargetKey === targetKey}
                   onSelect={() => props.onPickTarget(workspace.id, targetKey)}
+                  onDropFocus={() =>
+                    props.onPickTarget(workspace.id, focusTargetAfterCheckoutDrop(visibleCheckouts, checkout.id))
+                  }
                   unseenAttentionSessionIds={props.unseenAttentionSessionIds}
                 />
               );
@@ -367,6 +383,10 @@ export function Navigator(props: {
             }}
             active={cardActive}
             onSelect={() => props.onPickTarget(workspace.id, "home")}
+            onDropFocus={() => {
+              const replacementWorkspaceId = focusWorkspaceIdAfterDrop(renderedWorkspaceIds, workspace.id);
+              if (replacementWorkspaceId) props.onPickTarget(replacementWorkspaceId, "home");
+            }}
             branchLabel={aggregateRow || structuredHome ? null : undefined}
             prToneOverride={aggregateRow ? prAggregate.prTone : undefined}
             diffOverride={
@@ -453,6 +473,9 @@ export function Navigator(props: {
                     pullRequest={checkoutPullRequest({ checkout, workspacePullRequest, checkoutPrState })}
                     active={activeWorkspace && props.activeTargetKey === targetKey}
                     onSelect={() => props.onPickTarget(workspace.id, targetKey)}
+                    onDropFocus={() =>
+                      props.onPickTarget(workspace.id, focusTargetAfterCheckoutDrop(visibleCheckouts, checkout.id))
+                    }
                     unseenAttentionSessionIds={props.unseenAttentionSessionIds}
                   />
                 );
@@ -476,19 +499,12 @@ export function Navigator(props: {
       namespacesById,
       treeGrouping,
       reorderWorkspace,
+      renderedWorkspaceIds,
       collapsedWorkspaceCheckouts,
       toggleWorkspaceCheckouts,
       hideMainWorkspace,
       props.unseenAttentionSessionIds,
     ],
-  );
-  const flatEntries = useMemo<WorkspaceEntry[]>(
-    () =>
-      props.workspaces.map((workspace) => ({
-        workspace,
-        sessions: props.sessions.filter((session) => session.workspaceId === workspace.id),
-      })),
-    [props.workspaces, props.sessions],
   );
   const hasVisibleWorkspaceEntries = treeGrouping.length === 0 ? props.workspaces.length > 0 : tree.length > 0;
 
@@ -634,7 +650,6 @@ export function Navigator(props: {
       {props.createWorkspaceOpen ? (
         <CreateWorkspaceModal
           repos={props.repos}
-          {...(props.lastRepoId ? { lastRepoId: props.lastRepoId } : {})}
           grouping={grouping}
           intent={createWorkspaceIntent}
           onClose={closeCreateWorkspace}

@@ -27,6 +27,7 @@ function config(): CitadelConfig {
       jira: { enabled: true, command: "jtk", autoTransitions: [] },
     },
     agentRuntimes: [{ id: "codex", displayName: "Codex", command: "bash", args: [], supportsPrompt: true }],
+    agentSessions: { baseSystemPrompt: "" },
     terminal: { displayName: "Terminal", command: "bash", args: ["-l"] },
     usageProviders: [],
     automations: {

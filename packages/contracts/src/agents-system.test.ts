@@ -246,6 +246,12 @@ describe("agents system contracts", () => {
         actionName: "launch_implementation_agent",
       }).payload,
     ).toEqual({});
+    expect(
+      RuntimeLaunchOptionCapabilitiesSchema.parse({
+        runtimeId: "codex",
+        supportsSystemPromptArgv: true,
+      }).supportsSystemPromptArgv,
+    ).toBe(true);
 
     expect(
       LocalNotificationEventSchema.parse({

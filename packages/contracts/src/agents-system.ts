@@ -218,6 +218,7 @@ export const RuntimeLaunchOptionCapabilitiesSchema = z.object({
   defaultModel: z.string().min(1).nullable().default(null),
   effortValues: z.array(z.string().min(1)).default([]),
   supportsFastMode: z.boolean().default(false),
+  supportsSystemPromptArgv: z.boolean().default(false),
   contextModes: z.array(z.string().min(1)).default([]),
   checkedAt: z.string().nullable().default(null),
   stale: z.boolean().default(false),

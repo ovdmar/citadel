@@ -19,6 +19,7 @@ function config(overrides: Partial<CitadelConfig["automations"]["fixCi"]> = {}):
       { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] },
       { id: "codex", displayName: "Codex", command: "codex", args: [] },
     ],
+    agentSessions: { baseSystemPrompt: "" },
     terminal: { displayName: "Terminal", command: "bash", args: ["-l"] },
     usageProviders: [],
     automations: { fixCi: { ...DEFAULT_FIX_CI_AUTOMATION, ...overrides } },
