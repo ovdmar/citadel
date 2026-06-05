@@ -162,6 +162,8 @@ describe("structured role launchers", () => {
       runtimeId: "codex",
       role: "pm",
       targetType: "workspace_home",
+      prompt: "",
+      roleTemplatePrompt: expect.any(String),
       launchSettings,
     });
     expect(calls[0]?.runtime).toMatchObject({

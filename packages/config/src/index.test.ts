@@ -34,6 +34,7 @@ describe("loadConfig", () => {
 
     expect(config.version).toBe(1);
     expect(config.mcp.enabled).toBe(true);
+    expect(config.agentSessions.baseSystemPrompt).toBe("");
     expect(config.agentRuntimes.map((runtime) => runtime.id)).not.toContain("shell");
     expect(config.agentRuntimes.find((runtime) => runtime.id === "codex")?.args).toEqual([
       "--yolo",
@@ -44,6 +45,10 @@ describe("loadConfig", () => {
       defaultModel: "gpt-5.4",
       effortValues: ["low", "medium", "high", "xhigh"],
       modelArgv: { argv: ["-m", "{value}"] },
+      systemPromptArgv: { argv: ["-c", "developer_instructions={value}"], valueEncoding: "toml-string" },
+    });
+    expect(config.agentRuntimes.find((runtime) => runtime.id === "claude-code")?.launchOptions).toMatchObject({
+      systemPromptArgv: { argv: ["--append-system-prompt", "{value}"], valueEncoding: "raw" },
     });
     expect(config.terminal).toEqual({ displayName: "Terminal", command: "bash", args: ["-l"] });
     expect(config.usageProviders).toEqual([]);
@@ -217,6 +222,7 @@ describe("loadConfig", () => {
       providers: { github: { enabled: true }, jira: { enabled: false } },
       usageProviders: [{ id: "usage-codex", runtimeId: "codex", command: "node", args: ["usage.js"] }],
       automations: { fixCi: { enabled: true, runtimeId: "codex", fallbackRuntimeId: "cursor-agent" } },
+      agentSessions: { baseSystemPrompt: "Use Citadel tools." },
       hooks: [{ id: "setup", event: "workspace.setup", command: "node", args: ["setup.js"], blocking: false }],
       repoDefaults: { setupHookIds: ["setup"], teardownHookIds: [] },
     });
@@ -226,6 +232,7 @@ describe("loadConfig", () => {
     expect(reloaded.mcp.enabled).toBe(false);
     expect(reloaded.providers.jira.enabled).toBe(false);
     expect(reloaded.usageProviders[0]).toMatchObject({ id: "usage-codex", runtimeId: "codex" });
+    expect(reloaded.agentSessions.baseSystemPrompt).toBe("Use Citadel tools.");
     expect(reloaded.automations.fixCi).toMatchObject({
       enabled: true,
       runtimeId: "codex",
@@ -310,6 +317,10 @@ describe("loadConfig", () => {
     expect(claude?.sessionIdArg).toBe("--session-id");
     expect(claude?.supportsResume).toBe(true);
     expect(claude?.supportsModelSelection).toBe(true);
+    expect(claude?.launchOptions?.systemPromptArgv).toEqual({
+      argv: ["--append-system-prompt", "{value}"],
+      valueEncoding: "raw",
+    });
 
     expect(config.terminal).toEqual({ displayName: "Custom Shell", command: "zsh", args: [] });
     expect(config.agentRuntimes.map((runtime) => runtime.id)).not.toContain("shell");
@@ -346,6 +357,10 @@ describe("loadConfig", () => {
       "--enable",
       "goals",
     ]);
+    expect(config.agentRuntimes.find((runtime) => runtime.id === "codex")?.launchOptions?.systemPromptArgv).toEqual({
+      argv: ["-c", "developer_instructions={value}"],
+      valueEncoding: "toml-string",
+    });
 
     const patched = mergeConfigPatch(config, {
       agentRuntimes: [{ id: "codex", displayName: "Codex", command: "codex", args: [] }],

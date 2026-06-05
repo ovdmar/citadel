@@ -3,6 +3,13 @@ import { useMutation } from "@tanstack/react-query";
 import { Check, Search, X } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
+import {
+  type StateResponse,
+  addOptimisticCheckout,
+  createOptimisticCheckout,
+  reconcileOptimisticCheckout,
+  removeOptimisticCheckout,
+} from "./app-state.js";
 import { Button } from "./components/ui/button.js";
 import { type GroupKey, type NavigatorGrouping, normalizeNavigatorGrouping } from "./navigator-groups.js";
 import { repoNameWithOwner } from "./repo-labels.js";
@@ -118,6 +125,8 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   const [name, setName] = useState("");
   const [worktreeName, setWorktreeName] = useState("");
   const [selectedRepoIds, setSelectedRepoIds] = useState<string[]>([]);
+  const [attachPending, setAttachPending] = useState(false);
+  const mountedRef = useRef(true);
   const nameRef = useRef<HTMLInputElement | null>(null);
   const trimmedName = name.trim();
   const trimmedWorktreeName = worktreeName.trim();
@@ -133,31 +142,15 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   useEffect(() => {
     nameRef.current?.focus();
   }, []);
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    [],
+  );
 
-  const create = useMutation({
+  const createHome = useMutation({
     mutationFn: async (): Promise<CreateWorkspaceResult> => {
-      if (creationContext === "attach-worktree") {
-        if (!selectedRepoIds.length) throw new Error("repo_required");
-        const workspaceId = props.intent?.kind === "attach-worktree" ? props.intent.workspaceId : "";
-        let targetKey: string | undefined;
-        for (const selectedRepoId of selectedRepoIds) {
-          const payload: Record<string, unknown> = { repoId: selectedRepoId, source: "default_branch" };
-          if (singleSelectedAttachRepo && trimmedWorktreeName) {
-            payload.name = trimmedWorktreeName;
-            payload.displayName = trimmedWorktreeName;
-          }
-          const result = await api<{ checkoutId: string }>(
-            `/api/workspaces/${encodeURIComponent(workspaceId)}/checkouts`,
-            {
-              method: "POST",
-              body: JSON.stringify(payload),
-            },
-          );
-          if (selectedRepoIds.length === 1) targetKey = `checkout:${result.checkoutId}`;
-        }
-        return targetKey ? { workspaceId, targetKey } : { workspaceId };
-      }
-
       const result = await api<{ workspaceId: string }>("/api/workspaces/home", {
         method: "POST",
         body: JSON.stringify({ name: trimmedName, source: "scratch" }),
@@ -188,11 +181,78 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
     },
   });
 
+  const createAttachWorktrees = async () => {
+    if (!selectedRepoIds.length) return;
+    const workspaceId = props.intent?.kind === "attach-worktree" ? props.intent.workspaceId : "";
+    const pending: Array<{ repo: Repo; optimisticId: string | null; settled: boolean }> = [];
+    setAttachPending(true);
+    try {
+      for (const selectedRepoId of selectedRepoIds) {
+        const repo = props.repos.find((entry) => entry.id === selectedRepoId);
+        if (!repo) throw new Error("repo_required");
+        const requestedName = singleSelectedAttachRepo && trimmedWorktreeName ? trimmedWorktreeName : null;
+        pending.push({
+          repo,
+          optimisticId: addOptimisticCheckoutToState({ workspaceId, repo, requestedName }),
+          settled: false,
+        });
+      }
+
+      const optimisticTarget =
+        pending.length === 1 && pending[0]?.optimisticId ? `checkout:${pending[0].optimisticId}` : undefined;
+      if (optimisticTarget) props.onCreated(workspaceId, optimisticTarget);
+      else if (pending.some((entry) => entry.optimisticId)) props.onCreated(workspaceId);
+
+      let targetKey: string | undefined;
+      for (const entry of pending) {
+        const payload: Record<string, unknown> = { repoId: entry.repo.id, source: "default_branch" };
+        if (singleSelectedAttachRepo && trimmedWorktreeName) {
+          payload.name = trimmedWorktreeName;
+          payload.displayName = trimmedWorktreeName;
+        }
+        const result = await api<{ checkoutId: string }>(
+          `/api/workspaces/${encodeURIComponent(workspaceId)}/checkouts`,
+          {
+            method: "POST",
+            body: JSON.stringify(payload),
+          },
+        );
+        if (entry.optimisticId) {
+          const optimisticId = entry.optimisticId;
+          entry.settled = true;
+          queryClient.setQueryData<StateResponse>(["state"], (previous) =>
+            reconcileOptimisticCheckout(previous, optimisticId, result.checkoutId),
+          );
+        }
+        if (selectedRepoIds.length === 1) targetKey = `checkout:${result.checkoutId}`;
+      }
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      if (targetKey) props.onCreated(workspaceId, targetKey);
+      else props.onCreated(workspaceId);
+    } catch (err) {
+      for (const entry of pending) {
+        if (!entry.optimisticId || entry.settled) continue;
+        const optimisticId = entry.optimisticId;
+        queryClient.setQueryData<StateResponse>(["state"], (previous) =>
+          removeOptimisticCheckout(previous, optimisticId),
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      toast.push({
+        tone: "error",
+        message: `Workspace creation failed: ${err instanceof Error ? err.message : "create_failed"}`,
+      });
+    } finally {
+      if (mountedRef.current) setAttachPending(false);
+    }
+  };
+
   const modalTitle =
     creationContext === "attach-worktree"
       ? `Add worktree to ${props.intent?.kind === "attach-worktree" ? props.intent.workspaceName : "workspace"}`
       : "New workspace";
-  const submitLabel = create.isPending
+  const pending = creationContext === "attach-worktree" ? attachPending : createHome.isPending;
+  const submitLabel = pending
     ? "Creating..."
     : creationContext === "attach-worktree"
       ? selectedRepoIds.length > 1
@@ -202,7 +262,7 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
         ? "Create workspace and worktrees"
         : "Create workspace";
   const disabled =
-    create.isPending ||
+    pending ||
     (creationContext === "workspace-home"
       ? !trimmedName
       : !selectedRepoIds.length || props.intent?.kind !== "attach-worktree");
@@ -250,7 +310,14 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
         <Button type="button" variant="secondary" onClick={props.onClose}>
           Cancel
         </Button>
-        <Button type="button" disabled={disabled} onClick={() => create.mutate()}>
+        <Button
+          type="button"
+          disabled={disabled}
+          onClick={() => {
+            if (creationContext === "attach-worktree") void createAttachWorktrees();
+            else createHome.mutate();
+          }}
+        >
           {submitLabel}
         </Button>
       </div>
@@ -312,6 +379,42 @@ function filterRepos(repos: Repo[], query: string): Repo[] {
       label.includes(needle) || repo.name.toLowerCase().includes(needle) || repo.rootPath.toLowerCase().includes(needle)
     );
   });
+}
+
+function addOptimisticCheckoutToState(input: {
+  workspaceId: string;
+  repo: Repo;
+  requestedName: string | null;
+}): string | null {
+  const state = queryClient.getQueryData<StateResponse>(["state"]);
+  const workspace = state?.workspaces.find((entry) => entry.id === input.workspaceId);
+  if (!state || !workspace) return null;
+  const name = optimisticCheckoutName(input.repo, input.requestedName);
+  const optimisticId = optimisticCheckoutId();
+  const checkout = createOptimisticCheckout({
+    id: optimisticId,
+    workspace,
+    repo: input.repo,
+    name,
+    displayName: input.requestedName,
+    branch: name,
+    now: new Date().toISOString(),
+  });
+  queryClient.setQueryData<StateResponse>(["state"], (previous) => addOptimisticCheckout(previous, checkout));
+  return optimisticId;
+}
+
+function optimisticCheckoutName(repo: Repo, requestedName: string | null): string {
+  const slug = (requestedName ?? repo.name)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72);
+  return slug || "checkout";
+}
+
+function optimisticCheckoutId(): string {
+  return `co_optimistic_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export function Modal(props: { title: string; onClose: () => void; children: ReactNode }) {

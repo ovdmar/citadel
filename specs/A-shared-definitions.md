@@ -21,11 +21,11 @@
 [ ] 4. Worktree checkout — a repository worktree under a workspace root. One checkout represents one branch and one intended PR, may bind to one child issue, and may participate in a stack.
 [ ] 5. Execution target — either Workspace Home or a worktree checkout. Every terminal or agent session launches in exactly one target cwd.
 [ ] 6. Workspace session — a durable tab/session attached to an execution target. Workspace sessions are either agent sessions or terminal sessions.
-[ ] 7. Agent session — a workspace session with `kind: "agent"` launched by an agent runtime, optionally tied to a role template, action template, manager action, parent session, and workspace plan version.
+[ ] 7. Agent session — a workspace session with `kind: "agent"` launched by an agent runtime, optionally tied to a role template, action template, manager action, parent session, and workspace plan version. Agent sessions have a launch-time instruction channel separate from the initial user prompt/task.
 [ ] 8. Agent runtime — a prompt-driven CLI agent integration such as Claude Code, Codex, Cursor Agent, Pi, or another configured adapter.
-[ ] 9. Role template — one of Citadel's five predefined non-deletable roles: `pm`, `architect`, `implementation`, `prototype`, and `manager`. A role stores a system prompt and semantic launch settings.
+[ ] 9. Role template — one of Citadel's five predefined non-deletable roles: `pm`, `architect`, `implementation`, `prototype`, and `manager`. A role stores a specialized system prompt and semantic launch settings.
 [ ] 10. Action template — a built-in role-owned action such as `implementation.review_pr` or `manager.heartbeat_digest`, with prompt and launch settings. V1 does not include arbitrary user-defined triggers.
-[ ] 11. Launch settings — semantic runtime selection fields: runtime id, model id, effort/reasoning level, fast mode, and context mode. Runtime adapters map these settings to concrete argv and record warnings when unsupported or invalid settings fall back.
+[ ] 11. Launch settings — semantic runtime selection fields: runtime id, model id, effort/reasoning level, fast mode, context mode, and runtime-specific system-prompt delivery support. Runtime adapters map these settings to concrete argv and record warnings when unsupported or invalid settings fall back.
 [ ] 12. Manager instance — the durable workspace supervisor state machine. Structured workspaces get one manager at creation; freestyle workspaces may opt into one manually.
 [ ] 13. Workspace plan version — a registered reviewed plan artifact with an autoincrement version, status, hash, review artifacts, decisions, and at most one approved active version per workspace.
 [ ] 14. Delivery unit — a machine-readable slice of an approved plan that binds a stable key to repo/checkout/branch intent, child issue identity, dependency edges, and manager sequencing rules.
@@ -41,6 +41,7 @@
 [ ] 24. Readiness — Citadel's operator-facing summary of what needs attention and why.
 [ ] 25. Link — a navigation target related to a repo, workspace, provider, application, issue, PR, operation, or artifact.
 [ ] 26. Action — an explicit command the operator or manager can trigger through Citadel.
+[ ] 27. Base system prompt — the global Settings-configured Citadel instruction prefix for agent sessions. Freestyle agent sessions use it alone; specialized role sessions compose it before the role template system prompt.
 
 ## Status Legend
 

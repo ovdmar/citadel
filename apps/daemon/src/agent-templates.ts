@@ -9,6 +9,7 @@ import type {
   UpdateActionTemplateInput,
   UpdateRoleTemplateInput,
 } from "@citadel/contracts";
+import { assertNoRawAgentAuthorityToken } from "@citadel/core";
 
 const FILENAME = "agent-templates.json";
 const DEFAULT_RUNTIME = "claude-code";
@@ -113,6 +114,9 @@ export async function updateRoleTemplate(
     const role = normalized.store.roles.find((entry) => entry.role === roleId);
     if (!role) throw new AgentTemplateNotFoundError(roleId);
     if (role.updatedAt !== input.updatedAt) throw new StaleAgentTemplateUpdatedAtError();
+    if (input.systemPrompt) {
+      assertNoRawAgentAuthorityToken(input.systemPrompt, { component: "roleTemplate.systemPrompt" });
+    }
     const next: StoredRole = {
       ...role,
       systemPrompt: input.systemPrompt ?? role.systemPrompt,

@@ -57,6 +57,7 @@ describe("SqliteStore", () => {
       { version: 20 },
       { version: 21 },
       { version: 22 },
+      { version: 23 },
     ]);
   });
 
@@ -263,7 +264,12 @@ describe("SqliteStore", () => {
     expect(store.query("SELECT kind, runtime_id FROM workspace_sessions WHERE id = 'sess_test'")).toEqual([
       { kind: "agent", runtime_id: "claude-code" },
     ]);
-    expect(store.listSessions("ws_test")).toMatchObject([{ id: "sess_test", transport: "connected" }]);
+    expect(store.listSessions("ws_test")).toMatchObject([
+      {
+        id: "sess_test",
+        transport: "connected",
+      },
+    ]);
     store.insertWorkspaceSession({
       id: "sess_terminal",
       kind: "terminal",

@@ -101,6 +101,7 @@ Issue-tracker providers may declare auto-transitions that fire on lifecycle even
 [ ] 5. Settings can validate a repository configuration before it is used by workspace flows. *Diagnosis is delivered via `make doctor` and `GET /api/doctor` (see Verification below); gating of workspace flows on a failing doctor report is a deferred follow-up.*
 [ ] 6. Settings can export or reveal the config source for advanced users.
 [ ] 7. Future API-backed providers can manage API keys through provider-specific settings.
+[ ] 8. Agent settings include one global base system prompt that applies across all agent runtimes. It is used alone for freestyle sessions and prepended to specialized role prompts.
 
 ## Verification
 
@@ -125,7 +126,7 @@ Sections:
 
 - **Overview** — readiness counters (providers, agents, terminal, repos, MCP).
 - **Providers** — see Provider Category Model above.
-- **Agents** — runtime health/capabilities plus the five predefined role/action templates. Custom agent CRUD is not exposed in v1.
+- **Agents** — one global base system prompt, runtime health/capabilities, and the five predefined role/action templates. Custom agent CRUD is not exposed in v1.
 - **Terminal** — the singular terminal profile from `config.terminal`; plain shell is configured here, not as an agent runtime.
 - **Repositories** — register repos, remove tracking, and deep-link to per-repo settings.
 - **MCP** — local-first MCP toggle visibility plus a JSON client configuration example.

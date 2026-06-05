@@ -120,6 +120,14 @@ export function sessionFromRow(row: Record<string, unknown>): WorkspaceSession {
     // every legacy row as its own tab — matches pre-migration ordering.
     tabId: row.tab_id ? asString(row, "tab_id") : asString(row, "id"),
     runtimeSessionId: row.runtime_session_id ? asString(row, "runtime_session_id") : null,
+    systemPromptSources: row.system_prompt_sources
+      ? (jsonArray(row, "system_prompt_sources") as WorkspaceSession["systemPromptSources"])
+      : null,
+    systemPromptDelivery: jsonObject<WorkspaceSession["systemPromptDelivery"]>(row, "system_prompt_delivery"),
+    systemPromptLastDelivery: jsonObject<WorkspaceSession["systemPromptLastDelivery"]>(
+      row,
+      "system_prompt_last_delivery",
+    ),
     role: row.role ? (asString(row, "role") as WorkspaceSession["role"]) : null,
     actionId: row.action_id ? asString(row, "action_id") : null,
     managed: Number(row.managed ?? 0) === 1,
