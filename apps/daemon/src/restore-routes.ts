@@ -102,6 +102,7 @@ export function registerRestoreRoutes(app: express.Express, deps: Deps) {
           runtimeId: candidate.runtimeId,
           displayName: candidate.displayName,
           resumeRuntimeSessionId: candidate.runtimeSessionId,
+          resumeSourceSessionId: candidate.id,
           // Inherit the source row's tab slot so the cockpit places the
           // restored conversation back where it lived before. Fallback to the
           // source row id keeps ordering stable for legacy rows whose tab_id

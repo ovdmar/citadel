@@ -2,6 +2,7 @@ import type { CitadelConfig } from "@citadel/config";
 import { CreateAgentSessionInputSchema, CreateTerminalSessionInputSchema } from "@citadel/contracts";
 import type { OperationService } from "@citadel/operations";
 import type express from "express";
+import { resolveCreateAgentSessionInputFromTemplates } from "./agent-session-template-resolver.js";
 
 type AsyncRoute = (
   handler: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>,
@@ -25,7 +26,8 @@ export function registerAgentSessionRoutes(app: express.Express, deps: Deps) {
   app.post(
     "/api/agent-sessions",
     asyncRoute(async (req, res) => {
-      const input = CreateAgentSessionInputSchema.parse(req.body);
+      const parsed = CreateAgentSessionInputSchema.parse(req.body);
+      const input = await resolveCreateAgentSessionInputFromTemplates(config, parsed);
       const runtime = config.agentRuntimes.find((candidate) => candidate.id === input.runtimeId);
       if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
       const session = await operations.createAgentSession(input, {

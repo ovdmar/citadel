@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { resolveRuntimeLaunchProfile, runtimeLaunchOptionCapabilities } from "./launch-profile.js";
+import {
+  renderSystemPromptArgv,
+  resolveRuntimeLaunchProfile,
+  runtimeLaunchOptionCapabilities,
+} from "./launch-profile.js";
 
 describe("runtime launch profiles", () => {
   const runtime = {
@@ -18,6 +22,7 @@ describe("runtime launch profiles", () => {
       modelArgv: { argv: ["-m", "{value}"] },
       effortArgv: { argv: ["-c", "model_reasoning_effort={value}"] },
       contextArgv: { argv: ["-c", "model_context_window={value}"] },
+      systemPromptArgv: { argv: ["-c", "developer_instructions={value}"], valueEncoding: "toml-string" as const },
     },
   };
 
@@ -45,6 +50,7 @@ describe("runtime launch profiles", () => {
     ]);
     expect(profile.launchWarnings).toEqual([]);
     expect(profile.capabilities.checkedAt).toBe("2026-01-01T00:00:00.000Z");
+    expect(profile.capabilities.supportsSystemPromptArgv).toBe(true);
   });
 
   it("falls back from unavailable or deprecated models and records warnings", () => {
@@ -75,8 +81,31 @@ describe("runtime launch profiles", () => {
       runtimeId: "pi",
       models: [],
       defaultModel: null,
+      supportsSystemPromptArgv: false,
       stale: false,
       reason: "static_fallback",
     });
+  });
+
+  it("maps a system prompt to native argv with raw and toml-string encodings", () => {
+    expect(
+      renderSystemPromptArgv(
+        { argv: ["--append-system-prompt", "{value}"], valueEncoding: "raw" },
+        "Use Citadel tools.",
+      ),
+    ).toEqual(["--append-system-prompt", "Use Citadel tools."]);
+
+    expect(
+      renderSystemPromptArgv(
+        { argv: ["-c", "developer_instructions={value}"], valueEncoding: "toml-string" },
+        'Use "Citadel" tools.\nBackslash: \\',
+      ),
+    ).toEqual(["-c", 'developer_instructions="Use \\"Citadel\\" tools.\\nBackslash: \\\\"']);
+  });
+
+  it("reports fallback capability when no systemPromptArgv mapping exists", () => {
+    expect(runtimeLaunchOptionCapabilities({ id: "cursor-agent", launchOptions: {} }).supportsSystemPromptArgv).toBe(
+      false,
+    );
   });
 });

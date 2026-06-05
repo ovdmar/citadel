@@ -5,6 +5,7 @@ import {
   UpdateActionTemplateInputSchema,
   UpdateRoleTemplateInputSchema,
 } from "@citadel/contracts";
+import { LaunchTextValidationError, assertNoRawAgentAuthorityToken } from "@citadel/core";
 import type express from "express";
 import {
   AgentTemplateNotFoundError,
@@ -37,6 +38,9 @@ export function registerAgentTemplateRoutes(input: { app: express.Express; confi
         .json({ error: "invalid_input", detail: role.success ? body.error?.message : role.error.message });
     }
     try {
+      if (body.data.systemPrompt) {
+        assertNoRawAgentAuthorityToken(body.data.systemPrompt, { component: "roleTemplate.systemPrompt" });
+      }
       const updated = await updateRoleTemplate(config.dataDir, role.data, body.data, templateDefaults());
       emit("agent-templates.updated", { role: updated.role });
       res.json({ role: updated });
@@ -88,6 +92,9 @@ export function registerAgentTemplateRoutes(input: { app: express.Express; confi
 }
 
 function mapTemplateError(error: unknown, res: express.Response) {
+  if (error instanceof LaunchTextValidationError) {
+    return res.status(400).json({ error: error.code, component: error.component });
+  }
   if (error instanceof StaleAgentTemplateUpdatedAtError) return res.status(409).json({ error: "stale_updated_at" });
   if (error instanceof AgentTemplateNotFoundError) return res.status(404).json({ error: "agent_template_not_found" });
   throw error;

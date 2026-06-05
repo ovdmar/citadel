@@ -32,6 +32,11 @@ import {
   submitPrompt,
   tmuxSocketNameForWorkspace,
 } from "@citadel/terminal";
+import {
+  type CreateAgentSessionOperationInput,
+  renderSystemPromptFallbackMessage,
+  resolveSystemPromptLaunch,
+} from "./system-prompt-launch.js";
 import { executionTargetCwd } from "./workspace-layout.js";
 
 const CODEX_STATE_DB_LOCKED = /(?:database is locked|failed to initialize state runtime)/i;
@@ -63,6 +68,7 @@ export type CreateAgentSessionDeps = {
   store: SqliteStore;
   terminal?: TerminalProfile | undefined;
   dataDir?: string;
+  baseSystemPrompt?: string;
   activity: (
     type: string,
     source: ActivityEvent["source"],
@@ -95,7 +101,7 @@ const DEFAULT_TERMINAL_PROFILE: TerminalProfile = { displayName: "Terminal", com
 
 export async function createAgentSession(
   deps: CreateAgentSessionDeps,
-  input: CreateAgentSessionInput,
+  input: CreateAgentSessionOperationInput,
   runtime: RuntimeDescriptor,
   options: { activitySource?: ActivityEvent["source"] } = {},
 ): Promise<AgentSession> {
@@ -130,13 +136,28 @@ export async function createAgentSession(
     },
     settings: input.launchSettings,
   });
-  const runtimeArgs = [...launchProfile.args];
+  const systemPromptLaunch = resolveSystemPromptLaunch({
+    store,
+    workspaceId: workspace.id,
+    runtimeId: input.runtimeId,
+    resumeRuntimeSessionId: input.resumeRuntimeSessionId,
+    resumeSourceSessionId: input.resumeSourceSessionId,
+    baseSystemPrompt: deps.baseSystemPrompt ?? "",
+    roleTemplatePrompt: input.roleTemplatePrompt,
+    callerPrompt: input.systemPrompt,
+    mode: input.systemPromptMode,
+    runtimeArgs: launchProfile.args,
+    launchWarnings: launchProfile.launchWarnings,
+    systemPromptArgv: launchProfile.runtime.launchOptions?.systemPromptArgv,
+    operationInput: input,
+    runtime,
+  });
+  const systemPromptState = systemPromptLaunch.state;
+  const runtimeArgs = [...systemPromptLaunch.runtimeArgs];
+  const launchWarnings = [...systemPromptLaunch.launchWarnings];
+  const systemPromptDelivery = systemPromptLaunch.systemPromptDelivery;
+  const systemPromptLastDelivery = systemPromptLaunch.systemPromptLastDelivery;
   let promptForKeys: string | null = null;
-  if (input.prompt?.length) {
-    if (runtime.promptArg) runtimeArgs.push(runtime.promptArg, input.prompt);
-    else if (input.runtimeId === "codex") runtimeArgs.push(input.prompt);
-    else promptForKeys = input.prompt;
-  }
   // Pin a UUID at spawn time when the runtime supports it (claude-code's
   // --session-id), so we can resume this exact conversation across daemon/
   // machine restarts. Persisted on AgentSession.runtimeSessionId below.
@@ -154,6 +175,13 @@ export async function createAgentSession(
   } else if (runtime.sessionIdArg) {
     runtimeSessionId = randomUUID();
     runtimeArgs.push(runtime.sessionIdArg, runtimeSessionId);
+  }
+  if (systemPromptLaunch.shouldUseFallbackSystemPrompt && systemPromptState.value) {
+    promptForKeys = renderSystemPromptFallbackMessage(systemPromptState.value, input.prompt ?? null);
+  } else if (input.prompt?.length) {
+    if (runtime.promptArg) runtimeArgs.push(runtime.promptArg, input.prompt);
+    else if (input.runtimeId === "codex") runtimeArgs.push(input.prompt);
+    else promptForKeys = input.prompt;
   }
   // Shell-first three-step spawn:
   //  1) ensureTmuxSession  → pane PID is `bash -l` (the operator's shell).
@@ -265,11 +293,14 @@ export async function createAgentSession(
     // identical to ordering by createdAt.
     tabId: input.tabId ?? createId("tab"),
     runtimeSessionId,
-    launchWarnings: launchProfile.launchWarnings,
+    systemPromptSources: systemPromptState.sources,
+    systemPromptDelivery,
+    systemPromptLastDelivery,
+    launchWarnings,
     createdAt: now,
     updatedAt: now,
   };
-  store.insertSession(session);
+  store.insertSession({ ...session, systemPromptSnapshot: systemPromptState.snapshot });
   // Codex (and similarly runtimes without `sessionIdArg`) auto-generates its
   // UUID at spawn — we can't pin it via a CLI flag, so kick off a best-effort
   // background poll of the live Codex process / ~/.codex/sessions/ to find
@@ -310,7 +341,7 @@ export async function createAgentSession(
     workspace.id,
     launchedFromOperation,
   );
-  for (const warning of launchProfile.launchWarnings) {
+  for (const warning of launchWarnings) {
     deps.activity(
       "agent.launch_warning",
       activitySource,
