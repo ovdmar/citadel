@@ -319,18 +319,21 @@ export function Stage(props: {
   // the user's selection (e.g. right after starting a new agent). After a short
   // grace period (e.g. persisted ID from localStorage that no longer exists),
   // fall back to the first tab.
-  const pendingActive = Boolean(props.activeSessionId && !tabs.some((tab) => tab.session.id === props.activeSessionId));
+  const pendingActiveSessionId =
+    props.activeSessionId && !tabs.some((tab) => tab.session.id === props.activeSessionId)
+      ? props.activeSessionId
+      : null;
   const [graceExpired, setGraceExpired] = useState(false);
   useEffect(() => {
-    if (!pendingActive) {
-      if (graceExpired) setGraceExpired(false);
+    if (!pendingActiveSessionId) {
+      setGraceExpired(false);
       return;
     }
     setGraceExpired(false);
     const timeout = window.setTimeout(() => setGraceExpired(true), 4000);
     return () => window.clearTimeout(timeout);
-  }, [pendingActive, graceExpired]);
-  const keepPending = pendingActive && !graceExpired;
+  }, [pendingActiveSessionId]);
+  const keepPending = Boolean(pendingActiveSessionId) && !graceExpired;
   const activeSession = keepPending
     ? null
     : (tabs.find((tab) => tab.session.id === props.activeSessionId) ?? tabs[0] ?? null);
