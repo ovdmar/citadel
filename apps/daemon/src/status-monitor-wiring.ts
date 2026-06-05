@@ -4,6 +4,7 @@
 
 import { execFileSync } from "node:child_process";
 import type { CitadelConfig } from "@citadel/config";
+import type { TerminalSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import {
   type MonitorSessionState,
@@ -20,7 +21,7 @@ import { captureTmuxAsync, panePidProcess, tmuxPrefix, tmuxSessionExists } from 
 // stderr at 2 Hz. Key is `kind:message` so distinct error messages are still
 // reported (e.g., "ENOENT" vs "EACCES"). Cleared on process exit.
 const reportedMonitorFailures = new Set<string>();
-const DEFAULT_STATUS_MONITOR_INTERVAL_MS = 5000;
+export const DEFAULT_STATUS_MONITOR_INTERVAL_MS = 2000;
 const DEFAULT_PANE_CAPTURE_CACHE_MAX_AGE_MS = 10_000;
 
 function logMonitorFailureOnce(kind: string, err: unknown): void {
@@ -89,7 +90,7 @@ export function buildStatusMonitorDeps(
   return {
     now: () => new Date().toISOString(),
     listSessions: () => {
-      const sessions = store.listSessions();
+      const sessions = store.listWorkspaceSessions();
       sessionSocketByName.clear();
       sessionNameById.clear();
       for (const session of sessions) {
@@ -98,8 +99,12 @@ export function buildStatusMonitorDeps(
           sessionNameById.set(session.id, session.tmuxSessionName);
         }
       }
-      return sessions;
+      return sessions.filter((session) => session.kind === "agent");
     },
+    listTerminalSessions: () =>
+      store
+        .listWorkspaceSessions()
+        .filter((session): session is TerminalSession => session.kind === "terminal" && !session.closedAt),
     listWorkspaceIds: () => new Set(store.listWorkspaces().map((ws) => ws.id)),
     updateSession: (id, update) => {
       store.updateSessionStatus(id, {
@@ -259,7 +264,7 @@ export function buildStatusMonitorDeps(
     invalidatePaneCaptureForSession: (sessionId: string) => {
       const name =
         sessionNameById.get(sessionId) ??
-        store.listSessions().find((candidate) => candidate.id === sessionId)?.tmuxSessionName ??
+        store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId)?.tmuxSessionName ??
         null;
       if (name) captureCache.delete(name);
     },

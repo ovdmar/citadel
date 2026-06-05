@@ -65,6 +65,7 @@ import {
   workspaceCheckoutRows,
 } from "./navigator-workspace-cards.js";
 import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
+import type { AttentionSessionIds } from "./session-status-display.js";
 import { WorkspaceCard, lifecycleToneClass } from "./workspace-card.js";
 
 export { aggregateNavigatorTone };
@@ -97,6 +98,7 @@ export function Navigator(props: {
   onPickWorkspace: (workspace: Workspace) => void;
   onPickWorkspaceId: (workspaceId: string) => void;
   onPickTarget: (workspaceId: string, targetKey: string) => void;
+  unseenAttentionSessionIds?: AttentionSessionIds | undefined;
 }) {
   const location = useLocation();
   const path = location.pathname;
@@ -220,6 +222,7 @@ export function Navigator(props: {
     props.prByWorkspaceId,
     props.checkouts,
     props.checkoutPrByWorkspaceId,
+    props.unseenAttentionSessionIds,
   );
   const running = runningCount(props.sessions);
 
@@ -328,6 +331,7 @@ export function Navigator(props: {
                   pullRequest={checkoutPullRequest({ checkout, workspacePullRequest, checkoutPrState })}
                   active={activeWorkspace && props.activeTargetKey === targetKey}
                   onSelect={() => props.onPickTarget(workspace.id, targetKey)}
+                  unseenAttentionSessionIds={props.unseenAttentionSessionIds}
                 />
               );
             })}
@@ -374,6 +378,7 @@ export function Navigator(props: {
             diffOverride={
               aggregateRow ? { additions: prAggregate.additions, deletions: prAggregate.deletions } : undefined
             }
+            unseenAttentionSessionIds={props.unseenAttentionSessionIds}
             allowRootDrop={structuredHome}
             rightControl={
               canHideMainWorkspace || canAttachCheckout || nested ? (
@@ -454,6 +459,7 @@ export function Navigator(props: {
                     pullRequest={checkoutPullRequest({ checkout, workspacePullRequest, checkoutPrState })}
                     active={activeWorkspace && props.activeTargetKey === targetKey}
                     onSelect={() => props.onPickTarget(workspace.id, targetKey)}
+                    unseenAttentionSessionIds={props.unseenAttentionSessionIds}
                   />
                 );
               })}
@@ -479,6 +485,7 @@ export function Navigator(props: {
       collapsedWorkspaceCheckouts,
       toggleWorkspaceCheckouts,
       hideMainWorkspace,
+      props.unseenAttentionSessionIds,
     ],
   );
   const flatEntries = useMemo<WorkspaceEntry[]>(

@@ -6,7 +6,8 @@ import type {
   WorkspaceSession,
   WorktreeCheckout,
 } from "@citadel/contracts";
-import { type LifecycleTone, deriveWorkspaceLifecycleTone } from "@citadel/core";
+import type { LifecycleTone } from "@citadel/core";
+import { type AttentionSessionIds, deriveWorkspaceDisplayLifecycleTone } from "./session-status-display.js";
 import { type ApprovalTone, type PrTone, approvalToneFor, prToneFor } from "./workspace-card.js";
 
 export type CheckoutPrStateByWorkspace = Map<string, Map<string, WorkspacePrStateEntry>>;
@@ -52,6 +53,7 @@ export function aggregateNavigatorTone(
   prByWorkspaceId?: Map<string, PullRequestSummary | null>,
   checkouts: WorktreeCheckout[] = [],
   checkoutPrByWorkspaceId?: CheckoutPrStateByWorkspace,
+  unseenAttentionSessionIds?: AttentionSessionIds,
 ): LifecycleTone {
   let aggregate: LifecycleTone = "never-started";
   for (const workspace of workspaces) {
@@ -66,9 +68,10 @@ export function aggregateNavigatorTone(
       });
       if (prAggregate.prTone === "conflicting" || prAggregate.prTone === "failing") return "attention";
     }
-    const tone = deriveWorkspaceLifecycleTone({
+    const tone = deriveWorkspaceDisplayLifecycleTone({
       sessions: sessions.filter((session) => session.workspaceId === workspace.id),
       pullRequest: prByWorkspaceId?.get(workspace.id) ?? null,
+      unseenAttentionSessionIds,
     });
     if (tone === "attention") return "attention";
     if (tone === "running") aggregate = "running";

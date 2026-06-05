@@ -169,6 +169,8 @@ export function useEventRefresh() {
     events.addEventListener("checkout.gate.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("ticket.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("agent.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("terminal.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("workspace-session.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("scheduled-agent.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("scheduled-agent.run", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("namespace.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));

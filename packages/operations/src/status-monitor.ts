@@ -1,7 +1,8 @@
-import type { AgentSession } from "@citadel/contracts";
+import type { AgentSession, TerminalSession, WorkspaceSession } from "@citadel/contracts";
 import type {
   ActiveElapsedTimerProbe,
   ObservationContext,
+  PaneObservation,
   PaneObservationResult,
   RuntimeStatusAdapter,
   SessionAdapterState,
@@ -44,7 +45,7 @@ export interface MonitorSessionState {
 // Foreground commands that signal "pane is at a shell prompt, not running
 // the agent". When the foreground transitions from the agent binary to one
 // of these, the status flips to `idle`.
-const SHELL_BINARIES = new Set(["bash", "sh", "zsh", "fish", "dash"]);
+const SHELL_BINARIES = new Set(["bash", "sh", "zsh", "fish", "dash", "nu", "pwsh", "powershell"]);
 const RUNNING_TO_IDLE_DEBOUNCE_TICKS = 2;
 const CODEX_OPTIMISTIC_SEND_IDLE_SUPPRESS_MS = 10_000;
 const CODEX_REASON_STABLE_TIMEOUT = "pane:codex:stable_timeout";
@@ -61,6 +62,13 @@ const CODEX_FRESH_CAPTURE_STATUSES = new Set<AgentSession["status"]>([
 // tmux load — the journal already shows `[status-monitor] panes failed`
 // surfacing under sustained list-panes pressure.
 const TMUX_MISSING_DEBOUNCE_TICKS = 3;
+const PANE_OBSERVATIONS = new Set<PaneObservation>([
+  "running",
+  "idle",
+  "waiting_for_input",
+  "rate_limited",
+  "usage_limited",
+]);
 
 export interface PaneCaptureOptions {
   maxAgeMs?: number;
@@ -73,6 +81,7 @@ export interface PaneCaptureOptions {
 export interface MonitorTickDeps {
   now: () => string;
   listSessions: () => AgentSession[];
+  listTerminalSessions?: () => TerminalSession[];
   listWorkspaceIds: () => Set<string>;
   updateSession: (sessionId: string, update: StatusUpdate) => void;
   deleteSession: (sessionId: string) => void;
@@ -134,7 +143,7 @@ export interface MonitorTickResult {
   deletedSessions: number;
 }
 
-const TERMINAL_STATUSES = new Set<AgentSession["status"]>(["stopped", "failed"]);
+const FINAL_STATUSES = new Set<WorkspaceSession["status"]>(["stopped", "failed"]);
 
 function makeMonitorState(): MonitorSessionState {
   return {
@@ -144,6 +153,36 @@ function makeMonitorState(): MonitorSessionState {
     consecutiveShellTicks: 0,
     consecutiveMissingTicks: 0,
   };
+}
+
+function foregroundCommand(command: string): string {
+  return (command.split(/[\\/]/).pop() ?? command).trim().toLowerCase();
+}
+
+function isShellForeground(command: string): boolean {
+  return SHELL_BINARIES.has(foregroundCommand(command));
+}
+
+function isPaneObservation(value: string): value is PaneObservation {
+  return PANE_OBSERVATIONS.has(value as PaneObservation);
+}
+
+function updateTerminalSessionStatus(
+  deps: MonitorTickDeps,
+  session: TerminalSession,
+  next: Pick<WorkspaceSession, "status" | "statusReason">,
+): boolean {
+  const reason = next.statusReason ?? null;
+  const statusChanged = session.status !== next.status;
+  const reasonChanged = (session.statusReason ?? null) !== reason;
+  if (!statusChanged && !reasonChanged) return false;
+  deps.updateSession(session.id, {
+    status: next.status,
+    reason,
+    ...(statusChanged ? { lastStatusAt: deps.now() } : {}),
+  });
+  deps.emit("terminal.updated", { workspaceId: session.workspaceId, sessionId: session.id });
+  return true;
 }
 
 function shouldSuppressCodexOptimisticIdle(
@@ -175,10 +214,13 @@ export async function runStatusMonitorTick(
   deps: MonitorTickDeps,
   opts: MonitorTickOptions,
 ): Promise<MonitorTickResult> {
-  // Terminal tabs are no longer passed into the agent monitor; status-based
-  // terminal rows are filtered out defensively for old fixtures.
-  const sessions = deps.listSessions().filter((s) => !TERMINAL_STATUSES.has(s.status));
-  if (sessions.length === 0) return { sessionsTouched: 0, deletedSessions: 0 };
+  // Terminal tabs have their own foreground-command derivation below; agent
+  // runtime adapters still only receive agent rows.
+  const sessions = deps.listSessions().filter((s) => !FINAL_STATUSES.has(s.status));
+  const terminalSessions = (deps.listTerminalSessions?.() ?? []).filter(
+    (s) => !s.closedAt && !FINAL_STATUSES.has(s.status),
+  );
+  if (sessions.length === 0 && terminalSessions.length === 0) return { sessionsTouched: 0, deletedSessions: 0 };
 
   const workspaceIds = deps.listWorkspaceIds();
   const tmuxActivities = deps.tmuxActivities();
@@ -193,6 +235,52 @@ export async function runStatusMonitorTick(
 
   let sessionsTouched = 0;
   let deletedSessions = 0;
+
+  for (const session of terminalSessions) {
+    if (!session.tmuxSessionName) continue;
+    let monitorState = deps.monitorStates.get(session.id);
+    if (!monitorState) {
+      monitorState = makeMonitorState();
+      deps.monitorStates.set(session.id, monitorState);
+    }
+
+    const pane = panesByName
+      ? (panesByName.get(session.tmuxSessionName) ?? null)
+      : deps.panePidProcess(session.tmuxSessionName);
+
+    let tmuxAlive: boolean;
+    if (pane !== null) {
+      tmuxAlive = true;
+      monitorState.consecutiveMissingTicks = 0;
+    } else if (deps.hasTmuxSession?.(session.tmuxSessionName) === true) {
+      tmuxAlive = true;
+      monitorState.consecutiveMissingTicks = 0;
+    } else {
+      monitorState.consecutiveMissingTicks += 1;
+      tmuxAlive = monitorState.consecutiveMissingTicks < TMUX_MISSING_DEBOUNCE_TICKS;
+    }
+
+    if (!tmuxAlive) {
+      if (!workspaceIds.has(session.workspaceId)) {
+        deps.deleteSession(session.id);
+        deletedSessions += 1;
+        deps.monitorStates.delete(session.id);
+        continue;
+      }
+      const reason = opts.source === "boot" ? "daemon_restart_indeterminate" : "tmux_missing";
+      if (updateTerminalSessionStatus(deps, session, { status: "unknown", statusReason: reason })) {
+        sessionsTouched += 1;
+      }
+      continue;
+    }
+
+    if (!pane) continue;
+    const nextStatus: TerminalSession["status"] = isShellForeground(pane.command) ? "idle" : "running";
+    const nextReason = nextStatus === "idle" ? "shell_foreground" : "foreground_command";
+    if (updateTerminalSessionStatus(deps, session, { status: nextStatus, statusReason: nextReason })) {
+      sessionsTouched += 1;
+    }
+  }
 
   for (const session of sessions) {
     if (!session.tmuxSessionName) continue;
@@ -344,7 +432,7 @@ export async function runStatusMonitorTick(
         reason: opts.source === "boot" ? "daemon_restart_indeterminate" : "tmux_missing",
       });
       monitorState.consecutiveShellTicks = 0;
-    } else if (pane && SHELL_BINARIES.has(pane.command)) {
+    } else if (pane && isShellForeground(pane.command)) {
       if (activeElapsedTimer?.advanced) {
         monitorState.consecutiveShellTicks = 0;
         signals.push({ type: "pane_observation", observed: "running", reason: REASON_ELAPSED_TIMER });
@@ -400,7 +488,7 @@ export async function runStatusMonitorTick(
             reason: typeof observation === "string" ? null : observation.reason,
             lastStatusAt: session.lastStatusAt,
           });
-        } else if (typeof observation === "string") {
+        } else if (typeof observation === "string" && isPaneObservation(observation)) {
           signals.push({ type: "pane_observation", observed: observation });
         } else {
           signals.push({ type: "pane_observation", observed: observation.observed, reason: observation.reason });
