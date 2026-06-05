@@ -655,7 +655,7 @@ export function Cockpit() {
           </>
         ) : null}
       </div>
-      <BottomBar activeWorkspace={activeWorkspace} activeSession={activeSession} sessions={activeWorkspaceSessions} />
+      <BottomBar activeSession={activeSession} sessions={activeWorkspaceAllSessions} />
       {commandOpen ? (
         <CommandPalette
           workspaces={navigatorWorkspaces}
