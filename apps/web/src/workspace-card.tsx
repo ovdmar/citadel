@@ -97,6 +97,7 @@ export function WorkspaceCard(
     prToneOverride?: PrTone | undefined;
     diffOverride?: { additions: number | null; deletions: number | null } | undefined;
     unseenAttentionSessionIds?: AttentionSessionIds | undefined;
+    onDropFocus?: (() => void) | undefined;
   },
 ) {
   const { workspace, pullRequest } = props;
@@ -374,7 +375,13 @@ export function WorkspaceCard(
           <X size={11} />
         </button>
       )}
-      {confirmDrop ? <DropWorkspaceDialog workspace={workspace} onClose={() => setConfirmDrop(false)} /> : null}
+      {confirmDrop ? (
+        <DropWorkspaceDialog
+          workspace={workspace}
+          onDropFocus={props.onDropFocus}
+          onClose={() => setConfirmDrop(false)}
+        />
+      ) : null}
       {showNamespaceMenu ? (
         <NamespacePickerDialog
           workspace={workspace}
@@ -540,7 +547,11 @@ type DropCheckResult = {
   error?: string | null;
 };
 
-function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void }) {
+function DropWorkspaceDialog(props: {
+  workspace: Workspace;
+  onDropFocus?: (() => void) | undefined;
+  onClose: () => void;
+}) {
   useOverlayPresent();
   const optimistic = useOptimisticRemove();
   const toast = useToast();
@@ -592,6 +603,7 @@ function DropWorkspaceDialog(props: { workspace: Workspace; onClose: () => void 
     // active-workspace selector and the navigator) subtracts blacklisted
     // ids on read, so the workspace disappears for every consumer.
     onMutate: () => {
+      props.onDropFocus?.();
       optimistic.add(workspaceId);
       const previous = queryClient.getQueryData<StateResponse>(["state"]);
       if (previous) {
