@@ -230,11 +230,94 @@ describe("workspace layout migration planner", () => {
     expect(fs.existsSync(path.join(worktreeParent, ".citadel-migrate-ws_1.json"))).toBe(true);
     expect(store.listWorkspaceCheckouts("ws_1")).toMatchObject([{ id: "co_1", path: finalCheckoutPath }]);
     expect(store.listWorkspaces().find((entry) => entry.id === "ws_1")).toMatchObject({
+      repoId: null,
+      kind: "root",
+      mode: "structured",
+      branch: "home",
       path: worktreePath,
       rootPath: worktreePath,
     });
+    expect(store.getWorkspaceManager("ws_1")).toMatchObject({ pauseState: "running" });
     expect(git(finalCheckoutPath, ["status", "--porcelain=v1"])).toContain("?? dirty.txt");
     expect(git(finalCheckoutPath, ["rev-parse", "--show-toplevel"])).toBe(finalCheckoutPath);
+  });
+
+  it("promotes already-moved legacy workspace rows to structured Homes", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-layout-promote-"));
+    dirs.push(dir);
+    const store = new SqliteStore(path.join(dir, "citadel.sqlite"));
+    store.migrate();
+    const timestamp = "2026-06-01T00:00:00.000Z";
+    const workspacePath = path.join(dir, "feature");
+    const checkoutPath = path.join(workspacePath, "repo");
+    fs.mkdirSync(checkoutPath, { recursive: true });
+    store.insertRepo({
+      id: "repo_1",
+      name: "Repo",
+      rootPath: path.join(dir, "repo"),
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(dir, "worktrees"),
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      deployHookCommand: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      archivedAt: null,
+    });
+    store.insertWorkspace({
+      ...workspace,
+      id: "ws_moved",
+      repoId: "repo_1",
+      path: workspacePath,
+      rootPath: workspacePath,
+      mode: "freestyle",
+    });
+    store.insertWorkspaceCheckout({
+      ...checkout,
+      id: "co_moved",
+      workspaceId: "ws_moved",
+      repoId: "repo_1",
+      path: checkoutPath,
+    });
+    store.insertSession({
+      id: "sess_legacy",
+      kind: "agent",
+      workspaceId: "ws_moved",
+      runtimeId: "test-agent",
+      displayName: "Agent",
+      targetType: "worktree_checkout",
+      checkoutId: null,
+      status: "stopped",
+      statusReason: null,
+      lastStatusAt: timestamp,
+      lastOutputAt: null,
+      endedAt: null,
+      exitCode: null,
+      transport: "disconnected",
+      tmuxSessionName: null,
+      tmuxSessionId: null,
+      tmuxSocketName: null,
+      tabId: "tab_legacy",
+      runtimeSessionId: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    });
+
+    const result = new OperationService(store).runWorkspaceLayoutMigrations();
+
+    expect(result).toMatchObject({ migrated: 1, skipped: [] });
+    expect(store.listWorkspaces().find((entry) => entry.id === "ws_moved")).toMatchObject({
+      repoId: null,
+      kind: "root",
+      mode: "structured",
+      branch: "home",
+      path: workspacePath,
+      rootPath: workspacePath,
+    });
+    expect(store.getWorkspaceManager("ws_moved")).toMatchObject({ pauseState: "running" });
+    expect(store.listSessions("ws_moved")).toMatchObject([{ id: "sess_legacy", checkoutId: "co_moved" }]);
   });
 });
 

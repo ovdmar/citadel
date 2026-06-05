@@ -117,8 +117,8 @@ const ACTIVE_OPERATION_STATUSES = new Set(["queued", "running"]);
 
 export function hasWorkspaceLayoutMigrationCandidates(store: SqliteStore): boolean {
   return store.listWorkspaces().some((workspace) => {
-    if (!workspace.repoId || workspace.kind !== "worktree" || workspace.source === "imported") return false;
-    return store.listWorkspaceCheckouts(workspace.id).some((checkout) => samePath(checkout.path, workspace.path));
+    if (!isLegacyWorktreeWorkspace(workspace)) return false;
+    return store.listWorkspaceCheckouts(workspace.id).length > 0;
   });
 }
 
@@ -147,6 +147,21 @@ export function runWorkspaceLayoutMigrations(input: {
       continue;
     }
     summary.considered += 1;
+    if (candidate.kind === "promote_only") {
+      try {
+        const legacyCheckout = singleCheckoutForLegacySessions(candidate.checkouts);
+        input.store.promoteLegacyWorkspaceToStructuredHome(workspace.id, {
+          checkoutIdForLegacySessions: legacyCheckout?.id ?? null,
+        });
+        summary.migrated += 1;
+        input.log?.("info", `Promoted legacy workspace ${workspace.name} to structured Home`);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        summary.skipped.push({ workspaceId: workspace.id, reason: "migration_failed", detail });
+        input.log?.("error", `Workspace layout migration failed for ${workspace.name}: ${detail}`);
+      }
+      continue;
+    }
     const { repo, checkout, hasActiveSessionOrOperation } = candidate;
     const checkoutName = checkoutNameForMigration(workspace, checkout);
     const plan = planWorkspaceLayoutMigration({
@@ -183,6 +198,9 @@ export function runWorkspaceLayoutMigrations(input: {
             input.store.updateWorkspaceCheckoutLayout(updatedCheckout.id, {
               name: updatedCheckout.name,
               path: updatedCheckout.path,
+            });
+            input.store.promoteLegacyWorkspaceToStructuredHome(updatedWorkspace.id, {
+              checkoutIdForLegacySessions: updatedCheckout.id,
             });
           },
         },
@@ -221,9 +239,15 @@ export function executeWorkspaceLayoutMigration(input: {
 type Candidate =
   | {
       skip: false;
+      kind: "move_and_promote";
       repo: Repo;
       checkout: WorktreeCheckout;
       hasActiveSessionOrOperation: boolean;
+    }
+  | {
+      skip: false;
+      kind: "promote_only";
+      checkouts: WorktreeCheckout[];
     }
   | {
       skip: true;
@@ -238,22 +262,31 @@ function migrationCandidate(
   operations: Array<{ workspaceId: string | null; status: string }>,
   workspace: Workspace,
 ): Candidate {
-  if (!workspace.repoId || workspace.kind !== "worktree" || workspace.source === "imported") {
+  if (!isLegacyWorktreeWorkspace(workspace)) {
     return { skip: true, counted: false, reason: "not_citadel_worktree" };
   }
   const repo = repos.find((candidate) => candidate.id === workspace.repoId);
   const checkouts = store.listWorkspaceCheckouts(workspace.id);
   const checkout = checkouts.find((candidate) => samePath(candidate.path, workspace.path));
   if (!repo || !checkout) {
-    const counted = checkouts.length > 0;
-    return { skip: true, counted, reason: counted ? "already_migrated" : "not_citadel_worktree" };
+    if (checkouts.length > 0) return { skip: false, kind: "promote_only", checkouts };
+    return { skip: true, counted: false, reason: "not_citadel_worktree" };
   }
   const hasActiveSessionOrOperation =
     store.listWorkspaceSessions(workspace.id).some((session) => ACTIVE_SESSION_STATUSES.has(session.status)) ||
     operations.some(
       (operation) => operation.workspaceId === workspace.id && ACTIVE_OPERATION_STATUSES.has(operation.status),
     );
-  return { skip: false, repo, checkout, hasActiveSessionOrOperation };
+  return { skip: false, kind: "move_and_promote", repo, checkout, hasActiveSessionOrOperation };
+}
+
+function isLegacyWorktreeWorkspace(workspace: Workspace): boolean {
+  return Boolean(workspace.repoId) && workspace.kind === "worktree" && workspace.source !== "imported";
+}
+
+function singleCheckoutForLegacySessions(checkouts: WorktreeCheckout[]): WorktreeCheckout | null {
+  const live = checkouts.filter((checkout) => !checkout.archivedAt);
+  return live.length === 1 ? (live[0] ?? null) : null;
 }
 
 function writeManifest(

@@ -266,10 +266,7 @@ describe("Navigator checkout aggregation", () => {
     });
 
     expect(container.querySelector(".nav-checkout-card")).toBeNull();
-    expect(container.querySelector(".workspace-card-branch")?.textContent).toBe(
-      "1 repo · 1 worktree · 1 PR · 0 sessions",
-    );
-    expect(container.querySelector(".workspace-card-branch")?.getAttribute("title")).toBe("Workspace aggregate");
+    expect(container.querySelector(".workspace-card-branch")).toBeNull();
     expect(container.querySelector(".workspace-card-agent")?.className).toContain("tone-conflicting");
     expect(container.querySelector(".workspace-card-diff")?.textContent).toBe("+25-9");
     expect(container.querySelector(".approval-pill")?.getAttribute("title")).toBe("Approval: changes");
