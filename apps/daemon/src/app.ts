@@ -14,7 +14,6 @@ import {
   executionTargetCwd,
 } from "@citadel/operations";
 import {
-  type CollectGitHubVersionControlSummaryDeps,
   collectGitHubCiRunLog,
   collectGitHubCiRuns,
   collectGitHubVersionControlSummary,
@@ -50,6 +49,7 @@ import {
   resolveRepoFullNameFromWorkspaces,
   wireGhQuota,
 } from "./gh-quota-wiring.js";
+import { createGitHubProviderStateService } from "./github-provider-state.js";
 import { wireJiraAutoTransitions } from "./jira-auto-transitions.js";
 import { registerJiraRoutes } from "./jira-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
@@ -76,7 +76,6 @@ import { startDaemonStatusMonitor } from "./status-monitor-wiring.js";
 import { startTerminalReaper } from "./terminal-reaper.js";
 import { buildRespawnTmux } from "./terminal-routes-helpers.js";
 import { createUiActivityTracker } from "./ui-activity.js";
-import { fetchVersionControlGated } from "./vc-fetch-gated.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
 import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
 import { registerWorkspacesPrStateRoute } from "./workspaces-pr-state-route.js";
@@ -186,15 +185,19 @@ export async function createDaemonApp(input: {
   };
   const ghAutomationEnabled = automatedGhEnabled();
   server.on("close", () => ghQuota.stop());
-  const gatedVcDeps = {
+  const githubState = createGitHubProviderStateService({
     store,
     scheduler: ghQuota.scheduler,
     providerCache,
-    collectVc: (path: string, deps?: CollectGitHubVersionControlSummaryDeps) =>
-      providers.collectGitHubVersionControlSummary(path, deps),
+    collectVersionControl: (path, deps) => providers.collectGitHubVersionControlSummary(path, deps),
+    collectCi: (path) => providers.collectGitHubCiRuns(path),
     resolveRepoFullName,
     cachedProvider: <T>(k: string, l: () => T | Promise<T>, t?: number) => cachedProvider(k, l, t),
-  };
+    cachedProviderSwr: <T>(k: string, l: () => T | Promise<T>, t?: number) => cachedProviderSwr(k, l, t),
+    ghAutomationEnabled,
+    hasViewers: ghQuota.hasViewers,
+    msSinceLastViewer: ghQuota.msSinceLastViewer,
+  });
 
   app.use(cors());
   app.use((req, res, next) => {
@@ -288,7 +291,9 @@ export async function createDaemonApp(input: {
     ghAutomationEnabled,
     resolveRepoFullName,
     fetchVersionControl: (workspace, repo, cacheKey) =>
-      fetchVersionControlGated(gatedVcDeps, workspace, repo, cacheKey),
+      githubState.fetchVersionControl(workspace, repo, cacheKey, { intent: "interactive" }),
+    fetchCi: (workspace, repo) =>
+      githubState.fetchCi(workspace, repo, { intent: "interactive", staleWhileRevalidate: true }),
   });
   registerCockpitSummaryRoute({ app, buildWorkspaceCockpitSummary, asyncRoute });
 
@@ -483,6 +488,7 @@ export async function createDaemonApp(input: {
               import("@citadel/providers").then((mod) => mod.collectRuntimeUsage(provider)),
             listRuntimeHealth: () => listRuntimeHealth(config.agentRuntimes),
           },
+          github: githubState,
           hasFocusedWindow: () => uiActivity.hasFocusedWindow(),
         })
       : null;
@@ -643,10 +649,7 @@ export async function createDaemonApp(input: {
     // is a viewer-visible feature; consuming GitHub quota with nobody watching
     // is the largest pre-optimization quota sink.
     shouldRun: () => ghAutomationEnabled && (ghQuota.hasViewers() || ghQuota.msSinceLastViewer() <= 2 * 60_000),
-    providerCache,
-    scheduler: ghQuota.scheduler,
-    resolveRepoFullName,
-    cachedProvider,
+    github: githubState,
   });
   if (autoRecoveryMonitor) server.on("close", () => autoRecoveryMonitor.stop());
   const autoResume = startDaemonAutoResumeLoop(store, operations, config);

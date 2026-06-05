@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CitadelConfig } from "@citadel/config";
-import type { AgentRuntime, VersionControlSummary, Workspace, WorktreeCheckout } from "@citadel/contracts";
+import type { AgentRuntime, Repo, VersionControlSummary, Workspace, WorktreeCheckout } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProviderCache } from "./provider-cache.js";
@@ -69,6 +69,25 @@ function makeCheckout(id: string, overrides: Partial<WorktreeCheckout> = {}): Wo
   };
 }
 
+function makeRepo(id = "repo", overrides: Partial<Repo> = {}): Repo {
+  return {
+    id,
+    name: id,
+    rootPath: `/tmp/${id}`,
+    defaultBranch: "main",
+    defaultRemote: "origin",
+    worktreeParent: `/tmp/${id}/worktrees`,
+    setupHookIds: [],
+    teardownHookIds: [],
+    providerIds: ["github-gh"],
+    deployHookCommand: null,
+    createdAt: "2026-05-25T00:00:00Z",
+    updatedAt: "2026-05-25T00:00:00Z",
+    archivedAt: null,
+    ...overrides,
+  };
+}
+
 function makeRuntime(id: string, healthy = true): AgentRuntime {
   return {
     id,
@@ -94,11 +113,13 @@ function makeRuntime(id: string, healthy = true): AgentRuntime {
 function makeDeps(
   overrides: Partial<ProviderRefreshDeps> & {
     workspaces?: Workspace[];
+    repos?: Repo[];
     checkouts?: Record<string, WorktreeCheckout[]>;
     runtimes?: AgentRuntime[];
   },
 ) {
   const workspaces = overrides.workspaces ?? [makeWorkspace("w1")];
+  const repos = overrides.repos ?? [makeRepo()];
   const checkouts = overrides.checkouts ?? {};
   const runtimes = overrides.runtimes ?? [];
   const config = {
@@ -114,6 +135,7 @@ function makeDeps(
   } as unknown as CitadelConfig;
   const store = {
     listWorkspaces: () => workspaces,
+    listRepos: () => repos,
     listWorkspaceCheckouts: (workspaceId: string) => checkouts[workspaceId] ?? [],
   } as unknown as SqliteStore;
   const cache = createProviderCache({ dataDir: tempDataDir(), listLiveIds: () => workspaces.map((w) => w.id) });
@@ -206,6 +228,45 @@ describe("startProviderRefreshJob", () => {
     job.stop();
   });
 
+  it("delegates workspace GitHub refreshes to the shared state service when supplied", async () => {
+    const workspace = makeWorkspace("w1");
+    const repo = makeRepo();
+    const deps = makeDeps({ workspaces: [workspace], repos: [repo] });
+    const github = {
+      fetchVersionControl: vi.fn(async () => ({
+        providerId: "github-gh",
+        status: "healthy" as const,
+        reason: null,
+        checkedAt: new Date().toISOString(),
+        defaultBranch: null,
+        currentBranch: null,
+        remotes: [],
+        pullRequest: null,
+      })),
+      fetchCheckoutVersionControl: vi.fn(),
+      fetchCi: vi.fn(async () => ({
+        providerId: "github-gh",
+        status: "healthy" as const,
+        reason: null,
+        checkedAt: new Date().toISOString(),
+        runs: [],
+      })),
+    };
+    const job = startProviderRefreshJob({ ...deps, github, tickIntervalMs: 0, jitterMaxMs: 0 });
+    await job.runTickForTest();
+    expect(github.fetchVersionControl).toHaveBeenCalledWith(workspace, repo, "vc:w1:2026-05-25T00:00:00Z", {
+      intent: "automatic",
+    });
+    expect(github.fetchCi).toHaveBeenCalledWith(workspace, repo, {
+      cacheKey: "ci:w1:2026-05-25T00:00:00Z",
+      intent: "automatic",
+      ttlMs: 60_000,
+    });
+    expect(deps.providers.collectGitHubVersionControlSummary).not.toHaveBeenCalled();
+    expect(deps.providers.collectGitHubCiRuns).not.toHaveBeenCalled();
+    job.stop();
+  });
+
   it("refreshes VC summaries for active structured workspace checkouts", async () => {
     const deps = makeDeps({
       workspaces: [makeWorkspace("w1", { mode: "structured", kind: "root" })],
@@ -221,6 +282,52 @@ describe("startProviderRefreshJob", () => {
     expect(callPaths).toEqual(["/tmp/w1", "/tmp/w1/co_api"]);
     expect(deps.cache.get("vc:w1:checkout:co_api:2026-05-25T00:00:00Z")?.value).toBeDefined();
     expect(deps.cache.get("vc:w1:checkout:co_archived:2026-05-25T00:00:00Z")).toBeUndefined();
+    job.stop();
+  });
+
+  it("delegates checkout GitHub refreshes to the shared state service when supplied", async () => {
+    const workspace = makeWorkspace("w1", { mode: "structured", kind: "root" });
+    const checkout = makeCheckout("co_api");
+    const repo = makeRepo();
+    const deps = makeDeps({ workspaces: [workspace], repos: [repo], checkouts: { w1: [checkout] } });
+    const github = {
+      fetchVersionControl: vi.fn(async () => ({
+        providerId: "github-gh",
+        status: "healthy" as const,
+        reason: null,
+        checkedAt: new Date().toISOString(),
+        defaultBranch: null,
+        currentBranch: null,
+        remotes: [],
+        pullRequest: null,
+      })),
+      fetchCheckoutVersionControl: vi.fn(async () => ({
+        providerId: "github-gh",
+        status: "healthy" as const,
+        reason: null,
+        checkedAt: new Date().toISOString(),
+        defaultBranch: null,
+        currentBranch: null,
+        remotes: [],
+        pullRequest: null,
+      })),
+      fetchCi: vi.fn(async () => ({
+        providerId: "github-gh",
+        status: "healthy" as const,
+        reason: null,
+        checkedAt: new Date().toISOString(),
+        runs: [],
+      })),
+    };
+    const job = startProviderRefreshJob({ ...deps, github, tickIntervalMs: 0, jitterMaxMs: 0 });
+    await job.runTickForTest();
+    expect(github.fetchCheckoutVersionControl).toHaveBeenCalledWith(
+      workspace,
+      checkout,
+      repo,
+      "vc:w1:checkout:co_api:2026-05-25T00:00:00Z",
+      { intent: "automatic" },
+    );
     job.stop();
   });
 

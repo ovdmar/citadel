@@ -41,11 +41,17 @@ export type GatedVcFetchDeps = {
 
 export const VC_CACHE_TTL_MS = 90_000;
 
+export type FetchVersionControlGatedOptions = {
+  allowCollect?: boolean;
+  skipReason?: string;
+};
+
 export async function fetchVersionControlGated(
   deps: GatedVcFetchDeps,
   workspace: Workspace,
   repo: Repo,
   cacheKey: string,
+  options: FetchVersionControlGatedOptions = {},
 ): Promise<VersionControlSummary> {
   const snapshot = deps.store.getWorkspacePrSnapshot(workspace.id);
   const snapshotHeadSha = snapshot?.lastHeadSha ?? null;
@@ -97,6 +103,14 @@ export async function fetchVersionControlGated(
       if (cached) return cached;
       if (snapshot) return synthesizeVcFromSnapshot(workspace.path, repoFullName, snapshot, decision.reason);
     }
+  }
+
+  if (options.allowCollect === false) {
+    const cached = readAnyProviderValue<VersionControlSummary>(deps.providerCache, cacheKey);
+    if (cached) return cached;
+    if (snapshot)
+      return synthesizeVcFromSnapshot(workspace.path, repoFullName, snapshot, options.skipReason ?? "paused");
+    return synthesizePausedVc(workspace, repo, options.skipReason ?? "paused");
   }
 
   const inflightDeferred = globalKey ? deferred<PullRequestSummary>() : null;
@@ -282,6 +296,19 @@ function synthesizeVcFromSnapshot(
       headSha: snapshot.lastHeadSha,
     }),
     reason: `served from PR snapshot (${reason})`,
+  };
+}
+
+function synthesizePausedVc(workspace: Workspace, repo: Repo, reason: string): VersionControlSummary {
+  return {
+    providerId: "github-gh",
+    status: "unavailable",
+    reason,
+    defaultBranch: repo.defaultBranch || null,
+    currentBranch: workspace.branch || null,
+    remotes: [repo.defaultRemote || "origin"],
+    pullRequest: null,
+    checkedAt: new Date().toISOString(),
   };
 }
 
