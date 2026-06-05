@@ -188,6 +188,27 @@ describe("VoiceTargetRegistry", () => {
     expect(registered.insertText).toHaveBeenCalledWith("hello");
   });
 
+  it("resolves registered targets for focused descendant elements", () => {
+    const wrapper = document.createElement("section");
+    const editable = document.createElement("div");
+    editable.contentEditable = "true";
+    wrapper.appendChild(editable);
+    document.body.appendChild(wrapper);
+    const registry = new VoiceTargetRegistry();
+    const registered = {
+      kind: "registered" as const,
+      insertText: vi.fn(),
+      canAcceptVoiceCommit: () => true,
+    };
+    registry.register(wrapper, registered);
+
+    const resolved = registry.resolve(editable);
+    resolved?.insertText("inside");
+
+    expect(resolved?.kind).toBe("registered");
+    expect(registered.insertText).toHaveBeenCalledWith("inside");
+  });
+
   it("ignores disconnected registered targets", () => {
     const input = document.createElement("textarea");
     const registry = new VoiceTargetRegistry();
