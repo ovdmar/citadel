@@ -89,7 +89,6 @@ export function WorkspaceCard(
     branchTitle?: string | undefined;
     cardTitle?: string | undefined;
     displayTitle?: string;
-    titlePrefix?: string;
     onRename?: (name: string) => Promise<unknown> | unknown;
     renameLabel?: string;
     rightControl?: ReactNode;
@@ -313,7 +312,6 @@ export function WorkspaceCard(
                 }}
                 title={titleDisplay}
               >
-                {props.titlePrefix ? <span className="workspace-card-title-prefix">{props.titlePrefix} * </span> : null}
                 {workspace.issueKey ? <span className="workspace-card-issue">{workspace.issueKey}</span> : null}
                 {titleDisplay}
               </strong>

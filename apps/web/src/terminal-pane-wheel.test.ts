@@ -23,6 +23,7 @@ const xtermMocks = vi.hoisted(() => {
     options: Record<string, unknown>;
     focus = vi.fn();
     dispose = vi.fn();
+    refresh = vi.fn();
     selectAll = vi.fn();
     hasSelection = vi.fn(() => true);
     getSelection = vi.fn(() => "selected text");

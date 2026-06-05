@@ -9,7 +9,7 @@ import type {
   WorktreeCheckout,
 } from "@citadel/contracts";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { type ReactNode, createElement } from "react";
+import { type ReactNode, createElement, useState } from "react";
 import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -241,6 +241,46 @@ describe("aggregateNavigatorTone", () => {
 });
 
 describe("Navigator checkout aggregation", () => {
+  it("autoselects a newly attached worktree after creation", async () => {
+    const repo = makeRepo({ id: "repo_a" });
+    const workspace = makeWorkspace({
+      id: "ws_home",
+      repoId: null,
+      name: "Feature Home",
+      path: "/work/feature-home",
+      rootPath: "/work/feature-home",
+      branch: "home",
+      kind: "root",
+      mode: "structured",
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (String(input) !== "/api/workspaces/ws_home/checkouts") {
+        return Promise.reject(new Error(`unexpected fetch ${String(input)}`));
+      }
+      return Promise.resolve(jsonResponse({ workspaceId: "ws_home", checkoutId: "co_new" }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onPickTarget = vi.fn();
+    const onPickWorkspaceId = vi.fn();
+
+    const container = renderNavigator({
+      repos: [repo],
+      workspaces: [workspace],
+      onPickTarget,
+      onPickWorkspaceId,
+    });
+    await clickButtonByLabel(container, "Add worktree to Feature Home");
+    setInputByPlaceholder(container, "Optional", "Payments UI");
+    await clickButton(container, "Add worktree");
+
+    await waitFor(() =>
+      onPickTarget.mock.calls.some(
+        ([workspaceId, targetKey]) => workspaceId === "ws_home" && targetKey === "checkout:co_new",
+      ),
+    );
+    expect(onPickWorkspaceId).not.toHaveBeenCalled();
+  });
+
   it("renders hidden main-only checkout PR state on the parent workspace row", () => {
     const workspace = makeWorkspace({
       id: "ws_main",
@@ -339,6 +379,8 @@ function renderNavigator(overrides: {
   checkouts?: WorktreeCheckout[];
   prByWorkspaceId?: Map<string, PullRequestSummary | null>;
   checkoutPrByWorkspaceId?: CheckoutPrStateByWorkspace;
+  onPickTarget?: (workspaceId: string, targetKey: string) => void;
+  onPickWorkspaceId?: (workspaceId: string) => void;
 }) {
   const rootElement = document.createElement("div");
   document.body.appendChild(rootElement);
@@ -346,34 +388,89 @@ function renderNavigator(overrides: {
   roots.push(root);
   flushSync(() => {
     root.render(
-      createElement(
-        QueryClientProvider,
-        { client: queryClient },
-        createElement(Navigator, {
-          repos: overrides.repos ?? [],
-          workspaces: overrides.workspaces ?? [],
-          checkouts: overrides.checkouts ?? [],
-          sessions: [],
-          operations: [],
-          prByWorkspaceId: overrides.prByWorkspaceId ?? new Map(),
-          checkoutPrByWorkspaceId: overrides.checkoutPrByWorkspaceId ?? new Map(),
-          activeWorkspaceId: "",
-          activeTargetKey: "home",
-          runtimes: [makeRuntime()],
-          namespaces: [],
-          lastRepoId: undefined,
-          createWorkspaceOpen: false,
-          onOpenCreateWorkspace: () => undefined,
-          onCloseCreateWorkspace: () => undefined,
-          onCollapse: () => undefined,
-          onPickWorkspace: () => undefined,
-          onPickWorkspaceId: () => undefined,
-          onPickTarget: () => undefined,
-        }),
-      ),
+      createElement(QueryClientProvider, { client: queryClient }, createElement(NavigatorHarness, { overrides })),
     );
   });
   return rootElement;
+}
+
+function NavigatorHarness(props: {
+  overrides: {
+    repos?: Repo[];
+    workspaces?: Workspace[];
+    checkouts?: WorktreeCheckout[];
+    prByWorkspaceId?: Map<string, PullRequestSummary | null>;
+    checkoutPrByWorkspaceId?: CheckoutPrStateByWorkspace;
+    onPickTarget?: (workspaceId: string, targetKey: string) => void;
+    onPickWorkspaceId?: (workspaceId: string) => void;
+  };
+}) {
+  const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
+  const overrides = props.overrides;
+  return createElement(Navigator, {
+    repos: overrides.repos ?? [],
+    workspaces: overrides.workspaces ?? [],
+    checkouts: overrides.checkouts ?? [],
+    sessions: [],
+    operations: [],
+    prByWorkspaceId: overrides.prByWorkspaceId ?? new Map(),
+    checkoutPrByWorkspaceId: overrides.checkoutPrByWorkspaceId ?? new Map(),
+    activeWorkspaceId: "",
+    activeTargetKey: "home",
+    runtimes: [makeRuntime()],
+    namespaces: [],
+    lastRepoId: undefined,
+    createWorkspaceOpen,
+    onOpenCreateWorkspace: () => setCreateWorkspaceOpen(true),
+    onCloseCreateWorkspace: () => setCreateWorkspaceOpen(false),
+    onCollapse: () => undefined,
+    onPickWorkspace: () => undefined,
+    onPickWorkspaceId: overrides.onPickWorkspaceId ?? (() => undefined),
+    onPickTarget: overrides.onPickTarget ?? (() => undefined),
+  });
+}
+
+async function clickButton(container: HTMLElement, text: string) {
+  const button = Array.from(container.querySelectorAll("button")).find((candidate) =>
+    candidate.textContent?.includes(text),
+  );
+  expect(button).toBeTruthy();
+  flushSync(() => {
+    button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await flushPromises();
+}
+
+async function clickButtonByLabel(container: HTMLElement, label: string) {
+  const button = container.querySelector(`button[aria-label="${label}"]`);
+  expect(button).toBeTruthy();
+  flushSync(() => {
+    button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await flushPromises();
+}
+
+function setInputByPlaceholder(container: HTMLElement, placeholder: string, value: string) {
+  const input = Array.from(container.querySelectorAll("input")).find(
+    (candidate) => candidate.getAttribute("placeholder") === placeholder,
+  );
+  expect(input).toBeTruthy();
+  setInputValue(input as HTMLInputElement, value);
+  flushSync(() => {
+    input?.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (!setter) throw new Error("input value setter missing");
+  setter.call(input, value);
+}
+
+async function flushPromises() {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 async function waitFor(predicate: () => boolean) {

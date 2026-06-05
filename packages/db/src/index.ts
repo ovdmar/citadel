@@ -176,6 +176,7 @@ export class SqliteStore {
   insertNamespace = (n: Namespace) => namespaces.insertNamespace(this.database, n);
   updateNamespace = (id: string, p: Partial<Pick<Namespace, "name" | "color">>) =>
     namespaces.updateNamespace(this.database, id, p);
+  reorderNamespaces = (ids: readonly string[]) => namespaces.reorderNamespaces(this.database, ids);
   archiveNamespace = (id: string) => namespaces.archiveNamespace(this.database, id);
   restoreNamespace = (id: string, p?: { color?: string | null }) =>
     namespaces.restoreNamespace(this.database, id, p ?? {});

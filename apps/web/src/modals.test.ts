@@ -101,7 +101,8 @@ describe("CreateWorkspaceModal", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const container = renderCreateWorkspaceModal({ grouping: ["repo"], repos: [repo()] });
+    const onCreated = vi.fn();
+    const container = renderCreateWorkspaceModal({ grouping: ["repo"], repos: [repo()], onCreated });
 
     setInputByPlaceholder(container, "workspace-name", "Feature Home");
     clickCheckbox(container);
@@ -114,6 +115,12 @@ describe("CreateWorkspaceModal", () => {
     expect(body).toMatchObject({ repoId: "repo_1", source: "default_branch" });
     expect(body).not.toHaveProperty("name");
     expect(body).not.toHaveProperty("branch");
+    await waitFor(() =>
+      onCreated.mock.calls.some(
+        ([workspaceId, targetKey]) => workspaceId === "ws_new" && targetKey === "checkout:co_new",
+      ),
+    );
+    expect(onCreated).toHaveBeenCalledWith("ws_new", "checkout:co_new");
   });
 
   it("adds a worktree without launching an agent when opened from workspace Home", async () => {
@@ -134,7 +141,11 @@ describe("CreateWorkspaceModal", () => {
 
     setInputByPlaceholder(container, "Optional", "Payments UI");
     await clickButton(container, "Add worktree");
-    await waitFor(() => onCreated.mock.calls.some(([workspaceId]) => workspaceId === "ws_home"));
+    await waitFor(() =>
+      onCreated.mock.calls.some(
+        ([workspaceId, targetKey]) => workspaceId === "ws_home" && targetKey === "checkout:co_new",
+      ),
+    );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
@@ -149,6 +160,7 @@ describe("CreateWorkspaceModal", () => {
         }),
       }),
     );
+    expect(onCreated).toHaveBeenCalledWith("ws_home", "checkout:co_new");
   });
 
   it("adds worktrees for multiple selected repos when opened from workspace Home", async () => {
@@ -188,7 +200,7 @@ function renderCreateWorkspaceModal(overrides: {
   grouping?: Parameters<typeof CreateWorkspaceModal>[0]["grouping"];
   intent?: Parameters<typeof CreateWorkspaceModal>[0]["intent"];
   onClose?: () => void;
-  onCreated?: (workspaceId: string) => void;
+  onCreated?: (workspaceId: string, targetKey?: string) => void;
 }) {
   const rootElement = document.createElement("div");
   document.body.appendChild(rootElement);

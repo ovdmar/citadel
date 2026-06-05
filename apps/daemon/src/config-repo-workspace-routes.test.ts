@@ -221,7 +221,7 @@ describe("config/repo/workspace routes", () => {
     }
   });
 
-  it("generates unique names and branches for repeated blank structured worktree creates", async () => {
+  it("generates random-word names and unique branches for repeated blank structured worktree creates", async () => {
     const fixture = createFixtureBase(dirs);
     const { repoPath } = createGitFixtureWithRemote(fixture.config.dataDir);
     const { server } = await createDaemonApp(fixture);
@@ -265,7 +265,11 @@ describe("config/repo/workspace routes", () => {
       );
       expect(createdHomes.map((workspace) => workspace.name)).not.toContain("workspace");
       expect(new Set(createdHomes.map((workspace) => workspace.name)).size).toBe(2);
-      expect(createdCheckouts.map((checkout) => checkout.name)).toEqual(["citadel", "citadel"]);
+      expect(createdCheckouts.map((checkout) => checkout.name)).not.toContain("citadel");
+      expect(createdCheckouts.map((checkout) => checkout.name)).toEqual([
+        expect.stringMatching(/^[a-z]+-[a-z]+$/),
+        expect.stringMatching(/^[a-z]+-[a-z]+$/),
+      ]);
       expect(new Set(createdCheckouts.map((checkout) => checkout.branch)).size).toBe(2);
       expect(createdCheckouts.map((checkout) => checkout.name)).not.toEqual(
         createdHomes.map((workspace) => workspace.name),

@@ -96,6 +96,7 @@ export {
   CreateNamespaceInputSchema,
   NamespaceColorSchema,
   NamespaceSchema,
+  ReorderNamespacesInputSchema,
   UpdateNamespaceInputSchema,
 } from "./namespaces.js";
 
@@ -652,6 +653,7 @@ export type {
   AssignWorkspaceToNamespaceInput,
   CreateNamespaceInput,
   Namespace,
+  ReorderNamespacesInput,
   UpdateNamespaceInput,
 } from "./namespaces.js";
 export type DiffFile = z.infer<typeof DiffFileSchema>;

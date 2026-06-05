@@ -36,6 +36,7 @@ const xtermMocks = vi.hoisted(() => {
     writes: string[] = [];
     focus = vi.fn();
     dispose = vi.fn();
+    refresh = vi.fn();
     selectAll = vi.fn();
     hasSelection = vi.fn(() => true);
     getSelection = vi.fn(() => "selected text");
@@ -185,7 +186,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     );
   });
 
-  it("keeps retained hidden panes dormant until they become active", async () => {
+  it("keeps retained panes attached while inactive so pane switches do not replay", async () => {
     const rootElement = document.createElement("div");
     document.body.appendChild(rootElement);
     const root = createRoot(rootElement);
@@ -193,12 +194,25 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     const session = sessionFixture();
 
     await flushReactUpdate(async () => {
+      root.render(createElement(TerminalPane, { session, active: true }));
+    });
+
+    expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
+    expect(xtermMocks.FakeTerminal.instances).toHaveLength(1);
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    if (!ws) throw new Error("terminal rig missing");
+    await flushReactUpdate(async () => ws.open());
+    expect(getTerminalHandle("sess_1")?.canAcceptVoiceInput()).toBe(true);
+
+    await flushReactUpdate(async () => {
       root.render(createElement(TerminalPane, { session, active: false }));
     });
 
-    expect(TerminalPaneWebSocketMock.instances).toHaveLength(0);
-    expect(xtermMocks.FakeTerminal.instances).toHaveLength(0);
-    expect(getTerminalHandle("sess_1")).toBeDefined();
+    expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
+    expect(xtermMocks.FakeTerminal.instances).toHaveLength(1);
+    expect(TerminalPaneWebSocketMock.instances[0]?.readyState).toBe(TerminalPaneWebSocketMock.OPEN);
+    expect(xtermMocks.FakeTerminal.instances[0]?.dispose).not.toHaveBeenCalled();
+    expect(getTerminalHandle("sess_1")?.canAcceptVoiceInput()).toBe(false);
 
     await flushReactUpdate(async () => {
       root.render(createElement(TerminalPane, { session, active: true }));
@@ -206,13 +220,9 @@ describe("TerminalPane xterm WebSocket renderer", () => {
 
     expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
     expect(xtermMocks.FakeTerminal.instances).toHaveLength(1);
-
-    await flushReactUpdate(async () => {
-      root.render(createElement(TerminalPane, { session, active: false }));
-    });
-
-    expect(TerminalPaneWebSocketMock.instances[0]?.readyState).toBe(TerminalPaneWebSocketMock.CLOSED);
-    expect(xtermMocks.FakeTerminal.instances[0]?.dispose).toHaveBeenCalled();
+    expect(xtermMocks.FakeTerminal.instances[0]?.dispose).not.toHaveBeenCalled();
+    expect(getTerminalHandle("sess_1")).toBeDefined();
+    expect(getTerminalHandle("sess_1")?.canAcceptVoiceInput()).toBe(true);
   });
 
   it("writes WebSocket output to xterm and sends input over the same socket", async () => {
@@ -228,6 +238,37 @@ describe("TerminalPane xterm WebSocket renderer", () => {
 
     expect(term.writes.join("")).toBe("snapshot-chunk");
     expect(decodeBinarySent(ws.sent)).toContain("abc");
+  });
+
+  it("coalesces printable PTY-daemon input only while the socket is backed up", async () => {
+    vi.useFakeTimers();
+    await renderTerminal({ ...sessionFixture(), terminalBackend: "pty-daemon" });
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    if (!ws || !term) throw new Error("terminal rig missing");
+
+    await flushReactUpdate(async () => ws.open());
+    term.emitData("z");
+    expect(decodeBinarySent(ws.sent)).toEqual(["z"]);
+
+    ws.sent = [];
+    (ws as typeof ws & { bufferedAmount: number }).bufferedAmount = 1;
+    term.emitData("a");
+    term.emitData("b");
+
+    expect(decodeBinarySent(ws.sent)).toEqual([]);
+    await vi.advanceTimersByTimeAsync(5);
+    expect(decodeBinarySent(ws.sent)).toEqual(["ab"]);
+
+    ws.sent = [];
+    term.emitData("c");
+    term.emitData("\u0003");
+
+    expect(decodeBinarySent(ws.sent)).toEqual(["c\u0003"]);
+    expect(window.fetch).toHaveBeenCalledWith(
+      "/api/agent-sessions/sess_1/user-action",
+      expect.objectContaining({ body: JSON.stringify({ reason: "ctrl_c" }) }),
+    );
   });
 
   it("keeps raw input, control/meta shortcuts, paste, and Ctrl+C usable in the in-process xterm", async () => {

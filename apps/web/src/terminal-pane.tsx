@@ -8,6 +8,7 @@ import { matchShortcut } from "./shortcuts.js";
 import { writeTerminalBinary } from "./terminal-binary-writer.js";
 import { addTerminalResumeReconnectListeners } from "./terminal-resume-reconnect.js";
 import { postTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
+import { xtermTheme } from "./terminal-theme.js";
 import { readOverlayCount } from "./use-overlay-present.js";
 import { useResolvedTheme } from "./use-resolved-theme.js";
 
@@ -31,6 +32,7 @@ const TERMINAL_FAST_SCROLL_MULTIPLIER = 5;
 const TERMINAL_MAX_SCROLL_LINES_PER_MESSAGE = 200;
 const TERMINAL_AUTO_RETRY_LIMIT = 3;
 const TERMINAL_AUTO_RETRY_BACKOFF_MS = 5_000;
+const TERMINAL_PTY_INPUT_FLUSH_MS = 4;
 const AUTO_RETRYABLE_TERMINAL_ERRORS = new Set(["terminal_disconnected", "terminal_socket_error"]);
 const RUNTIME_MOUSE_EVENT_RUNTIMES = new Set(["claude-code"]);
 type TerminalPaneKey = typeof LINE_START_KEY | typeof LINE_END_KEY | typeof LINE_KILL_KEY;
@@ -62,6 +64,7 @@ export type TerminalHandle = {
 const REGISTRY = new Map<string, TerminalHandle>();
 const HOST_REGISTRY = new Map<string, HTMLElement>();
 const LISTENERS = new Set<(id: string) => void>();
+let defaultVoiceTerminalSessionId: string | null = null;
 
 function publish(id: string, handle: TerminalHandle | null) {
   if (handle) {
@@ -84,6 +87,15 @@ export function getFocusedTerminalSessionId(activeElement: Element | null = docu
     if (host === activeElement || host.contains(activeElement)) return sessionId;
   }
   return null;
+}
+
+export function setDefaultVoiceTerminalSession(sessionId: string | null | undefined): void {
+  defaultVoiceTerminalSessionId = sessionId ?? null;
+}
+
+export function getDefaultVoiceTerminalSessionId(): string | null {
+  if (!defaultVoiceTerminalSessionId) return null;
+  return REGISTRY.has(defaultVoiceTerminalSessionId) ? defaultVoiceTerminalSessionId : null;
 }
 
 export function subscribeTerminalHandle(listener: (sessionId: string) => void): () => void {
@@ -125,6 +137,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
   const encoderRef = useRef(new TextEncoder());
   const autoRetryAttemptsRef = useRef(0);
   const autoRetryTimerRef = useRef<number | null>(null);
+  const requestResizeRef = useRef<(() => void) | null>(null);
   const forwardWheelToRuntime = shouldForwardWheelToRuntime(props.session);
   themeRef.current = theme;
   const [connectionState, setConnectionState] = useState<"connecting" | "attached" | "disconnected">("connecting");
@@ -133,6 +146,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
   const activeRef = useRef(active);
   const connectionStateRef = useRef(connectionState);
   const errorRef = useRef(error);
+  const coalesceInput = props.session.terminalBackend === "pty-daemon";
   activeRef.current = active;
   connectionStateRef.current = connectionState;
   errorRef.current = error;
@@ -239,7 +253,6 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
 
   useEffect(() => {
     void generation;
-    if (!active) return;
     const host = containerRef.current;
     if (!host) return;
     HOST_REGISTRY.set(sessionId, host);
@@ -249,6 +262,8 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     let wheelRemainder = 0;
     let pendingWheelLines = 0;
     let lastSentResize: { cols: number; rows: number } | null = null;
+    let inputFlushTimer: number | null = null;
+    let pendingInput = "";
     const terminal = new Terminal({
       allowTransparency: false,
       convertEol: false,
@@ -278,6 +293,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
 
     const runResize = () => {
       if (disposed) return;
+      if (!activeRef.current) return;
       try {
         fit.fit();
       } catch {
@@ -300,11 +316,36 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
         runResize();
       });
     };
+    requestResizeRef.current = scheduleResize;
     const flushWheelScroll = () => {
       wheelFrame = null;
       const lines = pendingWheelLines;
       pendingWheelLines = 0;
       sendTerminalScroll(ws, lines);
+    };
+    const clearInputFlushTimer = () => {
+      if (inputFlushTimer !== null) {
+        window.clearTimeout(inputFlushTimer);
+        inputFlushTimer = null;
+      }
+    };
+    const flushInput = (suffix = "") => {
+      clearInputFlushTimer();
+      const data = pendingInput + suffix;
+      pendingInput = "";
+      if (data && ws.readyState === WebSocket.OPEN) ws.send(encoderRef.current.encode(data));
+    };
+    const sendInput = (data: string) => {
+      if (!shouldCoalesceTerminalInput(ws, data, coalesceInput)) {
+        flushInput(data);
+        return;
+      }
+      pendingInput += data;
+      if (inputFlushTimer !== null) return;
+      inputFlushTimer = window.setTimeout(() => {
+        inputFlushTimer = null;
+        flushInput();
+      }, TERMINAL_PTY_INPUT_FLUSH_MS);
     };
     const scheduleWheelScroll = () => {
       if (disposed || wheelFrame !== null) return;
@@ -348,7 +389,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     );
     const inputDisposable = terminal.onData((data) => {
       if (data.includes("\u0003")) recordTerminalUserAction(sessionId, "ctrl_c");
-      if (ws.readyState === WebSocket.OPEN) ws.send(encoderRef.current.encode(data));
+      if (ws.readyState === WebSocket.OPEN) sendInput(data);
     });
 
     ws.addEventListener("open", () => {
@@ -399,7 +440,9 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     });
     window.setTimeout(scheduleResize, 0);
     return () => {
+      flushInput();
       disposed = true;
+      clearInputFlushTimer();
       if (resizeFrame !== null) {
         window.cancelAnimationFrame(resizeFrame);
         resizeFrame = null;
@@ -417,12 +460,20 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
       window.removeEventListener("resize", scheduleResize);
       ws.close();
       terminal.dispose();
+      if (requestResizeRef.current === scheduleResize) requestResizeRef.current = null;
       if (terminalRef.current === terminal) terminalRef.current = null;
       if (fitRef.current === fit) fitRef.current = null;
       if (wsRef.current === ws) wsRef.current = null;
       if (HOST_REGISTRY.get(sessionId) === host) HOST_REGISTRY.delete(sessionId);
     };
-  }, [sessionId, generation, active, clearAutoRetryTimer, scheduleAutoRetry, forwardWheelToRuntime]);
+  }, [sessionId, generation, clearAutoRetryTimer, scheduleAutoRetry, forwardWheelToRuntime, coalesceInput]);
+
+  useEffect(() => {
+    if (!active) return;
+    requestResizeRef.current?.();
+    const terminal = terminalRef.current;
+    if (terminal) terminal.refresh(0, Math.max(0, terminal.rows - 1));
+  }, [active]);
 
   // Publish the live URL + reload/focus/recover callbacks so nav selection and
   // tab actions can drive state owned by TerminalPane.
@@ -631,6 +682,18 @@ function sendTerminalInput(ws: WebSocket, data: string): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
 }
 
+function shouldFlushTerminalInputImmediately(data: string): boolean {
+  for (let index = 0; index < data.length; index += 1) {
+    const code = data.charCodeAt(index);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
+function shouldCoalesceTerminalInput(ws: WebSocket, data: string, enabled: boolean): boolean {
+  return enabled && ws.bufferedAmount > 0 && !shouldFlushTerminalInputImmediately(data);
+}
+
 function sendTerminalKey(ws: WebSocket, key: TerminalPaneKey): void {
   sendTerminalControl(ws, { type: "key", key });
 }
@@ -712,58 +775,6 @@ export function parseTerminalSocketMessage(raw: unknown): TerminalSocketMessage 
     return null;
   }
 }
-
-function xtermTheme(theme: "light" | "dark") {
-  return theme === "light" ? LIGHT_XTERM_THEME : DARK_XTERM_THEME;
-}
-
-const LIGHT_XTERM_THEME = {
-  background: "#f5f1e8",
-  foreground: "#1a1814",
-  cursor: "#14171f",
-  cursorAccent: "#f5f1e8",
-  selectionBackground: "rgba(20, 23, 31, 0.18)",
-  black: "#1a1814",
-  red: "#9a1d12",
-  green: "#36680c",
-  yellow: "#825507",
-  blue: "#194d8e",
-  magenta: "#5f2a7a",
-  cyan: "#0a5d6e",
-  white: "#1a1814",
-  brightBlack: "#4a463e",
-  brightRed: "#b8281c",
-  brightGreen: "#4a8a14",
-  brightYellow: "#a06b0a",
-  brightBlue: "#2864ad",
-  brightMagenta: "#7d3a98",
-  brightCyan: "#0f7d92",
-  brightWhite: "#0c0a06",
-};
-
-const DARK_XTERM_THEME = {
-  background: "#1a1814",
-  foreground: "#e8e3d3",
-  cursor: "#f0ebdd",
-  cursorAccent: "#1a1814",
-  selectionBackground: "rgba(240, 235, 221, 0.18)",
-  black: "#1a1814",
-  red: "#ec7468",
-  green: "#a3d364",
-  yellow: "#e8b552",
-  blue: "#7eb5e4",
-  magenta: "#c896d4",
-  cyan: "#7dbedc",
-  white: "#e8e3d3",
-  brightBlack: "#948d7b",
-  brightRed: "#ff8d80",
-  brightGreen: "#bbe683",
-  brightYellow: "#f5c66a",
-  brightBlue: "#a2cef0",
-  brightMagenta: "#dcb1e4",
-  brightCyan: "#9ad0e8",
-  brightWhite: "#fffaef",
-};
 
 function recordTerminalClientEvent(sessionId: string, event: string, extra: Record<string, unknown> = {}) {
   fetch(`/api/agent-sessions/${encodeURIComponent(sessionId)}/terminal-client-event`, {
