@@ -477,11 +477,34 @@ describe("VoiceModeProvider", () => {
       voiceApi?.startDictation({ target: registeredTarget() });
     });
     FakeSpeechRecognition.instances[0]?.interim("route partial");
-    await flushReact(() => voiceApi?.stopDictation());
+    await flushReact(() => voiceApi?.stopDictation({ commitFinal: false }));
     vi.advanceTimersByTime(NO_RESULT_SILENCE_TIMEOUT_MS);
 
     expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Dictation needs attention");
     expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("route partial");
+    expect(FakeSpeechRecognition.instances[0]?.stop).toHaveBeenCalledOnce();
+  });
+
+  it("buffers pending final text and clears timers when route cleanup stops dictation", async () => {
+    const commit = vi.fn(() => ({ status: "submitted" as const, text: "route final" }));
+    const target: VoiceTarget = {
+      kind: "registered",
+      insertText: vi.fn(),
+      commit,
+      canAcceptVoiceCommit: () => true,
+    };
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation({ target });
+    });
+    FakeSpeechRecognition.instances[0]?.final("route final");
+    await flushReact(() => voiceApi?.stopDictation({ commitFinal: false }));
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+
+    expect(commit).not.toHaveBeenCalled();
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Dictation needs attention");
+    expect(document.querySelector(".voice-mode-buffer")?.textContent).toContain("route final");
     expect(FakeSpeechRecognition.instances[0]?.stop).toHaveBeenCalledOnce();
   });
 

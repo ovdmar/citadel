@@ -176,7 +176,7 @@ function ShellContent() {
   useEffect(() => {
     if (voiceRouteHrefRef.current === location.href) return;
     voiceRouteHrefRef.current = location.href;
-    stopDictation();
+    stopDictation({ commitFinal: false });
   }, [location.href, stopDictation]);
 
   // Shell-level keydown: cmd/ctrl+shift+s toggles the drawer from every route.

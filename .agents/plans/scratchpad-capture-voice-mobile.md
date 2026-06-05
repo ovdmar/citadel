@@ -239,6 +239,11 @@ No database schema changes. No DDL, no `schema_migrations` row, no foreign-key p
 - Verify first-use permission prompt, denied permission, previously granted permission, retry-from-click after shortcut failure, unavailable browser behavior, and insecure-context behavior in Chrome desktop, Safari desktop, iOS Safari/PWA, Android Chrome, and Firefox desktop.
 - Record the manual QA artifact in the implementation notes or PR description with browser/PWA matrix, date, shortcut result, supported/unavailable state, first-use prompt, denied permission, retry-from-click, and insecure-context outcome.
 
+### Implementation QA note — 2026-06-05 UTC
+
+- Automated coverage completed with mocked Web Speech API: `make check`, `make e2e`, and `make performance`.
+- Real-browser microphone permission/runtime QA was not executed in this local agent environment. The PR QA artifact must still record Chrome desktop, Chrome PWA/standalone, Safari desktop, Firefox desktop, iOS Safari/PWA, Android Chrome, and any hardware-keyboard mobile checks before merge.
+
 ### Assertions to add/change/tighten
 
 - Voice never commits interim transcript.

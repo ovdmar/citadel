@@ -33,11 +33,11 @@ type SpeechRecognitionWindow = Pick<Window, "isSecureContext"> & {
   webkitSpeechRecognition?: SpeechRecognitionConstructor;
 };
 
-export type SpeechRecognitionSupport =
+type SpeechRecognitionSupport =
   | { supported: true; Recognition: SpeechRecognitionConstructor }
   | { supported: false; reason: "insecure-context" | "unavailable" };
 
-export type SpeechRecognitionControllerState =
+type SpeechRecognitionControllerState =
   | { type: "idle" }
   | { type: "listening" }
   | { type: "unavailable"; reason: "insecure-context" | "unavailable" }
@@ -52,7 +52,7 @@ type TranscriptControllerState = Extract<
   { type: "permission-denied" | "capture-error" | "no-result-timeout" | "stopped" }
 >;
 
-export type SpeechRecognitionControllerOptions = {
+type SpeechRecognitionControllerOptions = {
   win?: Window;
   onState?: (state: SpeechRecognitionControllerState) => void;
   onInterim?: (text: string) => void;
@@ -128,9 +128,9 @@ export class SpeechRecognitionController {
     return true;
   }
 
-  stop(): void {
+  stop(options: { commitFinal?: boolean } = { commitFinal: true }): void {
     const finalTranscript = this.finalTranscript;
-    if (finalTranscript) {
+    if (finalTranscript && options.commitFinal !== false) {
       this.finalTranscript = "";
       this.clearInterimTranscript();
       this.clearTimers();

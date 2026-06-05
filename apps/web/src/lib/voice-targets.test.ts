@@ -65,16 +65,16 @@ describe("generic editable voice targets", () => {
     expect(latestState).toBe("before now");
   });
 
-  it("accepts text-like input controls including email inputs", () => {
-    const email = document.createElement("input");
-    email.type = "email";
-    email.value = "before";
-    document.body.appendChild(email);
+  it.each(["text", "search", "email", "tel", "url"])("accepts %s input controls", (type) => {
+    const input = document.createElement("input");
+    input.type = type;
+    input.value = "before";
+    document.body.appendChild(input);
 
-    const target = createGenericEditableVoiceTarget(email);
+    const target = createGenericEditableVoiceTarget(input);
     target?.insertText(" after");
 
-    expect(email.value).toBe("before after");
+    expect(input.value).toBe("before after");
   });
 
   it("does not create generic targets for contenteditable or disabled controls", () => {

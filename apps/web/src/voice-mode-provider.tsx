@@ -12,12 +12,16 @@ type StartDictationOptions = {
   terminalSessionId?: string;
 };
 
+type StopDictationOptions = {
+  commitFinal?: boolean;
+};
+
 export type VoiceModeContextValue = {
   autoSubmit: boolean;
   speechSupported: boolean;
   registerTarget: (element: HTMLElement, target: VoiceTarget) => () => void;
   startDictation: (options?: StartDictationOptions) => boolean;
-  stopDictation: () => void;
+  stopDictation: (options?: StopDictationOptions) => void;
   setAutoSubmit: (next: boolean) => void;
 };
 
@@ -143,8 +147,8 @@ export function VoiceModeProvider(props: { children: ReactNode }) {
     [commitFinal, setStatus],
   );
 
-  const stop = useCallback(() => {
-    controllerRef.current?.stop();
+  const stop = useCallback((options?: StopDictationOptions) => {
+    controllerRef.current?.stop({ commitFinal: options?.commitFinal ?? true });
     setInterim("");
   }, []);
 
@@ -197,7 +201,7 @@ export function VoiceModeProvider(props: { children: ReactNode }) {
         error={error}
         autoSubmit={autoSubmit}
         onAutoSubmitChange={setAutoSubmit}
-        onStop={stop}
+        onStop={() => stop()}
         onCancel={cancel}
         onRetry={retry}
       />
