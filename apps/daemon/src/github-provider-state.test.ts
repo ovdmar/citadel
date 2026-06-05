@@ -292,6 +292,31 @@ describe("GitHub provider state service", () => {
     });
   });
 
+  it("checkout version-control no-PR snapshots do not persist failing intended PR facts", async () => {
+    const checkout = makeCheckout();
+    const { service, checkoutPrUpdates } = makeService({
+      hasViewers: true,
+      checkout,
+      collectVersionControl: async () => ({ ...makeVc(), pullRequest: null }),
+    });
+
+    await service.fetchCheckoutVersionControl(
+      makeWorkspace({ kind: "root" }),
+      checkout,
+      makeRepo(),
+      "vc:w1:checkout:co_api:2026-05-25T00:00:00Z",
+      { intent: "interactive", force: true, staleWhileRevalidate: false },
+    );
+
+    expect(checkoutPrUpdates.at(-1)).toMatchObject({
+      number: null,
+      url: null,
+      checksGreen: null,
+      mergeStateStatus: null,
+      hasConflicts: null,
+    });
+  });
+
   it("checkout version-control serves the last checkout PR snapshot when automatic refreshes are paused", async () => {
     const checkout = makeCheckout({
       intendedPr: {

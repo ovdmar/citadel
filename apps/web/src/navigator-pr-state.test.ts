@@ -122,6 +122,42 @@ describe("checkout PR aggregation", () => {
     ).toBe("checkout");
   });
 
+  it("falls back to a matching workspace PR when checkout state has no full PR summary yet", () => {
+    const co = checkout("co_1", { intendedPr: intendedPr(12) });
+    const checkoutState = new Map([["co_1", makeEntry(null)]]);
+    expect(
+      checkoutPullRequest({
+        checkout: co,
+        workspacePullRequest: makePr(12, { title: "workspace" }),
+        checkoutPrState: checkoutState,
+      })?.title,
+    ).toBe("workspace");
+  });
+
+  it("treats provider-only intended PR records as no PR, not failing", () => {
+    const checkouts = [
+      checkout("co_pending_pr", {
+        intendedPr: {
+          provider: "github",
+          number: null,
+          url: null,
+          headSha: null,
+          baseRef: null,
+          fetchedAt: "2026-06-01T00:00:00.000Z",
+          checksGreen: false,
+          mergeStateStatus: "DIRTY",
+          hasConflicts: true,
+        },
+      }),
+    ];
+
+    expect(aggregateWorkspacePrState({ checkouts, workspacePullRequest: null, checkoutPrState: null })).toMatchObject({
+      prTone: "missing",
+      approval: "none",
+      prCount: 0,
+    });
+  });
+
   it("aggregates nested PR tone by attention priority and totals checkout diffs", () => {
     const checkouts = [
       checkout("co_ok", { intendedPr: intendedPr(1) }),

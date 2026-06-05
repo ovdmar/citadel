@@ -96,7 +96,7 @@ export function checkoutPullRequest(input: {
   checkoutPrState: Map<string, WorkspacePrStateEntry> | null | undefined;
 }): PullRequestSummary | null {
   const entry = input.checkoutPrState?.get(input.checkout.id);
-  if (entry) return entry.pullRequest ?? null;
+  if (entry?.pullRequest) return entry.pullRequest;
   return pullRequestMatchesCheckout(input.workspacePullRequest, input.checkout) ? input.workspacePullRequest : null;
 }
 
@@ -119,7 +119,7 @@ export function aggregateWorkspacePrState(input: {
       workspacePullRequest: input.workspacePullRequest,
       checkoutPrState: input.checkoutPrState,
     });
-    const hasExpectedPr = Boolean(pullRequest || checkout.intendedPr);
+    const hasExpectedPr = Boolean(pullRequest || hasIntendedPullRequestIdentity(checkout));
     if (hasExpectedPr) expectedPrCount += 1;
     tones.push(pullRequest ? prToneFor(pullRequest) : intendedPrTone(checkout));
     if (pullRequest) {
@@ -130,7 +130,7 @@ export function aggregateWorkspacePrState(input: {
         additions += pullRequest.additions ?? 0;
         deletions += pullRequest.deletions ?? 0;
       }
-    } else if (checkout.intendedPr) {
+    } else if (hasIntendedPullRequestIdentity(checkout)) {
       keys.add(checkout.intendedPr.url ?? `${checkout.id}:${checkout.intendedPr.number ?? "unknown"}`);
       approvals.push("pending");
     }
@@ -172,7 +172,7 @@ function aggregateApprovalTone(approvals: readonly ApprovalTone[], expectedPrCou
 }
 
 function intendedPrTone(checkout: WorktreeCheckout): PrTone {
-  if (!checkout.intendedPr) return "missing";
+  if (!hasIntendedPullRequestIdentity(checkout)) return "missing";
   if (checkout.intendedPr.hasConflicts) return "conflicting";
   if (checkout.intendedPr.checksGreen === false) return "failing";
   if (checkout.intendedPr.checksGreen === true) return "passing";
@@ -183,7 +183,16 @@ function pullRequestMatchesCheckout(
   pullRequest: PullRequestSummary | null,
   checkout: WorktreeCheckout,
 ): pullRequest is PullRequestSummary {
-  if (!pullRequest || !checkout.intendedPr) return false;
+  if (!pullRequest || !hasIntendedPullRequestIdentity(checkout)) return false;
   if (checkout.intendedPr.url && checkout.intendedPr.url === pullRequest.url) return true;
   return Boolean(checkout.intendedPr.number && checkout.intendedPr.number === pullRequest.number);
+}
+
+export function hasIntendedPullRequestIdentity(checkout: Pick<WorktreeCheckout, "intendedPr">): checkout is Pick<
+  WorktreeCheckout,
+  "intendedPr"
+> & {
+  intendedPr: NonNullable<WorktreeCheckout["intendedPr"]>;
+} {
+  return Boolean(checkout.intendedPr?.number || checkout.intendedPr?.url);
 }
