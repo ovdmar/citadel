@@ -9,7 +9,6 @@ import {
   FakeWebSocket as TerminalPaneWebSocketMock,
   clipboardDataMock,
   decodeBinarySent,
-  flushAnimationFrames,
   flushReact as flushReactUpdate,
   installAnimationFrameMock,
   installLocalStorageMock,
@@ -639,113 +638,6 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(ws.sent).toContain(JSON.stringify({ type: "input", data: "\n" }));
   });
 
-  it("captures wheel input and scrolls the terminal viewport instead of leaking prompt-history keys", async () => {
-    await renderTerminal();
-    const ws = TerminalPaneWebSocketMock.instances[0];
-    const host = document.querySelector(".terminal-xterm-host");
-    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
-    const downstream = vi.fn();
-    host.addEventListener("wheel", downstream);
-    await flushReactUpdate(async () => ws.open());
-
-    const event = new WheelEvent("wheel", { deltaY: -32, deltaMode: 0, bubbles: true, cancelable: true });
-
-    host.dispatchEvent(event);
-    await nextAnimationFrame();
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(downstream).not.toHaveBeenCalled();
-    expect(ws.sent).toContain(JSON.stringify({ type: "scroll", lines: -2 }));
-  });
-
-  it("coalesces trackpad wheel deltas into one scroll message per frame", async () => {
-    await renderTerminal();
-    const ws = TerminalPaneWebSocketMock.instances[0];
-    const host = document.querySelector(".terminal-xterm-host");
-    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
-    await flushReactUpdate(async () => ws.open());
-
-    host.dispatchEvent(new WheelEvent("wheel", { deltaY: -8, deltaMode: 0, bubbles: true, cancelable: true }));
-    host.dispatchEvent(new WheelEvent("wheel", { deltaY: -8, deltaMode: 0, bubbles: true, cancelable: true }));
-
-    expect(scrollMessages(ws)).toEqual([]);
-    await nextAnimationFrame();
-    expect(scrollMessages(ws)).toEqual([{ type: "scroll", lines: -1 }]);
-  });
-
-  it("maps line-mode wheel ticks to multiple terminal rows", async () => {
-    await renderTerminal();
-    const ws = TerminalPaneWebSocketMock.instances[0];
-    const host = document.querySelector(".terminal-xterm-host");
-    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
-    await flushReactUpdate(async () => ws.open());
-
-    host.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, deltaMode: 1, bubbles: true, cancelable: true }));
-    await nextAnimationFrame();
-
-    expect(scrollMessages(ws)).toEqual([{ type: "scroll", lines: -3 }]);
-  });
-
-  it("accelerates large wheel deltas and Alt fast-scrolls in larger chunks", async () => {
-    await renderTerminal();
-    const ws = TerminalPaneWebSocketMock.instances[0];
-    const host = document.querySelector(".terminal-xterm-host");
-    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
-    await flushReactUpdate(async () => ws.open());
-
-    const event = new WheelEvent("wheel", { deltaY: -72, deltaMode: 0, bubbles: true, cancelable: true });
-    Object.defineProperty(event, "altKey", { configurable: true, value: true });
-
-    host.dispatchEvent(event);
-    await nextAnimationFrame();
-
-    expect(scrollMessages(ws)).toEqual([{ type: "scroll", lines: -45 }]);
-  });
-
-  it("leaves shifted wheel events alone for browser horizontal-scroll gestures", async () => {
-    await renderTerminal();
-    const ws = TerminalPaneWebSocketMock.instances[0];
-    const host = document.querySelector(".terminal-xterm-host");
-    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
-    const downstream = vi.fn();
-    host.addEventListener("wheel", downstream);
-    await flushReactUpdate(async () => ws.open());
-
-    const event = new WheelEvent("wheel", { deltaY: -32, deltaMode: 0, bubbles: true, cancelable: true });
-    Object.defineProperty(event, "shiftKey", { configurable: true, value: true });
-
-    host.dispatchEvent(event);
-    await nextAnimationFrame();
-
-    expect(event.defaultPrevented).toBe(false);
-    expect(downstream).toHaveBeenCalledTimes(1);
-    expect(scrollMessages(ws)).toEqual([]);
-  });
-
-  it("lets Claude Code receive wheel input for fullscreen mouse scrolling", async () => {
-    await renderTerminal({
-      ...sessionFixture(),
-      kind: "agent",
-      runtimeId: "claude-code",
-      displayName: "Claude Code",
-    });
-    const ws = TerminalPaneWebSocketMock.instances[0];
-    const host = document.querySelector(".terminal-xterm-host");
-    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
-    const downstream = vi.fn();
-    host.addEventListener("wheel", downstream);
-    await flushReactUpdate(async () => ws.open());
-
-    const event = new WheelEvent("wheel", { deltaY: -32, deltaMode: 0, bubbles: true, cancelable: true });
-
-    host.dispatchEvent(event);
-    await nextAnimationFrame();
-
-    expect(event.defaultPrevented).toBe(false);
-    expect(downstream).toHaveBeenCalledTimes(1);
-    expect(scrollMessages(ws)).toEqual([]);
-  });
-
   it("does not reconnect the terminal when the resolved theme changes", async () => {
     applyThemePreference("dark");
     await renderTerminal();
@@ -774,18 +666,4 @@ async function renderTerminal(session: WorkspaceSession = sessionFixture()) {
     await settle();
   });
   return root;
-}
-
-async function nextAnimationFrame() {
-  flushAnimationFrames();
-  await settle();
-}
-
-function scrollMessages(ws: InstanceType<typeof TerminalPaneWebSocketMock>): Array<{ type: string; lines: number }> {
-  return ws.sent
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => JSON.parse(item) as { type?: string; lines?: unknown })
-    .filter(
-      (item): item is { type: string; lines: number } => item.type === "scroll" && typeof item.lines === "number",
-    );
 }

@@ -76,6 +76,7 @@ function makeAgent(over: Partial<AgentSession> = {}): AgentSession {
     displayName: "Claude",
     status: "running",
     transport: "connected",
+    terminalBackend: "tmux",
     tmuxSessionName: "citadel_a",
     tmuxSessionId: "$1",
     createdAt: "2026-05-26T00:00:00.000Z",

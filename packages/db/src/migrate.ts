@@ -26,7 +26,7 @@ type SessionTableName = "agent_sessions" | "workspace_sessions";
 // the new version below. Consumed by the doctor's database-schema check so
 // `make doctor` can flag an installed daemon whose code is newer than the
 // database it's been given.
-export const CURRENT_SCHEMA_VERSION = 20;
+export const CURRENT_SCHEMA_VERSION = 21;
 
 function tmuxSocketBase(): string {
   const configured = process.env.CITADEL_TMUX_SOCKET?.trim();
@@ -385,6 +385,16 @@ export function runMigrations(
   `);
   migrateManagerOrchestrationLedger(db, ensureColumn);
   migrateInternalReviewThreads(db);
+  ensureColumn("workspace_sessions", "terminal_backend", "TEXT NOT NULL DEFAULT 'tmux'");
+  ensureColumn("workspace_sessions", "pty_session_id", "TEXT");
+  ensureColumn("workspace_sessions", "pty_owner_socket", "TEXT");
+  ensureColumn("workspace_sessions", "pty_owner_pid", "INTEGER");
+  ensureColumn("workspace_sessions", "pty_last_seen_at", "TEXT");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_workspace_sessions_pty_session ON workspace_sessions(pty_session_id);
+    INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
+      (21, 'workspace-sessions-terminal-backend', datetime('now'));
+  `);
 }
 
 function tableExists(db: SqliteDatabase, tableName: string): boolean {
@@ -437,9 +447,14 @@ function workspaceSessionsTableSql() {
       ended_at TEXT,
       exit_code INTEGER,
       transport TEXT NOT NULL,
+      terminal_backend TEXT NOT NULL DEFAULT 'tmux',
       tmux_session_name TEXT,
       tmux_session_id TEXT,
       tmux_socket_name TEXT,
+      pty_session_id TEXT,
+      pty_owner_socket TEXT,
+      pty_owner_pid INTEGER,
+      pty_last_seen_at TEXT,
       tab_id TEXT,
       runtime_session_id TEXT,
       rate_limit_resume_attempts INTEGER NOT NULL DEFAULT 0,

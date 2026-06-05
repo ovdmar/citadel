@@ -82,6 +82,7 @@ describe("contract schemas", () => {
     expect(workspace.section).toBe("backlog");
     expect(session.kind).toBe("agent");
     expect(session.runtimeId).toBe("claude-code");
+    expect(session.terminalBackend).toBe("tmux");
     const terminal = WorkspaceSessionSchema.parse({
       id: "sess_terminal",
       kind: "terminal",
@@ -92,10 +93,17 @@ describe("contract schemas", () => {
       transport: "connected",
       tmuxSessionName: "citadel_terminal",
       tmuxSessionId: "$2",
+      terminalBackend: "pty-daemon",
+      ptySessionId: "pty_sess_terminal",
+      ptyOwnerSocket: "/tmp/citadel/pty.sock",
+      ptyOwnerPid: 1234,
+      ptyLastSeenAt: timestamp,
       createdAt: timestamp,
       updatedAt: timestamp,
     });
     expect(terminal.kind).toBe("terminal");
+    expect(terminal.terminalBackend).toBe("pty-daemon");
+    expect(terminal.ptySessionId).toBe("pty_sess_terminal");
     expect(WorkspaceSessionSchema.safeParse({ ...terminal, runtimeId: "codex" }).success).toBe(false);
   });
 

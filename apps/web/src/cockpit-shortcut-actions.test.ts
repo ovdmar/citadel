@@ -42,6 +42,7 @@ function makeSession(id: string, workspaceId: string): WorkspaceSession {
     status: "idle",
     statusReason: null,
     transport: "connected",
+    terminalBackend: "tmux",
     tmuxSessionName: "tmux",
     tmuxSessionId: "$0",
     createdAt: ts,

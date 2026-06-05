@@ -43,12 +43,13 @@
 ## Performance
 
 [~] 1. Citadel feels instant with 10-12 active workspaces across 2-3 repositories and remains usable at large operator loads (target: 50 workspaces with 3-5 agent sessions each, plus structured workspaces with multiple checkouts) without pre-spawning one terminal renderer process per session.
-[~] 2. Workspace switching remains responsive with long terminal buffers. The cockpit's terminal path reuses browser xterm.js panes over daemon WebSockets and disposable node-pty tmux attach viewers instead of forcing iframe or renderer-process startup on every cache miss. Terminal renderer stability includes opaque xterm surfaces and coalesced/de-duped active-pane resize controls so repaint or layout churn does not make the terminal unreadable.
+[~] 2. Workspace switching remains responsive with long terminal buffers. The cockpit's terminal path reuses browser xterm.js panes over daemon WebSockets. Legacy sessions may use disposable node-pty tmux attach viewers, while PTY-daemon sessions bridge directly to a long-running PTY owner process instead of forcing iframe or renderer-process startup on every cache miss. Terminal renderer stability includes opaque xterm surfaces and coalesced/de-duped active-pane resize controls so repaint or layout churn does not make the terminal unreadable.
 [ ] 3. Provider summaries load independently from the main workspace shell.
 [ ] 4. Slow provider commands appear as stale/degraded states.
-[ ] 5. Terminal scrollback is bounded or virtualized. The tmux server enforces a global `history-limit` (default 20000 lines per pane) so a forgotten session can't grow per-pane scrollback without bound.
-[~] 6. Normal navigation transfers only the terminal data needed for mounted views: tmux's current visible state on attach plus live PTY output while the pane is mounted.
-[ ] 7. Main happy paths have performance smoke coverage.
+[ ] 5. Terminal scrollback is bounded or virtualized. Legacy tmux sessions enforce a global `history-limit` (default 20000 lines per pane). PTY-daemon sessions enforce bounded raw replay plus bounded rendered screen/scrollback storage so a forgotten session cannot grow terminal memory without bound.
+[~] 6. Normal navigation transfers only the terminal data needed for mounted views: legacy tmux sessions send tmux's current visible state on attach plus live PTY output; PTY-daemon sessions send a bounded replay/snapshot plus live PTY output while the pane is mounted.
+[ ] 7. Main happy paths have performance smoke coverage. Terminal performance smoke compares direct `node-pty`, the legacy tmux attach bridge, the PTY-daemon WebSocket path, and browser typing latency under idle and high-output conditions.
+[ ] 7a. PTY-daemon terminal typing latency materially improves over the legacy tmux attach bridge before the backend becomes default. The local benchmark gate is p95 key echo latency at least 40% lower than tmux attach, no worse than 2x direct `node-pty`, browser typing latency under 50 ms p95 when idle, and under 100 ms p95 during high output on the benchmark host.
 [~] 8. Navigator/state payloads for structured workspaces are normalized enough that manager history, plan versions, and closed sessions do not force repeated full-terminal or full-artifact payload downloads.
 [ ] 9. Manager heartbeat/tick work is event-first with a low-frequency backstop and must not poll provider-heavy gates for inactive or paused workspaces without need.
 [ ] 10. Structured workspace state exposed to the web is normalized enough that manager actions/events, parsed delivery units, review artifacts, gate snapshots, durable facts, notifications, and closed-session history can render without downloading prompt bodies, transcripts, raw provider dumps, or full terminal buffers.
@@ -79,7 +80,7 @@
 [~] 2. Vitest tests must allocate temporary directories via `fs.mkdtempSync(path.join(os.tmpdir(), ...))` instead of relying on the default `CITADEL_DATA_DIR`.
 [~] 3. Playwright tests must run against a daemon started with an isolated `CITADEL_DATA_DIR` and ports that cannot collide with the operator's dev daemon (4010) or web (5175).
 [~] 4. Citadel provides `pnpm test:isolated` and `pnpm e2e:isolated` wrappers (see `scripts/dev/test-isolated.ts`). They allocate a fresh `CITADEL_DATA_DIR` under `os.tmpdir()`, randomise Playwright ports out of the dev range, and clean up after the run unless `CITADEL_TEST_KEEP=1`.
-[ ] 5. **Future:** a containerised e2e runner that pins Node, pnpm, `gh`, `git`, and tmux versions for fully reproducible CI. For now, the isolated scripts above are the documented entry point.
+[ ] 5. **Future:** a containerised e2e runner that pins Node, pnpm, `gh`, `git`, tmux, and native PTY dependencies for fully reproducible CI. For now, the isolated scripts above are the documented entry point.
 
 ---
 

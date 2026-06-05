@@ -488,15 +488,19 @@ function guidanceFor(code: string) {
   switch (code) {
     case "terminal_disconnected":
     case "terminal_socket_error":
-      return "The terminal WebSocket disconnected. Retry reconnects to the same tmux session.";
+      return "The terminal WebSocket disconnected. Retry reconnects to the same terminal session.";
     case "terminal_closed":
-      return "The terminal bridge closed. Retry reconnects if the underlying tmux session is still present.";
+      return "The terminal bridge closed. Retry reconnects if the underlying terminal session is still present.";
     case "tmux_session_missing":
       return "The tmux session this terminal would attach to no longer exists. Restart the agent session or reconcile.";
+    case "pty_owner_missing":
+      return "The PTY daemon is not reachable. Retry starts or adopts the terminal owner when the daemon is available.";
+    case "pty_session_missing":
+      return "The PTY daemon could not open or adopt this terminal session. Retry or recreate the terminal.";
     case "session_not_found":
       return "This Citadel session is not registered. Refresh or recreate it from the cockpit.";
     case "spawn_failed":
-      return "The terminal PTY failed to spawn. Verify tmux is installed and reachable from the daemon environment.";
+      return "The terminal PTY failed to spawn. Verify the terminal backend is installed and reachable from the daemon environment.";
     default:
       return "Open the terminal runbook below for diagnostic steps.";
   }
@@ -570,7 +574,12 @@ function isLineKillShortcut(key: string, event: KeyboardEvent): boolean {
 }
 
 function shouldForwardWheelToRuntime(session: WorkspaceSession): boolean {
-  return session.kind === "agent" && RUNTIME_MOUSE_EVENT_RUNTIMES.has(session.runtimeId);
+  return (
+    session.terminalBackend === "pty-daemon" ||
+    (session.terminalBackend === "tmux" &&
+      session.kind === "agent" &&
+      RUNTIME_MOUSE_EVENT_RUNTIMES.has(session.runtimeId))
+  );
 }
 
 function wheelDeltaToLines(

@@ -12,7 +12,7 @@ Citadel v2 is a local-first Linux daemon and operator web UI for managing reposi
 - `packages/config`: versioned config loading and validation.
 - `packages/db`: SQLite schema, migrations, repositories, and transaction helpers.
 - `packages/operations`: side-effectful workflows such as workspace create/remove and agent launch.
-- `packages/terminal`: tmux gateway and terminal WebSocket protocol.
+- `packages/terminal`: terminal backend adapters, legacy tmux gateway, PTY-daemon client, and terminal WebSocket protocol.
 - `packages/runtimes`: agent runtime provider contracts and built-in shell-backed adapters.
 - `packages/providers`: version-control, PR, CI, issue-tracker, usage, and notification providers.
 - `packages/hooks`: hook contracts, command execution, and event dispatch.
@@ -40,7 +40,7 @@ Providers are capability-first: version control, pull request/review, CI/checks,
 
 ## Workspace Session Terminal
 
-Shell-backed agent runtimes always launch through tmux. Citadel persists tmux session name/id and owns browser attach/reconnect through `packages/terminal`. The browser uses xterm.js for terminal rendering. REST/SSE carry state; WebSocket carries terminal I/O. Each browser attach creates a disposable node-pty `tmux attach-session` viewer, so interactive CLIs receive real PTY semantics while the durable tmux session survives browser refreshes and daemon viewer churn.
+Shell-backed agent runtimes launch through a backend-owned terminal session using the configured terminal profile as the base shell. Citadel persists terminal backend identity: legacy rows keep tmux session/socket identity, and PTY-daemon rows keep PTY session and owner socket identity. Browser attach/reconnect is owned by `packages/terminal`. The browser uses xterm.js for terminal rendering. REST/SSE carry state; WebSocket carries terminal I/O. Legacy browser attaches create a disposable node-pty `tmux attach-session` viewer; PTY-daemon attaches bridge to a long-running PTY owner process over a private Unix socket so the PTY survives Citadel daemon/browser restarts.
 
 ## UI Policy
 
@@ -48,7 +48,7 @@ The UI is an operator cockpit, not a landing page. It must be dense, scannable, 
 
 ## Deployment
 
-The first supported runtime is direct local Linux host install with pnpm, SQLite, tmux, git, and optional shell-backed provider CLIs. MCP is enabled by default for local/internal use and is not designed for public internet exposure in v2. Docker remote agents and daemon/client desktop architecture are later extension paths.
+The first supported runtime is direct local Linux host install with pnpm, SQLite, git, native PTY support, tmux as a migration/fallback dependency, and optional shell-backed provider CLIs. MCP is enabled by default for local/internal use and is not designed for public internet exposure in v2. Docker remote agents and daemon/client desktop architecture are later extension paths.
 
 ## Engineering Standards
 

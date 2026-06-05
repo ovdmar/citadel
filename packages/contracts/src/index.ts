@@ -42,6 +42,7 @@ export const AgentSessionStatusSchema = z.enum([
   "unknown",
 ]);
 export const TransportStatusSchema = z.enum(["disconnected", "connecting", "connected", "degraded"]);
+export const TerminalBackendSchema = z.enum(["tmux", "pty-daemon"]);
 export const OperationStatusSchema = z.enum(["queued", "running", "succeeded", "failed", "cancelled"]);
 
 export const RepoSchema = z.object({
@@ -152,12 +153,17 @@ const WorkspaceSessionBaseSchema = z.object({
   endedAt: z.string().nullable().optional(),
   exitCode: z.number().int().nullable().optional(),
   transport: TransportStatusSchema,
+  terminalBackend: TerminalBackendSchema.default("tmux"),
   tmuxSessionName: z.string().nullable(),
   tmuxSessionId: z.string().nullable(),
   // Tmux socket name that owns this pane. Persisted legacy rows are backfilled
   // to workspace-specific sockets; null/omitted still means the legacy daemon
   // socket from CITADEL_TMUX_SOCKET for in-memory/back-compat callers.
   tmuxSocketName: z.string().nullable().optional(),
+  ptySessionId: z.string().nullable().optional(),
+  ptyOwnerSocket: z.string().nullable().optional(),
+  ptyOwnerPid: z.number().int().nullable().optional(),
+  ptyLastSeenAt: z.string().nullable().optional(),
   // Stable per-tab identifier that survives across restore-spawn-restore
   // cycles. Generated fresh on first session create in a workspace; inherited
   // by every subsequent row that resumes the same conversation (the restored

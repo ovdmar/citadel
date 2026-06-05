@@ -141,6 +141,37 @@ describe("createAgentSession session-id wiring", () => {
     }
   }, 15_000);
 
+  it("creates feature-flagged PTY-daemon terminal rows without spawning tmux", async () => {
+    const previous = process.env.CITADEL_TERMINAL_BACKEND;
+    process.env.CITADEL_TERMINAL_BACKEND = "pty-daemon";
+    try {
+      const fixture = createGitFixture();
+      const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+      store.migrate();
+      const service = makeService(store);
+      const repo = service.registerRepo({ rootPath: fixture.repoPath });
+      const created = await service.createWorkspace({ repoId: repo.id, name: "terminal-pty", source: "scratch" });
+
+      const session = await service.createTerminalSession({ workspaceId: created.workspaceId });
+
+      expect(session).toMatchObject({
+        kind: "terminal",
+        runtimeId: null,
+        terminalBackend: "pty-daemon",
+        tmuxSessionName: null,
+        tmuxSessionId: null,
+        ptySessionId: session.id,
+      });
+      expect(store.listWorkspaceSessions(created.workspaceId).find((s) => s.id === session.id)).toMatchObject({
+        terminalBackend: "pty-daemon",
+        ptySessionId: session.id,
+      });
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(process.env, "CITADEL_TERMINAL_BACKEND");
+      else process.env.CITADEL_TERMINAL_BACKEND = previous;
+    }
+  });
+
   it("passes Codex initial prompts as positional argv instead of pasting into the TUI", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));

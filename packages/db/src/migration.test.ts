@@ -468,6 +468,37 @@ describe("tmux socket migration (version 13)", () => {
   });
 });
 
+describe("terminal backend migration (version 21)", () => {
+  it("adds terminal backend and nullable PTY owner columns to workspace_sessions", () => {
+    const dbPath = makeTempPath();
+    const store = new SqliteStore(dbPath);
+    store.migrate();
+    const db = (store as unknown as { database: DatabaseSync }).database;
+    const cols = db.prepare("PRAGMA table_info(workspace_sessions)").all() as Array<{
+      name: string;
+      type: string;
+      notnull: number;
+      dflt_value: string | null;
+    }>;
+    const byName = new Map(cols.map((column) => [column.name, column]));
+
+    expect(byName.get("terminal_backend")).toMatchObject({
+      type: "TEXT",
+      notnull: 1,
+      dflt_value: "'tmux'",
+    });
+    expect(byName.get("pty_session_id")).toMatchObject({ type: "TEXT", notnull: 0 });
+    expect(byName.get("pty_owner_socket")).toMatchObject({ type: "TEXT", notnull: 0 });
+    expect(byName.get("pty_owner_pid")).toMatchObject({ type: "INTEGER", notnull: 0 });
+    expect(byName.get("pty_last_seen_at")).toMatchObject({ type: "TEXT", notnull: 0 });
+
+    const migration = db.prepare("SELECT name FROM schema_migrations WHERE version = 21").get() as
+      | { name: string }
+      | undefined;
+    expect(migration?.name).toBe("workspace-sessions-terminal-backend");
+  });
+});
+
 describe("workspace_sessions migration (version 15)", () => {
   it("moves legacy agent_sessions rows into workspace_sessions and drops the old table", () => {
     const dbPath = makeTempPath();

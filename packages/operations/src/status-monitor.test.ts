@@ -31,6 +31,7 @@ function makeSession(over: Partial<AgentSession> = {}): AgentSession {
     endedAt: null,
     exitCode: null,
     transport: "disconnected",
+    terminalBackend: "tmux",
     tmuxSessionName: "citadel_test_1",
     tmuxSessionId: "$1",
     createdAt: "2026-05-26T18:59:00.000Z",

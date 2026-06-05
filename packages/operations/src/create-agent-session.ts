@@ -251,9 +251,14 @@ export async function createAgentSession(
     endedAt: null,
     exitCode: null,
     transport: "disconnected",
+    terminalBackend: "tmux",
     tmuxSessionName: tmux.tmuxSessionName,
     tmuxSessionId: tmux.tmuxSessionId,
     tmuxSocketName,
+    ptySessionId: null,
+    ptyOwnerSocket: null,
+    ptyOwnerPid: null,
+    ptyLastSeenAt: null,
     // Restore paths pass the source row's tabId here so the new session lands
     // in the same tab slot. Cold-start spawns generate a fresh time-encoded
     // id — the cockpit sorts tabs by tabId, so first-spawn ordering is
@@ -355,17 +360,21 @@ export async function createTerminalSession(
   const cwd = resolveSessionCwd({ workspace, checkout, targetType });
   const now = nowIso();
   const terminal = deps.terminal ?? DEFAULT_TERMINAL_PROFILE;
+  const terminalBackend = configuredTerminalBackend();
+  const sessionId = createId("sess");
   const sessionName = `citadel_${workspace.id}_${createId("term").slice(-8)}`;
   const tmuxSocketName = tmuxSocketNameForWorkspace(workspace.id);
-  let tmux: Awaited<ReturnType<typeof ensureTmuxSession>>;
-  try {
-    tmux = await ensureTmuxSession({ sessionName, cwd, terminal, socketName: tmuxSocketName });
-  } catch (error) {
-    killTmuxSession(sessionName, tmuxSocketName);
-    throw error;
+  let tmux: Awaited<ReturnType<typeof ensureTmuxSession>> | null = null;
+  if (terminalBackend === "tmux") {
+    try {
+      tmux = await ensureTmuxSession({ sessionName, cwd, terminal, socketName: tmuxSocketName });
+    } catch (error) {
+      killTmuxSession(sessionName, tmuxSocketName);
+      throw error;
+    }
   }
   const session: WorkspaceSession = {
-    id: createId("sess"),
+    id: sessionId,
     kind: "terminal",
     workspaceId: workspace.id,
     runtimeId: null,
@@ -379,9 +388,14 @@ export async function createTerminalSession(
     endedAt: null,
     exitCode: null,
     transport: "disconnected",
-    tmuxSessionName: tmux.tmuxSessionName,
-    tmuxSessionId: tmux.tmuxSessionId,
-    tmuxSocketName,
+    terminalBackend,
+    tmuxSessionName: tmux?.tmuxSessionName ?? null,
+    tmuxSessionId: tmux?.tmuxSessionId ?? null,
+    tmuxSocketName: tmux ? tmuxSocketName : null,
+    ptySessionId: terminalBackend === "pty-daemon" ? sessionId : null,
+    ptyOwnerSocket: null,
+    ptyOwnerPid: null,
+    ptyLastSeenAt: null,
     tabId: createId("tab"),
     runtimeSessionId: null,
     createdAt: now,
@@ -398,6 +412,10 @@ export async function createTerminalSession(
     null,
   );
   return session;
+}
+
+function configuredTerminalBackend(): WorkspaceSession["terminalBackend"] {
+  return process.env.CITADEL_TERMINAL_BACKEND === "pty-daemon" ? "pty-daemon" : "tmux";
 }
 
 async function launchRuntimeOnce(

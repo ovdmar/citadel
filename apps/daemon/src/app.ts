@@ -7,7 +7,12 @@ import type { CitadelConfig } from "@citadel/config";
 import { type AppEvent, HookActionSchema } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { mcpStatus } from "@citadel/mcp";
-import { type DiagnosticsLogger, OperationService, createDiagnosticsLogger } from "@citadel/operations";
+import {
+  type DiagnosticsLogger,
+  OperationService,
+  createDiagnosticsLogger,
+  executionTargetCwd,
+} from "@citadel/operations";
 import {
   type CollectGitHubVersionControlSummaryDeps,
   collectGitHubCiRunLog,
@@ -48,6 +53,7 @@ import { registerPrDiffRoute } from "./pr-diff-route.js";
 import { registerPrRoutes } from "./pr-routes.js";
 import { createProviderCache } from "./provider-cache.js";
 import { startProviderRefreshJob } from "./provider-refresh-job.js";
+import { ensurePtyDaemon } from "./pty-daemon-supervisor.js";
 import { wireRateLimitBackgroundResume } from "./rate-limit-background-resume.js";
 import { workspaceAppHookSample } from "./readiness.js";
 import { registerRepoDiscoveryRoutes } from "./repo-discovery-routes.js";
@@ -531,14 +537,57 @@ export async function createDaemonApp(input: {
     res.status(400).json({ error: message });
   });
 
-  // Primary terminal gateway: xterm.js in the browser talks to a short-lived
-  // node-pty `tmux attach-session` client. The tmux session remains durable;
-  // the browser viewer is disposable and killed on WebSocket close.
+  // Primary terminal gateway: xterm.js in the browser talks to a disposable
+  // websocket viewer. Tmux-backed sessions still attach through a short-lived
+  // node-pty `tmux attach-session` client; PTY-daemon sessions attach to the
+  // detached PTY owner over its private Unix socket.
   attachTerminalWebSocket(
     server,
     async (sessionId) => {
       const session = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
       if (!session) return null;
+      if (session.terminalBackend === "pty-daemon") {
+        if (session.kind !== "terminal") return null;
+        const workspace = store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
+        if (!workspace) return null;
+        const checkout = session.checkoutId ? store.findWorkspaceCheckout(session.checkoutId) : null;
+        const cwd =
+          session.targetType === "workspace_home"
+            ? executionTargetCwd({ workspace, targetType: "workspace_home" })
+            : checkout
+              ? executionTargetCwd({ workspace, checkout, targetType: "worktree_checkout" })
+              : workspace.mode === "structured"
+                ? executionTargetCwd({ workspace, targetType: "workspace_home" })
+                : workspace.path;
+        const owner = await ensurePtyDaemon({ dataDir: config.dataDir });
+        const terminal = config.terminal;
+        const ptySessionId = session.ptySessionId ?? session.id;
+        return {
+          backend: "pty-daemon",
+          sessionId: ptySessionId,
+          socketPath: owner.socketPath,
+          cwd,
+          command: terminal.command,
+          args: terminal.args,
+          env: { TERM: "xterm-256color", COLORTERM: "truecolor", FORCE_COLOR: "1", CLICOLOR_FORCE: "1" },
+          kind: session.kind,
+          onSessionReady: () => {
+            store.updateWorkspaceSessionTerminalOwner(session.id, {
+              terminalBackend: "pty-daemon",
+              ptySessionId,
+              ptyOwnerSocket: owner.socketPath,
+              ptyOwnerPid: owner.pid,
+              ptyLastSeenAt: new Date().toISOString(),
+            });
+            emit("terminal.ready", {
+              sessionId: session.id,
+              ptySession: ptySessionId,
+              renderer: "xterm-pty-daemon",
+              adopted: owner.adopted,
+            });
+          },
+        };
+      }
       const enableTmuxMouse = session.kind === "agent" && TMUX_MOUSE_RUNTIMES.has(session.runtimeId);
       if (session.tmuxSessionName && tmuxSessionExists(session.tmuxSessionName, session.tmuxSocketName ?? null)) {
         return {
