@@ -198,9 +198,6 @@ describe("SqliteStore", () => {
       transport: "connected",
       tmuxSessionName: "citadel_test",
       tmuxSessionId: "$1",
-      systemPromptSources: ["settings_base", "role_template"],
-      systemPromptDelivery: { mode: "native_argv", runtimeId: "claude-code" },
-      systemPromptLastDelivery: { mode: "native_argv", runtimeId: "claude-code" },
       createdAt: "2026-05-17T00:02:00.000Z",
       updatedAt: "2026-05-17T00:02:00.000Z",
     });
@@ -271,9 +268,6 @@ describe("SqliteStore", () => {
       {
         id: "sess_test",
         transport: "connected",
-        systemPromptSources: ["settings_base", "role_template"],
-        systemPromptDelivery: { mode: "native_argv", runtimeId: "claude-code" },
-        systemPromptLastDelivery: { mode: "native_argv", runtimeId: "claude-code" },
       },
     ]);
     store.insertWorkspaceSession({

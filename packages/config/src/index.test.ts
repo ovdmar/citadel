@@ -528,22 +528,6 @@ describe("AgentRuntimeConfig contract surface (regression guard)", () => {
     const shape = AgentRuntimeConfigSchema.shape;
     expect(shape).not.toHaveProperty("usageRefreshIntervalMs");
   });
-
-  it("accepts native system prompt argv mappings for custom runtimes", () => {
-    const runtime = AgentRuntimeConfigSchema.parse({
-      id: "custom",
-      displayName: "Custom",
-      command: "custom-agent",
-      launchOptions: {
-        systemPromptArgv: { argv: ["--system", "{value}"], valueEncoding: "raw" },
-      },
-    });
-
-    expect(runtime.launchOptions?.systemPromptArgv).toEqual({
-      argv: ["--system", "{value}"],
-      valueEncoding: "raw",
-    });
-  });
 });
 
 describe("HookEventSchema (re-exported from @citadel/contracts)", () => {

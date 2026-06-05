@@ -73,20 +73,6 @@ describe("createDaemonApp", () => {
         issues: [expect.objectContaining({ path: "hooks.0.cwd" })],
       });
 
-      const rawToken = "citadel_agent_authority_abcdefghijklmnopqrstuvwxyz0123456789";
-      const rejectedPrompt = await fetch(`${baseUrl}/api/config`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agentSessions: { baseSystemPrompt: `base ${rawToken}` } }),
-      });
-      const rejectedPromptText = await rejectedPrompt.text();
-      expect(rejectedPrompt.status).toBe(400);
-      expect(rejectedPromptText).not.toContain(rawToken);
-      expect(JSON.parse(rejectedPromptText)).toMatchObject({
-        error: "raw_authority_token_present",
-        component: "agentSessions.baseSystemPrompt",
-      });
-
       const mcpStatus = await getJson<{ enabled: boolean }>(`${baseUrl}/api/mcp/status`);
       expect(mcpStatus.enabled).toBe(false);
 

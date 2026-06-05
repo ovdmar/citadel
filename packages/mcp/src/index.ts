@@ -280,8 +280,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     },
     {
       name: "start_agent_session",
-      description:
-        "Start a configured agent runtime in a workspace through the daemon operation service. Optional systemPrompt is appended after Citadel's global base prompt. If role is provided, the daemon derives the role prompt from the Agents tab. If namespaceId is provided, the workspace is reassigned to that namespace as a side effect (assignment-on-launch).",
+      description: "Start an agent session with optional systemPrompt or server-resolved role prompt.",
       inputSchema: {
         type: "object",
         required: ["workspaceId", "runtimeId"],

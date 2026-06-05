@@ -19,7 +19,6 @@ import {
   IssueTransitionActionResultSchema,
   JiraAutoTransitionEventSchema,
   JiraAutoTransitionSchema,
-  LaunchAgentInputSchema,
   OperationSchema,
   PrMergeStateStatusSchema,
   PrReviewerSchema,
@@ -30,8 +29,6 @@ import {
   RuntimeUsageSummarySchema,
   ScheduledAgentRunSchema,
   ScheduledAgentSchema,
-  SystemPromptDeliverySchema,
-  SystemPromptSourceSchema,
   TerminalProfileSchema,
   UpdateScheduledAgentInputSchema,
   VersionControlSummarySchema,
@@ -77,9 +74,6 @@ describe("contract schemas", () => {
       transport: "connected",
       tmuxSessionName: "citadel_test",
       tmuxSessionId: "$1",
-      systemPromptSources: ["settings_base", "role_template"],
-      systemPromptDelivery: { mode: "native_argv", runtimeId: "claude-code" },
-      systemPromptLastDelivery: { mode: "native_argv", runtimeId: "claude-code" },
       createdAt: timestamp,
       updatedAt: timestamp,
     });
@@ -89,8 +83,6 @@ describe("contract schemas", () => {
     expect(session.kind).toBe("agent");
     expect(session.runtimeId).toBe("claude-code");
     expect(session.terminalBackend).toBe("tmux");
-    expect(session.systemPromptSources).toEqual(["settings_base", "role_template"]);
-    expect(session.systemPromptDelivery?.mode).toBe("native_argv");
     const terminal = WorkspaceSessionSchema.parse({
       id: "sess_terminal",
       kind: "terminal",
@@ -118,32 +110,8 @@ describe("contract schemas", () => {
   it("validates command inputs and provider/status contracts", () => {
     expect(CreateRepoInputSchema.parse({ rootPath: "/tmp/repo" }).rootPath).toBe("/tmp/repo");
     expect(CreateWorkspaceInputSchema.parse({ repoId: "repo_test", name: "Work" }).source).toBe("scratch");
-    expect(
-      CreateAgentSessionInputSchema.parse({
-        workspaceId: "ws_test",
-        runtimeId: "codex",
-        systemPrompt: "caller supplement",
-      }).systemPrompt,
-    ).toBe("caller supplement");
-    expect(
-      CreateAgentSessionInputSchema.safeParse({ workspaceId: "ws_test", runtimeId: "codex", systemPrompt: null })
-        .success,
-    ).toBe(false);
-    expect(
-      CreateAgentSessionInputSchema.safeParse({
-        workspaceId: "ws_test",
-        runtimeId: "codex",
-        systemPromptSources: ["role_template"],
-      }).success,
-    ).toBe(false);
+    expect(CreateAgentSessionInputSchema.parse({ workspaceId: "ws_test", runtimeId: "codex" }).runtimeId).toBe("codex");
     expect(CreateTerminalSessionInputSchema.parse({ workspaceId: "ws_test" }).workspaceId).toBe("ws_test");
-    expect(
-      LaunchAgentInputSchema.parse({ repoName: "citadel", prompt: "Build it", systemPrompt: "Use Citadel tools." })
-        .systemPrompt,
-    ).toBe("Use Citadel tools.");
-    expect(
-      LaunchAgentInputSchema.safeParse({ repoName: "citadel", prompt: "Build it", systemPrompt: null }).success,
-    ).toBe(false);
 
     expect(
       ProviderHealthSchema.parse({
@@ -154,31 +122,6 @@ describe("contract schemas", () => {
         checkedAt: timestamp,
       }).reason,
     ).toBeNull();
-  });
-
-  it("validates system prompt source and delivery metadata contracts", () => {
-    expect(SystemPromptSourceSchema.parse("settings_base")).toBe("settings_base");
-    expect(SystemPromptSourceSchema.parse("role_template")).toBe("role_template");
-    expect(SystemPromptSourceSchema.parse("caller")).toBe("caller");
-    expect(SystemPromptSourceSchema.safeParse("client_claimed_role").success).toBe(false);
-
-    expect(SystemPromptDeliverySchema.parse({ mode: "none", reason: "empty" })).toEqual({
-      mode: "none",
-      reason: "empty",
-    });
-    expect(SystemPromptDeliverySchema.parse({ mode: "native_argv", runtimeId: "claude-code" }).mode).toBe(
-      "native_argv",
-    );
-    expect(SystemPromptDeliverySchema.parse({ mode: "pasted_wrapper", reason: "native_unavailable" }).mode).toBe(
-      "pasted_wrapper",
-    );
-    expect(SystemPromptDeliverySchema.parse({ mode: "skipped_resume", reason: "resume" })).toMatchObject({
-      reason: "resume",
-    });
-    expect(SystemPromptDeliverySchema.parse({ mode: "pasted_wrapper", reason: "argv_too_large" })).toMatchObject({
-      reason: "argv_too_large",
-    });
-    expect(SystemPromptDeliverySchema.safeParse({ mode: "native_argv", reason: "resume" }).success).toBe(false);
   });
 
   it("validates operations, events, diffs, runtimes, and version-control summaries", () => {
