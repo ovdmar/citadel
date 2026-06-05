@@ -588,6 +588,7 @@ export class OperationService {
   renameNamespace = (id: string, patch: UpdateNamespaceInput) => namespaceOps.renameNamespace(this.nsDeps(), id, patch);
   archiveNamespace = (id: string) => namespaceOps.archiveNamespace(this.nsDeps(), id);
   restoreNamespace = (id: string) => namespaceOps.restoreNamespace(this.nsDeps(), id);
+  reorderNamespaces = (input: { namespaceIds: string[] }) => namespaceOps.reorderNamespaces(this.nsDeps(), input);
   assignWorkspaceToNamespace = (input: { workspaceId: string; namespaceId: string | null }) =>
     namespaceOps.assignWorkspaceToNamespace(this.nsDeps(), input);
   private nsDeps = (): namespaceOps.NamespaceServiceDeps => ({

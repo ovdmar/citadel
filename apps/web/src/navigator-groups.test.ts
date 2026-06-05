@@ -57,11 +57,12 @@ function makeWorkspace(id: string, repoId: string | null, overrides: Partial<Wor
   };
 }
 
-function makeNamespace(id: string, name: string): Namespace {
+function makeNamespace(id: string, name: string, position = 0): Namespace {
   return {
     id,
     name,
     color: null,
+    position,
     createdAt: ts,
     updatedAt: ts,
     archivedAt: null,
@@ -220,6 +221,17 @@ describe("buildGroupTree", () => {
       { label: "Uncategorized", count: 1, kind: "leaf" },
     ]);
     expect(tree[0]?.kind === "leaf" ? tree[0].workspaces.map((entry) => entry.workspace.id) : []).toEqual(["w-team"]);
+  });
+
+  it("orders namespace groups by persisted position", () => {
+    const first = makeNamespace("ns_first", "First", 2048);
+    const second = makeNamespace("ns_second", "Second", 1024);
+    const ws = [
+      makeWorkspace("w-first", "r-a", { namespaceId: first.id }),
+      makeWorkspace("w-second", "r-a", { namespaceId: second.id }),
+    ];
+    const tree = buildGroupTree(ws, repos, [], [], ["namespace"], [first, second]);
+    expect(tree.map((node) => node.label)).toEqual(["Second", "First", "Uncategorized"]);
   });
 });
 

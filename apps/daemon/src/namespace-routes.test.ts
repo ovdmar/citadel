@@ -17,7 +17,7 @@ afterEach(() => {
 process.env.CITADEL_DISABLE_REAPER = "1";
 process.env.CITADEL_DISABLE_SCHEDULER = "1";
 
-type Namespace = { id: string; name: string; archivedAt: string | null; color: string | null };
+type Namespace = { id: string; name: string; archivedAt: string | null; color: string | null; position: number };
 type Workspace = { id: string; name: string; namespaceId: string | null };
 
 describe("namespace routes + MCP integration", () => {
@@ -260,6 +260,33 @@ describe("namespace routes + MCP integration", () => {
           (issue) => issue.path?.includes("namespaceId") || issue.message?.includes("namespaceId"),
         ),
       ).toBe(true);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("reorders active namespaces through REST", async () => {
+    const fixture = createFixture();
+    const { server } = await createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const bravo = await postJson<{ namespace: Namespace; created: boolean }>(`${baseUrl}/api/namespaces`, {
+        name: "Bravo",
+      });
+      const alpha = await postJson<{ namespace: Namespace; created: boolean }>(`${baseUrl}/api/namespaces`, {
+        name: "Alpha",
+      });
+      expect(
+        (await getJson<{ namespaces: Namespace[] }>(`${baseUrl}/api/namespaces`)).namespaces.map((ns) => ns.name),
+      ).toEqual(["Bravo", "Alpha"]);
+
+      const result = await postJson<{ reordered: true; namespaces: Namespace[] }>(`${baseUrl}/api/namespaces/reorder`, {
+        namespaceIds: [alpha.namespace.id, bravo.namespace.id],
+      });
+      expect(result.namespaces.map((ns) => ns.name)).toEqual(["Alpha", "Bravo"]);
+      expect(
+        (await getJson<{ namespaces: Namespace[] }>(`${baseUrl}/api/namespaces`)).namespaces.map((ns) => ns.name),
+      ).toEqual(["Alpha", "Bravo"]);
     } finally {
       await closeServer(server);
     }
