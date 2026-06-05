@@ -14,6 +14,7 @@ import {
   checkoutBranchLabel,
   checkoutBranchTitle,
   checkoutPrLabel,
+  focusTargetAfterCheckoutDrop,
   hasNestedCheckouts,
   isWorkspaceMainCheckout,
   pullRequestForCheckout,
@@ -36,6 +37,15 @@ afterEach(() => {
 });
 
 describe("navigator workspace checkout cards", () => {
+  it("picks the next checkout target after a checkout drop, falling back to Home", () => {
+    expect(focusTargetAfterCheckoutDrop([checkout("co_a"), checkout("co_b"), checkout("co_c")], "co_b")).toBe(
+      "checkout:co_c",
+    );
+    expect(focusTargetAfterCheckoutDrop([checkout("co_a"), checkout("co_b")], "co_b")).toBe("home");
+    expect(focusTargetAfterCheckoutDrop([checkout("co_a")], "co_a")).toBe("home");
+    expect(focusTargetAfterCheckoutDrop([checkout("co_a")], "co_missing")).toBe("home");
+  });
+
   it("switches to nested checkout rendering whenever a workspace has checkouts", () => {
     expect(hasNestedCheckouts([])).toBe(false);
     expect(hasNestedCheckouts([checkout("co_1")])).toBe(true);
@@ -294,7 +304,8 @@ describe("navigator workspace checkout cards", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const container = renderCheckoutCard({ workspace: ws, checkout: co, repo });
+    const onDropFocus = vi.fn();
+    const container = renderCheckoutCard({ workspace: ws, checkout: co, repo, onDropFocus });
     const dropButton = container.querySelector('button[aria-label="Drop checkout api-stable"]');
     expect(dropButton).toBeTruthy();
     flushSync(() => {
@@ -310,6 +321,7 @@ describe("navigator workspace checkout cards", () => {
     });
 
     await waitFor(() => fetchMock.mock.calls.length === 1);
+    expect(onDropFocus).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/workspaces/ws_checkout/checkouts/co_api",
       expect.objectContaining({ method: "DELETE" }),
@@ -387,6 +399,7 @@ function renderCheckoutCard(input: {
   workspace: Workspace;
   checkout: WorktreeCheckout;
   repo: Repo;
+  onDropFocus?: () => void;
 }) {
   const rootElement = document.createElement("div");
   document.body.appendChild(rootElement);
@@ -411,6 +424,7 @@ function renderCheckoutCard(input: {
               pullRequest: null,
               active: false,
               onSelect: () => undefined,
+              onDropFocus: input.onDropFocus,
             }),
           ),
         ),

@@ -62,6 +62,7 @@ import { ScratchpadNavLink } from "./navigator-scratchpad-link.js";
 import {
   CheckoutNavCard,
   checkoutSessions,
+  focusTargetAfterCheckoutDrop,
   hasNestedCheckouts,
   workspaceCheckoutRows,
 } from "./navigator-workspace-cards.js";
@@ -72,6 +73,36 @@ export { aggregateNavigatorTone };
 
 function runningCount(sessions: WorkspaceSession[]): number {
   return sessions.filter((session) => session.kind === "agent" && session.status === "running").length;
+}
+
+export function focusWorkspaceIdAfterDrop(visibleIds: readonly string[], workspaceId: string): string | null {
+  const index = visibleIds.indexOf(workspaceId);
+  if (index === -1) return null;
+  for (let i = index + 1; i < visibleIds.length; i += 1) {
+    const id = visibleIds[i];
+    if (id && id !== workspaceId) return id;
+  }
+  for (let i = index - 1; i >= 0; i -= 1) {
+    const id = visibleIds[i];
+    if (id && id !== workspaceId) return id;
+  }
+  return null;
+}
+
+function renderedWorkspaceIdsFromTree(nodes: readonly GroupNode[], navigatorOrder: Record<string, string[]>): string[] {
+  const ids: string[] = [];
+  const walk = (list: readonly GroupNode[]) => {
+    for (const node of list) {
+      if (node.kind === "leaf") {
+        const ordered = applyLocalOrder(node.workspaces, navigatorOrder[node.path]);
+        for (const entry of ordered) ids.push(entry.workspace.id);
+      } else {
+        walk(node.children);
+      }
+    }
+  };
+  walk(nodes);
+  return ids;
 }
 
 function groupingLabel(grouping: NavigatorGrouping): string {
@@ -275,6 +306,21 @@ export function Navigator(props: {
     [props.namespaces, reorderNamespaces],
   );
 
+  const flatEntries = useMemo<WorkspaceEntry[]>(
+    () =>
+      props.workspaces.map((workspace) => ({
+        workspace,
+        sessions: props.sessions.filter((session) => session.workspaceId === workspace.id),
+      })),
+    [props.workspaces, props.sessions],
+  );
+  const renderedWorkspaceIds = useMemo(() => {
+    if (treeGrouping.length === 0) {
+      return applyLocalOrder(flatEntries, navigatorOrder.__flat).map((entry) => entry.workspace.id);
+    }
+    return renderedWorkspaceIdsFromTree(tree, navigatorOrder);
+  }, [flatEntries, navigatorOrder, tree, treeGrouping.length]);
+
   const renderWorkspace = useCallback(
     ({ workspace, sessions }: WorkspaceEntry, groupPath: string, visibleIds: readonly string[]) => {
       const checkouts = props.checkouts.filter(
@@ -324,6 +370,9 @@ export function Navigator(props: {
                   pullRequest={checkoutPullRequest({ checkout, workspacePullRequest, checkoutPrState })}
                   active={activeWorkspace && props.activeTargetKey === targetKey}
                   onSelect={() => props.onPickTarget(workspace.id, targetKey)}
+                  onDropFocus={() =>
+                    props.onPickTarget(workspace.id, focusTargetAfterCheckoutDrop(visibleCheckouts, checkout.id))
+                  }
                   unseenAttentionSessionIds={props.unseenAttentionSessionIds}
                 />
               );
@@ -366,6 +415,10 @@ export function Navigator(props: {
             }}
             active={cardActive}
             onSelect={() => props.onPickTarget(workspace.id, "home")}
+            onDropFocus={() => {
+              const replacementWorkspaceId = focusWorkspaceIdAfterDrop(renderedWorkspaceIds, workspace.id);
+              if (replacementWorkspaceId) props.onPickTarget(replacementWorkspaceId, "home");
+            }}
             branchLabel={aggregateRow || structuredHome ? null : undefined}
             prToneOverride={aggregateRow ? prAggregate.prTone : undefined}
             diffOverride={
@@ -452,6 +505,9 @@ export function Navigator(props: {
                     pullRequest={checkoutPullRequest({ checkout, workspacePullRequest, checkoutPrState })}
                     active={activeWorkspace && props.activeTargetKey === targetKey}
                     onSelect={() => props.onPickTarget(workspace.id, targetKey)}
+                    onDropFocus={() =>
+                      props.onPickTarget(workspace.id, focusTargetAfterCheckoutDrop(visibleCheckouts, checkout.id))
+                    }
                     unseenAttentionSessionIds={props.unseenAttentionSessionIds}
                   />
                 );
@@ -475,19 +531,12 @@ export function Navigator(props: {
       namespacesById,
       treeGrouping,
       reorderWorkspace,
+      renderedWorkspaceIds,
       collapsedWorkspaceCheckouts,
       toggleWorkspaceCheckouts,
       hideMainWorkspace,
       props.unseenAttentionSessionIds,
     ],
-  );
-  const flatEntries = useMemo<WorkspaceEntry[]>(
-    () =>
-      props.workspaces.map((workspace) => ({
-        workspace,
-        sessions: props.sessions.filter((session) => session.workspaceId === workspace.id),
-      })),
-    [props.workspaces, props.sessions],
   );
   const hasVisibleWorkspaceEntries = treeGrouping.length === 0 ? props.workspaces.length > 0 : tree.length > 0;
 
