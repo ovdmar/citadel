@@ -12,7 +12,12 @@ import {
   VoiceTargetRegistry,
 } from "./lib/voice-targets.js";
 import { matchShortcut } from "./shortcuts.js";
-import { getFocusedTerminalSessionId, getTerminalHandle } from "./terminal-pane.js";
+import {
+  focusActiveTerminal,
+  getDefaultVoiceTerminalSessionId,
+  getFocusedTerminalSessionId,
+  getTerminalHandle,
+} from "./terminal-pane.js";
 import { VoiceModeOverlay, type VoiceModeOverlayStatus } from "./voice-mode-overlay.js";
 
 const AUTO_SUBMIT_KEY = "citadel.voice.autoSubmit";
@@ -270,9 +275,7 @@ export function VoiceModeProvider(props: { children: ReactNode }) {
         buffer={buffer}
         error={error}
         autoSubmit={autoSubmit}
-        silenceTimeoutMs={silenceTimeoutMs}
         onAutoSubmitChange={setAutoSubmit}
-        onSilenceTimeoutChange={setSilenceTimeoutMs}
         onSendNow={sendNow}
         onStop={() => stop()}
         onCancel={cancel}
@@ -378,7 +381,14 @@ function resolveStartDictation(
     return { target, retryOptions: { terminalSessionId: focusedTerminalSessionId } };
   }
   const target = registry.resolve(document.activeElement);
-  return { target, retryOptions: { target } };
+  if (target) return { target, retryOptions: { target } };
+  const defaultTerminalSessionId = getDefaultVoiceTerminalSessionId();
+  if (defaultTerminalSessionId) {
+    focusActiveTerminal(defaultTerminalSessionId);
+    const defaultTarget = createTerminalVoiceTarget(defaultTerminalSessionId);
+    return { target: defaultTarget, retryOptions: { terminalSessionId: defaultTerminalSessionId } };
+  }
+  return { target: null, retryOptions: { target: null } };
 }
 
 function createTerminalVoiceTarget(sessionId: string): VoiceTarget | null {

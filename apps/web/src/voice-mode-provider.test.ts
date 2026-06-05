@@ -17,12 +17,16 @@ const terminalMocks = vi.hoisted(() => {
   const handles = new Map<string, TerminalHandleMock>();
   return {
     handles,
+    focusActiveTerminal: vi.fn(),
+    getDefaultVoiceTerminalSessionId: vi.fn<() => string | null>(() => null),
     getFocusedTerminalSessionId: vi.fn<(_activeElement?: Element | null) => string | null>(() => null),
     getTerminalHandle: vi.fn((sessionId: string) => handles.get(sessionId)),
   };
 });
 
 vi.mock("./terminal-pane.js", () => ({
+  focusActiveTerminal: terminalMocks.focusActiveTerminal,
+  getDefaultVoiceTerminalSessionId: terminalMocks.getDefaultVoiceTerminalSessionId,
   getFocusedTerminalSessionId: terminalMocks.getFocusedTerminalSessionId,
   getTerminalHandle: terminalMocks.getTerminalHandle,
 }));
@@ -74,6 +78,8 @@ beforeEach(() => {
   installLocalStorageMock();
   FakeSpeechRecognition.instances = [];
   terminalMocks.handles.clear();
+  terminalMocks.focusActiveTerminal.mockClear();
+  terminalMocks.getDefaultVoiceTerminalSessionId.mockReturnValue(null);
   terminalMocks.getFocusedTerminalSessionId.mockReturnValue(null);
   terminalMocks.getTerminalHandle.mockClear();
   vi.useFakeTimers();
@@ -345,6 +351,26 @@ describe("VoiceModeProvider", () => {
     expect(document.querySelector(".voice-mode-overlay")).not.toBeNull();
     await flushReact(() => cancelButton().click());
     expect(document.querySelector(".voice-mode-overlay")).toBeNull();
+  });
+
+  it("uses the selected terminal session when no input target is focused", async () => {
+    const sendVoiceInput = vi.fn(() => true);
+    terminalMocks.handles.set("sess_selected", {
+      sendVoiceInput,
+      canAcceptVoiceInput: vi.fn(() => true),
+    });
+    terminalMocks.getDefaultVoiceTerminalSessionId.mockReturnValue("sess_selected");
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation();
+      FakeSpeechRecognition.instances[0]?.final("ship it");
+      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+    });
+
+    expect(terminalMocks.focusActiveTerminal).toHaveBeenCalledWith("sess_selected");
+    expect(sendVoiceInput).toHaveBeenCalledWith("ship it", { submit: true });
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Submitted");
   });
 
   it("buffers in-flight dictation when a registered target unregisters before final commit", async () => {
@@ -745,7 +771,7 @@ function copyButton(): HTMLButtonElement {
 }
 
 function cancelButton(): HTMLButtonElement {
-  const button = [...document.querySelectorAll("button")].find((candidate) => candidate.textContent === "Cancel");
+  const button = document.querySelector('button[aria-label="Cancel"]');
   if (!(button instanceof HTMLButtonElement)) throw new Error("cancel button missing");
   return button;
 }
