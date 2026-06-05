@@ -150,6 +150,37 @@ describe("CreateWorkspaceModal", () => {
       }),
     );
   });
+
+  it("adds worktrees for multiple selected repos when opened from workspace Home", async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      void init;
+      const url = String(input);
+      if (url === "/api/workspaces/ws_home/checkouts")
+        return Promise.resolve(jsonResponse({ workspaceId: "ws_home", checkoutId: "co_new" }));
+      return Promise.reject(new Error(`unexpected fetch ${url}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const onCreated = vi.fn();
+    const container = renderCreateWorkspaceModal({
+      repos: [repo(), repo({ id: "repo_2", name: "ApiRepo", rootPath: "/tmp/api-repo" })],
+      onCreated,
+      intent: { kind: "attach-worktree", workspaceId: "ws_home", workspaceName: "Feature Home" },
+    });
+
+    clickCheckbox(container, 1);
+    await clickButton(container, "Add worktrees");
+    await waitFor(() => onCreated.mock.calls.some(([workspaceId]) => workspaceId === "ws_home"));
+
+    const checkoutCalls = fetchMock.mock.calls.filter(
+      ([input]) => String(input) === "/api/workspaces/ws_home/checkouts",
+    );
+    expect(checkoutCalls).toHaveLength(2);
+    expect(checkoutCalls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { repoId: "repo_1", source: "default_branch" },
+      { repoId: "repo_2", source: "default_branch" },
+    ]);
+  });
 });
 
 function renderCreateWorkspaceModal(overrides: {
@@ -207,8 +238,8 @@ function setInputByPlaceholder(container: HTMLElement, placeholder: string, valu
   });
 }
 
-function clickCheckbox(container: HTMLElement) {
-  const input = container.querySelector('input[type="checkbox"]');
+function clickCheckbox(container: HTMLElement, index = 0) {
+  const input = Array.from(container.querySelectorAll('input[type="checkbox"]'))[index];
   expect(input).toBeTruthy();
   flushSync(() => {
     input?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -244,7 +275,7 @@ function jsonResponse(body: unknown, init?: ResponseInit) {
   });
 }
 
-function repo(): Repo {
+function repo(overrides: Partial<Repo> = {}): Repo {
   return {
     id: "repo_1",
     name: "MockRepo",
@@ -259,5 +290,6 @@ function repo(): Repo {
     createdAt: "2026-06-03T00:00:00.000Z",
     updatedAt: "2026-06-03T00:00:00.000Z",
     archivedAt: null,
+    ...overrides,
   };
 }
