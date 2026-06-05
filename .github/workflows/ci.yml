@@ -69,6 +69,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build workspace packages
+        run: pnpm -r --filter './packages/*' build
+
       - name: Unit tests with coverage
         run: pnpm run coverage
 
@@ -141,6 +144,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build workspace packages
+        run: pnpm -r --filter './packages/*' build
+
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
 
@@ -195,6 +201,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Build workspace packages
+        run: pnpm -r --filter './packages/*' build
 
       - name: Install Playwright Chromium
         run: pnpm exec playwright install --with-deps chromium
