@@ -90,7 +90,6 @@ export function Navigator(props: {
   activeTargetKey: string;
   runtimes: import("@citadel/contracts").AgentRuntime[];
   namespaces: Namespace[];
-  lastRepoId: string | undefined;
   createWorkspaceOpen: boolean;
   onOpenCreateWorkspace: () => void;
   onCloseCreateWorkspace: () => void;
@@ -634,7 +633,6 @@ export function Navigator(props: {
       {props.createWorkspaceOpen ? (
         <CreateWorkspaceModal
           repos={props.repos}
-          {...(props.lastRepoId ? { lastRepoId: props.lastRepoId } : {})}
           grouping={grouping}
           intent={createWorkspaceIntent}
           onClose={closeCreateWorkspace}

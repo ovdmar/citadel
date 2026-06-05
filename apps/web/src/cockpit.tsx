@@ -55,7 +55,6 @@ import { prToneFor } from "./workspace-card.js";
 import { visibleNavigatorWorkspaces } from "./workspace-visibility.js";
 
 const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";
-const STORAGE_LAST_REPO = "citadel.last-repo";
 const STORAGE_SESSION_BY_WORKSPACE = "citadel.session-by-workspace";
 const STORAGE_TARGET_BY_WORKSPACE = "citadel.target-by-workspace";
 const TERMINAL_FOCUS_DELAYS_MS = [0, 50, 160, 400];
@@ -98,7 +97,6 @@ export function Cockpit() {
 
   const layout = useCockpitLayout();
   const [activeWorkspaceId, setActiveWorkspaceId] = useLocalStorage(STORAGE_LAST_WORKSPACE, "");
-  const [lastRepoId, setLastRepoId] = useLocalStorage(STORAGE_LAST_REPO, "");
   const [activeSessionByWorkspace, setActiveSessionByWorkspace] = useLocalStorageRecord(STORAGE_SESSION_BY_WORKSPACE);
   const [activeTargetByWorkspace, setActiveTargetByWorkspace] = useLocalStorageRecord(STORAGE_TARGET_BY_WORKSPACE);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -128,8 +126,7 @@ export function Cockpit() {
   }, [activeWorkspaceId, navigatorWorkspaces]);
   useEffect(() => {
     if (activeWorkspace && activeWorkspace.id !== activeWorkspaceId) setActiveWorkspaceId(activeWorkspace.id);
-    if (activeWorkspace?.repoId && activeWorkspace.repoId !== lastRepoId) setLastRepoId(activeWorkspace.repoId);
-  }, [activeWorkspace, activeWorkspaceId, lastRepoId, setActiveWorkspaceId, setLastRepoId]);
+  }, [activeWorkspace, activeWorkspaceId, setActiveWorkspaceId]);
 
   const batchPrSummary = useAllWorkspacesPrSummary(navigatorWorkspaces);
   const { summaries: stickySummaries, rememberSummary } = useStickyWorkspaceSummaries(
@@ -561,7 +558,6 @@ export function Cockpit() {
               runtimes={data?.agentRuntimes ?? []}
               namespaces={data?.namespaces ?? []}
               unseenAttentionSessionIds={unseenAttentionSessionIds}
-              lastRepoId={lastRepoId || undefined}
               createWorkspaceOpen={createWorkspaceOpen}
               onOpenCreateWorkspace={() => setCreateWorkspaceOpen(true)}
               onCloseCreateWorkspace={() => setCreateWorkspaceOpen(false)}
