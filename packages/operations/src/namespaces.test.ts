@@ -99,6 +99,28 @@ describe("namespace operations", () => {
     expect(store.listActivity().length).toBe(beforeRename);
   });
 
+  it("persists namespace reorder order", () => {
+    const fixture = createGitFixture();
+    const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
+    store.migrate();
+    const service = new OperationService(store, {
+      hooks: [],
+      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    });
+    const bravo = service.createNamespace({ name: "Bravo" }).namespace;
+    const alpha = service.createNamespace({ name: "Alpha" }).namespace;
+    expect(service.listNamespaces().map((namespace) => namespace.name)).toEqual(["Bravo", "Alpha"]);
+
+    const result = service.reorderNamespaces({ namespaceIds: [alpha.id, bravo.id] });
+    expect(result).toMatchObject({ reordered: true });
+    expect(service.listNamespaces().map((namespace) => namespace.name)).toEqual(["Alpha", "Bravo"]);
+    expect(service.reorderNamespaces({ namespaceIds: [alpha.id, alpha.id] })).toMatchObject({
+      reordered: false,
+      reason: "namespace_order_mismatch",
+    });
+  });
+
   it("createAgentSession reassigns the workspace to the supplied namespaceId", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
