@@ -51,6 +51,7 @@ export function createWorkspaceCockpitSummaryBuilder(input: {
   ghAutomationEnabled: boolean;
   resolveRepoFullName: (repoId: string) => string | null;
   fetchVersionControl: (workspace: Workspace, repo: Repo, cacheKey: string) => Promise<VersionControlSummary>;
+  fetchCi: (workspace: Workspace, repo: Repo) => Promise<CiProviderSummary>;
 }): BuildWorkspaceCockpitSummary {
   const {
     store,
@@ -63,6 +64,7 @@ export function createWorkspaceCockpitSummaryBuilder(input: {
     ghAutomationEnabled,
     resolveRepoFullName,
     fetchVersionControl,
+    fetchCi,
   } = input;
 
   return async (workspaceId: string): Promise<WorkspaceCockpitSummary | null> => {
@@ -87,7 +89,7 @@ export function createWorkspaceCockpitSummaryBuilder(input: {
         ? fetchVersionControl(workspace, repo, vcCacheKey(workspace.id, workspace.updatedAt))
         : Promise.resolve(disabledVersionControlSummary(workspace, repo)),
       shouldFetchCi
-        ? cachedProviderSwr<CiProviderSummary>(ciKey, () => providers.collectGitHubCiRuns(workspace.path), 60_000)
+        ? fetchCi(workspace, repo)
         : Promise.resolve(
             cachedCiOrDisabled(
               providerCache,
