@@ -131,6 +131,7 @@ export function CheckoutNavCard(props: CheckoutNavCardProps) {
           })
         }
         prToneOverride={prTone}
+        lifecyclePullRequest={null}
         unseenAttentionSessionIds={props.unseenAttentionSessionIds}
         disableDrop
       />

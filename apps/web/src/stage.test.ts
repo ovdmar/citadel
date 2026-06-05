@@ -1,8 +1,14 @@
 // @vitest-environment happy-dom
 
 import type { AgentRuntime, RoleTemplate, TerminalProfile, TerminalSession, Workspace } from "@citadel/contracts";
-import { describe, expect, it } from "vitest";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { createElement } from "react";
+import { flushSync } from "react-dom";
+import { type Root, createRoot } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { queryClient } from "./api.js";
 import {
+  Stage,
   buildStageLaunchEntryGroups,
   freestyleStageActions,
   retainRecentTerminalIds,
@@ -10,6 +16,29 @@ import {
   stableWorkspaceSessionIdsKey,
   structuredStageActions,
 } from "./stage.js";
+
+const roots: Root[] = [];
+
+(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+beforeEach(() => {
+  installLocalStorageMock();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() => Promise.resolve(jsonResponse({ roles: [] }))),
+  );
+});
+
+afterEach(async () => {
+  await flushReact(() => {
+    for (const root of roots.splice(0)) root.unmount();
+  });
+  document.body.innerHTML = "";
+  queryClient.clear();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("Stage terminal pane ordering", () => {
   it("keeps visited terminal panes in visit order when state polling reorders sessions", () => {
@@ -163,6 +192,32 @@ describe("Stage terminal pane ordering", () => {
       ],
     );
   });
+
+  it("keeps the empty launcher visible after a stale pending session grace period expires", async () => {
+    vi.useFakeTimers();
+    const container = await renderStage({
+      activeSessionId: "stale_session",
+      checkoutId: "co_empty",
+      targetKey: "checkout:co_empty",
+      targetLabel: "Empty checkout",
+      targetType: "worktree_checkout",
+    });
+
+    expect(container.textContent).toContain("Starting session");
+
+    await flushReact(() => {
+      vi.advanceTimersByTime(4000);
+    });
+    expect(container.textContent).toContain("New session");
+    expect(container.textContent).toContain("Empty checkout");
+    expect(container.textContent).not.toContain("Starting session");
+
+    await flushReact(() => {
+      vi.advanceTimersByTime(4000);
+    });
+    expect(container.textContent).toContain("New session");
+    expect(container.textContent).not.toContain("Starting session");
+  });
 });
 
 function sessionFixture(overrides: Partial<TerminalSession> = {}): TerminalSession {
@@ -262,4 +317,82 @@ function runtimeFixture(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
     },
     ...overrides,
   };
+}
+
+async function renderStage(
+  overrides: Partial<{
+    workspace: Workspace;
+    sessions: TerminalSession[];
+    allSessions: TerminalSession[];
+    targetKey: string;
+    targetType: "workspace_home" | "worktree_checkout";
+    checkoutId: string | null;
+    targetLabel: string;
+    runtimes: AgentRuntime[];
+    terminal: TerminalProfile;
+    activeSessionId: string;
+    onActiveSession: (id: string) => void;
+  }> = {},
+): Promise<HTMLElement> {
+  const rootElement = document.createElement("div");
+  document.body.appendChild(rootElement);
+  const root = createRoot(rootElement);
+  roots.push(root);
+  await flushReact(() => {
+    root.render(
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(Stage, {
+          workspace: overrides.workspace ?? workspaceFixture({ mode: "structured" }),
+          sessions: overrides.sessions ?? [],
+          allSessions: overrides.allSessions ?? overrides.sessions ?? [],
+          targetKey: overrides.targetKey ?? "home",
+          targetType: overrides.targetType ?? "workspace_home",
+          checkoutId: overrides.checkoutId ?? null,
+          targetLabel: overrides.targetLabel ?? "Home",
+          runtimes: overrides.runtimes ?? [runtimeFixture()],
+          terminal: overrides.terminal ?? terminalProfileFixture(),
+          activeSessionId: overrides.activeSessionId,
+          onActiveSession: overrides.onActiveSession ?? vi.fn(),
+        }),
+      ),
+    );
+  });
+  return rootElement;
+}
+
+async function flushReact(callback: () => void | Promise<void>): Promise<void> {
+  let result: void | Promise<void> = undefined;
+  flushSync(() => {
+    result = callback();
+  });
+  await result;
+  await settle();
+}
+
+async function settle(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+function installLocalStorageMock() {
+  const storage = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, String(value)),
+      removeItem: (key: string) => storage.delete(key),
+      clear: () => storage.clear(),
+    },
+  });
+}
+
+function jsonResponse(body: unknown, init?: ResponseInit) {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
 }
