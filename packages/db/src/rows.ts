@@ -33,6 +33,8 @@ export function repoFromRow(row: Record<string, unknown>): Repo {
     defaultBranch: asString(row, "default_branch"),
     defaultRemote: asString(row, "default_remote"),
     worktreeParent: asString(row, "worktree_parent"),
+    providerRepositoryKey: row.provider_repository_key ? asString(row, "provider_repository_key") : null,
+    showMainWorkspace: Number(row.show_main_workspace ?? 0) === 1,
     setupHookIds: jsonArray(row, "setup_hook_ids"),
     teardownHookIds: jsonArray(row, "teardown_hook_ids"),
     providerIds: jsonArray(row, "provider_ids"),

@@ -52,6 +52,7 @@ function createWorkspaceHomeSchema(
       workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
       repo_id TEXT NOT NULL REFERENCES repos(id),
       name TEXT NOT NULL,
+      display_name TEXT,
       path TEXT NOT NULL UNIQUE,
       branch TEXT NOT NULL,
       base_branch TEXT NOT NULL,

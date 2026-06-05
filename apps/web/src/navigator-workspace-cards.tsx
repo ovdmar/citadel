@@ -9,7 +9,8 @@ import type {
 import { useMutation } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useState } from "react";
-import { queryClient } from "./api.js";
+import { api, queryClient } from "./api.js";
+import { repoNameWithOwner } from "./repo-labels.js";
 import { useToast } from "./toast.js";
 import { useOverlayPresent } from "./use-overlay-present.js";
 import { type PrTone, WorkspaceCard, approvalToneFor, prToneFor } from "./workspace-card.js";
@@ -78,9 +79,12 @@ export function workspaceCheckoutRows(
 
 export function CheckoutNavCard(props: CheckoutNavCardProps) {
   const [confirmDrop, setConfirmDrop] = useState(false);
+  const displayName = props.checkout.displayName ?? props.checkout.name;
+  const repoLabel = repoNameWithOwner(props.repo);
   const workspaceForCard: Workspace = {
     ...props.workspace,
     repoId: props.checkout.repoId,
+    name: displayName,
     branch: props.checkout.branch,
     baseBranch: props.checkout.baseBranch,
     kind: "worktree",
@@ -105,6 +109,15 @@ export function CheckoutNavCard(props: CheckoutNavCardProps) {
         branchLabel={branchLabel}
         branchTitle={branchTitle}
         cardTitle={branchTitle}
+        displayTitle={displayName}
+        titlePrefix={repoLabel}
+        renameLabel="Rename worktree card"
+        onRename={(nextName) =>
+          api(`/api/workspaces/${props.workspace.id}/checkouts/${props.checkout.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ displayName: nextName }),
+          })
+        }
         prToneOverride={prTone}
         disableDrop
       />
@@ -241,7 +254,7 @@ function DropCheckoutDialog(props: { workspace: Workspace; checkout: WorktreeChe
 }
 
 export function checkoutBranchLabel(checkout: WorktreeCheckout, repo: Repo | null): string {
-  return repo ? `${repo.name} · ${checkout.branch}` : checkout.branch;
+  return repo ? `${repoNameWithOwner(repo)} · ${checkout.branch}` : checkout.branch;
 }
 
 export function checkoutBranchTitle(checkout: WorktreeCheckout, repo: Repo | null): string {

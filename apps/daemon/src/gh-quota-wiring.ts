@@ -97,6 +97,10 @@ export function resolveRepoFullNameFromWorkspaces(repoId: string, store: SqliteS
     repoFullNameCache.set(repoId, null);
     return null;
   }
+  if (repo.providerRepositoryKey) {
+    repoFullNameCache.set(repoId, repo.providerRepositoryKey);
+    return repo.providerRepositoryKey;
+  }
   const fullName = resolveRepoFullNameFromGit(repo.rootPath, repo.defaultRemote || "origin");
   repoFullNameCache.set(repoId, fullName);
   return fullName;

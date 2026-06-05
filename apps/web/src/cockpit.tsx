@@ -27,6 +27,7 @@ import {
 import { CommandPalette } from "./command-palette.js";
 import { GhCooldownBanner } from "./gh-cooldown-banner.js";
 import { useFocusRefresh } from "./hooks/use-focus-refresh.js";
+import { resolveInspectorTargetState } from "./inspector-target-state.js";
 import { Inspector } from "./inspector.js";
 import {
   expandGroupPath,
@@ -46,6 +47,7 @@ import { ThemeControls } from "./theme-controls.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
 import { prToneFor } from "./workspace-card.js";
+import { visibleNavigatorWorkspaces } from "./workspace-visibility.js";
 
 const STORAGE_LAST_WORKSPACE = "citadel.last-workspace";
 const STORAGE_LAST_REPO = "citadel.last-repo";
@@ -97,6 +99,10 @@ export function Cockpit() {
   const [commandOpen, setCommandOpen] = useState(false);
   const [createWorkspaceOpen, setCreateWorkspaceOpen] = useState(false);
   const [mobileView, setMobileView] = useState<MobileView>("stage");
+  const navigatorWorkspaces = useMemo(
+    () => visibleNavigatorWorkspaces(data?.workspaces ?? [], data?.repos ?? []),
+    [data?.workspaces, data?.repos],
+  );
 
   // Re-route search-param-driven workspace selection (used from dashboard/history)
   useEffect(() => {
@@ -108,21 +114,21 @@ export function Cockpit() {
   }, [search.workspace, navigate, location.pathname, setActiveWorkspaceId, setActiveTargetByWorkspace]);
 
   const activeWorkspace = useMemo<Workspace | null>(() => {
-    if (!data?.workspaces.length) return null;
+    if (!navigatorWorkspaces.length) return null;
     return (
-      data.workspaces.find((workspace) => workspace.id === activeWorkspaceId) ??
-      [...data.workspaces].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ??
+      navigatorWorkspaces.find((workspace) => workspace.id === activeWorkspaceId) ??
+      [...navigatorWorkspaces].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ??
       null
     );
-  }, [activeWorkspaceId, data?.workspaces]);
+  }, [activeWorkspaceId, navigatorWorkspaces]);
   useEffect(() => {
     if (activeWorkspace && activeWorkspace.id !== activeWorkspaceId) setActiveWorkspaceId(activeWorkspace.id);
     if (activeWorkspace?.repoId && activeWorkspace.repoId !== lastRepoId) setLastRepoId(activeWorkspace.repoId);
   }, [activeWorkspace, activeWorkspaceId, lastRepoId, setActiveWorkspaceId, setLastRepoId]);
 
-  const batchPrSummary = useAllWorkspacesPrSummary(data?.workspaces ?? []);
+  const batchPrSummary = useAllWorkspacesPrSummary(navigatorWorkspaces);
   const { summaries: stickySummaries, rememberSummary } = useStickyWorkspaceSummaries(
-    data?.workspaces ?? [],
+    navigatorWorkspaces,
     batchPrSummary.data,
   );
   const placeholderSummary = activeWorkspace ? stickySummaries.get(activeWorkspace.id) : undefined;
@@ -173,6 +179,23 @@ export function Cockpit() {
   const activeCheckoutId = checkoutIdFromTargetKey(activeTargetKey, activeWorkspaceCheckouts);
   const reviewCheckoutId = activeCheckoutId ?? homeReviewCheckoutId(activeWorkspace, activeWorkspaceCheckouts);
   const activeTargetType = activeCheckoutId ? "worktree_checkout" : "workspace_home";
+  const workspacePrEntry = activeWorkspace ? prStateQuery.data?.workspacePrState?.[activeWorkspace.id] : undefined;
+  const workspacePullRequest = activeWorkspace ? (prByWorkspaceId.get(activeWorkspace.id) ?? null) : null;
+  const workspacePrCheckedAt =
+    activeWorkspace && cockpitSummary.data?.workspaceId === activeWorkspace.id
+      ? cockpitSummary.data.versionControl.checkedAt
+      : (workspacePrEntry?.checkedAt ?? workspacePrEntry?.cachedAt ?? undefined);
+  const inspectorTarget = activeWorkspace
+    ? resolveInspectorTargetState({
+        workspace: activeWorkspace,
+        repos: data?.repos ?? [],
+        checkouts: activeWorkspaceCheckouts,
+        activeCheckoutId,
+        workspacePullRequest,
+        workspaceCheckedAt: workspacePrCheckedAt,
+        checkoutPrState: checkoutPrByWorkspaceId.get(activeWorkspace.id),
+      })
+    : null;
   const showInspectorPanel = shouldShowInspectorPanel(activeWorkspace, activeTargetType);
   const activeWorkspaceAllSessions = activeWorkspace
     ? allSessions.filter((session) => session.workspaceId === activeWorkspace.id)
@@ -214,7 +237,7 @@ export function Cockpit() {
     const levels = treeGroupingFor(navigatorGrouping);
     if (!levels.length) return [];
     return buildGroupTree(
-      data.workspaces,
+      navigatorWorkspaces,
       data.repos,
       data.sessions,
       data.operations,
@@ -222,11 +245,11 @@ export function Cockpit() {
       data.namespaces,
       data.checkouts,
     );
-  }, [data, navigatorGrouping]);
+  }, [data, navigatorGrouping, navigatorWorkspaces]);
   const flatWorkspaceIds = useMemo(() => {
     if (navTree.length) return flattenWorkspaceOrder(navTree);
-    return data?.workspaces.map((workspace) => workspace.id) ?? [];
-  }, [navTree, data?.workspaces]);
+    return navigatorWorkspaces.map((workspace) => workspace.id);
+  }, [navTree, navigatorWorkspaces]);
 
   const [shortcutError, setShortcutError] = useState<string | null>(null);
   const spawnSession = useMutation({
@@ -431,7 +454,7 @@ export function Cockpit() {
   const workspaceMeta = useMemo(() => {
     const map: Record<string, { readiness?: string; prTone?: string; prNumber?: number | null; attention?: string }> =
       {};
-    for (const workspace of data?.workspaces ?? []) {
+    for (const workspace of navigatorWorkspaces) {
       const sessions = data?.sessions.filter((session) => session.workspaceId === workspace.id) ?? [];
       const operations = data?.operations.filter((operation) => operation.workspaceId === workspace.id) ?? [];
       const attention = readinessForWorkspace(workspace, { sessions, operations });
@@ -448,7 +471,7 @@ export function Cockpit() {
       map[workspace.id] = entry;
     }
     return map;
-  }, [data?.workspaces, data?.sessions, data?.operations, cockpitSummary.data, prByWorkspaceId]);
+  }, [navigatorWorkspaces, data?.sessions, data?.operations, cockpitSummary.data, prByWorkspaceId]);
 
   if (state.isLoading && !data)
     return (
@@ -500,7 +523,7 @@ export function Cockpit() {
         </nav>
         {layout.state.leftCollapsed ? (
           <CollapsedLeftRail
-            workspaces={data?.workspaces ?? []}
+            workspaces={navigatorWorkspaces}
             activeWorkspaceId={activeWorkspace?.id ?? ""}
             sessions={data?.sessions ?? []}
             onExpand={layout.toggleLeft}
@@ -513,7 +536,7 @@ export function Cockpit() {
           >
             <Navigator
               repos={data?.repos ?? []}
-              workspaces={data?.workspaces ?? []}
+              workspaces={navigatorWorkspaces}
               checkouts={allCheckouts}
               sessions={data?.sessions ?? []}
               operations={data?.operations ?? []}
@@ -596,10 +619,15 @@ export function Cockpit() {
                 {activeWorkspace ? (
                   <Inspector
                     workspace={activeWorkspace}
-                    repo={selectedRepo}
+                    repo={inspectorTarget?.repo ?? selectedRepo}
                     sessions={activeWorkspaceSessions}
                     summary={cockpitSummary.data}
                     reviewCheckoutId={reviewCheckoutId}
+                    targetCheckoutId={activeCheckoutId}
+                    targetPullRequest={inspectorTarget?.pullRequest ?? null}
+                    targetPullRequestCheckedAt={inspectorTarget?.checkedAt}
+                    targetBranch={inspectorTarget?.branch ?? activeWorkspace.branch}
+                    targetBaseBranch={inspectorTarget?.baseBranch ?? activeWorkspace.baseBranch}
                     onCollapse={layout.toggleRight}
                   />
                 ) : (
@@ -613,7 +641,7 @@ export function Cockpit() {
       <BottomBar activeWorkspace={activeWorkspace} activeSession={activeSession} sessions={activeWorkspaceSessions} />
       {commandOpen ? (
         <CommandPalette
-          workspaces={data?.workspaces ?? []}
+          workspaces={navigatorWorkspaces}
           repoNames={repoNames}
           workspaceMeta={workspaceMeta}
           onClose={() => setCommandOpen(false)}

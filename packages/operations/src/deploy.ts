@@ -100,7 +100,7 @@ export async function listDeployedApps(
 
 export async function redeployApp(
   deps: DeployOpsDeps,
-  input: { repo: Repo; workspace: Workspace; appName?: string | undefined },
+  input: { repo: Repo; workspace: Workspace; checkoutId?: string | undefined; appName?: string | undefined },
 ): Promise<{ operationId: string; status: "succeeded" | "failed"; exitStatus: number | null }> {
   const label = input.appName ? `Redeploy ${input.appName}` : "Redeploy all apps";
   const operation = deps.newOperation(
@@ -150,7 +150,12 @@ export async function redeployApp(
       retriable: !ok,
       retryInput: ok
         ? null
-        : { kind: "deploy.redeploy", workspaceId: input.workspace.id, appName: input.appName ?? null },
+        : {
+            kind: "deploy.redeploy",
+            workspaceId: input.workspace.id,
+            checkoutId: input.checkoutId ?? null,
+            appName: input.appName ?? null,
+          },
       updatedAt: nowIso(),
     });
     deps.activity(
@@ -170,7 +175,12 @@ export async function redeployApp(
       progress: 100,
       error: message,
       retriable: true,
-      retryInput: { kind: "deploy.redeploy", workspaceId: input.workspace.id, appName: input.appName ?? null },
+      retryInput: {
+        kind: "deploy.redeploy",
+        workspaceId: input.workspace.id,
+        checkoutId: input.checkoutId ?? null,
+        appName: input.appName ?? null,
+      },
       updatedAt: nowIso(),
     });
     deps.activity(

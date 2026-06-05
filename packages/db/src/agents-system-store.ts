@@ -21,6 +21,7 @@ declare module "./index.js" {
     insertWorkspaceCheckout(checkout: WorktreeCheckout): void;
     deleteWorkspaceCheckout(id: string): void;
     updateWorkspaceCheckoutLayout(id: string, patch: Pick<WorktreeCheckout, "name" | "path">): WorktreeCheckout | null;
+    updateWorkspaceCheckoutDisplayName(id: string, displayName: string | null): WorktreeCheckout | null;
     updateWorkspaceCheckoutGate(id: string, gateStatus: WorktreeCheckout["gateStatus"]): WorktreeCheckout | null;
     updateWorkspaceCheckoutIssue(id: string, issue: IssueBinding | null): WorktreeCheckout | null;
     updateWorkspaceCheckoutPr(id: string, pr: PullRequestBinding | null): WorktreeCheckout | null;
@@ -53,6 +54,7 @@ function checkoutFromRow(row: Record<string, unknown>): WorktreeCheckout {
     workspaceId: asString(row, "workspace_id"),
     repoId: asString(row, "repo_id"),
     name: asString(row, "name"),
+    displayName: row.display_name ? asString(row, "display_name") : null,
     path: asString(row, "path"),
     branch: asString(row, "branch"),
     baseBranch: asString(row, "base_branch"),
@@ -223,7 +225,7 @@ export const agentsSystemStoreMethods = {
   insertWorkspaceCheckout(this: SqliteStore, checkout: WorktreeCheckout) {
     this.database
       .prepare(
-        `INSERT INTO workspace_checkouts (id, workspace_id, repo_id, name, path, branch, base_branch,
+        `INSERT INTO workspace_checkouts (id, workspace_id, repo_id, name, display_name, path, branch, base_branch,
           issue_provider, issue_key, issue_url, issue_title, issue_status, issue_fetched_at,
           intended_pr_provider, intended_pr_number, intended_pr_url,
           pr_head_sha, pr_base_ref, intended_pr_fetched_at, intended_pr_checks_green,
@@ -231,13 +233,14 @@ export const agentsSystemStoreMethods = {
           stack_parent_checkout_id, inferred_purpose, delivery_unit_key, delivery_plan_version_id,
           manager_status, manager_status_reason, manager_status_updated_at, gate_status,
           created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         checkout.id,
         checkout.workspaceId,
         checkout.repoId,
         checkout.name,
+        checkout.displayName ?? null,
         checkout.path,
         checkout.branch,
         checkout.baseBranch,
@@ -295,6 +298,17 @@ export const agentsSystemStoreMethods = {
     this.database
       .prepare("UPDATE workspace_checkouts SET name = ?, path = ?, updated_at = ? WHERE id = ?")
       .run(patch.name, patch.path, new Date().toISOString(), id);
+    return this.findWorkspaceCheckout(id);
+  },
+
+  updateWorkspaceCheckoutDisplayName(
+    this: SqliteStore,
+    id: string,
+    displayName: string | null,
+  ): WorktreeCheckout | null {
+    this.database
+      .prepare("UPDATE workspace_checkouts SET display_name = ?, updated_at = ? WHERE id = ?")
+      .run(displayName, new Date().toISOString(), id);
     return this.findWorkspaceCheckout(id);
   },
 

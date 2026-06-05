@@ -1,6 +1,7 @@
 import type { Namespace, Operation, Repo, Workspace, WorkspaceSession, WorktreeCheckout } from "@citadel/contracts";
 import { readinessForWorkspace } from "./cockpit-readiness.js";
 import { formatLabel } from "./labels.js";
+import { repoNameWithOwner } from "./repo-labels.js";
 
 export const SECTION_ORDER = ["blocked", "needs-review", "working", "dirty", "idle", "done"];
 
@@ -65,7 +66,7 @@ type EnrichedWorkspace = WorkspaceEntry & {
 const UNCATEGORIZED_KEY = "__uncategorized__";
 
 function rawBucketKey(entry: EnrichedWorkspace, field: GroupableKey): string {
-  if (field === "repo") return entry.repo?.name ?? "Unknown repo";
+  if (field === "repo") return entry.repo ? repoNameWithOwner(entry.repo) : "Unknown repo";
   if (field === "namespace") return entry.namespace ? entry.namespace.id : UNCATEGORIZED_KEY;
   return entry.section ?? "idle";
 }

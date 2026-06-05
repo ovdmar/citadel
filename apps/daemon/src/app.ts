@@ -44,7 +44,12 @@ import { registerDoctorRoutes } from "./doctor-routes.js";
 import { E2E_RUN_ID_HEADER, e2eHealthFields, e2eRunIdMismatch } from "./e2e-guard.js";
 import { registerWorkspaceExtraRoutes } from "./extra-routes.js";
 import { AUTOMATED_GH_DISABLED_REASON, automatedGhEnabled } from "./gh-automation.js";
-import { type GhQuotaWiringWithDetach, resolveRepoFullNameFromWorkspaces, wireGhQuota } from "./gh-quota-wiring.js";
+import {
+  type GhQuotaWiringWithDetach,
+  resolveRepoFullNameFromGit,
+  resolveRepoFullNameFromWorkspaces,
+  wireGhQuota,
+} from "./gh-quota-wiring.js";
 import { wireJiraAutoTransitions } from "./jira-auto-transitions.js";
 import { registerJiraRoutes } from "./jira-routes.js";
 import { registerMcpRoutes } from "./mcp-routes.js";
@@ -173,6 +178,7 @@ export async function createDaemonApp(input: {
     pid: process.pid,
     nodeVersion: process.versions.node,
   });
+  backfillRepoProviderRepositoryKeys(store);
   const resolveRepoFullName = (repoId: string) => resolveRepoFullNameFromWorkspaces(repoId, store);
   const ghQuota: GhQuotaWiringWithDetach = wireGhQuota({ sseClients, store, resolveRepoFullName });
   const detachSseClient = (client: express.Response) => {
@@ -664,5 +670,13 @@ export async function createDaemonApp(input: {
   // own TTL semantics.
   function cachedProviderSwr<T>(key: string, load: () => T | Promise<T>, ttlMs = 10_000): Promise<T> {
     return cachedProviderWithStaleFallback({ cache: providerCache, key, load, ttlMs });
+  }
+}
+
+function backfillRepoProviderRepositoryKeys(store: SqliteStore): void {
+  for (const repo of store.listRepos()) {
+    if (repo.providerRepositoryKey) continue;
+    const key = resolveRepoFullNameFromGit(repo.rootPath, repo.defaultRemote || "origin");
+    if (key) store.updateRepo(repo.id, { providerRepositoryKey: key });
   }
 }

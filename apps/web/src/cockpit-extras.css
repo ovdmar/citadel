@@ -592,6 +592,11 @@
   padding: 1px 4px;
 }
 
+.workspace-card-title-prefix {
+  color: var(--c-fg-4);
+  font-weight: 500;
+}
+
 .workspace-card-branch {
   font-family: var(--font-mono);
   font-size: 10.5px;

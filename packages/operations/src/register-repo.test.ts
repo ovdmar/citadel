@@ -15,6 +15,7 @@ afterEach(() => {
 describe("registerRepo", () => {
   it("populates the root workspace root_path during repo registration", () => {
     const fixture = createGitFixture();
+    run("git", ["remote", "set-url", "origin", "git@github.com:ovdmar/citadel.git"], fixture.repoPath);
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
     const service = new OperationService(store);
@@ -22,6 +23,7 @@ describe("registerRepo", () => {
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
     const rootWorkspace = store.listWorkspaces(repo.id).find((workspace) => workspace.kind === "root");
 
+    expect(repo).toMatchObject({ providerRepositoryKey: "ovdmar/citadel", showMainWorkspace: false });
     expect(rootWorkspace).toMatchObject({ repoId: repo.id, path: fixture.repoPath, name: "main" });
     expect(store.database.prepare("SELECT root_path FROM workspaces WHERE id = ?").get(rootWorkspace?.id)).toEqual({
       root_path: fixture.repoPath,

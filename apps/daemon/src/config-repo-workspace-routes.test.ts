@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -65,6 +66,7 @@ describe("config/repo/workspace routes", () => {
         rootPath: repoPath,
         name: "citadel",
       });
+      expect(registered.repo).toMatchObject({ showMainWorkspace: false });
       const home = await postJson<{ workspaceId: string }>(`${baseUrl}/api/workspaces/home`, {
         name: "Feature Home",
         source: "scratch",
@@ -85,6 +87,7 @@ describe("config/repo/workspace routes", () => {
         {
           repoId: registered.repo.id,
           name: "api",
+          displayName: "API review",
           branch: "feature/api",
           source: "default_branch",
         },
@@ -97,9 +100,86 @@ describe("config/repo/workspace routes", () => {
           workspaceId: home.workspaceId,
           repoId: registered.repo.id,
           name: "api",
+          displayName: "API review",
           branch: "feature/api",
         }),
       );
+
+      const renameResponse = await fetch(
+        `${baseUrl}/api/workspaces/${home.workspaceId}/checkouts/${checkout.checkoutId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ displayName: "Payments UI" }),
+        },
+      );
+      expect(renameResponse.ok, await renameResponse.text()).toBe(true);
+      const stateAfterRename = await getJson<{ checkouts: WorktreeCheckout[] }>(`${baseUrl}/api/state`);
+      expect(stateAfterRename.checkouts.find((candidate) => candidate.id === checkout.checkoutId)).toMatchObject({
+        name: "api",
+        displayName: "Payments UI",
+      });
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("persists main repo workspace visibility through repo patch", async () => {
+    const fixture = createFixtureBase(dirs);
+    const { repoPath } = createGitFixtureWithRemote(fixture.config.dataDir);
+    const { server } = await createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const registered = await postJson<{ repo: Repo }>(`${baseUrl}/api/repos`, {
+        rootPath: repoPath,
+        name: "citadel",
+      });
+      expect(registered.repo.showMainWorkspace).toBe(false);
+
+      const response = await fetch(`${baseUrl}/api/repos/${registered.repo.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ showMainWorkspace: true }),
+      });
+      expect(response.ok, await response.text()).toBe(true);
+
+      const state = await getJson<{ repos: Repo[] }>(`${baseUrl}/api/state`);
+      expect(state.repos.find((repo) => repo.id === registered.repo.id)?.showMainWorkspace).toBe(true);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("backfills owner/repo labels for existing registered repos on startup", async () => {
+    const fixture = createFixtureBase(dirs);
+    const { repoPath } = createGitFixtureWithRemote(fixture.config.dataDir);
+    execFileSync("git", ["remote", "set-url", "origin", "https://github.com/ovdmar/citadel.git"], {
+      cwd: repoPath,
+      stdio: "pipe",
+    });
+    fixture.store.insertRepo({
+      id: "repo_existing",
+      name: "citadel",
+      rootPath: repoPath,
+      defaultBranch: "main",
+      defaultRemote: "origin",
+      worktreeParent: path.join(fixture.config.dataDir, "worktrees"),
+      providerRepositoryKey: null,
+      showMainWorkspace: false,
+      setupHookIds: [],
+      teardownHookIds: [],
+      providerIds: [],
+      deployHookCommand: null,
+      createdAt: "2026-06-03T00:00:00.000Z",
+      updatedAt: "2026-06-03T00:00:00.000Z",
+      archivedAt: null,
+    });
+
+    const { server } = await createDaemonApp(fixture);
+    const baseUrl = await listen(server);
+    try {
+      const state = await getJson<{ repos: Repo[] }>(`${baseUrl}/api/state`);
+      expect(state.repos.find((repo) => repo.id === "repo_existing")?.providerRepositoryKey).toBe("ovdmar/citadel");
     } finally {
       await closeServer(server);
     }
@@ -185,9 +265,9 @@ describe("config/repo/workspace routes", () => {
       );
       expect(createdHomes.map((workspace) => workspace.name)).not.toContain("workspace");
       expect(new Set(createdHomes.map((workspace) => workspace.name)).size).toBe(2);
-      expect(new Set(createdCheckouts.map((checkout) => checkout.name)).size).toBe(2);
+      expect(createdCheckouts.map((checkout) => checkout.name)).toEqual(["citadel", "citadel"]);
       expect(new Set(createdCheckouts.map((checkout) => checkout.branch)).size).toBe(2);
-      expect(createdCheckouts.map((checkout) => checkout.name)).toEqual(
+      expect(createdCheckouts.map((checkout) => checkout.name)).not.toEqual(
         createdHomes.map((workspace) => workspace.name),
       );
     } finally {

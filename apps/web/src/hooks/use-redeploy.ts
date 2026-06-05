@@ -1,6 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, queryClient } from "../api.js";
+import { deployedAppsQueryKey, redeployPayload } from "../deployed-apps-target.js";
 import {
   MIN_SPIN_MS,
   PREFETCH_TIMEOUT_MS,
@@ -21,7 +22,7 @@ type UseRedeployResult = {
   trigger: (name?: string) => void;
 };
 
-export function useRedeploy(workspaceId: string): UseRedeployResult {
+export function useRedeploy(workspaceId: string, checkoutId?: string | null): UseRedeployResult {
   const [inFlight, setInFlight] = useState(false);
   const [targetName, setTargetName] = useState<string | undefined>(undefined);
   const [lastOperationId, setLastOperationId] = useState<string | null>(null);
@@ -60,14 +61,14 @@ export function useRedeploy(workspaceId: string): UseRedeployResult {
 
   const finishInFlight = useCallback(() => {
     safeSet(setInFlight, false);
-    queryClient.invalidateQueries({ queryKey: ["deployed-apps", workspaceId] });
-  }, [safeSet, workspaceId]);
+    queryClient.invalidateQueries({ queryKey: deployedAppsQueryKey(workspaceId, checkoutId) });
+  }, [safeSet, workspaceId, checkoutId]);
 
   const mutation = useMutation({
     mutationFn: (name?: string) =>
       api<RedeployResponse>(`/api/workspaces/${workspaceId}/deployed-apps/redeploy`, {
         method: "POST",
-        body: JSON.stringify(name ? { name } : {}),
+        body: JSON.stringify(redeployPayload(name, checkoutId)),
       }),
   });
 

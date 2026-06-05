@@ -26,6 +26,9 @@ export function InspectorPrSection(props: {
   diffAdded: number;
   diffRemoved: number;
   checkedAt: string | undefined;
+  checkoutId: string | null;
+  targetBranch: string;
+  targetBaseBranch: string;
 }) {
   const { workspace, pr, diffFiles, diffAdded, diffRemoved, checkedAt } = props;
   const prTone = prToneFor(pr);
@@ -35,16 +38,21 @@ export function InspectorPrSection(props: {
   const reviewerAggregate = aggregateReviewerCounts(pr?.reviewers ?? []);
   const elapsed = useElapsed(checkedAt);
   const refresh = useMutation({
-    mutationFn: () => api(`/api/workspaces/${workspace.id}/pr-refresh`, { method: "POST", body: JSON.stringify({}) }),
+    mutationFn: () =>
+      api(`/api/workspaces/${workspace.id}/pr-refresh`, {
+        method: "POST",
+        body: JSON.stringify(props.checkoutId ? { checkoutId: props.checkoutId } : {}),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["workspace-cockpit", workspace.id] });
       queryClient.invalidateQueries({ queryKey: ["workspaces-pr-batch"] });
+      queryClient.invalidateQueries({ queryKey: ["workspaces-pr-state"] });
     },
   });
   // Copies the PR's head ref (from gh) — NOT workspace.branch. If the local
   // branch was renamed but the PR head hasn't moved, the operator pastes the
   // correct ref into `git push origin <ref>` and friends.
-  const headRef = pr?.headRefName ?? workspace.branch;
+  const headRef = pr?.headRefName ?? props.targetBranch;
   const copyHead = () => {
     if (typeof navigator !== "undefined" && navigator.clipboard) navigator.clipboard.writeText(headRef);
   };
@@ -85,7 +93,7 @@ export function InspectorPrSection(props: {
                   #{pr.number} <ExternalLink size={9} />
                 </a>
                 <span className="ins-pr-base">
-                  <span className="ins-mono">{workspace.baseBranch}</span>
+                  <span className="ins-mono">{props.targetBaseBranch}</span>
                   <span className="ins-pr-arrow">←</span>
                   <span className="ins-mono">{headRef}</span>
                   <button

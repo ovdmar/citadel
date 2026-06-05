@@ -87,6 +87,10 @@ export function WorkspaceCard(
     branchLabel?: string | null | undefined;
     branchTitle?: string | undefined;
     cardTitle?: string | undefined;
+    displayTitle?: string;
+    titlePrefix?: string;
+    onRename?: (name: string) => Promise<unknown> | unknown;
+    renameLabel?: string;
     rightControl?: ReactNode;
     disableDrop?: boolean;
     allowRootDrop?: boolean;
@@ -95,7 +99,7 @@ export function WorkspaceCard(
   },
 ) {
   const { workspace, pullRequest } = props;
-  const titleDisplay = workspaceDisplayTitle(workspace);
+  const titleDisplay = props.displayTitle ?? workspaceDisplayTitle(workspace);
   const prTone = props.prToneOverride ?? (pullRequest ? prToneFor(pullRequest) : "missing");
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
   const lifecycleTone = deriveWorkspaceLifecycleTone({ sessions: props.sessions, pullRequest: pullRequest ?? null });
@@ -139,11 +143,13 @@ export function WorkspaceCard(
   }, [editing]);
 
   const rename = useMutation({
-    mutationFn: (name: string) =>
-      api(`/api/workspaces/${workspace.id}`, {
+    mutationFn: (name: string) => {
+      if (props.onRename) return Promise.resolve(props.onRename(name));
+      return api(`/api/workspaces/${workspace.id}`, {
         method: "PATCH",
         body: JSON.stringify({ name }),
-      }),
+      });
+    },
     onSuccess: () => {
       setEditing(false);
       queryClient.invalidateQueries({ queryKey: ["state"] });
@@ -291,7 +297,7 @@ export function WorkspaceCard(
                     setEditing(false);
                   }
                 }}
-                aria-label="Rename workspace"
+                aria-label={props.renameLabel ?? "Rename workspace"}
               />
             ) : (
               <strong
@@ -301,6 +307,7 @@ export function WorkspaceCard(
                 }}
                 title={titleDisplay}
               >
+                {props.titlePrefix ? <span className="workspace-card-title-prefix">{props.titlePrefix} * </span> : null}
                 {workspace.issueKey ? <span className="workspace-card-issue">{workspace.issueKey}</span> : null}
                 {titleDisplay}
               </strong>

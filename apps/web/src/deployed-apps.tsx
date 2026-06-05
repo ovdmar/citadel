@@ -4,15 +4,16 @@ import { Link } from "@tanstack/react-router";
 import { RefreshCw } from "lucide-react";
 import { api } from "./api.js";
 import { Button } from "./components/ui/button.js";
+import { deployedAppsQueryKey, deployedAppsUrl } from "./deployed-apps-target.js";
 import { useRedeploy } from "./hooks/use-redeploy.js";
 
-export function DeployedAppsPanel(props: { workspaceId: string; repo: Repo | null }) {
+export function DeployedAppsPanel(props: { workspaceId: string; repo: Repo | null; checkoutId?: string | null }) {
   const summary = useQuery<DeployedAppsSummary>({
-    queryKey: ["deployed-apps", props.workspaceId],
-    queryFn: () => api<DeployedAppsSummary>(`/api/workspaces/${props.workspaceId}/deployed-apps`),
+    queryKey: deployedAppsQueryKey(props.workspaceId, props.checkoutId),
+    queryFn: () => api<DeployedAppsSummary>(deployedAppsUrl(props.workspaceId, props.checkoutId)),
     refetchInterval: 10_000,
   });
-  const redeploy = useRedeploy(props.workspaceId);
+  const redeploy = useRedeploy(props.workspaceId, props.checkoutId);
 
   const data = summary.data;
   const showEmpty = !data || data.resolution.source === "none";

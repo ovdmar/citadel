@@ -26,7 +26,7 @@ type SessionTableName = "agent_sessions" | "workspace_sessions";
 // the new version below. Consumed by the doctor's database-schema check so
 // `make doctor` can flag an installed daemon whose code is newer than the
 // database it's been given.
-export const CURRENT_SCHEMA_VERSION = 21;
+export const CURRENT_SCHEMA_VERSION = 22;
 
 function tmuxSocketBase(): string {
   const configured = process.env.CITADEL_TMUX_SOCKET?.trim();
@@ -146,6 +146,8 @@ export function runMigrations(
     VALUES (1, 'initial-local-first-schema', datetime('now'));
   `);
   ensureColumn("activity_events", "hook_output", "TEXT");
+  ensureColumn("repos", "provider_repository_key", "TEXT");
+  ensureColumn("repos", "show_main_workspace", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("operations", "logs", "TEXT");
   ensureColumn("operations", "retriable", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("operations", "retry_input", "TEXT");
@@ -369,6 +371,7 @@ export function runMigrations(
   backfillWorkspaceTmuxSocketNames(db, "workspace_sessions");
   migrateWorkspaceHomeCheckoutsManager(db, ensureColumn);
   ensureColumn("workspace_checkouts", "issue_title", "TEXT");
+  ensureColumn("workspace_checkouts", "display_name", "TEXT");
   ensureColumn("workspace_checkouts", "issue_status", "TEXT");
   ensureColumn("workspace_checkouts", "issue_fetched_at", "TEXT");
   db.exec(`
@@ -393,7 +396,8 @@ export function runMigrations(
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_workspace_sessions_pty_session ON workspace_sessions(pty_session_id);
     INSERT OR IGNORE INTO schema_migrations(version, name, applied_at) VALUES
-      (21, 'workspace-sessions-terminal-backend', datetime('now'));
+      (21, 'workspace-sessions-terminal-backend', datetime('now')),
+      (22, 'repo-main-workspace-visibility-and-checkout-title', datetime('now'));
   `);
 }
 

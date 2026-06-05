@@ -194,6 +194,7 @@ describe("navigator workspace checkout cards", () => {
     const repo: Repo = {
       id: "repo_a",
       name: "citadel",
+      providerRepositoryKey: "ovdmar/citadel",
       rootPath: "/repo/citadel",
       defaultBranch: "main",
       defaultRemote: "origin",
@@ -207,39 +208,42 @@ describe("navigator workspace checkout cards", () => {
       archivedAt: null,
     };
 
-    expect(checkoutBranchLabel(co, repo)).toBe("citadel · feature/api");
+    expect(checkoutBranchLabel(co, repo)).toBe("ovdmar/citadel · feature/api");
     expect(checkoutBranchTitle(co, repo)).toBe(
-      "citadel · feature/api · git worktree: api-stable · /work/home/api-stable",
+      "ovdmar/citadel · feature/api · git worktree: api-stable · /work/home/api-stable",
     );
   });
 
-  it("edits the checkout card title through the workspace display name without renaming the git worktree", async () => {
+  it("edits the checkout card display title without renaming the git worktree", async () => {
     const ws = workspace({ id: "ws_checkout", name: "Readable API" });
     const co = checkout("co_api", {
       workspaceId: ws.id,
       name: "api-stable",
+      displayName: "API Review",
       path: "/work/home/api-stable",
       branch: "feature/api",
     });
-    const repo = repoFixture({ id: co.repoId, name: "citadel" });
+    const repo = repoFixture({ id: co.repoId, name: "citadel", providerRepositoryKey: "ovdmar/citadel" });
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input) !== "/api/workspaces/ws_checkout") {
+      if (String(input) !== "/api/workspaces/ws_checkout/checkouts/co_api") {
         return Promise.reject(new Error(`unexpected fetch ${String(input)}`));
       }
-      return Promise.resolve(jsonResponse({ workspace: { ...ws, name: JSON.parse(String(init?.body)).name } }));
+      return Promise.resolve(
+        jsonResponse({ checkout: { ...co, displayName: JSON.parse(String(init?.body)).displayName } }),
+      );
     });
     vi.stubGlobal("fetch", fetchMock);
 
     const container = renderCheckoutCard({ workspace: ws, checkout: co, repo });
     const branch = Array.from(container.querySelectorAll(".workspace-card-branch")).find(
-      (candidate) => candidate.textContent === "citadel · feature/api",
+      (candidate) => candidate.textContent === "ovdmar/citadel · feature/api",
     );
     expect(branch?.getAttribute("title")).toBe(
-      "citadel · feature/api · git worktree: api-stable · /work/home/api-stable",
+      "ovdmar/citadel · feature/api · git worktree: api-stable · /work/home/api-stable",
     );
 
     const title = container.querySelector("strong");
-    expect(title?.textContent).toBe("Readable API");
+    expect(title?.textContent).toBe("ovdmar/citadel * API Review");
     flushSync(() => {
       title?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
     });
@@ -254,10 +258,10 @@ describe("navigator workspace checkout cards", () => {
 
     await waitFor(() => fetchMock.mock.calls.length === 1);
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/workspaces/ws_checkout",
+      "/api/workspaces/ws_checkout/checkouts/co_api",
       expect.objectContaining({
         method: "PATCH",
-        body: JSON.stringify({ name: "Payments UI" }),
+        body: JSON.stringify({ displayName: "Payments UI" }),
       }),
     );
     expect(co.name).toBe("api-stable");

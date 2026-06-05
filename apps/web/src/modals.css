@@ -291,6 +291,59 @@
   gap: 12px;
 }
 
+.workspace-repo-picker {
+  display: grid;
+  gap: 6px;
+}
+
+.workspace-repo-options {
+  display: grid;
+  gap: 3px;
+  max-height: 220px;
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-strong);
+}
+
+.workspace-repo-option {
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px !important;
+  padding: 6px 8px;
+  border-radius: 5px;
+  color: CanvasText !important;
+}
+
+.workspace-repo-option.is-selected,
+.workspace-repo-option:hover {
+  background: color-mix(in srgb, var(--color-action) 12%, transparent);
+}
+
+.workspace-repo-option input {
+  min-height: auto;
+}
+
+.workspace-repo-option span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.workspace-repo-option strong,
+.workspace-repo-option small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-repo-option small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .workspace-modal-prompt textarea {
   min-height: 88px;
   font-size: 13px;
