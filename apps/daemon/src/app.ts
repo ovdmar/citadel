@@ -32,7 +32,13 @@ import express from "express";
 import { ZodError } from "zod";
 import { registerAgentSessionRoutes } from "./agent-session-routes.js";
 import { registerAgentTemplateRoutes } from "./agent-templates-routes.js";
-import { asyncRoute, cachedProviderValue, cachedProviderWithStaleFallback, parsePositiveInt } from "./app-helpers.js";
+import {
+  asyncRoute,
+  bustCacheByPrefixes,
+  cachedProviderValue,
+  cachedProviderWithStaleFallback,
+  parsePositiveInt,
+} from "./app-helpers.js";
 import { startDaemonAutoRecoveryMonitor } from "./auto-recovery-wiring.js";
 import { startDaemonAutoResumeLoop } from "./auto-resume-wiring.js";
 import { registerCitadelActionRoutes } from "./citadel-actions-routes.js";
@@ -78,7 +84,6 @@ import { buildRespawnTmux } from "./terminal-routes-helpers.js";
 import { createUiActivityTracker } from "./ui-activity.js";
 import { fetchVersionControlGated } from "./vc-fetch-gated.js";
 import { registerWorkspaceDiffRoutes } from "./workspace-diff-routes.js";
-import { bustCacheByPrefixes, createWorkspaceFsWatchers } from "./workspace-fs-watcher.js";
 import { registerWorkspacesPrStateRoute } from "./workspaces-pr-state-route.js";
 
 type AnyServer = http.Server | https.Server;
@@ -108,7 +113,7 @@ export async function createDaemonApp(input: {
   operations?: OperationService;
   providers?: Partial<ProviderCollectors>;
   // Default true. Test helpers pass false so vitest boots don't spawn the
-  // 15s background tick (and the implied `gh`/`jtk` subprocesses on tick).
+  // background tick (and the implied `gh`/`jtk` subprocesses on tick).
   // Note: deliberately NOT gated on process.env.VITEST — that pattern would
   // silently disable the feature in production if the env var leaks.
   enableRefreshJob?: boolean;
@@ -204,7 +209,6 @@ export async function createDaemonApp(input: {
   });
   app.use(express.json({ limit: "2mb" }));
 
-  let fsWatchers: { reconcile: () => void; close: () => void } | null = null;
   const emit = (type: string, payload: unknown) => {
     const event: AppEvent = {
       id: `sse_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
@@ -214,9 +218,6 @@ export async function createDaemonApp(input: {
       payload,
     };
     writeSseEvent(sseClients, type, event, detachSseClient, diagnostics);
-    if (fsWatchers && (type === "workspace.updated" || type === "state.reconciled" || type === "repo.updated")) {
-      fsWatchers.reconcile();
-    }
   };
 
   const recentUserAction = new Map<string, number>();
@@ -487,17 +488,6 @@ export async function createDaemonApp(input: {
         })
       : null;
   if (refreshJob) server.on("close", () => refreshJob.stop());
-
-  if (process.env.CITADEL_DISABLE_FS_WATCHERS !== "1") {
-    fsWatchers = createWorkspaceFsWatchers({
-      listWorkspaces: () => store.listWorkspaces(),
-      providerCache,
-      emit,
-      onSettled: refreshJob ? (workspaceId) => void refreshJob.pokeWorkspace(workspaceId) : undefined,
-    });
-    fsWatchers.reconcile();
-    server.on("close", () => fsWatchers?.close());
-  }
 
   server.on("close", () => {
     // Final synchronous flush so the persisted cache reflects in-memory state

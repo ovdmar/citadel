@@ -13,6 +13,17 @@ export function asyncRoute(
 
 export type ProviderCache = Map<string, ProviderCacheEntry>;
 
+export function bustCacheByPrefixes(providerCache: ProviderCache, prefixes: string[]): number {
+  let removed = 0;
+  for (const key of Array.from(providerCache.keys())) {
+    if (prefixes.some((prefix) => key.startsWith(prefix))) {
+      providerCache.delete(key);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
 // Memoize a provider lookup with a TTL. Shared between routes that need the
 // same expensive computation (e.g. CI status, runtime usage) within the cache
 // window. Strict mode: miss/expired entries always await load.

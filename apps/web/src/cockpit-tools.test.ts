@@ -135,10 +135,10 @@ describe("nextPollInterval", () => {
 });
 
 describe("workspaceCockpitSummaryQueryOptions", () => {
-  it("does not install an active-workspace polling interval", () => {
+  it("polls the active workspace cockpit summary every 30s", () => {
     const options = workspaceCockpitSummaryQueryOptions(workspace({ id: "ws_a" }));
 
-    expect("refetchInterval" in options).toBe(false);
+    expect(options.refetchInterval).toBe(30_000);
     expect(options.refetchOnWindowFocus).toBe(true);
   });
 

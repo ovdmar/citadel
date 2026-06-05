@@ -3,9 +3,8 @@ import { CreateRepoInputSchema } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
 import type express from "express";
-import { asyncRoute } from "./app-helpers.js";
+import { asyncRoute, bustCacheByPrefixes } from "./app-helpers.js";
 import { registerRepoDiscoveryRoutes } from "./repo-discovery-routes.js";
-import { bustCacheByPrefixes } from "./workspace-fs-watcher.js";
 
 type RepoRoutesInput = {
   app: express.Express;
