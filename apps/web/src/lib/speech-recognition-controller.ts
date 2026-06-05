@@ -1,5 +1,8 @@
-export const FINAL_AUTO_SUBMIT_DELAY_MS = 900;
-export const NO_RESULT_SILENCE_TIMEOUT_MS = 10_000;
+export const DEFAULT_VOICE_SILENCE_TIMEOUT_MS = 15_000;
+export const MIN_VOICE_SILENCE_TIMEOUT_MS = 3_000;
+export const MAX_VOICE_SILENCE_TIMEOUT_MS = 30_000;
+export const FINAL_AUTO_SUBMIT_DELAY_MS = DEFAULT_VOICE_SILENCE_TIMEOUT_MS;
+export const NO_RESULT_SILENCE_TIMEOUT_MS = DEFAULT_VOICE_SILENCE_TIMEOUT_MS;
 
 type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
 
@@ -54,10 +57,18 @@ type TranscriptControllerState = Extract<
 
 type SpeechRecognitionControllerOptions = {
   win?: Window;
+  silenceTimeoutMs?: number;
   onState?: (state: SpeechRecognitionControllerState) => void;
   onInterim?: (text: string) => void;
+  onDraft?: (text: string) => void;
   onFinal?: (text: string) => void | Promise<void>;
 };
+
+export function normalizeVoiceSilenceTimeoutMs(value: number): number {
+  if (!Number.isFinite(value)) return DEFAULT_VOICE_SILENCE_TIMEOUT_MS;
+  const rounded = Math.round(value);
+  return Math.min(MAX_VOICE_SILENCE_TIMEOUT_MS, Math.max(MIN_VOICE_SILENCE_TIMEOUT_MS, rounded));
+}
 
 export function detectSpeechRecognitionSupport(win: Window = window): SpeechRecognitionSupport {
   const candidate = win as SpeechRecognitionWindow;
@@ -75,9 +86,22 @@ export class SpeechRecognitionController {
   private interimTranscript = "";
   private generation = 0;
   private readonly win: Window;
+  private silenceTimeoutMs: number;
 
   constructor(private readonly options: SpeechRecognitionControllerOptions = {}) {
     this.win = options.win ?? window;
+    this.silenceTimeoutMs = normalizeVoiceSilenceTimeoutMs(
+      options.silenceTimeoutMs ?? DEFAULT_VOICE_SILENCE_TIMEOUT_MS,
+    );
+  }
+
+  setSilenceTimeoutMs(value: number): void {
+    this.silenceTimeoutMs = normalizeVoiceSilenceTimeoutMs(value);
+    if (this.finalTimer !== null) {
+      this.armFinalTimer();
+    } else if (this.silenceTimer !== null) {
+      this.armSilenceTimer();
+    }
   }
 
   start(): boolean {
@@ -98,7 +122,7 @@ export class SpeechRecognitionController {
     const recognition = new support.Recognition();
     recognition.lang = "en-US";
     recognition.interimResults = true;
-    recognition.continuous = false;
+    recognition.continuous = true;
     recognition.onresult = (event) => {
       if (this.isCurrentRecognition(recognition, generation)) this.handleResult(event);
     };
@@ -125,6 +149,18 @@ export class SpeechRecognitionController {
     }
     this.options.onState?.({ type: "listening" });
     this.armSilenceTimer();
+    return true;
+  }
+
+  commitCurrent(): boolean {
+    const transcript = this.consumePartialTranscript();
+    this.clearTimers();
+    this.stopRecognition();
+    if (!transcript) {
+      this.options.onState?.({ type: "stopped" });
+      return false;
+    }
+    void this.options.onFinal?.(transcript);
     return true;
   }
 
@@ -171,23 +207,21 @@ export class SpeechRecognitionController {
       }
     }
     if (interim) {
+      this.clearFinalTimer();
       this.interimTranscript = interim;
       this.options.onInterim?.(interim);
     }
-    if (!final) return;
-    this.finalTranscript += final;
-    this.clearFinalTimer();
-    if (interim) return;
-    this.clearInterimTranscript();
-    this.finalTimer = setTimeout(() => {
-      const text = this.finalTranscript;
-      this.finalTimer = null;
-      this.finalTranscript = "";
+    if (final) {
+      this.finalTranscript += final;
+      this.clearFinalTimer();
+    }
+    if (!interim && !final) return;
+    if (final && !interim) {
       this.clearInterimTranscript();
       this.clearSilenceTimer();
-      if (text) this.options.onFinal?.(text);
-      this.stopRecognition();
-    }, FINAL_AUTO_SUBMIT_DELAY_MS);
+      this.armFinalTimer();
+    }
+    this.emitDraft();
   }
 
   private handleError(event: SpeechRecognitionErrorEventLike): void {
@@ -208,13 +242,28 @@ export class SpeechRecognitionController {
       this.options.onState?.(withTranscript({ type: "no-result-timeout" }, this.consumePartialTranscript()));
       this.clearTimers();
       this.stopRecognition();
-    }, NO_RESULT_SILENCE_TIMEOUT_MS);
+    }, this.silenceTimeoutMs);
+  }
+
+  private armFinalTimer(): void {
+    this.clearFinalTimer();
+    this.finalTimer = setTimeout(() => {
+      const text = this.finalTranscript;
+      this.finalTimer = null;
+      this.finalTranscript = "";
+      this.clearInterimTranscript();
+      this.clearSilenceTimer();
+      this.emitDraft();
+      if (text) this.options.onFinal?.(text);
+      this.stopRecognition();
+    }, this.silenceTimeoutMs);
   }
 
   private consumePartialTranscript(): string | undefined {
     const transcript = `${this.finalTranscript}${this.interimTranscript}`;
     this.finalTranscript = "";
     this.clearInterimTranscript();
+    this.emitDraft();
     return transcript.length > 0 ? transcript : undefined;
   }
 
@@ -266,6 +315,10 @@ export class SpeechRecognitionController {
     if (!recognition) return;
     clearRecognitionHandlers(recognition);
     this.recognition = null;
+  }
+
+  private emitDraft(): void {
+    this.options.onDraft?.(`${this.finalTranscript}${this.interimTranscript}`);
   }
 }
 

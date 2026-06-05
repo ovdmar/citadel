@@ -80,6 +80,8 @@ test.describe("scratchpad drawer", () => {
       )
       .toBeGreaterThan(0);
     expect(await emitFakeSpeechFinal(page, "voice idea")).toBe(true);
+    await expect(page.locator(".voice-mode-interim")).toContainText("voice idea");
+    await page.getByRole("button", { name: "Send now" }).click();
     await expect(page.locator(".scratchpad-block-list").getByText("voice idea")).toBeVisible();
   });
 
@@ -126,6 +128,8 @@ test.describe("scratchpad drawer", () => {
     await expect(page.locator(".voice-mode-overlay")).toBeVisible();
     await expect(page.locator(".voice-mode-status")).toContainText("Listening");
     expect(await emitFakeSpeechFinal(page, "desktop voice idea")).toBe(true);
+    await expect(page.locator(".voice-mode-interim")).toContainText("desktop voice idea");
+    await page.getByRole("button", { name: "Send now" }).click();
     await expect(page.locator(".scratchpad-block-list").getByText("desktop voice idea")).toBeVisible();
   });
 
@@ -163,6 +167,8 @@ test.describe("scratchpad drawer", () => {
 
     await expect(page.locator(".voice-mode-overlay")).toBeVisible();
     expect(await emitFakeSpeechFinal(page, "/tmp/voice-notes.md")).toBe(true);
+    await expect(page.locator(".voice-mode-interim")).toContainText("/tmp/voice-notes.md");
+    await page.getByRole("button", { name: "Send now" }).click();
     await expect(notesInput).toHaveValue("/tmp/voice-notes.md");
     await expect(page.locator(".scratchpad-drawer")).toBeHidden();
   });
@@ -179,8 +185,11 @@ test.describe("scratchpad drawer", () => {
     await composer.focus();
 
     await page.keyboard.press("Control+Shift+D");
-    await page.getByLabel("Auto-submit").uncheck();
+    await page.locator(".voice-mode-toggle").click();
+    await expect(page.getByRole("checkbox", { name: "Auto-submit" })).not.toBeChecked();
     expect(await emitFakeSpeechFinal(page, "draft only")).toBe(true);
+    await expect(page.locator(".voice-mode-interim")).toContainText("draft only");
+    await page.getByRole("button", { name: "Send now" }).click();
 
     await expect(page.locator(".voice-mode-status")).toContainText("Inserted");
     await expect(composer).toHaveValue("draft only");
