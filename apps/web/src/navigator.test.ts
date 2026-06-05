@@ -14,6 +14,7 @@ import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { queryClient } from "./api.js";
+import { focusWorkspaceIdAfterDrop } from "./navigator-drop-focus.js";
 import type { CheckoutPrStateByWorkspace } from "./navigator-pr-state.js";
 import { Navigator, aggregateNavigatorTone } from "./navigator.js";
 
@@ -241,6 +242,14 @@ describe("aggregateNavigatorTone", () => {
 });
 
 describe("Navigator checkout aggregation", () => {
+  it("picks the next workspace after a drop, falling back to the nearest previous workspace", () => {
+    expect(focusWorkspaceIdAfterDrop(["ws_a", "ws_b", "ws_c"], "ws_b")).toBe("ws_c");
+    expect(focusWorkspaceIdAfterDrop(["ws_a", "ws_b"], "ws_b")).toBe("ws_a");
+    expect(focusWorkspaceIdAfterDrop(["ws_a"], "ws_a")).toBeNull();
+    expect(focusWorkspaceIdAfterDrop(["ws_a", "ws_a", "ws_b"], "ws_a")).toBe("ws_b");
+    expect(focusWorkspaceIdAfterDrop(["ws_a"], "ws_missing")).toBeNull();
+  });
+
   it("autoselects a newly attached worktree after creation", async () => {
     const repo = makeRepo({ id: "repo_a" });
     const workspace = makeWorkspace({
@@ -372,6 +381,40 @@ describe("Navigator checkout aggregation", () => {
         body: JSON.stringify({ showMainWorkspace: false }),
       }),
     );
+  });
+
+  it("focuses the next rendered workspace when a workspace drop starts", async () => {
+    const first = makeWorkspace({ id: "ws_first", name: "First" });
+    const middle = makeWorkspace({ id: "ws_middle", name: "Middle" });
+    const last = makeWorkspace({ id: "ws_last", name: "Last" });
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/workspaces/ws_middle/removal-check") {
+        return Promise.resolve(jsonResponse({ removable: true, dirty: false, reason: "ok" }));
+      }
+      if (String(input) === "/api/workspaces/ws_middle" && init?.method === "DELETE") {
+        return Promise.resolve(jsonResponse({ removed: true, archived: false, dirty: false }, { status: 202 }));
+      }
+      return Promise.reject(new Error(`unexpected fetch ${String(input)}`));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onPickTarget = vi.fn();
+
+    const container = renderNavigator({
+      workspaces: [first, middle, last],
+      onPickTarget,
+    });
+    await clickButtonByLabel(container, "Drop workspace Middle");
+
+    const confirm = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Drop workspace",
+    );
+    await waitFor(() => Boolean(confirm && !(confirm as HTMLButtonElement).disabled));
+    flushSync(() => {
+      confirm?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    await waitFor(() => fetchMock.mock.calls.some(([input]) => String(input) === "/api/workspaces/ws_middle"));
+    expect(onPickTarget).toHaveBeenCalledWith("ws_last", "home");
   });
 });
 
