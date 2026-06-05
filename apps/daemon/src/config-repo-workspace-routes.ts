@@ -245,6 +245,28 @@ export function registerConfigRepoWorkspaceRoutes(input: {
     }),
   );
 
+  app.delete(
+    "/api/workspaces/:workspaceId/checkouts/:checkoutId",
+    asyncRoute(async (req, res) => {
+      const workspaceId = req.params.workspaceId;
+      const checkoutId = req.params.checkoutId;
+      if (typeof workspaceId !== "string") return res.status(400).json({ error: "workspace_id_required" });
+      if (typeof checkoutId !== "string") return res.status(400).json({ error: "checkout_id_required" });
+      try {
+        const result = await operations.removeWorkspaceCheckout({
+          workspaceId,
+          checkoutId,
+          force: req.query.force === "true",
+        });
+        emit("workspace.updated", { workspaceId, checkoutId, operationId: result.operationId });
+        res.status(result.removed ? 202 : 409).json(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "checkout_remove_failed";
+        res.status(404).json({ error: message });
+      }
+    }),
+  );
+
   app.get("/api/agent-runtimes", (_req, res) => {
     res.json({ agentRuntimes: listRuntimeHealth(config.agentRuntimes) });
   });

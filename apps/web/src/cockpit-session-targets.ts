@@ -1,9 +1,11 @@
 import type { Workspace, WorkspaceSession, WorktreeCheckout } from "@citadel/contracts";
 
+export type WorkspaceTargetType = "workspace_home" | "worktree_checkout";
+
 export function sessionMatchesTarget(
   session: WorkspaceSession,
   workspace: Workspace,
-  targetType: "workspace_home" | "worktree_checkout",
+  targetType: WorkspaceTargetType,
   checkoutId: string | null,
 ): boolean {
   if (workspace.mode !== "structured") return true;
@@ -22,10 +24,17 @@ export function checkoutIdFromTargetKey(targetKey: string, checkouts: WorktreeCh
 }
 
 export function targetLabel(
-  targetType: "workspace_home" | "worktree_checkout",
+  targetType: WorkspaceTargetType,
   checkoutId: string | null,
   checkouts: WorktreeCheckout[],
 ): string {
   if (targetType === "workspace_home") return "Home";
   return checkouts.find((checkout) => checkout.id === checkoutId)?.name ?? "Checkout";
+}
+
+export function shouldShowInspectorPanel(
+  workspace: Workspace | null | undefined,
+  targetType: WorkspaceTargetType,
+): boolean {
+  return workspace?.mode !== "structured" || targetType === "worktree_checkout";
 }

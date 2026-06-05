@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { OperationService } from "@citadel/operations";
 import { afterEach, describe, expect, it } from "vitest";
+import { agentTemplateDefaultsFromRuntimes, listAgentTemplates, updateRoleTemplate } from "./agent-templates.js";
 import { createFixture } from "./app-test-helpers.js";
 import { launchStructuredRoleAgent } from "./structured-role-launchers.js";
 
@@ -65,6 +66,112 @@ describe("structured role launchers", () => {
     expect(store.getWorkspaceManager(result.workspaceId)).toMatchObject({ pauseState: "running" });
     expect(store.listWorkspaceCheckouts(result.workspaceId)).toEqual([]);
     operations.stopWorkspaceSession({ sessionId: result.session.id });
+  });
+
+  it("launches structured roles with the configured agent runtime and launch settings", async () => {
+    const { config, store, operations } = createDeps();
+    config.agentRuntimes = [
+      {
+        id: "codex",
+        displayName: "Codex",
+        command: "codex",
+        args: ["--yolo"],
+        resumeArg: "resume",
+        launchOptions: {
+          models: [{ id: "gpt-5.4", label: "GPT-5.4", default: true, deprecated: false }],
+          defaultModel: "gpt-5.4",
+          effortValues: ["low", "medium", "high"],
+          supportsFastMode: false,
+          contextModes: ["standard", "max"],
+          modelArgv: { argv: ["-m", "{value}"] },
+          effortArgv: { argv: ["-c", "model_reasoning_effort={value}"] },
+          contextArgv: { argv: ["-c", "model_context_window={value}"] },
+        },
+      },
+      { id: "claude-code", displayName: "Claude Code", command: "claude", args: [] },
+    ];
+    const workspace = await operations.createWorkspace({
+      mode: "structured",
+      rootPath: path.join(config.dataDir, "runtime-feature"),
+      name: "Runtime Feature",
+      source: "scratch",
+    });
+    const template = (
+      await listAgentTemplates(config.dataDir, agentTemplateDefaultsFromRuntimes(config.agentRuntimes))
+    ).find((entry) => entry.role === "pm");
+    if (!template) throw new Error("expected PM template");
+    const launchSettings = {
+      runtimeId: "codex",
+      model: "gpt-5.4",
+      effort: "high",
+      fastMode: null,
+      contextMode: "max",
+    };
+    await updateRoleTemplate(
+      config.dataDir,
+      "pm",
+      { launchSettings, updatedAt: template.updatedAt ?? "" },
+      agentTemplateDefaultsFromRuntimes(config.agentRuntimes),
+    );
+    const calls: Array<{ input: Record<string, unknown>; runtime: Record<string, unknown> }> = [];
+    const fakeOperations = {
+      createAgentSession: async (input: Record<string, unknown>, runtime: Record<string, unknown>) => {
+        calls.push({ input, runtime });
+        return {
+          id: "sess_codex",
+          kind: "agent",
+          workspaceId: input.workspaceId,
+          runtimeId: input.runtimeId,
+          displayName: input.displayName,
+          targetType: input.targetType,
+          checkoutId: null,
+          role: input.role,
+          actionId: null,
+          managed: input.managed,
+          parentSessionId: null,
+          planVersionId: null,
+          managerActionId: null,
+          status: "running",
+          statusReason: "launched",
+          lastStatusAt: "2026-06-01T00:00:00.000Z",
+          lastOutputAt: null,
+          endedAt: null,
+          exitCode: null,
+          transport: "disconnected",
+          tmuxSessionName: null,
+          tmuxSessionId: null,
+          tmuxSocketName: null,
+          tabId: "tab_codex",
+          runtimeSessionId: null,
+          launchWarnings: [],
+          createdAt: "2026-06-01T00:00:00.000Z",
+          updatedAt: "2026-06-01T00:00:00.000Z",
+        };
+      },
+    } as unknown as OperationService;
+
+    const result = await launchStructuredRoleAgent(
+      { config, store, operations: fakeOperations },
+      { role: "pm", input: { workspaceId: workspace.workspaceId } },
+      { actor: "human" },
+    );
+
+    expect(result).toMatchObject({ ok: true, session: { runtimeId: "codex" } });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.input).toMatchObject({
+      runtimeId: "codex",
+      role: "pm",
+      targetType: "workspace_home",
+      launchSettings,
+    });
+    expect(calls[0]?.runtime).toMatchObject({
+      id: "codex",
+      command: "codex",
+      args: ["--yolo"],
+      displayName: "Codex",
+      resumeArg: "resume",
+      launchOptions: expect.objectContaining({ defaultModel: "gpt-5.4" }),
+    });
   });
 
   it("enforces implementation gates before launching checkout-scoped work", async () => {

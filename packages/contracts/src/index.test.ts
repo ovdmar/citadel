@@ -37,6 +37,7 @@ import {
   WorkspaceRecentCommitsSchema,
   WorkspaceSchema,
   WorkspaceSessionSchema,
+  WorkspacesPrStateResponseSchema,
 } from "./index.js";
 
 const timestamp = "2026-05-17T00:00:00.000Z";
@@ -660,6 +661,26 @@ describe("contract schemas", () => {
         freshness: { checkedAt: timestamp, stale: false, degraded: false },
       }).state,
     ).toBe("pr-conflicts");
+  });
+
+  it("accepts checkout-level PR state as a backwards-compatible additive response field", () => {
+    const legacy = WorkspacesPrStateResponseSchema.parse({ workspacePrState: {} });
+    expect(legacy.checkoutPrState).toEqual({});
+
+    const response = WorkspacesPrStateResponseSchema.parse({
+      workspacePrState: {},
+      checkoutPrState: {
+        ws_1: {
+          co_1: {
+            pullRequest: null,
+            ciRuns: [],
+            checkedAt: null,
+            cachedAt: null,
+          },
+        },
+      },
+    });
+    expect(response.checkoutPrState.ws_1?.co_1?.pullRequest).toBeNull();
   });
 });
 
