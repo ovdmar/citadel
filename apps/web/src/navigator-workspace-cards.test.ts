@@ -7,6 +7,7 @@ import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { queryClient } from "./api.js";
+import { OptimisticRemoveProvider, type StateResponse } from "./app-state.js";
 import { aggregateWorkspacePrState } from "./navigator-pr-state.js";
 import {
   CheckoutNavCard,
@@ -19,6 +20,7 @@ import {
   workspaceAggregateBranchLabel,
   workspaceCheckoutRows,
 } from "./navigator-workspace-cards.js";
+import { ToastProvider } from "./toast.js";
 
 const ts = "2026-06-01T00:00:00.000Z";
 const roots: Root[] = [];
@@ -313,6 +315,72 @@ describe("navigator workspace checkout cards", () => {
       expect.objectContaining({ method: "DELETE" }),
     );
   });
+
+  it("optimistically removes a checkout and restores it with a toast when deletion is blocked", async () => {
+    const ws = workspace({ id: "ws_checkout", name: "Readable API" });
+    const co = checkout("co_api", {
+      workspaceId: ws.id,
+      name: "api-stable",
+      path: "/work/home/api-stable",
+      branch: "feature/api",
+    });
+    const other = checkout("co_other", { workspaceId: ws.id, name: "other-stable" });
+    const repo = repoFixture({ id: co.repoId, name: "citadel" });
+    queryClient.setQueryData<StateResponse>(["state"], stateFixture({ workspaces: [ws], checkouts: [co, other] }));
+
+    const deleteRequest: { resolve?: (response: Response) => void } = {};
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (String(input) !== "/api/workspaces/ws_checkout/checkouts/co_api") {
+        return Promise.reject(new Error(`unexpected fetch ${String(input)}`));
+      }
+      return new Promise<Response>((resolve) => {
+        deleteRequest.resolve = resolve;
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = renderCheckoutCard({ workspace: ws, checkout: co, repo });
+    const dropButton = container.querySelector('button[aria-label="Drop checkout api-stable"]');
+    flushSync(() => {
+      dropButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    const confirm = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Drop checkout",
+    );
+    flushSync(() => {
+      confirm?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    await waitFor(() => queryClient.getQueryData<StateResponse>(["state"])?.checkouts.length === 1);
+    expect(queryClient.getQueryData<StateResponse>(["state"])?.checkouts.map((checkout) => checkout.id)).toEqual([
+      "co_other",
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const resolveDelete = deleteRequest.resolve;
+    if (!resolveDelete) throw new Error("delete request was not started");
+    resolveDelete(
+      jsonResponse(
+        {
+          removed: false,
+          dirty: true,
+          dirtySummary: { files: [], unpushedCommits: [] },
+        },
+        { status: 409 },
+      ),
+    );
+
+    await waitFor(() =>
+      Boolean(queryClient.getQueryData<StateResponse>(["state"])?.checkouts.some((checkout) => checkout.id === co.id)),
+    );
+    await waitFor(() =>
+      Boolean(
+        document
+          .querySelector(".cit-toast-message")
+          ?.textContent?.includes('Drop "api-stable" failed: uncommitted changes or unpushed commits'),
+      ),
+    );
+  });
 });
 
 function renderCheckoutCard(input: {
@@ -329,19 +397,52 @@ function renderCheckoutCard(input: {
       createElement(
         QueryClientProvider,
         { client: queryClient },
-        createElement(CheckoutNavCard, {
-          workspace: input.workspace,
-          checkout: input.checkout,
-          repo: input.repo,
-          sessions: [],
-          pullRequest: null,
-          active: false,
-          onSelect: () => undefined,
-        }),
+        createElement(
+          OptimisticRemoveProvider,
+          null,
+          createElement(
+            ToastProvider,
+            null,
+            createElement(CheckoutNavCard, {
+              workspace: input.workspace,
+              checkout: input.checkout,
+              repo: input.repo,
+              sessions: [],
+              pullRequest: null,
+              active: false,
+              onSelect: () => undefined,
+            }),
+          ),
+        ),
       ),
     );
   });
   return rootElement;
+}
+
+function stateFixture(input: { workspaces: Workspace[]; checkouts?: WorktreeCheckout[] }): StateResponse {
+  return {
+    repos: [],
+    workspaces: input.workspaces,
+    checkouts: input.checkouts ?? [],
+    workspacePlans: [],
+    workspacePlanDeliveryUnits: [],
+    workspacePlanDependencyEdges: [],
+    workspaceManagers: [],
+    managerActions: [],
+    localNotifications: [],
+    planDeviations: [],
+    sessions: [],
+    operations: [],
+    activity: [],
+    providerHealth: [],
+    agentRuntimes: [],
+    terminal: { displayName: "Terminal", command: "bash", args: ["-l"] },
+    mcp: { enabled: false, resources: [], tools: [] },
+    scheduledAgents: [],
+    namespaces: [],
+    bootRestore: null,
+  };
 }
 
 async function waitFor(predicate: () => boolean) {
