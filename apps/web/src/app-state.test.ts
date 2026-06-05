@@ -1,4 +1,4 @@
-import type { SystemHealthSnapshot, Workspace } from "@citadel/contracts";
+import type { SystemHealthSnapshot, Workspace, WorktreeCheckout } from "@citadel/contracts";
 import { describe, expect, it } from "vitest";
 import { type StateResponse, applyOptimisticRemoveFilter, parseSseSystemHealth } from "./app-state.js";
 
@@ -28,11 +28,31 @@ function workspace(id: string): Workspace {
   } as Workspace;
 }
 
-function baseState(workspaces: Workspace[]): StateResponse {
+function checkout(id: string, workspaceId = "a"): WorktreeCheckout {
+  return {
+    id,
+    workspaceId,
+    repoId: "repo_a",
+    name: id,
+    path: `/tmp/${workspaceId}/${id}`,
+    branch: `feat/${id}`,
+    baseBranch: "main",
+    issue: null,
+    intendedPr: null,
+    stackParentCheckoutId: null,
+    inferredPurpose: null,
+    gateStatus: "not_started",
+    createdAt: "2026-05-25T12:00:00.000Z",
+    updatedAt: "2026-05-25T12:00:00.000Z",
+    archivedAt: null,
+  };
+}
+
+function baseState(workspaces: Workspace[], checkouts: WorktreeCheckout[] = []): StateResponse {
   return {
     repos: [],
     workspaces,
-    checkouts: [],
+    checkouts,
     workspacePlans: [],
     workspacePlanDeliveryUnits: [],
     workspacePlanDependencyEdges: [],
@@ -65,12 +85,24 @@ describe("applyOptimisticRemoveFilter", () => {
   });
 
   it("subtracts blacklisted workspace ids from `workspaces`", () => {
-    const state = baseState([workspace("a"), workspace("b"), workspace("c")]);
+    const state = baseState(
+      [workspace("a"), workspace("b"), workspace("c")],
+      [checkout("co_a", "a"), checkout("co_b", "b")],
+    );
     const filtered = applyOptimisticRemoveFilter(state, new Set(["b"]));
     expect(filtered?.workspaces.map((w) => w.id)).toEqual(["a", "c"]);
+    expect(filtered?.checkouts.map((checkout) => checkout.id)).toEqual(["co_a"]);
     // Original state must not be mutated — React Query consumers may
     // observe both views during a transition.
     expect(state.workspaces.map((w) => w.id)).toEqual(["a", "b", "c"]);
+    expect(state.checkouts.map((checkout) => checkout.id)).toEqual(["co_a", "co_b"]);
+  });
+
+  it("subtracts blacklisted checkout ids from `checkouts` without removing the workspace", () => {
+    const state = baseState([workspace("a")], [checkout("co_a", "a"), checkout("co_b", "a")]);
+    const filtered = applyOptimisticRemoveFilter(state, new Set(), new Set(["co_b"]));
+    expect(filtered?.workspaces.map((w) => w.id)).toEqual(["a"]);
+    expect(filtered?.checkouts.map((entry) => entry.id)).toEqual(["co_a"]);
   });
 
   it("leaves non-workspace fields untouched", () => {

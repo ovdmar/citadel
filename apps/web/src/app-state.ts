@@ -73,29 +73,37 @@ export function useStateQuery(options?: { enabled?: boolean }) {
   });
 }
 
-// AC4 — optimistic-remove blacklist. While a workspace id is in this set,
-// `useFilteredStateQuery` subtracts it from `workspaces[]` so the 5s
-// refetch (or any post-invalidate refetch) can't resurrect the row mid
-// teardown. Lifecycle is mutation-bound: `onMutate` adds the id;
-// `onSettled` removes it. No timer — survives slow teardowns (hook
-// scripts can take minutes).
+// Optimistic-remove blacklist. While a workspace or checkout id is in
+// this set, `useFilteredStateQuery` subtracts it from the relevant state
+// slices so the 5s refetch (or any post-invalidate refetch) can't
+// resurrect the row mid teardown. Lifecycle is mutation-bound: `onMutate`
+// adds the id; `onSettled` removes it. No timer — survives slow teardowns
+// (hook scripts can take minutes).
 type OptimisticRemoveContextValue = {
   ids: ReadonlySet<string>;
+  checkoutIds: ReadonlySet<string>;
   add: (id: string) => void;
   remove: (id: string) => void;
+  addCheckout: (id: string) => void;
+  removeCheckout: (id: string) => void;
 };
 
 const OptimisticRemoveContext = createContext<OptimisticRemoveContextValue>({
   ids: new Set<string>(),
+  checkoutIds: new Set<string>(),
   add: () => undefined,
   remove: () => undefined,
+  addCheckout: () => undefined,
+  removeCheckout: () => undefined,
 });
 
 export function OptimisticRemoveProvider({ children }: { children: ReactNode }) {
   const [ids, setIds] = useState<ReadonlySet<string>>(() => new Set<string>());
+  const [checkoutIds, setCheckoutIds] = useState<ReadonlySet<string>>(() => new Set<string>());
   const value = useMemo<OptimisticRemoveContextValue>(
     () => ({
       ids,
+      checkoutIds,
       add: (id: string) =>
         setIds((prev) => {
           if (prev.has(id)) return prev;
@@ -110,8 +118,22 @@ export function OptimisticRemoveProvider({ children }: { children: ReactNode }) 
           next.delete(id);
           return next;
         }),
+      addCheckout: (id: string) =>
+        setCheckoutIds((prev) => {
+          if (prev.has(id)) return prev;
+          const next = new Set(prev);
+          next.add(id);
+          return next;
+        }),
+      removeCheckout: (id: string) =>
+        setCheckoutIds((prev) => {
+          if (!prev.has(id)) return prev;
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        }),
     }),
-    [ids],
+    [ids, checkoutIds],
   );
   return createElement(OptimisticRemoveContext.Provider, { value }, children);
 }
@@ -128,12 +150,13 @@ export function useOptimisticRemove(): OptimisticRemoveContextValue {
 export function applyOptimisticRemoveFilter(
   state: StateResponse | undefined,
   ids: ReadonlySet<string>,
+  checkoutIds: ReadonlySet<string> = new Set<string>(),
 ): StateResponse | undefined {
-  if (!state || ids.size === 0) return state;
+  if (!state || (ids.size === 0 && checkoutIds.size === 0)) return state;
   return {
     ...state,
     workspaces: state.workspaces.filter((w) => !ids.has(w.id)),
-    checkouts: state.checkouts.filter((checkout) => !ids.has(checkout.workspaceId)),
+    checkouts: state.checkouts.filter((checkout) => !ids.has(checkout.workspaceId) && !checkoutIds.has(checkout.id)),
     workspacePlans: state.workspacePlans.filter((plan) => !ids.has(plan.workspaceId)),
     workspacePlanDeliveryUnits: state.workspacePlanDeliveryUnits.filter(
       (unit) => !unit.workspaceId || !ids.has(unit.workspaceId),
@@ -142,9 +165,15 @@ export function applyOptimisticRemoveFilter(
       (edge) => !edge.workspaceId || !ids.has(edge.workspaceId),
     ),
     workspaceManagers: state.workspaceManagers.filter((manager) => !ids.has(manager.workspaceId)),
-    managerActions: state.managerActions.filter((action) => !ids.has(action.workspaceId)),
-    localNotifications: state.localNotifications.filter((event) => !ids.has(event.workspaceId)),
-    planDeviations: state.planDeviations.filter((report) => !ids.has(report.workspaceId)),
+    managerActions: state.managerActions.filter(
+      (action) => !ids.has(action.workspaceId) && (!action.checkoutId || !checkoutIds.has(action.checkoutId)),
+    ),
+    localNotifications: state.localNotifications.filter(
+      (event) => !ids.has(event.workspaceId) && (!event.checkoutId || !checkoutIds.has(event.checkoutId)),
+    ),
+    planDeviations: state.planDeviations.filter(
+      (report) => !ids.has(report.workspaceId) && (!report.checkoutId || !checkoutIds.has(report.checkoutId)),
+    ),
   };
 }
 
@@ -154,8 +183,11 @@ export function applyOptimisticRemoveFilter(
 // React Query dedupes, so we don't pay an extra fetch.
 export function useFilteredStateQuery(options?: { enabled?: boolean }) {
   const result = useStateQuery(options);
-  const { ids } = useOptimisticRemove();
-  const filtered = useMemo(() => applyOptimisticRemoveFilter(result.data, ids), [result.data, ids]);
+  const { ids, checkoutIds } = useOptimisticRemove();
+  const filtered = useMemo(
+    () => applyOptimisticRemoveFilter(result.data, ids, checkoutIds),
+    [result.data, ids, checkoutIds],
+  );
   return { ...result, data: filtered };
 }
 
@@ -180,14 +212,6 @@ export function useEventRefresh() {
       const systemHealth = parseSseSystemHealth(ev as MessageEvent);
       if (systemHealth) queryClient.setQueryData(["system-health"], { systemHealth });
     });
-    events.addEventListener("workspace.fsChanged", (ev) => {
-      const workspaceId = parseSseWorkspaceId(ev as MessageEvent);
-      if (workspaceId) {
-        queryClient.invalidateQueries({ queryKey: ["workspace-cockpit", workspaceId] });
-      } else {
-        queryClient.invalidateQueries({ queryKey: ["workspace-cockpit"] });
-      }
-    });
     return () => events.close();
   }, []);
 }
@@ -197,16 +221,6 @@ export function parseSseSystemHealth(event: MessageEvent): SystemHealthSnapshot 
     const data = JSON.parse(event.data) as { payload?: unknown };
     const parsed = SystemHealthSnapshotSchema.safeParse(data.payload);
     return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
-function parseSseWorkspaceId(event: MessageEvent): string | null {
-  try {
-    const data = JSON.parse(event.data) as { payload?: { workspaceId?: unknown } };
-    const id = data?.payload?.workspaceId;
-    return typeof id === "string" && id.length > 0 ? id : null;
   } catch {
     return null;
   }

@@ -10,6 +10,7 @@ import { useMutation } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useState } from "react";
 import { api, queryClient } from "./api.js";
+import { type StateResponse, useOptimisticRemove } from "./app-state.js";
 import { repoNameWithOwner } from "./repo-labels.js";
 import type { AttentionSessionIds } from "./session-status-display.js";
 import { useToast } from "./toast.js";
@@ -154,7 +155,9 @@ type DropCheckoutResult = {
 
 function DropCheckoutDialog(props: { workspace: Workspace; checkout: WorktreeCheckout; onClose: () => void }) {
   useOverlayPresent();
+  const optimistic = useOptimisticRemove();
   const toast = useToast();
+  const checkoutId = props.checkout.id;
   const drop = useMutation({
     mutationFn: async (): Promise<DropCheckoutResult> => {
       const response = await fetch(
@@ -170,21 +173,38 @@ function DropCheckoutDialog(props: { workspace: Workspace; checkout: WorktreeChe
         dirtySummary: body.dirtySummary ?? null,
       };
     },
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ["state"] });
+    onMutate: () => {
+      optimistic.addCheckout(checkoutId);
+      const previous = queryClient.getQueryData<StateResponse>(["state"]);
+      if (previous) {
+        queryClient.setQueryData<StateResponse>(["state"], {
+          ...previous,
+          checkouts: previous.checkouts.filter((checkout) => checkout.id !== checkoutId),
+        });
+      }
+      return { previous };
+    },
+    onSuccess: (result, _vars, context) => {
       if (result.removed) {
+        queryClient.invalidateQueries({ queryKey: ["state"] });
         props.onClose();
         return;
       }
+      if (context?.previous) queryClient.setQueryData(["state"], context.previous);
+      queryClient.invalidateQueries({ queryKey: ["state"] });
       const reason = result.dirty ? "uncommitted changes or unpushed commits" : (result.error ?? "teardown failed");
       toast.push({ tone: "error", message: `Drop "${props.checkout.name}" failed: ${reason}` });
     },
-    onError: (error) => {
+    onError: (error, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(["state"], context.previous);
       queryClient.invalidateQueries({ queryKey: ["state"] });
       toast.push({
         tone: "error",
         message: `Drop "${props.checkout.name}" failed: ${error instanceof Error ? error.message : "network error"}`,
       });
+    },
+    onSettled: () => {
+      optimistic.removeCheckout(checkoutId);
     },
   });
   const dirtySummary = drop.data?.dirtySummary ?? null;
