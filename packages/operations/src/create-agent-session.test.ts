@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SqliteStore } from "@citadel/db";
-import { codexSqliteHomeForWorkspace } from "@citadel/runtimes";
+import { codexHomeForWorkspace, codexSqliteHomeForWorkspace } from "@citadel/runtimes";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperationService } from "./index.js";
 
@@ -338,7 +338,7 @@ describe("createAgentSession session-id wiring", () => {
     }
   }, 20_000);
 
-  it("launches Codex with an isolated workspace CODEX_SQLITE_HOME", async () => {
+  it("launches Codex with isolated workspace CODEX_HOME and CODEX_SQLITE_HOME", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
@@ -351,20 +351,28 @@ describe("createAgentSession session-id wiring", () => {
       scriptPath,
       [
         "const fs = require('node:fs');",
-        `fs.writeFileSync(${JSON.stringify(envPath)}, process.env.CODEX_SQLITE_HOME || '');`,
+        `fs.writeFileSync(${JSON.stringify(envPath)}, JSON.stringify({ home: process.env.CODEX_HOME || '', sqlite: process.env.CODEX_SQLITE_HOME || '' }));`,
         "setInterval(() => {}, 1000);",
       ].join("\n"),
     );
 
-    const session = await service.createAgentSession(
-      { workspaceId: created.workspaceId, runtimeId: "codex" },
-      { command: "node", args: [scriptPath], displayName: "Fake Codex", sessionIdArg: "--session-id" },
-    );
+    const previousRoot = process.env.CITADEL_CODEX_HOME_ROOT;
+    process.env.CITADEL_CODEX_HOME_ROOT = path.join(fixture.dir, "codex-home-root");
+    let session: Awaited<ReturnType<typeof service.createAgentSession>> | null = null;
     try {
-      expect(fs.readFileSync(envPath, "utf8")).toBe(codexSqliteHomeForWorkspace(created.workspaceId, fixture.dir));
-      expect(fs.existsSync(codexSqliteHomeForWorkspace(created.workspaceId, fixture.dir))).toBe(true);
+      session = await service.createAgentSession(
+        { workspaceId: created.workspaceId, runtimeId: "codex" },
+        { command: "node", args: [scriptPath], displayName: "Fake Codex", sessionIdArg: "--session-id" },
+      );
+      const env = JSON.parse(fs.readFileSync(envPath, "utf8")) as { home: string; sqlite: string };
+      expect(env.home).toBe(codexHomeForWorkspace(created.workspaceId));
+      expect(env.sqlite).toBe(codexSqliteHomeForWorkspace(created.workspaceId));
+      expect(fs.existsSync(codexHomeForWorkspace(created.workspaceId))).toBe(true);
+      expect(fs.existsSync(codexSqliteHomeForWorkspace(created.workspaceId))).toBe(true);
     } finally {
-      service.stopAgentSession({ sessionId: session.id });
+      if (previousRoot === undefined) Reflect.deleteProperty(process.env, "CITADEL_CODEX_HOME_ROOT");
+      else process.env.CITADEL_CODEX_HOME_ROOT = previousRoot;
+      if (session) service.stopAgentSession({ sessionId: session.id });
     }
   }, 15_000);
 

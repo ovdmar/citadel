@@ -5,7 +5,13 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Workspace, WorkspaceDirtySummary } from "@citadel/contracts";
 import { nowIso } from "@citadel/core";
-import { killTmuxSession } from "@citadel/terminal";
+import {
+  killTmuxServer,
+  killTmuxSession,
+  listAllTmuxSessions,
+  listTmuxSessionPaths,
+  tmuxSocketNameForWorkspace,
+} from "@citadel/terminal";
 import type { WorkspaceOpsDeps } from "./create-workspace.js";
 import { cleanupWorktree, workspaceDirtySummary, workspaceIsDirty } from "./helpers.js";
 import { runTeardownPhase } from "./remove-workspace-helpers.js";
@@ -177,6 +183,10 @@ export async function removeWorkspaceImpl(
   if (ownedSessions.length && !input.archiveOnly) {
     deps.logOp(operation.id, "info", `Killed ${ownedSessions.length} tmux session(s) attached to workspace`);
   }
+  if (!input.archiveOnly) {
+    cleanupBackgroundSessionsForPath(deps, workspace.path, operation.id);
+    cleanupCitadelOwnedTmuxForWorkspace(deps, workspace, operation.id);
+  }
 
   if (!input.archiveOnly) {
     const cleanup = cleanupWorktree(repo.rootPath, workspace.path);
@@ -316,6 +326,8 @@ export async function removeWorkspaceCheckoutImpl(
     if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
   }
   if (ownedSessions.length) deps.logOp(operation.id, "info", `Killed ${ownedSessions.length} checkout session(s)`);
+  cleanupBackgroundSessionsForPath(deps, checkout.path, operation.id);
+  cleanupCitadelOwnedTmuxForCheckout(deps, workspace, checkout.path, operation.id);
 
   const cleanup = cleanupWorktree(repo.rootPath, checkout.path);
   deps.logOp(operation.id, "info", `${cleanup.action} checkout at ${checkout.path}`);
@@ -365,7 +377,11 @@ function removeStructuredWorkspaceHome(
   for (const session of ownedSessions) {
     if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
   }
+  if (ownedSessions.length)
+    deps.logOp(operation.id, "info", `Killed ${ownedSessions.length} tmux session(s) attached to workspace`);
   const rootPath = workspaceRootPath(workspace);
+  cleanupBackgroundSessionsForPath(deps, rootPath, operation.id);
+  cleanupCitadelOwnedTmuxForWorkspace(deps, workspace, operation.id);
   const markerPath = path.join(rootPath, ".citadel", "workspace.json");
   if (fs.existsSync(markerPath)) fs.rmSync(rootPath, { recursive: true, force: true });
   deps.store.deleteWorkspace(workspace.id);
@@ -378,4 +394,72 @@ function removeStructuredWorkspaceHome(
   });
   deps.activity("workspace.removed", "user", `Removed ${workspace.name}`, null, workspace.id, operation.id);
   return { operationId: operation.id, removed: true, archived: false, dirty: false };
+}
+
+function cleanupCitadelOwnedTmuxForWorkspace(deps: WorkspaceOpsDeps, workspace: Workspace, operationId: string): void {
+  const socketName = tmuxSocketNameForWorkspace(workspace.id);
+  const prefix = citadelWorkspaceSessionPrefix(workspace.id);
+  const sessions = listAllTmuxSessions(socketName);
+  let killed = 0;
+  if (sessions) {
+    for (const sessionName of sessions) {
+      if (!sessionName.startsWith(prefix)) continue;
+      killTmuxSession(sessionName, socketName);
+      killed += 1;
+    }
+  }
+  if (killed) deps.logOp(operationId, "info", `Killed ${killed} orphan Citadel tmux session(s) on workspace socket`);
+  if (killTmuxServer(socketName))
+    deps.logOp(operationId, "info", `Killed tmux server for workspace socket ${socketName}`);
+}
+
+function cleanupCitadelOwnedTmuxForCheckout(
+  deps: WorkspaceOpsDeps,
+  workspace: Workspace,
+  checkoutPath: string,
+  operationId: string,
+): void {
+  const socketName = tmuxSocketNameForWorkspace(workspace.id);
+  const prefix = citadelWorkspaceSessionPrefix(workspace.id);
+  const sessions = listTmuxSessionPaths(socketName) ?? [];
+  let killed = 0;
+  for (const session of sessions) {
+    if (!session.sessionName.startsWith(prefix)) continue;
+    if (!session.currentPath || !pathIsSameOrInside(checkoutPath, session.currentPath)) continue;
+    killTmuxSession(session.sessionName, socketName);
+    killed += 1;
+  }
+  if (killed) deps.logOp(operationId, "info", `Killed ${killed} orphan Citadel tmux session(s) in checkout`);
+}
+
+function cleanupBackgroundSessionsForPath(deps: WorkspaceOpsDeps, targetPath: string, operationId: string): void {
+  let killedRows = 0;
+  for (const session of deps.store.listRunningBackgroundSessions()) {
+    if (!pathIsSameOrInside(targetPath, session.cwd)) continue;
+    killTmuxSession(session.tmuxSessionName, null);
+    deps.store.updateBackgroundSessionStatus(session.id, "stopped");
+    killedRows += 1;
+  }
+  if (killedRows) deps.logOp(operationId, "info", `Killed ${killedRows} background tmux session(s) in removed path`);
+
+  const sessions = listTmuxSessionPaths(null) ?? [];
+  let killedOrphans = 0;
+  for (const session of sessions) {
+    if (!session.sessionName.startsWith("citadel_bg_")) continue;
+    if (!session.currentPath || !pathIsSameOrInside(targetPath, session.currentPath)) continue;
+    killTmuxSession(session.sessionName, null);
+    killedOrphans += 1;
+  }
+  if (killedOrphans) {
+    deps.logOp(operationId, "info", `Killed ${killedOrphans} orphan background tmux session(s) in removed path`);
+  }
+}
+
+function citadelWorkspaceSessionPrefix(workspaceId: string): string {
+  return `citadel_${workspaceId}_`;
+}
+
+function pathIsSameOrInside(parentPath: string, candidatePath: string): boolean {
+  const relative = path.relative(path.resolve(parentPath), path.resolve(candidatePath));
+  return relative === "" || (relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative));
 }

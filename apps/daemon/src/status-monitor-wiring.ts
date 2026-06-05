@@ -14,7 +14,7 @@ import {
   startStatusMonitor,
 } from "@citadel/operations";
 import type { RuntimeStatusAdapter, SessionAdapterState } from "@citadel/runtimes";
-import { discoverCodexSessionIdFromProcess, getStatusAdapter } from "@citadel/runtimes";
+import { codexHomeForWorkspace, discoverCodexSessionIdFromProcess, getStatusAdapter } from "@citadel/runtimes";
 import { captureTmuxAsync, panePidProcess, tmuxPrefix, tmuxSessionExists } from "@citadel/terminal";
 
 // Dedupe monitor-side failures so a persistent tmux outage doesn't flood
@@ -181,6 +181,7 @@ export function buildStatusMonitorDeps(
       runtimeSessionBackfillAttempts.set(session.id, nowMs);
       return discoverCodexSessionIdFromProcess({
         rootPid: pane.pid,
+        codexHome: codexHomeForWorkspace(session.workspaceId),
         ...(workspace ? { workspacePath: workspace.path, sessionStartedAt: session.createdAt } : {}),
       });
     },

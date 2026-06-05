@@ -137,6 +137,37 @@ describe("findCodexRolloutForSession + adapter", () => {
       }),
     ).toBeNull();
   });
+
+  it("matches rollouts under CODEX_HOME/sessions", () => {
+    const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-codex-home-root-"));
+    dirs.push(codexHome);
+    const workspacePath = "/tmp/codex-var-ws";
+    const matchFile = path.join(codexHome, "sessions", "2026", "06", "05", "rollout-match.jsonl");
+    writeRollout(matchFile, [
+      {
+        type: "session_meta",
+        payload: { id: "match-var", cwd: workspacePath, timestamp: "2026-06-05T10:00:02.000Z" },
+      },
+      {
+        type: "response_item",
+        timestamp: "2026-06-05T10:00:03.000Z",
+        payload: { type: "message", role: "user", content: [{ type: "input_text", text: "hi from var" }] },
+      },
+    ]);
+
+    expect(
+      findCodexRolloutForSession({
+        workspacePath,
+        sessionStartedAt: "2026-06-05T10:00:00.000Z",
+        codexHome,
+      }),
+    ).toBe(matchFile);
+    expect(
+      codexAdapter
+        .getUserPrompts({ workspacePath, sessionStartedAt: "2026-06-05T10:00:00.000Z", codexHome })
+        .map((entry) => entry.text),
+    ).toEqual(["hi from var"]);
+  });
 });
 
 describe("codex live-process session id discovery", () => {

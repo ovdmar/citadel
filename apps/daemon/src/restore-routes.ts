@@ -17,6 +17,7 @@ import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
 import {
   claudeProjectsDir,
+  codexHomeForWorkspace,
   findCodexRolloutForSession,
   parseClaudeTranscript,
   parseCodexRollout,
@@ -217,6 +218,7 @@ function backfillCodexRuntimeSessionId(
     const rolloutPath = findCodexRolloutForSession({
       workspacePath,
       sessionStartedAt: session.createdAt,
+      codexHome: codexHomeForWorkspace(session.workspaceId),
     });
     if (!rolloutPath) return null;
     const { meta } = parseCodexRollout(rolloutPath);

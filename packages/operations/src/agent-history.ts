@@ -1,6 +1,6 @@
 import type { AgentPrompt } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
-import { getUserPromptsForSession } from "@citadel/runtimes";
+import { codexHomeForWorkspace, getUserPromptsForSession } from "@citadel/runtimes";
 
 export type AgentHistoryResult = {
   ok: true;
@@ -40,6 +40,7 @@ export function readAgentHistory(
         runtimeId: session.runtimeId,
         workspacePath: workspace.path,
         sessionStartedAt: session.createdAt,
+        ...(session.runtimeId === "codex" ? { codexHome: codexHomeForWorkspace(session.workspaceId) } : {}),
       })
     : [];
   const limit = clampInt(input.limit, DEFAULT_LIMIT, 1, MAX_LIMIT);
@@ -88,6 +89,7 @@ export function getSessionPromptSummary(
     runtimeId: session.runtimeId,
     workspacePath: workspace.path,
     sessionStartedAt: session.createdAt,
+    ...(session.runtimeId === "codex" ? { codexHome: codexHomeForWorkspace(session.workspaceId) } : {}),
   });
   return {
     initialPrompt: prompts[0]?.text ?? null,
