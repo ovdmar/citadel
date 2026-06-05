@@ -5,12 +5,14 @@ type VoiceCommitOptions = {
 export type VoiceCommitResult =
   | { status: "submitted"; text: string }
   | { status: "inserted-not-submitted"; text: string }
-  | { status: "buffered"; text: string; reason: string };
+  | { status: "buffered"; text: string; reason: string; cause?: "no-target" | "commit-error" };
+
+export type VoiceCommitResultLike = VoiceCommitResult | Promise<VoiceCommitResult>;
 
 export type VoiceTarget = {
   kind: "registered" | "generic" | "terminal";
   insertText: (text: string) => void;
-  commit?: (text: string, options: VoiceCommitOptions) => VoiceCommitResult;
+  commit?: (text: string, options: VoiceCommitOptions) => VoiceCommitResultLike;
   submit?: () => void | Promise<void>;
   canAcceptVoiceCommit: () => boolean;
 };

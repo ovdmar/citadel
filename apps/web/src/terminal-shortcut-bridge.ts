@@ -6,6 +6,7 @@ export type TerminalShortcutMessage = {
   sessionId: string;
   index?: number;
 };
+type TerminalShortcutSourceValidator = (source: MessageEvent["source"], sessionId: string) => boolean;
 
 const TERMINAL_SHORTCUT_SOURCE = "citadel-terminal";
 const TERMINAL_SHORTCUT_TYPE = "citadel.terminal-shortcut";
@@ -32,6 +33,15 @@ export function parseTerminalShortcutMessage(event: MessageEvent): TerminalShort
   if (candidate.index === undefined) return { action, sessionId };
   if (typeof candidate.index !== "number" || !Number.isInteger(candidate.index) || candidate.index < 0) return null;
   return { action, sessionId, index: candidate.index };
+}
+
+export function parseRegisteredTerminalShortcutMessage(
+  event: MessageEvent,
+  isRegisteredSource: TerminalShortcutSourceValidator,
+): TerminalShortcutMessage | null {
+  const message = parseTerminalShortcutMessage(event);
+  if (!message || !isRegisteredSource(event.source, message.sessionId)) return null;
+  return message;
 }
 
 export function terminalShortcutMatch(message: TerminalShortcutMessage): ShortcutMatch | null {

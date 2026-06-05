@@ -182,6 +182,22 @@ describe("SpeechRecognitionController", () => {
     expect(onState).not.toHaveBeenCalledWith(expect.objectContaining({ type: "stopped" }));
   });
 
+  it("commits pending final text when recognition ends before the final delay", () => {
+    const onState = vi.fn();
+    const onFinal = vi.fn();
+    const controller = new SpeechRecognitionController({ win: makeWindow(), onState, onFinal });
+    controller.start();
+
+    FakeSpeechRecognition.instances[0]?.result([{ transcript: "race final", isFinal: true }]);
+    FakeSpeechRecognition.instances[0]?.end();
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+
+    expect(onFinal).toHaveBeenCalledOnce();
+    expect(onFinal).toHaveBeenCalledWith("race final");
+    expect(FakeSpeechRecognition.instances[0]?.stop).toHaveBeenCalled();
+    expect(onState).not.toHaveBeenCalledWith(expect.objectContaining({ type: "stopped" }));
+  });
+
   it("keeps interim transcript copyable when stopped before a final result", () => {
     const onState = vi.fn();
     const onFinal = vi.fn();
@@ -257,6 +273,21 @@ describe("SpeechRecognitionController", () => {
     controller.start();
     FakeSpeechRecognition.instances[1]?.error("network");
     expect(onState).toHaveBeenCalledWith({ type: "capture-error", message: "network" });
+  });
+
+  it("treats service-not-allowed as permission denial while preserving partial transcript", () => {
+    const onState = vi.fn();
+    const controller = new SpeechRecognitionController({ win: makeWindow(), onState });
+    controller.start();
+
+    FakeSpeechRecognition.instances[0]?.result([{ transcript: "service partial", isFinal: false }]);
+    FakeSpeechRecognition.instances[0]?.error("service-not-allowed");
+
+    expect(onState).toHaveBeenCalledWith({
+      type: "permission-denied",
+      message: "service-not-allowed",
+      transcript: "service partial",
+    });
   });
 
   it("detaches disposed recognition callbacks and cancels pending commits", () => {

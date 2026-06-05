@@ -1,5 +1,5 @@
 import { isRegisteredTerminalMessageSource } from "./terminal-pane.js";
-import { parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
+import { parseRegisteredTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
 import type { VoiceModeContextValue } from "./voice-mode-provider.js";
 
 type ShellTerminalShortcutHandlers = {
@@ -11,8 +11,8 @@ export function handleShellTerminalShortcutMessage(
   event: MessageEvent,
   handlers: ShellTerminalShortcutHandlers,
 ): boolean {
-  const message = parseTerminalShortcutMessage(event);
-  if (!message || !isRegisteredTerminalMessageSource(event.source, message.sessionId)) return false;
+  const message = parseRegisteredTerminalShortcutMessage(event, isRegisteredTerminalMessageSource);
+  if (!message) return false;
   if (message.action === "scratchpad-toggle") {
     handlers.toggleScratchpad();
     return true;

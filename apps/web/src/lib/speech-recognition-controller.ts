@@ -56,7 +56,7 @@ type SpeechRecognitionControllerOptions = {
   win?: Window;
   onState?: (state: SpeechRecognitionControllerState) => void;
   onInterim?: (text: string) => void;
-  onFinal?: (text: string) => void;
+  onFinal?: (text: string) => void | Promise<void>;
 };
 
 export function detectSpeechRecognitionSupport(win: Window = window): SpeechRecognitionSupport {

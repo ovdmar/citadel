@@ -94,7 +94,7 @@ function Harness(props: {
     open: props.open,
     onDraftChange: vi.fn(),
     registerTarget: props.registerTarget,
-    submitDraft: vi.fn(),
+    submitDraft: vi.fn(() => true),
   });
   return props.show ? createElement("textarea", { ref: inputRef }) : null;
 }

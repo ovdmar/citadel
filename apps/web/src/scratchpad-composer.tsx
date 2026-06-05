@@ -6,7 +6,7 @@ type ScratchpadComposerProps = {
   error: string | null;
   inputRef: Ref<HTMLTextAreaElement>;
   onChange: (value: string) => void;
-  onSubmit: (text: string) => void | Promise<void>;
+  onSubmit: (text: string) => unknown;
   actions?: ReactNode;
 };
 

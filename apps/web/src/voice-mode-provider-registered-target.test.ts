@@ -42,6 +42,17 @@ class FakeSpeechRecognition {
       results: [{ isFinal: true, 0: { transcript: text } }],
     });
   }
+
+  interim(text: string) {
+    this.onresult?.({
+      resultIndex: 0,
+      results: [{ isFinal: false, 0: { transcript: text } }],
+    });
+  }
+
+  error(error: string) {
+    this.onerror?.({ error });
+  }
 }
 
 const roots: Root[] = [];
@@ -126,6 +137,35 @@ describe("VoiceModeProvider insecure-context support", () => {
   });
 });
 
+describe("VoiceModeProvider retry after capture errors", () => {
+  it("retries against the snapshotted shortcut target", async () => {
+    await renderProvider();
+    const first = document.createElement("input");
+    const second = document.createElement("input");
+    document.body.append(first, second);
+    first.focus();
+
+    await flushReact(() => {
+      dispatchVoiceShortcut(first);
+    });
+    await flushReact(() => {
+      FakeSpeechRecognition.instances[0]?.interim("interim partial");
+      FakeSpeechRecognition.instances[0]?.error("network");
+    });
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Dictation needs attention");
+
+    second.focus();
+    await flushReact(() => retryButton().click());
+    await flushReact(() => {
+      FakeSpeechRecognition.instances[1]?.final("dictated retry");
+      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+    });
+
+    expect(first.value).toBe("dictated retry");
+    expect(second.value).toBe("");
+  });
+});
+
 async function renderProvider(options: { renderMic?: boolean; target?: VoiceTarget } = {}) {
   const rootElement = document.createElement("div");
   document.body.replaceChildren(rootElement);
@@ -153,6 +193,24 @@ function registeredSubmitTarget(): VoiceTarget {
     submit: vi.fn(),
     canAcceptVoiceCommit: () => true,
   };
+}
+
+function dispatchVoiceShortcut(target: EventTarget = window): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key: "d",
+    metaKey: true,
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+function retryButton(): HTMLButtonElement {
+  const button = [...document.querySelectorAll("button")].find((candidate) => candidate.textContent === "Retry");
+  if (!(button instanceof HTMLButtonElement)) throw new Error("retry button missing");
+  return button;
 }
 
 async function settle() {

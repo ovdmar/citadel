@@ -351,22 +351,24 @@ export function ScratchpadPanel() {
   );
 
   const submitComposer = useCallback(
-    async (text: string) => {
+    async (text: string): Promise<boolean> => {
       const trimmed = text.trim();
-      if (trimmed.length === 0) return;
+      if (trimmed.length === 0) return false;
       try {
         await api<{ block: BlockSummary; snapshot: ScratchpadSnapshot }>("/api/scratchpad/blocks", {
           method: "POST",
           body: JSON.stringify({ text }),
         });
-        if (!mountedRef.current) return;
+        if (!mountedRef.current) return false;
         setComposer("");
         setComposerError(null);
         await loadBlocks();
         composerRef.current?.focus();
+        return true;
       } catch (error) {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current) return false;
         setComposerError(error instanceof Error ? error.message : "save_failed");
+        return false;
       }
     },
     [loadBlocks],

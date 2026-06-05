@@ -17,7 +17,7 @@ describe("createScratchpadComposerVoiceTarget", () => {
       getElement: () => textarea,
       isLoaded: () => true,
       onDraftChange,
-      submitDraft: vi.fn(),
+      submitDraft: vi.fn(() => true),
     });
 
     const result = target.commit?.("now", { autoSubmit: false });
@@ -28,12 +28,12 @@ describe("createScratchpadComposerVoiceTarget", () => {
     expect(onDraftChange).toHaveBeenCalledWith("before now");
   });
 
-  it("auto-submits the whole post-insertion draft", () => {
+  it("auto-submits the whole post-insertion draft", async () => {
     const textarea = document.createElement("textarea");
     textarea.value = "existing ";
     textarea.setSelectionRange(textarea.value.length, textarea.value.length);
     document.body.appendChild(textarea);
-    const submitDraft = vi.fn();
+    const submitDraft = vi.fn(async () => true);
     const target = createScratchpadComposerVoiceTarget({
       getElement: () => textarea,
       isLoaded: () => true,
@@ -41,9 +41,33 @@ describe("createScratchpadComposerVoiceTarget", () => {
       submitDraft,
     });
 
-    const result = target.commit?.("idea", { autoSubmit: true });
+    const result = await target.commit?.("idea", { autoSubmit: true });
 
     expect(result).toEqual({ status: "submitted", text: "existing idea" });
+    expect(submitDraft).toHaveBeenCalledWith("existing idea");
+  });
+
+  it("buffers the whole post-insertion draft when auto-submit fails", async () => {
+    const textarea = document.createElement("textarea");
+    textarea.value = "existing ";
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    document.body.appendChild(textarea);
+    const submitDraft = vi.fn(async () => false);
+    const target = createScratchpadComposerVoiceTarget({
+      getElement: () => textarea,
+      isLoaded: () => true,
+      onDraftChange: vi.fn(),
+      submitDraft,
+    });
+
+    const result = await target.commit?.("idea", { autoSubmit: true });
+
+    expect(result).toEqual({
+      status: "buffered",
+      text: "existing idea",
+      cause: "commit-error",
+      reason: "The scratchpad block could not be created. Copy the dictated text.",
+    });
     expect(submitDraft).toHaveBeenCalledWith("existing idea");
   });
 
@@ -54,7 +78,7 @@ describe("createScratchpadComposerVoiceTarget", () => {
       getElement: () => textarea,
       isLoaded: () => false,
       onDraftChange: vi.fn(),
-      submitDraft: vi.fn(),
+      submitDraft: vi.fn(() => true),
     });
 
     expect(target.canAcceptVoiceCommit()).toBe(false);
@@ -76,7 +100,7 @@ describe("createScratchpadComposerVoiceTarget", () => {
       isLoaded: () => true,
       isVisible: () => true,
       onDraftChange: vi.fn(),
-      submitDraft: vi.fn(),
+      submitDraft: vi.fn(() => true),
     });
 
     expect(target.canAcceptVoiceCommit()).toBe(false);

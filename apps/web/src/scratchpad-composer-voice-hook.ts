@@ -8,7 +8,7 @@ type ScratchpadComposerVoiceHookOptions = {
   open: boolean;
   onDraftChange: (draft: string) => void;
   registerTarget: (element: HTMLElement, target: VoiceTarget) => () => void;
-  submitDraft: (draft: string) => void | Promise<void>;
+  submitDraft: (draft: string) => boolean | Promise<boolean>;
 };
 
 type ScratchpadComposerVoiceRegistration = {

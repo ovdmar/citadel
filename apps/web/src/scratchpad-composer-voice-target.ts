@@ -1,4 +1,5 @@
 import {
+  type VoiceCommitResult,
   type VoiceTarget,
   canAcceptTextEditableVoiceCommit,
   createGenericEditableVoiceTarget,
@@ -9,7 +10,7 @@ type ScratchpadComposerVoiceTargetOptions = {
   isLoaded: () => boolean;
   isVisible?: () => boolean;
   onDraftChange: (draft: string) => void;
-  submitDraft: (draft: string) => void | Promise<void>;
+  submitDraft: (draft: string) => boolean | Promise<boolean>;
 };
 
 export function createScratchpadComposerVoiceTarget(options: ScratchpadComposerVoiceTargetOptions): VoiceTarget {
@@ -29,8 +30,7 @@ export function createScratchpadComposerVoiceTarget(options: ScratchpadComposerV
         };
       }
       if (commitOptions.autoSubmit && draft.trim().length > 0) {
-        void options.submitDraft(draft);
-        return { status: "submitted", text: draft };
+        return submitComposerDraft(options, draft);
       }
       return { status: "inserted-not-submitted", text: draft };
     },
@@ -53,4 +53,20 @@ function insertIntoComposer(options: ScratchpadComposerVoiceTargetOptions, text:
   const draft = element.value;
   options.onDraftChange(draft);
   return draft;
+}
+
+async function submitComposerDraft(
+  options: ScratchpadComposerVoiceTargetOptions,
+  draft: string,
+): Promise<VoiceCommitResult> {
+  const submitted = await options.submitDraft(draft);
+  if (!submitted) {
+    return {
+      status: "buffered",
+      text: draft,
+      cause: "commit-error",
+      reason: "The scratchpad block could not be created. Copy the dictated text.",
+    };
+  }
+  return { status: "submitted", text: draft };
 }
