@@ -226,6 +226,42 @@ describe("navigator workspace checkout cards", () => {
     );
   });
 
+  it("keeps the checkout lifecycle dot idle after agent attention is acknowledged even when the PR is failing", () => {
+    const ws = workspace({ id: "ws_checkout", name: "Readable API" });
+    const co = checkout("co_api", {
+      workspaceId: ws.id,
+      name: "api-stable",
+      path: "/work/home/api-stable",
+      branch: "feature/api",
+    });
+    const repo = repoFixture({ id: co.repoId, name: "citadel" });
+    const failingPr = pr(12, {
+      checks: [
+        { name: "ci", status: "completed", conclusion: "failure", url: null, startedAt: null, completedAt: null },
+      ],
+    });
+
+    const container = renderCheckoutCard({
+      workspace: ws,
+      checkout: co,
+      repo,
+      sessions: [
+        session("sess_seen", {
+          checkoutId: co.id,
+          status: "idle",
+          lastStatusAt: "2026-06-05T10:00:00.000Z",
+        }),
+      ],
+      pullRequest: failingPr,
+      unseenAttentionSessionIds: new Set(),
+    });
+
+    const dot = container.querySelector(".workspace-status-dot");
+    expect(dot?.classList.contains("cit-pulse-idle")).toBe(true);
+    expect(dot?.classList.contains("cit-pulse-bad")).toBe(false);
+    expect(container.querySelector(".workspace-card-agent")?.classList.contains("tone-failing")).toBe(true);
+  });
+
   it("edits the checkout card display title without renaming the git worktree", async () => {
     const ws = workspace({ id: "ws_checkout", name: "Readable API" });
     const co = checkout("co_api", {
@@ -399,6 +435,9 @@ function renderCheckoutCard(input: {
   workspace: Workspace;
   checkout: WorktreeCheckout;
   repo: Repo;
+  sessions?: AgentSession[];
+  pullRequest?: PullRequestSummary | null;
+  unseenAttentionSessionIds?: ReadonlySet<string>;
   onDropFocus?: () => void;
 }) {
   const rootElement = document.createElement("div");
@@ -420,10 +459,11 @@ function renderCheckoutCard(input: {
               workspace: input.workspace,
               checkout: input.checkout,
               repo: input.repo,
-              sessions: [],
-              pullRequest: null,
+              sessions: input.sessions ?? [],
+              pullRequest: input.pullRequest ?? null,
               active: false,
               onSelect: () => undefined,
+              unseenAttentionSessionIds: input.unseenAttentionSessionIds,
               onDropFocus: input.onDropFocus,
             }),
           ),
