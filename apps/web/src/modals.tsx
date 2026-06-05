@@ -90,7 +90,12 @@ type CreateWorkspaceModalProps = {
   grouping?: NavigatorGrouping;
   intent?: CreateWorkspaceIntent;
   onClose: () => void;
-  onCreated: (workspaceId: string) => void;
+  onCreated: (workspaceId: string, targetKey?: string) => void;
+};
+
+type CreateWorkspaceResult = {
+  workspaceId: string;
+  targetKey?: string;
 };
 
 export type CreateWorkspaceIntent =
@@ -128,7 +133,7 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   }, []);
 
   const create = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (): Promise<CreateWorkspaceResult> => {
       if (creationContext === "attach-worktree") {
         if (!repoId) throw new Error("repo_required");
         const workspaceId = props.intent?.kind === "attach-worktree" ? props.intent.workspaceId : "";
@@ -137,28 +142,37 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
           payload.name = trimmedWorktreeName;
           payload.displayName = trimmedWorktreeName;
         }
-        await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/checkouts`, {
-          method: "POST",
-          body: JSON.stringify(payload),
-        });
-        return { workspaceId };
+        const result = await api<{ workspaceId: string; checkoutId: string }>(
+          `/api/workspaces/${encodeURIComponent(workspaceId)}/checkouts`,
+          {
+            method: "POST",
+            body: JSON.stringify(payload),
+          },
+        );
+        return { workspaceId: result.workspaceId, targetKey: `checkout:${result.checkoutId}` };
       }
 
       const result = await api<{ workspaceId: string }>("/api/workspaces/home", {
         method: "POST",
         body: JSON.stringify({ name: trimmedName, source: "scratch" }),
       });
+      let targetKey: string | undefined;
       for (const selectedRepoId of selectedRepoIds) {
-        await api(`/api/workspaces/${encodeURIComponent(result.workspaceId)}/checkouts`, {
-          method: "POST",
-          body: JSON.stringify({ repoId: selectedRepoId, source: "default_branch" }),
-        });
+        const checkout = await api<{ checkoutId: string }>(
+          `/api/workspaces/${encodeURIComponent(result.workspaceId)}/checkouts`,
+          {
+            method: "POST",
+            body: JSON.stringify({ repoId: selectedRepoId, source: "default_branch" }),
+          },
+        );
+        if (selectedRepoIds.length === 1) targetKey = `checkout:${checkout.checkoutId}`;
       }
-      return result;
+      return targetKey ? { workspaceId: result.workspaceId, targetKey } : result;
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["state"] });
-      props.onCreated(result.workspaceId);
+      if (result.targetKey) props.onCreated(result.workspaceId, result.targetKey);
+      else props.onCreated(result.workspaceId);
     },
     onError: (err) => {
       toast.push({
