@@ -227,6 +227,8 @@ describe("navigator workspace checkout cards", () => {
         title: "Checkout issue",
         url: "https://jira.example/browse/MS-123",
         provider: "jira",
+        status: null,
+        fetchedAt: null,
       },
     });
     const repo = repoFixture({ id: co.repoId, name: "citadel", providerRepositoryKey: "ovdmar/citadel" });
