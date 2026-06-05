@@ -76,6 +76,7 @@ function checkoutFromRow(row: Record<string, unknown>): WorktreeCheckout {
               ? null
               : Number(row.intended_pr_number),
           url: row.intended_pr_url ? asString(row, "intended_pr_url") : null,
+          state: row.intended_pr_state ? (asString(row, "intended_pr_state") as PullRequestBinding["state"]) : null,
           headSha: row.pr_head_sha ? asString(row, "pr_head_sha") : null,
           baseRef: row.pr_base_ref ? asString(row, "pr_base_ref") : null,
           fetchedAt: row.intended_pr_fetched_at ? asString(row, "intended_pr_fetched_at") : null,
@@ -228,12 +229,12 @@ export const agentsSystemStoreMethods = {
         `INSERT INTO workspace_checkouts (id, workspace_id, repo_id, name, display_name, path, branch, base_branch,
           issue_provider, issue_key, issue_url, issue_title, issue_status, issue_fetched_at,
           intended_pr_provider, intended_pr_number, intended_pr_url,
-          pr_head_sha, pr_base_ref, intended_pr_fetched_at, intended_pr_checks_green,
+          intended_pr_state, pr_head_sha, pr_base_ref, intended_pr_fetched_at, intended_pr_checks_green,
           intended_pr_merge_state_status, intended_pr_has_conflicts,
           stack_parent_checkout_id, inferred_purpose, delivery_unit_key, delivery_plan_version_id,
           manager_status, manager_status_reason, manager_status_updated_at, gate_status,
           created_at, updated_at, archived_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         checkout.id,
@@ -253,6 +254,7 @@ export const agentsSystemStoreMethods = {
         checkout.intendedPr?.provider ?? null,
         checkout.intendedPr?.number ?? null,
         checkout.intendedPr?.url ?? null,
+        checkout.intendedPr?.state ?? null,
         checkout.intendedPr?.headSha ?? null,
         checkout.intendedPr?.baseRef ?? null,
         checkout.intendedPr?.fetchedAt ?? null,
@@ -348,8 +350,8 @@ export const agentsSystemStoreMethods = {
     this.database
       .prepare(
         `UPDATE workspace_checkouts
-         SET intended_pr_provider = ?, intended_pr_number = ?, intended_pr_url = ?, pr_head_sha = ?, pr_base_ref = ?,
-           intended_pr_fetched_at = ?, intended_pr_checks_green = ?, intended_pr_merge_state_status = ?,
+         SET intended_pr_provider = ?, intended_pr_number = ?, intended_pr_url = ?, intended_pr_state = ?,
+           pr_head_sha = ?, pr_base_ref = ?, intended_pr_fetched_at = ?, intended_pr_checks_green = ?, intended_pr_merge_state_status = ?,
            intended_pr_has_conflicts = ?,
            updated_at = ?
          WHERE id = ?`,
@@ -358,6 +360,7 @@ export const agentsSystemStoreMethods = {
         pr?.provider ?? null,
         pr?.number ?? null,
         pr?.url ?? null,
+        pr?.state ?? null,
         pr?.headSha ?? null,
         pr?.baseRef ?? null,
         pr?.fetchedAt ?? null,

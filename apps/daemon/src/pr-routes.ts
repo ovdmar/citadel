@@ -9,18 +9,12 @@ import type {
 } from "@citadel/contracts";
 import { PrMergeRequestSchema, WorkspaceCockpitSummaryBatchRequestSchema } from "@citadel/contracts/pr-routes";
 import type { SqliteStore } from "@citadel/db";
-import {
-  type collectGitHubCiRunLog,
-  type collectGitHubCiRuns,
-  type collectGitHubVersionControlSummary,
-  getGhCooldown,
-  mergePr,
-  pLimit,
-} from "@citadel/providers";
+import { getGhCooldown, mergePr, pLimit } from "@citadel/providers";
 import type express from "express";
 import { ZodError } from "zod";
 import { bustCacheByPrefixes } from "./app-helpers.js";
-import { buildVersionControlProviderDeps, decorateWithCooldown } from "./gh-quota-wiring.js";
+import { decorateWithCooldown } from "./gh-quota-wiring.js";
+import type { GitHubProviderStateService } from "./github-provider-state.js";
 import {
   bustGlobalPrEntry,
   globalPrCacheKey,
@@ -29,18 +23,10 @@ import {
 } from "./global-pr-cache.js";
 import { checkoutVcCacheKey } from "./provider-cache.js";
 
-type ProviderCollectors = {
-  collectGitHubVersionControlSummary: typeof collectGitHubVersionControlSummary;
-  collectGitHubCiRuns: typeof collectGitHubCiRuns;
-  collectGitHubCiRunLog: typeof collectGitHubCiRunLog;
-};
-
 type AsyncHandler = (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>;
 type AsyncRoute = (
   handler: AsyncHandler,
 ) => (req: express.Request, res: express.Response, next: express.NextFunction) => void;
-
-type CachedProvider = <T>(key: string, load: () => T | Promise<T>, ttlMs?: number) => Promise<T>;
 
 type ProviderCache = Map<string, { expiresAt: number; value: unknown }>;
 
@@ -64,16 +50,15 @@ function requestString(value: unknown): string | undefined {
 // Repo-level PR/CI routes + workspace-level batch poll, force-refresh, and
 // merge endpoints.
 //
-// Caching boundary with #15: keys use the established `vc:` / `ci:` prefixes
-// and go through the daemon's cachedProvider helper. #15 may later replace
-// the in-memory map with a richer caching layer; we depend only on
-// cachedProvider(key, fn, ttl?) and bustCacheByPrefixes(cache, prefixes).
+// GitHub reads go through GitHubProviderStateService so cache freshness,
+// scheduler cadence, stale-while-revalidate, and in-flight de-dupe stay in
+// one place. Routes only own request validation, cache bust intent, and
+// non-GitHub mutations such as mergePr.
 export function registerPrRoutes(input: {
   app: express.Express;
   store: SqliteStore;
-  providers: ProviderCollectors;
+  github: GitHubProviderStateService;
   asyncRoute: AsyncRoute;
-  cachedProvider: CachedProvider;
   providerCache: ProviderCache;
   resolveRepoFullName: (repoId: string) => string | null;
   buildWorkspaceCockpitSummary: (workspaceId: string) => Promise<WorkspaceCockpitSummary | null>;
@@ -82,16 +67,13 @@ export function registerPrRoutes(input: {
   const {
     app,
     store,
-    providers,
+    github,
     asyncRoute,
-    cachedProvider,
     providerCache,
     resolveRepoFullName,
     buildWorkspaceCockpitSummary,
     operations,
   } = input;
-  const providerDepsForRepo = (repoId: string) =>
-    buildVersionControlProviderDeps(providerCache, () => resolveRepoFullName(repoId));
 
   app.get(
     "/api/repos/:repoId/provider-summary",
@@ -100,10 +82,10 @@ export function registerPrRoutes(input: {
       if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const versionControl: VersionControlSummary = await cachedProvider(
+      const versionControl: VersionControlSummary = await github.fetchRepoVersionControl(
+        repo,
         `vc:${repo.id}:${repo.updatedAt}`,
-        () => providers.collectGitHubVersionControlSummary(repo.rootPath, providerDepsForRepo(repo.id)),
-        VC_PROVIDER_CACHE_TTL_MS,
+        { intent: "interactive", staleWhileRevalidate: true },
       );
       res.json({ versionControl: decorateWithCooldown(versionControl) });
     }),
@@ -116,11 +98,11 @@ export function registerPrRoutes(input: {
       if (typeof repoId !== "string") return res.status(400).json({ error: "repo_id_required" });
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const ci: CiProviderSummary = await cachedProvider(
-        `ci:${repo.id}:${repo.updatedAt}`,
-        () => providers.collectGitHubCiRuns(repo.rootPath),
-        180_000,
-      );
+      const ci: CiProviderSummary = await github.fetchRepoCi(repo, `ci:${repo.id}:${repo.updatedAt}`, {
+        intent: "interactive",
+        staleWhileRevalidate: true,
+        ttlMs: 180_000,
+      });
       res.json({ ci });
     }),
   );
@@ -134,7 +116,7 @@ export function registerPrRoutes(input: {
       if (typeof runId !== "string") return res.status(400).json({ error: "run_id_required" });
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const log = await providers.collectGitHubCiRunLog(repo.rootPath, runId);
+      const log = await github.fetchCiRunLog(repo, runId, { intent: "interactive", staleWhileRevalidate: true });
       res.json({ log });
     }),
   );
@@ -194,7 +176,6 @@ export function registerPrRoutes(input: {
       const repoId = checkout?.repoId ?? workspace.repoId;
       const repo = store.listRepos().find((candidate) => candidate.id === repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      const targetPath = checkout?.path ?? workspace.path;
       const targetCacheKey = checkout
         ? checkoutVcCacheKey(workspace.id, checkout.id, checkout.updatedAt)
         : `vc:${workspace.id}:${workspace.updatedAt}`;
@@ -215,11 +196,17 @@ export function registerPrRoutes(input: {
           if (key) providerCache.delete(key);
         }
       }
-      const versionControl: VersionControlSummary = await cachedProvider(
-        targetCacheKey,
-        () => providers.collectGitHubVersionControlSummary(targetPath, providerDepsForRepo(repo.id)),
-        VC_PROVIDER_CACHE_TTL_MS,
-      );
+      const versionControl: VersionControlSummary = checkout
+        ? await github.fetchCheckoutVersionControl(workspace, checkout, repo, targetCacheKey, {
+            intent: "interactive",
+            force: true,
+            staleWhileRevalidate: true,
+          })
+        : await github.fetchVersionControl(workspace, repo, targetCacheKey, {
+            intent: "interactive",
+            force: true,
+            staleWhileRevalidate: true,
+          });
       res.json({ versionControl: decorateWithCooldown(versionControl) });
     }),
   );
@@ -240,11 +227,10 @@ export function registerPrRoutes(input: {
         if (error instanceof ZodError) return res.status(400).json({ error: "invalid_merge_request" });
         throw error;
       }
-      const summary = await cachedProvider(
-        `vc:${workspace.id}:${workspace.updatedAt}`,
-        () => providers.collectGitHubVersionControlSummary(workspace.path, providerDepsForRepo(repo.id)),
-        VC_PROVIDER_CACHE_TTL_MS,
-      );
+      const summary = await github.fetchVersionControl(workspace, repo, `vc:${workspace.id}:${workspace.updatedAt}`, {
+        intent: "interactive",
+        staleWhileRevalidate: true,
+      });
       const pr = summary.pullRequest;
       const number = pr?.number;
       if (!pr || typeof number !== "number")

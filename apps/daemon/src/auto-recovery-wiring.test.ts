@@ -29,7 +29,7 @@ function config(overrides: Partial<CitadelConfig["automations"]["fixCi"]> = {}):
     providerRefresh: {
       enabled: true,
       workingHours: { startHour: 9, endHour: 18, weekdaysOnly: true },
-      intervals: { prCiMs: 60_000, jiraMs: 5 * 60_000, usageMs: 5 * 60_000 },
+      intervals: { prCiMs: 60_000, ciMs: 5 * 60_000, jiraMs: 5 * 60_000, usageMs: 5 * 60_000 },
       focusRefreshThresholdMs: 30_000,
       maxConcurrentRefreshes: 4,
     },

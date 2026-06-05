@@ -4,7 +4,7 @@
 
 import { execFileSync } from "node:child_process";
 import type { CitadelConfig } from "@citadel/config";
-import type { TerminalSession } from "@citadel/contracts";
+import type { AgentSession, TerminalSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import {
   type MonitorSessionState,
@@ -56,12 +56,23 @@ export interface DaemonStatusMonitorDeps extends MonitorTickDeps {
   invalidatePaneCaptureForSession(sessionId: string): void;
 }
 
+export type AgentStatusTransitionObserver = (transition: {
+  session: AgentSession;
+  previousStatus: AgentSession["status"];
+  nextStatus: AgentSession["status"];
+}) => void;
+
+export type StatusMonitorWiringOptions = {
+  onAgentStatusTransition?: AgentStatusTransitionObserver;
+};
+
 export function buildStatusMonitorDeps(
   store: SqliteStore,
   emit: (event: string, payload: unknown) => void,
   config: CitadelConfig,
   recentUserAction: Map<string, number>,
   diagnostics?: MonitorTickDeps["diagnostics"],
+  options: StatusMonitorWiringOptions = {},
 ): DaemonStatusMonitorDeps {
   const adapterStates = new Map<string, SessionAdapterState>();
   const monitorStates = new Map<string, MonitorSessionState>();
@@ -107,6 +118,10 @@ export function buildStatusMonitorDeps(
         .filter((session): session is TerminalSession => session.kind === "terminal" && !session.closedAt),
     listWorkspaceIds: () => new Set(store.listWorkspaces().map((ws) => ws.id)),
     updateSession: (id, update) => {
+      const previous =
+        update.status !== undefined
+          ? store.listWorkspaceSessions().find((candidate) => candidate.id === id)
+          : undefined;
       store.updateSessionStatus(id, {
         ...(update.status !== undefined ? { status: update.status } : {}),
         ...(update.reason !== undefined ? { statusReason: update.reason } : {}),
@@ -116,6 +131,18 @@ export function buildStatusMonitorDeps(
         ...(update.endedAt !== undefined ? { endedAt: update.endedAt } : {}),
         ...(update.exitCode !== undefined ? { exitCode: update.exitCode } : {}),
       });
+      if (
+        previous?.kind === "agent" &&
+        update.status !== undefined &&
+        update.status !== previous.status &&
+        options.onAgentStatusTransition
+      ) {
+        options.onAgentStatusTransition({
+          session: previous,
+          previousStatus: previous.status,
+          nextStatus: update.status,
+        });
+      }
     },
     deleteSession: (id) => store.deleteSession(id),
     emit: (event, payload) => emit(event, payload),
@@ -280,9 +307,10 @@ export function startDaemonStatusMonitor(
   config: CitadelConfig,
   recentUserAction: Map<string, number>,
   diagnostics?: MonitorTickDeps["diagnostics"],
+  options: StatusMonitorWiringOptions = {},
 ): DaemonStatusMonitorHandle | null {
   if (process.env.CITADEL_DISABLE_STATUS_MONITOR === "1") return null;
-  const deps = buildStatusMonitorDeps(store, emit, config, recentUserAction, diagnostics);
+  const deps = buildStatusMonitorDeps(store, emit, config, recentUserAction, diagnostics, options);
   const intervalMs =
     Number.parseInt(process.env.CITADEL_STATUS_MONITOR_INTERVAL_MS ?? "", 10) || DEFAULT_STATUS_MONITOR_INTERVAL_MS;
   return {

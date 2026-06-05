@@ -5,20 +5,11 @@ import { type CitadelConfig, DEFAULT_FIX_CI_AUTOMATION } from "@citadel/config";
 import type { AgentRuntime, CiProviderSummary, VersionControlSummary } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { type AutoRecoveryMonitorHandle, type OperationService, startAutoRecoveryMonitor } from "@citadel/operations";
-import {
-  type CollectGitHubVersionControlSummaryDeps,
-  collectGitHubCiRuns,
-  collectGitHubVersionControlSummary,
-} from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
-import type { ProviderCache } from "./app-helpers.js";
 import { parsePositiveInt } from "./app-helpers.js";
 import { FIX_CI_PROMPT, decideAutoRecoveryAction } from "./auto-recovery.js";
-import { cachedCiOrDisabled, githubCiCacheKey, shouldFetchGithubCi } from "./gh-automation.js";
-import type { GhScheduler } from "./gh-scheduler.js";
 import type { GitHubProviderStateService } from "./github-provider-state.js";
 import { ciCacheKey, vcCacheKey } from "./provider-cache.js";
-import { fetchVersionControlGated } from "./vc-fetch-gated.js";
 
 export type AutoRecoveryWiringDeps = {
   store: SqliteStore;
@@ -33,10 +24,6 @@ export type AutoRecoveryWiringDeps = {
   fetchVersionControl?: (workspacePath: string) => Promise<VersionControlSummary>;
   fetchCi?: (workspacePath: string) => Promise<CiProviderSummary>;
   github?: GitHubProviderStateService;
-  providerCache?: ProviderCache;
-  scheduler?: GhScheduler;
-  resolveRepoFullName?: (repoId: string) => string | null;
-  cachedProvider?: <T>(key: string, load: () => T | Promise<T>, ttlMs?: number) => Promise<T>;
 };
 
 // Parse env knobs once at startup. Config owns the defaults; env vars remain
@@ -52,7 +39,6 @@ function readEnvKnobs(config: CitadelConfig) {
 
 export function startDaemonAutoRecoveryMonitor(deps: AutoRecoveryWiringDeps): AutoRecoveryMonitorHandle | null {
   const githubFetchers = deps.github ? buildGitHubStateAutoRecoveryFetchers(deps, deps.github) : null;
-  const cachedFetchers = githubFetchers ? null : buildCachedAutoRecoveryFetchers(deps);
   return startAutoRecoveryMonitor(
     {
       store: deps.store,
@@ -61,13 +47,9 @@ export function startDaemonAutoRecoveryMonitor(deps: AutoRecoveryWiringDeps): Au
       fetchVersionControl:
         deps.fetchVersionControl ??
         githubFetchers?.fetchVersionControl ??
-        cachedFetchers?.fetchVersionControl ??
-        ((workspacePath) => collectGitHubVersionControlSummary(workspacePath)),
+        ((workspacePath) => Promise.resolve(unavailableVersionControl(workspacePath))),
       fetchCi:
-        deps.fetchCi ??
-        githubFetchers?.fetchCi ??
-        cachedFetchers?.fetchCi ??
-        ((workspacePath) => collectGitHubCiRuns(workspacePath)),
+        deps.fetchCi ?? githubFetchers?.fetchCi ?? ((workspacePath) => Promise.resolve(unavailableCi(workspacePath))),
       spawnAutoRecoveryAgent: async ({ workspaceId, runtimeId, prompt }) => {
         const runtime = deps.config.agentRuntimes.find((candidate) => candidate.id === runtimeId);
         if (!runtime) throw new Error(`runtime_not_found:${runtimeId}`);
@@ -168,51 +150,33 @@ function buildGitHubStateAutoRecoveryFetchers(
   };
 }
 
-function buildCachedAutoRecoveryFetchers(deps: AutoRecoveryWiringDeps): {
-  fetchVersionControl: (workspacePath: string) => Promise<VersionControlSummary>;
-  fetchCi: (workspacePath: string) => Promise<CiProviderSummary>;
-} | null {
-  const providerCache = deps.providerCache;
-  const scheduler = deps.scheduler;
-  const resolveRepoFullName = deps.resolveRepoFullName;
-  const cachedProvider = deps.cachedProvider;
-  if (!providerCache || !scheduler || !resolveRepoFullName || !cachedProvider) return null;
-  const gatedVcDeps = {
-    store: deps.store,
-    scheduler,
-    providerCache,
-    collectVc: (path: string, providerDeps?: CollectGitHubVersionControlSummaryDeps) =>
-      collectGitHubVersionControlSummary(path, providerDeps),
-    resolveRepoFullName,
-    cachedProvider,
-  };
-  return {
-    fetchVersionControl: (workspacePath) => {
-      const { workspace, repo } = findWorkspaceRepo(deps.store, workspacePath);
-      return fetchVersionControlGated(gatedVcDeps, workspace, repo, `vc:${workspace.id}:${workspace.updatedAt}`);
-    },
-    fetchCi: (workspacePath) => {
-      const { workspace, repo } = findWorkspaceRepo(deps.store, workspacePath);
-      const ciKey = githubCiCacheKey(
-        workspace,
-        repo,
-        resolveRepoFullName(repo.id),
-        deps.store.getWorkspacePrSnapshot(workspace.id),
-      );
-      if (!shouldFetchGithubCi(deps.store, workspace)) {
-        return Promise.resolve(
-          cachedCiOrDisabled(providerCache, ciKey, "GitHub CI is cached until the PR receives a new local commit"),
-        );
-      }
-      return cachedProvider(ciKey, () => collectGitHubCiRuns(workspace.path), 60_000);
-    },
-  };
-}
-
 function findWorkspaceRepo(store: SqliteStore, workspacePath: string) {
   const workspace = store.listWorkspaces().find((candidate) => candidate.path === workspacePath);
   if (!workspace) throw new Error("workspace_not_found");
   const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
   if (!repo) throw new Error("repo_not_found");
   return { workspace, repo };
+}
+
+function unavailableVersionControl(workspacePath: string): VersionControlSummary {
+  return {
+    providerId: "github-gh",
+    status: "unavailable",
+    reason: `GitHub state service unavailable for auto-recovery (${workspacePath})`,
+    defaultBranch: null,
+    currentBranch: null,
+    remotes: [],
+    pullRequest: null,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+function unavailableCi(workspacePath: string): CiProviderSummary {
+  return {
+    providerId: "github-gh",
+    status: "unavailable",
+    reason: `GitHub state service unavailable for auto-recovery (${workspacePath})`,
+    runs: [],
+    checkedAt: new Date().toISOString(),
+  };
 }

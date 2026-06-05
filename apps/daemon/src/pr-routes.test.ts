@@ -492,6 +492,17 @@ function createPrRouteHarness(input: {
   ]);
   const app = express();
   app.use(express.json());
+  const collectGitHubCiRuns =
+    input.collectGitHubCiRuns ??
+    (async () => ({
+      providerId: "github-gh" as const,
+      status: "healthy" as const,
+      reason: null,
+      runs: [] as [],
+      checkedAt: now,
+    }));
+  const fetchVc = (cacheKey: string) =>
+    cachedProviderValue(input.providerCache, cacheKey, async () => makeVcSummary(now), 90_000);
   registerPrRoutes({
     app,
     store: {
@@ -543,21 +554,25 @@ function createPrRouteHarness(input: {
         snapshots.set(workspaceId, { ...(snapshots.get(workspaceId) ?? nullSnapshot()), ...patch });
       },
     } as never,
-    providers: {
-      collectGitHubVersionControlSummary: async () => makeVcSummary(now),
-      collectGitHubCiRuns:
-        input.collectGitHubCiRuns ??
-        (async () => ({
-          providerId: "github-gh",
-          status: "healthy" as const,
-          reason: null,
-          runs: [],
-          checkedAt: now,
-        })),
-      collectGitHubCiRunLog: async () => ({ providerId: "github-gh", status: "healthy" as const, reason: null }),
-    } as never,
+    github: {
+      fetchVersionControl: async (_workspace, _repo, cacheKey) => fetchVc(cacheKey),
+      fetchCheckoutVersionControl: async (_workspace, _checkout, _repo, cacheKey) => fetchVc(cacheKey),
+      fetchRepoVersionControl: async (_repo, cacheKey) => fetchVc(cacheKey),
+      fetchRepoCi: async (_repo, cacheKey, options) =>
+        cachedProviderValue(input.providerCache, cacheKey, collectGitHubCiRuns, options?.ttlMs ?? 180_000),
+      fetchCi: async (_workspace, _repo, options) =>
+        cachedProviderValue(input.providerCache, options?.cacheKey ?? `ci:ws_a:${now}`, collectGitHubCiRuns, 180_000),
+      fetchCiRunLog: async (_repo, runId) => ({
+        providerId: "github-gh",
+        status: "healthy" as const,
+        reason: null,
+        runId,
+        truncated: false,
+        log: "log",
+        checkedAt: now,
+      }),
+    },
     asyncRoute,
-    cachedProvider: (key, load, ttlMs) => cachedProviderValue(input.providerCache, key, load, ttlMs),
     providerCache: input.providerCache,
     resolveRepoFullName: () => "owner/repo",
     buildWorkspaceCockpitSummary: async () => null,

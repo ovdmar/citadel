@@ -26,6 +26,7 @@ import {
 } from "./cockpit-tools.js";
 import { CommandPalette } from "./command-palette.js";
 import { GhCooldownBanner } from "./gh-cooldown-banner.js";
+import { useCheckoutPrOpenRefresh } from "./hooks/use-checkout-pr-open-refresh.js";
 import { useFocusRefresh } from "./hooks/use-focus-refresh.js";
 import { resolveInspectorTargetState } from "./inspector-target-state.js";
 import { Inspector } from "./inspector.js";
@@ -179,6 +180,7 @@ export function Cockpit() {
     : [];
   const activeTargetKey = activeWorkspace ? (activeTargetByWorkspace[activeWorkspace.id] ?? "home") : "home";
   const activeCheckoutId = checkoutIdFromTargetKey(activeTargetKey, activeWorkspaceCheckouts);
+  useCheckoutPrOpenRefresh({ workspaceId: activeWorkspace?.id, checkoutId: activeCheckoutId, queryClient });
   const reviewCheckoutId = activeCheckoutId ?? homeReviewCheckoutId(activeWorkspace, activeWorkspaceCheckouts);
   const activeTargetType = activeCheckoutId ? "worktree_checkout" : "workspace_home";
   const workspacePrEntry = activeWorkspace ? prStateQuery.data?.workspacePrState?.[activeWorkspace.id] : undefined;

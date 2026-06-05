@@ -450,6 +450,7 @@ describe("providerRefresh schema", () => {
     expect(config.providerRefresh.workingHours.endHour).toBe(18);
     expect(config.providerRefresh.workingHours.weekdaysOnly).toBe(true);
     expect(config.providerRefresh.intervals.prCiMs).toBe(60_000);
+    expect(config.providerRefresh.intervals.ciMs).toBe(5 * 60_000);
     expect(config.providerRefresh.intervals.jiraMs).toBe(5 * 60_000);
     expect(config.providerRefresh.intervals.usageMs).toBe(5 * 60_000);
     expect(config.providerRefresh.focusRefreshThresholdMs).toBe(30_000);
@@ -468,6 +469,7 @@ describe("providerRefresh schema", () => {
 
   it("rejects intervals below their respective minima", () => {
     expect(() => parseWith({ intervals: { prCiMs: 14_999 } })).toThrow();
+    expect(() => parseWith({ intervals: { ciMs: 59_999 } })).toThrow();
     expect(() => parseWith({ intervals: { jiraMs: 29_999 } })).toThrow();
     expect(() => parseWith({ intervals: { usageMs: 29_999 } })).toThrow();
   });

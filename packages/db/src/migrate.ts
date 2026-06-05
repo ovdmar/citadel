@@ -399,6 +399,7 @@ export function runMigrations(
       (17, 'workspace-checkout-issue-status', datetime('now'));
   `);
   ensureColumn("workspace_checkouts", "intended_pr_fetched_at", "TEXT");
+  ensureColumn("workspace_checkouts", "intended_pr_state", "TEXT");
   ensureColumn("workspace_checkouts", "intended_pr_checks_green", "INTEGER");
   ensureColumn("workspace_checkouts", "intended_pr_merge_state_status", "TEXT");
   ensureColumn("workspace_checkouts", "intended_pr_has_conflicts", "INTEGER");

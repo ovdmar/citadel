@@ -19,8 +19,10 @@ import type { asyncRoute as AsyncRoute } from "./app-helpers.js";
 import {
   AUTOMATED_GH_DISABLED_REASON,
   cachedCiOrDisabled,
+  cachedCiOrSkipped,
   disabledVersionControlSummary,
   githubCiCacheKey,
+  githubCiSkipReason,
   shouldFetchGithubCi,
 } from "./gh-automation.js";
 import { decorateWithCooldown } from "./gh-quota-wiring.js";
@@ -91,13 +93,9 @@ export function createWorkspaceCockpitSummaryBuilder(input: {
       shouldFetchCi
         ? fetchCi(workspace, repo)
         : Promise.resolve(
-            cachedCiOrDisabled(
-              providerCache,
-              ciKey,
-              ghAutomationEnabled
-                ? "GitHub CI is cached until the PR receives a new local commit"
-                : AUTOMATED_GH_DISABLED_REASON,
-            ),
+            ghAutomationEnabled
+              ? cachedCiOrSkipped(providerCache, ciKey, githubCiSkipReason(store, workspace) ?? "GitHub CI is cached")
+              : cachedCiOrDisabled(providerCache, ciKey, AUTOMATED_GH_DISABLED_REASON),
           ),
       workspace.issueKey
         ? cachedProviderSwr<IssueTrackerSummary>(issueCacheKey(workspace.issueKey), () =>

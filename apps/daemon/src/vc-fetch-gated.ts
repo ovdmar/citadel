@@ -9,7 +9,6 @@ import { makeKey } from "./gh-scheduler.js";
 import {
   getInflight,
   globalPrCacheKey,
-  globalPrCacheKeyForWorkspace,
   readGlobalPrSummary,
   registerInflight,
   writeGlobalPrSummary,
@@ -37,6 +36,7 @@ export type GatedVcFetchDeps = {
   collectVc: (workspacePath: string, deps?: CollectGitHubVersionControlSummaryDeps) => Promise<VersionControlSummary>;
   resolveRepoFullName: (repoId: string) => string | null;
   cachedProvider: <T>(key: string, load: () => T | Promise<T>, ttlMs?: number) => Promise<T>;
+  cachedProviderSwr?: <T>(key: string, load: () => T | Promise<T>, ttlMs?: number) => Promise<T>;
 };
 
 export const VC_CACHE_TTL_MS = 90_000;
@@ -44,6 +44,14 @@ export const VC_CACHE_TTL_MS = 90_000;
 export type FetchVersionControlGatedOptions = {
   allowCollect?: boolean;
   skipReason?: string;
+  force?: boolean | undefined;
+  staleWhileRevalidate?: boolean;
+  snapshot?: {
+    read: () => WorkspacePrSnapshot | null;
+    write: (patch: Partial<WorkspacePrSnapshot>) => void;
+    schedulerTargetId?: string | undefined;
+  };
+  afterFetch?: (summary: VersionControlSummary) => void;
 };
 
 export async function fetchVersionControlGated(
@@ -53,11 +61,16 @@ export async function fetchVersionControlGated(
   cacheKey: string,
   options: FetchVersionControlGatedOptions = {},
 ): Promise<VersionControlSummary> {
-  const snapshot = deps.store.getWorkspacePrSnapshot(workspace.id);
+  const snapshotReader = options.snapshot?.read ?? (() => deps.store.getWorkspacePrSnapshot(workspace.id));
+  const snapshotWriter =
+    options.snapshot?.write ?? ((patch) => deps.store.updateWorkspacePrSnapshot(workspace.id, patch));
+  const schedulerTargetId = options.snapshot?.schedulerTargetId ?? workspace.id;
+  const snapshot = snapshotReader();
   const snapshotHeadSha = snapshot?.lastHeadSha ?? null;
   const repoFullName = snapshot?.prNumber != null ? deps.resolveRepoFullName(repo.id) : null;
   const key: SchedulerKey | null = snapshot?.prNumber && repoFullName ? makeKey(repoFullName, snapshot.prNumber) : null;
   if (
+    !options.force &&
     snapshot &&
     snapshot.prNumber == null &&
     snapshot.lastFetchAt &&
@@ -73,12 +86,9 @@ export async function fetchVersionControlGated(
     snapshot?.prState !== "merged" &&
     snapshot?.prState !== "closed" &&
     !headMatches(workspace.path, snapshotHeadSha);
-  const globalKey = globalPrCacheKeyForWorkspace(workspace, {
-    resolveRepoFullName: deps.resolveRepoFullName,
-    getSnapshot: (workspaceId) => deps.store.getWorkspacePrSnapshot(workspaceId),
-  });
+  const globalKey = snapshot?.prNumber && repoFullName ? globalPrCacheKey(repoFullName, snapshot.prNumber) : null;
 
-  if (globalKey) {
+  if (globalKey && !options.force) {
     const cachedPr = readGlobalPrSummary(deps.providerCache, globalKey);
     if (!localHeadChanged && cachedPr && isCurrentHead(workspace.path, cachedPr))
       return synthesizeVcFromGlobalCache(workspace.path, cachedPr);
@@ -97,7 +107,7 @@ export async function fetchVersionControlGated(
 
   // shouldRefetch:false + cache-hit → serve cache without spawning gh.
   if (key && !localHeadChanged) {
-    const decision = deps.scheduler.shouldRefetch(key);
+    const decision = deps.scheduler.shouldRefetch(key, { force: options.force });
     if (!decision.fetch) {
       const cached = readAnyProviderValue<VersionControlSummary>(deps.providerCache, cacheKey);
       if (cached) return cached;
@@ -114,27 +124,31 @@ export async function fetchVersionControlGated(
   }
 
   const inflightDeferred = globalKey ? deferred<PullRequestSummary>() : null;
+  const providerRead =
+    options.staleWhileRevalidate && deps.cachedProviderSwr ? deps.cachedProviderSwr : deps.cachedProvider;
   try {
-    if (localHeadChanged) deps.providerCache.delete(cacheKey);
+    if (options.force || localHeadChanged) deps.providerCache.delete(cacheKey);
     if (globalKey && inflightDeferred) {
       registerInflight(globalKey, inflightDeferred.promise);
     }
-    const vc = await deps.cachedProvider(
+    return await providerRead(
       cacheKey,
-      () =>
-        deps.collectVc(
+      async () => {
+        const vc = await deps.collectVc(
           workspace.path,
           buildVersionControlProviderDeps(deps.providerCache, () => deps.resolveRepoFullName(repo.id)),
-        ),
+        );
+        if (vc.status === "healthy" && vc.pullRequest) {
+          inflightDeferred?.resolve(vc.pullRequest);
+        } else {
+          inflightDeferred?.reject(new Error(vc.reason ?? "vc fetch had no PR"));
+        }
+        recordVcOutcome(deps, workspace, repo, vc, key, repoFullName, snapshotWriter, schedulerTargetId);
+        options.afterFetch?.(vc);
+        return vc;
+      },
       VC_CACHE_TTL_MS,
     );
-    if (vc.status === "healthy" && vc.pullRequest) {
-      inflightDeferred?.resolve(vc.pullRequest);
-    } else {
-      inflightDeferred?.reject(new Error(vc.reason ?? "vc fetch had no PR"));
-    }
-    recordVcOutcome(deps, workspace, repo, vc, key, repoFullName);
-    return vc;
   } catch (err) {
     inflightDeferred?.reject(err);
     if (key) deps.scheduler.recordFetchError(key, err);
@@ -159,6 +173,8 @@ function recordVcOutcome(
   vc: VersionControlSummary,
   priorKey: SchedulerKey | null,
   priorRepoFullName: string | null,
+  writeSnapshot: (patch: Partial<WorkspacePrSnapshot>) => void,
+  schedulerTargetId: string,
 ): void {
   // Non-healthy responses → error path for the scheduler (auth wobble,
   // network blip; rate-limit already short-circuited inside gh()). Without
@@ -169,7 +185,7 @@ function recordVcOutcome(
   }
   if (!vc.pullRequest) {
     const localHead = gitOptional(workspace.path, ["rev-parse", "HEAD"]) || null;
-    deps.store.updateWorkspacePrSnapshot(workspace.id, {
+    writeSnapshot({
       prNumber: null,
       prState: null,
       lastFetchAt: new Date().toISOString(),
@@ -186,7 +202,7 @@ function recordVcOutcome(
   const repoFullName = priorRepoFullName ?? deps.resolveRepoFullName(repo.id);
   if (!repoFullName) return; // can't key the scheduler without a full name
   const key = makeKey(repoFullName, pr.number);
-  deps.scheduler.recordFetch(key, pr, workspace.id);
+  deps.scheduler.recordFetch(key, pr, schedulerTargetId);
   writeGlobalPrSummary(deps.providerCache, globalPrCacheKey(repoFullName, pr.number), pr);
 
   // Persist the snapshot — drives the scheduler.hydrate() path on next
@@ -201,7 +217,7 @@ function recordVcOutcome(
   const nowIso = new Date().toISOString();
   const entryChangedAt = deps.scheduler._entries().get(key)?.lastHeadShaChangedAt ?? null;
   const lastHeadShaChangedAtIso = entryChangedAt != null ? new Date(entryChangedAt).toISOString() : null;
-  deps.store.updateWorkspacePrSnapshot(workspace.id, {
+  writeSnapshot({
     prNumber: pr.number,
     prState: (pr.state ?? "open").toLowerCase() as "open" | "closed" | "merged",
     lastFetchAt: nowIso,

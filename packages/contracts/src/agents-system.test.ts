@@ -125,6 +125,7 @@ describe("agents system contracts", () => {
       mergeStateStatus: null,
       hasConflicts: null,
     });
+    expect(checkout.intendedPr?.state).toBeUndefined();
     expect(target.type).toBe("worktree_checkout");
     expect(plan.approvalMode).toBe("manual");
     expect(artifact.blockingFindings).toEqual([]);

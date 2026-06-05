@@ -65,6 +65,7 @@ function createWorkspaceHomeSchema(
       intended_pr_provider TEXT,
       intended_pr_number INTEGER,
       intended_pr_url TEXT,
+      intended_pr_state TEXT,
       pr_head_sha TEXT,
       pr_base_ref TEXT,
       intended_pr_fetched_at TEXT,
@@ -86,6 +87,7 @@ function createWorkspaceHomeSchema(
   ensureColumn("workspace_checkouts", "issue_status", "TEXT");
   ensureColumn("workspace_checkouts", "issue_fetched_at", "TEXT");
   ensureColumn("workspace_checkouts", "intended_pr_fetched_at", "TEXT");
+  ensureColumn("workspace_checkouts", "intended_pr_state", "TEXT");
   ensureColumn("workspace_checkouts", "intended_pr_checks_green", "INTEGER");
   ensureColumn("workspace_checkouts", "intended_pr_merge_state_status", "TEXT");
   ensureColumn("workspace_checkouts", "intended_pr_has_conflicts", "INTEGER");

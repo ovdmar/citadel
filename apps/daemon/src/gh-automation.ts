@@ -37,10 +37,26 @@ export function disabledCiSummary(reason = AUTOMATED_GH_DISABLED_REASON): CiProv
   };
 }
 
+export function skippedCiSummary(reason: string): CiProviderSummary {
+  return {
+    providerId: "github-gh",
+    status: "healthy",
+    reason,
+    runs: [],
+    checkedAt: new Date().toISOString(),
+  };
+}
+
 export function cachedCiOrDisabled(cache: ProviderCache, key: string, reason: string): CiProviderSummary {
   const cached = cache.get(key);
   if (cached) return cached.value as CiProviderSummary;
   return disabledCiSummary(reason);
+}
+
+export function cachedCiOrSkipped(cache: ProviderCache, key: string, reason: string): CiProviderSummary {
+  const cached = cache.get(key);
+  if (cached) return cached.value as CiProviderSummary;
+  return skippedCiSummary(reason);
 }
 
 export function githubCiCacheKey(
@@ -55,14 +71,36 @@ export function githubCiCacheKey(
 }
 
 export function shouldFetchGithubCi(store: Pick<SqliteStore, "getWorkspacePrSnapshot">, workspace: Workspace): boolean {
+  return githubCiFetchDecision(store, workspace).fetch;
+}
+
+export function githubCiSkipReason(
+  store: Pick<SqliteStore, "getWorkspacePrSnapshot">,
+  workspace: Workspace,
+): string | null {
+  const decision = githubCiFetchDecision(store, workspace);
+  return decision.fetch ? null : decision.reason;
+}
+
+function githubCiFetchDecision(
+  store: Pick<SqliteStore, "getWorkspacePrSnapshot">,
+  workspace: Workspace,
+): { fetch: true } | { fetch: false; reason: string } {
   const snapshot = store.getWorkspacePrSnapshot(workspace.id);
-  if (!snapshot?.prNumber) return true;
+  if (!snapshot) return { fetch: false, reason: "GitHub CI is cached until PR metadata is fetched" };
+  if (!snapshot.prNumber) return { fetch: false, reason: "GitHub CI is skipped because this workspace has no PR" };
   const localHead = readLocalHead(workspace.path);
-  if (!localHead || !snapshot.lastHeadSha || localHead !== snapshot.lastHeadSha) return true;
-  if (snapshot.prState === "merged" || snapshot.prState === "closed") return false;
-  if (snapshot.lastMergeStateStatus === "DIRTY") return false;
-  if (snapshot.lastChecksGreenAt) return false;
-  return true;
+  if (!localHead || !snapshot.lastHeadSha || localHead !== snapshot.lastHeadSha) return { fetch: true };
+  if (snapshot.prState === "merged" || snapshot.prState === "closed") {
+    return { fetch: false, reason: "GitHub CI is cached because the PR is no longer open" };
+  }
+  if (snapshot.lastMergeStateStatus === "DIRTY") {
+    return { fetch: false, reason: "GitHub CI is cached while the PR has conflicts" };
+  }
+  if (snapshot.lastChecksGreenAt) {
+    return { fetch: false, reason: "GitHub CI is cached until the PR receives a new local commit" };
+  }
+  return { fetch: true };
 }
 
 function readLocalHead(workspacePath: string): string | null {

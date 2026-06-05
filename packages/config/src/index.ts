@@ -10,6 +10,7 @@ import {
   ensureCodexGoalsFeatureArgs,
 } from "./agent-runtime-config.js";
 import type { AgentRuntimeConfig } from "./agent-runtime-config.js";
+import { ProviderRefreshConfigSchema } from "./provider-refresh.js";
 
 export { devStatePath, loadDevState, saveDevState, resolveWorktreeRoot, DevStateSchema } from "./dev-state.js";
 export type { DevState } from "./dev-state.js";
@@ -19,6 +20,7 @@ export {
   ensureCodexGoalsFeatureArgs,
 } from "./agent-runtime-config.js";
 export type { AgentRuntimeConfig } from "./agent-runtime-config.js";
+export { DEFAULT_PROVIDER_REFRESH, ProviderRefreshConfigSchema } from "./provider-refresh.js";
 
 // Re-export HookEventSchema so existing consumers importing it from
 // @citadel/config keep working. The canonical home is @citadel/contracts —
@@ -188,44 +190,7 @@ export const CitadelConfigSchema = z
         allowDestructiveWorkspaceCleanup: z.boolean().default(false),
       })
       .default({ hookTimeoutMs: 120000, allowDestructiveWorkspaceCleanup: false }),
-    providerRefresh: z
-      .object({
-        enabled: z.boolean().default(true),
-        // workingHours uses the daemon process's local clock. Operators working
-        // across timezones from a laptop should expect the gate to follow the
-        // laptop, not the human — set explicit hours or enabled:false to override.
-        workingHours: z
-          .object({
-            startHour: z.number().int().min(0).max(23).default(9),
-            endHour: z.number().int().min(0).max(24).default(18),
-            weekdaysOnly: z.boolean().default(true),
-          })
-          .default({ startHour: 9, endHour: 18, weekdaysOnly: true }),
-        intervals: z
-          .object({
-            prCiMs: z.number().int().min(15_000).default(60_000),
-            jiraMs: z
-              .number()
-              .int()
-              .min(30_000)
-              .default(5 * 60_000),
-            usageMs: z
-              .number()
-              .int()
-              .min(30_000)
-              .default(5 * 60_000),
-          })
-          .default({ prCiMs: 60_000, jiraMs: 5 * 60_000, usageMs: 5 * 60_000 }),
-        focusRefreshThresholdMs: z.number().int().min(5_000).default(30_000),
-        maxConcurrentRefreshes: z.number().int().min(1).max(16).default(4),
-      })
-      .default({
-        enabled: true,
-        workingHours: { startHour: 9, endHour: 18, weekdaysOnly: true },
-        intervals: { prCiMs: 60_000, jiraMs: 5 * 60_000, usageMs: 5 * 60_000 },
-        focusRefreshThresholdMs: 30_000,
-        maxConcurrentRefreshes: 4,
-      }),
+    providerRefresh: ProviderRefreshConfigSchema,
     scratchpad: z
       .object({
         path: z
@@ -284,6 +249,7 @@ export type UsageProviderConfig = z.infer<typeof UsageProviderConfigSchema>;
 export type AutomationConfig = z.infer<typeof AutomationConfigSchema>;
 export type FixCiAutomationConfig = z.infer<typeof FixCiAutomationConfigSchema>;
 export type HookConfig = z.infer<typeof HookConfigSchema>;
+export type ProviderRefreshConfig = z.infer<typeof ProviderRefreshConfigSchema>;
 
 export function defaultDataDir() {
   return process.env.CITADEL_DATA_DIR || path.join(os.homedir(), ".local", "share", "citadel");

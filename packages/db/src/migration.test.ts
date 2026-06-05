@@ -697,6 +697,7 @@ describe("workspace home/checkouts/manager migration (v16)", () => {
       "issue_status",
       "issue_fetched_at",
       "intended_pr_fetched_at",
+      "intended_pr_state",
       "intended_pr_checks_green",
       "intended_pr_merge_state_status",
       "intended_pr_has_conflicts",
