@@ -29,6 +29,7 @@ import {
   tmuxHistoryLimit,
   tmuxPrefix,
   tmuxSessionExists,
+  waitForPaneCommand,
 } from "./index.js";
 import { hasCollapsedPasteMarker } from "./submit-prompt.js";
 
@@ -287,9 +288,11 @@ describe("tmux terminal gateway helpers", () => {
     await waitForCapture(sessionName, "READY_FOR_INTERRUPT");
     sendKeys(sessionName, "\u0003");
     await waitForCapture(sessionName, "INTERRUPTED");
+    expect(await waitForPaneCommand(sessionName, (cmd) => cmd === "bash")).toBe("bash");
 
     sendKeys(sessionName, "cat > pasted.txt");
     sendKeys(sessionName, "\r");
+    expect(await waitForPaneCommand(sessionName, (cmd) => cmd === "cat")).toBe("cat");
     pasteText(sessionName, "alpha\nbeta\n");
     await waitForCapture(sessionName, "beta");
     sendKeys(sessionName, "\u0004");
