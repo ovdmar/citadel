@@ -76,7 +76,7 @@ describe("SpeechRecognitionController", () => {
     const recognition = FakeSpeechRecognition.instances[0];
     expect(recognition?.lang).toBe("en-US");
     expect(recognition?.interimResults).toBe(true);
-    expect(recognition?.continuous).toBe(false);
+    expect(recognition?.continuous).toBe(true);
     expect(recognition?.start).toHaveBeenCalled();
     expect(onState).toHaveBeenCalledWith({ type: "listening" });
   });
@@ -116,6 +116,33 @@ describe("SpeechRecognitionController", () => {
     expect(FakeSpeechRecognition.instances[0]?.stop).toHaveBeenCalled();
   });
 
+  it("uses a configurable silence window for final auto-submit", () => {
+    const onFinal = vi.fn();
+    const controller = new SpeechRecognitionController({ win: makeWindow(), silenceTimeoutMs: 4_000, onFinal });
+    controller.start();
+
+    FakeSpeechRecognition.instances[0]?.result([{ transcript: "slower pause", isFinal: true }]);
+    vi.advanceTimersByTime(3_999);
+    expect(onFinal).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+
+    expect(onFinal).toHaveBeenCalledWith("slower pause");
+  });
+
+  it("re-arms an active final debounce when the silence window changes", () => {
+    const onFinal = vi.fn();
+    const controller = new SpeechRecognitionController({ win: makeWindow(), silenceTimeoutMs: 4_000, onFinal });
+    controller.start();
+
+    FakeSpeechRecognition.instances[0]?.result([{ transcript: "reconfigured pause", isFinal: true }]);
+    controller.setSilenceTimeoutMs(6_000);
+    vi.advanceTimersByTime(5_999);
+    expect(onFinal).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+
+    expect(onFinal).toHaveBeenCalledWith("reconfigured pause");
+  });
+
   it("keeps mixed final and interim results open until the interim tail finalizes", () => {
     const onInterim = vi.fn();
     const onFinal = vi.fn();
@@ -127,7 +154,7 @@ describe("SpeechRecognitionController", () => {
       { transcript: "wor", isFinal: false },
     ]);
     expect(onInterim).toHaveBeenLastCalledWith("wor");
-    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS - 1);
     expect(onFinal).not.toHaveBeenCalled();
 
     FakeSpeechRecognition.instances[0]?.result([{ transcript: "world", isFinal: true }]);
@@ -151,6 +178,27 @@ describe("SpeechRecognitionController", () => {
 
     expect(onFinal).not.toHaveBeenCalled();
     expect(onState).toHaveBeenCalledWith({ type: "stopped", transcript: "hello wor" });
+  });
+
+  it("commits the current draft immediately, including interim text", () => {
+    const onDraft = vi.fn();
+    const onFinal = vi.fn();
+    const controller = new SpeechRecognitionController({ win: makeWindow(), onDraft, onFinal });
+    controller.start();
+
+    FakeSpeechRecognition.instances[0]?.result([
+      { transcript: "manual ", isFinal: true },
+      { transcript: "send", isFinal: false },
+    ]);
+    expect(onDraft).toHaveBeenLastCalledWith("manual send");
+
+    expect(controller.commitCurrent()).toBe(true);
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+
+    expect(onFinal).toHaveBeenCalledOnce();
+    expect(onFinal).toHaveBeenCalledWith("manual send");
+    expect(onDraft).toHaveBeenLastCalledWith("");
+    expect(FakeSpeechRecognition.instances[0]?.stop).toHaveBeenCalled();
   });
 
   it("does not emit a no-result timeout after final auto-submit", () => {
@@ -211,7 +259,7 @@ describe("SpeechRecognitionController", () => {
     expect(onState).toHaveBeenCalledWith({ type: "stopped", transcript: "partial text" });
   });
 
-  it("hard-stops after 10s without recognition results", () => {
+  it("hard-stops after the silence window without recognition results", () => {
     const onState = vi.fn();
     const controller = new SpeechRecognitionController({ win: makeWindow(), onState });
     controller.start();
