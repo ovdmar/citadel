@@ -14,8 +14,9 @@ import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { queryClient } from "./api.js";
+import { focusWorkspaceIdAfterDrop } from "./navigator-drop-focus.js";
 import type { CheckoutPrStateByWorkspace } from "./navigator-pr-state.js";
-import { Navigator, aggregateNavigatorTone, focusWorkspaceIdAfterDrop } from "./navigator.js";
+import { Navigator, aggregateNavigatorTone } from "./navigator.js";
 
 vi.mock("@tanstack/react-router", () => ({
   Link: (props: { to: string; className?: string; title?: string; children?: ReactNode }) =>
