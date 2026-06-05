@@ -4,7 +4,7 @@
 import { type AgentRuntimeConfig, type CitadelConfig, ensureCodexGoalsFeatureArgs } from "@citadel/config";
 import type { AgentSession, WorkspaceSession } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
-import { prepareCodexSqliteHomeForWorkspace } from "@citadel/runtimes";
+import { prepareCodexHomeForWorkspace } from "@citadel/runtimes";
 import { ensureTmuxSession, launchAgentInSession, panePidProcess } from "@citadel/terminal";
 
 const SHELL_COMMANDS = ["bash", "sh", "zsh", "fish"] as const;
@@ -43,14 +43,13 @@ function resolveSessionContext(
 
 function codexEnvForSession(
   session: AgentSession,
-  config: CitadelConfig,
+  _config: CitadelConfig,
 ): Record<string, string | null | undefined> | undefined {
   if (session.runtimeId !== "codex") return undefined;
+  const codexHome = prepareCodexHomeForWorkspace({ workspaceId: session.workspaceId });
   return {
-    CODEX_SQLITE_HOME: prepareCodexSqliteHomeForWorkspace({
-      workspaceId: session.workspaceId,
-      dataDir: config.dataDir,
-    }),
+    CODEX_HOME: codexHome.home,
+    CODEX_SQLITE_HOME: codexHome.sqliteHome,
   };
 }
 

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SqliteStore } from "@citadel/db";
+import { codexHomeForWorkspace, codexSqliteHomeForWorkspace } from "@citadel/runtimes";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const killCalls: string[] = [];
@@ -138,6 +139,34 @@ describe("createBackgroundAgentSession", () => {
     const pasteCall = vi.mocked(terminal.ensureTmuxSessionRaw).mock.calls.at(-1)?.[0];
     expect(pasteCall?.args).toEqual([]);
     expect(terminal.submitPrompt).toHaveBeenCalledWith(pasteCall?.sessionName, "echo hi");
+  });
+
+  it("launches background Codex runs with isolated CODEX_HOME and CODEX_SQLITE_HOME", async () => {
+    const terminal = await import("@citadel/terminal");
+    const { createBackgroundAgentSession } = await import("./create-background-agent-session.js");
+    const { store, dir } = createStore();
+    const previousRoot = process.env.CITADEL_CODEX_HOME_ROOT;
+    process.env.CITADEL_CODEX_HOME_ROOT = path.join(dir, "codex-root");
+    try {
+      await createBackgroundAgentSession(
+        { store, activity: () => {} },
+        {
+          cwd: "/tmp/bg-codex",
+          runtimeId: "codex",
+          runtime: { command: "codex", args: [], displayName: "Codex", promptArg: null },
+          scheduledAgentId: "sched_codex",
+          logFilePath: "/tmp/bg-codex/run.log",
+        },
+      );
+      const call = vi.mocked(terminal.ensureTmuxSessionRaw).mock.calls.at(-1)?.[0];
+      expect(call?.env).toEqual({
+        CODEX_HOME: codexHomeForWorkspace("background_sched_codex"),
+        CODEX_SQLITE_HOME: codexSqliteHomeForWorkspace("background_sched_codex"),
+      });
+    } finally {
+      if (previousRoot === undefined) Reflect.deleteProperty(process.env, "CITADEL_CODEX_HOME_ROOT");
+      else process.env.CITADEL_CODEX_HOME_ROOT = previousRoot;
+    }
   });
 });
 

@@ -1,21 +1,37 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
-function defaultCitadelDataDir(): string {
-  return process.env.CITADEL_DATA_DIR || path.join(os.homedir(), ".local", "share", "citadel");
+export const DEFAULT_CODEX_HOME_ROOT = "/var/tmp/citadel/codex";
+
+function defaultCodexHomeRoot(): string {
+  return process.env.CITADEL_CODEX_HOME_ROOT || DEFAULT_CODEX_HOME_ROOT;
 }
 
 function safeSegment(value: string): string {
   return value.replace(/[^A-Za-z0-9_-]+/g, "_") || "unknown";
 }
 
-export function codexSqliteHomeForWorkspace(workspaceId: string, dataDir: string = defaultCitadelDataDir()): string {
-  return path.join(path.resolve(dataDir), "codex-sqlite", safeSegment(workspaceId));
+export function codexHomeForWorkspace(workspaceId: string, homeRoot: string = defaultCodexHomeRoot()): string {
+  return path.join(path.resolve(homeRoot), safeSegment(workspaceId));
 }
 
-export function prepareCodexSqliteHomeForWorkspace(input: { workspaceId: string; dataDir?: string }): string {
-  const sqliteHome = codexSqliteHomeForWorkspace(input.workspaceId, input.dataDir);
+export function codexSqliteHomeForWorkspace(workspaceId: string, homeRoot: string = defaultCodexHomeRoot()): string {
+  return path.join(codexHomeForWorkspace(workspaceId, homeRoot), "sqlite");
+}
+
+export function prepareCodexHomeForWorkspace(input: {
+  workspaceId: string;
+  homeRoot?: string;
+}): { home: string; sqliteHome: string } {
+  const home = codexHomeForWorkspace(input.workspaceId, input.homeRoot);
+  const sqliteHome = codexSqliteHomeForWorkspace(input.workspaceId, input.homeRoot);
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  fs.mkdirSync(sqliteHome, { recursive: true, mode: 0o700 });
+  return { home, sqliteHome };
+}
+
+export function prepareCodexSqliteHomeForWorkspace(input: { workspaceId: string; homeRoot?: string }): string {
+  const sqliteHome = codexSqliteHomeForWorkspace(input.workspaceId, input.homeRoot);
   fs.mkdirSync(sqliteHome, { recursive: true, mode: 0o700 });
   return sqliteHome;
 }

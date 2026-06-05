@@ -2,6 +2,7 @@ import { ensureCodexGoalsFeatureArgs } from "@citadel/config";
 import type { ActivityEvent, BackgroundAgentSession } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
+import { prepareCodexHomeForWorkspace } from "@citadel/runtimes";
 import { ensureTmuxSessionRaw, killTmuxSession, pipeBackgroundSessionToLog, submitPrompt } from "@citadel/terminal";
 
 type RuntimeDescriptor = { command: string; args: string[]; displayName: string; promptArg: string | null };
@@ -52,6 +53,10 @@ export async function createBackgroundAgentSession(
     if (input.runtime.promptArg) runtimeArgs.push(input.runtime.promptArg, input.prompt);
     else promptForKeys = input.prompt;
   }
+  const codexHome =
+    input.runtimeId === "codex"
+      ? prepareCodexHomeForWorkspace({ workspaceId: `background_${input.scheduledAgentId}` })
+      : null;
 
   let tmux: { tmuxSessionName: string; tmuxSessionId: string };
   try {
@@ -60,6 +65,7 @@ export async function createBackgroundAgentSession(
       cwd: input.cwd,
       command: input.runtime.command,
       args: runtimeArgs,
+      ...(codexHome ? { env: { CODEX_HOME: codexHome.home, CODEX_SQLITE_HOME: codexHome.sqliteHome } } : {}),
     });
   } catch (error) {
     // Best-effort cleanup: kill the session if it half-spawned.

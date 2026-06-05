@@ -23,7 +23,10 @@ export {
 } from "./transcripts/index.js";
 export type { RuntimeUserPrompt, RuntimeTranscriptAdapter, GetUserPromptsInput } from "./transcripts/index.js";
 export {
+  DEFAULT_CODEX_HOME_ROOT,
+  codexHomeForWorkspace,
   codexSqliteHomeForWorkspace,
+  prepareCodexHomeForWorkspace,
   prepareCodexSqliteHomeForWorkspace,
 } from "./codex-sqlite-home.js";
 

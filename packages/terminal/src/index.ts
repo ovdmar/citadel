@@ -190,6 +190,17 @@ export function shellQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function tmuxEnvironmentArgs(env?: Record<string, string | null | undefined>): string[] {
+  if (!env) return [];
+  const args: string[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (value === null || value === undefined) continue;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    args.push("-e", `${key}=${value}`);
+  }
+  return args;
+}
+
 /**
  * Per-run cap on pipe-pane log size. tmux pipe-pane streams the raw PTY bytes
  * into `head -c LOG_TRUNCATION_BYTES`, which exits on cap and closes the pipe,
@@ -217,6 +228,7 @@ export type RawTerminalSessionRequest = {
   cwd: string;
   command: string;
   args: string[];
+  env?: Record<string, string | null | undefined>;
   socketName?: string | null;
 };
 
@@ -242,7 +254,17 @@ export async function ensureTmuxSessionRaw(input: RawTerminalSessionRequest) {
   const shellCommand = [input.command, ...input.args].map(shellQuote).join(" ");
   await execFileAsync(
     "tmux",
-    [...tmuxPrefix(input.socketName), "new-session", "-d", "-s", input.sessionName, "-c", input.cwd, shellCommand],
+    [
+      ...tmuxPrefix(input.socketName),
+      "new-session",
+      "-d",
+      "-s",
+      input.sessionName,
+      "-c",
+      input.cwd,
+      ...tmuxEnvironmentArgs(input.env),
+      shellCommand,
+    ],
     {
       timeout: 10000,
       maxBuffer: 128 * 1024,
@@ -359,6 +381,49 @@ export function listAllTmuxSessions(socketName?: string | null): Set<string> | n
       if (origStderr.includes("no server running")) return null;
       return new Set();
     }
+  }
+}
+
+export type TmuxSessionPath = { sessionName: string; currentPath: string | null };
+
+export function listTmuxSessionPaths(socketName?: string | null): TmuxSessionPath[] | null {
+  try {
+    const output = execFileSync(
+      "tmux",
+      [...tmuxPrefix(socketName), "list-sessions", "-F", "#{session_name}\t#{pane_current_path}"],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+    return output
+      .split("\n")
+      .map((line) => line.trimEnd())
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const tabIndex = line.indexOf("\t");
+        if (tabIndex < 0) return { sessionName: line, currentPath: null };
+        const sessionName = line.slice(0, tabIndex);
+        const currentPath = line.slice(tabIndex + 1);
+        return { sessionName, currentPath: currentPath.length ? currentPath : null };
+      });
+  } catch (error) {
+    const stderr =
+      error && typeof error === "object" && "stderr" in error
+        ? String((error as { stderr: unknown }).stderr ?? "")
+        : "";
+    if (stderr.includes("no server running")) return null;
+    return [];
+  }
+}
+
+export function killTmuxServer(socketName?: string | null): boolean {
+  if (!socketName) return false;
+  try {
+    execFileSync("tmux", [...tmuxPrefix(socketName), "kill-server"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
   }
 }
 
