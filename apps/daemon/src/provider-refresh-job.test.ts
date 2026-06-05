@@ -211,6 +211,24 @@ function makeDeps(
 }
 
 describe("startProviderRefreshJob", () => {
+  it("defaults the background scheduler tick to 60s", async () => {
+    vi.useFakeTimers();
+    const deps = makeDeps({ workspaces: [makeWorkspace("w1")] });
+    const job = startProviderRefreshJob({ ...deps, jitterMaxMs: 0 });
+    try {
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(deps.providers.collectGitHubVersionControlSummary).not.toHaveBeenCalled();
+      expect(deps.providers.collectGitHubCiRuns).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(deps.providers.collectGitHubVersionControlSummary).toHaveBeenCalledTimes(1);
+      expect(deps.providers.collectGitHubCiRuns).toHaveBeenCalledTimes(1);
+    } finally {
+      job.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("skips when outside working hours", async () => {
     const deps = makeDeps({
       workspaces: [makeWorkspace("w1")],

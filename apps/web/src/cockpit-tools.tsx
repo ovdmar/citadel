@@ -12,8 +12,8 @@ import { api } from "./api.js";
 
 export { RuntimeLauncher, WorkspaceForm } from "./workspace-forms.js";
 
-// Single-workspace summary. Freshness is driven by the 60s batch poll, focus,
-// and SSE invalidation; placeholderData keeps workspace switches instant.
+// Single-workspace summary. Freshness is driven by a modest active poll, focus,
+// and explicit invalidations; placeholderData keeps workspace switches instant.
 export function useWorkspaceCockpitSummary(
   workspace: Workspace | null,
   placeholderSummary?: WorkspaceCockpitSummary | undefined,
@@ -29,6 +29,7 @@ export function workspaceCockpitSummaryQueryOptions(
     queryKey: ["workspace-cockpit", workspace?.id],
     enabled: Boolean(workspace),
     refetchOnWindowFocus: true,
+    refetchInterval: 30_000,
     queryFn: () => api<WorkspaceCockpitSummary>(`/api/workspaces/${workspace?.id}/cockpit-summary`),
     // Conditional spread — exactOptionalPropertyTypes disallows passing
     // `undefined` explicitly, but omitting the key is fine.

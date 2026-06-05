@@ -9,7 +9,8 @@ const managedApiPort = process.env.CITADEL_PERFORMANCE_DAEMON_PORT || "14110";
 const managedWebPort = process.env.CITADEL_PERFORMANCE_WEB_PORT || "15173";
 const managedTmuxSocket = `citadel-perf-${managedApiPort}`.replace(/[^A-Za-z0-9_.-]/g, "-");
 const apiBaseUrl = process.env.CITADEL_BASE_URL || `http://127.0.0.1:${managedApiPort}`;
-const webBaseUrl = process.env.CITADEL_WEB_URL || `http://127.0.0.1:${managedWebPort}`;
+const externalWebBaseUrl = process.env.CITADEL_WEB_URL || webUrlFromPort(process.env.CITADEL_WEB_PORT);
+const webBaseUrl = externalWebBaseUrl || `http://127.0.0.1:${managedWebPort}`;
 const managedProcesses: ChildProcess[] = [];
 const managedDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-perf-runtime-"));
 const workspaceSwitchBudgetMs = readPositiveInt(
@@ -115,7 +116,7 @@ try {
 
 async function ensureLocalServices() {
   const externalApi = Boolean(process.env.CITADEL_BASE_URL);
-  const externalWeb = Boolean(process.env.CITADEL_WEB_URL);
+  const externalWeb = Boolean(externalWebBaseUrl);
   if (!externalApi && !(await canFetch(`${apiBaseUrl}/api/health`))) {
     managedProcesses.push(
       spawn("pnpm", ["--filter", "@citadel/daemon", "dev"], {
@@ -156,6 +157,10 @@ async function ensureLocalServices() {
   }
   await waitForHttp(`${apiBaseUrl}/api/health`, 15_000);
   await waitForHttp(webBaseUrl, 15_000);
+}
+
+function webUrlFromPort(port: string | undefined) {
+  return port ? `http://127.0.0.1:${port}` : undefined;
 }
 
 async function canFetch(url: string) {

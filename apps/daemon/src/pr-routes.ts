@@ -19,6 +19,7 @@ import {
 } from "@citadel/providers";
 import type express from "express";
 import { ZodError } from "zod";
+import { bustCacheByPrefixes } from "./app-helpers.js";
 import { buildVersionControlProviderDeps, decorateWithCooldown } from "./gh-quota-wiring.js";
 import {
   bustGlobalPrEntry,
@@ -27,7 +28,6 @@ import {
   writeGlobalPrSummary,
 } from "./global-pr-cache.js";
 import { checkoutVcCacheKey } from "./provider-cache.js";
-import { bustCacheByPrefixes } from "./workspace-fs-watcher.js";
 
 type ProviderCollectors = {
   collectGitHubVersionControlSummary: typeof collectGitHubVersionControlSummary;
