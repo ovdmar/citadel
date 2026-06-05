@@ -8,6 +8,7 @@ import { matchShortcut } from "./shortcuts.js";
 import { writeTerminalBinary } from "./terminal-binary-writer.js";
 import { addTerminalResumeReconnectListeners } from "./terminal-resume-reconnect.js";
 import { postTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
+import { type TerminalSocketMessage, parseTerminalSocketMessage } from "./terminal-socket-message.js";
 import { xtermTheme } from "./terminal-theme.js";
 import { readOverlayCount } from "./use-overlay-present.js";
 import { useResolvedTheme } from "./use-resolved-theme.js";
@@ -35,14 +36,9 @@ const TERMINAL_AUTO_RETRY_BACKOFF_MS = 5_000;
 const TERMINAL_PTY_INPUT_FLUSH_MS = 4;
 const AUTO_RETRYABLE_TERMINAL_ERRORS = new Set(["terminal_disconnected", "terminal_socket_error"]);
 const RUNTIME_MOUSE_EVENT_RUNTIMES = new Set(["claude-code"]);
-type TerminalPaneKey = typeof LINE_START_KEY | typeof LINE_END_KEY | typeof LINE_KILL_KEY;
-
-export type TerminalSocketMessage = {
-  type?: string;
-  data?: string;
-  key?: TerminalPaneKey;
-  lines?: number;
-};
+export type TerminalPaneKey = typeof LINE_START_KEY | typeof LINE_END_KEY | typeof LINE_KILL_KEY;
+export { parseTerminalSocketMessage };
+export type { TerminalSocketMessage };
 
 /**
  * Per-session handle used by Stage tabs and Shell-level voice dictation to
@@ -764,16 +760,6 @@ async function pasteClipboardIntoTerminal(ws: WebSocket): Promise<void> {
 function isApplePlatform(): boolean {
   const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
   return /Mac|iPhone|iPad|iPod/.test(nav.userAgentData?.platform || navigator.platform || "");
-}
-
-export function parseTerminalSocketMessage(raw: unknown): TerminalSocketMessage | null {
-  if (typeof raw !== "string") return null;
-  try {
-    const parsed = JSON.parse(raw) as TerminalSocketMessage;
-    return parsed && typeof parsed === "object" ? parsed : null;
-  } catch {
-    return null;
-  }
 }
 
 function recordTerminalClientEvent(sessionId: string, event: string, extra: Record<string, unknown> = {}) {

@@ -18,7 +18,6 @@ import {
   ClipboardList,
   FolderPlus,
   LayoutDashboard,
-  NotebookPen,
   PanelLeftClose,
   Plus,
   Settings2,
@@ -59,13 +58,13 @@ import {
   repoByGroupName,
   repoGroupNameFromPath,
 } from "./navigator-repo-groups.js";
+import { ScratchpadNavLink } from "./navigator-scratchpad-link.js";
 import {
   CheckoutNavCard,
   checkoutSessions,
   hasNestedCheckouts,
   workspaceCheckoutRows,
 } from "./navigator-workspace-cards.js";
-import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import type { AttentionSessionIds } from "./session-status-display.js";
 import { WorkspaceCard, lifecycleToneClass } from "./workspace-card.js";
 
@@ -780,26 +779,5 @@ function GroupNodeView(props: GroupNodeViewProps) {
         </div>
       )}
     </div>
-  );
-}
-
-function ScratchpadNavLink() {
-  const { open, toggle } = useScratchpadDrawer();
-  const isMac =
-    typeof navigator !== "undefined" && /Mac|iPod|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
-  const hint = isMac ? "Shift+Cmd+S" : "Shift+Ctrl+S";
-  return (
-    <button
-      type="button"
-      className={`nav-link-button${open ? " active" : ""}`}
-      onClick={toggle}
-      title={`Scratchpad — markdown notes orchestrator agents can read via MCP (${hint})`}
-      aria-pressed={open}
-    >
-      <NotebookPen size={13} /> Scratchpad
-      <kbd className="nav-kbd-hint" aria-hidden>
-        {hint}
-      </kbd>
-    </button>
   );
 }
