@@ -529,37 +529,39 @@ export const CreateWorkspaceInputSchema = z.object({
   namespaceId: IdSchema.optional(),
 });
 
-export const CreateAgentSessionInputSchema = z.object({
-  workspaceId: IdSchema,
-  targetType: ExecutionTargetTypeSchema.optional(),
-  checkoutId: IdSchema.optional(),
-  runtimeId: IdSchema,
-  displayName: z.string().min(1).optional(),
-  prompt: z.string().optional(),
-  systemPrompt: z.string().optional(),
-  role: RoleIdSchema.optional(),
-  actionId: z.string().optional(),
-  managed: z.boolean().optional(),
-  parentSessionId: IdSchema.optional(),
-  planVersionId: IdSchema.optional(),
-  managerActionId: IdSchema.optional(),
-  launchSettings: LaunchSettingsSchema.optional(),
-  namespaceId: IdSchema.optional(),
-  // operationId lets hook-dispatched sessions link their activity back to the
-  // firing operation. Always optional — user-launched sessions don't have a
-  // parent operation, and existing callers must keep working unchanged.
-  operationId: z.string().optional(),
-  // When set, the spawn uses `--resume <uuid>` (via the runtime's resumeArg)
-  // instead of generating a fresh UUID via `--session-id`. The runtime
-  // session's transcript on disk must exist; the caller is responsible for
-  // validating that (see the Settings restore flow / backfill).
-  resumeRuntimeSessionId: z.string().uuid().optional(),
-  // When set, the new session is bound to an existing tab slot (instead of
-  // generating a fresh tabId). Restore paths pass the source row's tabId so
-  // the restored session reuses the original tab position in the cockpit's
-  // tab strip. Non-restore callers leave this unset and get a fresh tabId.
-  tabId: z.string().optional(),
-}).strict();
+export const CreateAgentSessionInputSchema = z
+  .object({
+    workspaceId: IdSchema,
+    targetType: ExecutionTargetTypeSchema.optional(),
+    checkoutId: IdSchema.optional(),
+    runtimeId: IdSchema,
+    displayName: z.string().min(1).optional(),
+    prompt: z.string().optional(),
+    systemPrompt: z.string().optional(),
+    role: RoleIdSchema.optional(),
+    actionId: z.string().optional(),
+    managed: z.boolean().optional(),
+    parentSessionId: IdSchema.optional(),
+    planVersionId: IdSchema.optional(),
+    managerActionId: IdSchema.optional(),
+    launchSettings: LaunchSettingsSchema.optional(),
+    namespaceId: IdSchema.optional(),
+    // operationId lets hook-dispatched sessions link their activity back to the
+    // firing operation. Always optional — user-launched sessions don't have a
+    // parent operation, and existing callers must keep working unchanged.
+    operationId: z.string().optional(),
+    // When set, the spawn uses `--resume <uuid>` (via the runtime's resumeArg)
+    // instead of generating a fresh UUID via `--session-id`. The runtime
+    // session's transcript on disk must exist; the caller is responsible for
+    // validating that (see the Settings restore flow / backfill).
+    resumeRuntimeSessionId: z.string().uuid().optional(),
+    // When set, the new session is bound to an existing tab slot (instead of
+    // generating a fresh tabId). Restore paths pass the source row's tabId so
+    // the restored session reuses the original tab position in the cockpit's
+    // tab strip. Non-restore callers leave this unset and get a fresh tabId.
+    tabId: z.string().optional(),
+  })
+  .strict();
 
 export const CreateTerminalSessionInputSchema = z.object({
   workspaceId: IdSchema,
