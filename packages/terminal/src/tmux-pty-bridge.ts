@@ -291,10 +291,12 @@ async function attachPtyDaemonWebSocketClient(
   let registeredClient = false;
   let cleanedUp = false;
   let unsubscribe: (() => void) | null = null;
+  let unsubscribeDisconnect: (() => void) | null = null;
   const cleanup = () => {
     if (cleanedUp) return;
     cleanedUp = true;
     unsubscribe?.();
+    unsubscribeDisconnect?.();
     if (registeredClient) options.onCleanup();
     client?.dispose();
   };
@@ -315,6 +317,13 @@ async function attachPtyDaemonWebSocketClient(
   }
   options.onClient(client);
   registeredClient = true;
+  unsubscribeDisconnect = client.onDisconnect((error) => {
+    cleanup();
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      sendControl(ws, { type: "error", data: error.message || "pty_daemon_disconnected" });
+      ws.close(1011, "pty_daemon_disconnected");
+    }
+  });
   const closeForBackpressure = () => {
     cleanup();
     if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {

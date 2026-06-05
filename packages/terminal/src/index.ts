@@ -39,6 +39,7 @@ export type {
   PtyDaemonFrame,
   PtyDaemonMessage,
   PtyDaemonSessionInfo,
+  PtyDaemonUpgradePreparedResult,
 } from "./pty-daemon-protocol.js";
 export { connectPtyDaemonClient, PtyDaemonClient } from "./pty-daemon-client.js";
 export type { ConnectPtyDaemonClientOptions, PtyDaemonClientSubscription } from "./pty-daemon-client.js";

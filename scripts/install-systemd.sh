@@ -95,6 +95,9 @@ systemctl --user disable citadel-tmux.service >/dev/null 2>&1 || true
 echo "→ pnpm build (so the supervised process has a fresh dist)"
 ( cd "$ROOT" && pnpm build )
 
+echo "→ prepare PTY daemon handoff"
+env CITADEL_INSTALL_ROOT="$ROOT" CITADEL_CONFIG="$CITADEL_CONFIG_PATH" "$NODE_BIN" "$ROOT/scripts/install/prepare-pty-daemon-upgrade.mjs"
+
 echo "→ restart citadel.service"
 systemctl --user restart citadel.service
 sleep 0.6

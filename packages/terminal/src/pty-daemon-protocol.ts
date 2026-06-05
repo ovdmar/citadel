@@ -38,6 +38,8 @@ export type PtyDaemonMessage =
   | { type: "capture"; requestId: string; sessionId: string; lines?: number; maxChars?: number }
   | { type: "capture-result"; requestId: string; capture: PtyDaemonCaptureResult }
   | { type: "close"; requestId?: string; sessionId: string }
+  | { type: "prepare-upgrade"; requestId: string }
+  | { type: "upgrade-prepared"; requestId: string; result: PtyDaemonUpgradePreparedResult }
   | { type: "output"; sessionId: string }
   | { type: "exit"; sessionId: string; exitCode: number; signal?: number }
   | { type: "error"; requestId?: string; code: string; message: string };
@@ -61,6 +63,8 @@ export type PtyDaemonSessionInfo = {
 export type PtyDaemonCaptureResult =
   | { ok: true; sessionId: string; text: string; charCount: number; truncated: boolean }
   | { ok: false; error: "pty_session_missing" };
+
+export type PtyDaemonUpgradePreparedResult = { ok: true; successorPid: number } | { ok: false; reason: string };
 
 export type PtyDaemonFrame = {
   message: PtyDaemonMessage;

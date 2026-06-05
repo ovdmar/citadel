@@ -61,13 +61,13 @@ describe("PTY daemon WebSocket bridge", () => {
       await waitForWebSocketOutput(ws, "READY");
 
       ws.send(Buffer.from("\u0003"));
-      await waitFor(() => fake.writes.includes("\u0003"));
+      await waitFor(() => writeText(fake).includes("\u0003"));
 
       ws.send(JSON.stringify({ type: "input", data: "\n" }));
-      await waitFor(() => fake.writes.includes("\n"));
+      await waitFor(() => writeText(fake).includes("\n"));
 
       ws.send(JSON.stringify({ type: "key", key: "C-u" }));
-      await waitFor(() => fake.writes.includes("\u0015"));
+      await waitFor(() => writeText(fake).includes("\u0015"));
 
       ws.send(JSON.stringify({ type: "resize", cols: 1000, rows: 1 }));
       await waitFor(() => fake.resizes.length === 1);
@@ -122,6 +122,35 @@ describe("PTY daemon WebSocket bridge", () => {
       await waitForClose(reconnect);
     } finally {
       await closeServer(restartedServer.server);
+    }
+  });
+
+  it("closes viewers when the PTY daemon socket disconnects", async () => {
+    const fake = new FakePty();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-pty-ws-"));
+    dirs.push(dir);
+    const socketPath = path.join(dir, "pty.sock");
+    const ptyDaemon = new PtyDaemonServer({
+      socketPath,
+      store: new PtySessionStore({ replayLimitBytes: 1024, spawnPty: () => fake }),
+    });
+    servers.push(ptyDaemon);
+    await ptyDaemon.start();
+
+    const gateway = await startGateway(socketPath, dir);
+    try {
+      const address = gateway.server.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP test server address");
+      const ws = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/pty`);
+      await waitForOpen(ws);
+      await gateway.sessionReady;
+
+      const closed = waitForCloseEvent(ws);
+      await ptyDaemon.close();
+      const close = await closed;
+      expect(close).toEqual({ code: 1011, reason: "pty_daemon_disconnected" });
+    } finally {
+      await closeServer(gateway.server);
     }
   });
 
@@ -183,12 +212,16 @@ describe("PTY daemon WebSocket bridge", () => {
 class FakePty extends EventEmitter implements PtyLike {
   pid = 4242;
   process = "fake";
-  writes: string[] = [];
+  writes: Buffer[] = [];
   resizes: Array<{ cols: number; rows: number }> = [];
   kills: string[] = [];
 
-  write(data: string): void {
-    this.writes.push(data);
+  getMasterFd(): number {
+    return 99;
+  }
+
+  write(data: Buffer): void {
+    this.writes.push(Buffer.from(data));
   }
 
   resize(cols: number, rows: number): void {
@@ -200,7 +233,7 @@ class FakePty extends EventEmitter implements PtyLike {
     this.emit("exit", 0, 1);
   }
 
-  onData(callback: (data: string) => void): { dispose: () => void } {
+  onData(callback: (data: Buffer) => void): { dispose: () => void } {
     this.on("data", callback);
     return { dispose: () => this.off("data", callback) };
   }
@@ -212,9 +245,13 @@ class FakePty extends EventEmitter implements PtyLike {
     return { dispose: () => this.off("exit", listener) };
   }
 
-  emitData(data: string): void {
-    this.emit("data", data);
+  emitData(data: string | Buffer): void {
+    this.emit("data", Buffer.isBuffer(data) ? data : Buffer.from(data, "utf8"));
   }
+}
+
+function writeText(fake: FakePty): string {
+  return Buffer.concat(fake.writes).toString("utf8");
 }
 
 class CountingPtySessionStore extends PtySessionStore {
@@ -284,6 +321,12 @@ function waitForClose(ws: WebSocket): Promise<void> {
       return;
     }
     ws.once("close", () => resolve());
+  });
+}
+
+function waitForCloseEvent(ws: WebSocket): Promise<{ code: number; reason: string }> {
+  return new Promise((resolve) => {
+    ws.once("close", (code, reason) => resolve({ code, reason: reason.toString("utf8") }));
   });
 }
 
