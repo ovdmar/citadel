@@ -12,7 +12,7 @@ import type {
   WorkspacePlanVersion,
   WorktreeCheckout,
 } from "@citadel/contracts";
-import { AGENTS_SYSTEM_TOOL_DEFINITIONS } from "./agents-system-tools.js";
+import { AGENTS_SYSTEM_TOOL_DEFINITIONS, type AgentsSystemToolName } from "./agents-system-tools.js";
 import { listWorkspaceLinks, serializeWorkspaceResource } from "./resources.js";
 import { SCRATCHPAD_TOOL_DEFINITIONS, type ScratchpadToolName } from "./scratchpad-tools.js";
 
@@ -40,25 +40,7 @@ export type McpToolName =
   | "list_agent_runtimes"
   | "list_runtimes"
   | "list_workspace_links"
-  | "get_citadel_context"
-  | "list_workspace_checkouts"
-  | "create_workspace_checkout"
-  | "register_workspace_plan"
-  | "get_workspace_plan"
-  | "report_plan_deviation"
-  | "start_workspace_manager"
-  | "pause_workspace_manager"
-  | "resume_workspace_manager"
-  | "mark_checkout_ready_for_review"
-  | "register_checkout_review_artifact"
-  | "get_checkout_ticket"
-  | "get_checkout_pr"
-  | "get_checkout_gate_status"
-  | "update_ticket_status"
-  | "launch_pm_agent"
-  | "launch_architect_agent"
-  | "launch_implementation_agent"
-  | "launch_prototype_agent"
+  | AgentsSystemToolName
   | "register_repo"
   | "create_workspace"
   | "start_agent_session"
@@ -738,6 +720,12 @@ export function callMcpTool(call: McpToolCall, context: McpToolContext) {
     case "list_scheduled_agent_runs":
     case "read_scheduled_agent_run_log":
       return { error: "scheduled_agent_run_tool_requires_daemon" };
+    case "list_review_threads":
+    case "create_review_thread":
+    case "reply_review_thread":
+    case "resolve_review_thread":
+    case "reopen_review_thread":
+      return { error: "review_tool_requires_daemon" };
     case "get_citadel_context":
       return { error: "context_tool_requires_daemon" };
     case "read_agent_output":

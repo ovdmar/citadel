@@ -37,6 +37,11 @@ describe("mcp helpers", () => {
       "get_checkout_ticket",
       "get_checkout_pr",
       "get_checkout_gate_status",
+      "list_review_threads",
+      "create_review_thread",
+      "reply_review_thread",
+      "resolve_review_thread",
+      "reopen_review_thread",
       "update_ticket_status",
       "launch_pm_agent",
       "launch_architect_agent",
@@ -125,6 +130,9 @@ describe("mcp helpers", () => {
     for (const name of ["read_scratchpad", "list_blocks", "add_block", "update_block", "delete_block"] as const) {
       expect(callMcpTool({ name }, context)).toEqual({ error: "scratchpad_tool_requires_daemon" });
     }
+    expect(callMcpTool({ name: "create_review_thread", arguments: {} }, context)).toEqual({
+      error: "review_tool_requires_daemon",
+    });
   });
 
   it("serializes normalized workspace resources without raw terminal transport", () => {

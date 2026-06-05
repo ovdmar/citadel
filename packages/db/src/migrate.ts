@@ -1,4 +1,5 @@
 import process from "node:process";
+import { migrateInternalReviewThreads } from "./internal-review-migration.js";
 import { migrateManagerOrchestrationLedger } from "./manager-orchestration-migration.js";
 import { migrateWorkspaceHomeCheckoutsManager } from "./workspace-structure-migration.js";
 
@@ -25,7 +26,7 @@ type SessionTableName = "agent_sessions" | "workspace_sessions";
 // the new version below. Consumed by the doctor's database-schema check so
 // `make doctor` can flag an installed daemon whose code is newer than the
 // database it's been given.
-export const CURRENT_SCHEMA_VERSION = 19;
+export const CURRENT_SCHEMA_VERSION = 20;
 
 function tmuxSocketBase(): string {
   const configured = process.env.CITADEL_TMUX_SOCKET?.trim();
@@ -383,6 +384,7 @@ export function runMigrations(
       (18, 'checkout-pr-gate-facts', datetime('now'));
   `);
   migrateManagerOrchestrationLedger(db, ensureColumn);
+  migrateInternalReviewThreads(db);
 }
 
 function tableExists(db: SqliteDatabase, tableName: string): boolean {

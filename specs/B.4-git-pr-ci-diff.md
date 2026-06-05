@@ -97,14 +97,20 @@
 [ ] 9. Diff summary is connected to readiness and PR/check state.
 [ ] 10. The diff/review surface is read-only.
 [ ] 11. The inspector `Diff` tab shows the changed files list with additions/deletions per file in a compact list.
+[ ] 12. Fullscreen review diff is scoped to a selected worktree checkout. It shows `Committed vs base`, `Staged`, and `Unstaged` sections, resolves base from the checkout `baseBranch` preferring `origin/<baseBranch>`, and never fetches during diff load.
+[ ] 13. Review diff metadata and lazy file-content endpoints use opaque file ids, keep staged/unstaged/against-base identities separate for the same path, reject path traversal, and expose explicit binary, deleted, rename, conflicted, submodule, symlink, mode-only, LFS pointer, truncation, and too-large states.
 
-## Human Review (Planned)
+## Human Review
 
-[ ] 1. A future full-screen *Human Review* mode is reachable from the inspector `Diff` tab.
-[ ] 2. Human Review presents files in a GitHub-style review surface.
-[ ] 3. Human Review allows leaving file/line comments.
-[ ] 4. Comments are visible to the active agent session as structured input.
-[ ] 5. Human Review remains scoped to the selected workspace.
+[ ] 1. Full-screen *Human Review* mode is reachable from the inspector `Diff` tab and from checkout PR/review context without unmounting the cockpit.
+[ ] 2. Human Review presents checkout files in a GitHub-style continuous side-by-side review surface with sticky file headers, a file outline, viewed state, and lazy file content.
+[ ] 3. If the selected checkout has no PR, Human Review still shows the local diff and offers a GitHub/`gh` create-PR action; internal comment composers stay disabled until a PR-backed review scope exists.
+[ ] 4. Create-PR never creates draft PRs, respects repository PR templates when present, never stages or commits dirty work, warns about staged/unstaged changes excluded from the pushed PR, and falls back from GraphQL-specific rate limiting to REST only after rechecking for an already-created PR.
+[ ] 5. Internal review threads support line/range comments, file-level comments, replies, `open`/`resolved` lifecycle, resolved expansion, reopen, `authorKind`, exact anchor revalidation, and `current`/`outdated` anchor state.
+[ ] 6. Internal comments remain private Citadel state forever. Future public/provider comments are a distinct `kind`; external comments are read-only until a separate public-comment feature exists.
+[ ] 7. Agents can list, create, reply to, resolve, and reopen internal review threads through MCP using checkout/review-scope targets and file/line anchors from their local code context. MCP does not expose diff content.
+[ ] 8. Open/current internal review threads contribute to the selected checkout gate as `review_blocked`, below conflicts, check failures, and stale provider facts. Resolved and outdated threads never block readiness.
+[ ] 9. Internal review data is stored in first-class SQLite tables. Merged PR scopes are hard-deleted only after a fresh merged provider observation; closed-unmerged scopes are pruned after a short grace window; stale, unavailable, rate-limited, or misconfigured provider states never delete review data.
 
 ---
 
