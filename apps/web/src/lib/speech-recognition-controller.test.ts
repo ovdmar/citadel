@@ -116,6 +116,43 @@ describe("SpeechRecognitionController", () => {
     expect(FakeSpeechRecognition.instances[0]?.stop).toHaveBeenCalled();
   });
 
+  it("keeps mixed final and interim results open until the interim tail finalizes", () => {
+    const onInterim = vi.fn();
+    const onFinal = vi.fn();
+    const controller = new SpeechRecognitionController({ win: makeWindow(), onInterim, onFinal });
+    controller.start();
+
+    FakeSpeechRecognition.instances[0]?.result([
+      { transcript: "hello ", isFinal: true },
+      { transcript: "wor", isFinal: false },
+    ]);
+    expect(onInterim).toHaveBeenLastCalledWith("wor");
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+    expect(onFinal).not.toHaveBeenCalled();
+
+    FakeSpeechRecognition.instances[0]?.result([{ transcript: "world", isFinal: true }]);
+    expect(onInterim).toHaveBeenLastCalledWith("");
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+
+    expect(onFinal).toHaveBeenCalledWith("hello world");
+  });
+
+  it("keeps mixed final and interim results copyable when stopped before finalization", () => {
+    const onState = vi.fn();
+    const onFinal = vi.fn();
+    const controller = new SpeechRecognitionController({ win: makeWindow(), onState, onFinal });
+    controller.start();
+
+    FakeSpeechRecognition.instances[0]?.result([
+      { transcript: "hello ", isFinal: true },
+      { transcript: "wor", isFinal: false },
+    ]);
+    controller.stop();
+
+    expect(onFinal).not.toHaveBeenCalled();
+    expect(onState).toHaveBeenCalledWith({ type: "stopped", transcript: "hello wor" });
+  });
+
   it("does not emit a no-result timeout after final auto-submit", () => {
     const onState = vi.fn();
     const onFinal = vi.fn();

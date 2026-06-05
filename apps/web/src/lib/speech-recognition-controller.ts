@@ -130,7 +130,7 @@ export class SpeechRecognitionController {
 
   stop(options: { commitFinal?: boolean } = { commitFinal: true }): void {
     const finalTranscript = this.finalTranscript;
-    if (finalTranscript && options.commitFinal !== false) {
+    if (finalTranscript && !this.interimTranscript && options.commitFinal !== false) {
       this.finalTranscript = "";
       this.clearInterimTranscript();
       this.clearTimers();
@@ -176,8 +176,9 @@ export class SpeechRecognitionController {
     }
     if (!final) return;
     this.finalTranscript += final;
-    this.clearInterimTranscript();
     this.clearFinalTimer();
+    if (interim) return;
+    this.clearInterimTranscript();
     this.finalTimer = setTimeout(() => {
       const text = this.finalTranscript;
       this.finalTimer = null;

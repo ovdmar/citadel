@@ -322,6 +322,36 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     );
   });
 
+  it("forwards native host voice shortcuts without sending terminal bytes", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+    await flushReactUpdate(async () => ws.open());
+    ws.sent = [];
+    const postMessage = vi.spyOn(window, "postMessage").mockImplementation(() => undefined);
+    const downstream = vi.fn();
+    host.addEventListener("keydown", downstream);
+
+    const event = new KeyboardEvent("keydown", {
+      key: "d",
+      metaKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    host.dispatchEvent(event);
+    host.removeEventListener("keydown", downstream);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(downstream).not.toHaveBeenCalled();
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "voice-dictation", sessionId: "sess_1" }),
+      window.location.origin,
+    );
+    expect(decodeBinarySent(ws.sent)).toEqual([]);
+  });
+
   it("sends voice input through the terminal WebSocket with one Enter on submit", async () => {
     await renderTerminal();
     const ws = TerminalPaneWebSocketMock.instances[0];

@@ -508,6 +508,29 @@ describe("VoiceModeProvider", () => {
     expect(FakeSpeechRecognition.instances[0]?.stop).toHaveBeenCalledOnce();
   });
 
+  it("aborts active recognition on unmount and prevents pending final commits", async () => {
+    const target = registeredTarget();
+    const commit = target.commit;
+    if (!commit) throw new Error("registered target commit missing");
+    await renderProvider();
+    await flushReact(() => {
+      voiceApi?.startDictation({ target });
+    });
+    const recognition = FakeSpeechRecognition.instances[0];
+    if (!recognition) throw new Error("recognition instance missing");
+    recognition.final("teardown final");
+    await flushReact(() => {
+      for (const root of roots.splice(0)) root.unmount();
+    });
+    recognition.final("late final");
+    recognition.error("network");
+    recognition.end();
+    vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS + NO_RESULT_SILENCE_TIMEOUT_MS);
+    expect(commit).not.toHaveBeenCalled();
+    expect(recognition.abort).toHaveBeenCalledOnce();
+    expect([recognition.onresult, recognition.onerror, recognition.onend]).toEqual([null, null, null]);
+  });
+
   it("copies buffered transcript text to the clipboard", async () => {
     const writeText = vi.fn(() => Promise.resolve());
     Object.defineProperty(navigator, "clipboard", {

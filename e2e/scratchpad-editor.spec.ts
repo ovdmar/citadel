@@ -116,7 +116,10 @@ test.describe("scratchpad drawer", () => {
     test.skip(testInfo.project.name === "mobile", "hardware shortcut coverage is desktop/tablet");
     await installFakeSpeechRecognition(page);
     await page.goto("/?scratchpad=1");
-    await page.locator(".scratchpad-composer-input").focus();
+    const composer = page.locator(".scratchpad-composer-input");
+    await expect(composer).toBeVisible();
+    await composer.focus();
+    await expect(composer).toBeFocused();
 
     await page.keyboard.press("Control+Shift+D");
 
