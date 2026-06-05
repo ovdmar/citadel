@@ -8,7 +8,12 @@ import {
   CreateWorkspaceCheckoutInputSchema,
   CreateWorkspaceInputSchema,
 } from "@citadel/contracts";
-import { generateFunnyName, workspaceBranchName } from "@citadel/core";
+import {
+  LaunchTextValidationError,
+  assertNoRawAgentAuthorityToken,
+  generateFunnyName,
+  workspaceBranchName,
+} from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
 import { setGithubCommand, setJiraCommand } from "@citadel/providers";
@@ -35,24 +40,34 @@ export function registerConfigRepoWorkspaceRoutes(input: {
   });
 
   app.put("/api/config", (req, res) => {
-    const nextConfig = mergeConfigPatch(config, req.body);
-    const saved = saveConfig(nextConfig, configPath);
-    Object.assign(config, saved);
-    setGithubCommand(saved.providers.github.command);
-    setJiraCommand(saved.providers.jira.command);
-    providerCache.clear();
-    store.addActivity({
-      id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
-      type: "settings.updated",
-      source: "user",
-      repoId: null,
-      workspaceId: null,
-      operationId: null,
-      message: "Updated local config",
-      createdAt: new Date().toISOString(),
-    });
-    emit("config.updated", { configPath });
-    res.json({ config, configPath });
+    try {
+      const nextConfig = mergeConfigPatch(config, req.body);
+      assertNoRawAgentAuthorityToken(nextConfig.agentSessions.baseSystemPrompt, {
+        component: "agentSessions.baseSystemPrompt",
+      });
+      const saved = saveConfig(nextConfig, configPath);
+      Object.assign(config, saved);
+      setGithubCommand(saved.providers.github.command);
+      setJiraCommand(saved.providers.jira.command);
+      providerCache.clear();
+      store.addActivity({
+        id: `evt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`,
+        type: "settings.updated",
+        source: "user",
+        repoId: null,
+        workspaceId: null,
+        operationId: null,
+        message: "Updated local config",
+        createdAt: new Date().toISOString(),
+      });
+      emit("config.updated", { configPath });
+      res.json({ config, configPath });
+    } catch (error) {
+      if (error instanceof LaunchTextValidationError) {
+        return res.status(400).json({ error: error.code, component: error.component });
+      }
+      throw error;
+    }
   });
 
   app.post("/api/repos", (req, res) => {

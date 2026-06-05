@@ -20,8 +20,15 @@ type RuntimeConfig = {
   topBarCategoryKey?: string;
 };
 
-type ConfigResponse = { config: { agentRuntimes: RuntimeConfig[]; terminal: TerminalProfile } };
-type RuntimeSettingsDraft = { agentRuntimes: RuntimeConfig[]; terminal: TerminalProfile };
+type AgentSessionsConfig = { baseSystemPrompt: string };
+type ConfigResponse = {
+  config: { agentRuntimes: RuntimeConfig[]; terminal: TerminalProfile; agentSessions?: AgentSessionsConfig };
+};
+type RuntimeSettingsDraft = {
+  agentRuntimes: RuntimeConfig[];
+  terminal: TerminalProfile;
+  agentSessions: AgentSessionsConfig;
+};
 
 const PLATFORM_AGENTS: Record<string, { label: string; blurb: string }> = {
   "claude-code": {
@@ -55,13 +62,20 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
     command: "bash",
     args: ["-l"],
   });
+  const [baseSystemPromptDraft, setBaseSystemPromptDraft] = useState("");
   const [query, setQuery] = useState("");
   const [showAdd, setShowAdd] = useState(false);
 
   useEffect(() => {
     if (configQuery.data?.config.agentRuntimes) setDrafts(configQuery.data.config.agentRuntimes);
     if (configQuery.data?.config.terminal) setTerminalDraft(configQuery.data.config.terminal);
-  }, [configQuery.data?.config.agentRuntimes, configQuery.data?.config.terminal]);
+    if (configQuery.data?.config.agentSessions)
+      setBaseSystemPromptDraft(configQuery.data.config.agentSessions.baseSystemPrompt);
+  }, [
+    configQuery.data?.config.agentRuntimes,
+    configQuery.data?.config.agentSessions,
+    configQuery.data?.config.terminal,
+  ]);
 
   const save = useMutation({
     mutationFn: (draft: RuntimeSettingsDraft) =>
@@ -81,7 +95,11 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
   const updateDraftAndPersist = (id: string, patch: Partial<RuntimeConfig>) => {
     const next = drafts.map((runtime) => (runtime.id === id ? { ...runtime, ...patch } : runtime));
     setDrafts(next);
-    save.mutate({ agentRuntimes: next, terminal: terminalDraft });
+    save.mutate({
+      agentRuntimes: next,
+      terminal: terminalDraft,
+      agentSessions: { baseSystemPrompt: baseSystemPromptDraft },
+    });
   };
   const updateTerminal = (patch: Partial<TerminalProfile>) => {
     setTerminalDraft((current) => ({ ...current, ...patch }));
@@ -91,7 +109,11 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
     if (drafts.some((runtime) => runtime.id === entry.id)) return;
     const next: RuntimeConfig[] = [...drafts, { ...entry, supportsPrompt: true }];
     setDrafts(next);
-    save.mutate({ agentRuntimes: next, terminal: terminalDraft });
+    save.mutate({
+      agentRuntimes: next,
+      terminal: terminalDraft,
+      agentSessions: { baseSystemPrompt: baseSystemPromptDraft },
+    });
     setShowAdd(false);
   };
 
@@ -111,10 +133,12 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
   const healthyCount = props.runtimes.filter((runtime) => runtime.health === "healthy").length;
   const dirty =
     JSON.stringify(drafts) !== JSON.stringify(configQuery.data?.config.agentRuntimes ?? []) ||
-    JSON.stringify(terminalDraft) !== JSON.stringify(configQuery.data?.config.terminal ?? null);
+    JSON.stringify(terminalDraft) !== JSON.stringify(configQuery.data?.config.terminal ?? null) ||
+    baseSystemPromptDraft !== (configQuery.data?.config.agentSessions?.baseSystemPrompt ?? "");
 
   return (
     <>
+      <BaseSystemPromptPanel value={baseSystemPromptDraft} onChange={setBaseSystemPromptDraft} />
       <TerminalProfilePanel terminal={terminalDraft} onUpdate={updateTerminal} />
 
       <div className="set-repo-toolbar">
@@ -178,7 +202,13 @@ export function AgentsPanel(props: { runtimes: AgentRuntime[] }) {
         <button
           type="button"
           className="set-btn set-btn-primary"
-          onClick={() => save.mutate({ agentRuntimes: drafts, terminal: terminalDraft })}
+          onClick={() =>
+            save.mutate({
+              agentRuntimes: drafts,
+              terminal: terminalDraft,
+              agentSessions: { baseSystemPrompt: baseSystemPromptDraft },
+            })
+          }
           disabled={save.isPending || !dirty}
         >
           <Save size={13} /> Save changes
@@ -303,6 +333,29 @@ function AgentCard(props: {
           </button>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function BaseSystemPromptPanel(props: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="set-card set-section" style={{ marginBottom: 16 }}>
+      <div className="set-section-head">
+        <span className="set-section-eyebrow">Base agent prompt</span>
+        <span className="set-pill set-pill-mute">all runtimes</span>
+      </div>
+      <label className="set-form-col">
+        <span className="set-field-label">System prompt</span>
+        <textarea
+          className="set-textarea is-mono"
+          value={props.value}
+          onChange={(event) => props.onChange(event.target.value)}
+          spellCheck={false}
+        />
+      </label>
     </div>
   );
 }

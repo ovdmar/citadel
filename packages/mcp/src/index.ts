@@ -263,7 +263,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     {
       name: "start_agent_session",
       description:
-        "Start a configured agent runtime in a workspace through the daemon operation service. If namespaceId is provided, the workspace is reassigned to that namespace as a side effect (assignment-on-launch).",
+        "Start a configured agent runtime in a workspace through the daemon operation service. Optional systemPrompt is appended after Citadel's global base prompt. If role is provided, the daemon derives the role prompt from the Agents tab. If namespaceId is provided, the workspace is reassigned to that namespace as a side effect (assignment-on-launch).",
       inputSchema: {
         type: "object",
         required: ["workspaceId", "runtimeId"],
@@ -272,6 +272,8 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
           runtimeId: { type: "string" },
           displayName: { type: "string" },
           prompt: { type: "string" },
+          systemPrompt: { type: "string" },
+          role: { type: "string" },
           namespaceId: { type: "string" },
         },
         additionalProperties: false,
@@ -361,7 +363,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
     {
       name: "launch_agent",
       description:
-        "High-level one-shot: create a fresh scratch workspace in a repo and immediately start an agent session in it with the given prompt. Returns { workspaceId, sessionId, branchName, workspacePath, operationId }. Use this instead of chaining create_workspace + start_agent_session when an orchestrator just wants 'run this prompt in repo X'. Pass exactly one of repoId or repoName; runtimeId defaults to claude-code. If namespaceId is provided, the new workspace is assigned to that namespace at creation (so it groups with sibling sub-agents under one topic).",
+        "High-level one-shot: create a fresh scratch workspace in a repo and immediately start an agent session in it with the given prompt. Optional systemPrompt is appended after Citadel's global base prompt. Returns { workspaceId, sessionId, branchName, workspacePath, operationId }. Use this instead of chaining create_workspace + start_agent_session when an orchestrator just wants 'run this prompt in repo X'. Pass exactly one of repoId or repoName; runtimeId defaults to claude-code. If namespaceId is provided, the new workspace is assigned to that namespace at creation (so it groups with sibling sub-agents under one topic).",
       inputSchema: {
         type: "object",
         required: ["prompt"],
@@ -369,6 +371,7 @@ export function mcpToolDefinitions(): McpToolDefinition[] {
           repoId: { type: "string", description: "Internal repo id (provide this OR repoName)." },
           repoName: { type: "string", description: "Configured repo display name (provide this OR repoId)." },
           prompt: { type: "string", minLength: 1 },
+          systemPrompt: { type: "string" },
           runtimeId: { type: "string", default: "claude-code" },
           displayName: { type: "string", maxLength: 80 },
           workspaceName: { type: "string", maxLength: 80 },

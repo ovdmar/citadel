@@ -309,7 +309,6 @@ export function Stage(props: {
           ...(props.checkoutId ? { checkoutId: props.checkoutId } : {}),
           runtimeId: action.template.launchSettings.runtimeId,
           displayName: action.template.displayName,
-          prompt: action.template.systemPrompt,
           role: action.template.role,
           managed: true,
           launchSettings: action.template.launchSettings,

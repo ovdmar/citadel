@@ -15,6 +15,7 @@ import { createId } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import type { RuntimeLaunchOptionsInput } from "@citadel/runtimes";
 import { WorkspaceInUseError } from "./helpers.js";
+import type { CreateAgentSessionOperationInput } from "./system-prompt-launch.js";
 
 export type LaunchAgentResult = {
   workspaceId: string;
@@ -29,7 +30,10 @@ export type LaunchAgentResult = {
 export type LaunchAgentDeps = {
   store: SqliteStore;
   createWorkspace: (input: CreateWorkspaceInput) => Promise<{ operationId: string; workspaceId: string }>;
-  createAgentSession: (input: CreateAgentSessionInput, runtime: LaunchRuntimeDescriptor) => Promise<AgentSession>;
+  createAgentSession: (
+    input: CreateAgentSessionOperationInput,
+    runtime: LaunchRuntimeDescriptor,
+  ) => Promise<AgentSession>;
   createWorkspaceCheckout: (
     input: CreateWorkspaceCheckoutInput,
   ) => Promise<{ operationId: string; checkoutId: string }>;
@@ -95,6 +99,7 @@ export async function launchAgent(
       runtimeId: input.runtimeId,
       displayName: input.displayName ?? deriveAgentDisplayName(input.prompt),
       prompt: input.prompt,
+      ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
       targetType: "worktree_checkout",
       checkoutId: checkout.id,
     };
@@ -146,6 +151,7 @@ export async function launchAgent(
     runtimeId: input.runtimeId,
     displayName: input.displayName ?? deriveAgentDisplayName(input.prompt),
     prompt: input.prompt,
+    ...(input.systemPrompt ? { systemPrompt: input.systemPrompt } : {}),
     targetType: "worktree_checkout",
     checkoutId: checkout.id,
     ...(input.namespaceId ? { namespaceId: input.namespaceId } : {}),

@@ -18,9 +18,11 @@ import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 import * as namespaceOps from "./namespaces.js";
 import { registerRepo as registerRepoImpl } from "./register-repo.js";
 import { checkWorkspaceRemovalImpl, removeWorkspaceCheckoutImpl, removeWorkspaceImpl } from "./remove-workspace.js";
+import type { CreateAgentSessionOperationInput } from "./system-prompt-launch.js";
 export type { TranscriptResult, TranscriptErrorResult, SendMessageResult } from "./agent-messages.js";
 export type { RuntimeDescriptor } from "./create-agent-session.js";
 export type { LaunchAgentResult } from "./launch-agent.js";
+export type { CreateAgentSessionOperationInput } from "./system-prompt-launch.js";
 export type { AssignWorkspaceResult, CreateNamespaceResult } from "./namespaces.js";
 export type { AgentHistoryResult, AgentHistoryErrorResult } from "./agent-history.js";
 export * from "./status.js";
@@ -246,7 +248,7 @@ export class OperationService {
   };
 
   createAgentSession = (
-    input: CreateAgentSessionInput,
+    input: CreateAgentSessionOperationInput,
     runtime: RuntimeDescriptor,
     options: { activitySource?: ActivityEvent["source"] } = {},
   ) => {
