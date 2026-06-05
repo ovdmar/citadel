@@ -86,7 +86,6 @@ function nextGroupingSelection(current: NavigatorGrouping, option: GroupKey): Na
 
 type CreateWorkspaceModalProps = {
   repos: Repo[];
-  lastRepoId?: string;
   grouping?: NavigatorGrouping;
   intent?: CreateWorkspaceIntent;
   onClose: () => void;
@@ -116,12 +115,9 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   useOverlayPresent();
   const toast = useToast();
   const creationContext = resolveCreateWorkspaceContext(props.intent, props.grouping);
-  const initialRepo = props.repos.find((repo) => repo.id === props.lastRepoId)?.id ?? props.repos[0]?.id ?? "";
-  const initialSelectedRepoIds = creationContext === "attach-worktree" && initialRepo ? [initialRepo] : [];
   const [name, setName] = useState("");
   const [worktreeName, setWorktreeName] = useState("");
-  const [selectedRepoIds, setSelectedRepoIds] = useState<string[]>(initialSelectedRepoIds);
-  const attachSelectionInitializedRef = useRef(initialSelectedRepoIds.length > 0);
+  const [selectedRepoIds, setSelectedRepoIds] = useState<string[]>([]);
   const nameRef = useRef<HTMLInputElement | null>(null);
   const trimmedName = name.trim();
   const trimmedWorktreeName = worktreeName.trim();
@@ -134,12 +130,6 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
       return next.length === previous.length ? previous : next;
     });
   }, [props.repos]);
-  useEffect(() => {
-    if (creationContext !== "attach-worktree" || attachSelectionInitializedRef.current) return;
-    if (!initialRepo) return;
-    attachSelectionInitializedRef.current = true;
-    setSelectedRepoIds([initialRepo]);
-  }, [creationContext, initialRepo]);
   useEffect(() => {
     nameRef.current?.focus();
   }, []);
