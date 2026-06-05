@@ -376,6 +376,25 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(getFocusedTerminalSessionId(host)).toBeNull();
   });
 
+  it("rejects terminal voice input while the terminal pane is in an error state", async () => {
+    await renderTerminal();
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    if (!ws) throw new Error("terminal rig missing");
+    await flushReactUpdate(async () => ws.open());
+    ws.sent = [];
+    const handle = getTerminalHandle("sess_1");
+
+    expect(handle?.canAcceptVoiceInput()).toBe(true);
+    await flushReactUpdate(async () => {
+      ws.message(JSON.stringify({ type: "error", data: "tmux_session_missing" }));
+    });
+
+    expect(document.querySelector(".terminal-error-state")).not.toBeNull();
+    expect(handle?.canAcceptVoiceInput()).toBe(false);
+    expect(handle?.sendVoiceInput("should buffer", { submit: true })).toBe(false);
+    expect(decodeBinarySent(ws.sent)).toEqual([]);
+  });
+
   it("resolves focused xterm descendants to their session id", async () => {
     await renderTerminal();
     const host = document.querySelector(".terminal-xterm-host");

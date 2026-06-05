@@ -55,6 +55,13 @@ test.describe("scratchpad drawer", () => {
     await expect(composer).toBeFocused();
     const mic = page.getByRole("button", { name: "Start voice dictation" });
     await expect(mic).toBeVisible();
+    const modalBox = await page.locator(".scratchpad-modal").boundingBox();
+    const viewport = page.viewportSize();
+    expect(Math.abs(modalBox?.x ?? Number.NaN)).toBeLessThanOrEqual(10);
+    expect(Math.abs(modalBox?.y ?? Number.NaN)).toBeLessThanOrEqual(10);
+    expect(modalBox?.width ?? 0).toBeGreaterThanOrEqual((viewport?.width ?? 0) - 12);
+    expect(modalBox?.height ?? 0).toBeGreaterThanOrEqual((viewport?.height ?? 0) - 12);
+    await expect(page.locator(".scratchpad-modal")).toHaveCSS("border-radius", "0px");
     const box = await mic.boundingBox();
     expect(box?.width ?? 0).toBeGreaterThanOrEqual(36);
     expect(box?.height ?? 0).toBeGreaterThanOrEqual(36);
@@ -119,6 +126,26 @@ test.describe("scratchpad drawer", () => {
     await expect(page.locator(".scratchpad-block-list").getByText("desktop voice idea")).toBeVisible();
   });
 
+  test("route navigation stops active dictation and keeps interim text copyable", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name === "mobile", "hardware shortcut coverage is desktop/tablet");
+    await installFakeSpeechRecognition(page);
+    await page.goto("/settings");
+    await page.getByRole("button", { name: "Notes" }).click();
+    const notesInput = page.locator('[data-testid="notes-location-input"]');
+    await expect(notesInput).toBeVisible();
+    await notesInput.focus();
+
+    await page.keyboard.press("Control+Shift+D");
+    await expect(page.locator(".voice-mode-overlay")).toBeVisible();
+    expect(await emitFakeSpeechInterim(page, "route partial")).toBe(true);
+    await expect(page.locator(".voice-mode-interim")).toContainText("route partial");
+
+    await page.getByRole("link", { name: "Back to cockpit" }).click();
+
+    await expect(page.locator(".voice-mode-status")).toContainText("Dictation needs attention");
+    await expect(page.locator(".voice-mode-buffer")).toContainText("route partial");
+  });
+
   test("desktop voice shortcut inserts into a focused non-scratchpad input", async ({ page }, testInfo) => {
     test.skip(testInfo.project.name === "mobile", "hardware shortcut coverage is desktop/tablet");
     await installFakeSpeechRecognition(page);
@@ -135,6 +162,29 @@ test.describe("scratchpad drawer", () => {
     expect(await emitFakeSpeechFinal(page, "/tmp/voice-notes.md")).toBe(true);
     await expect(notesInput).toHaveValue("/tmp/voice-notes.md");
     await expect(page.locator(".scratchpad-drawer")).toBeHidden();
+  });
+
+  test("scratchpad voice with auto-submit off leaves the transcript in the composer draft", async ({
+    page,
+    request,
+  }, testInfo) => {
+    test.skip(testInfo.project.name === "mobile", "covered on desktop/tablet where the overlay is stable");
+    await installFakeSpeechRecognition(page);
+    await page.goto("/?scratchpad=1");
+    const composer = page.locator(".scratchpad-composer-input");
+    await expect(composer).toBeVisible();
+    await composer.focus();
+
+    await page.keyboard.press("Control+Shift+D");
+    await page.getByLabel("Auto-submit").uncheck();
+    expect(await emitFakeSpeechFinal(page, "draft only")).toBe(true);
+
+    await expect(page.locator(".voice-mode-status")).toContainText("Inserted");
+    await expect(composer).toHaveValue("draft only");
+    await expect(page.locator(".scratchpad-block-list").getByText("draft only")).toHaveCount(0);
+    const list = await apiGet(request, `${API_BASE}/api/scratchpad/blocks`);
+    const body = (await list.json()) as { blocks: Array<{ text: string }> };
+    expect(body.blocks.some((block) => block.text.includes("draft only"))).toBe(false);
   });
 
   test("preserves angle-bracket text in rendered blocks (regression)", async ({ page, request }) => {
@@ -185,6 +235,12 @@ async function installFakeSpeechRecognition(page: Page): Promise<void> {
       abort() {
         this.onend?.();
       }
+      emitInterim(text: string) {
+        this.onresult?.({
+          resultIndex: 0,
+          results: [{ isFinal: false, 0: { transcript: text } }],
+        });
+      }
       emitFinal(text: string) {
         this.onresult?.({
           resultIndex: 0,
@@ -213,6 +269,19 @@ async function emitFakeSpeechFinal(page: Page, text: string): Promise<boolean> {
     const instance = instances[instances.length - 1];
     if (!instance) return false;
     instance.emitFinal(finalText);
+    return true;
+  }, text);
+}
+
+async function emitFakeSpeechInterim(page: Page, text: string): Promise<boolean> {
+  return page.evaluate((interimText) => {
+    const typedWindow = window as typeof window & {
+      __citadelFakeSpeechRecognitionInstances: Array<{ emitInterim: (text: string) => void }>;
+    };
+    const instances = typedWindow.__citadelFakeSpeechRecognitionInstances;
+    const instance = instances[instances.length - 1];
+    if (!instance) return false;
+    instance.emitInterim(interimText);
     return true;
   }, text);
 }

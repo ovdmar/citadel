@@ -1,9 +1,9 @@
-import { type RefObject, useEffect, useMemo } from "react";
+import { type RefCallback, useCallback, useEffect, useMemo, useRef } from "react";
 import type { VoiceTarget } from "./lib/voice-targets.js";
 import { createScratchpadComposerVoiceTarget } from "./scratchpad-composer-voice-target.js";
 
 type ScratchpadComposerVoiceHookOptions = {
-  composerRef: RefObject<HTMLTextAreaElement | null>;
+  composerRef: { current: HTMLTextAreaElement | null };
   loaded: boolean;
   open: boolean;
   onDraftChange: (draft: string) => void;
@@ -11,7 +11,15 @@ type ScratchpadComposerVoiceHookOptions = {
   submitDraft: (draft: string) => void | Promise<void>;
 };
 
-export function useScratchpadComposerVoiceTarget(options: ScratchpadComposerVoiceHookOptions): VoiceTarget {
+type ScratchpadComposerVoiceRegistration = {
+  target: VoiceTarget;
+  inputRef: RefCallback<HTMLTextAreaElement>;
+};
+
+export function useScratchpadComposerVoiceTarget(
+  options: ScratchpadComposerVoiceHookOptions,
+): ScratchpadComposerVoiceRegistration {
+  const unregisterRef = useRef<(() => void) | null>(null);
   const target = useMemo(
     () =>
       createScratchpadComposerVoiceTarget({
@@ -24,11 +32,23 @@ export function useScratchpadComposerVoiceTarget(options: ScratchpadComposerVoic
     [options.composerRef, options.loaded, options.open, options.onDraftChange, options.submitDraft],
   );
 
-  useEffect(() => {
-    const element = options.composerRef.current;
-    if (!element) return;
-    return options.registerTarget(element, target);
-  }, [options.composerRef, options.registerTarget, target]);
+  const inputRef = useCallback<RefCallback<HTMLTextAreaElement>>(
+    (element) => {
+      unregisterRef.current?.();
+      unregisterRef.current = null;
+      options.composerRef.current = element;
+      if (element) unregisterRef.current = options.registerTarget(element, target);
+    },
+    [options.composerRef, options.registerTarget, target],
+  );
 
-  return target;
+  useEffect(
+    () => () => {
+      unregisterRef.current?.();
+      unregisterRef.current = null;
+    },
+    [],
+  );
+
+  return { target, inputRef };
 }

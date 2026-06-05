@@ -372,7 +372,7 @@ export function ScratchpadPanel() {
     [loadBlocks],
   );
 
-  const composerVoiceTarget = useScratchpadComposerVoiceTarget({
+  const { target: composerVoiceTarget, inputRef: composerVoiceInputRef } = useScratchpadComposerVoiceTarget({
     composerRef,
     loaded,
     open,
@@ -674,7 +674,7 @@ export function ScratchpadPanel() {
                   ))}
                 </div>
                 <ScratchpadComposer
-                  inputRef={composerRef}
+                  inputRef={composerVoiceInputRef}
                   value={composer}
                   loaded={loaded}
                   error={composerError}

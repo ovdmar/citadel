@@ -129,6 +129,12 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
   const [connectionState, setConnectionState] = useState<"connecting" | "attached" | "disconnected">("connecting");
   const [error, setError] = useState<TerminalError | null>(null);
   const [generation, setGeneration] = useState(0);
+  const activeRef = useRef(active);
+  const connectionStateRef = useRef(connectionState);
+  const errorRef = useRef(error);
+  activeRef.current = active;
+  connectionStateRef.current = connectionState;
+  errorRef.current = error;
 
   const clearAutoRetryTimer = useCallback(() => {
     if (autoRetryTimerRef.current !== null) {
@@ -170,16 +176,30 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
 
   const sendVoiceInput = useCallback((text: string, options: { submit: boolean }) => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    if (
+      !canAcceptTerminalVoiceInput(
+        containerRef.current,
+        ws,
+        activeRef.current,
+        connectionStateRef.current,
+        errorRef.current,
+      )
+    ) {
+      return false;
+    }
     sendTerminalInput(ws, text);
     if (options.submit) sendTerminalInput(ws, "\r");
     return true;
   }, []);
 
   const canAcceptVoiceInput = useCallback(() => {
-    const host = containerRef.current;
-    const ws = wsRef.current;
-    return Boolean(host && ws && ws.readyState === WebSocket.OPEN && isElementVoiceVisible(host));
+    return canAcceptTerminalVoiceInput(
+      containerRef.current,
+      wsRef.current,
+      activeRef.current,
+      connectionStateRef.current,
+      errorRef.current,
+    );
   }, []);
 
   const recoverIfDisconnected = useCallback(() => {
@@ -420,6 +440,24 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
 export function terminalWebSocketUrl(sessionId: string, location: Location = window.location): string {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${location.host}/terminal/${encodeURIComponent(sessionId)}`;
+}
+
+function canAcceptTerminalVoiceInput(
+  host: HTMLElement | null,
+  ws: WebSocket | null,
+  active: boolean,
+  connectionState: "connecting" | "attached" | "disconnected",
+  error: TerminalError | null,
+): ws is WebSocket {
+  return Boolean(
+    active &&
+      !error &&
+      connectionState === "attached" &&
+      host &&
+      ws &&
+      ws.readyState === WebSocket.OPEN &&
+      isElementVoiceVisible(host),
+  );
 }
 
 function TerminalErrorState(props: { error: TerminalError; onRetry: () => void; retrying: boolean }) {

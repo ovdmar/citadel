@@ -584,6 +584,30 @@ describe("VoiceModeProvider", () => {
     expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Submitted");
   });
 
+  it("commits terminal dictation only to the snapshotted terminal session", async () => {
+    const firstSendVoiceInput = vi.fn(() => true);
+    const secondSendVoiceInput = vi.fn(() => true);
+    terminalMocks.handles.set("sess_1", {
+      sendVoiceInput: firstSendVoiceInput,
+      canAcceptVoiceInput: vi.fn(() => true),
+    });
+    terminalMocks.handles.set("sess_2", {
+      sendVoiceInput: secondSendVoiceInput,
+      canAcceptVoiceInput: vi.fn(() => true),
+    });
+    await renderProvider();
+
+    await flushReact(() => {
+      voiceApi?.startDictation({ terminalSessionId: "sess_2" });
+      FakeSpeechRecognition.instances[0]?.final("session two");
+      vi.advanceTimersByTime(FINAL_AUTO_SUBMIT_DELAY_MS);
+    });
+
+    expect(firstSendVoiceInput).not.toHaveBeenCalled();
+    expect(secondSendVoiceInput).toHaveBeenCalledWith("session two", { submit: true });
+    expect(document.querySelector(".voice-mode-status")?.textContent).toBe("Submitted");
+  });
+
   it("buffers terminal dictation when the session handle cannot write", async () => {
     const sendVoiceInput = vi.fn(() => false);
     terminalMocks.handles.set("sess_1", { sendVoiceInput, canAcceptVoiceInput: vi.fn(() => true) });
