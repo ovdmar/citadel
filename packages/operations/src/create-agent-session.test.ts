@@ -411,12 +411,17 @@ describe("createAgentSession session-id wiring", () => {
   }, 20_000);
 });
 
-function makeService(store: SqliteStore, dataDir?: string) {
+function makeService(
+  store: SqliteStore,
+  dataDir?: string,
+  overrides: { agentSessions?: { baseSystemPrompt: string } } = {},
+) {
   return new OperationService(store, {
     ...(dataDir ? { dataDir } : {}),
     hooks: [],
     repoDefaults: { setupHookIds: [], teardownHookIds: [] },
     commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
+    ...overrides,
   });
 }
 

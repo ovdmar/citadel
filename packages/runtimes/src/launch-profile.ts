@@ -1,6 +1,7 @@
 import type { LaunchSettings, RuntimeLaunchOptionCapabilities } from "@citadel/contracts";
 
 type LaunchArgvMapping = { argv: string[] };
+export type SystemPromptArgvMapping = { argv: string[]; valueEncoding: "raw" | "toml-string" };
 export type RuntimeLaunchOptionsInput = {
   models?: Array<{ id: string; label: string; default?: boolean; deprecated?: boolean }>;
   defaultModel?: string | null;
@@ -11,6 +12,7 @@ export type RuntimeLaunchOptionsInput = {
   effortArgv?: LaunchArgvMapping | undefined;
   fastArgv?: LaunchArgvMapping | undefined;
   contextArgv?: LaunchArgvMapping | undefined;
+  systemPromptArgv?: SystemPromptArgvMapping | undefined;
 };
 
 export type RuntimeWithLaunchOptions = {
@@ -54,11 +56,21 @@ export function runtimeLaunchOptionCapabilities(
     defaultModel: configuredDefault,
     effortValues: launchOptions?.effortValues ?? [],
     supportsFastMode: launchOptions?.supportsFastMode ?? false,
+    supportsSystemPromptArgv: Boolean(launchOptions?.systemPromptArgv),
     contextModes: launchOptions?.contextModes ?? [],
     checkedAt: options.now?.() ?? new Date().toISOString(),
     stale: false,
     reason: launchOptions ? null : "static_fallback",
   };
+}
+
+export function renderSystemPromptArgv(mapping: SystemPromptArgvMapping, systemPrompt: string): string[] {
+  const value = mapping.valueEncoding === "toml-string" ? encodeTomlString(systemPrompt) : systemPrompt;
+  return mapping.argv.map((token) => token.replaceAll("{value}", value));
+}
+
+export function encodeTomlString(value: string): string {
+  return JSON.stringify(value);
 }
 
 export function resolveRuntimeLaunchProfile(input: {

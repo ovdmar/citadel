@@ -74,7 +74,6 @@ async function launchPm(
     template,
     runtime,
     prompt: [
-      template.systemPrompt,
       input.idea ? `Idea:\n${input.idea}` : null,
       input.parentIssue ? `Parent issue:\n${input.parentIssue.provider}:${input.parentIssue.key}` : null,
     ],
@@ -100,7 +99,7 @@ async function launchArchitect(
     actor,
     template,
     runtime,
-    prompt: [template.systemPrompt, `Plan approval mode: ${input.planApprovalMode}`],
+    prompt: [`Plan approval mode: ${input.planApprovalMode}`],
   });
 }
 
@@ -134,7 +133,6 @@ async function launchImplementation(
     runtime,
     plan: activePlan,
     prompt: [
-      template.systemPrompt,
       `Checkout: ${checkout.name}`,
       activePlan ? `Workspace plan version: v${activePlan.version}` : null,
       checkout.issue ? `Child ticket: ${checkout.issue.provider}:${checkout.issue.key}` : null,
@@ -158,7 +156,7 @@ async function launchPrototype(
     actor,
     template,
     runtime,
-    prompt: [template.systemPrompt, input.prompt ?? null],
+    prompt: [input.prompt ?? null],
   });
 }
 
@@ -182,6 +180,7 @@ async function launchRoleSession(
       workspaceId: input.workspace.id,
       runtimeId: input.runtime.id,
       displayName: input.template.displayName,
+      roleTemplatePrompt: input.template.systemPrompt,
       prompt: input.prompt.filter(Boolean).join("\n\n"),
       targetType: input.checkout ? "worktree_checkout" : "workspace_home",
       ...(input.checkout ? { checkoutId: input.checkout.id } : {}),
