@@ -8,12 +8,13 @@ import {
   createRouter,
   useLocation,
 } from "@tanstack/react-router";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
 import { OptimisticRemoveProvider } from "./app-state.js";
 import { Cockpit } from "./cockpit.js";
 import { bootstrapLastRoute, clearLastRoute, saveLastRoute } from "./lib/last-route.js";
+import { bootstrapMobileScratchpad } from "./lib/mobile-scratchpad-bootstrap.js";
 import { AgentTemplatesView } from "./routes/agents.js";
 import { DashboardView } from "./routes/dashboard.js";
 import { HistoryView } from "./routes/history.js";
@@ -25,13 +26,14 @@ import { ScratchpadView } from "./routes/scratchpad.js";
 import { SettingsView } from "./routes/settings.js";
 import { getScratchpadDrawerOpen, setScratchpadDrawerOpen, toggleScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { ScratchpadPanel } from "./scratchpad-panel.js";
-import { isRegisteredTerminalMessageSource } from "./terminal-pane.js";
-import { parseTerminalShortcutMessage } from "./terminal-shortcut-bridge.js";
+import { handleShellTerminalShortcutMessage } from "./shell-terminal-shortcuts.js";
 import { ToastProvider } from "./toast.js";
 import { installUiDiagnostics } from "./ui-diagnostics.js";
 import { applyThemePreference, readThemePreference } from "./use-resolved-theme.js";
+import { VoiceModeProvider, useVoiceMode } from "./voice-mode-provider.js";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
+import "./voice-mode.css";
 import "./chrome.css";
 import "./stage-terminal.css";
 import "./structured-home-summary.css";
@@ -151,6 +153,17 @@ const scheduledAgentsRoute = createRoute({
 });
 
 function Shell() {
+  return (
+    <VoiceModeProvider>
+      <ShellContent />
+    </VoiceModeProvider>
+  );
+}
+
+function ShellContent() {
+  const { startDictation, stopDictation } = useVoiceMode();
+  const location = useLocation();
+  const voiceRouteHrefRef = useRef(location.href);
   // Initialize the drawer from the `?scratchpad=1` query param on cold mount,
   // so deep-link refreshes (e.g. /settings?scratchpad=1) restore the drawer
   // exactly as it was. Subsequent toggles update the URL via syncDrawerToUrl
@@ -159,6 +172,12 @@ function Shell() {
     const params = new URLSearchParams(window.location.search);
     if (params.get("scratchpad") === "1") setScratchpadDrawerOpen(true);
   }, []);
+
+  useEffect(() => {
+    if (voiceRouteHrefRef.current === location.href) return;
+    voiceRouteHrefRef.current = location.href;
+    stopDictation({ commitFinal: false });
+  }, [location.href, stopDictation]);
 
   // Shell-level keydown: cmd/ctrl+shift+s toggles the drawer from every route.
   // Cockpit-specific shortcuts (cmd+k, c, ctrl+n) stay in Cockpit so they're
@@ -175,9 +194,7 @@ function Shell() {
       }
     };
     const onMessage = (event: MessageEvent) => {
-      const message = parseTerminalShortcutMessage(event);
-      if (!message || !isRegisteredTerminalMessageSource(event.source, message.sessionId)) return;
-      if (message.action === "scratchpad-toggle") toggleScratchpad();
+      handleShellTerminalShortcutMessage(event, { startDictation, toggleScratchpad });
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("message", onMessage);
@@ -185,7 +202,7 @@ function Shell() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("message", onMessage);
     };
-  }, []);
+  }, [startDictation]);
 
   return (
     <OptimisticRemoveProvider>
@@ -256,11 +273,13 @@ function NotFoundView() {
   );
 }
 
-// Restore the last visited route BEFORE the router boots so it picks the
-// correct initial location off the URL bar. The decision logic lives in
-// bootstrapLastRoute so it can be unit-tested independently.
+// Bootstrap the URL before the router boots so it picks the correct initial
+// location. Mobile scratchpad default-open runs first, then last-route restore
+// handles ordinary bare-root reloads.
 if (typeof window !== "undefined") {
-  bootstrapLastRoute(window.location, window.history);
+  if (!bootstrapMobileScratchpad(window.location, window.history)) {
+    bootstrapLastRoute(window.location, window.history);
+  }
 }
 
 const router = createRouter({

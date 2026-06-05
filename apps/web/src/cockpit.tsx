@@ -40,7 +40,7 @@ import { RestoreBanner } from "./restore-banner.js";
 import { type ShortcutMatch, matchShortcut } from "./shortcuts.js";
 import { Stage } from "./stage.js";
 import { focusActiveTerminal, isRegisteredTerminalMessageSource } from "./terminal-pane.js";
-import { parseTerminalShortcutMessage, terminalShortcutMatch } from "./terminal-shortcut-bridge.js";
+import { parseRegisteredTerminalShortcutMessage, terminalShortcutMatch } from "./terminal-shortcut-bridge.js";
 import { ThemeControls } from "./theme-controls.js";
 import { UsageIndicator } from "./usage-indicator.js";
 import { startColumnDrag, useCockpitLayout } from "./use-cockpit-layout.js";
@@ -353,8 +353,8 @@ export function Cockpit() {
       applyShortcutMatch(match, () => event.preventDefault());
     };
     const onMessage = (event: MessageEvent) => {
-      const message = parseTerminalShortcutMessage(event);
-      if (!message || !isRegisteredTerminalMessageSource(event.source, message.sessionId)) return;
+      const message = parseRegisteredTerminalShortcutMessage(event, isRegisteredTerminalMessageSource);
+      if (!message) return;
       if (message.action === "new-workspace") {
         openCreateWorkspace();
         return;

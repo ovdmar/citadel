@@ -6,6 +6,7 @@ export type TerminalShortcutMessage = {
   sessionId: string;
   index?: number;
 };
+type TerminalShortcutSourceValidator = (source: MessageEvent["source"], sessionId: string) => boolean;
 
 const TERMINAL_SHORTCUT_SOURCE = "citadel-terminal";
 const TERMINAL_SHORTCUT_TYPE = "citadel.terminal-shortcut";
@@ -34,8 +35,23 @@ export function parseTerminalShortcutMessage(event: MessageEvent): TerminalShort
   return { action, sessionId, index: candidate.index };
 }
 
+export function parseRegisteredTerminalShortcutMessage(
+  event: MessageEvent,
+  isRegisteredSource: TerminalShortcutSourceValidator,
+): TerminalShortcutMessage | null {
+  const message = parseTerminalShortcutMessage(event);
+  if (!message || !isRegisteredSource(event.source, message.sessionId)) return null;
+  return message;
+}
+
 export function terminalShortcutMatch(message: TerminalShortcutMessage): ShortcutMatch | null {
-  if (message.action === "scratchpad-toggle" || message.action === "new-workspace") return null;
+  if (
+    message.action === "scratchpad-toggle" ||
+    message.action === "new-workspace" ||
+    message.action === "voice-dictation"
+  ) {
+    return null;
+  }
   if ((message.action === "nav-workspace" || message.action === "nav-session") && message.index === undefined) {
     return null;
   }

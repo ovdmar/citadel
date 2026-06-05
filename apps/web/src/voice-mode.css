@@ -1,0 +1,78 @@
+.voice-mode-overlay {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  z-index: 1200;
+  width: min(420px, calc(100vw - 24px));
+  transform: translateX(-50%);
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 8px;
+  background: var(--c-elev, var(--panel-strong));
+  color: inherit;
+  box-shadow: var(--sh-2, 0 8px 24px rgba(0, 0, 0, 0.25));
+}
+
+.voice-mode-status {
+  font-weight: 600;
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
+.voice-mode-interim,
+.voice-mode-buffer {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.voice-mode-interim {
+  color: var(--muted);
+}
+
+.voice-mode-buffer {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.voice-mode-error {
+  font-size: 12px;
+  color: var(--color-danger, #ef4444);
+}
+
+.voice-mode-toggle,
+.voice-mode-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.voice-mode-toggle {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.voice-mode-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.voice-mode-actions button {
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.voice-mode-actions button:hover,
+.voice-mode-actions button:focus-visible {
+  background: var(--c-line-1, rgba(255, 255, 255, 0.06));
+  outline: none;
+}
