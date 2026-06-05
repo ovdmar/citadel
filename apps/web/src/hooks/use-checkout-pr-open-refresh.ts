@@ -1,6 +1,16 @@
+import type { WorktreeCheckout } from "@citadel/contracts";
 import type { QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 import { api } from "../api.js";
+
+export function checkoutPrRefreshIdentity(
+  checkout: Pick<WorktreeCheckout, "intendedPr"> | null | undefined,
+): string | null {
+  const intendedPr = checkout?.intendedPr;
+  return intendedPr?.number || intendedPr?.url
+    ? [intendedPr.number ?? "", intendedPr.url ?? "", intendedPr.headSha ?? ""].join(":")
+    : null;
+}
 
 export function useCheckoutPrOpenRefresh(input: {
   workspaceId: string | null | undefined;

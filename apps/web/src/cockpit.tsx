@@ -26,7 +26,7 @@ import {
 } from "./cockpit-tools.js";
 import { CommandPalette } from "./command-palette.js";
 import { GhCooldownBanner } from "./gh-cooldown-banner.js";
-import { useCheckoutPrOpenRefresh } from "./hooks/use-checkout-pr-open-refresh.js";
+import { checkoutPrRefreshIdentity, useCheckoutPrOpenRefresh } from "./hooks/use-checkout-pr-open-refresh.js";
 import { useFocusRefresh } from "./hooks/use-focus-refresh.js";
 import { resolveInspectorTargetState } from "./inspector-target-state.js";
 import { Inspector } from "./inspector.js";
@@ -183,14 +183,7 @@ export function Cockpit() {
   const activeCheckout = activeCheckoutId
     ? (activeWorkspaceCheckouts.find((checkout) => checkout.id === activeCheckoutId) ?? null)
     : null;
-  const activeCheckoutPrIdentity =
-    activeCheckout?.intendedPr?.number || activeCheckout?.intendedPr?.url
-      ? [
-          activeCheckout.intendedPr.number ?? "",
-          activeCheckout.intendedPr.url ?? "",
-          activeCheckout.intendedPr.headSha ?? "",
-        ].join(":")
-      : null;
+  const activeCheckoutPrIdentity = checkoutPrRefreshIdentity(activeCheckout);
   useCheckoutPrOpenRefresh({
     workspaceId: activeWorkspace?.id,
     checkoutId: activeCheckoutId,
