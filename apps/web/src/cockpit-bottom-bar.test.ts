@@ -1,6 +1,24 @@
+// @vitest-environment happy-dom
+
 import type { TerminalSession, WorkspaceSession } from "@citadel/contracts";
-import { describe, expect, it } from "vitest";
-import { formatBytes, formatClock, formatPercent, resolveLiveWatchLabel } from "./cockpit-bottom-bar.js";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createElement } from "react";
+import { flushSync } from "react-dom";
+import { type Root, createRoot } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { BottomBar, formatBytes, formatClock, formatPercent } from "./cockpit-bottom-bar.js";
+
+vi.mock("./api.js", () => ({
+  api: vi.fn(async () => ({ systemHealth: null })),
+}));
+
+const roots: Root[] = [];
+
+afterEach(() => {
+  for (const root of roots.splice(0)) root.unmount();
+  document.body.innerHTML = "";
+  vi.useRealTimers();
+});
 
 describe("footer health formatting", () => {
   it("formats unavailable percentages as n/a", () => {
@@ -22,27 +40,38 @@ describe("footer health formatting", () => {
   });
 });
 
-describe("footer live watch selection", () => {
-  it("uses the active session label when it is live", () => {
-    const active = session({ id: "sess_active", tmuxSessionName: "citadel_active" });
-    expect(resolveLiveWatchLabel(active, [session({ id: "sess_other", tmuxSessionName: "citadel_other" })])).toBe(
-      "citadel_active",
-    );
-  });
+describe("footer right side", () => {
+  it("renders only the clock even when a live session has a watch label", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-05T09:07:30Z"));
+    const active = session({ tmuxSessionName: "citadel_ws_mq0rwq26_0azakwt0_vxda7uee" });
 
-  it("falls back to another live workspace session when the active target has none", () => {
-    expect(
-      resolveLiveWatchLabel(null, [
-        session({ id: "sess_closed", tmuxSessionName: "citadel_closed", closedAt: "2026-06-05T00:00:00.000Z" }),
-        session({ id: "sess_live", ptySessionId: "pty_sess_live" }),
-      ]),
-    ).toBe("pty_sess_live");
-  });
+    renderBottomBar({ activeSession: active, sessions: [active] });
 
-  it("returns null when there is no actual live watch", () => {
-    expect(resolveLiveWatchLabel(null, [session({ closedAt: "2026-06-05T00:00:00.000Z" })])).toBeNull();
+    const right = document.querySelector(".cit-bb-right");
+    expect(right?.textContent).toBe("09:07");
+    expect(right?.querySelector(".cit-bb-watch")).toBeNull();
   });
 });
+
+function renderBottomBar(props: { activeSession: WorkspaceSession | null; sessions: WorkspaceSession[] }) {
+  const rootElement = document.createElement("div");
+  document.body.replaceChildren(rootElement);
+  const root = createRoot(rootElement);
+  roots.push(root);
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  flushSync(() => {
+    root.render(
+      createElement(
+        QueryClientProvider,
+        { client },
+        createElement(BottomBar, { activeSession: props.activeSession, sessions: props.sessions }),
+      ),
+    );
+  });
+}
 
 function session(overrides: Partial<TerminalSession> = {}): WorkspaceSession {
   const base: TerminalSession = {
