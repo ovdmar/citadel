@@ -26,7 +26,7 @@ export function Inspector(props: {
   repo: Repo | null;
   sessions: WorkspaceSession[];
   summary: WorkspaceCockpitSummary | undefined;
-  activeCheckoutId: string | null;
+  reviewCheckoutId: string | null;
   onCollapse: () => void;
 }) {
   const [tab, setTab] = useState<InspectorTab>("stats");
@@ -74,7 +74,7 @@ export function Inspector(props: {
             workspace={props.workspace}
             summary={props.summary}
             diff={diff.data}
-            activeCheckoutId={props.activeCheckoutId}
+            reviewCheckoutId={props.reviewCheckoutId}
           />
         )}
       </div>
@@ -228,7 +228,7 @@ function DiffTab(props: {
   workspace: Workspace;
   summary: WorkspaceCockpitSummary | undefined;
   diff: WorkspaceDiff | undefined;
-  activeCheckoutId: string | null;
+  reviewCheckoutId: string | null;
 }) {
   const diff = useQuery<WorkspaceDiff>({
     queryKey: ["diff", props.workspace.id],
@@ -273,11 +273,11 @@ function DiffTab(props: {
       </section>
       <section className="inspector-block">
         <h4>Human review</h4>
-        {props.activeCheckoutId ? (
+        {props.reviewCheckoutId ? (
           <Link
             className="settings-link"
             to="/workspaces/$workspaceId/checkouts/$checkoutId/review"
-            params={{ workspaceId: props.workspace.id, checkoutId: props.activeCheckoutId }}
+            params={{ workspaceId: props.workspace.id, checkoutId: props.reviewCheckoutId }}
           >
             Open review
           </Link>

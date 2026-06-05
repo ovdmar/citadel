@@ -59,6 +59,20 @@ function focusTerminalSoon(sessionId: string) {
   }
 }
 
+function homeReviewCheckoutId(
+  workspace: Workspace | null,
+  checkouts: Array<{
+    id: string;
+    repoId: string;
+    path: string;
+  }>,
+): string | null {
+  if (!workspace) return null;
+  const exact = checkouts.find((checkout) => checkout.path === workspace.path && checkout.repoId === workspace.repoId);
+  if (exact) return exact.id;
+  return checkouts.length === 1 ? (checkouts[0]?.id ?? null) : null;
+}
+
 export function Cockpit() {
   // Use the filtered variant so workspaces in the optimistic-remove
   // blacklist (AC4) are subtracted from `data.workspaces` for every
@@ -165,6 +179,7 @@ export function Cockpit() {
     : [];
   const activeTargetKey = activeWorkspace ? (activeTargetByWorkspace[activeWorkspace.id] ?? "home") : "home";
   const activeCheckoutId = checkoutIdFromTargetKey(activeTargetKey, activeWorkspaceCheckouts);
+  const reviewCheckoutId = activeCheckoutId ?? homeReviewCheckoutId(activeWorkspace, activeWorkspaceCheckouts);
   const activeTargetType = activeCheckoutId ? "worktree_checkout" : "workspace_home";
   const activeWorkspaceAllSessions = activeWorkspace
     ? allSessions.filter((session) => session.workspaceId === activeWorkspace.id)
@@ -595,7 +610,7 @@ export function Cockpit() {
                 repo={selectedRepo}
                 sessions={activeWorkspaceSessions}
                 summary={cockpitSummary.data}
-                activeCheckoutId={activeCheckoutId}
+                reviewCheckoutId={reviewCheckoutId}
                 onCollapse={layout.toggleRight}
               />
             ) : (
