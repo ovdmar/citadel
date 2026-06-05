@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Repo, VersionControlSummary, Workspace } from "@citadel/contracts";
-import type { SqliteStore } from "@citadel/db";
+import type { SqliteStore, WorkspacePrSnapshot } from "@citadel/db";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GhScheduler } from "./gh-scheduler.js";
 import { createGitHubProviderStateService } from "./github-provider-state.js";
@@ -120,10 +120,11 @@ function makeService(input: {
     checkedAt: string;
     runs: [];
   }>;
+  snapshot?: Partial<WorkspacePrSnapshot> | null;
 }) {
   const cache = createProviderCache({ dataDir: tempDataDir(), listLiveIds: () => ["w1", "repo"] });
   const store = {
-    getWorkspacePrSnapshot: () => null,
+    getWorkspacePrSnapshot: () => input.snapshot ?? null,
     updateWorkspacePrSnapshot: () => {},
   } as unknown as SqliteStore;
   const collectVersionControl = vi.fn(input.collectVersionControl ?? (async () => makeVc()));
@@ -195,15 +196,28 @@ describe("GitHub provider state service", () => {
   });
 
   it("allows interactive CI reads to collect and populate cache", async () => {
-    const { service, cache, collectCi } = makeService({});
+    const { service, cache, collectCi } = makeService({
+      snapshot: { prNumber: 42, prState: "open", lastHeadSha: "abc123", lastChecksGreenAt: null },
+    });
     const ci = await service.fetchCi(makeWorkspace(), makeRepo(), { intent: "interactive" });
     expect(collectCi).toHaveBeenCalledTimes(1);
     expect(ci.status).toBe("healthy");
-    expect(cache.get("ci:owner/repo:feature")?.value).toMatchObject({ status: "healthy" });
+    expect(cache.get("ci:owner/repo:abc123")?.value).toMatchObject({ status: "healthy" });
+  });
+
+  it("does not collect interactive CI until PR metadata is known", async () => {
+    const { service, collectCi } = makeService({});
+    const ci = await service.fetchCi(makeWorkspace(), makeRepo(), { intent: "interactive" });
+    expect(collectCi).not.toHaveBeenCalled();
+    expect(ci.status).toBe("unavailable");
+    expect(ci.reason).toContain("PR metadata");
   });
 
   it("mirrors CI refreshes to a supplied workspace cache key", async () => {
-    const { service, cache, collectCi } = makeService({ hasViewers: true });
+    const { service, cache, collectCi } = makeService({
+      hasViewers: true,
+      snapshot: { prNumber: 42, prState: "open", lastHeadSha: "abc123", lastChecksGreenAt: null },
+    });
     const ci = await service.fetchCi(makeWorkspace(), makeRepo(), {
       cacheKey: "ci:w1:2026-05-25T00:00:00Z",
       intent: "automatic",
@@ -211,7 +225,7 @@ describe("GitHub provider state service", () => {
     });
     expect(collectCi).toHaveBeenCalledTimes(1);
     expect(ci.status).toBe("healthy");
-    expect(cache.get("ci:owner/repo:feature")?.value).toMatchObject({ status: "healthy" });
+    expect(cache.get("ci:owner/repo:abc123")?.value).toMatchObject({ status: "healthy" });
     expect(cache.get("ci:w1:2026-05-25T00:00:00Z")?.value).toMatchObject({ status: "healthy" });
   });
 });

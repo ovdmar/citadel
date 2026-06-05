@@ -11,6 +11,7 @@ import {
   cachedCiOrDisabled,
   disabledVersionControlSummary,
   githubCiCacheKey,
+  githubCiSkipReason,
   shouldFetchGithubCi,
 } from "./gh-automation.js";
 import { buildVersionControlProviderDeps } from "./gh-quota-wiring.js";
@@ -58,7 +59,7 @@ export type CreateGitHubProviderStateServiceInput = {
   msSinceLastViewer: () => number;
 };
 
-const CI_CACHE_TTL_MS = 60_000;
+const CI_CACHE_TTL_MS = 5 * 60_000;
 const NO_VIEWERS_REASON = "GitHub automation is paused while no cockpit tab is connected";
 
 export function createGitHubProviderStateService(
@@ -139,7 +140,7 @@ export function createGitHubProviderStateService(
     const reason = pauseReason(options.intent ?? "interactive");
     if (reason) return cachedCiOrDisabledFromKeys(cacheKeys, reason);
     if (!shouldFetchGithubCi(input.store, workspace)) {
-      return cachedCiOrDisabledFromKeys(cacheKeys, "GitHub CI is cached until the PR receives a new local commit");
+      return cachedCiOrDisabledFromKeys(cacheKeys, githubCiSkipReason(input.store, workspace) ?? "GitHub CI is cached");
     }
     const ttlMs = options.ttlMs ?? CI_CACHE_TTL_MS;
     const load = () => input.collectCi(workspace.path);

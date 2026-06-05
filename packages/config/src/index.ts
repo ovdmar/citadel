@@ -333,7 +333,16 @@ export const CitadelConfigSchema = z
           .default({ startHour: 9, endHour: 18, weekdaysOnly: true }),
         intervals: z
           .object({
+            // Legacy name kept for config compatibility. This now controls
+            // version-control/PR metadata cadence; CI run-list refresh has
+            // its own slower default below because PR summaries already carry
+            // statusCheckRollup.
             prCiMs: z.number().int().min(15_000).default(60_000),
+            ciMs: z
+              .number()
+              .int()
+              .min(60_000)
+              .default(5 * 60_000),
             jiraMs: z
               .number()
               .int()
@@ -345,14 +354,14 @@ export const CitadelConfigSchema = z
               .min(30_000)
               .default(5 * 60_000),
           })
-          .default({ prCiMs: 60_000, jiraMs: 5 * 60_000, usageMs: 5 * 60_000 }),
+          .default({ prCiMs: 60_000, ciMs: 5 * 60_000, jiraMs: 5 * 60_000, usageMs: 5 * 60_000 }),
         focusRefreshThresholdMs: z.number().int().min(5_000).default(30_000),
         maxConcurrentRefreshes: z.number().int().min(1).max(16).default(4),
       })
       .default({
         enabled: true,
         workingHours: { startHour: 9, endHour: 18, weekdaysOnly: true },
-        intervals: { prCiMs: 60_000, jiraMs: 5 * 60_000, usageMs: 5 * 60_000 },
+        intervals: { prCiMs: 60_000, ciMs: 5 * 60_000, jiraMs: 5 * 60_000, usageMs: 5 * 60_000 },
         focusRefreshThresholdMs: 30_000,
         maxConcurrentRefreshes: 4,
       }),

@@ -22,6 +22,7 @@ import type {
   WorktreeCheckout,
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
+import { shouldFetchGithubCi } from "./gh-automation.js";
 import type { GitHubProviderStateService } from "./github-provider-state.js";
 import {
   type PersistentProviderCache,
@@ -116,13 +117,14 @@ export function startProviderRefreshJob(deps: ProviderRefreshDeps): ProviderRefr
   function collectItemsForWorkspace(workspace: Workspace): RefreshItem[] {
     const items: RefreshItem[] = [];
     const { prCiMs, jiraMs } = deps.config.providerRefresh.intervals;
+    const ciMs = deps.config.providerRefresh.intervals.ciMs ?? prCiMs;
     const vcKey = vcCacheKey(workspace.id, workspace.updatedAt);
     const ciKey = ciCacheKey(workspace.id, workspace.updatedAt);
     if (isStale(vcKey, prCiMs)) {
       items.push({ kind: "vc", workspaceId: workspace.id, cacheKey: vcKey, ttlMs: prCiMs, rootPath: workspace.path });
     }
-    if (isStale(ciKey, prCiMs)) {
-      items.push({ kind: "ci", workspaceId: workspace.id, cacheKey: ciKey, ttlMs: prCiMs, rootPath: workspace.path });
+    if (shouldFetchGithubCi(deps.store, workspace) && isStale(ciKey, ciMs)) {
+      items.push({ kind: "ci", workspaceId: workspace.id, cacheKey: ciKey, ttlMs: ciMs, rootPath: workspace.path });
     }
     for (const checkout of listActiveWorkspaceCheckouts(deps.store, workspace.id)) {
       const checkoutVcKey = checkoutVcCacheKey(workspace.id, checkout.id, checkout.updatedAt);

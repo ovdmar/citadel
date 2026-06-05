@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { CitadelConfig } from "@citadel/config";
 import type { AgentRuntime, Repo, VersionControlSummary, Workspace, WorktreeCheckout } from "@citadel/contracts";
-import type { SqliteStore } from "@citadel/db";
+import type { SqliteStore, WorkspacePrSnapshot } from "@citadel/db";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProviderCache } from "./provider-cache.js";
 import { type ProviderRefreshDeps, startProviderRefreshJob } from "./provider-refresh-job.js";
@@ -116,19 +116,36 @@ function makeDeps(
     repos?: Repo[];
     checkouts?: Record<string, WorktreeCheckout[]>;
     runtimes?: AgentRuntime[];
+    snapshots?: Map<string, Partial<WorkspacePrSnapshot> | null>;
   },
 ) {
   const workspaces = overrides.workspaces ?? [makeWorkspace("w1")];
   const repos = overrides.repos ?? [makeRepo()];
   const checkouts = overrides.checkouts ?? {};
   const runtimes = overrides.runtimes ?? [];
+  const snapshots =
+    overrides.snapshots ??
+    new Map<string, Partial<WorkspacePrSnapshot>>(
+      workspaces.map((workspace) => [
+        workspace.id,
+        {
+          prNumber: 42,
+          prState: "open",
+          lastFetchAt: "2026-05-25T00:00:00Z",
+          lastHeadSha: "abc123",
+          lastHeadShaChangedAt: "2026-05-25T00:00:00Z",
+          lastChecksGreenAt: null,
+          lastMergeStateStatus: null,
+        },
+      ]),
+    );
   const config = {
     runtimes: runtimes.map((r) => ({ id: r.id, displayName: r.displayName, command: r.command, args: r.args })),
     usageProviders: [],
     providerRefresh: {
       enabled: true,
       workingHours: { startHour: 0, endHour: 24, weekdaysOnly: false },
-      intervals: { prCiMs: 60_000, jiraMs: 5 * 60_000, usageMs: 5 * 60_000 },
+      intervals: { prCiMs: 60_000, ciMs: 5 * 60_000, jiraMs: 5 * 60_000, usageMs: 5 * 60_000 },
       focusRefreshThresholdMs: 30_000,
       maxConcurrentRefreshes: 4,
     },
@@ -137,6 +154,8 @@ function makeDeps(
     listWorkspaces: () => workspaces,
     listRepos: () => repos,
     listWorkspaceCheckouts: (workspaceId: string) => checkouts[workspaceId] ?? [],
+    getWorkspacePrSnapshot: (workspaceId: string) =>
+      snapshots.has(workspaceId) ? (snapshots.get(workspaceId) ?? null) : null,
   } as unknown as SqliteStore;
   const cache = createProviderCache({ dataDir: tempDataDir(), listLiveIds: () => workspaces.map((w) => w.id) });
   const checkedAt = () => new Date().toISOString();
@@ -228,6 +247,31 @@ describe("startProviderRefreshJob", () => {
     job.stop();
   });
 
+  it("does not queue CI refresh for a workspace with an authoritative no-PR snapshot", async () => {
+    const deps = makeDeps({
+      workspaces: [makeWorkspace("w1")],
+      snapshots: new Map([
+        [
+          "w1",
+          {
+            prNumber: null,
+            prState: null,
+            lastFetchAt: "2026-05-25T00:00:00Z",
+            lastHeadSha: "abc123",
+            lastHeadShaChangedAt: "2026-05-25T00:00:00Z",
+            lastChecksGreenAt: null,
+            lastMergeStateStatus: null,
+          },
+        ],
+      ]),
+    });
+    const job = startProviderRefreshJob({ ...deps, tickIntervalMs: 0, jitterMaxMs: 0 });
+    await job.runTickForTest();
+    expect(deps.providers.collectGitHubVersionControlSummary).toHaveBeenCalledTimes(1);
+    expect(deps.providers.collectGitHubCiRuns).not.toHaveBeenCalled();
+    job.stop();
+  });
+
   it("delegates workspace GitHub refreshes to the shared state service when supplied", async () => {
     const workspace = makeWorkspace("w1");
     const repo = makeRepo();
@@ -260,7 +304,7 @@ describe("startProviderRefreshJob", () => {
     expect(github.fetchCi).toHaveBeenCalledWith(workspace, repo, {
       cacheKey: "ci:w1:2026-05-25T00:00:00Z",
       intent: "automatic",
-      ttlMs: 60_000,
+      ttlMs: 5 * 60_000,
     });
     expect(deps.providers.collectGitHubVersionControlSummary).not.toHaveBeenCalled();
     expect(deps.providers.collectGitHubCiRuns).not.toHaveBeenCalled();
@@ -442,6 +486,15 @@ describe("startProviderRefreshJob", () => {
         listCalls += 1;
         return listCalls === 1 ? [ws] : [archivedWs];
       },
+      getWorkspacePrSnapshot: () => ({
+        prNumber: 42,
+        prState: "open",
+        lastFetchAt: "2026-05-25T00:00:00Z",
+        lastHeadSha: "abc123",
+        lastHeadShaChangedAt: "2026-05-25T00:00:00Z",
+        lastChecksGreenAt: null,
+        lastMergeStateStatus: null,
+      }),
     } as unknown as SqliteStore;
     deps.providers.collectGitHubVersionControlSummary = vi.fn(async () => {
       throw new Error("vc provider must not be called after mid-tick archive");

@@ -65,6 +65,34 @@ describe("automatedGhEnabled", () => {
 });
 
 describe("shouldFetchGithubCi", () => {
+  it("waits for PR metadata before polling CI", () => {
+    const git = makeGitRepo();
+    const workspace = makeWorkspace(git.repoPath);
+    const store = {
+      getWorkspacePrSnapshot: () => null,
+    };
+
+    expect(shouldFetchGithubCi(store, workspace)).toBe(false);
+  });
+
+  it("does not poll CI when the current head is known to have no PR", () => {
+    const git = makeGitRepo();
+    const workspace = makeWorkspace(git.repoPath);
+    const store = {
+      getWorkspacePrSnapshot: () => ({
+        prNumber: null,
+        prState: null,
+        lastFetchAt: "2026-05-27T00:00:00.000Z",
+        lastHeadSha: git.headSha,
+        lastHeadShaChangedAt: "2026-05-27T00:00:00.000Z",
+        lastChecksGreenAt: null,
+        lastMergeStateStatus: null,
+      }),
+    };
+
+    expect(shouldFetchGithubCi(store, workspace)).toBe(false);
+  });
+
   it("stops CI polling for green PRs until local HEAD changes", () => {
     const git = makeGitRepo();
     const workspace = makeWorkspace(git.repoPath);

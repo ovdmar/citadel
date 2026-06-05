@@ -14,7 +14,7 @@ import { listRuntimeHealth } from "@citadel/runtimes";
 import type { ProviderCache } from "./app-helpers.js";
 import { parsePositiveInt } from "./app-helpers.js";
 import { FIX_CI_PROMPT, decideAutoRecoveryAction } from "./auto-recovery.js";
-import { cachedCiOrDisabled, githubCiCacheKey, shouldFetchGithubCi } from "./gh-automation.js";
+import { cachedCiOrDisabled, githubCiCacheKey, githubCiSkipReason, shouldFetchGithubCi } from "./gh-automation.js";
 import type { GhScheduler } from "./gh-scheduler.js";
 import type { GitHubProviderStateService } from "./github-provider-state.js";
 import { ciCacheKey, vcCacheKey } from "./provider-cache.js";
@@ -201,7 +201,7 @@ function buildCachedAutoRecoveryFetchers(deps: AutoRecoveryWiringDeps): {
       );
       if (!shouldFetchGithubCi(deps.store, workspace)) {
         return Promise.resolve(
-          cachedCiOrDisabled(providerCache, ciKey, "GitHub CI is cached until the PR receives a new local commit"),
+          cachedCiOrDisabled(providerCache, ciKey, githubCiSkipReason(deps.store, workspace) ?? "GitHub CI is cached"),
         );
       }
       return cachedProvider(ciKey, () => collectGitHubCiRuns(workspace.path), 60_000);

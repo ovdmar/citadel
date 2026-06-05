@@ -21,6 +21,7 @@ import {
   cachedCiOrDisabled,
   disabledVersionControlSummary,
   githubCiCacheKey,
+  githubCiSkipReason,
   shouldFetchGithubCi,
 } from "./gh-automation.js";
 import { decorateWithCooldown } from "./gh-quota-wiring.js";
@@ -95,7 +96,7 @@ export function createWorkspaceCockpitSummaryBuilder(input: {
               providerCache,
               ciKey,
               ghAutomationEnabled
-                ? "GitHub CI is cached until the PR receives a new local commit"
+                ? (githubCiSkipReason(store, workspace) ?? "GitHub CI is cached")
                 : AUTOMATED_GH_DISABLED_REASON,
             ),
           ),
