@@ -435,6 +435,13 @@ export class SqliteStore {
       .run(runtimeSessionId, new Date().toISOString(), sessionId);
   }
 
+  getWorkspaceSessionSystemPromptSnapshot(sessionId: string): string | null {
+    const row = this.database
+      .prepare("SELECT system_prompt_snapshot FROM workspace_sessions WHERE id = ?")
+      .get(sessionId) as { system_prompt_snapshot?: string | null } | undefined;
+    return row?.system_prompt_snapshot ?? null;
+  }
+
   updateWorkspaceSessionTerminalOwner(
     sessionId: string,
     update: {

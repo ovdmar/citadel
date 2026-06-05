@@ -172,10 +172,12 @@ describe("contract schemas", () => {
     expect(SystemPromptDeliverySchema.parse({ mode: "pasted_wrapper", reason: "native_unavailable" }).mode).toBe(
       "pasted_wrapper",
     );
-    expect(SystemPromptDeliverySchema.parse({ mode: "skipped_resume", reason: "resume" }).reason).toBe("resume");
-    expect(SystemPromptDeliverySchema.parse({ mode: "pasted_wrapper", reason: "argv_too_large" }).reason).toBe(
-      "argv_too_large",
-    );
+    expect(SystemPromptDeliverySchema.parse({ mode: "skipped_resume", reason: "resume" })).toMatchObject({
+      reason: "resume",
+    });
+    expect(SystemPromptDeliverySchema.parse({ mode: "pasted_wrapper", reason: "argv_too_large" })).toMatchObject({
+      reason: "argv_too_large",
+    });
     expect(SystemPromptDeliverySchema.safeParse({ mode: "native_argv", reason: "resume" }).success).toBe(false);
   });
 

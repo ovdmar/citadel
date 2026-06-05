@@ -129,6 +129,7 @@ export class OperationService {
       commandPolicy: CitadelConfig["commandPolicy"];
       terminal?: CitadelConfig["terminal"];
       agentRuntimes?: CitadelConfig["agentRuntimes"];
+      agentSessions?: CitadelConfig["agentSessions"];
     },
     private readonly runAutoTransitionsDep: RunAutoTransitionsDep | null = null,
   ) {}
@@ -259,6 +260,7 @@ export class OperationService {
         store: this.store,
         terminal: this.config?.terminal,
         ...(this.config?.dataDir ? { dataDir: this.config.dataDir } : {}),
+        baseSystemPrompt: this.config?.agentSessions?.baseSystemPrompt ?? "",
         activity: (...args) => this.activity(...args),
         runNotificationHooks: (event, repo, workspace, operationId, payload) =>
           this.runNotificationHooks(event, repo, workspace, operationId, payload),

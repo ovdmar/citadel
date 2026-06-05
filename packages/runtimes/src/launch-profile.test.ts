@@ -22,7 +22,7 @@ describe("runtime launch profiles", () => {
       modelArgv: { argv: ["-m", "{value}"] },
       effortArgv: { argv: ["-c", "model_reasoning_effort={value}"] },
       contextArgv: { argv: ["-c", "model_context_window={value}"] },
-      systemPromptArgv: { argv: ["-c", "developer_instructions={value}"], valueEncoding: "toml-string" },
+      systemPromptArgv: { argv: ["-c", "developer_instructions={value}"], valueEncoding: "toml-string" as const },
     },
   };
 
@@ -98,7 +98,7 @@ describe("runtime launch profiles", () => {
     expect(
       renderSystemPromptArgv(
         { argv: ["-c", "developer_instructions={value}"], valueEncoding: "toml-string" },
-        "Use \"Citadel\" tools.\nBackslash: \\",
+        'Use "Citadel" tools.\nBackslash: \\',
       ),
     ).toEqual(["-c", 'developer_instructions="Use \\"Citadel\\" tools.\\nBackslash: \\\\"']);
   });
