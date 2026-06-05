@@ -636,8 +636,12 @@ export function Navigator(props: {
           grouping={grouping}
           intent={createWorkspaceIntent}
           onClose={closeCreateWorkspace}
-          onCreated={(workspaceId) => {
+          onCreated={(workspaceId, targetKey) => {
             closeCreateWorkspace();
+            if (targetKey) {
+              props.onPickTarget(workspaceId, targetKey);
+              return;
+            }
             const created = props.workspaces.find((workspace) => workspace.id === workspaceId);
             if (created) props.onPickWorkspace(created);
             else props.onPickWorkspaceId(workspaceId);

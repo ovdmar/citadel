@@ -207,6 +207,68 @@ describe("PTY daemon WebSocket bridge", () => {
       await closeServer(httpServer);
     }
   });
+
+  it("buffers browser input while PTY daemon attach is still starting", async () => {
+    const fake = new FakePty();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-pty-ws-"));
+    dirs.push(dir);
+    const socketPath = path.join(dir, "pty.sock");
+    const ptyDaemon = new PtyDaemonServer({
+      socketPath,
+      store: new PtySessionStore({ replayLimitBytes: 1024, spawnPty: () => fake }),
+    });
+    servers.push(ptyDaemon);
+    await ptyDaemon.start();
+
+    let readyStarted = false;
+    let releaseReady!: () => void;
+    let readyReleased = false;
+    const readyHold = new Promise<void>((resolve) => {
+      releaseReady = () => {
+        readyReleased = true;
+        resolve();
+      };
+    });
+    const httpServer = http.createServer();
+    attachTerminalWebSocket(httpServer, (id) =>
+      id === "pty"
+        ? {
+            backend: "pty-daemon",
+            sessionId: "pty-1",
+            socketPath,
+            cwd: dir,
+            command: "bash",
+            args: ["-l"],
+            env: { TERM: "xterm-256color" },
+            kind: "terminal",
+            onSessionReady: () => {
+              readyStarted = true;
+              return readyHold;
+            },
+          }
+        : null,
+    );
+    await listen(httpServer);
+    try {
+      const address = httpServer.address();
+      if (!address || typeof address === "string") throw new Error("Expected TCP test server address");
+      const ws = new WebSocket(`ws://127.0.0.1:${address.port}/terminal/pty`);
+      await waitForOpen(ws);
+      await waitFor(() => readyStarted);
+
+      ws.send(Buffer.from("early-input", "utf8"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(writeText(fake)).toBe("");
+
+      releaseReady();
+      await waitFor(() => writeText(fake) === "early-input");
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      if (!readyReleased) releaseReady();
+      await closeServer(httpServer);
+    }
+  });
 });
 
 class FakePty extends EventEmitter implements PtyLike {

@@ -90,7 +90,12 @@ type CreateWorkspaceModalProps = {
   grouping?: NavigatorGrouping;
   intent?: CreateWorkspaceIntent;
   onClose: () => void;
-  onCreated: (workspaceId: string) => void;
+  onCreated: (workspaceId: string, targetKey?: string) => void;
+};
+
+type CreateWorkspaceResult = {
+  workspaceId: string;
+  targetKey?: string;
 };
 
 export type CreateWorkspaceIntent =
@@ -112,53 +117,78 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   const toast = useToast();
   const creationContext = resolveCreateWorkspaceContext(props.intent, props.grouping);
   const initialRepo = props.repos.find((repo) => repo.id === props.lastRepoId)?.id ?? props.repos[0]?.id ?? "";
+  const initialSelectedRepoIds = creationContext === "attach-worktree" && initialRepo ? [initialRepo] : [];
   const [name, setName] = useState("");
   const [worktreeName, setWorktreeName] = useState("");
-  const [repoId, setRepoId] = useState(initialRepo);
-  const [selectedRepoIds, setSelectedRepoIds] = useState<string[]>([]);
+  const [selectedRepoIds, setSelectedRepoIds] = useState<string[]>(initialSelectedRepoIds);
+  const attachSelectionInitializedRef = useRef(initialSelectedRepoIds.length > 0);
   const nameRef = useRef<HTMLInputElement | null>(null);
   const trimmedName = name.trim();
   const trimmedWorktreeName = worktreeName.trim();
+  const singleSelectedAttachRepo = creationContext === "attach-worktree" && selectedRepoIds.length === 1;
 
   useEffect(() => {
-    if (!repoId && props.repos[0]) setRepoId(props.repos[0].id);
-  }, [props.repos, repoId]);
+    const validRepoIds = new Set(props.repos.map((repo) => repo.id));
+    setSelectedRepoIds((previous) => {
+      const next = previous.filter((repoId) => validRepoIds.has(repoId));
+      return next.length === previous.length ? previous : next;
+    });
+  }, [props.repos]);
+  useEffect(() => {
+    if (creationContext !== "attach-worktree" || attachSelectionInitializedRef.current) return;
+    if (!initialRepo) return;
+    attachSelectionInitializedRef.current = true;
+    setSelectedRepoIds([initialRepo]);
+  }, [creationContext, initialRepo]);
   useEffect(() => {
     nameRef.current?.focus();
   }, []);
 
   const create = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (): Promise<CreateWorkspaceResult> => {
       if (creationContext === "attach-worktree") {
-        if (!repoId) throw new Error("repo_required");
+        if (!selectedRepoIds.length) throw new Error("repo_required");
         const workspaceId = props.intent?.kind === "attach-worktree" ? props.intent.workspaceId : "";
-        const payload: Record<string, unknown> = { repoId, source: "default_branch" };
-        if (trimmedWorktreeName) {
-          payload.name = trimmedWorktreeName;
-          payload.displayName = trimmedWorktreeName;
+        let targetKey: string | undefined;
+        for (const selectedRepoId of selectedRepoIds) {
+          const payload: Record<string, unknown> = { repoId: selectedRepoId, source: "default_branch" };
+          if (singleSelectedAttachRepo && trimmedWorktreeName) {
+            payload.name = trimmedWorktreeName;
+            payload.displayName = trimmedWorktreeName;
+          }
+          const result = await api<{ checkoutId: string }>(
+            `/api/workspaces/${encodeURIComponent(workspaceId)}/checkouts`,
+            {
+              method: "POST",
+              body: JSON.stringify(payload),
+            },
+          );
+          if (selectedRepoIds.length === 1) targetKey = `checkout:${result.checkoutId}`;
         }
-        await api(`/api/workspaces/${encodeURIComponent(workspaceId)}/checkouts`, {
-          method: "POST",
-          body: JSON.stringify(payload),
-        });
-        return { workspaceId };
+        return targetKey ? { workspaceId, targetKey } : { workspaceId };
       }
 
       const result = await api<{ workspaceId: string }>("/api/workspaces/home", {
         method: "POST",
         body: JSON.stringify({ name: trimmedName, source: "scratch" }),
       });
+      let targetKey: string | undefined;
       for (const selectedRepoId of selectedRepoIds) {
-        await api(`/api/workspaces/${encodeURIComponent(result.workspaceId)}/checkouts`, {
-          method: "POST",
-          body: JSON.stringify({ repoId: selectedRepoId, source: "default_branch" }),
-        });
+        const checkout = await api<{ checkoutId: string }>(
+          `/api/workspaces/${encodeURIComponent(result.workspaceId)}/checkouts`,
+          {
+            method: "POST",
+            body: JSON.stringify({ repoId: selectedRepoId, source: "default_branch" }),
+          },
+        );
+        if (selectedRepoIds.length === 1) targetKey = `checkout:${checkout.checkoutId}`;
       }
-      return result;
+      return targetKey ? { workspaceId: result.workspaceId, targetKey } : result;
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["state"] });
-      props.onCreated(result.workspaceId);
+      if (result.targetKey) props.onCreated(result.workspaceId, result.targetKey);
+      else props.onCreated(result.workspaceId);
     },
     onError: (err) => {
       toast.push({
@@ -175,13 +205,17 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   const submitLabel = create.isPending
     ? "Creating..."
     : creationContext === "attach-worktree"
-      ? "Add worktree"
+      ? selectedRepoIds.length > 1
+        ? "Add worktrees"
+        : "Add worktree"
       : selectedRepoIds.length
         ? "Create workspace and worktrees"
         : "Create workspace";
   const disabled =
     create.isPending ||
-    (creationContext === "workspace-home" ? !trimmedName : !repoId || props.intent?.kind !== "attach-worktree");
+    (creationContext === "workspace-home"
+      ? !trimmedName
+      : !selectedRepoIds.length || props.intent?.kind !== "attach-worktree");
 
   return (
     <Modal title={modalTitle} onClose={props.onClose}>
@@ -203,14 +237,20 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
           </>
         ) : (
           <>
-            <RepoSinglePicker repos={props.repos} value={repoId} onChange={setRepoId} />
+            <RepoMultiPicker
+              label="Repositories"
+              repos={props.repos}
+              selected={selectedRepoIds}
+              onChange={setSelectedRepoIds}
+            />
             <label>
               Worktree name
               <input
                 ref={nameRef}
                 value={worktreeName}
                 onChange={(event) => setWorktreeName(event.target.value)}
-                placeholder="Optional"
+                placeholder={selectedRepoIds.length > 1 ? "Auto-generated for multiple repos" : "Optional"}
+                disabled={!singleSelectedAttachRepo}
               />
             </label>
           </>
@@ -228,14 +268,19 @@ export function CreateWorkspaceModal(props: CreateWorkspaceModalProps) {
   );
 }
 
-function RepoMultiPicker(props: { repos: Repo[]; selected: string[]; onChange: (repoIds: string[]) => void }) {
+function RepoMultiPicker(props: {
+  label?: string;
+  repos: Repo[];
+  selected: string[];
+  onChange: (repoIds: string[]) => void;
+}) {
   const [query, setQuery] = useState("");
   const filtered = useMemo(() => filterRepos(props.repos, query), [props.repos, query]);
   const selected = new Set(props.selected);
   return (
     <div className="workspace-repo-picker">
       <label>
-        Initial worktrees
+        {props.label ?? "Initial worktrees"}
         <input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -256,38 +301,6 @@ function RepoMultiPicker(props: { repos: Repo[]; selected: string[]; onChange: (
                   else props.onChange([...props.selected, repo.id]);
                 }}
               />
-              <span>
-                <strong>{repoNameWithOwner(repo)}</strong>
-                <small>{repo.rootPath}</small>
-              </span>
-            </label>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function RepoSinglePicker(props: { repos: Repo[]; value: string; onChange: (repoId: string) => void }) {
-  const [query, setQuery] = useState("");
-  const filtered = useMemo(() => filterRepos(props.repos, query), [props.repos, query]);
-  return (
-    <div className="workspace-repo-picker">
-      <label>
-        Repository
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search repositories..."
-          spellCheck={false}
-        />
-      </label>
-      <div className="workspace-repo-options" role="radiogroup">
-        {filtered.map((repo) => {
-          const checked = props.value === repo.id;
-          return (
-            <label key={repo.id} className={`workspace-repo-option ${checked ? "is-selected" : ""}`}>
-              <input type="radio" checked={checked} onChange={() => props.onChange(repo.id)} />
               <span>
                 <strong>{repoNameWithOwner(repo)}</strong>
                 <small>{repo.rootPath}</small>

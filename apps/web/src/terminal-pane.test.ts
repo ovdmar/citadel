@@ -240,6 +240,37 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(decodeBinarySent(ws.sent)).toContain("abc");
   });
 
+  it("coalesces printable PTY-daemon input only while the socket is backed up", async () => {
+    vi.useFakeTimers();
+    await renderTerminal({ ...sessionFixture(), terminalBackend: "pty-daemon" });
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const term = xtermMocks.FakeTerminal.instances[0];
+    if (!ws || !term) throw new Error("terminal rig missing");
+
+    await flushReactUpdate(async () => ws.open());
+    term.emitData("z");
+    expect(decodeBinarySent(ws.sent)).toEqual(["z"]);
+
+    ws.sent = [];
+    (ws as typeof ws & { bufferedAmount: number }).bufferedAmount = 1;
+    term.emitData("a");
+    term.emitData("b");
+
+    expect(decodeBinarySent(ws.sent)).toEqual([]);
+    await vi.advanceTimersByTimeAsync(5);
+    expect(decodeBinarySent(ws.sent)).toEqual(["ab"]);
+
+    ws.sent = [];
+    term.emitData("c");
+    term.emitData("\u0003");
+
+    expect(decodeBinarySent(ws.sent)).toEqual(["c\u0003"]);
+    expect(window.fetch).toHaveBeenCalledWith(
+      "/api/agent-sessions/sess_1/user-action",
+      expect.objectContaining({ body: JSON.stringify({ reason: "ctrl_c" }) }),
+    );
+  });
+
   it("keeps raw input, control/meta shortcuts, paste, and Ctrl+C usable in the in-process xterm", async () => {
     await renderTerminal();
     const ws = TerminalPaneWebSocketMock.instances[0];
