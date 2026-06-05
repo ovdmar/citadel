@@ -19,27 +19,29 @@ type ScratchpadComposerVoiceRegistration = {
 export function useScratchpadComposerVoiceTarget(
   options: ScratchpadComposerVoiceHookOptions,
 ): ScratchpadComposerVoiceRegistration {
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
   const unregisterRef = useRef<(() => void) | null>(null);
   const target = useMemo(
     () =>
       createScratchpadComposerVoiceTarget({
-        getElement: () => options.composerRef.current,
-        isLoaded: () => options.loaded,
-        isVisible: () => options.open,
-        onDraftChange: options.onDraftChange,
-        submitDraft: options.submitDraft,
+        getElement: () => optionsRef.current.composerRef.current,
+        isLoaded: () => optionsRef.current.loaded,
+        isVisible: () => optionsRef.current.open,
+        onDraftChange: (draft) => optionsRef.current.onDraftChange(draft),
+        submitDraft: (draft) => optionsRef.current.submitDraft(draft),
       }),
-    [options.composerRef, options.loaded, options.open, options.onDraftChange, options.submitDraft],
+    [],
   );
 
   const inputRef = useCallback<RefCallback<HTMLTextAreaElement>>(
     (element) => {
       unregisterRef.current?.();
       unregisterRef.current = null;
-      options.composerRef.current = element;
-      if (element) unregisterRef.current = options.registerTarget(element, target);
+      optionsRef.current.composerRef.current = element;
+      if (element) unregisterRef.current = optionsRef.current.registerTarget(element, target);
     },
-    [options.composerRef, options.registerTarget, target],
+    [target],
   );
 
   useEffect(

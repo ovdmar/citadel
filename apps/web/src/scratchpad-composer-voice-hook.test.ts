@@ -19,6 +19,34 @@ afterEach(async () => {
 });
 
 describe("useScratchpadComposerVoiceTarget", () => {
+  it("keeps the registered composer target active across ordinary rerenders", async () => {
+    const captured: { target: VoiceTarget | null } = { target: null };
+    const unregister = vi.fn();
+    const registerTarget = vi.fn<(_element: HTMLElement, _target: VoiceTarget) => () => void>((_element, target) => {
+      captured.target = target;
+      return unregister;
+    });
+    const rootElement = document.createElement("div");
+    document.body.appendChild(rootElement);
+    const root = createRoot(rootElement);
+    roots.push(root);
+
+    await flushReact(() =>
+      root.render(createElement(Harness, { show: true, loaded: true, open: true, registerTarget })),
+    );
+    const firstTarget = captured.target;
+    await flushReact(() =>
+      root.render(createElement(Harness, { show: true, loaded: true, open: true, registerTarget })),
+    );
+    const currentTarget = captured.target;
+    if (!currentTarget) throw new Error("target was not registered");
+
+    expect(registerTarget).toHaveBeenCalledOnce();
+    expect(unregister).not.toHaveBeenCalled();
+    expect(currentTarget).toBe(firstTarget);
+    expect(currentTarget.canAcceptVoiceCommit()).toBe(true);
+  });
+
   it("re-registers the composer target when the textarea remounts with stable dependencies", async () => {
     const unregisterFirst = vi.fn();
     const unregisterSecond = vi.fn();
