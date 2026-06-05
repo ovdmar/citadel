@@ -2,7 +2,7 @@ import type { AgentRuntime, RoleTemplate, TerminalProfile, Workspace, WorkspaceS
 import { deriveAgentLifecycleTone } from "@citadel/core";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Bot, Plus, RefreshCw, TerminalSquare, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import {
   applySessionOrder,
@@ -35,6 +35,57 @@ export type StageDirectRoleAction = {
   id: string;
   label: string;
   template: RoleTemplate;
+};
+
+export type StageLaunchEntry =
+  | {
+      type: "structured";
+      id: string;
+      group: "specialized";
+      label: string;
+      icon: "agent";
+      title: string;
+      detail: string | null;
+      disabled: boolean;
+      action: StageStructuredAction;
+    }
+  | {
+      type: "direct-role";
+      id: string;
+      group: "specialized";
+      label: string;
+      icon: "agent";
+      title: string;
+      detail: string | null;
+      disabled: boolean;
+      action: StageDirectRoleAction;
+    }
+  | {
+      type: "terminal";
+      id: "terminal";
+      group: "freestyle";
+      label: string;
+      icon: "terminal";
+      title: string;
+      detail: string | null;
+      disabled: boolean;
+    }
+  | {
+      type: "runtime";
+      id: string;
+      group: "freestyle";
+      label: string;
+      icon: "agent";
+      title: string;
+      detail: string;
+      disabled: boolean;
+      runtime: AgentRuntime;
+    };
+
+export type StageLaunchEntryGroup = {
+  id: "specialized" | "freestyle";
+  label: "Specialized" | "Freestyle";
+  entries: StageLaunchEntry[];
 };
 
 const WORKSPACE_SESSION_CAP = 20;
@@ -135,6 +186,83 @@ export function freestyleStageActions(input: {
     const template = input.templates.find((entry) => entry.role === role);
     return template ? [{ id: role, label: template.displayName, template }] : [];
   });
+}
+
+export function buildStageLaunchEntryGroups(input: {
+  structuredActions: StageStructuredAction[];
+  directRoleActions: StageDirectRoleAction[];
+  terminal: TerminalProfile;
+  runtimes: AgentRuntime[];
+  addDisabled: boolean;
+  atSessionCap: boolean;
+  sessionCap?: number;
+}): StageLaunchEntryGroup[] {
+  const sessionCap = input.sessionCap ?? WORKSPACE_SESSION_CAP;
+  const capTitle = `Cap reached (${sessionCap}). Close a session first.`;
+  const specializedEntries: StageLaunchEntry[] = [
+    ...input.structuredActions.map((action): StageLaunchEntry => {
+      const title = input.atSessionCap ? capTitle : action.label;
+      return {
+        type: "structured",
+        id: `structured:${action.id}`,
+        group: "specialized",
+        label: action.label,
+        icon: "agent",
+        title,
+        detail: null,
+        disabled: input.addDisabled,
+        action,
+      };
+    }),
+    ...input.directRoleActions.map((action): StageLaunchEntry => {
+      const title = input.atSessionCap ? capTitle : action.label;
+      return {
+        type: "direct-role",
+        id: `direct:${action.id}`,
+        group: "specialized",
+        label: action.label,
+        icon: "agent",
+        title,
+        detail: null,
+        disabled: input.addDisabled,
+        action,
+      };
+    }),
+  ];
+  const freestyleEntries: StageLaunchEntry[] = [
+    {
+      type: "terminal",
+      id: "terminal",
+      group: "freestyle",
+      label: input.terminal.displayName,
+      icon: "terminal",
+      title: input.atSessionCap ? capTitle : "Start a terminal in this workspace",
+      detail: null,
+      disabled: input.addDisabled,
+    },
+    ...input.runtimes.map((runtime): StageLaunchEntry => {
+      const runtimeTitle = input.atSessionCap
+        ? capTitle
+        : runtime.health === "healthy"
+          ? `Start ${runtime.displayName}`
+          : `${runtime.displayName} is ${runtime.health}${runtime.healthReason ? ` · ${runtime.healthReason}` : ""}`;
+      return {
+        type: "runtime",
+        id: `runtime:${runtime.id}`,
+        group: "freestyle",
+        label: runtime.displayName,
+        icon: "agent",
+        title: runtimeTitle,
+        detail: runtime.health,
+        disabled: runtime.health !== "healthy" || input.addDisabled,
+        runtime,
+      };
+    }),
+  ];
+  return [
+    specializedEntries.length ? { id: "specialized", label: "Specialized", entries: specializedEntries } : null,
+    { id: "freestyle", label: "Freestyle", entries: freestyleEntries },
+  ].filter((group): group is StageLaunchEntryGroup => Boolean(group));
 }
 
 function sameOrderedIds(a: Set<string>, b: Set<string>): boolean {
@@ -397,7 +525,30 @@ export function Stage(props: {
     workspace: props.workspace,
     templates: agentTemplates.data?.roles ?? [],
   });
-  const hasSpecializedActions = structuredActions.length > 0 || directRoleActions.length > 0;
+  const launchGroups = buildStageLaunchEntryGroups({
+    structuredActions,
+    directRoleActions,
+    terminal: props.terminal,
+    runtimes: props.runtimes,
+    addDisabled,
+    atSessionCap,
+  });
+  const launchEntry = (entry: StageLaunchEntry) => {
+    if (entry.disabled) return;
+    if (entry.type === "structured") {
+      startStructuredAction.mutate(entry.action);
+      return;
+    }
+    if (entry.type === "direct-role") {
+      startDirectRoleSession.mutate(entry.action);
+      return;
+    }
+    if (entry.type === "terminal") {
+      startTerminalSession.mutate();
+      return;
+    }
+    startAgentSession.mutate({ runtimeId: entry.runtime.id, displayName: entry.runtime.displayName });
+  };
   return (
     <>
       <div className="stage-tabbar">
@@ -559,68 +710,30 @@ export function Stage(props: {
                   </output>
                 ) : null}
               </div>
-              {hasSpecializedActions ? <div className="stage-add-menu-label">Specialized</div> : null}
-              {structuredActions.map((action) => (
-                <button
-                  key={action.id}
-                  type="button"
-                  role="menuitem"
-                  title={atSessionCap ? `Cap reached (${WORKSPACE_SESSION_CAP}). Close a session first.` : action.label}
-                  onClick={() => startStructuredAction.mutate(action)}
-                  disabled={addDisabled}
-                >
-                  <Bot size={12} /> {action.label}
-                </button>
+              {launchGroups.map((group) => (
+                <Fragment key={group.id}>
+                  <div className="stage-add-menu-label">{group.label}</div>
+                  {group.entries.map((entry) => (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      role="menuitem"
+                      title={entry.title}
+                      onClick={() => launchEntry(entry)}
+                      disabled={entry.disabled}
+                    >
+                      <StageLaunchEntryIcon entry={entry} size={12} />
+                      {entry.label}
+                      {entry.detail ? (
+                        <>
+                          {" "}
+                          · <span className={`stage-add-health ${entry.detail}`}>{entry.detail}</span>
+                        </>
+                      ) : null}
+                    </button>
+                  ))}
+                </Fragment>
               ))}
-              {directRoleActions.map((action) => (
-                <button
-                  key={action.id}
-                  type="button"
-                  role="menuitem"
-                  title={atSessionCap ? `Cap reached (${WORKSPACE_SESSION_CAP}). Close a session first.` : action.label}
-                  onClick={() => startDirectRoleSession.mutate(action)}
-                  disabled={addDisabled}
-                >
-                  <Bot size={12} /> {action.label}
-                </button>
-              ))}
-              <div className="stage-add-menu-label">Freestyle</div>
-              <button
-                type="button"
-                role="menuitem"
-                title={
-                  atSessionCap
-                    ? `Cap reached (${WORKSPACE_SESSION_CAP}). Close a session first.`
-                    : "Start a terminal in this workspace"
-                }
-                onClick={() => startTerminalSession.mutate()}
-                disabled={addDisabled}
-              >
-                <TerminalSquare size={12} /> {props.terminal.displayName}
-              </button>
-              {props.runtimes.map((runtime) => {
-                const runtimeDisabled = runtime.health !== "healthy" || addDisabled;
-                const runtimeTitle = atSessionCap
-                  ? `Cap reached (${WORKSPACE_SESSION_CAP}). Close a session first.`
-                  : runtime.health === "healthy"
-                    ? `Start ${runtime.displayName}`
-                    : `${runtime.displayName} is ${runtime.health}${runtime.healthReason ? ` · ${runtime.healthReason}` : ""}`;
-                return (
-                  <button
-                    key={runtime.id}
-                    type="button"
-                    role="menuitem"
-                    disabled={runtimeDisabled}
-                    title={runtimeTitle}
-                    onClick={() =>
-                      startAgentSession.mutate({ runtimeId: runtime.id, displayName: runtime.displayName })
-                    }
-                  >
-                    {runtime.displayName} ·{" "}
-                    <span className={`stage-add-health ${runtime.health}`}>{runtime.health}</span>
-                  </button>
-                );
-              })}
               {props.runtimes.length === 0 ? (
                 <div className="stage-add-empty">
                   No agents configured. <a href="/settings">Open settings</a> to add one.
@@ -649,12 +762,72 @@ export function Stage(props: {
           keepPending ? (
             <div className="empty">Starting session…</div>
           ) : (
-            <div className="empty">No session yet. Click the plus to start a terminal or agent.</div>
+            <StageEmptyLauncher
+              targetLabel={props.targetLabel}
+              groups={launchGroups}
+              runtimesCount={props.runtimes.length}
+              onLaunch={launchEntry}
+            />
           )
         ) : null}
       </div>
     </>
   );
+}
+
+function StageEmptyLauncher(props: {
+  targetLabel: string;
+  groups: StageLaunchEntryGroup[];
+  runtimesCount: number;
+  onLaunch: (entry: StageLaunchEntry) => void;
+}) {
+  return (
+    <div className="stage-empty-launcher">
+      <div className="stage-empty-header">
+        <span className="stage-empty-eyebrow">New session</span>
+        <strong>{props.targetLabel}</strong>
+      </div>
+      {props.groups.map((group) => (
+        <section key={group.id} className="stage-empty-section" aria-label={group.label}>
+          <div className="stage-empty-section-label">{group.label}</div>
+          <div className="stage-launch-grid">
+            {group.entries.map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                className={`stage-launch-card ${entry.icon === "terminal" ? "terminal" : "agent"}`}
+                title={entry.title}
+                disabled={entry.disabled}
+                onClick={() => props.onLaunch(entry)}
+              >
+                <span className="stage-launch-card-icon" aria-hidden>
+                  <StageLaunchEntryIcon entry={entry} size={16} />
+                </span>
+                <span className="stage-launch-card-copy">
+                  <strong>{entry.label}</strong>
+                  {entry.detail ? (
+                    <small className={`stage-launch-detail ${entry.detail}`}>{entry.detail}</small>
+                  ) : null}
+                </span>
+                <span className="stage-launch-card-go" aria-hidden>
+                  <Plus size={14} />
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      ))}
+      {props.runtimesCount === 0 ? (
+        <div className="stage-empty-note">
+          No agents configured. <a href="/settings">Open settings</a>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function StageLaunchEntryIcon(props: { entry: StageLaunchEntry; size: number }) {
+  return props.entry.icon === "terminal" ? <TerminalSquare size={props.size} /> : <Bot size={props.size} />;
 }
 
 type StructuredToolResult = {
