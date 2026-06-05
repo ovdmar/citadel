@@ -699,9 +699,17 @@ describe("OperationService", () => {
     const workspace = store.listWorkspaces().find((candidate) => candidate.id === result.workspaceId);
     expect(workspace?.lifecycle).toBe("ready");
     expect(workspace?.source).toBe("scratch");
-    expect(workspace?.repoId).toBe(repo.id);
+    expect(workspace?.repoId).toBeNull();
+    expect(workspace?.kind).toBe("root");
+    expect(workspace?.mode).toBe("structured");
+    const checkout = store.listWorkspaceCheckouts(result.workspaceId)[0];
+    expect(checkout?.repoId).toBe(repo.id);
+    expect(checkout?.branch).toBe(result.branchName);
+    expect(checkout?.path).toBe(result.workspacePath);
     expect(session?.runtimeId).toBe("test-agent");
     expect(session?.workspaceId).toBe(result.workspaceId);
+    expect(session?.targetType).toBe("worktree_checkout");
+    expect(session?.checkoutId).toBe(checkout?.id);
     expect(session?.displayName).toBe("describe the repo in one sentence");
   });
 
