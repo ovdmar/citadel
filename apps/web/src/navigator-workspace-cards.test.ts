@@ -449,6 +449,7 @@ function session(id: string, overrides: Partial<AgentSession> = {}): AgentSessio
     displayName: "Codex",
     status: "running",
     transport: "connected",
+    terminalBackend: "tmux",
     tmuxSessionName: id,
     tmuxSessionId: id,
     createdAt: ts,
