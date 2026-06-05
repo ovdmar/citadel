@@ -37,6 +37,7 @@ import "./styles.css";
 import "./voice-mode.css";
 import "./chrome.css";
 import "./stage-terminal.css";
+import "./stage-empty-launcher.css";
 import "./structured-home-summary.css";
 import "./cockpit-extras.css";
 import "./pr-card-actions.css";
