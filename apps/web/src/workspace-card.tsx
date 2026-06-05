@@ -96,6 +96,7 @@ export function WorkspaceCard(
     allowRootDrop?: boolean;
     prToneOverride?: PrTone | undefined;
     diffOverride?: { additions: number | null; deletions: number | null } | undefined;
+    lifecyclePullRequest?: PullRequestSummary | null | undefined;
     unseenAttentionSessionIds?: AttentionSessionIds | undefined;
   },
 ) {
@@ -105,7 +106,7 @@ export function WorkspaceCard(
   const approvalTone = props.approval ?? approvalToneFor(pullRequest);
   const lifecycleTone = deriveWorkspaceDisplayLifecycleTone({
     sessions: props.sessions,
-    pullRequest: pullRequest ?? null,
+    pullRequest: props.lifecyclePullRequest === undefined ? (pullRequest ?? null) : props.lifecyclePullRequest,
     unseenAttentionSessionIds: props.unseenAttentionSessionIds,
   });
   const agentToneSuffix = lifecycleToneAriaSuffix(lifecycleTone);
