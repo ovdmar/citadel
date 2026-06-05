@@ -1,7 +1,7 @@
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService } from "@citadel/operations";
 import type express from "express";
-import { bustCacheByPrefixes } from "./workspace-fs-watcher.js";
+import { bustCacheByPrefixes } from "./app-helpers.js";
 
 type Emit = (type: string, payload: unknown) => void;
 type AsyncHandler = (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>;

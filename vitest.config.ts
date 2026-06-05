@@ -1,14 +1,31 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
+const workspacePackages = {
+  "@citadel/config": "./packages/config/src/index.ts",
+  "@citadel/contracts": "./packages/contracts/src/index.ts",
+  "@citadel/core": "./packages/core/src/index.ts",
+  "@citadel/db": "./packages/db/src/index.ts",
+  "@citadel/hooks": "./packages/hooks/src/index.ts",
+  "@citadel/mcp": "./packages/mcp/src/index.ts",
+  "@citadel/operations": "./packages/operations/src/index.ts",
+  "@citadel/providers": "./packages/providers/src/index.ts",
+  "@citadel/runtimes": "./packages/runtimes/src/index.ts",
+  "@citadel/terminal": "./packages/terminal/src/index.ts",
+  "@citadel/testing": "./packages/testing/src/index.ts",
+  "@citadel/ui": "./packages/ui/src/index.ts",
+} as const;
+
+const workspaceAliases = Object.entries(workspacePackages).map(([find, source]) => ({
+  find: new RegExp(`^${find.replace("/", "\\/")}$`),
+  replacement: fileURLToPath(new URL(source, import.meta.url)),
+}));
+
 const contractsSrc = fileURLToPath(new URL("./packages/contracts/src", import.meta.url));
 
 export default defineConfig({
   resolve: {
-    alias: [
-      { find: /^@citadel\/contracts$/, replacement: `${contractsSrc}/index.ts` },
-      { find: /^@citadel\/contracts\/(.+)$/, replacement: `${contractsSrc}/$1.ts` },
-    ],
+    alias: [...workspaceAliases, { find: /^@citadel\/contracts\/(.+)$/, replacement: `${contractsSrc}/$1.ts` }],
   },
   test: {
     include: ["packages/*/src/**/*.test.ts", "apps/*/src/**/*.test.ts", "scripts/**/*.test.ts"],

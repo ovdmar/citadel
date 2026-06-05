@@ -44,6 +44,7 @@ CI_PORT                     ?= 4337
 CI_WEB_PORT                 ?= 5173
 CI_BASE_URL                 ?= http://127.0.0.1:$(CI_PORT)
 CI_DAEMON_URL               ?= http://127.0.0.1:$(CI_PORT)
+CI_WEB_URL                  ?= http://127.0.0.1:$(CI_WEB_PORT)
 CI_E2E_PROJECTS             ?= desktop tablet mobile
 CI_PLAYWRIGHT_INSTALL_ARGS  ?= --with-deps chromium
 CI_DEV_LOG                  ?= /tmp/citadel-dev.log
@@ -196,6 +197,7 @@ ci-smoke: ci-host-tools ci-install-playwright
 		CITADEL_WEB_PORT="$(CI_WEB_PORT)" \
 		CITADEL_DAEMON_URL="$(CI_DAEMON_URL)" \
 		CITADEL_BASE_URL="$(CI_BASE_URL)" \
+		CITADEL_WEB_URL="$(CI_WEB_URL)" \
 		pnpm dev >"$(CI_DEV_LOG)" 2>&1 & \
 	dev_pgid="$$!"; \
 	for attempt in {1..60}; do \
@@ -210,7 +212,7 @@ ci-smoke: ci-host-tools ci-install-playwright
 		exit 1; \
 	fi; \
 	CITADEL_BASE_URL="$(CI_BASE_URL)" pnpm smoke; \
-	CITADEL_BASE_URL="$(CI_BASE_URL)" pnpm performance
+	CI=true CITADEL_BASE_URL="$(CI_BASE_URL)" CITADEL_WEB_URL="$(CI_WEB_URL)" pnpm performance
 
 ci-clean-tmux:
 	@bash scripts/dev/ci-clean-tmux.sh
