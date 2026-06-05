@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CitadelConfig } from "@citadel/config";
-import type { AgentRuntime, VersionControlSummary, Workspace } from "@citadel/contracts";
+import type { AgentRuntime, VersionControlSummary, Workspace, WorktreeCheckout } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createProviderCache } from "./provider-cache.js";
@@ -48,6 +48,27 @@ function makeWorkspace(id: string, overrides: Partial<Workspace> = {}): Workspac
   };
 }
 
+function makeCheckout(id: string, overrides: Partial<WorktreeCheckout> = {}): WorktreeCheckout {
+  return {
+    id,
+    workspaceId: "w1",
+    repoId: "repo",
+    name: id,
+    path: `/tmp/w1/${id}`,
+    branch: `feature/${id}`,
+    baseBranch: "main",
+    issue: null,
+    intendedPr: null,
+    stackParentCheckoutId: null,
+    inferredPurpose: "implementation",
+    gateStatus: "not_started",
+    createdAt: "2026-05-25T00:00:00Z",
+    updatedAt: "2026-05-25T00:00:00Z",
+    archivedAt: null,
+    ...overrides,
+  };
+}
+
 function makeRuntime(id: string, healthy = true): AgentRuntime {
   return {
     id,
@@ -70,8 +91,15 @@ function makeRuntime(id: string, healthy = true): AgentRuntime {
   };
 }
 
-function makeDeps(overrides: Partial<ProviderRefreshDeps> & { workspaces?: Workspace[]; runtimes?: AgentRuntime[] }) {
+function makeDeps(
+  overrides: Partial<ProviderRefreshDeps> & {
+    workspaces?: Workspace[];
+    checkouts?: Record<string, WorktreeCheckout[]>;
+    runtimes?: AgentRuntime[];
+  },
+) {
   const workspaces = overrides.workspaces ?? [makeWorkspace("w1")];
+  const checkouts = overrides.checkouts ?? {};
   const runtimes = overrides.runtimes ?? [];
   const config = {
     runtimes: runtimes.map((r) => ({ id: r.id, displayName: r.displayName, command: r.command, args: r.args })),
@@ -86,6 +114,7 @@ function makeDeps(overrides: Partial<ProviderRefreshDeps> & { workspaces?: Works
   } as unknown as CitadelConfig;
   const store = {
     listWorkspaces: () => workspaces,
+    listWorkspaceCheckouts: (workspaceId: string) => checkouts[workspaceId] ?? [],
   } as unknown as SqliteStore;
   const cache = createProviderCache({ dataDir: tempDataDir(), listLiveIds: () => workspaces.map((w) => w.id) });
   const checkedAt = () => new Date().toISOString();
@@ -174,6 +203,24 @@ describe("startProviderRefreshJob", () => {
     await job.runTickForTest();
     expect(deps.providers.collectGitHubVersionControlSummary).toHaveBeenCalledTimes(2);
     expect(deps.providers.collectGitHubCiRuns).toHaveBeenCalledTimes(2);
+    job.stop();
+  });
+
+  it("refreshes VC summaries for active structured workspace checkouts", async () => {
+    const deps = makeDeps({
+      workspaces: [makeWorkspace("w1", { mode: "structured", kind: "root" })],
+      checkouts: {
+        w1: [makeCheckout("co_api"), makeCheckout("co_archived", { archivedAt: "2026-05-26T00:00:00Z" })],
+      },
+    });
+    const job = startProviderRefreshJob({ ...deps, tickIntervalMs: 0, jitterMaxMs: 0 });
+    await job.runTickForTest();
+    const callPaths = (deps.providers.collectGitHubVersionControlSummary as ReturnType<typeof vi.fn>).mock.calls.map(
+      (call) => call[0],
+    );
+    expect(callPaths).toEqual(["/tmp/w1", "/tmp/w1/co_api"]);
+    expect(deps.cache.get("vc:w1:checkout:co_api:2026-05-25T00:00:00Z")?.value).toBeDefined();
+    expect(deps.cache.get("vc:w1:checkout:co_archived:2026-05-25T00:00:00Z")).toBeUndefined();
     job.stop();
   });
 

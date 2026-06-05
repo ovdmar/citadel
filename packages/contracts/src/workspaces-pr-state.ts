@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CiRunSummarySchema, PullRequestSummarySchema } from "./index.js";
+import { CiRunSummarySchema, PullRequestSummarySchema } from "./pr-summary.js";
 
 // Lightweight per-workspace PR/CI snapshot served by GET /api/workspaces/pr-state.
 // Built from cache only; entries with no cached value are omitted (the
@@ -15,6 +15,11 @@ export const WorkspacePrStateEntrySchema = z.object({
 
 export const WorkspacesPrStateResponseSchema = z.object({
   workspacePrState: z.record(z.string(), WorkspacePrStateEntrySchema),
+  // Structured workspace children keyed by parent workspace id, then checkout id.
+  // Missing cache entries are represented by pullRequest=null so clients can
+  // distinguish "known checkout with no full PR snapshot yet" from "checkout
+  // not present in this workspace".
+  checkoutPrState: z.record(z.string(), z.record(z.string(), WorkspacePrStateEntrySchema)).default({}),
 });
 
 export type WorkspacePrStateEntry = z.infer<typeof WorkspacePrStateEntrySchema>;

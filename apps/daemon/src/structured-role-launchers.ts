@@ -15,7 +15,7 @@ import type {
 } from "@citadel/contracts";
 import type { SqliteStore } from "@citadel/db";
 import type { OperationService, RuntimeDescriptor } from "@citadel/operations";
-import { listAgentTemplates } from "./agent-templates.js";
+import { agentTemplateDefaultsFromRuntimes, listAgentTemplates } from "./agent-templates.js";
 import { slug, uniqueWorkspaceRoot } from "./workspace-home-paths.js";
 
 type Actor = "human" | "manager" | "agent" | "mcp" | "system";
@@ -41,7 +41,7 @@ export async function launchStructuredRoleAgent(
   options: { actor?: Actor } = {},
 ): Promise<RoleLaunchResult> {
   const actor = options.actor ?? "mcp";
-  const template = await findRoleTemplate(deps.config.dataDir, launch.role);
+  const template = await findRoleTemplate(deps.config, launch.role);
   if (!template) return { ok: false, error: "role_template_not_found", detail: launch.role };
   const runtime = resolveRuntime(deps.config, template.launchSettings);
   if (!runtime) return { ok: false, error: "runtime_unavailable", detail: template.launchSettings.runtimeId };
@@ -252,8 +252,8 @@ function resolveCheckout(
   return { ok: true, workspace: context.workspace, checkout: context.checkout };
 }
 
-async function findRoleTemplate(dataDir: string, role: RoleId): Promise<RoleTemplate | null> {
-  const templates = await listAgentTemplates(dataDir);
+async function findRoleTemplate(config: CitadelConfig, role: RoleId): Promise<RoleTemplate | null> {
+  const templates = await listAgentTemplates(config.dataDir, agentTemplateDefaultsFromRuntimes(config.agentRuntimes));
   return templates.find((template) => template.role === role) ?? null;
 }
 

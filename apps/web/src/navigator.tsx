@@ -7,7 +7,6 @@ import type {
   WorkspaceSession,
   WorktreeCheckout,
 } from "@citadel/contracts";
-import { type LifecycleTone, deriveWorkspaceLifecycleTone } from "@citadel/core";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
@@ -47,13 +46,22 @@ import {
 } from "./navigator-groups.js";
 import { applyLocalOrder, loadOrder, pruneOrder, saveOrder, spliceIntoOrder } from "./navigator-order.js";
 import {
+  type CheckoutPrStateByWorkspace,
+  aggregateNavigatorTone,
+  aggregateWorkspacePrState,
+  checkoutPullRequest,
+} from "./navigator-pr-state.js";
+import {
   CheckoutNavCard,
   checkoutSessions,
   hasNestedCheckouts,
-  pullRequestForCheckout,
+  workspaceAggregateBranchLabel,
+  workspaceCheckoutRows,
 } from "./navigator-workspace-cards.js";
 import { useScratchpadDrawer } from "./scratchpad-drawer-store.js";
 import { WorkspaceCard, lifecycleToneClass } from "./workspace-card.js";
+
+export { aggregateNavigatorTone };
 
 function runningCount(sessions: WorkspaceSession[]): number {
   return sessions.filter((session) => session.kind === "agent" && session.status === "running").length;
@@ -87,24 +95,6 @@ function checkoutMatchesRepoGroup(checkout: WorktreeCheckout, repoGroupName: str
   return repoGroupName === UNKNOWN_REPO_LABEL ? repo === null : repo?.name === repoGroupName;
 }
 
-export function aggregateNavigatorTone(
-  workspaces: Workspace[],
-  sessions: WorkspaceSession[],
-  prByWorkspaceId?: Map<string, PullRequestSummary | null>,
-): LifecycleTone {
-  let aggregate: LifecycleTone = "never-started";
-  for (const workspace of workspaces) {
-    const tone = deriveWorkspaceLifecycleTone({
-      sessions: sessions.filter((session) => session.workspaceId === workspace.id),
-      pullRequest: prByWorkspaceId?.get(workspace.id) ?? null,
-    });
-    if (tone === "attention") return "attention";
-    if (tone === "running") aggregate = "running";
-    else if (tone === "done" && aggregate === "never-started") aggregate = "done";
-  }
-  return aggregate;
-}
-
 export function Navigator(props: {
   repos: Repo[];
   workspaces: Workspace[];
@@ -112,6 +102,7 @@ export function Navigator(props: {
   sessions: WorkspaceSession[];
   operations: Operation[];
   prByWorkspaceId: Map<string, PullRequestSummary | null>;
+  checkoutPrByWorkspaceId: CheckoutPrStateByWorkspace;
   activeWorkspaceId: string;
   activeTargetKey: string;
   runtimes: import("@citadel/contracts").AgentRuntime[];
@@ -241,7 +232,13 @@ export function Navigator(props: {
     [props.workspaces, props.repos, props.sessions, props.operations, treeGrouping, props.namespaces, props.checkouts],
   );
   const historyCount = props.operations.length;
-  const navigatorTone = aggregateNavigatorTone(props.workspaces, props.sessions, props.prByWorkspaceId);
+  const navigatorTone = aggregateNavigatorTone(
+    props.workspaces,
+    props.sessions,
+    props.prByWorkspaceId,
+    props.checkouts,
+    props.checkoutPrByWorkspaceId,
+  );
   const running = runningCount(props.sessions);
 
   // Prune collapsed entries whose group no longer exists, so localStorage doesn't accumulate
@@ -297,16 +294,25 @@ export function Navigator(props: {
       const checkouts = props.checkouts.filter(
         (checkout) => checkout.workspaceId === workspace.id && !checkout.archivedAt,
       );
-      const nested = hasNestedCheckouts(checkouts);
-      const workspaceCheckout = checkouts.length === 1 ? checkouts[0] : null;
+      const { visibleCheckouts, aggregateCheckouts } = workspaceCheckoutRows(workspace, checkouts);
+      const nested = hasNestedCheckouts(visibleCheckouts);
+      const aggregateRow = nested || (aggregateCheckouts.length > 0 && visibleCheckouts.length === 0);
+      const aggregateLabelCheckouts = visibleCheckouts.length > 0 ? visibleCheckouts : aggregateCheckouts;
+      const workspaceCheckout = visibleCheckouts.length === 1 ? visibleCheckouts[0] : null;
       const activeWorkspace = workspace.id === props.activeWorkspaceId;
       const workspacePullRequest = props.prByWorkspaceId.get(workspace.id) ?? null;
+      const checkoutPrState = props.checkoutPrByWorkspaceId.get(workspace.id);
+      const prAggregate = aggregateWorkspacePrState({
+        checkouts: aggregateCheckouts,
+        workspacePullRequest,
+        checkoutPrState,
+      });
       const checkoutsCollapsed = collapsedWorkspaceCheckouts[workspace.id] === true;
       const checkoutListId = `nav-workspace-checkouts-${encodeURIComponent(workspace.id)}`;
       const repoGroupName = repoGroupNameFromPath(groupPath);
       const canAttachCheckout = workspace.kind === "root" && props.repos.length > 0;
       if (nested && repoGroupName) {
-        const repoGroupedCheckouts = checkouts.filter((checkout) =>
+        const repoGroupedCheckouts = visibleCheckouts.filter((checkout) =>
           checkoutMatchesRepoGroup(checkout, repoGroupName, props.repos),
         );
         if (!repoGroupedCheckouts.length) return null;
@@ -326,7 +332,7 @@ export function Navigator(props: {
                   checkout={checkout}
                   repo={repo}
                   sessions={checkoutSessions(sessions, checkout.id)}
-                  pullRequest={pullRequestForCheckout(workspacePullRequest, checkout)}
+                  pullRequest={checkoutPullRequest({ checkout, workspacePullRequest, checkoutPrState })}
                   active={activeWorkspace && props.activeTargetKey === targetKey}
                   onSelect={() => props.onPickTarget(workspace.id, targetKey)}
                 />
@@ -352,7 +358,8 @@ export function Navigator(props: {
                 .filter((operation) => operation.workspaceId === workspace.id && operation.type === "workspace.create")
                 .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0] ?? null
             }
-            pullRequest={nested ? null : workspacePullRequest}
+            pullRequest={aggregateRow ? null : workspacePullRequest}
+            approval={aggregateRow ? prAggregate.approval : undefined}
             namespace={
               treeGrouping.includes("namespace")
                 ? null
@@ -369,7 +376,24 @@ export function Navigator(props: {
             }}
             active={cardActive}
             onSelect={() => props.onPickTarget(workspace.id, "home")}
-            hideBranch={nested}
+            branchLabel={
+              aggregateRow
+                ? workspaceAggregateBranchLabel({
+                    checkouts: aggregateLabelCheckouts,
+                    sessions,
+                    pullRequest: workspacePullRequest,
+                    prCount: prAggregate.prCount,
+                  })
+                : workspace.kind === "root" && workspace.mode === "structured"
+                  ? null
+                  : undefined
+            }
+            branchTitle={aggregateRow ? "Workspace aggregate" : undefined}
+            prToneOverride={aggregateRow ? prAggregate.prTone : undefined}
+            diffOverride={
+              aggregateRow ? { additions: prAggregate.additions, deletions: prAggregate.deletions } : undefined
+            }
+            allowRootDrop={workspace.kind === "root" && workspace.mode === "structured" && !nested}
             rightControl={
               canAttachCheckout || nested ? (
                 <>
@@ -422,7 +446,7 @@ export function Navigator(props: {
               aria-label={`${workspace.name} worktrees`}
               hidden={checkoutsCollapsed}
             >
-              {checkouts.map((checkout) => {
+              {visibleCheckouts.map((checkout) => {
                 const repo = props.repos.find((entry) => entry.id === checkout.repoId) ?? null;
                 const targetKey = `checkout:${checkout.id}`;
                 return (
@@ -432,7 +456,7 @@ export function Navigator(props: {
                     checkout={checkout}
                     repo={repo}
                     sessions={checkoutSessions(sessions, checkout.id)}
-                    pullRequest={pullRequestForCheckout(workspacePullRequest, checkout)}
+                    pullRequest={checkoutPullRequest({ checkout, workspacePullRequest, checkoutPrState })}
                     active={activeWorkspace && props.activeTargetKey === targetKey}
                     onSelect={() => props.onPickTarget(workspace.id, targetKey)}
                   />
@@ -446,6 +470,7 @@ export function Navigator(props: {
     [
       props.checkouts,
       props.prByWorkspaceId,
+      props.checkoutPrByWorkspaceId,
       props.repos,
       props.operations,
       props.activeWorkspaceId,

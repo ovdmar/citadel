@@ -7,14 +7,17 @@ import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { queryClient } from "./api.js";
+import { aggregateWorkspacePrState } from "./navigator-pr-state.js";
 import {
   CheckoutNavCard,
   checkoutBranchLabel,
   checkoutBranchTitle,
   checkoutPrLabel,
   hasNestedCheckouts,
+  isWorkspaceMainCheckout,
   pullRequestForCheckout,
   workspaceAggregateBranchLabel,
+  workspaceCheckoutRows,
 } from "./navigator-workspace-cards.js";
 
 const ts = "2026-06-01T00:00:00.000Z";
@@ -62,6 +65,85 @@ describe("navigator workspace checkout cards", () => {
         pullRequest: null,
       }),
     ).toBe("2 repos · 2 worktrees · 1 PR · 1 session");
+  });
+
+  it("lets callers use resolved checkout PR count in aggregate workspace labels", () => {
+    expect(
+      workspaceAggregateBranchLabel({
+        checkouts: [checkout("co_1"), checkout("co_2")],
+        sessions: [],
+        pullRequest: null,
+        prCount: 2,
+      }),
+    ).toBe("1 repo · 2 worktrees · 2 PRs · 0 sessions");
+  });
+
+  it("recognizes only the checkout that mirrors the workspace root as the main checkout row", () => {
+    const ws = workspace({ path: "/work/home", rootPath: "/work/home" });
+    expect(isWorkspaceMainCheckout(ws, checkout("co_main", { path: "/work/home" }))).toBe(true);
+    expect(isWorkspaceMainCheckout(ws, checkout("co_feature", { path: "/work/home/feature" }))).toBe(false);
+  });
+
+  it("hides the main checkout row but keeps it in workspace PR aggregation", () => {
+    const ws = workspace({ path: "/work/home", rootPath: "/work/home" });
+    const main = checkout("co_main", {
+      path: "/work/home",
+      intendedPr: intendedPr(10),
+    });
+    const nested = checkout("co_nested", {
+      path: "/work/home/nested",
+      intendedPr: intendedPr(20),
+    });
+    const { visibleCheckouts, aggregateCheckouts } = workspaceCheckoutRows(ws, [main, nested]);
+    const checkoutPrState = new Map([
+      [
+        "co_main",
+        {
+          pullRequest: pr(10, {
+            additions: 6,
+            deletions: 1,
+            mergeable: "conflicting",
+            reviewDecision: "CHANGES_REQUESTED",
+          }),
+          ciRuns: [],
+          checkedAt: null,
+          cachedAt: null,
+        },
+      ],
+      [
+        "co_nested",
+        {
+          pullRequest: pr(20, { additions: 2, deletions: 2, reviewDecision: "APPROVED" }),
+          ciRuns: [],
+          checkedAt: null,
+          cachedAt: null,
+        },
+      ],
+    ]);
+
+    expect(visibleCheckouts.map((entry) => entry.id)).toEqual(["co_nested"]);
+    expect(aggregateCheckouts.map((entry) => entry.id)).toEqual(["co_main", "co_nested"]);
+
+    const aggregate = aggregateWorkspacePrState({
+      checkouts: aggregateCheckouts,
+      workspacePullRequest: null,
+      checkoutPrState,
+    });
+    expect(aggregate).toEqual({
+      prTone: "conflicting",
+      approval: "changes",
+      additions: 8,
+      deletions: 3,
+      prCount: 2,
+    });
+    expect(
+      workspaceAggregateBranchLabel({
+        checkouts: visibleCheckouts,
+        sessions: [],
+        pullRequest: null,
+        prCount: aggregate.prCount,
+      }),
+    ).toBe("1 repo · 1 worktree · 2 PRs · 0 sessions");
   });
 
   it("matches a workspace PR summary to a checkout intended PR when possible", () => {
@@ -180,6 +262,45 @@ describe("navigator workspace checkout cards", () => {
     );
     expect(co.name).toBe("api-stable");
   });
+
+  it("drops an individual checkout through the checkout remove endpoint", async () => {
+    const ws = workspace({ id: "ws_checkout", name: "Readable API" });
+    const co = checkout("co_api", {
+      workspaceId: ws.id,
+      name: "api-stable",
+      path: "/work/home/api-stable",
+      branch: "feature/api",
+    });
+    const repo = repoFixture({ id: co.repoId, name: "citadel" });
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) !== "/api/workspaces/ws_checkout/checkouts/co_api") {
+        return Promise.reject(new Error(`unexpected fetch ${String(input)}`));
+      }
+      return Promise.resolve(jsonResponse({ removed: true, dirty: false }, { status: 202 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = renderCheckoutCard({ workspace: ws, checkout: co, repo });
+    const dropButton = container.querySelector('button[aria-label="Drop checkout api-stable"]');
+    expect(dropButton).toBeTruthy();
+    flushSync(() => {
+      dropButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    const confirm = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent === "Drop checkout",
+    );
+    expect(confirm).toBeTruthy();
+    flushSync(() => {
+      confirm?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    await waitFor(() => fetchMock.mock.calls.length === 1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/workspaces/ws_checkout/checkouts/co_api",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
 });
 
 function renderCheckoutCard(input: {
@@ -255,6 +376,20 @@ function checkout(id: string, overrides: Partial<WorktreeCheckout> = {}): Worktr
   };
 }
 
+function intendedPr(number: number) {
+  return {
+    provider: "github" as const,
+    number,
+    url: `https://x/pr/${number}`,
+    headSha: null,
+    baseRef: null,
+    fetchedAt: null,
+    checksGreen: null,
+    mergeStateStatus: null,
+    hasConflicts: null,
+  };
+}
+
 function workspace(overrides: Partial<Workspace> = {}): Workspace {
   return {
     id: "ws_1",
@@ -322,7 +457,7 @@ function session(id: string, overrides: Partial<AgentSession> = {}): AgentSessio
   };
 }
 
-function pr(number: number): PullRequestSummary {
+function pr(number: number, overrides: Partial<PullRequestSummary> = {}): PullRequestSummary {
   return {
     number,
     title: `PR ${number}`,
@@ -341,5 +476,6 @@ function pr(number: number): PullRequestSummary {
     allowedMergeStrategies: [],
     mergeStateStatus: null,
     headSha: null,
+    ...overrides,
   };
 }
