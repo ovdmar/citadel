@@ -36,7 +36,7 @@
 [ ] 9. The navigator separates Dashboard/History from the workspaces list with a subtle divider, and exposes group-by/add-repo/create-workspace icon controls next to the *Workspaces* header.
 [ ] 10. The Dashboard route surfaces the kanban as its primary content, framed by a compact header that contains only a back-to-cockpit link. No oversized page title is rendered.
 [ ] 11. The History route also exposes a back-to-cockpit link in its compact header, matching the Dashboard treatment.
-[ ] 12. Settings and onboarding surfaces follow the cockpit's dark-blue dense aesthetic: slim sub-nav, small uppercase panel titles, compact health/setup rows, no wall-of-form layouts.
+[ ] 12. Settings and onboarding surfaces follow the cockpit's dark-blue dense aesthetic: slim sub-nav, small uppercase panel titles, compact health/setup rows, no wall-of-form layouts. Global agent settings such as the base system prompt are visually separate from runtime cards and role editors without nesting cards.
 [ ] 13. Workspace > Home/checkouts navigation preserves stable row heights and does not shift while live session/gate counts update.
 [~] 14. Workspace-level history remains usable for many manager-created sessions without mounting terminal renderers for closed tabs.
 

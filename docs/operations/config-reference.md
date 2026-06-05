@@ -31,14 +31,32 @@ Agent runtimes are prompt-driven command adapters launched through tmux:
 
 ```json
 {
+  "agentSessions": {
+    "baseSystemPrompt": "You are running inside Citadel..."
+  },
   "agentRuntimes": [
-    { "id": "codex", "displayName": "Codex", "command": "codex", "args": ["--yolo", "--enable", "goals"] }
+    {
+      "id": "codex",
+      "displayName": "Codex",
+      "command": "codex",
+      "args": ["--yolo", "--enable", "goals"],
+      "launchOptions": {
+        "systemPromptArgv": {
+          "argv": ["-c", "developer_instructions={value}"],
+          "valueEncoding": "toml-string"
+        }
+      }
+    }
   ],
   "terminal": { "displayName": "Terminal", "command": "bash", "args": ["-l"] }
 }
 ```
 
 Built-in agent defaults include `claude-code`, `codex`, `cursor-agent`, and `pi`. Plain shell is the singular `terminal` profile, not an agent runtime. Codex defaults to `--yolo` so interactive launches use the CLI's no-approval/no-sandbox mode; edit or clear the runtime args in Settings to change that. Citadel keeps `--enable goals` on the Codex runtime so all Citadel-launched Codex sessions use the experimental goals feature. Agent runtime health is derived from command availability. Workspace sessions persist tmux session name/id for reconnect.
+
+`agentSessions.baseSystemPrompt` is a single global prompt prefix configured from Settings -> Agents. Freestyle agent sessions use it as their system prompt. Specialized role sessions receive the global base prompt first and the Agents-tab role template system prompt second. Public API/MCP callers may provide supplemental system-prompt text for their own launch, but they cannot suppress the global base prompt or provide trusted role/source metadata.
+
+Runtime launch options may declare native system-prompt delivery. The built-in Claude Code runtime uses `--append-system-prompt`; the built-in Codex runtime uses `-c developer_instructions=<toml-string>`. Cursor Agent, Pi, and custom runtimes without a `systemPromptArgv` mapping receive one pasted first message with a delimited Citadel system-instructions block and user-task block. Native argv delivery can be visible to local process inspection while the runtime starts; pasted fallback is visible in the agent transcript by design. Persisted prompt snapshots are internal audit/debug metadata, not a secret store.
 
 Citadel launches Codex with a workspace-scoped `CODEX_SQLITE_HOME` under
 `${dataDir}/codex-sqlite/<workspaceId>`. User auth/config and transcript/history
@@ -224,7 +242,7 @@ Resources:
 
 Tools include read-only state inspection (including `read_agent_output`, which returns the latest tmux pane content for a specific agent session, bounded by `lines` and `maxChars`) plus daemon-handled workspace creation, agent launch, follow-up agent messaging (`send_agent_message`), metadata archive, and workspace link listing. MCP is agent-only: terminal workspace sessions are not listed, launched, read, or messaged through MCP. See [runbook.md](./runbook.md) for curl examples.
 
-For interactive runtimes like Claude Code, an initial `prompt` passed to `start_agent_session` and every `send_agent_message` are delivered into the tmux pane via paste-buffer + Enter, so the prompt is actually submitted to the agent and not just left in the input box. Citadel ships `claude-code` without `promptArg` for this reason — `-p` is Claude Code's non-interactive print mode, which exits after responding and is not what an interactive Citadel session needs.
+For interactive runtimes like Claude Code, an initial `prompt` passed to `start_agent_session` and every `send_agent_message` are delivered into the tmux pane via paste-buffer + Enter, so the prompt is actually submitted to the agent and not just left in the input box. Citadel ships `claude-code` without `promptArg` for this reason — `-p` is Claude Code's non-interactive print mode, which exits after responding and is not what an interactive Citadel session needs. If a runtime has no native system-prompt append support, Citadel combines the system-instructions wrapper and initial prompt into that pasted first message.
 
 ## Terminal Renderer
 

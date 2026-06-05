@@ -222,6 +222,13 @@ export function summarizeWorkspaceState(input: {
 export { groupChecksByKind, statusLabel, summarizeDoctor } from "./doctor.js";
 export { FUNNY_ADJECTIVES, FUNNY_ANIMALS, generateFunnyName } from "./funny-name.js";
 export {
+  LaunchTextValidationError,
+  assertNoRawAgentAuthorityToken,
+  containsRawAgentAuthorityToken,
+  type LaunchTextValidationContext,
+  type LaunchTextValidationErrorCode,
+} from "./agent-authority-token.js";
+export {
   type FuzzyBlockMatch,
   type FuzzyMatchIndex,
   SEARCH_LIMITS,

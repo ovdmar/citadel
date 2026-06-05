@@ -41,6 +41,7 @@ import {
 } from "@citadel/operations";
 import { collectProviderHealth } from "@citadel/providers";
 import { listRuntimeHealth } from "@citadel/runtimes";
+import { resolveCreateAgentSessionInputFromTemplates } from "./agent-session-template-resolver.js";
 import type { ProviderCache } from "./app-helpers.js";
 import { readLogSlice } from "./log-slice.js";
 import { readReviewDiffMetadata } from "./review-diff.js";
@@ -366,7 +367,8 @@ export async function callDaemonMcpTool(deps: DaemonMcpDeps, call: McpToolCall, 
     return result;
   }
   if (call.name === "start_agent_session") {
-    const input = CreateAgentSessionInputSchema.parse(call.arguments ?? {});
+    const parsed = CreateAgentSessionInputSchema.parse(call.arguments ?? {});
+    const input = await resolveCreateAgentSessionInputFromTemplates(config, parsed);
     const runtime = config.agentRuntimes.find((candidate) => candidate.id === input.runtimeId);
     if (!runtime) throw new Error(`Unknown runtime: ${input.runtimeId}`);
     const session = await operations.createAgentSession(input, {
