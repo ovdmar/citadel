@@ -1,4 +1,4 @@
-// Background refresh job. Runs on a slow tick (15s default) and refreshes
+// Background refresh job. Runs on a slow tick (60s default) and refreshes
 // per-workspace provider data (PR/CI/Jira) plus per-runtime usage on a
 // per-kind cadence — but only within a configurable working-hours window.
 //
@@ -75,7 +75,7 @@ export type ProviderRefreshJob = {
   runTickForTest: () => Promise<void>;
 };
 
-const DEFAULT_TICK_MS = 15_000;
+const DEFAULT_TICK_MS = 60_000;
 const DEFAULT_JITTER_MS = 500;
 
 function listActiveWorkspaceCheckouts(store: SqliteStore, workspaceId: string): WorktreeCheckout[] {
