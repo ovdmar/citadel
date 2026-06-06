@@ -258,16 +258,7 @@ export async function ensureTmuxSessionRaw(input: RawTerminalSessionRequest) {
   const shellCommand = [...commandEnvironmentPrefix(input.env), input.command, ...input.args].map(shellQuote).join(" ");
   await execFileAsync(
     "tmux",
-    [
-      ...tmuxPrefix(input.socketName),
-      "new-session",
-      "-d",
-      "-s",
-      input.sessionName,
-      "-c",
-      input.cwd,
-      shellCommand,
-    ],
+    [...tmuxPrefix(input.socketName), "new-session", "-d", "-s", input.sessionName, "-c", input.cwd, shellCommand],
     {
       timeout: 10000,
       maxBuffer: 128 * 1024,
