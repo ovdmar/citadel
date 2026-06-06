@@ -1,20 +1,37 @@
 // @vitest-environment happy-dom
 
-import type { AgentRuntime, RoleTemplate, TerminalProfile, TerminalSession, Workspace } from "@citadel/contracts";
+import type {
+  AgentRuntime,
+  AgentSession,
+  RoleTemplate,
+  TerminalProfile,
+  TerminalSession,
+  Workspace,
+} from "@citadel/contracts";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { createElement } from "react";
 import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { queryClient } from "./api.js";
+
+vi.mock("./terminal-pane.js", async () => {
+  const react = await import("react");
+  return {
+    TerminalPane: (props: { session: { id: string }; active: boolean }) =>
+      react.createElement("div", { "data-active": props.active, "data-session-id": props.session.id }),
+    getTerminalHandle: vi.fn(() => null),
+  };
+});
+
+import { buildStageLaunchEntryGroups, freestyleStageActions, structuredStageActions } from "./stage-launch-actions.js";
 import {
   Stage,
-  buildStageLaunchEntryGroups,
-  freestyleStageActions,
+  applyPendingReloadSessions,
   retainRecentTerminalIds,
   stableVisitedSessions,
   stableWorkspaceSessionIdsKey,
-  structuredStageActions,
+  stageTabIdentity,
 } from "./stage.js";
 
 const roots: Root[] = [];
@@ -55,6 +72,14 @@ describe("Stage terminal pane ordering", () => {
     const second = sessionFixture({ id: "sess_b", tabId: "tab_b", updatedAt: "2026-05-28T20:00:05.000Z" });
 
     expect(stableWorkspaceSessionIdsKey([second, first])).toBe(stableWorkspaceSessionIdsKey([first, second]));
+  });
+
+  it("uses stable tab ids for reload replacements", () => {
+    const source = agentSessionFixture({ id: "sess_source", tabId: "tab_stable" });
+    const replacement = agentSessionFixture({ id: "sess_reloaded", tabId: "tab_stable" });
+
+    expect(stageTabIdentity(replacement)).toBe("tab_stable");
+    expect(applyPendingReloadSessions([source], { [source.id]: { source, replacement } })).toEqual([replacement]);
   });
 
   it("retains only the five most recently visited terminal panes", () => {
@@ -218,6 +243,113 @@ describe("Stage terminal pane ordering", () => {
     expect(container.textContent).toContain("New session");
     expect(container.textContent).not.toContain("Starting session");
   });
+
+  it("enables reload session only for runtimes that support resume", async () => {
+    const resumable = agentSessionFixture({
+      id: "sess_resumable",
+      runtimeId: "claude-code",
+      displayName: "Claude",
+    });
+    const nonResumable = agentSessionFixture({
+      id: "sess_plain",
+      runtimeId: "plain-agent",
+      displayName: "Plain",
+    });
+
+    const resumableContainer = await renderStage({
+      sessions: [resumable],
+      allSessions: [resumable],
+      activeSessionId: "sess_resumable",
+      runtimes: [runtimeFixture({ id: "claude-code", capabilities: runtimeCapabilities({ supportsResume: true }) })],
+    });
+    click(button(resumableContainer, "Open actions for Claude"));
+    expect((button(resumableContainer, "Reload session") as HTMLButtonElement).disabled).toBe(false);
+
+    const nonResumableContainer = await renderStage({
+      sessions: [nonResumable],
+      allSessions: [nonResumable],
+      activeSessionId: "sess_plain",
+      runtimes: [runtimeFixture({ id: "plain-agent", capabilities: runtimeCapabilities({ supportsResume: false }) })],
+    });
+    click(button(nonResumableContainer, "Open actions for Plain"));
+    expect((button(nonResumableContainer, "Reload session") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("keeps a reloading tab visible while state polling observes the source row closed", async () => {
+    const source = agentSessionFixture({
+      id: "sess_source",
+      tabId: "tab_stable",
+      displayName: "Claude",
+    });
+    const closedSource = agentSessionFixture({
+      ...source,
+      status: "stopped",
+      transport: "disconnected",
+      closedAt: "2026-06-06T00:01:00.000Z",
+    });
+    const replacement = agentSessionFixture({
+      id: "sess_reloaded",
+      tabId: "tab_stable",
+      displayName: "Claude",
+    });
+    let resolveReload: ((response: Response) => void) | null = null;
+    const reloadResponse = new Promise<Response>((resolve) => {
+      resolveReload = resolve;
+    });
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/agent-sessions/sess_source/reload")) return reloadResponse;
+      return Promise.resolve(jsonResponse({ roles: [] }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onActiveSession = vi.fn();
+    const rootElement = document.createElement("div");
+    document.body.appendChild(rootElement);
+    const root = createRoot(rootElement);
+    roots.push(root);
+    const render = (sessions: AgentSession[], allSessions: AgentSession[], activeSessionId = "sess_source") => {
+      root.render(
+        createElement(
+          QueryClientProvider,
+          { client: queryClient },
+          createElement(Stage, {
+            workspace: workspaceFixture({ mode: "structured" }),
+            sessions,
+            allSessions,
+            targetKey: "home",
+            targetType: "workspace_home",
+            checkoutId: null,
+            targetLabel: "Home",
+            runtimes: [
+              runtimeFixture({ id: "claude-code", capabilities: runtimeCapabilities({ supportsResume: true }) }),
+            ],
+            terminal: terminalProfileFixture(),
+            activeSessionId,
+            onActiveSession,
+          }),
+        ),
+      );
+    };
+
+    await flushReact(() => render([source], [source]));
+    click(button(rootElement, "Open actions for Claude"));
+    click(button(rootElement, "Reload session"));
+
+    await flushReact(() => render([], [closedSource]));
+    expect(rootElement.textContent).toContain("Claude");
+    expect(rootElement.textContent).not.toContain("New session");
+    expect(rootElement.querySelector('[data-session-id="sess_source"]')).toBeTruthy();
+
+    await flushReact(async () => {
+      resolveReload?.(jsonResponse({ session: replacement, reloadedFrom: source.id }));
+      await reloadResponse;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await flushReact(() => {});
+    expect(onActiveSession).toHaveBeenCalledWith("sess_reloaded");
+    expect(rootElement.textContent).toContain("Claude");
+    expect(rootElement.querySelector('[data-session-id="sess_reloaded"]')).toBeTruthy();
+  });
 });
 
 function sessionFixture(overrides: Partial<TerminalSession> = {}): TerminalSession {
@@ -232,6 +364,25 @@ function sessionFixture(overrides: Partial<TerminalSession> = {}): TerminalSessi
     terminalBackend: "tmux",
     tmuxSessionName: "citadel_sess_1",
     tmuxSessionId: "tmux_1",
+    createdAt: "2026-05-28T19:00:00.000Z",
+    updatedAt: "2026-05-28T19:00:00.000Z",
+    ...overrides,
+  };
+}
+
+function agentSessionFixture(overrides: Partial<AgentSession> = {}): AgentSession {
+  return {
+    id: "sess_agent",
+    workspaceId: "ws_1",
+    kind: "agent",
+    runtimeId: "claude-code",
+    displayName: "Claude",
+    status: "running",
+    transport: "connected",
+    terminalBackend: "tmux",
+    tmuxSessionName: "citadel_sess_agent",
+    tmuxSessionId: "tmux_agent",
+    runtimeSessionId: "550e8400-e29b-41d4-a716-446655440000",
     createdAt: "2026-05-28T19:00:00.000Z",
     updatedAt: "2026-05-28T19:00:00.000Z",
     ...overrides,
@@ -304,17 +455,22 @@ function runtimeFixture(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
     args: [],
     health: "healthy",
     healthReason: null,
-    capabilities: {
-      supportsPrompt: true,
-      supportsResume: true,
-      supportsModelSelection: false,
-      supportsTranscript: true,
-      supportsStatusDetection: true,
-      supportsNonInteractiveGoal: true,
-      supportsShell: true,
-      supportsUsage: false,
-      supportsTui: true,
-    },
+    capabilities: runtimeCapabilities(),
+    ...overrides,
+  };
+}
+
+function runtimeCapabilities(overrides: Partial<AgentRuntime["capabilities"]> = {}): AgentRuntime["capabilities"] {
+  return {
+    supportsPrompt: true,
+    supportsResume: true,
+    supportsModelSelection: false,
+    supportsTranscript: true,
+    supportsStatusDetection: true,
+    supportsNonInteractiveGoal: true,
+    supportsShell: true,
+    supportsUsage: false,
+    supportsTui: true,
     ...overrides,
   };
 }
@@ -322,8 +478,8 @@ function runtimeFixture(overrides: Partial<AgentRuntime> = {}): AgentRuntime {
 async function renderStage(
   overrides: Partial<{
     workspace: Workspace;
-    sessions: TerminalSession[];
-    allSessions: TerminalSession[];
+    sessions: Array<TerminalSession | AgentSession>;
+    allSessions: Array<TerminalSession | AgentSession>;
     targetKey: string;
     targetType: "workspace_home" | "worktree_checkout";
     checkoutId: string | null;
@@ -360,6 +516,21 @@ async function renderStage(
     );
   });
   return rootElement;
+}
+
+function click(element: Element) {
+  flushSync(() => {
+    if (element instanceof HTMLElement) element.click();
+    else element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
+function button(container: HTMLElement, label: string): HTMLButtonElement {
+  const found = [...container.querySelectorAll("button")].find(
+    (candidate) => candidate.getAttribute("aria-label") === label || candidate.textContent?.trim() === label,
+  );
+  if (!(found instanceof HTMLButtonElement)) throw new Error(`button not found: ${label}`);
+  return found;
 }
 
 async function flushReact(callback: () => void | Promise<void>): Promise<void> {

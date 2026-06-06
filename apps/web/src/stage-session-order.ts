@@ -3,17 +3,21 @@ export const STAGE_SESSION_ORDER_STORAGE = "citadel.stage-session-order";
 export function applySessionOrder<T extends { id: string }>(
   sessions: readonly T[],
   idOrder: readonly string[] | undefined,
+  orderId: (session: T) => string = (session) => session.id,
 ): T[] {
   if (!idOrder || idOrder.length === 0) return sessions.slice();
   const byId = new Map<string, T>();
-  for (const session of sessions) byId.set(session.id, session);
+  for (const session of sessions) {
+    byId.set(session.id, session);
+    byId.set(orderId(session), session);
+  }
   const head: T[] = [];
   const seen = new Set<string>();
   for (const id of idOrder) {
     const session = byId.get(id);
-    if (session && !seen.has(id)) {
+    if (session && !seen.has(session.id)) {
       head.push(session);
-      seen.add(id);
+      seen.add(session.id);
     }
   }
   const tail = sessions.filter((session) => !seen.has(session.id));
@@ -24,6 +28,12 @@ export function spliceSessionOrder(visibleIds: readonly string[], draggedId: str
   const without = visibleIds.filter((id) => id !== draggedId);
   const clamped = Math.max(0, Math.min(targetIndex, without.length));
   return [...without.slice(0, clamped), draggedId, ...without.slice(clamped)];
+}
+
+export function replaceSessionOrderId(idOrder: readonly string[] | undefined, fromId: string, toId: string): string[] {
+  if (!idOrder || idOrder.length === 0) return [];
+  const next = idOrder.map((id) => (id === fromId ? toId : id));
+  return [...new Set(next)];
 }
 
 export function loadSessionOrder(): Record<string, string[]> {
