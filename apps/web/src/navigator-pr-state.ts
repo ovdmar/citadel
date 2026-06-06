@@ -125,7 +125,7 @@ export function aggregateWorkspacePrState(input: {
     });
     const hasExpectedPr = Boolean(pullRequest || hasIntendedPullRequestIdentity(checkout));
     if (hasExpectedPr) expectedPrCount += 1;
-    tones.push(pullRequest ? prToneFor(pullRequest) : intendedPrTone(checkout));
+    tones.push(pullRequest ? prToneFor(pullRequest) : intendedPrTone());
     if (pullRequest) {
       keys.add(pullRequest.url || `checkout-pr-${pullRequest.number}`);
       approvals.push(approvalToneFor(pullRequest));
@@ -175,12 +175,8 @@ function aggregateApprovalTone(approvals: readonly ApprovalTone[], expectedPrCou
   return "none";
 }
 
-function intendedPrTone(checkout: WorktreeCheckout): PrTone {
-  if (!hasIntendedPullRequestIdentity(checkout)) return "missing";
-  if (checkout.intendedPr.hasConflicts) return "conflicting";
-  if (checkout.intendedPr.checksGreen === false) return "failing";
-  if (checkout.intendedPr.checksGreen === true) return "passing";
-  return "pending";
+function intendedPrTone(): PrTone {
+  return "missing";
 }
 
 function pullRequestMatchesCheckout(

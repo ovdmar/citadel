@@ -106,7 +106,7 @@ export function CheckoutNavCard(props: CheckoutNavCardProps) {
     issueTitle: null,
     issueUrl: null,
   };
-  const prTone = props.pullRequest ? prToneFor(props.pullRequest) : checkoutPrTone(props.checkout);
+  const prTone = props.pullRequest ? prToneFor(props.pullRequest) : checkoutPrTone();
   const branchLabel = checkoutBranchLabel(props.checkout, props.repo);
   const branchTitle = checkoutBranchTitle(props.checkout, props.repo);
 
@@ -313,12 +313,8 @@ function aggregatePrCount(checkouts: readonly WorktreeCheckout[], pullRequest: P
   return keys.size;
 }
 
-function checkoutPrTone(checkout: WorktreeCheckout): PrTone {
-  if (!hasIntendedPullRequestIdentity(checkout)) return "missing";
-  if (checkout.intendedPr.hasConflicts) return "conflicting";
-  if (checkout.intendedPr.checksGreen === true) return "passing";
-  if (checkout.intendedPr.checksGreen === false) return "failing";
-  return "pending";
+function checkoutPrTone(): PrTone {
+  return "missing";
 }
 
 export function checkoutPrLabel(checkout: WorktreeCheckout, pullRequest: PullRequestSummary | null): string | null {

@@ -225,6 +225,36 @@ describe("navigator workspace checkout cards", () => {
     expect(prIcon?.classList.contains("tone-conflicting")).toBe(false);
   });
 
+  it("renders intended PR identity without a PR summary as grey no-PR state", () => {
+    const ws = workspace({ id: "ws_checkout", name: "Readable API" });
+    const co = checkout("co_api", {
+      workspaceId: ws.id,
+      intendedPr: {
+        provider: "github",
+        number: 12,
+        url: "https://x/pr/12",
+        headSha: null,
+        baseRef: null,
+        fetchedAt: "2026-06-05T10:00:00.000Z",
+        checksGreen: false,
+        mergeStateStatus: "DIRTY",
+        hasConflicts: true,
+      },
+    });
+    const container = renderCheckoutCard({
+      workspace: ws,
+      checkout: co,
+      repo: repoFixture({ id: co.repoId, name: "citadel" }),
+      pullRequest: null,
+    });
+
+    const prIcon = container.querySelector(".workspace-card-agent");
+    expect(prIcon?.classList.contains("tone-missing")).toBe(true);
+    expect(prIcon?.classList.contains("tone-failing")).toBe(false);
+    expect(prIcon?.classList.contains("tone-conflicting")).toBe(false);
+    expect(prIcon?.getAttribute("title")).toBe("No PR yet");
+  });
+
   it("shows repo name before branch and keeps the stable git worktree name in hover text", () => {
     const co = checkout("co_api", {
       name: "api-stable",

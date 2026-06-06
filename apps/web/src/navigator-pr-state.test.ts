@@ -158,6 +158,30 @@ describe("checkout PR aggregation", () => {
     });
   });
 
+  it("treats intended PR identity without a resolved PR summary as no PR, not stale red", () => {
+    const checkouts = [
+      checkout("co_planned_pr", {
+        intendedPr: {
+          provider: "github",
+          number: 12,
+          url: "https://example.test/pr/12",
+          headSha: null,
+          baseRef: null,
+          fetchedAt: "2026-06-01T00:00:00.000Z",
+          checksGreen: false,
+          mergeStateStatus: "DIRTY",
+          hasConflicts: true,
+        },
+      }),
+    ];
+
+    expect(aggregateWorkspacePrState({ checkouts, workspacePullRequest: null, checkoutPrState: null })).toMatchObject({
+      prTone: "missing",
+      approval: "pending",
+      prCount: 1,
+    });
+  });
+
   it("aggregates nested PR tone by attention priority and totals checkout diffs", () => {
     const checkouts = [
       checkout("co_ok", { intendedPr: intendedPr(1) }),
