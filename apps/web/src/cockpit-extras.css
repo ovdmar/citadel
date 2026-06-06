@@ -147,19 +147,6 @@
   color: var(--c-fg-3);
 }
 
-.nav-section-hover-control {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease;
-}
-
-.nav-section:hover .nav-section-hover-control,
-.nav-section:focus-within .nav-section-hover-control,
-.nav-section-hover-control:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
-}
-
 .nav-group {
   padding: 2px 6px 4px;
   /* Shared right-edge slot for the group count and the workspace approval
@@ -673,19 +660,6 @@
   background: transparent;
   color: var(--c-fg-4);
   cursor: pointer;
-}
-
-.workspace-card-hover-control {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease;
-}
-
-.workspace-card-wrap:hover .workspace-card-hover-control,
-.workspace-card-wrap:focus-within .workspace-card-hover-control,
-.workspace-card-hover-control:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 .workspace-card-collapse:hover,
