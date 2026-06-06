@@ -5,6 +5,7 @@ import {
   addOptimisticCheckout,
   applyOptimisticRemoveFilter,
   createOptimisticCheckout,
+  invalidatePrQueriesFromSse,
   parseSseSystemHealth,
   reconcileOptimisticCheckout,
   removeOptimisticCheckout,
@@ -157,6 +158,36 @@ describe("parseSseSystemHealth", () => {
   it("returns null for malformed or invalid SSE payloads", () => {
     expect(parseSseSystemHealth(message({ payload: { tone: "healthy" } }))).toBeNull();
     expect(parseSseSystemHealth({ data: "not-json" } as MessageEvent)).toBeNull();
+  });
+});
+
+describe("invalidatePrQueriesFromSse", () => {
+  it("invalidates state and PR queries for a workspace PR event", () => {
+    const calls: Array<{ queryKey: readonly unknown[] }> = [];
+    invalidatePrQueriesFromSse(
+      { invalidateQueries: (input) => calls.push(input) },
+      message({ payload: { workspaceId: "ws_pr" } }),
+    );
+
+    expect(calls).toEqual([
+      { queryKey: ["state"] },
+      { queryKey: ["workspaces-pr-state"] },
+      { queryKey: ["workspaces-pr-batch"] },
+      { queryKey: ["workspace-cockpit", "ws_pr"] },
+    ]);
+  });
+
+  it("still invalidates global PR queries when the event payload is malformed", () => {
+    const calls: Array<{ queryKey: readonly unknown[] }> = [];
+    invalidatePrQueriesFromSse({ invalidateQueries: (input) => calls.push(input) }, {
+      data: "not-json",
+    } as MessageEvent);
+
+    expect(calls).toEqual([
+      { queryKey: ["state"] },
+      { queryKey: ["workspaces-pr-state"] },
+      { queryKey: ["workspaces-pr-batch"] },
+    ]);
   });
 });
 

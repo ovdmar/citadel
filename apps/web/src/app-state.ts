@@ -263,6 +263,7 @@ export function useEventRefresh() {
     events.onmessage = () => queryClient.invalidateQueries({ queryKey: ["state"] });
     events.addEventListener("repo.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("workspace.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
+    events.addEventListener("workspace.pr.updated", (event) => invalidatePrQueriesFromSse(queryClient, event));
     events.addEventListener("workspace.manager.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("workspace.plan.updated", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
     events.addEventListener("workspace.plan.deviation", () => queryClient.invalidateQueries({ queryKey: ["state"] }));
@@ -280,6 +281,28 @@ export function useEventRefresh() {
     });
     return () => events.close();
   }, []);
+}
+
+type QueryInvalidator = {
+  invalidateQueries: (input: { queryKey: readonly unknown[] }) => unknown;
+};
+
+export function invalidatePrQueriesFromSse(client: QueryInvalidator, event: MessageEvent): void {
+  const workspaceId = workspaceIdFromSseEvent(event);
+  client.invalidateQueries({ queryKey: ["state"] });
+  client.invalidateQueries({ queryKey: ["workspaces-pr-state"] });
+  client.invalidateQueries({ queryKey: ["workspaces-pr-batch"] });
+  if (workspaceId) client.invalidateQueries({ queryKey: ["workspace-cockpit", workspaceId] });
+}
+
+function workspaceIdFromSseEvent(event: MessageEvent): string | null {
+  try {
+    const data = JSON.parse(event.data) as { workspaceId?: unknown; payload?: { workspaceId?: unknown } };
+    const workspaceId = typeof data.workspaceId === "string" ? data.workspaceId : data.payload?.workspaceId;
+    return typeof workspaceId === "string" && workspaceId ? workspaceId : null;
+  } catch {
+    return null;
+  }
 }
 
 export function parseSseSystemHealth(event: MessageEvent): SystemHealthSnapshot | null {
