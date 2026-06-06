@@ -7,6 +7,26 @@ const FAILING_CHECK_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out", 
 
 export type AttentionSessionIds = ReadonlySet<string>;
 
+export function workspaceCardSessions(
+  sessions: readonly WorkspaceSession[],
+  workspaceId: string,
+  checkouts: readonly { id: string }[],
+): WorkspaceSession[] {
+  const checkoutIds = new Set(checkouts.map((checkout) => checkout.id));
+  const seen = new Set<string>();
+  const result: WorkspaceSession[] = [];
+  for (const session of sessions) {
+    if (session.closedAt) continue;
+    const belongsToWorkspace = session.workspaceId === workspaceId;
+    const belongsToCheckout = Boolean(session.checkoutId && checkoutIds.has(session.checkoutId));
+    if (!belongsToWorkspace && !belongsToCheckout) continue;
+    if (seen.has(session.id)) continue;
+    seen.add(session.id);
+    result.push(session);
+  }
+  return result;
+}
+
 export function sessionAttentionFingerprint(session: WorkspaceSession): string | null {
   if (session.kind !== "agent") return null;
   const tone = deriveAgentLifecycleTone(session);

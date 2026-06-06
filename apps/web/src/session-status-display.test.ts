@@ -5,6 +5,7 @@ import {
   deriveTerminalLifecycleTone,
   deriveWorkspaceDisplayLifecycleTone,
   sessionAttentionFingerprint,
+  workspaceCardSessions,
 } from "./session-status-display.js";
 
 describe("session display lifecycle tones", () => {
@@ -38,6 +39,24 @@ describe("session display lifecycle tones", () => {
   it("shows terminal shells as running only while the backend status is running", () => {
     expect(deriveTerminalLifecycleTone(terminal({ status: "running" }))).toBe("running");
     expect(deriveTerminalLifecycleTone(terminal({ status: "idle" }))).toBe("done");
+  });
+
+  it("collects live workspace card sessions from both Home and nested checkout targets", () => {
+    const home = agent({ id: "sess_home", workspaceId: "ws_1", checkoutId: null });
+    const checkout = agent({ id: "sess_checkout", workspaceId: "ws_1", checkoutId: "co_api" });
+    const otherCheckout = agent({ id: "sess_other", workspaceId: "ws_2", checkoutId: "co_other" });
+    const closed = agent({
+      id: "sess_closed",
+      workspaceId: "ws_1",
+      checkoutId: "co_api",
+      closedAt: "2026-06-05T10:00:00.000Z",
+    });
+
+    expect(
+      workspaceCardSessions([home, checkout, otherCheckout, closed], "ws_1", [{ id: "co_api" }]).map(
+        (entry) => entry.id,
+      ),
+    ).toEqual(["sess_home", "sess_checkout"]);
   });
 });
 

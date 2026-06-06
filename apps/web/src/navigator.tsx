@@ -67,7 +67,7 @@ import {
   hasNestedCheckouts,
   workspaceCheckoutRows,
 } from "./navigator-workspace-cards.js";
-import type { AttentionSessionIds } from "./session-status-display.js";
+import { type AttentionSessionIds, workspaceCardSessions } from "./session-status-display.js";
 import { WorkspaceCard, lifecycleToneClass } from "./workspace-card.js";
 export { aggregateNavigatorTone };
 function runningCount(sessions: WorkspaceSession[]): number {
@@ -359,7 +359,7 @@ export function Navigator(props: {
         <div key={workspace.id} className="nav-workspace-target-wrap">
           <WorkspaceCard
             workspace={cardWorkspace}
-            sessions={sessions.filter((session) => !session.closedAt)}
+            sessions={workspaceCardSessions(sessions, workspace.id, aggregateCheckouts)}
             operation={
               props.operations
                 .filter((operation) => operation.workspaceId === workspace.id && operation.type === "workspace.create")
