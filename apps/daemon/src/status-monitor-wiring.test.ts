@@ -1,79 +1,78 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { CitadelConfig } from "@citadel/config";
 import { SqliteStore } from "@citadel/db";
-import { agentExitSentinelPath, agentLiveSentinelPath } from "@citadel/terminal";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildStatusMonitorDeps } from "./status-monitor-wiring.js";
 
-describe("status-monitor wiring — stale-.exit guard", () => {
+// Shell-first wiring smoke tests. The legacy readSentinels stale-.exit guard
+// is gone (the wrapper that wrote those files is removed). The replacement
+// is panePidProcess + runtimeBinaryFor — both stateless lookups, validated
+// here only at the wiring-shape level. End-to-end behavior is covered by
+// packages/operations/src/status-monitor.test.ts.
+
+describe("buildStatusMonitorDeps — shell-first wiring", () => {
   let tmpDbDir: string;
   let store: SqliteStore;
-  const sessionNames: string[] = [];
 
   beforeEach(() => {
     tmpDbDir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-wiring-test-"));
     store = new SqliteStore(path.join(tmpDbDir, "test.sqlite"));
-    sessionNames.length = 0;
+    store.migrate();
   });
 
   afterEach(() => {
     store.close();
     fs.rmSync(tmpDbDir, { recursive: true, force: true });
-    for (const name of sessionNames) {
-      try {
-        fs.unlinkSync(agentLiveSentinelPath(name));
-      } catch {
-        // best-effort
-      }
-      try {
-        fs.unlinkSync(agentExitSentinelPath(name));
-      } catch {
-        // best-effort
-      }
-    }
   });
 
-  function uniqueName(suffix: string): string {
-    const n = `citadel_wiring_test_${process.pid}_${Date.now().toString(36)}_${suffix}`;
-    sessionNames.push(n);
-    return n;
+  function makeConfig(runtimes: Array<{ id: string; command: string }>): CitadelConfig {
+    return {
+      version: 1,
+      dataDir: tmpDbDir,
+      databasePath: path.join(tmpDbDir, "test.sqlite"),
+      bindHost: "127.0.0.1",
+      port: 4010,
+      mcp: { enabled: false },
+      providers: {
+        github: { enabled: false, command: "gh" },
+        jira: { enabled: false, command: "jtk" },
+      },
+      runtimes: runtimes.map((r) => ({ ...r, args: [], displayName: r.id })),
+    } as unknown as CitadelConfig;
   }
 
-  it("treats .exit as authoritative when .live is absent (normal exited path)", async () => {
-    const name = uniqueName("exited");
-    fs.writeFileSync(agentExitSentinelPath(name), "0\n");
-    const deps = buildStatusMonitorDeps(store, () => {});
-    const reading = await deps.readSentinels(name);
-    expect(reading.live).toBe(false);
-    expect(reading.exitCode).toBe(0);
-    expect(reading.exitedAt).not.toBeNull();
+  it("exposes panePidProcess that returns null for a missing tmux session (the tmux_missing signal)", () => {
+    const recent = new Map<string, number>();
+    const deps = buildStatusMonitorDeps(store, () => {}, makeConfig([]), recent);
+    expect(deps.panePidProcess("citadel_does_not_exist_xyz")).toBeNull();
   });
 
-  it("ignores .exit when .live is newer (stale .exit from a prior incarnation)", async () => {
-    const name = uniqueName("stale");
-    // Write .exit first, then .live ~30ms later so live.mtime > exit.mtime.
-    fs.writeFileSync(agentExitSentinelPath(name), "42\n");
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    fs.writeFileSync(agentLiveSentinelPath(name), "");
-    const deps = buildStatusMonitorDeps(store, () => {});
-    const reading = await deps.readSentinels(name);
-    expect(reading.live).toBe(true);
-    expect(reading.exitCode).toBeNull();
-    expect(reading.exitedAt).toBeNull();
+  it("exposes runtimeBinaryFor that maps configured runtimes to their command names", () => {
+    const recent = new Map<string, number>();
+    const deps = buildStatusMonitorDeps(
+      store,
+      () => {},
+      makeConfig([
+        { id: "claude-code", command: "claude" },
+        { id: "codex", command: "codex" },
+        { id: "shell", command: "bash" },
+      ]),
+      recent,
+    );
+    expect(deps.runtimeBinaryFor("claude-code")).toBe("claude");
+    expect(deps.runtimeBinaryFor("codex")).toBe("codex");
+    expect(deps.runtimeBinaryFor("shell")).toBe("bash");
+    expect(deps.runtimeBinaryFor("unknown-runtime")).toBeNull();
   });
 
-  it("honors .exit when it is newer than .live (happy path where rm of .live raced)", async () => {
-    const name = uniqueName("normal-order");
-    // .live first, then .exit later — what a clean exit looks like if the
-    // wrapper somehow didn't get to remove .live (defense-in-depth case).
-    fs.writeFileSync(agentLiveSentinelPath(name), "");
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    fs.writeFileSync(agentExitSentinelPath(name), "0\n");
-    const deps = buildStatusMonitorDeps(store, () => {});
-    const reading = await deps.readSentinels(name);
-    expect(reading.live).toBe(true);
-    expect(reading.exitCode).toBe(0);
-    expect(reading.exitedAt).not.toBeNull();
+  it("threads the recentUserAction map by reference so writes from endpoints land in the status-monitor's tick", () => {
+    const recent = new Map<string, number>();
+    const deps = buildStatusMonitorDeps(store, () => {}, makeConfig([]), recent);
+    recent.set("sess_x", 12345);
+    // The deps holds the SAME Map reference, so the status-monitor will see
+    // the write on its next tick.
+    expect(deps.recentUserAction.get("sess_x")).toBe(12345);
   });
 });

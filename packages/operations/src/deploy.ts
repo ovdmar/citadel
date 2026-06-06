@@ -1,4 +1,5 @@
 import type {
+  ActivityEvent,
   DeployHookResolution,
   DeployedApp,
   DeployedAppStatus,
@@ -21,7 +22,7 @@ export type DeployOpsDeps = {
   store: SqliteStore;
   activity: (
     type: string,
-    source: "user" | "system" | "hook",
+    source: ActivityEvent["source"],
     message: string,
     repoId: string | null,
     workspaceId: string | null,

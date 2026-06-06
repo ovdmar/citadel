@@ -1,5 +1,6 @@
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 import type {
+  ActivityEvent,
   HookAction,
   HookDiagnostic,
   HookOutput,
@@ -32,7 +33,7 @@ export type WorkspaceAppsDeps = {
   config: WorkspaceAppsConfig | undefined;
   activity: (
     type: string,
-    source: "user" | "system" | "hook",
+    source: ActivityEvent["source"],
     message: string,
     repoId: string | null,
     workspaceId: string | null,
@@ -52,6 +53,14 @@ export type WorkspaceAppsDeps = {
 function configuredHooks(deps: WorkspaceAppsDeps, event: HookConfig["event"], hookIds: string[]) {
   const hooks = (deps.config?.hooks ?? []).filter((hook) => hook.event === event);
   return hookIds.length ? hooks.filter((hook) => hookIds.includes(hook.id)) : hooks;
+}
+
+function parseOptionalHookOutput(stdout: string): HookOutput | null {
+  try {
+    return parseHookOutput(stdout);
+  } catch {
+    return null;
+  }
 }
 
 export async function discoverWorkspaceApps(
@@ -181,7 +190,7 @@ export async function runWorkspaceAction(
         input.repo.id,
         input.workspace.id,
         operation.id,
-        parseHookOutput(result.stdout),
+        parseOptionalHookOutput(result.stdout),
       );
     }
     deps.store.upsertOperation({

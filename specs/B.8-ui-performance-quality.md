@@ -44,7 +44,7 @@
 [ ] 2. Workspace switching remains responsive with long terminal buffers.
 [ ] 3. Provider summaries load independently from the main workspace shell.
 [ ] 4. Slow provider commands appear as stale/degraded states.
-[ ] 5. Terminal scrollback is bounded or virtualized.
+[ ] 5. Terminal scrollback is bounded or virtualized. The tmux server enforces a global `history-limit` (default 5000 lines per pane) so a forgotten session can't grow per-pane scrollback without bound.
 [ ] 6. Normal navigation transfers only the terminal data needed for the active view.
 [ ] 7. Main happy paths have performance smoke coverage.
 

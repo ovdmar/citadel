@@ -68,6 +68,26 @@
   z-index: 2;
 }
 
+.stage-tab.is-drop-before::before,
+.stage-tab.is-drop-after::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--c-accent, #5b8df8);
+  pointer-events: none;
+}
+
+.stage-tab.is-drop-before::before {
+  left: -1px;
+}
+
+.stage-tab.is-drop-after::after {
+  right: -1px;
+}
+
 .stage-tab-button {
   appearance: none;
   background: transparent;

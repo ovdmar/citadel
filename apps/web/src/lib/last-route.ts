@@ -4,9 +4,12 @@
 const STORAGE_KEY = "citadel:lastRoute";
 
 // Path prefixes that should never be persisted as "where the user left off".
-// Empty today — every navigable view is fair game, including /onboarding so a
-// user who closes mid-setup resumes in the wizard.
-const EXCLUDED_PREFIXES: readonly string[] = [];
+// /scratchpad is the one-shot deep-link to the scratchpad drawer; persisting
+// it would cause the drawer's redirect-on-mount to loop back to itself instead
+// of restoring whichever cockpit view the user was actually on. Other routes
+// (including /onboarding) are fair game so a user who closes mid-setup resumes
+// in the wizard.
+const EXCLUDED_PREFIXES: readonly string[] = ["/scratchpad"];
 
 type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 

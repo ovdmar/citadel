@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Workspace } from "@citadel/contracts";
+import { globalPrCacheKeyForWorkspace } from "./global-pr-cache.js";
 
 const IGNORED_TOP_LEVEL = new Set([
   "node_modules",
@@ -20,11 +21,15 @@ const IGNORED_TOP_LEVEL = new Set([
 ]);
 const IGNORED_GIT_INTERNAL = new Set(["objects", "logs", "lfs", "hooks"]);
 const DEBOUNCE_MS = 350;
+const POLL_MS = 500;
 
 type ProviderCache = Map<string, { expiresAt: number; value: unknown }>;
+type WatchHandle = { close(): void };
 
 type WorkspaceFsWatcherDeps = {
   listWorkspaces: () => Workspace[];
+  resolveRepoFullName?: (repoId: string) => string | null;
+  getWorkspacePrSnapshot?: (workspaceId: string) => { prNumber: number | null } | null;
   providerCache: ProviderCache;
   emit: (type: string, payload: unknown) => void;
 };
@@ -49,12 +54,14 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
   // in node_modules then flood the event loop with ignored callbacks and
   // ttyd's WS keepalive starts missing pings (visible as the cockpit's
   // Reconnecting/Reconnected overlay storm).
-  const watchers = new Map<string, fs.FSWatcher[]>();
+  const watchers = new Map<string, WatchHandle[]>();
   const debounces = new Map<string, ReturnType<typeof setTimeout>>();
+  const pendingHeadBusts = new Set<string>();
   const failed = new Set<string>();
 
   const onChange = (workspaceId: string) => (rel: string) => {
     if (!rel || isIgnored(rel)) return;
+    if (isGitHeadRef(rel)) pendingHeadBusts.add(workspaceId);
     const existing = debounces.get(workspaceId);
     if (existing) clearTimeout(existing);
     debounces.set(
@@ -62,13 +69,14 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
       setTimeout(() => {
         debounces.delete(workspaceId);
         bustWorkspaceCaches(deps.providerCache, workspaceId);
+        if (pendingHeadBusts.delete(workspaceId)) bustWorkspaceGlobalPrCache(deps, workspaceId);
         deps.emit("workspace.fsChanged", { workspaceId });
       }, DEBOUNCE_MS),
     );
   };
 
-  const watchTree = (rootPath: string, callback: (rel: string) => void): fs.FSWatcher[] => {
-    const acc: fs.FSWatcher[] = [];
+  const watchTree = (rootPath: string, callback: (rel: string) => void): WatchHandle[] => {
+    const acc: WatchHandle[] = [];
     const walk = (absDir: string, relDir: string) => {
       if (relDir) {
         const parts = relDir.split(path.sep);
@@ -107,6 +115,18 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
     return acc;
   };
 
+  const pollTree = (rootPath: string, callback: (rel: string) => void): WatchHandle => {
+    let previous = snapshotTree(rootPath);
+    const timer = setInterval(() => {
+      const next = snapshotTree(rootPath);
+      const changedRel = firstChangedRel(previous, next);
+      previous = next;
+      if (changedRel) callback(changedRel);
+    }, POLL_MS);
+    timer.unref?.();
+    return { close: () => clearInterval(timer) };
+  };
+
   const closeFor = (id: string) => {
     const ws = watchers.get(id);
     if (ws) for (const w of ws) w.close();
@@ -130,11 +150,9 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
     for (const [id, ws] of current) {
       if (watchers.has(id) || failed.has(id)) continue;
       try {
-        const set = watchTree(ws.path, onChange(id));
+        let set = watchTree(ws.path, onChange(id));
         if (set.length === 0) {
-          failed.add(id);
-          console.error(`[fs-watch] failed to install any watch for ${ws.path}`);
-          continue;
+          set = [pollTree(ws.path, onChange(id))];
         }
         watchers.set(id, set);
       } catch (err) {
@@ -157,12 +175,29 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
 }
 
 function bustWorkspaceCaches(providerCache: ProviderCache, workspaceId: string) {
-  bustCacheByPrefixes(providerCache, [
-    `git:${workspaceId}`,
-    `vc:${workspaceId}`,
-    `ci:${workspaceId}`,
-    `apps:${workspaceId}`,
-  ]);
+  // Only invalidate caches whose freshness actually depends on the local
+  // working tree. `vc:` (PR) and `ci:` (workflow runs) are remote state — they
+  // don't change because an agent wrote a file. Busting them on every fs blip
+  // forces a fresh `gh pr view` on the next batch poll, which under load
+  // pushes gh into rate limits and surfaces as PR icons disappearing from the
+  // navbar. The 10s / 30s polls already keep this data fresh enough.
+  bustCacheByPrefixes(providerCache, [`git:${workspaceId}`, `apps:${workspaceId}`]);
+}
+
+function bustWorkspaceGlobalPrCache(deps: WorkspaceFsWatcherDeps, workspaceId: string): void {
+  if (!deps.resolveRepoFullName || !deps.getWorkspacePrSnapshot) return;
+  const workspace = deps.listWorkspaces().find((candidate) => candidate.id === workspaceId);
+  if (!workspace) return;
+  const key = globalPrCacheKeyForWorkspace(workspace, {
+    resolveRepoFullName: deps.resolveRepoFullName,
+    getSnapshot: deps.getWorkspacePrSnapshot,
+  });
+  if (key) deps.providerCache.delete(key);
+}
+
+function isGitHeadRef(rel: string): boolean {
+  const parts = rel.split(path.sep);
+  return rel === path.join(".git", "HEAD") || (parts[0] === ".git" && parts[1] === "refs" && parts[2] === "heads");
 }
 
 function isIgnored(rel: string): boolean {
@@ -176,4 +211,43 @@ function isIgnored(rel: string): boolean {
     if (sub && IGNORED_GIT_INTERNAL.has(sub)) return true;
   }
   return false;
+}
+
+function snapshotTree(rootPath: string): Map<string, string> {
+  const snapshot = new Map<string, string>();
+  const walk = (absDir: string, relDir: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const rel = relDir ? path.join(relDir, entry.name) : entry.name;
+      if (isIgnored(rel) || entry.isSymbolicLink()) continue;
+      const abs = path.join(absDir, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs, rel);
+        continue;
+      }
+      try {
+        const stat = fs.statSync(abs);
+        snapshot.set(rel, `${stat.size}:${stat.mtimeMs}`);
+      } catch {
+        // File disappeared between readdir and stat.
+      }
+    }
+  };
+  walk(rootPath, "");
+  return snapshot;
+}
+
+function firstChangedRel(previous: Map<string, string>, next: Map<string, string>): string | null {
+  for (const [rel, signature] of next) {
+    if (previous.get(rel) !== signature) return rel;
+  }
+  for (const rel of previous.keys()) {
+    if (!next.has(rel)) return rel;
+  }
+  return null;
 }

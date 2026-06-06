@@ -23,7 +23,7 @@ Bundled provider toggles:
 }
 ```
 
-GitHub provider features use the local `gh` CLI when enabled. Jira provider features use the local `jtk` CLI when enabled. If a provider CLI is missing or unhealthy, Citadel reports the provider as degraded or unavailable and disables provider-backed actions in the cockpit.
+GitHub provider features use the local `gh` CLI when enabled. Jira provider features use the local `jtk` CLI when enabled. If a provider CLI is missing or unhealthy, Citadel reports the provider as degraded or unavailable and disables provider-backed actions in the cockpit. Worktree deploys started by `make deploy` disable automated GitHub polling by default (`CITADEL_AUTOMATED_GH=0`); set `CITADEL_ENABLE_WORKTREE_GH_AUTOMATION=1` before `make deploy` to opt one worktree back in. The long-term systemd install sets `CITADEL_AUTOMATED_GH=1`.
 
 ## Runtimes
 
@@ -32,13 +32,13 @@ Runtimes are shell-backed command adapters launched through tmux:
 ```json
 {
   "runtimes": [
-    { "id": "codex", "displayName": "Codex", "command": "codex", "args": [] },
+    { "id": "codex", "displayName": "Codex", "command": "codex", "args": ["--yolo"] },
     { "id": "shell", "displayName": "Shell", "command": "bash", "args": ["-l"] }
   ]
 }
 ```
 
-Built-in defaults include `claude-code`, `codex`, `cursor-agent`, `pi`, and `shell`. Runtime health is derived from command availability. Agent sessions persist tmux session name/id for reconnect.
+Built-in defaults include `claude-code`, `codex`, `cursor-agent`, `pi`, and `shell`. Codex defaults to `--yolo` so interactive launches use the CLI's no-approval/no-sandbox mode; edit or clear the runtime args in Settings to change that. Runtime health is derived from command availability. Agent sessions persist tmux session name/id for reconnect.
 
 ## Runtime Usage Providers
 
@@ -71,6 +71,27 @@ Expected stdout fields:
 ```
 
 If no usage provider is configured for a runtime, Citadel returns an explicit `unavailable` usage summary rather than guessing.
+
+## Automations
+
+The fix-CI automation is configurable from Settings -> Automations and persists under `automations.fixCi`:
+
+```json
+{
+  "automations": {
+    "fixCi": {
+      "enabled": true,
+      "runtimeId": "claude-code",
+      "fallbackRuntimeId": "codex",
+      "idleThresholdMs": 300000,
+      "debounceMs": 1800000,
+      "intervalMs": 60000
+    }
+  }
+}
+```
+
+When PR checks are failing and the workspace is idle, Citadel launches the primary runtime only if its health is `healthy`; otherwise it tries the configured fallback. Set `fallbackRuntimeId` to `null` to skip auto-repair when the primary runtime is unavailable.
 
 ## Hooks
 

@@ -20,7 +20,7 @@ describe("ScheduledAgentRunner", () => {
     store.migrate();
     const operations = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = operations.registerRepo({ rootPath: fixture.repoPath });
@@ -56,7 +56,7 @@ describe("ScheduledAgentRunner", () => {
     store.migrate();
     const operations = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = operations.registerRepo({ rootPath: fixture.repoPath });
@@ -96,7 +96,7 @@ describe("ScheduledAgentRunner", () => {
     store.migrate();
     const operations = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = operations.registerRepo({ rootPath: fixture.repoPath });
@@ -132,7 +132,7 @@ describe("ScheduledAgentRunner", () => {
     store.migrate();
     const operations = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = operations.registerRepo({ rootPath: fixture.repoPath });
@@ -181,7 +181,7 @@ describe("ScheduledAgentRunner", () => {
     store.migrate();
     const operations = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = operations.registerRepo({ rootPath: fixture.repoPath });
@@ -244,7 +244,7 @@ describe("ScheduledAgentRunner", () => {
     store.migrate();
     const operations = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = operations.registerRepo({ rootPath: fixture.repoPath });
@@ -284,7 +284,7 @@ describe("ScheduledAgentRunner", () => {
     store.migrate();
     const operations = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = operations.registerRepo({ rootPath: fixture.repoPath });
@@ -323,7 +323,7 @@ describe("ScheduledAgentRunner", () => {
     store.migrate();
     const operations = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = operations.registerRepo({ rootPath: fixture.repoPath });
@@ -365,7 +365,7 @@ describe("ScheduledAgentRunner", () => {
     store.migrate();
     const operations = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = operations.registerRepo({ rootPath: fixture.repoPath });
@@ -428,7 +428,7 @@ describe("ScheduledAgentRunner", () => {
     store.migrate();
     const operations = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = operations.registerRepo({ rootPath: fixture.repoPath });
@@ -477,7 +477,7 @@ describe("ScheduledAgentRunner", () => {
     store.migrate();
     const operations = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = operations.registerRepo({ rootPath: fixture.repoPath });
@@ -549,7 +549,7 @@ describe("ScheduledAgentRunner", () => {
     store.migrate();
     const operations = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = operations.registerRepo({ rootPath: fixture.repoPath });
@@ -636,7 +636,7 @@ describe("ScheduledAgentRunner", () => {
     store.migrate();
     const operations = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = operations.registerRepo({ rootPath: fixture.repoPath });

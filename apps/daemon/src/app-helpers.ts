@@ -29,22 +29,21 @@ export async function cachedProviderValue<T>(
   return value;
 }
 
-// Narrows a RuntimeConfig down to the spawn-arg subset OperationService wants,
-// and coerces optionals to `null` so exactOptionalPropertyTypes stays happy.
-export function runtimeSpawnArgs(runtime: {
-  command: string;
-  args: string[];
-  displayName: string;
-  promptArg?: string | undefined;
-  sessionIdArg?: string | undefined;
-  resumeArg?: string | undefined;
-}) {
-  return {
-    command: runtime.command,
-    args: runtime.args,
-    displayName: runtime.displayName,
-    promptArg: runtime.promptArg ?? null,
-    sessionIdArg: runtime.sessionIdArg ?? null,
-    resumeArg: runtime.resumeArg ?? null,
-  };
+/** Parse a positive integer from an env var, falling back to `fallback` for
+ * unset / non-numeric / non-positive values. Used by every "interval / timeout
+ * in ms" knob in the daemon. */
+export function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/** Read a value from the provider cache without calling the loader. Returns
+ * the cached value if present and not expired, else undefined. The gh-quota
+ * scheduler uses this to serve cache when shouldRefetch says "don't fetch
+ * yet" without bypassing the normal cache freshness rules. */
+export function peekProviderValue<T>(cache: ProviderCache, key: string): T | undefined {
+  const cached = cache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value as T;
+  return undefined;
 }

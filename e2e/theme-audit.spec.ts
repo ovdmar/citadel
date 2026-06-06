@@ -95,6 +95,31 @@ test.describe("cockpit theme audit", () => {
     );
   });
 
+  test("pinned light theme keeps native controls light under a dark OS preference", async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "dark" });
+    await forceTheme(page, "light");
+    await page.goto("/");
+    await expect(page.locator(".cit-brand")).toBeVisible();
+
+    await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe("light");
+
+    await page.getByRole("button", { name: "Create workspace" }).click();
+    const select = page.locator(".modal-form select").first();
+    await expect(select).toBeVisible();
+
+    const color = await select.evaluate((element) => getComputedStyle(element).color);
+    const channels =
+      color
+        .match(/\d+(\.\d+)?/g)
+        ?.slice(0, 3)
+        .map(Number) ?? [];
+    expect(channels, `expected parsable rgb color, got ${color}`).toHaveLength(3);
+    expect(
+      channels.reduce((sum, value) => sum + value, 0),
+      `expected light-theme select text to stay dark, got ${color}`,
+    ).toBeLessThan(384);
+  });
+
   test("settings route inherits both themes cleanly", async ({ page }, testInfo) => {
     await forceTheme(page, "light");
     await page.goto("/settings");

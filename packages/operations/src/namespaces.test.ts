@@ -19,7 +19,7 @@ describe("namespace operations", () => {
     store.migrate();
     const service = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
@@ -81,7 +81,7 @@ describe("namespace operations", () => {
     store.migrate();
     const service = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     service.registerRepo({ rootPath: fixture.repoPath });
@@ -105,7 +105,7 @@ describe("namespace operations", () => {
     store.migrate();
     const service = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
@@ -131,7 +131,7 @@ describe("namespace operations", () => {
     store.migrate();
     const service = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });
@@ -159,7 +159,7 @@ describe("namespace operations", () => {
     store.migrate();
     const service = new OperationService(store, {
       hooks: [],
-      repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+      repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
       commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
     });
     const repo = service.registerRepo({ rootPath: fixture.repoPath });

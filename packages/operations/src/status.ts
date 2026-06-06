@@ -9,6 +9,12 @@ export type {
   MonitorTickDeps,
   MonitorTickOptions,
   MonitorTickResult,
-  SentinelReading,
   StatusMonitorHandle,
 } from "./status-monitor.js";
+export { runAutoRecoveryTick, startAutoRecoveryMonitor } from "./auto-recovery-monitor.js";
+export type {
+  AutoRecoveryDecision,
+  AutoRecoveryDecisionInput,
+  AutoRecoveryMonitorDeps,
+  AutoRecoveryMonitorHandle,
+} from "./auto-recovery-monitor.js";

@@ -265,7 +265,7 @@ function createService() {
   store.migrate();
   const operations = new OperationService(store, {
     hooks: [],
-    repoDefaults: { setupHookIds: [], teardownHookIds: [] },
+    repoDefaults: { setupHookIds: [], teardownHookIds: [], requestReviewHookIds: [] },
     commandPolicy: { hookTimeoutMs: 5000, allowDestructiveWorkspaceCleanup: false },
   });
   const runner = new ScheduledAgentRunner({

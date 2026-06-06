@@ -26,6 +26,7 @@ import {
   submitPrompt,
   tmuxSessionExists,
 } from "./index.js";
+import { hasCollapsedPasteMarker } from "./submit-prompt.js";
 
 const sessions: string[] = [];
 const dirs: string[] = [];
@@ -36,6 +37,12 @@ afterEach(() => {
 });
 
 describe("tmux terminal gateway helpers", () => {
+  it("recognizes collapsed paste markers from Claude Code and Codex", () => {
+    expect(hasCollapsedPasteMarker("[Pasted text #1 +101 lines]")).toBe(true);
+    expect(hasCollapsedPasteMarker("[Pasted Content 3298 chars]")).toBe(true);
+    expect(hasCollapsedPasteMarker("Pasted Content 3298 chars")).toBe(false);
+  });
+
   it("decodes tmux control-mode output chunks", () => {
     expect(parseTmuxControlOutput("%output %1 hello\\015\\012")).toBe("hello\r\n");
     expect(parseTmuxControlOutput("%session-changed $1 shell")).toBeNull();
@@ -50,8 +57,6 @@ describe("tmux terminal gateway helpers", () => {
     const session = await ensureTmuxSession({
       sessionName,
       cwd,
-      command: "bash",
-      args: ["--noprofile", "--norc"],
     });
 
     expect(session.tmuxSessionName).toBe(sessionName);
@@ -83,16 +88,16 @@ describe("tmux terminal gateway helpers", () => {
     await ensureTmuxSession({
       sessionName,
       cwd,
-      command: "bash",
-      args: ["--noprofile", "--norc"],
     });
 
     ensureTmuxExtendedKeys();
 
     const extendedKeys = execTmux(["show-options", "-s", "-g", "extended-keys"]);
     const terminalFeatures = execTmux(["show-options", "-s", "-g", "terminal-features"]);
+    const historyLimit = execTmux(["show-options", "-g", "history-limit"]);
     expect(extendedKeys).toContain("extended-keys on");
     expect(terminalFeatures).toMatch(/xterm\*.*extkeys/);
+    expect(historyLimit).toContain("history-limit 5000");
   });
 
   it("submitPrompt pastes the prompt and presses Enter so the runtime actually executes it", async () => {
@@ -103,8 +108,6 @@ describe("tmux terminal gateway helpers", () => {
     await ensureTmuxSession({
       sessionName,
       cwd,
-      command: "bash",
-      args: ["--noprofile", "--norc"],
     });
 
     // Simulates Claude Code's input box: a `read` waits for an entire line. If
@@ -140,8 +143,6 @@ describe("tmux terminal gateway helpers", () => {
     await ensureTmuxSession({
       sessionName,
       cwd,
-      command: "bash",
-      args: ["--noprofile", "--norc"],
     });
     sendKeys(sessionName, "read line && printf 'TRIMMED:%s.\\n' \"$line\"");
     sendKeys(sessionName, "\r");
@@ -171,8 +172,6 @@ describe("tmux terminal gateway helpers", () => {
     await ensureTmuxSession({
       sessionName,
       cwd,
-      command: "bash",
-      args: ["--noprofile", "--norc"],
     });
     sendKeys(sessionName, "printf 'transcript-line\\n'");
     sendKeys(sessionName, "\r");
@@ -202,8 +201,6 @@ describe("tmux terminal gateway helpers", () => {
     await ensureTmuxSession({
       sessionName,
       cwd,
-      command: "bash",
-      args: ["--noprofile", "--norc"],
     });
 
     sendKeys(sessionName, "trap 'echo INTERRUPTED' INT; sleep 10");
@@ -228,8 +225,6 @@ describe("tmux terminal gateway helpers", () => {
     await ensureTmuxSession({
       sessionName,
       cwd,
-      command: "bash",
-      args: ["--noprofile", "--norc"],
     });
 
     sendKeys(sessionName, "printf '\\033[?1049hALTSCREEN'; sleep 1; printf '\\033[?1049l'");
@@ -247,8 +242,6 @@ describe("tmux terminal gateway helpers", () => {
     await ensureTmuxSession({
       sessionName,
       cwd,
-      command: "bash",
-      args: ["--noprofile", "--norc"],
     });
     const server = http.createServer();
     attachTerminalWebSocket(server, (id) => (id === "alt" ? sessionName : null));
@@ -278,8 +271,6 @@ describe("tmux terminal gateway helpers", () => {
     await ensureTmuxSession({
       sessionName,
       cwd,
-      command: "bash",
-      args: ["--noprofile", "--norc"],
     });
     const server = http.createServer();
     attachTerminalWebSocket(server, (id) => (id === "sess_test" ? sessionName : null));
@@ -318,38 +309,6 @@ describe("tmux terminal gateway helpers", () => {
   // After it dies, the pane must drop back to an interactive login shell
   // rooted at the workspace cwd, and the sentinel that gates session status
   // detection must be cleared.
-  it("pane survives the agent exiting and drops back into a usable shell", async () => {
-    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
-    dirs.push(cwd);
-    const sessionName = `citadel_pane_survives_${Date.now().toString(36)}`;
-    sessions.push(sessionName);
-
-    await ensureTmuxSession({
-      sessionName,
-      cwd,
-      command: "bash",
-      args: ["-c", "trap 'echo AGENT-DEAD; exit 0' INT; while true; do sleep 1; done"],
-    });
-
-    // ensureTmuxSession now waits for the pane to settle, so the wrapper's
-    // sentinel must be present and the inner agent must be reading stdin.
-    expect(isAgentLive(sessionName)).toBe(true);
-
-    sendKeys(sessionName, "\u0003"); // Ctrl+C → mock agent traps, exits 0.
-    await waitForCapture(sessionName, "AGENT-DEAD");
-    await waitForCapture(sessionName, "[citadel] Agent exited");
-    await waitFor(() => !isAgentLive(sessionName), 2000);
-    expect(isAgentLive(sessionName)).toBe(false);
-
-    // Pane is still alive; we can run a shell command and see its output.
-    sendKeys(sessionName, "printf 'post-agent-prompt'");
-    sendKeys(sessionName, "\r");
-    await waitForCapture(sessionName, "post-agent-prompt");
-    expect(tmuxSessionExists(sessionName)).toBe(true);
-
-    killTmuxSession(sessionName);
-    expect(fs.existsSync(agentLiveSentinelPath(sessionName))).toBe(false);
-  });
 
   it("keeps WebSocket output isolated across sessions and supports reconnect scrollback", async () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-terminal-"));
@@ -357,8 +316,8 @@ describe("tmux terminal gateway helpers", () => {
     const sessionA = `citadel_iso_a_${Date.now().toString(36)}`;
     const sessionB = `citadel_iso_b_${Date.now().toString(36)}`;
     sessions.push(sessionA, sessionB);
-    await ensureTmuxSession({ sessionName: sessionA, cwd, command: "bash", args: ["--noprofile", "--norc"] });
-    await ensureTmuxSession({ sessionName: sessionB, cwd, command: "bash", args: ["--noprofile", "--norc"] });
+    await ensureTmuxSession({ sessionName: sessionA, cwd });
+    await ensureTmuxSession({ sessionName: sessionB, cwd });
     const server = http.createServer();
     attachTerminalWebSocket(server, (id) => (id === "a" ? sessionA : id === "b" ? sessionB : null));
     await listen(server);
