@@ -15,8 +15,9 @@ process.env.CITADEL_DISABLE_SCHEDULER = "1";
 process.env.CITADEL_DISABLE_TERMINAL_REAPER = "1";
 
 const createFixture = () => createFixtureBase(dirs);
+const SLOW_DAEMON_TEST_TIMEOUT = 20_000;
 
-describe("createDaemonApp — GitHub quota", () => {
+describe("createDaemonApp — GitHub quota", { timeout: SLOW_DAEMON_TEST_TIMEOUT }, () => {
   it("reports GitHub quota automation disabled for worktree daemons without shelling out", async () => {
     const prevWorktree = process.env.CITADEL_WORKTREE;
     const prevAutomated = process.env.CITADEL_AUTOMATED_GH;

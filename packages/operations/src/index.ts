@@ -53,6 +53,7 @@ import {
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export { BranchInUseByWorktreeError, RemoteRefMissingError, WorkspaceInUseError, WorkspaceNameTakenError } from "./helpers.js";
 import { runNotificationHooks, runWorkspaceHooks } from "./hooks-runner.js";
+import { addActivityRecord, createOperationRecord } from "./service-records.js";
 import {
   type WorkspaceAppsDeps,
   discoverWorkspaceApps as discoverWorkspaceAppsImpl,
@@ -730,24 +731,7 @@ export class OperationService {
     progress: number,
     message: string,
   ) {
-    const now = nowIso();
-    const operation: Operation = {
-      id: createId("op"),
-      type,
-      status,
-      repoId,
-      workspaceId,
-      progress,
-      message,
-      error: null,
-      logs: [{ level: "info", message, at: now }],
-      retriable: false,
-      retryInput: null,
-      createdAt: now,
-      updatedAt: now,
-    };
-    this.store.upsertOperation(operation);
-    return operation;
+    return createOperationRecord(this.store, { type, status, repoId, workspaceId, progress, message });
   }
 
   private logOp(operationId: string, level: "info" | "warn" | "error", message: string) {
@@ -763,17 +747,7 @@ export class OperationService {
     operationId: string | null,
     hookOutput?: HookOutput | null,
   ) {
-    this.store.addActivity({
-      id: createId("evt"),
-      type,
-      source,
-      repoId,
-      workspaceId,
-      operationId,
-      message,
-      hookOutput: hookOutput ?? null,
-      createdAt: nowIso(),
-    });
+    addActivityRecord(this.store, { type, source, repoId, workspaceId, operationId, message, hookOutput });
   }
 
   private runWorkspaceHooks = (

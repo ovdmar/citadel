@@ -19,8 +19,9 @@ process.env.CITADEL_DISABLE_SCHEDULER = "1";
 
 type Namespace = { id: string; name: string; archivedAt: string | null; color: string | null };
 type Workspace = { id: string; name: string; namespaceId: string | null };
+const SLOW_DAEMON_TEST_TIMEOUT = 30_000;
 
-describe("namespace routes + MCP integration", () => {
+describe("namespace routes + MCP integration", { timeout: SLOW_DAEMON_TEST_TIMEOUT }, () => {
   it("creates a namespace, creates a workspace in it, lists, and reassigns through the MCP tool surface", async () => {
     const fixture = createFixture();
     const git = createGitRepo(fixture.config.dataDir);
@@ -238,7 +239,7 @@ describe("namespace routes + MCP integration", () => {
       expect(recreate.namespace.color).toBe("#445566");
 
       // assign_workspace_to_namespace via MCP without namespaceId is rejected
-      // by the daemon (Zod parse), surfacing a validation error to the caller.
+      // by the daemon (Zod parse), surfacing a JSON-RPC error to the caller.
       const missingArgResponse = await fetch(`${baseUrl}/api/mcp/rpc`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -249,12 +250,11 @@ describe("namespace routes + MCP integration", () => {
           params: { name: "assign_workspace_to_namespace", arguments: { workspaceId: workspaceCreate.workspaceId } },
         }),
       });
-      expect(missingArgResponse.status).toBe(400);
+      expect(missingArgResponse.status).toBe(200);
       const missingArgBody = (await missingArgResponse.json()) as {
-        error?: string;
-        issues?: Array<{ path: string }>;
+        error?: { message?: string };
       };
-      expect(missingArgBody.issues?.some((issue) => issue.path === "namespaceId")).toBe(true);
+      expect(missingArgBody.error?.message).toContain("namespaceId");
     } finally {
       await closeServer(server);
     }

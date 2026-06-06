@@ -24,12 +24,24 @@ const DEBOUNCE_MS = 350;
 
 type ProviderCache = Map<string, { expiresAt: number; value: unknown }>;
 
+export type WorkspaceWatchDirectory = (
+  absDir: string,
+  listener: (eventType: string, filename: string | Buffer | null) => void,
+) => WorkspaceWatchHandle;
+
+type WorkspaceWatchHandle = {
+  close(): void;
+  on(event: "error", listener: (error: Error) => void): unknown;
+};
+
 type WorkspaceFsWatcherDeps = {
   listWorkspaces: () => Workspace[];
   resolveRepoFullName?: (repoId: string) => string | null;
   getWorkspacePrSnapshot?: (workspaceId: string) => { prNumber: number | null } | null;
   providerCache: ProviderCache;
   emit: (type: string, payload: unknown) => void;
+  watchDirectory?: WorkspaceWatchDirectory;
+  debounceMs?: number;
 };
 
 export function bustCacheByPrefixes(providerCache: ProviderCache, prefixes: string[]): number {
@@ -52,10 +64,17 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
   // in node_modules then flood the event loop with ignored callbacks and
   // ttyd's WS keepalive starts missing pings (visible as the cockpit's
   // Reconnecting/Reconnected overlay storm).
-  const watchers = new Map<string, fs.FSWatcher[]>();
+  const watchers = new Map<string, WorkspaceWatchHandle[]>();
   const debounces = new Map<string, ReturnType<typeof setTimeout>>();
   const pendingHeadBusts = new Set<string>();
   const failed = new Set<string>();
+  const watchDirectory: WorkspaceWatchDirectory =
+    deps.watchDirectory ??
+    ((absDir, listener) =>
+      fs.watch(absDir, { persistent: false }, (eventType, filename) => {
+        listener(eventType, filename);
+      }));
+  const debounceMs = deps.debounceMs ?? DEBOUNCE_MS;
 
   const onChange = (workspaceId: string) => (rel: string) => {
     if (!rel || isIgnored(rel)) return;
@@ -69,12 +88,12 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
         bustWorkspaceCaches(deps.providerCache, workspaceId);
         if (pendingHeadBusts.delete(workspaceId)) bustWorkspaceGlobalPrCache(deps, workspaceId);
         deps.emit("workspace.fsChanged", { workspaceId });
-      }, DEBOUNCE_MS),
+      }, debounceMs),
     );
   };
 
-  const watchTree = (rootPath: string, callback: (rel: string) => void): fs.FSWatcher[] => {
-    const acc: fs.FSWatcher[] = [];
+  const watchTree = (rootPath: string, callback: (rel: string) => void): WorkspaceWatchHandle[] => {
+    const acc: WorkspaceWatchHandle[] = [];
     const walk = (absDir: string, relDir: string) => {
       if (relDir) {
         const parts = relDir.split(path.sep);
@@ -83,7 +102,7 @@ export function createWorkspaceFsWatchers(deps: WorkspaceFsWatcherDeps) {
         if (top === ".git" && parts[1] && IGNORED_GIT_INTERNAL.has(parts[1])) return;
       }
       try {
-        const w = fs.watch(absDir, { persistent: false }, (_eventType, filename) => {
+        const w = watchDirectory(absDir, (_eventType, filename) => {
           if (filename == null) return;
           const name = typeof filename === "string" ? filename : String(filename);
           if (!name) return;
