@@ -7,7 +7,11 @@ import type {
   WorktreeCheckout,
 } from "@citadel/contracts";
 import type { LifecycleTone } from "@citadel/core";
-import { type AttentionSessionIds, deriveWorkspaceDisplayLifecycleTone } from "./session-status-display.js";
+import {
+  type AttentionSessionIds,
+  deriveWorkspaceDisplayLifecycleTone,
+  workspaceCardSessions,
+} from "./session-status-display.js";
 import { type ApprovalTone, type PrTone, approvalToneFor, prToneFor } from "./workspace-card.js";
 
 export type CheckoutPrStateByWorkspace = Map<string, Map<string, WorkspacePrStateEntry>>;
@@ -69,7 +73,7 @@ export function aggregateNavigatorTone(
       if (prAggregate.prTone === "conflicting" || prAggregate.prTone === "failing") return "attention";
     }
     const tone = deriveWorkspaceDisplayLifecycleTone({
-      sessions: sessions.filter((session) => session.workspaceId === workspace.id),
+      sessions: workspaceCardSessions(sessions, workspace.id, workspaceCheckouts),
       pullRequest: prByWorkspaceId?.get(workspace.id) ?? null,
       unseenAttentionSessionIds,
     });

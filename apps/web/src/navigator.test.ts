@@ -136,6 +136,17 @@ describe("aggregateNavigatorTone", () => {
     ).toBe("running");
   });
 
+  it("running when a nested checkout has a running agent", () => {
+    expect(
+      aggregateNavigatorTone(
+        [makeWorkspace({ id: "ws_home" })],
+        [makeAgent({ id: "sess_checkout", workspaceId: "ws_home", checkoutId: "co_api", status: "running" })],
+        undefined,
+        [makeCheckout({ id: "co_api", workspaceId: "ws_home" })],
+      ),
+    ).toBe("running");
+  });
+
   it("done when every workspace's agents finished and no PR overrides", () => {
     expect(
       aggregateNavigatorTone(
@@ -347,6 +358,36 @@ describe("Navigator checkout aggregation", () => {
     expect(container.querySelector(".approval-pill")?.getAttribute("title")).toBe("Approval: changes");
   });
 
+  it("renders running checkout agents as orange pulses on parent and worktree cards", () => {
+    const workspace = makeWorkspace({
+      id: "ws_home",
+      repoId: null,
+      name: "Home",
+      path: "/work/home",
+      rootPath: "/work/home",
+      branch: "home",
+      kind: "root",
+      mode: "structured",
+    });
+    const checkout = makeCheckout({
+      id: "co_api",
+      workspaceId: workspace.id,
+      name: "api",
+      path: "/work/home/api",
+      branch: "feature/api",
+    });
+    const container = renderNavigator({
+      workspaces: [workspace],
+      checkouts: [checkout],
+      sessions: [makeAgent({ id: "sess_api", workspaceId: workspace.id, checkoutId: checkout.id, status: "running" })],
+    });
+
+    const dots = Array.from(container.querySelectorAll(".workspace-status-dot"));
+    expect(dots).toHaveLength(2);
+    expect(dots.every((dot) => dot.classList.contains("cit-pulse-run"))).toBe(true);
+    expect(dots.some((dot) => dot.classList.contains("cit-pulse-idle"))).toBe(false);
+  });
+
   it("hides a shown main repo workspace through the repo visibility flag", async () => {
     const repo = makeRepo({ id: "repo_a", showMainWorkspace: true });
     const workspace = makeWorkspace({
@@ -422,6 +463,7 @@ function renderNavigator(overrides: {
   repos?: Repo[];
   workspaces?: Workspace[];
   checkouts?: WorktreeCheckout[];
+  sessions?: AgentSession[];
   prByWorkspaceId?: Map<string, PullRequestSummary | null>;
   checkoutPrByWorkspaceId?: CheckoutPrStateByWorkspace;
   onPickTarget?: (workspaceId: string, targetKey: string) => void;
@@ -444,6 +486,7 @@ function NavigatorHarness(props: {
     repos?: Repo[];
     workspaces?: Workspace[];
     checkouts?: WorktreeCheckout[];
+    sessions?: AgentSession[];
     prByWorkspaceId?: Map<string, PullRequestSummary | null>;
     checkoutPrByWorkspaceId?: CheckoutPrStateByWorkspace;
     onPickTarget?: (workspaceId: string, targetKey: string) => void;
@@ -456,7 +499,7 @@ function NavigatorHarness(props: {
     repos: overrides.repos ?? [],
     workspaces: overrides.workspaces ?? [],
     checkouts: overrides.checkouts ?? [],
-    sessions: [],
+    sessions: overrides.sessions ?? [],
     operations: [],
     prByWorkspaceId: overrides.prByWorkspaceId ?? new Map(),
     checkoutPrByWorkspaceId: overrides.checkoutPrByWorkspaceId ?? new Map(),
