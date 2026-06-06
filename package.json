@@ -2,6 +2,7 @@
   "name": "citadel",
   "version": "0.3.0",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "packageManager": "pnpm@11.1.2",
   "engines": {
