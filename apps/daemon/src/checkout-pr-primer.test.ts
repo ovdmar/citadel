@@ -110,7 +110,7 @@ async function flush() {
 }
 
 describe("checkout PR primer", () => {
-  it("only primes when a running checkout agent reaches a terminal work status", () => {
+  it("only primes when a running agent reaches a terminal work status", () => {
     const base = session();
     expect(shouldPrimeCheckoutPr({ session: base, previousStatus: "running", nextStatus: "idle" })).toBe(true);
     expect(shouldPrimeCheckoutPr({ session: base, previousStatus: "running", nextStatus: "waiting_for_input" })).toBe(
@@ -124,22 +124,25 @@ describe("checkout PR primer", () => {
         previousStatus: "running",
         nextStatus: "idle",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("forces one checkout PR refresh and suppresses repeated same-head transitions inside the debounce", async () => {
     let nowMs = 1_000_000;
     const fetchCheckoutVersionControl = vi.fn(async () => vc());
+    const fetchVersionControl = vi.fn(async () => vc());
+    const onRefreshed = vi.fn();
     const primer = createCheckoutPrPrimeOnAgentFinish({
       store: {
         findWorkspaceCheckout: () => checkout(),
         listWorkspaces: () => [workspace()],
         listRepos: () => [repo()],
       },
-      github: { fetchCheckoutVersionControl },
+      github: { fetchCheckoutVersionControl, fetchVersionControl },
       now: () => nowMs,
       debounceMs: 120_000,
       readHead: () => "sha-a",
+      onRefreshed,
     });
 
     primer({ session: session(), previousStatus: "running", nextStatus: "idle" });
@@ -154,6 +157,11 @@ describe("checkout PR primer", () => {
       "vc:ws_a:checkout:co_api:2026-06-05T00:00:00.000Z",
       { intent: "automatic", force: true, staleWhileRevalidate: true },
     );
+    expect(fetchVersionControl).not.toHaveBeenCalled();
+    expect(onRefreshed).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "ws_a" }),
+      expect.objectContaining({ id: "co_api" }),
+    );
 
     nowMs += 121_000;
     primer({ session: session(), previousStatus: "running", nextStatus: "idle" });
@@ -163,6 +171,7 @@ describe("checkout PR primer", () => {
 
   it("allows a second forced refresh for the same checkout when local HEAD changed", async () => {
     const fetchCheckoutVersionControl = vi.fn(async () => vc());
+    const fetchVersionControl = vi.fn(async () => vc());
     let head = "sha-a";
     const primer = createCheckoutPrPrimeOnAgentFinish({
       store: {
@@ -170,7 +179,7 @@ describe("checkout PR primer", () => {
         listWorkspaces: () => [workspace()],
         listRepos: () => [repo()],
       },
-      github: { fetchCheckoutVersionControl },
+      github: { fetchCheckoutVersionControl, fetchVersionControl },
       now: () => 1_000_000,
       debounceMs: 120_000,
       readHead: () => head,
@@ -182,5 +191,39 @@ describe("checkout PR primer", () => {
     await flush();
 
     expect(fetchCheckoutVersionControl).toHaveBeenCalledTimes(2);
+  });
+
+  it("forces a workspace PR refresh for a non-checkout agent finishing work", async () => {
+    const fetchCheckoutVersionControl = vi.fn(async () => vc());
+    const fetchVersionControl = vi.fn(async () => vc());
+    const onRefreshed = vi.fn();
+    const primer = createCheckoutPrPrimeOnAgentFinish({
+      store: {
+        findWorkspaceCheckout: () => null,
+        listWorkspaces: () => [workspace({ kind: "worktree" })],
+        listRepos: () => [repo()],
+      },
+      github: { fetchCheckoutVersionControl, fetchVersionControl },
+      now: () => 1_000_000,
+      debounceMs: 120_000,
+      readHead: () => "sha-workspace",
+      onRefreshed,
+    });
+
+    primer({
+      session: session({ targetType: "workspace_home", checkoutId: null }),
+      previousStatus: "running",
+      nextStatus: "idle",
+    });
+    await flush();
+
+    expect(fetchCheckoutVersionControl).not.toHaveBeenCalled();
+    expect(fetchVersionControl).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "ws_a" }),
+      expect.objectContaining({ id: "repo_a" }),
+      "vc:ws_a:2026-06-05T00:00:00.000Z",
+      { intent: "automatic", force: true, staleWhileRevalidate: true },
+    );
+    expect(onRefreshed).toHaveBeenCalledWith(expect.objectContaining({ id: "ws_a" }), null);
   });
 });

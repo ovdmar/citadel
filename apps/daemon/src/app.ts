@@ -258,7 +258,7 @@ export async function createDaemonApp(input: {
     store,
     github: githubState,
     onRefreshed: (workspace, checkout) => {
-      emit("workspace.updated", { workspaceId: workspace.id, checkoutId: checkout.id });
+      emit("workspace.pr.updated", { workspaceId: workspace.id, checkoutId: checkout?.id ?? null });
     },
   });
 
