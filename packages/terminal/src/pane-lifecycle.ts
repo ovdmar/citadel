@@ -14,11 +14,11 @@ import { shellQuote, tmuxPrefix, waitForPaneCommand, waitForTerminalIdle } from 
 // runtime binary names still match.
 export const COMM_TRUNCATION = 15;
 
-// Env tokens preserved byte-for-byte from the legacy wrapper at
-// packages/terminal/src/index.ts:131. Dropping any one of these produces a
-// visible TUI rendering regression in claude/codex (verified against the
-// wrapper before the shell-first refactor).
-const COLOR_ENV_PREFIX = "env -u NO_COLOR TERM=xterm-256color COLORTERM=truecolor FORCE_COLOR=1 CLICOLOR_FORCE=1";
+// Env tokens preserved from the legacy wrapper at packages/terminal/src/index.ts:131.
+// Dropping any one of these produces a visible TUI rendering regression in
+// claude/codex (verified against the wrapper before the shell-first refactor).
+const COLOR_ENV_UNSETS = ["NO_COLOR"];
+const COLOR_ENV_ASSIGNMENTS = ["TERM=xterm-256color", "COLORTERM=truecolor", "FORCE_COLOR=1", "CLICOLOR_FORCE=1"];
 
 export type PanePidProcess = { command: string; pid: number };
 export type AgentExitHint = { runtimeId: string; runtimeSessionId?: string | null };
@@ -94,8 +94,11 @@ export async function launchAgentInSession(
   if (!runtimeBinary) throw new Error("launchAgentInSession requires a runtimeBinary");
   await waitForTerminalIdle(sessionName, { timeoutMs: 1500, idleMs: 200, socketName: options.socketName ?? null });
   const launchCmd = [
-    COLOR_ENV_PREFIX,
-    ...envAssignments(options.env),
+    "env",
+    ...envUnsetArgs(options.env),
+    ...COLOR_ENV_UNSETS.flatMap((key) => ["-u", key]),
+    ...COLOR_ENV_ASSIGNMENTS,
+    ...envAssignmentArgs(options.env),
     shellQuote(runtimeBinary),
     ...argv.map(shellQuote),
   ].join(" ");
@@ -114,12 +117,24 @@ export async function launchAgentInSession(
   }
 }
 
-function envAssignments(env: Record<string, string | null | undefined> | undefined): string[] {
+function envUnsetArgs(env: Record<string, string | null | undefined> | undefined): string[] {
   if (!env) return [];
   const out: string[] = [];
   for (const [key, value] of Object.entries(env)) {
-    if (value === null || value === undefined) continue;
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`Invalid environment variable name: ${key}`);
+    if (value === null) {
+      out.push("-u", key);
+    }
+  }
+  return out;
+}
+
+function envAssignmentArgs(env: Record<string, string | null | undefined> | undefined): string[] {
+  if (!env) return [];
+  const out: string[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) throw new Error(`Invalid environment variable name: ${key}`);
+    if (value === null || value === undefined) continue;
     out.push(shellQuote(`${key}=${value}`));
   }
   return out;

@@ -190,15 +190,19 @@ export function shellQuote(value: string) {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-function tmuxEnvironmentArgs(env?: Record<string, string | null | undefined>): string[] {
+function commandEnvironmentPrefix(env?: Record<string, string | null | undefined>): string[] {
   if (!env) return [];
   const args: string[] = [];
   for (const [key, value] of Object.entries(env)) {
-    if (value === null || value === undefined) continue;
+    if (value === undefined) continue;
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
-    args.push("-e", `${key}=${value}`);
+    if (value === null) {
+      args.push("-u", key);
+      continue;
+    }
+    args.push(`${key}=${value}`);
   }
-  return args;
+  return args.length ? ["env", ...args] : [];
 }
 
 /**
@@ -251,20 +255,10 @@ export async function ensureTmuxSessionRaw(input: RawTerminalSessionRequest) {
   // tmux new-session takes a single `shell-command` string and hands it to
   // /bin/sh -c. Build it ourselves with shellQuote so an arg with spaces is
   // preserved correctly.
-  const shellCommand = [input.command, ...input.args].map(shellQuote).join(" ");
+  const shellCommand = [...commandEnvironmentPrefix(input.env), input.command, ...input.args].map(shellQuote).join(" ");
   await execFileAsync(
     "tmux",
-    [
-      ...tmuxPrefix(input.socketName),
-      "new-session",
-      "-d",
-      "-s",
-      input.sessionName,
-      "-c",
-      input.cwd,
-      ...tmuxEnvironmentArgs(input.env),
-      shellCommand,
-    ],
+    [...tmuxPrefix(input.socketName), "new-session", "-d", "-s", input.sessionName, "-c", input.cwd, shellCommand],
     {
       timeout: 10000,
       maxBuffer: 128 * 1024,

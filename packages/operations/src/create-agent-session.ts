@@ -17,8 +17,9 @@ import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import {
   type RuntimeLaunchOptionsInput,
+  codexHomeForWorkspace,
   discoverCodexSessionId,
-  prepareCodexHomeForWorkspace,
+  prepareCodexSqliteHomeForWorkspace,
   resolveRuntimeLaunchProfile,
 } from "@citadel/runtimes";
 import {
@@ -196,8 +197,9 @@ export async function createAgentSession(
   // and is already foreground; calling launchAgentInSession with "bash"
   // would re-launch bash inside the existing bash. Skip it.
   const isShellRuntime = ["bash", "sh", "zsh", "fish"].includes(runtime.command);
-  const codexHome = input.runtimeId === "codex" ? prepareCodexHomeForWorkspace({ workspaceId: workspace.id }) : null;
-  const runtimeEnv = codexHome ? { CODEX_HOME: codexHome.home, CODEX_SQLITE_HOME: codexHome.sqliteHome } : undefined;
+  const codexSqliteHome =
+    input.runtimeId === "codex" ? prepareCodexSqliteHomeForWorkspace({ workspaceId: workspace.id }) : null;
+  const runtimeEnv = codexSqliteHome ? { CODEX_HOME: null, CODEX_SQLITE_HOME: codexSqliteHome } : undefined;
   let tmux: Awaited<ReturnType<typeof ensureTmuxSession>>;
   let runtimeLaunchStartedMs: number | null = null;
   try {
@@ -311,7 +313,7 @@ export async function createAgentSession(
           spawnTimeMs,
           timeoutMs: 120_000,
           ...(paneRootPid ? { rootPid: paneRootPid } : {}),
-          ...(codexHome ? { codexHome: codexHome.home } : {}),
+          ...(codexSqliteHome ? { codexHome: codexHomeForWorkspace(workspace.id) } : {}),
         });
         if (found) store.setSessionRuntimeSessionId(session.id, found);
       } catch {
