@@ -235,16 +235,18 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     const runResize = () => {
       if (disposed) return;
       if (!activeRef.current) return;
+      let fittedSize: ReturnType<FitAddon["proposeDimensions"]>;
       try {
-        fit.fit();
+        fittedSize = fit.proposeDimensions();
       } catch {
         return;
       }
-      const fittedCols = terminal.cols;
-      const rows = terminal.rows;
+      if (!fittedSize) return;
+      const fittedCols = fittedSize.cols;
+      const rows = fittedSize.rows;
       if (!Number.isFinite(fittedCols) || !Number.isFinite(rows) || fittedCols <= 0 || rows <= 0) return;
       const cols = terminalReadableCols(fittedCols);
-      if (cols !== fittedCols) terminal.resize(cols, rows);
+      if (terminal.cols !== cols || terminal.rows !== rows) terminal.resize(cols, rows);
       if (lastSentResize?.cols === cols && lastSentResize.rows === rows) return;
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "resize", cols, rows }));

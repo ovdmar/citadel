@@ -322,7 +322,7 @@ test("desktop terminal surface is opaque and stable in the cockpit", async ({ pa
     const workspaceName = `render-${Date.now().toString(36)}`;
     workspaceId = (await createWorkspace(request, repo.id, workspaceName)).workspaceId;
     await waitForWorkspace(request, workspaceId, "ready");
-    await startSession(request, workspaceId, "Render Shell");
+    const session = await startSession(request, workspaceId, "Render Shell");
 
     await page.goto("/");
     const navigator = page.locator("aside[aria-label='Navigator']");
@@ -407,6 +407,67 @@ test("desktop terminal surface is opaque and stable in the cockpit", async ({ pa
     expect(terminalGeometry.xtermRight).toBeLessThanOrEqual(terminalGeometry.hostRight + 0.5);
     expect(terminalGeometry.screenRight).toBeLessThanOrEqual(terminalGeometry.hostRight + 0.5);
     expect(terminalGeometry.viewportRight).toBeLessThanOrEqual(terminalGeometry.hostRight + 0.5);
+
+    const edgeMarker = `EDGE_${Date.now().toString(36)}`;
+    const edgeSocket = await openTerminalSocket(session.id);
+    try {
+      const edgeOutput = waitForTerminalOutput(edgeSocket, edgeMarker);
+      edgeSocket.send(
+        Buffer.from(
+          `cols=$(tput cols); pad=$((cols-${edgeMarker.length})); [ "$pad" -lt 0 ] && pad=0; printf '%*s%s\\n' "$pad" "" "${edgeMarker}"\r`,
+          "utf8",
+        ),
+      );
+      await edgeOutput;
+    } finally {
+      edgeSocket.close();
+    }
+
+    await expect
+      .poll(
+        () =>
+          terminalHost.evaluate(
+            (element, marker) => element.querySelector(".xterm-rows")?.textContent?.includes(marker) ?? false,
+            edgeMarker,
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(true);
+    const markerGeometry = await terminalHost.evaluate((element, marker) => {
+      const hostRect = element.getBoundingClientRect();
+      const rows = Array.from(element.querySelectorAll(".xterm-rows > div"));
+      const row = rows.find((candidate) => candidate.textContent?.includes(marker));
+      if (!(row instanceof HTMLElement)) return null;
+      const markerRect = markerTextRect(row, marker);
+      if (!markerRect) return null;
+      return {
+        markerRightGap: hostRect.right - markerRect.right,
+        rowText: row.textContent ?? "",
+      };
+
+      function markerTextRect(root: HTMLElement, needle: string): DOMRect | null {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let node = walker.nextNode();
+        while (node) {
+          const text = node.textContent ?? "";
+          const index = text.indexOf(needle);
+          if (index !== -1) {
+            const range = document.createRange();
+            range.setStart(node, index);
+            range.setEnd(node, index + needle.length);
+            const rect = Array.from(range.getClientRects()).at(-1) ?? null;
+            range.detach();
+            return rect;
+          }
+          node = walker.nextNode();
+        }
+        return null;
+      }
+    }, edgeMarker);
+    expect(markerGeometry, `Expected terminal output row to contain ${edgeMarker}`).not.toBeNull();
+    if (!markerGeometry) throw new Error(`Terminal marker ${edgeMarker} was not measurable`);
+    expect(markerGeometry.rowText).toContain(edgeMarker);
+    expect(markerGeometry.markerRightGap).toBeGreaterThanOrEqual(12);
   } finally {
     if (workspaceId) await request.delete(`${API_BASE}/api/workspaces/${workspaceId}?archiveOnly=true`);
     fs.rmSync(fixture.dir, { recursive: true, force: true });
