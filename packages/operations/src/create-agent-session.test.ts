@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SqliteStore } from "@citadel/db";
-import { codexHomeForWorkspace, codexSqliteHomeForWorkspace } from "@citadel/runtimes";
+import { codexSqliteHomeForWorkspace } from "@citadel/runtimes";
 import { afterEach, describe, expect, it } from "vitest";
 import { OperationService } from "./index.js";
 
@@ -338,7 +338,7 @@ describe("createAgentSession session-id wiring", () => {
     }
   }, 20_000);
 
-  it("launches Codex with isolated workspace CODEX_HOME and CODEX_SQLITE_HOME", async () => {
+  it("launches Codex with isolated workspace CODEX_SQLITE_HOME and shared user CODEX_HOME", async () => {
     const fixture = createGitFixture();
     const store = new SqliteStore(path.join(fixture.dir, "citadel.sqlite"));
     store.migrate();
@@ -365,9 +365,8 @@ describe("createAgentSession session-id wiring", () => {
         { command: "node", args: [scriptPath], displayName: "Fake Codex", sessionIdArg: "--session-id" },
       );
       const env = JSON.parse(fs.readFileSync(envPath, "utf8")) as { home: string; sqlite: string };
-      expect(env.home).toBe(codexHomeForWorkspace(created.workspaceId));
+      expect(env.home).toBe("");
       expect(env.sqlite).toBe(codexSqliteHomeForWorkspace(created.workspaceId));
-      expect(fs.existsSync(codexHomeForWorkspace(created.workspaceId))).toBe(true);
       expect(fs.existsSync(codexSqliteHomeForWorkspace(created.workspaceId))).toBe(true);
     } finally {
       if (previousRoot === undefined) Reflect.deleteProperty(process.env, "CITADEL_CODEX_HOME_ROOT");

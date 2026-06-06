@@ -83,7 +83,7 @@ describe("launchAgentInSession", () => {
     // long enough for the predicate to match. Predicate uses COMM_TRUNCATION.
     await launchAgentInSession(sessionName, "sleep", ["10"], {
       timeoutMs: 3000,
-      env: { CODEX_SQLITE_HOME: "/tmp/citadel-codex-sqlite" },
+      env: { CODEX_HOME: null, CODEX_SQLITE_HOME: "/tmp/citadel-codex-sqlite" },
     });
     const info = panePidProcess(sessionName);
     expect(info?.command).toBe("sleep".slice(0, COMM_TRUNCATION));
@@ -96,11 +96,12 @@ describe("launchAgentInSession", () => {
       { encoding: "utf8", maxBuffer: 65_536 },
     );
     const scroll = scrollRaw.replace(/[ \t]+\n/g, "").replace(/\n/g, " ");
-    expect(scroll).toContain("env -u NO_COLOR");
+    expect(scroll).toContain("env -u CODEX_HOME -u NO_COLOR");
     expect(scroll).toContain("TERM=xterm-256color");
     expect(scroll).toContain("COLORTERM=truecolor");
     expect(scroll).toContain("FORCE_COLOR=1");
     expect(scroll).toContain("CLICOLOR_FORCE=1");
+    expect(scroll).toContain("-u CODEX_HOME");
     expect(scroll).toContain("CODEX_SQLITE_HOME=/tmp/citadel-codex-sqlite");
   }, 10_000);
 

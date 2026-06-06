@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SqliteStore } from "@citadel/db";
-import { codexHomeForWorkspace, codexSqliteHomeForWorkspace } from "@citadel/runtimes";
+import { codexSqliteHomeForWorkspace } from "@citadel/runtimes";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const killCalls: string[] = [];
@@ -141,7 +141,7 @@ describe("createBackgroundAgentSession", () => {
     expect(terminal.submitPrompt).toHaveBeenCalledWith(pasteCall?.sessionName, "echo hi");
   });
 
-  it("launches background Codex runs with isolated CODEX_HOME and CODEX_SQLITE_HOME", async () => {
+  it("launches background Codex runs with isolated CODEX_SQLITE_HOME and shared user CODEX_HOME", async () => {
     const terminal = await import("@citadel/terminal");
     const { createBackgroundAgentSession } = await import("./create-background-agent-session.js");
     const { store, dir } = createStore();
@@ -160,7 +160,7 @@ describe("createBackgroundAgentSession", () => {
       );
       const call = vi.mocked(terminal.ensureTmuxSessionRaw).mock.calls.at(-1)?.[0];
       expect(call?.env).toEqual({
-        CODEX_HOME: codexHomeForWorkspace("background_sched_codex"),
+        CODEX_HOME: null,
         CODEX_SQLITE_HOME: codexSqliteHomeForWorkspace("background_sched_codex"),
       });
     } finally {
