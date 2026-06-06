@@ -38,10 +38,6 @@ make e2e
 
 Citadel uses pnpm, strict TypeScript project references, Biome, Vitest, Playwright, SQLite, tmux, REST/SSE for app state, and a dedicated WebSocket for terminal I/O.
 
-## License
-
-Citadel is source-available under the [PolyForm Perimeter License 1.0.1](LICENSE). Commercial use is allowed when it does not provide a product or service that competes with Citadel. Redistributions must preserve the required notice pointing to the original repository.
-
 ## Docs
 
 - [Product specs](specs/README.md)
