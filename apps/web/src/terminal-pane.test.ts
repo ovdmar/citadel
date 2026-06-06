@@ -679,6 +679,25 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     expect(ws.sent).toContain(JSON.stringify({ type: "input", data: "\n" }));
   });
 
+  it("sends Codex's modified-enter sequence for Shift+Enter in Codex sessions", async () => {
+    await renderTerminal({
+      ...sessionFixture(),
+      kind: "agent",
+      runtimeId: "codex",
+      displayName: "Codex",
+    });
+    const ws = TerminalPaneWebSocketMock.instances[0];
+    const host = document.querySelector(".terminal-xterm-host");
+    if (!ws || !(host instanceof HTMLElement)) throw new Error("terminal rig missing");
+
+    await flushReactUpdate(async () => ws.open());
+    const event = new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true, cancelable: true });
+    host.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(ws.sent).toContain(JSON.stringify({ type: "input", data: "\u001b[13;2u" }));
+  });
+
   it("does not reconnect the terminal when the resolved theme changes", async () => {
     applyThemePreference("dark");
     await renderTerminal();

@@ -32,6 +32,7 @@ type TerminalError = {
 const RUNBOOK_URL = "/docs/operations/terminal-runbook";
 const XTERM_FONT = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
 const SHIFT_ENTER_INPUT = "\n";
+const CODEX_SHIFT_ENTER_INPUT = "\u001b[13;2u";
 const LINE_START_KEY = "C-a";
 const LINE_END_KEY = "C-e";
 const LINE_KILL_KEY = "C-u";
@@ -61,6 +62,7 @@ export type { TerminalSocketMessage };
  */
 export function TerminalPane(props: { session: WorkspaceSession; active?: boolean }) {
   const sessionId = props.session.id;
+  const sessionRuntimeId = props.session.runtimeId;
   const active = props.active ?? true;
   const theme = useResolvedTheme();
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -295,7 +297,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     resizeObserver?.observe(host);
     window.addEventListener("resize", scheduleResize);
     const nativeKeyHandler = (event: KeyboardEvent) => {
-      if (!handleTerminalKeyEvent(event, terminal, sessionId, ws, host, latestSelectionText)) {
+      if (!handleTerminalKeyEvent(event, terminal, sessionId, sessionRuntimeId, ws, host, latestSelectionText)) {
         event.preventDefault();
         event.stopImmediatePropagation();
       }
@@ -319,7 +321,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     if (!forwardWheelToRuntime) host.addEventListener("wheel", nativeWheelHandler, { capture: true, passive: false });
     document.addEventListener("copy", nativeCopyHandler, true);
     terminal.attachCustomKeyEventHandler((event) =>
-      handleTerminalKeyEvent(event, terminal, sessionId, ws, host, latestSelectionText),
+      handleTerminalKeyEvent(event, terminal, sessionId, sessionRuntimeId, ws, host, latestSelectionText),
     );
     const inputDisposable = terminal.onData((data) => {
       if (data.includes("\u0003")) recordTerminalUserAction(sessionId, "ctrl_c");
@@ -400,7 +402,15 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
       if (wsRef.current === ws) wsRef.current = null;
       unregisterTerminalHost();
     };
-  }, [sessionId, generation, clearAutoRetryTimer, scheduleAutoRetry, forwardWheelToRuntime, coalesceInput]);
+  }, [
+    sessionId,
+    sessionRuntimeId,
+    generation,
+    clearAutoRetryTimer,
+    scheduleAutoRetry,
+    forwardWheelToRuntime,
+    coalesceInput,
+  ]);
 
   useEffect(() => {
     if (!active) return;
@@ -515,6 +525,7 @@ function handleTerminalKeyEvent(
   event: KeyboardEvent,
   terminal: Terminal,
   sessionId: string,
+  runtimeId: string | null,
   ws: WebSocket,
   host: HTMLElement,
   selectionSnapshot = "",
@@ -539,7 +550,7 @@ function handleTerminalKeyEvent(
     return false;
   }
   if (key === "enter" && event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
-    sendTerminalControl(ws, { type: "input", data: SHIFT_ENTER_INPUT });
+    sendTerminalControl(ws, { type: "input", data: shiftEnterInputForRuntime(runtimeId) });
     return false;
   }
   if (isLineKillShortcut(key, event)) {
@@ -570,6 +581,10 @@ function handleTerminalKeyEvent(
     }
   }
   return true;
+}
+
+function shiftEnterInputForRuntime(runtimeId: string | null): string {
+  return runtimeId === "codex" ? CODEX_SHIFT_ENTER_INPUT : SHIFT_ENTER_INPUT;
 }
 
 function isLineKillShortcut(key: string, event: KeyboardEvent): boolean {
