@@ -157,6 +157,52 @@ exit 1
   );
 
   it(
+    "starts GitHub cooldown from a nearly exhausted quota response before it reaches zero",
+    async () => {
+      const fixture = createFixture();
+      const fakeGh = path.join(fixture.config.dataDir, "fake-gh");
+      fs.writeFileSync(
+        fakeGh,
+        `#!/usr/bin/env bash
+if [ "$1" = "api" ] && [ "$2" = "rate_limit" ]; then
+  cat <<'JSON'
+{"resources":{"core":{"limit":5000,"used":25,"remaining":4975,"reset":4102444800},"graphql":{"limit":5000,"used":4950,"remaining":50,"reset":4102444800},"search":{"limit":30,"used":0,"remaining":30,"reset":4102444800}}}
+JSON
+  exit 0
+fi
+exit 1
+`,
+        { mode: 0o755 },
+      );
+      fixture.config.providers.github.enabled = true;
+      fixture.config.providers.github.command = fakeGh;
+      const { server } = await createDaemonApp(fixture);
+      const baseUrl = await listen(server);
+      try {
+        const body = await getJson<{
+          quota: {
+            status: string;
+            reason: string | null;
+            cooldownUntil: string | null;
+            resources: Array<{ name: string; remaining: number; percentUsed: number }>;
+          };
+        }>(`${baseUrl}/api/integrations/github/quota`);
+        expect(body.quota.status).toBe("degraded");
+        expect(body.quota.reason).toContain("GitHub graphql quota nearly exhausted");
+        expect(body.quota.cooldownUntil).toBeTruthy();
+        expect(body.quota.resources.find((resource) => resource.name === "graphql")).toMatchObject({
+          remaining: 50,
+          percentUsed: 99,
+        });
+      } finally {
+        clearGhCooldown();
+        await closeServer(server);
+      }
+    },
+    ROUTE_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "injects versionControl.cooldownUntil into provider-summary while gh is in cooldown (review #6)",
     async () => {
       const fixture = createFixture();

@@ -277,7 +277,7 @@ describe("GitHub provider state service", () => {
       makeWorkspace({ kind: "root" }),
       checkout,
       makeRepo(),
-      "vc:w1:checkout:co_api:2026-05-25T00:00:00Z",
+      "vc:w1:checkout:co_api",
       { intent: "interactive", force: true, staleWhileRevalidate: false },
     );
 
@@ -304,7 +304,7 @@ describe("GitHub provider state service", () => {
       makeWorkspace({ kind: "root" }),
       checkout,
       makeRepo(),
-      "vc:w1:checkout:co_api:2026-05-25T00:00:00Z",
+      "vc:w1:checkout:co_api",
       { intent: "interactive", force: true, staleWhileRevalidate: false },
     );
 
@@ -338,7 +338,7 @@ describe("GitHub provider state service", () => {
       makeWorkspace({ kind: "root" }),
       checkout,
       makeRepo(),
-      "vc:w1:checkout:co_api:2026-05-25T00:00:00Z",
+      "vc:w1:checkout:co_api",
       { intent: "automatic" },
     );
 

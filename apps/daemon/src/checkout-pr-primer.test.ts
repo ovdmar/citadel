@@ -154,7 +154,7 @@ describe("checkout PR primer", () => {
       expect.objectContaining({ id: "ws_a" }),
       expect.objectContaining({ id: "co_api" }),
       expect.objectContaining({ id: "repo_a" }),
-      "vc:ws_a:checkout:co_api:2026-06-05T00:00:00.000Z",
+      "vc:ws_a:checkout:co_api",
       { intent: "automatic", force: true, staleWhileRevalidate: true },
     );
     expect(fetchVersionControl).not.toHaveBeenCalled();
