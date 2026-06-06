@@ -2,7 +2,7 @@
 
 import type { AgentSession, PullRequestSummary, Repo, Workspace, WorktreeCheckout } from "@citadel/contracts";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { createElement } from "react";
+import { type ReactNode, createElement } from "react";
 import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +22,7 @@ import {
   workspaceCheckoutRows,
 } from "./navigator-workspace-cards.js";
 import { ToastProvider } from "./toast.js";
+import { WorkspaceCard } from "./workspace-card.js";
 
 const ts = "2026-06-01T00:00:00.000Z";
 const roots: Root[] = [];
@@ -253,6 +254,21 @@ describe("navigator workspace checkout cards", () => {
     expect(prIcon?.classList.contains("tone-failing")).toBe(false);
     expect(prIcon?.classList.contains("tone-conflicting")).toBe(false);
     expect(prIcon?.getAttribute("title")).toBe("No PR yet");
+  });
+
+  it("marks active workspace card wrappers so hover-gated controls stay available", () => {
+    const container = renderWorkspaceCard({
+      active: true,
+      rightControl: createElement(
+        "button",
+        { type: "button", className: "workspace-card-collapse", "aria-controls": "nav-workspace-checkouts-ws_1" },
+        "Toggle",
+      ),
+    });
+
+    const wrap = container.querySelector(".workspace-card-wrap");
+    expect(wrap?.classList.contains("is-active")).toBe(true);
+    expect(wrap?.querySelector(".workspace-card-collapse")).toBeTruthy();
   });
 
   it("shows repo name before branch and keeps the stable git worktree name in hover text", () => {
@@ -526,6 +542,31 @@ function renderCheckoutCard(input: {
             }),
           ),
         ),
+      ),
+    );
+  });
+  return rootElement;
+}
+
+function renderWorkspaceCard(input: { active: boolean; rightControl?: ReactNode }) {
+  const rootElement = document.createElement("div");
+  document.body.appendChild(rootElement);
+  const root = createRoot(rootElement);
+  roots.push(root);
+  flushSync(() => {
+    root.render(
+      createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        createElement(WorkspaceCard, {
+          workspace: workspace(),
+          sessions: [],
+          namespace: null,
+          namespaces: [],
+          active: input.active,
+          onSelect: () => undefined,
+          rightControl: input.rightControl,
+        }),
       ),
     );
   });

@@ -39,7 +39,9 @@
 .workspace-card-wrap:hover .workspace-card-collapse[aria-label^="Add worktree"],
 .workspace-card-wrap:hover .workspace-card-collapse[aria-controls^="nav-workspace-checkouts-"],
 .workspace-card-wrap:focus-within .workspace-card-collapse[aria-label^="Add worktree"],
-.workspace-card-wrap:focus-within .workspace-card-collapse[aria-controls^="nav-workspace-checkouts-"] {
+.workspace-card-wrap:focus-within .workspace-card-collapse[aria-controls^="nav-workspace-checkouts-"],
+.workspace-card-wrap.is-active .workspace-card-collapse[aria-label^="Add worktree"],
+.workspace-card-wrap.is-active .workspace-card-collapse[aria-controls^="nav-workspace-checkouts-"] {
   opacity: 1;
   pointer-events: auto;
 }
