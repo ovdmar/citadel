@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { shellQuote, tmuxPrefix, waitForPaneCommand, waitForTerminalIdle } from "./index.js";
+import { agentResourcePrefixArgs } from "./resource-priority.js";
 
 // Shell-first pane lifecycle helpers. The tmux pane PID is `bash -l`; the
 // agent runs as a child of the shell. Killing the agent (Ctrl+C, /quit,
@@ -94,6 +95,7 @@ export async function launchAgentInSession(
   if (!runtimeBinary) throw new Error("launchAgentInSession requires a runtimeBinary");
   await waitForTerminalIdle(sessionName, { timeoutMs: 1500, idleMs: 200, socketName: options.socketName ?? null });
   const launchCmd = [
+    ...agentResourcePrefixArgs(),
     "env",
     ...envUnsetArgs(options.env),
     ...COLOR_ENV_UNSETS.flatMap((key) => ["-u", key]),

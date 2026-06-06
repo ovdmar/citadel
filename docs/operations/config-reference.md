@@ -253,6 +253,9 @@ Environment variables:
 - `CITADEL_TMUX_SOCKET` — tmux socket name used by the daemon and terminal bridge.
 - `CITADEL_TMUX_HISTORY_LIMIT` — tmux scrollback lines per pane (default `20000`, clamped to `1000`-`100000`).
 - `CITADEL_SHELL_BIN` — shell used when Citadel creates shell-first tmux sessions (default `$SHELL` then `/bin/bash`).
+- `CITADEL_AGENT_LOW_PRIORITY` — set to `0`, `false`, `no`, or `off` to disable the default low-priority wrapper for agent runtimes.
+- `CITADEL_AGENT_IONICE` — set to `off` to skip `ionice -c3`; by default Citadel uses it when available so agent disk IO yields to interactive work.
+- `CITADEL_AGENT_NICE` — agent niceness value, default `10`, clamped to `0`-`19`.
 
 Lifecycle:
 
