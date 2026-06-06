@@ -186,7 +186,7 @@ describe("TerminalPane xterm WebSocket renderer", () => {
     );
   });
 
-  it("keeps retained panes attached while inactive so pane switches do not replay", async () => {
+  it("detaches retained panes while inactive so hidden output cannot block active typing", async () => {
     const rootElement = document.createElement("div");
     document.body.appendChild(rootElement);
     const root = createRoot(rootElement);
@@ -210,18 +210,18 @@ describe("TerminalPane xterm WebSocket renderer", () => {
 
     expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
     expect(xtermMocks.FakeTerminal.instances).toHaveLength(1);
-    expect(TerminalPaneWebSocketMock.instances[0]?.readyState).toBe(TerminalPaneWebSocketMock.OPEN);
-    expect(xtermMocks.FakeTerminal.instances[0]?.dispose).not.toHaveBeenCalled();
+    expect(TerminalPaneWebSocketMock.instances[0]?.readyState).toBe(TerminalPaneWebSocketMock.CLOSED);
+    expect(xtermMocks.FakeTerminal.instances[0]?.dispose).toHaveBeenCalled();
     expect(getTerminalHandle("sess_1")?.canAcceptVoiceInput()).toBe(false);
 
     await flushReactUpdate(async () => {
       root.render(createElement(TerminalPane, { session, active: true }));
     });
 
-    expect(TerminalPaneWebSocketMock.instances).toHaveLength(1);
-    expect(xtermMocks.FakeTerminal.instances).toHaveLength(1);
-    expect(xtermMocks.FakeTerminal.instances[0]?.dispose).not.toHaveBeenCalled();
+    expect(TerminalPaneWebSocketMock.instances).toHaveLength(2);
+    expect(xtermMocks.FakeTerminal.instances).toHaveLength(2);
     expect(getTerminalHandle("sess_1")).toBeDefined();
+    await flushReactUpdate(async () => TerminalPaneWebSocketMock.instances[1]?.open());
     expect(getTerminalHandle("sess_1")?.canAcceptVoiceInput()).toBe(true);
   });
 

@@ -191,6 +191,10 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     void generation;
     const host = containerRef.current;
     if (!host) return;
+    if (!active) {
+      requestResizeRef.current = null;
+      return;
+    }
     const unregisterTerminalHost = registerTerminalHost(sessionId, host);
     let disposed = false;
     let resizeFrame: number | null = null;
@@ -404,6 +408,7 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     };
   }, [
     sessionId,
+    active,
     sessionRuntimeId,
     generation,
     clearAutoRetryTimer,
