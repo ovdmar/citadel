@@ -40,6 +40,7 @@ const xtermMocks = vi.hoisted(() => {
     selectAll = vi.fn();
     hasSelection = vi.fn(() => true);
     getSelection = vi.fn(() => "selected text");
+    resize = vi.fn();
     private dataHandler: ((data: string) => void) | null = null;
     private keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
     private selectionHandler: (() => void) | null = null;

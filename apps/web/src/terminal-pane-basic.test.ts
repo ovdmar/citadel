@@ -25,6 +25,7 @@ const xtermMocks = vi.hoisted(() => {
     selectAll = vi.fn();
     hasSelection = vi.fn(() => true);
     getSelection = vi.fn(() => "selected text");
+    resize = vi.fn();
 
     constructor(options: Record<string, unknown>) {
       this.options = options;

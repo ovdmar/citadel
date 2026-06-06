@@ -20,6 +20,7 @@ const xtermMocks = vi.hoisted(() => {
     selectAll = vi.fn();
     hasSelection = vi.fn(() => true);
     getSelection = vi.fn(() => "selected text");
+    resize = vi.fn();
     private dataHandler: ((data: string) => void) | null = null;
     private keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
     private selectionHandler: (() => void) | null = null;
@@ -208,14 +209,15 @@ describe("TerminalPane resize handling", () => {
     flushAnimationFrames();
 
     expect(fit.fit).toHaveBeenCalledTimes(1);
-    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 78, rows: 24 }]);
+    expect(term.resize).toHaveBeenCalledWith(78, 24);
 
     observer.trigger();
     window.dispatchEvent(new Event("resize"));
     flushAnimationFrames();
 
     expect(fit.fit).toHaveBeenCalledTimes(2);
-    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 78, rows: 24 }]);
 
     term.cols = 100;
     term.rows = 32;
@@ -225,8 +227,8 @@ describe("TerminalPane resize handling", () => {
 
     expect(fit.fit).toHaveBeenCalledTimes(3);
     expect(resizeMessages(ws)).toEqual([
-      { type: "resize", cols: 80, rows: 24 },
-      { type: "resize", cols: 100, rows: 32 },
+      { type: "resize", cols: 78, rows: 24 },
+      { type: "resize", cols: 98, rows: 32 },
     ]);
   });
 
@@ -262,7 +264,7 @@ describe("TerminalPane resize handling", () => {
     observer.trigger();
     flushAnimationFrames();
 
-    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 90, rows: 30 }]);
+    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 88, rows: 30 }]);
   });
 
   it("sends the first valid resize when the WebSocket opens after an earlier fit", async () => {
@@ -278,7 +280,7 @@ describe("TerminalPane resize handling", () => {
     await flushReactUpdate(() => ws.open());
     flushAnimationFrames();
 
-    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+    expect(resizeMessages(ws)).toEqual([{ type: "resize", cols: 78, rows: 24 }]);
   });
 
   it("sends the first valid resize again after reconnect", async () => {
@@ -287,7 +289,7 @@ describe("TerminalPane resize handling", () => {
     if (!first) throw new Error("missing first ws");
     await flushReactUpdate(() => first.open());
     flushAnimationFrames();
-    expect(resizeMessages(first)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+    expect(resizeMessages(first)).toEqual([{ type: "resize", cols: 78, rows: 24 }]);
 
     await flushReactUpdate(() => {
       getTerminalHandle("sess_1")?.reload();
@@ -298,7 +300,7 @@ describe("TerminalPane resize handling", () => {
     await flushReactUpdate(() => second.open());
     flushAnimationFrames();
 
-    expect(resizeMessages(second)).toEqual([{ type: "resize", cols: 80, rows: 24 }]);
+    expect(resizeMessages(second)).toEqual([{ type: "resize", cols: 78, rows: 24 }]);
   });
 
   it("cancels pending resize work on unmount", async () => {

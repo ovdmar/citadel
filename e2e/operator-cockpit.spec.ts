@@ -395,13 +395,15 @@ test("desktop terminal surface is opaque and stable in the cockpit", async ({ pa
         hostRight: hostRect.right,
         xtermRight: xtermRect.right,
         screenRight: screenRect.right,
+        screenRightGap: hostRect.right - screenRect.right,
         viewportRight: viewportRect.right,
         surfacePaddingRight: Number.parseFloat(surfaceStyle.paddingRight),
         xtermPaddingRight: Number.parseFloat(xtermStyle.paddingRight),
       };
     });
     expect(terminalGeometry.surfacePaddingRight).toBe(0);
-    expect(terminalGeometry.xtermPaddingRight).toBeGreaterThan(0);
+    expect(terminalGeometry.xtermPaddingRight).toBeGreaterThanOrEqual(16);
+    expect(terminalGeometry.screenRightGap).toBeGreaterThanOrEqual(12);
     expect(terminalGeometry.xtermRight).toBeLessThanOrEqual(terminalGeometry.hostRight + 0.5);
     expect(terminalGeometry.screenRight).toBeLessThanOrEqual(terminalGeometry.hostRight + 0.5);
     expect(terminalGeometry.viewportRight).toBeLessThanOrEqual(terminalGeometry.hostRight + 0.5);
