@@ -414,7 +414,7 @@ export function Navigator(props: {
                   {canAttachCheckout ? (
                     <button
                       type="button"
-                      className="workspace-card-collapse"
+                      className="workspace-card-collapse workspace-card-hover-control"
                       aria-label={`Add worktree to ${workspace.name}`}
                       title="Add worktree"
                       onClick={(event) => {
@@ -432,7 +432,7 @@ export function Navigator(props: {
                   {nested ? (
                     <button
                       type="button"
-                      className="workspace-card-collapse"
+                      className="workspace-card-collapse workspace-card-hover-control"
                       aria-label={`${checkoutsCollapsed ? "Expand" : "Collapse"} ${workspace.name} worktrees`}
                       aria-controls={checkoutListId}
                       aria-expanded={!checkoutsCollapsed}
@@ -548,6 +548,7 @@ export function Navigator(props: {
           <div className="nav-section-icons">
             <button
               type="button"
+              className="nav-section-hover-control"
               onClick={toggleAllWorkspaceCheckouts}
               disabled={!collapsibleWorkspaceIds.length}
               aria-label={`${checkoutBulkAction === "collapse" ? "Collapse" : "Expand"} all workspace worktrees`}
@@ -588,6 +589,7 @@ export function Navigator(props: {
             </button>
             <button
               type="button"
+              className="nav-section-hover-control"
               onClick={() => openCreateWorkspace()}
               aria-label="Create workspace"
               title="New workspace (press c)"
