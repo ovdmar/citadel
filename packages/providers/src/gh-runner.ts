@@ -16,9 +16,8 @@ export function setGithubCommand(command: string | undefined) {
   githubCommandOverride = command?.length ? command : "gh";
 }
 
-// Global gh rate-limit circuit breaker. The cooldown state lives in
-// ./gh-cooldown.ts; every provider path that shells out to gh should use this
-// runner so one cooldown gate covers PR view, CI, auth status, merge, etc.
+// Global gh rate-limit circuit breaker for provider entrypoints that use the
+// package-level GitHub command override.
 export async function gh(rootPath: string, args: string[]) {
   const until = getGhCooldownUntil();
   if (until > Date.now()) {

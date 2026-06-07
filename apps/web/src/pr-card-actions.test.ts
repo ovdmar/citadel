@@ -139,6 +139,40 @@ describe("PrCardActionSlot", () => {
     expect(adminBypassItem(harness.container).getAttribute("aria-checked")).toBe("false");
   });
 
+  it("resets admin bypass when the workspace changes with the same PR number", async () => {
+    const fetchMock = installMergeFetchMock([{ status: 200, body: { ok: true } }]);
+    const harness = renderActionHarness({ allowedMergeStrategies: ["squash"], number: 42 }, { id: "ws_a" });
+
+    await openMergeMenu(harness.container);
+    await flushReact(() => adminBypassItem(harness.container).click());
+    harness.rerender({ allowedMergeStrategies: ["squash"], number: 42 }, { id: "ws_b" });
+    await openMergeMenu(harness.container);
+
+    expect(adminBypassItem(harness.container).getAttribute("aria-checked")).toBe("false");
+    await clickStrategy(harness.container, "Squash & merge");
+    expect(mergeBodies(fetchMock)).toEqual([{ strategy: "squash" }]);
+    expect(mergePaths(fetchMock)).toEqual(["/api/workspaces/ws_b/pr-merge"]);
+  });
+
+  it("clears admin bypass when merge eligibility hides the menu", async () => {
+    const fetchMock = installMergeFetchMock([{ status: 200, body: { ok: true } }]);
+    const harness = renderActionHarness({ allowedMergeStrategies: ["squash"], mergeable: "mergeable" });
+
+    await openMergeMenu(harness.container);
+    await flushReact(() => adminBypassItem(harness.container).click());
+    harness.rerender({ allowedMergeStrategies: ["squash"], mergeable: "unknown" });
+    await flushReact(() => undefined);
+    expect(harness.container.querySelector('[role="menuitemcheckbox"]')).toBeNull();
+
+    harness.rerender({ allowedMergeStrategies: ["squash"], mergeable: "mergeable" });
+    await flushReact(() => undefined);
+    await openMergeMenu(harness.container);
+
+    expect(adminBypassItem(harness.container).getAttribute("aria-checked")).toBe("false");
+    await clickStrategy(harness.container, "Squash & merge");
+    expect(mergeBodies(fetchMock)).toEqual([{ strategy: "squash" }]);
+  });
+
   it("resets admin bypass after a failed merge before the next normal merge", async () => {
     const fetchMock = installMergeFetchMock([
       { status: 409, body: { ok: false, reason: "gh_error", detail: "merge rejected" } },
@@ -301,6 +335,10 @@ function mergeBodies(fetchMock: FetchMock): unknown[] {
   return fetchMock.mock.calls
     .filter(([path]) => String(path).includes("/pr-merge"))
     .map(([, init]) => JSON.parse(String(init?.body ?? "{}")) as unknown);
+}
+
+function mergePaths(fetchMock: FetchMock): string[] {
+  return fetchMock.mock.calls.map(([path]) => String(path)).filter((path) => path.includes("/pr-merge"));
 }
 
 async function settle() {

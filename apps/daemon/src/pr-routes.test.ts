@@ -412,12 +412,20 @@ describe("PR routes", () => {
     });
     const baseUrl = await listen(server);
     try {
-      const result = await postJson<{ ok: true }>(`${baseUrl}/api/workspaces/ws_a/pr-merge`, {
+      const defaultResult = await postJson<{ ok: true }>(`${baseUrl}/api/workspaces/ws_a/pr-merge`, {
+        strategy: "squash",
+      });
+
+      expect(defaultResult).toEqual({ ok: true });
+      expect(fs.readFileSync(gh.argsFile, "utf8").trim()).toBe("pr merge 42 --squash");
+
+      providerCache.set(`vc:ws_a:${now}`, { expiresAt: Date.now() + 60_000, value: makeVcSummary(now) });
+      const adminResult = await postJson<{ ok: true }>(`${baseUrl}/api/workspaces/ws_a/pr-merge`, {
         strategy: "squash",
         admin: true,
       });
 
-      expect(result).toEqual({ ok: true });
+      expect(adminResult).toEqual({ ok: true });
       expect(fs.readFileSync(gh.argsFile, "utf8").trim()).toBe("pr merge 42 --squash --admin");
     } finally {
       await closeServer(server);
