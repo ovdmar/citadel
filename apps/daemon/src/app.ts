@@ -379,7 +379,7 @@ export async function createDaemonApp(input: {
   });
   registerReviewRoutes({ app, store, config, asyncRoute, emit });
 
-  registerAgentSessionRoutes(app, { operations, emit, asyncRoute, config });
+  registerAgentSessionRoutes(app, { operations, store, emit, asyncRoute, config });
   registerRestoreRoutes(app, { store, operations, config, emit, asyncRoute });
 
   app.post(

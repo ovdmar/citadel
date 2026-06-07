@@ -1,5 +1,5 @@
 import { Bot, Plus, TerminalSquare } from "lucide-react";
-import type { StageLaunchEntry, StageLaunchEntryGroup } from "./stage.js";
+import type { StageLaunchEntry, StageLaunchEntryGroup } from "./stage-launch-actions.js";
 
 export function StageEmptyLauncher(props: {
   targetLabel: string;

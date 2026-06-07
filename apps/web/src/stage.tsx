@@ -1,18 +1,29 @@
 import type { AgentRuntime, RoleTemplate, TerminalProfile, Workspace, WorkspaceSession } from "@citadel/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Plus, RefreshCw, X } from "lucide-react";
+import { Plus } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { type AttentionSessionIds, deriveSessionDisplayLifecycleTone } from "./session-status-display.js";
 import { StageEmptyLauncher, StageLaunchEntryIcon } from "./stage-empty-launcher.js";
 import {
+  type StageDirectRoleAction,
+  type StageLaunchEntry,
+  type StageStructuredAction,
+  WORKSPACE_SESSION_CAP,
+  buildStageLaunchEntryGroups,
+  freestyleStageActions,
+  structuredStageActions,
+} from "./stage-launch-actions.js";
+import {
   applySessionOrder,
   loadSessionOrder,
   pruneSessionOrder,
+  replaceSessionOrderId,
   saveSessionOrder,
   spliceSessionOrder,
 } from "./stage-session-order.js";
-import { TerminalPane, getTerminalHandle, subscribeTerminalHandle } from "./terminal-pane.js";
+import { StageTabActionMenu } from "./stage-tab-menu.js";
+import { TerminalPane, getTerminalHandle } from "./terminal-pane.js";
 import { lifecycleToneClass } from "./workspace-card.js";
 
 type StageTab = {
@@ -20,76 +31,12 @@ type StageTab = {
   label: string;
 };
 
-export type StageStructuredAction = {
-  id: string;
-  label: string;
-  toolName:
-    | "launch_pm_agent"
-    | "launch_architect_agent"
-    | "launch_implementation_agent"
-    | "launch_prototype_agent"
-    | "start_workspace_manager";
-  arguments: Record<string, unknown>;
+type PendingReload = {
+  source: WorkspaceSession;
+  replacement?: WorkspaceSession;
 };
 
-export type StageDirectRoleAction = {
-  id: string;
-  label: string;
-  template: RoleTemplate;
-};
-
-export type StageLaunchEntry =
-  | {
-      type: "structured";
-      id: string;
-      group: "specialized";
-      label: string;
-      icon: "agent";
-      title: string;
-      detail: string | null;
-      disabled: boolean;
-      action: StageStructuredAction;
-    }
-  | {
-      type: "direct-role";
-      id: string;
-      group: "specialized";
-      label: string;
-      icon: "agent";
-      title: string;
-      detail: string | null;
-      disabled: boolean;
-      action: StageDirectRoleAction;
-    }
-  | {
-      type: "terminal";
-      id: "terminal";
-      group: "freestyle";
-      label: string;
-      icon: "terminal";
-      title: string;
-      detail: string | null;
-      disabled: boolean;
-    }
-  | {
-      type: "runtime";
-      id: string;
-      group: "freestyle";
-      label: string;
-      icon: "agent";
-      title: string;
-      detail: string;
-      disabled: boolean;
-      runtime: AgentRuntime;
-    };
-
-export type StageLaunchEntryGroup = {
-  id: "specialized" | "freestyle";
-  label: "Specialized" | "Freestyle";
-  entries: StageLaunchEntry[];
-};
-
-const WORKSPACE_SESSION_CAP = 20;
+type PendingReloads = Record<string, PendingReload>;
 const SESSION_REORDER_MIME = "application/x-citadel-agent-session-reorder";
 export const TERMINAL_PANE_RETAIN_LIMIT = 5;
 
@@ -98,6 +45,38 @@ function compareStageSessions(a: WorkspaceSession, b: WorkspaceSession) {
   const bKey = b.tabId ?? b.id;
   const cmp = aKey.localeCompare(bKey);
   return cmp !== 0 ? cmp : a.createdAt.localeCompare(b.createdAt);
+}
+
+export function stageTabIdentity(session: WorkspaceSession): string {
+  return session.tabId ?? session.id;
+}
+
+export function applyPendingReloadSessions(
+  sessions: readonly WorkspaceSession[],
+  pendingReloads: PendingReloads,
+): WorkspaceSession[] {
+  const next = sessions.slice();
+  for (const pending of Object.values(pendingReloads)) {
+    const display = pending.replacement ?? pending.source;
+    const tabId = stageTabIdentity(display);
+    const existingIndex = next.findIndex((session) => stageTabIdentity(session) === tabId);
+    if (existingIndex === -1) {
+      next.push(display);
+      continue;
+    }
+    if (pending.replacement || next[existingIndex]?.closedAt) next[existingIndex] = display;
+  }
+  return next;
+}
+
+function pendingReloadTabIdentity(pendingReloads: PendingReloads, sessionId: string | undefined): string | null {
+  if (!sessionId) return null;
+  const direct = pendingReloads[sessionId];
+  if (direct) return stageTabIdentity(direct.replacement ?? direct.source);
+  for (const pending of Object.values(pendingReloads)) {
+    if (pending.replacement?.id === sessionId) return stageTabIdentity(pending.replacement);
+  }
+  return null;
 }
 
 export function stableVisitedSessions(allSessions: WorkspaceSession[], visitedIds: Set<string>): WorkspaceSession[] {
@@ -133,139 +112,6 @@ export function stableWorkspaceSessionIdsKey(sessions: WorkspaceSession[]): stri
     .join("\0");
 }
 
-export function structuredStageActions(input: {
-  workspace: Workspace;
-  targetType: "workspace_home" | "worktree_checkout";
-  checkoutId: string | null;
-}): StageStructuredAction[] {
-  if (input.workspace.mode !== "structured") return [];
-  if (input.targetType === "workspace_home") {
-    return [
-      {
-        id: "pm",
-        label: "PM",
-        toolName: "launch_pm_agent",
-        arguments: { workspaceId: input.workspace.id },
-      },
-      {
-        id: "architect",
-        label: "Architect",
-        toolName: "launch_architect_agent",
-        arguments: { workspaceId: input.workspace.id, planApprovalMode: "manual" },
-      },
-      {
-        id: "manager",
-        label: "Manager",
-        toolName: "start_workspace_manager",
-        arguments: { workspaceId: input.workspace.id },
-      },
-    ];
-  }
-  if (!input.checkoutId) return [];
-  return [
-    {
-      id: "implementation",
-      label: "Implementation",
-      toolName: "launch_implementation_agent",
-      arguments: { checkoutId: input.checkoutId },
-    },
-    {
-      id: "prototype",
-      label: "Prototype",
-      toolName: "launch_prototype_agent",
-      arguments: { checkoutId: input.checkoutId },
-    },
-  ];
-}
-
-export function freestyleStageActions(input: {
-  workspace: Workspace;
-  templates: RoleTemplate[];
-}): StageDirectRoleAction[] {
-  if (input.workspace.mode === "structured") return [];
-  return ["pm", "prototype"].flatMap((role) => {
-    const template = input.templates.find((entry) => entry.role === role);
-    return template ? [{ id: role, label: template.displayName, template }] : [];
-  });
-}
-
-export function buildStageLaunchEntryGroups(input: {
-  structuredActions: StageStructuredAction[];
-  directRoleActions: StageDirectRoleAction[];
-  terminal: TerminalProfile;
-  runtimes: AgentRuntime[];
-  addDisabled: boolean;
-  atSessionCap: boolean;
-  sessionCap?: number;
-}): StageLaunchEntryGroup[] {
-  const sessionCap = input.sessionCap ?? WORKSPACE_SESSION_CAP;
-  const capTitle = `Cap reached (${sessionCap}). Close a session first.`;
-  const specializedEntries: StageLaunchEntry[] = [
-    ...input.structuredActions.map((action): StageLaunchEntry => {
-      const title = input.atSessionCap ? capTitle : action.label;
-      return {
-        type: "structured",
-        id: `structured:${action.id}`,
-        group: "specialized",
-        label: action.label,
-        icon: "agent",
-        title,
-        detail: null,
-        disabled: input.addDisabled,
-        action,
-      };
-    }),
-    ...input.directRoleActions.map((action): StageLaunchEntry => {
-      const title = input.atSessionCap ? capTitle : action.label;
-      return {
-        type: "direct-role",
-        id: `direct:${action.id}`,
-        group: "specialized",
-        label: action.label,
-        icon: "agent",
-        title,
-        detail: null,
-        disabled: input.addDisabled,
-        action,
-      };
-    }),
-  ];
-  const freestyleEntries: StageLaunchEntry[] = [
-    {
-      type: "terminal",
-      id: "terminal",
-      group: "freestyle",
-      label: input.terminal.displayName,
-      icon: "terminal",
-      title: input.atSessionCap ? capTitle : "Start a terminal in this workspace",
-      detail: null,
-      disabled: input.addDisabled,
-    },
-    ...input.runtimes.map((runtime): StageLaunchEntry => {
-      const runtimeTitle = input.atSessionCap
-        ? capTitle
-        : runtime.health === "healthy"
-          ? `Start ${runtime.displayName}`
-          : `${runtime.displayName} is ${runtime.health}${runtime.healthReason ? ` · ${runtime.healthReason}` : ""}`;
-      return {
-        type: "runtime",
-        id: `runtime:${runtime.id}`,
-        group: "freestyle",
-        label: runtime.displayName,
-        icon: "agent",
-        title: runtimeTitle,
-        detail: runtime.health,
-        disabled: runtime.health !== "healthy" || input.addDisabled,
-        runtime,
-      };
-    }),
-  ];
-  return [
-    specializedEntries.length ? { id: "specialized", label: "Specialized", entries: specializedEntries } : null,
-    { id: "freestyle", label: "Freestyle", entries: freestyleEntries },
-  ].filter((group): group is StageLaunchEntryGroup => Boolean(group));
-}
-
 function sameOrderedIds(a: Set<string>, b: Set<string>): boolean {
   if (a.size !== b.size) return false;
   const aIds = [...a];
@@ -290,28 +136,53 @@ export function Stage(props: {
   onActiveSession: (id: string) => void;
   unseenAttentionSessionIds?: AttentionSessionIds | undefined;
 }) {
+  const [pendingReloads, setPendingReloads] = useState<PendingReloads>({});
+  const renderedSessions = useMemo(
+    () => applyPendingReloadSessions(props.sessions, pendingReloads),
+    [props.sessions, pendingReloads],
+  );
+  const renderedAllSessions = useMemo(
+    () => applyPendingReloadSessions(props.allSessions ?? props.sessions, pendingReloads),
+    [props.allSessions, props.sessions, pendingReloads],
+  );
+
   // Sort by tabId (time-encoded by createId on the daemon side), with createdAt
   // as a stable tie-breaker for legacy rows whose tab_id pre-dates migration 11.
   // The point of tabId: when a session is restored via `claude --resume <uuid>`
   // the new row inherits the source row's tabId, so the restored tab appears
   // in the same slot the original lived in — sorting by createdAt instead would
   // jump the restored session to the end of the strip.
-  const defaultSortedSessions = [...props.sessions].sort(compareStageSessions);
+  const defaultSortedSessions = [...renderedSessions].sort(compareStageSessions);
   const [sessionOrder, setSessionOrder] = useState<Record<string, string[]>>(() => loadSessionOrder());
   useEffect(() => saveSessionOrder(sessionOrder), [sessionOrder]);
   useEffect(() => {
     const live = new Set(
-      props.allSessions?.filter((session) => !session.closedAt).map((session) => session.id) ??
-        props.sessions.map((session) => session.id),
+      renderedAllSessions
+        .filter((session) => !session.closedAt)
+        .flatMap((session) => [session.id, stageTabIdentity(session)]),
     );
     setSessionOrder((prev) => pruneSessionOrder(prev, live));
-  }, [props.allSessions, props.sessions]);
+  }, [renderedAllSessions]);
+  useEffect(() => {
+    const visibleSessionIds = new Set(props.sessions.map((session) => session.id));
+    setPendingReloads((prev) => {
+      let changed = false;
+      const next: PendingReloads = {};
+      for (const [sourceId, pending] of Object.entries(prev)) {
+        if (pending.replacement && visibleSessionIds.has(pending.replacement.id)) {
+          changed = true;
+          continue;
+        }
+        next[sourceId] = pending;
+      }
+      return changed ? next : prev;
+    });
+  }, [props.sessions]);
   const orderKey = `${props.workspace.id}:${props.targetKey}`;
-  const sortedSessions = applySessionOrder(defaultSortedSessions, sessionOrder[orderKey]);
+  const sortedSessions = applySessionOrder(defaultSortedSessions, sessionOrder[orderKey], stageTabIdentity);
   const tabs: StageTab[] = sortedSessions.map((session) => ({ session, label: session.displayName }));
-  const visibleTabIds = tabs.map((tab) => tab.session.id);
-  const allSessions = props.allSessions ?? props.sessions;
-  const liveSessions = useMemo(() => allSessions.filter((session) => !session.closedAt), [allSessions]);
+  const visibleTabIds = tabs.map((tab) => stageTabIdentity(tab.session));
+  const liveSessions = useMemo(() => renderedAllSessions.filter((session) => !session.closedAt), [renderedAllSessions]);
 
   // If the caller just selected a session that hasn't shown up in props.sessions
   // yet (mutation responded, query refetch in flight), keep that ID even though
@@ -319,8 +190,11 @@ export function Stage(props: {
   // the user's selection (e.g. right after starting a new agent). After a short
   // grace period (e.g. persisted ID from localStorage that no longer exists),
   // fall back to the first tab.
+  const activeReloadTabIdentity = pendingReloadTabIdentity(pendingReloads, props.activeSessionId);
   const pendingActiveSessionId =
-    props.activeSessionId && !tabs.some((tab) => tab.session.id === props.activeSessionId)
+    props.activeSessionId &&
+    !tabs.some((tab) => tab.session.id === props.activeSessionId) &&
+    !(activeReloadTabIdentity && tabs.some((tab) => stageTabIdentity(tab.session) === activeReloadTabIdentity))
       ? props.activeSessionId
       : null;
   const [graceExpired, setGraceExpired] = useState(false);
@@ -336,7 +210,12 @@ export function Stage(props: {
   const keepPending = Boolean(pendingActiveSessionId) && !graceExpired;
   const activeSession = keepPending
     ? null
-    : (tabs.find((tab) => tab.session.id === props.activeSessionId) ?? tabs[0] ?? null);
+    : (tabs.find((tab) => tab.session.id === props.activeSessionId) ??
+      (activeReloadTabIdentity
+        ? tabs.find((tab) => stageTabIdentity(tab.session) === activeReloadTabIdentity)
+        : undefined) ??
+      tabs[0] ??
+      null);
   useEffect(() => {
     if (keepPending) return;
     if (activeSession && activeSession.session.id !== props.activeSessionId) {
@@ -361,7 +240,8 @@ export function Stage(props: {
       return sameOrderedIds(prev, next) ? prev : next;
     });
   }, [activeSession?.session.id, liveSessions]);
-  const visitedPanes = stableVisitedSessions(liveSessions, visitedIds);
+  const visiblePaneIds = activeSession ? new Set([...visitedIds, activeSession.session.id]) : visitedIds;
+  const visitedPanes = stableVisitedSessions(liveSessions, visiblePaneIds);
   const workspaceSessionIdsKey = stableWorkspaceSessionIdsKey(props.sessions);
 
   useEffect(() => {
@@ -477,6 +357,36 @@ export function Stage(props: {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
 
+  const reloadAgentSession = useMutation({
+    mutationFn: (session: WorkspaceSession) =>
+      api<{ session: WorkspaceSession; reloadedFrom: string }>(`/api/agent-sessions/${session.id}/reload`, {
+        method: "POST",
+      }),
+    onMutate: (session) => {
+      setPendingReloads((prev) => ({ ...prev, [session.id]: { source: session } }));
+    },
+    onSuccess: ({ session, reloadedFrom }) => {
+      setPendingReloads((prev) => ({
+        ...prev,
+        [reloadedFrom]: { source: prev[reloadedFrom]?.source ?? session, replacement: session },
+      }));
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+      setSessionOrder((prev) => {
+        const current = prev[orderKey];
+        if (!current?.includes(reloadedFrom)) return prev;
+        return { ...prev, [orderKey]: replaceSessionOrderId(current, reloadedFrom, stageTabIdentity(session)) };
+      });
+      props.onActiveSession(session.id);
+    },
+    onError: (_error, session) => {
+      setPendingReloads((prev) => {
+        const { [session.id]: _removed, ...next } = prev;
+        return next;
+      });
+      queryClient.invalidateQueries({ queryKey: ["state"] });
+    },
+  });
+
   const renameSession = useMutation({
     mutationFn: (input: { sessionId: string; name: string }) =>
       api(`/api/workspace-sessions/${input.sessionId}`, {
@@ -485,11 +395,6 @@ export function Stage(props: {
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["state"] }),
   });
-
-  // Tick whenever any TerminalPane updates its handle so the tab actions
-  // (refresh, open-in-new-tab) reflect the current URL + reload callback.
-  const [, setHandleTick] = useState(0);
-  useEffect(() => subscribeTerminalHandle(() => setHandleTick((n) => n + 1)), []);
 
   const startError =
     startAgentSession.error instanceof Error
@@ -501,6 +406,7 @@ export function Stage(props: {
           : startStructuredAction.error instanceof Error
             ? startStructuredAction.error.message
             : null;
+  const reloadError = reloadAgentSession.error instanceof Error ? reloadAgentSession.error.message : null;
   const atSessionCap = props.sessions.length >= WORKSPACE_SESSION_CAP;
   // Per spec B.2 §Center Stage Sessions #10: starting a session needs a
   // ready worktree, so the "+" button is gated off while the workspace is
@@ -537,6 +443,10 @@ export function Stage(props: {
     addDisabled,
     atSessionCap,
   });
+  const resumableRuntimeIds = useMemo(
+    () => new Set(props.runtimes.filter((runtime) => runtime.capabilities.supportsResume).map((runtime) => runtime.id)),
+    [props.runtimes],
+  );
   const launchEntry = (entry: StageLaunchEntry) => {
     if (entry.disabled) return;
     if (entry.type === "structured") {
@@ -563,13 +473,13 @@ export function Stage(props: {
             const dropSide = tabDropIndicator?.id === tab.session.id ? tabDropIndicator.side : null;
             return (
               <div
-                key={tab.session.id}
+                key={stageTabIdentity(tab.session)}
                 className={`stage-tab ${isActive ? "active" : ""} ${
                   dropSide === "before" ? "is-drop-before" : dropSide === "after" ? "is-drop-after" : ""
                 }`}
                 draggable={editingId !== tab.session.id}
                 onDragStart={(event) => {
-                  event.dataTransfer.setData(SESSION_REORDER_MIME, tab.session.id);
+                  event.dataTransfer.setData(SESSION_REORDER_MIME, stageTabIdentity(tab.session));
                   event.dataTransfer.effectAllowed = "move";
                 }}
                 onDragOver={(event) => {
@@ -585,11 +495,11 @@ export function Stage(props: {
                   if (!event.dataTransfer.types.includes(SESSION_REORDER_MIME)) return;
                   event.preventDefault();
                   const draggedId = event.dataTransfer.getData(SESSION_REORDER_MIME);
-                  if (!draggedId || draggedId === tab.session.id) {
+                  if (!draggedId || draggedId === stageTabIdentity(tab.session)) {
                     setTabDropIndicator(null);
                     return;
                   }
-                  const targetIndex = visibleTabIds.indexOf(tab.session.id);
+                  const targetIndex = visibleTabIds.indexOf(stageTabIdentity(tab.session));
                   if (targetIndex === -1) {
                     setTabDropIndicator(null);
                     return;
@@ -651,42 +561,27 @@ export function Stage(props: {
                     )}
                   </span>
                 </button>
-                <span className="stage-tab-actions">
-                  <button
-                    type="button"
-                    className="stage-tab-act"
-                    aria-label="Restart terminal session"
-                    title="Restart session"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      getTerminalHandle(tab.session.id)?.reload();
-                    }}
-                  >
-                    <RefreshCw size={11} />
-                  </button>
-                  <button
-                    type="button"
-                    className="close-tab"
-                    aria-label="Stop session"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      // Pre-pick the next active tab BEFORE mutating so the
-                      // 4s `keepPending` grace never opens a blank window on
-                      // close. Prefer the LEFT sibling; fall back to the
-                      // right sibling. If this is the only tab, leave the
-                      // active pointer alone (Stage falls back to "no
-                      // session yet" empty state).
-                      if (tab.session.id === activeSession?.session.id && tabs.length > 1) {
-                        const next = tabs[index - 1] ?? tabs[index + 1];
-                        if (next) props.onActiveSession(next.session.id);
-                      }
-                      stopSession.mutate(tab.session.id);
-                    }}
-                    title="Stop session"
-                  >
-                    <X size={11} />
-                  </button>
-                </span>
+                <StageTabActionMenu
+                  session={tab.session}
+                  label={tab.label}
+                  canReloadAgentSession={
+                    tab.session.kind === "agent" &&
+                    Boolean(tab.session.runtimeSessionId) &&
+                    resumableRuntimeIds.has(tab.session.runtimeId)
+                  }
+                  reloadingAgentSession={reloadAgentSession.isPending}
+                  onReloadTerminal={() => getTerminalHandle(tab.session.id)?.reload()}
+                  onReloadAgentSession={() => reloadAgentSession.mutate(tab.session)}
+                  onStopSession={() => {
+                    // Pre-pick the next active tab before mutation so the
+                    // keepPending grace never opens a blank window on close.
+                    if (tab.session.id === activeSession?.session.id && tabs.length > 1) {
+                      const next = tabs[index - 1] ?? tabs[index + 1];
+                      if (next) props.onActiveSession(next.session.id);
+                    }
+                    stopSession.mutate(tab.session.id);
+                  }}
+                />
               </div>
             );
           })}
@@ -748,15 +643,15 @@ export function Stage(props: {
         </div>
         <div className="stage-tabbar-spacer" aria-hidden />
       </div>
-      {startError ? (
+      {startError || reloadError ? (
         <div className="stage-error" role="alert">
-          Failed to start session: {startError}
+          {startError ? `Failed to start session: ${startError}` : `Failed to reload session: ${reloadError}`}
         </div>
       ) : null}
       <div className="stage-body">
         {visitedPanes.map((session) => (
           <div
-            key={session.id}
+            key={stageTabIdentity(session)}
             className={session.id === activeSession?.session.id ? "terminal-active" : "terminal-hidden"}
           >
             <TerminalPane session={session} active={session.id === activeSession?.session.id} />
