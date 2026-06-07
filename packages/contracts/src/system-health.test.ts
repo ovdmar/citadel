@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { SystemHealthSnapshotSchema } from "./system-health.js";
+import { SystemHealthSnapshotSchema, SystemResourceOffenderBreakdownSchema } from "./system-health.js";
 
 describe("system health contracts", () => {
   it("validates the cockpit footer health snapshot", () => {
@@ -32,5 +32,27 @@ describe("system health contracts", () => {
 
     expect(snapshot.tone).toBe("healthy");
     expect(snapshot.machine.disk.freeBytes).toBe(60);
+  });
+
+  it("validates resource offender breakdowns for hover details", () => {
+    const breakdown = SystemResourceOffenderBreakdownSchema.parse({
+      resource: "cpu",
+      checkedAt: "2026-06-05T12:00:00.000Z",
+      status: "available",
+      reason: null,
+      offenders: [
+        {
+          id: "pid:123",
+          label: "node",
+          detail: "node dist/main.js",
+          pid: 123,
+          value: 48.2,
+          unit: "percent",
+        },
+      ],
+    });
+
+    expect(breakdown.offenders).toHaveLength(1);
+    expect(breakdown.offenders[0]?.unit).toBe("percent");
   });
 });

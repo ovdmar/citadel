@@ -1,19 +1,70 @@
-import type { SystemHealthSnapshot, SystemHealthTone, WorkspaceSession } from "@citadel/contracts";
+import type {
+  SystemHealthSnapshot,
+  SystemHealthTone,
+  SystemResourceOffender,
+  SystemResourceOffenderBreakdown,
+  SystemResourceType,
+  WorkspaceSession,
+} from "@citadel/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { api } from "./api.js";
 
 type SystemHealthResponse = { systemHealth: SystemHealthSnapshot };
+type SystemResourceOffendersResponse = { breakdown: SystemResourceOffenderBreakdown };
+type ResourceMetricConfig = { type: SystemResourceType; label: string };
+type BreakdownState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "loaded"; breakdown: SystemResourceOffenderBreakdown }
+  | { status: "error"; message: string };
+
+const RESOURCE_METRICS = {
+  cpu: { type: "cpu", label: "CPU" },
+  memory: { type: "memory", label: "RAM" },
+  disk: { type: "disk", label: "Disk" },
+  disk_io: { type: "disk_io", label: "I/O" },
+  citadel: { type: "citadel", label: "Citadel" },
+} satisfies Record<SystemResourceType, ResourceMetricConfig>;
 
 export function BottomBar(props: {
   activeSession: WorkspaceSession | null;
   sessions: WorkspaceSession[];
 }) {
   const [now, setNow] = useState(() => formatClock(new Date()));
+  const [activeResource, setActiveResource] = useState<ResourceMetricConfig | null>(null);
+  const [breakdownState, setBreakdownState] = useState<BreakdownState>({ status: "idle" });
   useEffect(() => {
     const id = window.setInterval(() => setNow(formatClock(new Date())), 30_000);
     return () => window.clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    if (!activeResource) {
+      setBreakdownState({ status: "idle" });
+      return;
+    }
+    const controller = new AbortController();
+    setBreakdownState({ status: "loading" });
+    api<SystemResourceOffendersResponse>(`/api/system-health/resources/${activeResource.type}/offenders`, {
+      signal: controller.signal,
+    })
+      .then((response) => setBreakdownState({ status: "loaded", breakdown: response.breakdown }))
+      .catch((error: unknown) => {
+        if (isAbortError(error)) return;
+        setBreakdownState({ status: "error", message: errorMessage(error) });
+      });
+    return () => controller.abort();
+  }, [activeResource]);
+
+  useEffect(() => {
+    if (!activeResource) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setActiveResource(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeResource]);
 
   const systemHealth = useQuery<SystemHealthResponse>({
     queryKey: ["system-health"],
@@ -23,7 +74,7 @@ export function BottomBar(props: {
   const health = systemHealth.data?.systemHealth ?? null;
 
   return (
-    <footer className="cit-bottombar" aria-label="Status bar">
+    <footer className="cit-bottombar" aria-label="Status bar" onMouseLeave={() => setActiveResource(null)}>
       <div className="cit-bb-left">
         <span
           className={`cit-bb-health cit-bb-health--${health?.tone ?? "unknown"}`}
@@ -32,25 +83,39 @@ export function BottomBar(props: {
           <span className={`cit-pulse ${healthPulseClass(health?.tone ?? "unknown")}`} aria-hidden="true" />
           health {healthLabel(health?.tone ?? "unknown")}
         </span>
-        <FooterMetric label="CPU" value={formatPercent(health?.machine.cpu.percentUsed)} title={cpuTitle(health)} />
         <FooterMetric
-          label="RAM"
+          metric={RESOURCE_METRICS.cpu}
+          active={activeResource?.type === "cpu"}
+          onActivate={setActiveResource}
+          value={formatPercent(health?.machine.cpu.percentUsed)}
+          title={cpuTitle(health)}
+        />
+        <FooterMetric
+          metric={RESOURCE_METRICS.memory}
+          active={activeResource?.type === "memory"}
+          onActivate={setActiveResource}
           value={formatPercent(health?.machine.memory.percentUsed)}
           title={memoryTitle(health)}
         />
         <FooterMetric
-          label="Disk"
+          metric={RESOURCE_METRICS.disk}
+          active={activeResource?.type === "disk"}
+          onActivate={setActiveResource}
           value={formatPercent(health?.machine.disk.percentUsed)}
           detail={`${formatBytes(health?.machine.disk.freeBytes)} free`}
           title={diskTitle(health)}
         />
         <FooterMetric
-          label="I/O"
+          metric={RESOURCE_METRICS.disk_io}
+          active={activeResource?.type === "disk_io"}
+          onActivate={setActiveResource}
           value={formatPercent(health?.machine.disk.ioUtilizationPercent)}
           title={diskIoTitle(health)}
         />
         <FooterMetric
-          label="Citadel"
+          metric={RESOURCE_METRICS.citadel}
+          active={activeResource?.type === "citadel"}
+          onActivate={setActiveResource}
           value={formatBytes(health?.process.rssBytes)}
           detail="RSS"
           title={processTitle(health)}
@@ -60,17 +125,99 @@ export function BottomBar(props: {
       <div className="cit-bb-right">
         <span className="cit-bb-time">{now}</span>
       </div>
+      {activeResource ? (
+        <ResourceBreakdownModal
+          resource={activeResource}
+          state={breakdownState}
+          onClose={() => setActiveResource(null)}
+        />
+      ) : null}
     </footer>
   );
 }
 
-function FooterMetric(props: { label: string; value: string; detail?: string; title: string; className?: string }) {
+function FooterMetric(props: {
+  metric: ResourceMetricConfig;
+  value: string;
+  detail?: string;
+  title: string;
+  className?: string;
+  active: boolean;
+  onActivate: (resource: ResourceMetricConfig) => void;
+}) {
   return (
-    <span className={`cit-bb-metric ${props.className ?? ""}`} title={props.title}>
-      <span className="cit-bb-metric-label">{props.label}</span>
+    <button
+      type="button"
+      className={`cit-bb-metric cit-bb-metric--hoverable ${props.active ? "cit-bb-metric--active" : ""} ${
+        props.className ?? ""
+      }`}
+      title={props.title}
+      aria-haspopup="dialog"
+      aria-expanded={props.active}
+      data-resource-type={props.metric.type}
+      onFocus={() => props.onActivate(props.metric)}
+      onMouseEnter={() => props.onActivate(props.metric)}
+    >
+      <span className="cit-bb-metric-label">{props.metric.label}</span>
       <span className="cit-bb-metric-value">{props.value}</span>
       {props.detail ? <span className="cit-bb-metric-detail">{props.detail}</span> : null}
-    </span>
+    </button>
+  );
+}
+
+function ResourceBreakdownModal(props: {
+  resource: ResourceMetricConfig;
+  state: BreakdownState;
+  onClose: () => void;
+}) {
+  return (
+    <dialog className="cit-resource-modal" aria-label={`${props.resource.label} resource offenders`} open>
+      <div className="cit-resource-modal-head">
+        <div>
+          <span className="cit-resource-modal-kicker">{props.resource.label}</span>
+          <h2>Top offenders</h2>
+        </div>
+        <button type="button" className="cit-resource-modal-close" aria-label="Close" onClick={props.onClose}>
+          x
+        </button>
+      </div>
+      <ResourceBreakdownBody state={props.state} />
+    </dialog>
+  );
+}
+
+function ResourceBreakdownBody(props: { state: BreakdownState }) {
+  if (props.state.status === "loading") {
+    return (
+      <div className="cit-resource-modal-state" aria-live="polite">
+        Loading breakdown...
+      </div>
+    );
+  }
+  if (props.state.status === "error") {
+    return <div className="cit-resource-modal-state cit-resource-modal-state--bad">{props.state.message}</div>;
+  }
+  if (props.state.status !== "loaded") return null;
+  const { breakdown } = props.state;
+  if (breakdown.offenders.length === 0) {
+    return (
+      <div className="cit-resource-modal-state">
+        {breakdown.reason ?? (breakdown.status === "unavailable" ? "Breakdown unavailable" : "No offenders reported")}
+      </div>
+    );
+  }
+  return (
+    <ol className="cit-resource-offenders">
+      {breakdown.offenders.map((offender) => (
+        <li key={offender.id}>
+          <div className="cit-resource-offender-main">
+            <span className="cit-resource-offender-name">{offender.label}</span>
+            <span className="cit-resource-offender-value">{formatOffenderValue(offender)}</span>
+          </div>
+          <div className="cit-resource-offender-detail">{offender.detail ?? offenderPid(offender)}</div>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -104,6 +251,25 @@ export function formatBytes(bytes: number | null | undefined) {
   }
   const precision = value >= 10 || unit === 0 ? 0 : 1;
   return `${value.toFixed(precision)} ${units[unit]}`;
+}
+
+function formatOffenderValue(offender: SystemResourceOffender) {
+  if (offender.value === null || offender.value === undefined) return "n/a";
+  if (offender.unit === "percent") return formatPercent(offender.value);
+  if (offender.unit === "io_bytes") return `${formatBytes(offender.value)} I/O`;
+  return formatBytes(offender.value);
+}
+
+function offenderPid(offender: SystemResourceOffender) {
+  return offender.pid ? `pid ${offender.pid}` : "";
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function healthTitle(health: SystemHealthSnapshot | null) {

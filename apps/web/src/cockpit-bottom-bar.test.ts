@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
 
-import type { TerminalSession, WorkspaceSession } from "@citadel/contracts";
+import type { SystemHealthSnapshot, TerminalSession, WorkspaceSession } from "@citadel/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement } from "react";
 import { flushSync } from "react-dom";
 import { type Root, createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { api } from "./api.js";
 import { BottomBar, formatBytes, formatClock, formatPercent } from "./cockpit-bottom-bar.js";
 
 vi.mock("./api.js", () => ({
@@ -13,6 +14,13 @@ vi.mock("./api.js", () => ({
 }));
 
 const roots: Root[] = [];
+const apiMock = vi.mocked(api);
+
+beforeEach(() => {
+  apiMock.mockReset();
+  const defaultApi: typeof api = async () => ({ systemHealth: null }) as never;
+  apiMock.mockImplementation(defaultApi);
+});
 
 afterEach(() => {
   for (const root of roots.splice(0)) root.unmount();
@@ -54,6 +62,86 @@ describe("footer right side", () => {
   });
 });
 
+describe("footer resource breakdowns", () => {
+  it("opens an immediate loading modal and fetches top offenders for the hovered resource", async () => {
+    let resolveBreakdown!: (value: {
+      breakdown: {
+        resource: "cpu";
+        checkedAt: string;
+        status: "available";
+        reason: null;
+        offenders: Array<{
+          id: string;
+          label: string;
+          detail: string;
+          pid: number;
+          value: number;
+          unit: "percent";
+        }>;
+      };
+    }) => void;
+    const breakdown = new Promise<{
+      breakdown: {
+        resource: "cpu";
+        checkedAt: string;
+        status: "available";
+        reason: null;
+        offenders: Array<{
+          id: string;
+          label: string;
+          detail: string;
+          pid: number;
+          value: number;
+          unit: "percent";
+        }>;
+      };
+    }>((resolve) => {
+      resolveBreakdown = resolve;
+    });
+    const mockApi: typeof api = async (path) => {
+      if (path === "/api/system-health") return { systemHealth: healthSnapshot } as never;
+      if (path === "/api/system-health/resources/cpu/offenders") return breakdown as never;
+      throw new Error(`unexpected path ${path}`);
+    };
+    apiMock.mockImplementation(mockApi);
+
+    renderBottomBar({ activeSession: null, sessions: [] });
+    const cpu = document.querySelector('[data-resource-type="cpu"]');
+    if (!cpu) throw new Error("CPU metric missing");
+
+    await flushReact(() => {
+      cpu.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+    });
+
+    await waitFor(
+      () => document.querySelector(".cit-resource-modal")?.textContent?.includes("Loading breakdown...") === true,
+    );
+    expect(apiMock.mock.calls.some(([path]) => path === "/api/system-health/resources/cpu/offenders")).toBe(true);
+
+    resolveBreakdown({
+      breakdown: {
+        resource: "cpu",
+        checkedAt: "2026-06-05T12:00:00.000Z",
+        status: "available",
+        reason: null,
+        offenders: [
+          {
+            id: "pid:123",
+            label: "node",
+            detail: "node /tmp/citadel/dist/main.js",
+            pid: 123,
+            value: 48.4,
+            unit: "percent",
+          },
+        ],
+      },
+    });
+
+    await waitFor(() => document.querySelector(".cit-resource-modal")?.textContent?.includes("node") === true);
+    expect(document.querySelector(".cit-resource-modal")?.textContent).toContain("48%");
+  });
+});
+
 function renderBottomBar(props: { activeSession: WorkspaceSession | null; sessions: WorkspaceSession[] }) {
   const rootElement = document.createElement("div");
   document.body.replaceChildren(rootElement);
@@ -71,6 +159,29 @@ function renderBottomBar(props: { activeSession: WorkspaceSession | null; sessio
       ),
     );
   });
+}
+
+async function flushReact(callback: () => void | Promise<void>) {
+  let result: void | Promise<void> = undefined;
+  flushSync(() => {
+    result = callback();
+  });
+  await result;
+  await settle();
+}
+
+async function settle() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+async function waitFor(predicate: () => boolean) {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > 1000) break;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  expect(predicate()).toBe(true);
 }
 
 function session(overrides: Partial<TerminalSession> = {}): WorkspaceSession {
@@ -91,3 +202,24 @@ function session(overrides: Partial<TerminalSession> = {}): WorkspaceSession {
   };
   return { ...base, ...overrides };
 }
+
+const healthSnapshot: SystemHealthSnapshot = {
+  tone: "healthy",
+  reason: null,
+  checkedAt: "2026-06-05T12:00:00.000Z",
+  machine: {
+    cpu: { percentUsed: 42, loadAverage1m: 1.2, cores: 8 },
+    memory: { totalBytes: 100, usedBytes: 45, freeBytes: 55, percentUsed: 45 },
+    disk: {
+      path: "/tmp/citadel",
+      device: "sda1",
+      totalBytes: 100,
+      usedBytes: 40,
+      freeBytes: 60,
+      percentUsed: 40,
+      ioUtilizationPercent: 2,
+      error: null,
+    },
+  },
+  process: { pid: 123, rssBytes: 32, heapUsedBytes: 16, heapTotalBytes: 24, percentOfMachineMemory: 1 },
+};
