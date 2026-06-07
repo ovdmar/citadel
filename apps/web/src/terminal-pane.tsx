@@ -46,6 +46,7 @@ const TERMINAL_MAX_SCROLL_LINES_PER_MESSAGE = 200;
 const TERMINAL_AUTO_RETRY_LIMIT = 3;
 const TERMINAL_AUTO_RETRY_BACKOFF_MS = 5_000;
 const TERMINAL_PTY_INPUT_FLUSH_MS = 4;
+const TERMINAL_RIGHT_EDGE_RESERVED_COLUMNS = 2;
 const AUTO_RETRYABLE_TERMINAL_ERRORS = new Set(["terminal_disconnected", "terminal_socket_error"]);
 const RUNTIME_MOUSE_EVENT_RUNTIMES = new Set(["claude-code"]);
 export type TerminalPaneKey = typeof LINE_START_KEY | typeof LINE_END_KEY | typeof LINE_KILL_KEY;
@@ -234,14 +235,18 @@ export function TerminalPane(props: { session: WorkspaceSession; active?: boolea
     const runResize = () => {
       if (disposed) return;
       if (!activeRef.current) return;
+      let fittedSize: ReturnType<FitAddon["proposeDimensions"]>;
       try {
-        fit.fit();
+        fittedSize = fit.proposeDimensions();
       } catch {
         return;
       }
-      const cols = terminal.cols;
-      const rows = terminal.rows;
-      if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) return;
+      if (!fittedSize) return;
+      const fittedCols = fittedSize.cols;
+      const rows = fittedSize.rows;
+      if (!Number.isFinite(fittedCols) || !Number.isFinite(rows) || fittedCols <= 0 || rows <= 0) return;
+      const cols = terminalReadableCols(fittedCols);
+      if (terminal.cols !== cols || terminal.rows !== rows) terminal.resize(cols, rows);
       if (lastSentResize?.cols === cols && lastSentResize.rows === rows) return;
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "resize", cols, rows }));
@@ -524,6 +529,10 @@ function guidanceFor(code: string) {
     default:
       return "Open the terminal runbook below for diagnostic steps.";
   }
+}
+
+function terminalReadableCols(cols: number): number {
+  return Math.max(20, Math.trunc(cols) - TERMINAL_RIGHT_EDGE_RESERVED_COLUMNS);
 }
 
 function handleTerminalKeyEvent(

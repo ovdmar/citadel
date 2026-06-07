@@ -1,0 +1,127 @@
+.cit-resource-modal {
+  position: fixed;
+  left: 12px;
+  bottom: 38px;
+  z-index: 30;
+  width: min(380px, calc(100vw - 24px));
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--c-border-1);
+  border-radius: 8px;
+  background: var(--c-elev);
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
+  color: var(--c-fg-2);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.cit-resource-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 12px 10px;
+  border-bottom: 0.5px solid var(--c-line-2);
+}
+
+.cit-resource-modal-kicker {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--c-fg-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.cit-resource-modal h2 {
+  margin: 0;
+  color: var(--c-fg-1);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.cit-resource-modal-close {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--c-fg-3);
+  font: inherit;
+  font-size: 14px;
+  cursor: default;
+}
+
+.cit-resource-modal-close:hover,
+.cit-resource-modal-close:focus-visible {
+  background: var(--c-line-1);
+  color: var(--c-fg-1);
+  outline: 0;
+}
+
+.cit-resource-modal-state {
+  padding: 14px 12px;
+  color: var(--c-fg-3);
+}
+
+.cit-resource-modal-state--bad {
+  color: var(--c-bad);
+}
+
+.cit-resource-offenders {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cit-resource-offenders li {
+  min-width: 0;
+  padding: 9px 12px;
+  border-top: 0.5px solid var(--c-line-1);
+}
+
+.cit-resource-offenders li:first-child {
+  border-top: 0;
+}
+
+.cit-resource-offender-main {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.cit-resource-offender-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--c-fg-1);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cit-resource-offender-value {
+  flex: 0 0 auto;
+  color: var(--c-fg-1);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.cit-resource-offender-detail {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--c-fg-4);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
