@@ -1,8 +1,8 @@
 import type { ProviderHealth, PullRequestSummary, Workspace } from "@citadel/contracts";
 import type { PrMergeStrategy } from "@citadel/contracts/pr-routes";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { GitMerge, GitPullRequest, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { GitMerge, GitPullRequest, Loader2, ShieldAlert } from "lucide-react";
+import { useEffect, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { markWorkspacePrMergedInQueryCache } from "./cockpit-tools.js";
 import type { PrTone } from "./workspace-card.js";
@@ -16,7 +16,7 @@ export function PrCardActionSlot(props: { workspace: Workspace; pr: PullRequestS
   const { workspace, pr, prTone } = props;
   if (prTone === "merged" || prTone === "missing") return null;
   if (prTone === "conflicting") return <FixConflictsButton workspaceId={workspace.id} />;
-  return <MergeButton workspace={workspace} pr={pr} />;
+  return <MergeButton key={`${workspace.id}:${pr.number}`} workspace={workspace} pr={pr} />;
 }
 
 // Launches a fresh agent session against the daemon's fix-conflicts endpoint.
@@ -65,9 +65,13 @@ function FixConflictsButton(props: { workspaceId: string }) {
 function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
   const { workspace, pr } = props;
   const [open, setOpen] = useState(false);
+  const [adminBypass, setAdminBypass] = useState(false);
   const allowed: PrMergeStrategy[] = pr.allowedMergeStrategies.length
     ? pr.allowedMergeStrategies
     : (["squash", "merge", "rebase"] as const).filter(() => false);
+  useEffect(() => {
+    setAdminBypass(false);
+  }, [workspace.id, pr.number]);
   const providerHealth = useQuery<{ providerHealth: ProviderHealth[] }>({
     queryKey: ["provider-health"],
     queryFn: () => api<{ providerHealth: ProviderHealth[] }>("/api/health"),
@@ -83,14 +87,17 @@ function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
         queryClient.cancelQueries({ queryKey: ["workspaces-pr-batch"] }),
       ]);
     },
-    mutationFn: (strategy: PrMergeStrategy) =>
+    mutationFn: (input: { strategy: PrMergeStrategy; admin: boolean }) =>
       api(`/api/workspaces/${workspace.id}/pr-merge`, {
         method: "POST",
-        body: JSON.stringify({ strategy }),
+        body: JSON.stringify(input.admin ? { strategy: input.strategy, admin: true } : { strategy: input.strategy }),
       }),
     onSuccess: () => {
       setOpen(false);
       markWorkspacePrMergedInQueryCache(queryClient, workspace.id, pr.number);
+    },
+    onSettled: () => {
+      setAdminBypass(false);
     },
   });
   const disabledReason = mergeDisabledReason({
@@ -114,7 +121,11 @@ function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
           className="pr-card-btn pr-card-btn-merge"
           onClick={(event) => {
             event.stopPropagation();
-            if (canMerge) setOpen((value) => !value);
+            if (canMerge)
+              setOpen((value) => {
+                setAdminBypass(false);
+                return !value;
+              });
           }}
           disabled={!canMerge || merge.isPending}
           aria-disabled={!canMerge || merge.isPending}
@@ -126,6 +137,23 @@ function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
       </span>
       {open && canMerge ? (
         <div className="pr-card-merge-menu" role="menu">
+          <button
+            type="button"
+            className="pr-card-merge-admin"
+            onClick={(event) => {
+              event.stopPropagation();
+              setAdminBypass((value) => !value);
+            }}
+            disabled={merge.isPending}
+            role="menuitemcheckbox"
+            aria-checked={adminBypass}
+          >
+            <ShieldAlert size={11} aria-hidden="true" />
+            <span className="pr-card-merge-admin-text">
+              <span>Admin bypass</span>
+              <span>Unmet requirements</span>
+            </span>
+          </button>
           {allowed.map((strategy) => (
             <button
               key={strategy}
@@ -133,7 +161,9 @@ function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
               className="pr-card-merge-strategy"
               onClick={(event) => {
                 event.stopPropagation();
-                merge.mutate(strategy);
+                const selectedAdminBypass = adminBypass;
+                setAdminBypass(false);
+                merge.mutate({ strategy, admin: selectedAdminBypass });
               }}
               disabled={merge.isPending}
               role="menuitem"
