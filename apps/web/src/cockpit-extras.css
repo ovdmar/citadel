@@ -644,9 +644,11 @@
 }
 
 .workspace-card-right-control-spacer {
-  width: 38px;
+  /* Reserve the full absolute-control lane: right offset plus the widest
+   * current rightControl set (two 18px buttons with a 2px gap). */
+  width: 66px;
   height: 18px;
-  flex: 0 0 38px;
+  flex: 0 0 66px;
 }
 
 .workspace-card-collapse {
