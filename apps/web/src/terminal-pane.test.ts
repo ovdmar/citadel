@@ -40,6 +40,10 @@ const xtermMocks = vi.hoisted(() => {
     selectAll = vi.fn();
     hasSelection = vi.fn(() => true);
     getSelection = vi.fn(() => "selected text");
+    resize = vi.fn((cols: number, rows: number) => {
+      this.cols = cols;
+      this.rows = rows;
+    });
     private dataHandler: ((data: string) => void) | null = null;
     private keyHandler: ((event: KeyboardEvent) => boolean) | null = null;
     private selectionHandler: (() => void) | null = null;
@@ -80,7 +84,7 @@ const xtermMocks = vi.hoisted(() => {
 
   class FakeFitAddon {
     static instances: FakeFitAddon[] = [];
-    fit = vi.fn();
+    proposeDimensions = vi.fn(() => ({ cols: 80, rows: 24 }));
 
     constructor() {
       FakeFitAddon.instances.push(this);

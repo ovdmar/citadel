@@ -496,6 +496,8 @@
 
 .terminal-surface {
   --terminal-xterm-bg: #f5f1e8;
+  --terminal-xterm-gutter-left: 6px;
+  --terminal-xterm-gutter-right: 18px;
 
   position: relative;
   box-sizing: border-box;
@@ -517,11 +519,11 @@
 }
 
 .terminal-surface .xterm {
-  /* FitAddon subtracts .xterm padding when computing PTY columns. */
+  /* FitAddon subtracts this padding; TerminalPane reserves extra readable columns. */
   box-sizing: border-box;
   width: 100%;
   height: 100% !important;
-  padding: 4px 6px 0;
+  padding: 4px var(--terminal-xterm-gutter-right) 0 var(--terminal-xterm-gutter-left);
 }
 
 .terminal-surface .xterm-viewport {
