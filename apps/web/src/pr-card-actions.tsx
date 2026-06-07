@@ -2,7 +2,7 @@ import type { ProviderHealth, PullRequestSummary, Workspace } from "@citadel/con
 import type { PrMergeStrategy } from "@citadel/contracts/pr-routes";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { GitMerge, GitPullRequest, Loader2, ShieldAlert } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { api, queryClient } from "./api.js";
 import { markWorkspacePrMergedInQueryCache } from "./cockpit-tools.js";
 import type { PrTone } from "./workspace-card.js";
@@ -69,9 +69,6 @@ function MergeButton(props: { workspace: Workspace; pr: PullRequestSummary }) {
   const allowed: PrMergeStrategy[] = pr.allowedMergeStrategies.length
     ? pr.allowedMergeStrategies
     : (["squash", "merge", "rebase"] as const).filter(() => false);
-  useEffect(() => {
-    setAdminBypass(false);
-  }, [workspace.id, pr.number]);
   const providerHealth = useQuery<{ providerHealth: ProviderHealth[] }>({
     queryKey: ["provider-health"],
     queryFn: () => api<{ providerHealth: ProviderHealth[] }>("/api/health"),

@@ -17,13 +17,10 @@ describe("mergePr", () => {
 
   it("adds admin bypass only when requested", async () => {
     const calls: string[][] = [];
-    const result = await mergePr(
-      { rootPath: "/tmp/x", number: 8, strategy: "merge", admin: true },
-      async (args) => {
-        calls.push(args);
-        return "";
-      },
-    );
+    const result = await mergePr({ rootPath: "/tmp/x", number: 8, strategy: "merge", admin: true }, async (args) => {
+      calls.push(args);
+      return "";
+    });
 
     expect(result).toEqual({ ok: true });
     expect(calls).toEqual([["pr", "merge", "8", "--merge", "--admin"]]);

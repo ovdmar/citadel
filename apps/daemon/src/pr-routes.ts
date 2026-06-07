@@ -261,7 +261,12 @@ export function registerPrRoutes(input: {
         if (nameWithOwner) bustGlobalPrEntry(providerCache, nameWithOwner, number);
         return res.status(202).json({ ok: true });
       }
-      const result = await mergePr({ rootPath: workspace.path, number, strategy: parsed.strategy, admin: parsed.admin });
+      const result = await mergePr({
+        rootPath: workspace.path,
+        number,
+        strategy: parsed.strategy,
+        admin: parsed.admin,
+      });
       const nameWithOwner = resolveRepoFullName(repo.id);
       if (result.ok) {
         const mergedPr = markPullRequestMerged(pr);

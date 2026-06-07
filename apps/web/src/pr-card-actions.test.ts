@@ -283,9 +283,7 @@ function adminBypassItem(container: HTMLElement): HTMLButtonElement {
 
 type FetchMock = ReturnType<typeof vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>>;
 
-function installMergeFetchMock(
-  responses: Array<{ status: number; body: unknown }>,
-): FetchMock {
+function installMergeFetchMock(responses: Array<{ status: number; body: unknown }>): FetchMock {
   let index = 0;
   const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () => {
     const response = responses[Math.min(index, responses.length - 1)] ?? { status: 200, body: { ok: true } };
