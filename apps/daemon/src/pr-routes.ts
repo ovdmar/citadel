@@ -220,7 +220,7 @@ export function registerPrRoutes(input: {
       if (!workspace) return res.status(404).json({ error: "workspace_not_found" });
       const repo = store.listRepos().find((candidate) => candidate.id === workspace.repoId);
       if (!repo) return res.status(404).json({ error: "repo_not_found" });
-      let parsed: { strategy: "squash" | "merge" | "rebase" };
+      let parsed: { strategy: "squash" | "merge" | "rebase"; admin: boolean };
       try {
         parsed = PrMergeRequestSchema.parse(req.body);
       } catch (error) {
@@ -244,6 +244,7 @@ export function registerPrRoutes(input: {
             operationMessage: `Running PR #${number} merge hooks`,
             payload: {
               strategy: parsed.strategy,
+              admin: parsed.admin,
               pullRequest: summary.pullRequest,
               versionControl: summary,
             },
@@ -260,7 +261,7 @@ export function registerPrRoutes(input: {
         if (nameWithOwner) bustGlobalPrEntry(providerCache, nameWithOwner, number);
         return res.status(202).json({ ok: true });
       }
-      const result = await mergePr({ rootPath: workspace.path, number, strategy: parsed.strategy });
+      const result = await mergePr({ rootPath: workspace.path, number, strategy: parsed.strategy, admin: parsed.admin });
       const nameWithOwner = resolveRepoFullName(repo.id);
       if (result.ok) {
         const mergedPr = markPullRequestMerged(pr);
