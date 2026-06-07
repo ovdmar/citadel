@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CitadelConfig, HookConfig } from "@citadel/config";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
-import type { ActivityEvent, AgentSession, CheckoutContextInput, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceCheckoutInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, MarkCheckoutReadyForReviewInput, Namespace, Operation, PlanDeviationReport, RegisterCheckoutReviewArtifactInput, RegisterWorkspacePlanInput, Repo, UpdateNamespaceInput, UpdateTicketStatusInput, Workspace, WorkspaceManagerControlInput, WorktreeCheckout } from "@citadel/contracts";
+import type { ActivityEvent, AgentSession, CheckoutContextInput, CreateAgentSessionInput, CreateNamespaceInput, CreateTerminalSessionInput, CreateWorkspaceCheckoutInput, CreateWorkspaceInput, HookAction, HookEvent, HookOutput, JiraAutoTransitionEvent, LaunchAgentInput, MarkCheckoutReadyForReviewInput, Namespace, Operation, PlanDeviationReport, RegisterCheckoutReviewArtifactInput, RegisterWorkspacePlanInput, Repo, UpdateNamespaceInput, UpdateTicketStatusInput, Workspace, WorkspaceManagerControlInput, WorkspaceSession, WorktreeCheckout } from "@citadel/contracts";
 import { createId, nowIso } from "@citadel/core";
 import type { SqliteStore } from "@citadel/db";
 import { killTmuxSession } from "@citadel/terminal";
@@ -16,6 +16,7 @@ import {
 import { type CreateWorkspaceOptions, type WorkspaceOpsDeps, createWorkspaceImpl } from "./create-workspace.js";
 import { launchAgent as launchAgentImpl } from "./launch-agent.js";
 import * as namespaceOps from "./namespaces.js";
+import { type ClosePtySession, closePtySessionBestEffort } from "./pty-session-cleanup.js";
 import { registerRepo as registerRepoImpl } from "./register-repo.js";
 import { checkWorkspaceRemovalImpl, removeWorkspaceCheckoutImpl, removeWorkspaceImpl } from "./remove-workspace.js";
 import type { CreateAgentSessionOperationInput } from "./system-prompt-launch.js";
@@ -132,6 +133,7 @@ export class OperationService {
       terminal?: CitadelConfig["terminal"];
       agentRuntimes?: CitadelConfig["agentRuntimes"];
       agentSessions?: CitadelConfig["agentSessions"];
+      closePtySession?: ClosePtySession;
     },
     private readonly runAutoTransitionsDep: RunAutoTransitionsDep | null = null,
   ) {}
@@ -328,6 +330,7 @@ export class OperationService {
     const session = this.store.listWorkspaceSessions().find((candidate) => candidate.id === input.sessionId);
     if (!session) return { stopped: false, reason: "session_not_found" as const };
     if (session.tmuxSessionName) killTmuxSession(session.tmuxSessionName, session.tmuxSocketName ?? null);
+    closePtySessionBestEffort(this.config?.closePtySession, session);
     this.store.closeWorkspaceSession(session.id);
     const workspace = this.store.listWorkspaces().find((candidate) => candidate.id === session.workspaceId);
     const activityType = session.kind === "agent" ? "agent.stopped" : "terminal.stopped";
@@ -790,7 +793,6 @@ export class OperationService {
     };
   }
 }
-
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
 export { runDoctorChecks } from "./doctor.js";
 // biome-ignore format: keep on one line to stay inside the 800-line file-size budget
