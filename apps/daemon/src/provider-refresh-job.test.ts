@@ -367,9 +367,9 @@ describe("startProviderRefreshJob", () => {
     const callPaths = (deps.providers.collectGitHubVersionControlSummary as ReturnType<typeof vi.fn>).mock.calls.map(
       (call) => call[0],
     );
-    expect(callPaths).toEqual(["/tmp/w1", "/tmp/w1/co_api"]);
-    expect(deps.cache.get("vc:w1:checkout:co_api:2026-05-25T00:00:00Z")?.value).toBeDefined();
-    expect(deps.cache.get("vc:w1:checkout:co_archived:2026-05-25T00:00:00Z")).toBeUndefined();
+    expect(callPaths).toEqual(["/tmp/w1/co_api"]);
+    expect(deps.cache.get("vc:w1:checkout:co_api")?.value).toBeDefined();
+    expect(deps.cache.get("vc:w1:checkout:co_archived")).toBeUndefined();
     job.stop();
   });
 
@@ -409,11 +409,12 @@ describe("startProviderRefreshJob", () => {
     };
     const job = startProviderRefreshJob({ ...deps, github, tickIntervalMs: 0, jitterMaxMs: 0 });
     await job.runTickForTest();
+    expect(github.fetchVersionControl).not.toHaveBeenCalled();
     expect(github.fetchCheckoutVersionControl).toHaveBeenCalledWith(
       workspace,
       checkout,
       repo,
-      "vc:w1:checkout:co_api:2026-05-25T00:00:00Z",
+      "vc:w1:checkout:co_api",
       { intent: "automatic" },
     );
     job.stop();
