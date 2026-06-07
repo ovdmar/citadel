@@ -281,13 +281,13 @@ function adminBypassItem(container: HTMLElement): HTMLButtonElement {
   return item;
 }
 
-type FetchMock = ReturnType<typeof vi.fn<[RequestInfo | URL, RequestInit?], Promise<Response>>>;
+type FetchMock = ReturnType<typeof vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>>;
 
 function installMergeFetchMock(
   responses: Array<{ status: number; body: unknown }>,
 ): FetchMock {
   let index = 0;
-  const fetchMock = vi.fn<[RequestInfo | URL, RequestInit?], Promise<Response>>(async () => {
+  const fetchMock = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>(async () => {
     const response = responses[Math.min(index, responses.length - 1)] ?? { status: 200, body: { ok: true } };
     index += 1;
     return new Response(JSON.stringify(response.body), {
@@ -295,7 +295,7 @@ function installMergeFetchMock(
       headers: { "Content-Type": "application/json" },
     });
   });
-  globalThis.fetch = fetchMock as typeof fetch;
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
   return fetchMock;
 }
 
