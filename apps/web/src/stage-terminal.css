@@ -154,14 +154,14 @@
   border-color: var(--c-line-2);
 }
 
-.stage-tab-actions {
+.stage-tab-menu-wrapper {
   display: inline-flex;
   align-items: center;
-  gap: 1px;
+  flex: 0 0 auto;
   margin-left: 2px;
 }
 
-.stage-tab-act {
+.stage-tab-menu-trigger {
   appearance: none;
   width: 18px;
   height: 18px;
@@ -172,23 +172,60 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  opacity: 0;
+  opacity: 0.45;
   cursor: pointer;
   transition: opacity 0.1s, background 0.1s, color 0.1s;
 }
 
-.stage-tab-act:hover {
+.stage-tab-menu-trigger:hover,
+.stage-tab-menu-trigger[aria-expanded="true"] {
   background: var(--c-line-2);
+  color: var(--c-fg-1);
+  opacity: 1;
+}
+
+.stage-tab:hover .stage-tab-menu-trigger,
+.stage-tab.active .stage-tab-menu-trigger {
+  opacity: 1;
+}
+
+.stage-tab-menu {
+  position: fixed;
+  z-index: 80;
+  width: 180px;
+  padding: 5px;
+  border: 0.5px solid var(--c-line-3);
+  border-radius: 8px;
+  background: var(--c-elev);
+  box-shadow: 0 10px 28px -6px rgba(20, 12, 0, 0.2), 0 2px 8px rgba(20, 12, 0, 0.1);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.stage-tab-menu button {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--c-fg-2);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.2;
+  padding: 7px 8px;
+  text-align: left;
+}
+
+.stage-tab-menu button:hover:not(:disabled) {
+  background: var(--c-line-1);
   color: var(--c-fg-1);
 }
 
-.stage-tab:hover .stage-tab-act,
-.stage-tab.active .stage-tab-act {
-  opacity: 0.7;
-}
-
-.stage-tab .stage-tab-act:hover {
-  opacity: 1;
+.stage-tab-menu button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .stage-tab input {
@@ -201,25 +238,6 @@
   padding: 0;
   outline: none;
   font: inherit;
-}
-
-.stage-tab .close-tab {
-  border: 0;
-  background: transparent;
-  color: var(--c-fg-4);
-  opacity: 0.6;
-  cursor: pointer;
-  display: inline-grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
-}
-
-.stage-tab .close-tab:hover {
-  opacity: 1;
-  background: var(--c-line-2);
-  color: var(--c-fg-1);
 }
 
 .stage-add {

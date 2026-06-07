@@ -1,6 +1,8 @@
-import type { CitadelConfig } from "@citadel/config";
+import type { AgentRuntimeConfig, CitadelConfig } from "@citadel/config";
 import { CreateAgentSessionInputSchema, CreateTerminalSessionInputSchema } from "@citadel/contracts";
-import type { OperationService } from "@citadel/operations";
+import type { AgentSession } from "@citadel/contracts";
+import type { SqliteStore } from "@citadel/db";
+import type { CreateAgentSessionOperationInput, OperationService } from "@citadel/operations";
 import type express from "express";
 import { resolveCreateAgentSessionInputFromTemplates } from "./agent-session-template-resolver.js";
 
@@ -10,6 +12,7 @@ type AsyncRoute = (
 
 type Deps = {
   operations: OperationService;
+  store: SqliteStore;
   emit: (type: string, payload: unknown) => void;
   asyncRoute: AsyncRoute;
   config: CitadelConfig;
@@ -21,7 +24,7 @@ type Deps = {
  * automation share the same backend code path.
  */
 export function registerAgentSessionRoutes(app: express.Express, deps: Deps) {
-  const { operations, emit, asyncRoute, config } = deps;
+  const { operations, store, emit, asyncRoute, config } = deps;
 
   app.post(
     "/api/agent-sessions",
@@ -30,15 +33,7 @@ export function registerAgentSessionRoutes(app: express.Express, deps: Deps) {
       const input = await resolveCreateAgentSessionInputFromTemplates(config, parsed);
       const runtime = config.agentRuntimes.find((candidate) => candidate.id === input.runtimeId);
       if (!runtime) return res.status(404).json({ error: "runtime_not_found" });
-      const session = await operations.createAgentSession(input, {
-        command: runtime.command,
-        args: runtime.args,
-        displayName: runtime.displayName,
-        promptArg: runtime.promptArg ?? null,
-        sessionIdArg: runtime.sessionIdArg ?? null,
-        resumeArg: runtime.resumeArg ?? null,
-        ...(runtime.launchOptions ? { launchOptions: runtime.launchOptions } : {}),
-      });
+      const session = await operations.createAgentSession(input, runtimeDescriptor(runtime));
       emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id });
       res.status(202).json({ session });
     }),
@@ -77,6 +72,38 @@ export function registerAgentSessionRoutes(app: express.Express, deps: Deps) {
       if (!result.stopped) return res.status(404).json(result);
       emit("workspace-session.updated", { sessionId });
       res.status(202).json(result);
+    }),
+  );
+
+  app.post(
+    "/api/agent-sessions/:sessionId/reload",
+    asyncRoute(async (req, res) => {
+      const sessionId = req.params.sessionId;
+      if (typeof sessionId !== "string") return res.status(400).json({ error: "session_id_required" });
+      const source = store.listWorkspaceSessions().find((candidate) => candidate.id === sessionId);
+      if (!source) return res.status(404).json({ error: "session_not_found" });
+      if (source.kind !== "agent") return res.status(409).json({ error: "session_not_agent" });
+      if (source.closedAt) return res.status(409).json({ error: "session_not_live", sessionId: source.id });
+      if (!source.runtimeSessionId) {
+        return res.status(409).json({ error: "session_not_resumable", sessionId: source.id });
+      }
+      const runtime = config.agentRuntimes.find((candidate) => candidate.id === source.runtimeId);
+      if (!runtime) return res.status(404).json({ error: "runtime_not_found", runtimeId: source.runtimeId });
+      if (!runtime.resumeArg) {
+        return res.status(409).json({ error: "runtime_does_not_support_resume", runtimeId: source.runtimeId });
+      }
+
+      const stopped = operations.stopAgentSession({ sessionId: source.id });
+      if (!stopped.stopped) return res.status(409).json(stopped);
+      let session: AgentSession;
+      try {
+        session = await operations.createAgentSession(reloadInput(source), runtimeDescriptor(runtime));
+      } catch (error) {
+        emit("agent.updated", { workspaceId: source.workspaceId, sessionId: source.id });
+        throw error;
+      }
+      emit("agent.updated", { workspaceId: session.workspaceId, sessionId: session.id, reloadedFrom: source.id });
+      res.status(202).json({ session, reloadedFrom: source.id });
     }),
   );
 
@@ -125,6 +152,37 @@ export function registerAgentSessionRoutes(app: express.Express, deps: Deps) {
       res.status(202).json(result);
     }),
   );
+}
+
+function runtimeDescriptor(runtime: AgentRuntimeConfig) {
+  return {
+    command: runtime.command,
+    args: runtime.args,
+    displayName: runtime.displayName,
+    promptArg: runtime.promptArg ?? null,
+    sessionIdArg: runtime.sessionIdArg ?? null,
+    resumeArg: runtime.resumeArg ?? null,
+    ...(runtime.launchOptions ? { launchOptions: runtime.launchOptions } : {}),
+  };
+}
+
+function reloadInput(source: AgentSession): CreateAgentSessionOperationInput {
+  return {
+    workspaceId: source.workspaceId,
+    runtimeId: source.runtimeId,
+    displayName: source.displayName,
+    resumeRuntimeSessionId: source.runtimeSessionId ?? undefined,
+    resumeSourceSessionId: source.id,
+    tabId: source.tabId ?? source.id,
+    ...(source.targetType ? { targetType: source.targetType } : {}),
+    ...(source.checkoutId ? { checkoutId: source.checkoutId } : {}),
+    ...(source.role ? { role: source.role } : {}),
+    ...(source.actionId ? { actionId: source.actionId } : {}),
+    ...(source.managed !== undefined ? { managed: source.managed } : {}),
+    ...(source.parentSessionId ? { parentSessionId: source.parentSessionId } : {}),
+    ...(source.planVersionId ? { planVersionId: source.planVersionId } : {}),
+    ...(source.managerActionId ? { managerActionId: source.managerActionId } : {}),
+  };
 }
 
 function parseIntQuery(value: unknown): number | undefined {
