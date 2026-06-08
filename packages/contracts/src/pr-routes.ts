@@ -58,6 +58,7 @@ export const PrRefreshResponseSchema = z.object({
 
 export const PrMergeRequestSchema = z.object({
   strategy: PrMergeStrategySchema,
+  admin: z.boolean().default(false),
 });
 
 export const PrMergeResponseSchema = z.discriminatedUnion("ok", [

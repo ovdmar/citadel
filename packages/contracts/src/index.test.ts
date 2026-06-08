@@ -546,9 +546,14 @@ describe("contract schemas", () => {
     });
     expect(() => PrMergeResponseSchema.parse({ ok: false })).toThrow();
 
-    // PrMergeRequestSchema requires a valid strategy.
-    expect(PrMergeRequestSchema.parse({ strategy: "rebase" })).toEqual({ strategy: "rebase" });
+    // PrMergeRequestSchema requires a valid strategy and defaults admin bypass off.
+    expect(PrMergeRequestSchema.parse({ strategy: "rebase" })).toEqual({ strategy: "rebase", admin: false });
+    expect(PrMergeRequestSchema.parse({ strategy: "squash", admin: true })).toEqual({
+      strategy: "squash",
+      admin: true,
+    });
     expect(() => PrMergeRequestSchema.parse({ strategy: "x" })).toThrow();
+    expect(() => PrMergeRequestSchema.parse({ strategy: "squash", admin: "true" })).toThrow();
 
     // Batch request requires at least one workspace id.
     expect(WorkspaceCockpitSummaryBatchRequestSchema.parse({ ids: ["ws_1"] })).toEqual({ ids: ["ws_1"] });

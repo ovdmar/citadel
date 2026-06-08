@@ -399,6 +399,67 @@ describe("PR routes", () => {
     }
   });
 
+  it("passes admin bypass through to gh merge only when requested", async () => {
+    const now = new Date().toISOString();
+    const gh = fakeGhRecorder();
+    setGithubCommand(gh.script);
+    const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
+    providerCache.set(`vc:ws_a:${now}`, { expiresAt: Date.now() + 60_000, value: makeVcSummary(now) });
+    const { server } = createPrRouteHarness({
+      providerCache,
+      workspaceUpdatedAt: now,
+      repoUpdatedAt: now,
+    });
+    const baseUrl = await listen(server);
+    try {
+      const defaultResult = await postJson<{ ok: true }>(`${baseUrl}/api/workspaces/ws_a/pr-merge`, {
+        strategy: "squash",
+      });
+
+      expect(defaultResult).toEqual({ ok: true });
+      expect(fs.readFileSync(gh.argsFile, "utf8").trim()).toBe("pr merge 42 --squash");
+
+      providerCache.set(`vc:ws_a:${now}`, { expiresAt: Date.now() + 60_000, value: makeVcSummary(now) });
+      const adminResult = await postJson<{ ok: true }>(`${baseUrl}/api/workspaces/ws_a/pr-merge`, {
+        strategy: "squash",
+        admin: true,
+      });
+
+      expect(adminResult).toEqual({ ok: true });
+      expect(fs.readFileSync(gh.argsFile, "utf8").trim()).toBe("pr merge 42 --squash --admin");
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("rejects invalid admin payloads before merging", async () => {
+    const now = new Date().toISOString();
+    const gh = fakeGhRecorder();
+    setGithubCommand(gh.script);
+    const providerCache = new Map<string, { expiresAt: number; value: unknown }>();
+    providerCache.set(`vc:ws_a:${now}`, { expiresAt: Date.now() + 60_000, value: makeVcSummary(now) });
+    const { server } = createPrRouteHarness({
+      providerCache,
+      workspaceUpdatedAt: now,
+      repoUpdatedAt: now,
+    });
+    const baseUrl = await listen(server);
+    try {
+      const response = await fetch(`${baseUrl}/api/workspaces/ws_a/pr-merge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ strategy: "squash", admin: "true" }),
+      });
+      const result = (await response.json()) as { error: string };
+
+      expect(response.status).toBe(400);
+      expect(result.error).toBe("invalid_merge_request");
+      expect(fs.existsSync(gh.argsFile)).toBe(false);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("runs pr.merge hooks as the merge handler when present", async () => {
     const now = new Date().toISOString();
     const script = fakeGhScript("strategy-failure");
@@ -420,7 +481,7 @@ describe("PR routes", () => {
       const response = await fetch(`${baseUrl}/api/workspaces/ws_a/pr-merge`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ strategy: "squash" }),
+        body: JSON.stringify({ strategy: "squash", admin: true }),
       });
       const result = (await response.json()) as { ok: true };
 
@@ -428,7 +489,7 @@ describe("PR routes", () => {
       expect(result).toEqual({ ok: true });
       expect(hookCalls).toHaveLength(1);
       expect(hookCalls[0]?.event).toBe("pr.merge");
-      expect(hookCalls[0]?.payload).toMatchObject({ strategy: "squash", pullRequest: { number: 42 } });
+      expect(hookCalls[0]?.payload).toMatchObject({ strategy: "squash", admin: true, pullRequest: { number: 42 } });
       expect(providerCache.has(globalPrCacheKey("owner/repo", 42))).toBe(false);
     } finally {
       await closeServer(server);
@@ -636,4 +697,14 @@ function fakeGhScript(mode: "success" | "strategy-failure"): string {
   );
   fs.chmodSync(script, 0o755);
   return script;
+}
+
+function fakeGhRecorder(): { script: string; argsFile: string } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "citadel-fake-gh-"));
+  dirs.push(dir);
+  const script = path.join(dir, "gh");
+  const argsFile = path.join(dir, "args.txt");
+  fs.writeFileSync(script, `#!/usr/bin/env bash\nprintf '%s\\n' "$*" > ${JSON.stringify(argsFile)}\nexit 0\n`);
+  fs.chmodSync(script, 0o755);
+  return { script, argsFile };
 }
