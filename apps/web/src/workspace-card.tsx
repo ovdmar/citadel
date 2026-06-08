@@ -237,6 +237,7 @@ export function WorkspaceCard(
 
   const wrapClassName = [
     "workspace-card-wrap",
+    props.active ? "is-active" : null,
     props.rightControl ? "has-right-control" : null,
     reorderIndicator === "above" ? "is-drop-above" : null,
     reorderIndicator === "below" ? "is-drop-below" : null,
