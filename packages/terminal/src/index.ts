@@ -21,6 +21,7 @@ export { keyForControlCharacter, keyForEscapeSequence, tokenizeTerminalInput } f
 export type { InputToken } from "./input-tokens.js";
 
 import { captureTmuxSnapshot, waitForTerminalIdle } from "./capture.js";
+import { agentResourcePrefixArgs } from "./resource-priority.js";
 export {
   attachTerminalWebSocket,
   attachTmuxPty,
@@ -151,6 +152,7 @@ export {
   sweepLegacyAgentSentinels,
 } from "./pane-lifecycle.js";
 export type { AgentExitHint, PanePidProcess, SweepLegacySentinelsResult } from "./pane-lifecycle.js";
+export { agentNiceValue, agentResourcePrefixArgs } from "./resource-priority.js";
 
 // Path of the "agent still running" sentinel file for a given tmux session.
 // The wrapper script touches this before exec'ing the agent and removes it
@@ -255,7 +257,14 @@ export async function ensureTmuxSessionRaw(input: RawTerminalSessionRequest) {
   // tmux new-session takes a single `shell-command` string and hands it to
   // /bin/sh -c. Build it ourselves with shellQuote so an arg with spaces is
   // preserved correctly.
-  const shellCommand = [...commandEnvironmentPrefix(input.env), input.command, ...input.args].map(shellQuote).join(" ");
+  const shellCommand = [
+    ...commandEnvironmentPrefix(input.env),
+    ...agentResourcePrefixArgs(),
+    input.command,
+    ...input.args,
+  ]
+    .map(shellQuote)
+    .join(" ");
   await execFileAsync(
     "tmux",
     [...tmuxPrefix(input.socketName), "new-session", "-d", "-s", input.sessionName, "-c", input.cwd, shellCommand],
