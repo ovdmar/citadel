@@ -28,7 +28,13 @@ export default defineConfig({
     alias: [...workspaceAliases, { find: /^@citadel\/contracts\/(.+)$/, replacement: `${contractsSrc}/$1.ts` }],
   },
   test: {
-    include: ["packages/*/src/**/*.test.ts", "apps/*/src/**/*.test.ts", "scripts/**/*.test.ts"],
+    include: [
+      "packages/*/src/**/*.test.ts",
+      "packages/*/src/**/*.test.tsx",
+      "apps/*/src/**/*.test.ts",
+      "apps/*/src/**/*.test.tsx",
+      "scripts/**/*.test.ts",
+    ],
     exclude: ["**/node_modules/**", "e2e/**", "**/dist/**", "**/coverage/**"],
     setupFiles: ["./vitest.setup.ts"],
     pool: "forks",

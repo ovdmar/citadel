@@ -12,6 +12,8 @@ import { Plus, Save } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, queryClient } from "./api.js";
 import { Button } from "./components/ui/button.js";
+import { FormField } from "./components/ui/form-field.js";
+import { Input } from "./components/ui/input.js";
 import { describeCronClient, nextCronRunClient } from "./cron-client.js";
 
 // Reusable scheduled-agent form. Drives both the create modal and the
@@ -267,10 +269,9 @@ export function ScheduledAgentForm(props: FormProps) {
         if (canSubmit && !submit.isPending) submit.mutate();
       }}
     >
-      <label className="scheduled-agent-field">
-        <span>Name</span>
-        <input value={draft.name} onChange={(event) => update({ name: event.target.value })} required />
-      </label>
+      <FormField label="Name" required className="scheduled-agent-field">
+        <Input value={draft.name} onChange={(event) => update({ name: event.target.value })} />
+      </FormField>
       <label className="scheduled-agent-field">
         <span>Type</span>
         <select

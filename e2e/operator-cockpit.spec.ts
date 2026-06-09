@@ -222,7 +222,11 @@ test("dialogs render near viewport center on desktop and tablet", async ({ page,
 
     // 2. Create-workspace modal (Plus button in navigator). Has more content
     // and a 90vh cap, so vertical slack is wider; horizontal must still be
-    // tight to catch the original "drifted right" symptom.
+    // tight to catch the original "drifted right" symptom. Migrated to
+    // Radix Dialog — selector targets the portal-rendered role="dialog"
+    // by its accessible name. NB the dialog title rendered by modals.tsx
+    // is "New workspace" (not "Create workspace" — that's the navigator
+    // button's aria-label that opens it).
     await page.getByRole("button", { name: "Create workspace" }).click();
     const createWorkspaceDialog = page.getByRole("dialog", { name: "New workspace" });
     await assertCentered(createWorkspaceDialog, "create-workspace modal", { verticalSlack: 32 });

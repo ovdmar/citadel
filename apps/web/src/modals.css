@@ -1,11 +1,7 @@
-/* Neutralize UA <dialog> styles (position: absolute; inset-inline: 0; margin: auto)
- * so the dialog participates in the backdrop's `place-items: center` grid and
- * lands at the viewport center both axes. Without this reset a <dialog open>
- * inside a centered backdrop renders pinned to the top of the backdrop's
- * containing block — the "dialog appears top-center / top-right" bug the
- * user keeps re-reporting. */
+/* Reset UA <dialog open> styling for backdrops that still use the native
+ * element (command palette, drop-workspace). Radix Dialog renders its own
+ * portal + overlay, so .modal-backdrop is no longer authored here. */
 .command-backdrop dialog[open],
-.modal-backdrop dialog[open],
 .drop-workspace-backdrop dialog[open] {
   position: relative;
   inset: auto;
@@ -99,54 +95,27 @@
   color: var(--muted);
 }
 
-/* Modal frame (create workspace, add repo, group-by) */
+/* Modal content (create workspace, add repo).
+ *
+ * Radix Dialog owns the overlay, centering, frame chrome, focus trap, and
+ * Esc/backdrop dismissal — see apps/web/src/components/ui/dialog.tsx. The
+ * rules below style the inner content layout only. .modal-backdrop /
+ * .modal-frame were removed when the bespoke scaffolding was migrated. */
 
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 25;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: var(--overlay-bg);
-  backdrop-filter: blur(4px);
-}
-
-.modal-frame {
-  width: min(560px, 100%);
-  max-height: 90vh;
-  padding: 0;
-  overflow: hidden;
-  background: var(--panel);
-  border: 1px solid var(--line-strong);
-  border-radius: 10px;
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  color: inherit;
-  box-shadow: 0 28px 80px rgb(var(--shadow-color) / 0.45);
-}
-
-.modal-header {
-  display: flex;
+.modal-title {
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
-}
-
-.modal-header h2 {
-  font-size: 14px;
-  margin: 0;
-  flex: 1;
 }
 
 .modal-body {
-  padding: 12px 14px;
   overflow: auto;
+  max-height: min(70vh, 600px);
 }
 
 .modal-footer {
-  padding: 10px 14px;
+  padding-top: 10px;
+  margin-top: 10px;
   display: flex;
   justify-content: flex-end;
   gap: 8px;

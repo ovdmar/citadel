@@ -1,0 +1,72 @@
+# Citadel design-system token inventory.
+#
+# Source of truth for `tokens.test.ts` — every token listed below must
+# resolve to a non-empty value in both `data-theme="light"` and
+# `data-theme="dark"` via apps/web/src/design-system/tokens.css.
+#
+# Excluded by design: component-local CSS variables defined and consumed
+# inside the same component CSS file (e.g. `--right-slot` in
+# cockpit-extras.css, `--set-font-serif` in settings-ia.css). These are
+# layout helpers, not cross-component design tokens.
+#
+# Regenerate the candidate list with:
+#   grep -rohE "var\(--[a-z0-9-]+\)" apps/web/src --include="*.css" --include="*.tsx" \
+#     | sed -E 's/^var\(//; s/\)$//' | sort -u
+# Then remove component-local entries before committing.
+#
+# Also included: documented-but-currently-unused legacy aliases that the
+# token surface contract preserves so future consumers can reach them
+# (`--sh-2`, `--color-purple`, `--topbar-fg`, `--topbar-line`).
+--c-app
+--c-bad
+--c-bad-bg
+--c-canvas
+--c-card
+--c-dark
+--c-dark-2
+--c-elev
+--c-fg-1
+--c-fg-2
+--c-fg-3
+--c-fg-4
+--c-fg-5
+--c-info
+--c-info-bg
+--c-line-1
+--c-line-2
+--c-line-3
+--c-ok
+--c-ok-bg
+--c-on-dark
+--c-on-dark-d
+--c-surface
+--c-warn
+--c-warn-bg
+--color-accent
+--color-action
+--color-action-hover
+--color-danger
+--color-merged
+--color-purple
+--color-success
+--color-warning
+--font-mono
+--font-sans
+--font-serif
+--line
+--line-strong
+--muted
+--overlay-bg
+--panel
+--panel-elevated
+--panel-strong
+--sh-1
+--sh-2
+--sh-card
+--shadow-color
+--surface
+--surface-strong
+--text-muted
+--topbar-bg
+--topbar-fg
+--topbar-line

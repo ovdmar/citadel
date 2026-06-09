@@ -1,5 +1,7 @@
+/// <reference types="vite/client" />
 import { QueryClientProvider } from "@tanstack/react-query";
 import {
+  type AnyRoute,
   Link,
   Outlet,
   RouterProvider,
@@ -13,6 +15,8 @@ import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.js";
 import { OptimisticRemoveProvider } from "./app-state.js";
 import { Cockpit } from "./cockpit.js";
+import { Toaster } from "./components/ui/toast.js";
+import { TooltipProvider } from "./components/ui/tooltip.js";
 import { bootstrapLastRoute, clearLastRoute, saveLastRoute } from "./lib/last-route.js";
 import { bootstrapMobileScratchpad } from "./lib/mobile-scratchpad-bootstrap.js";
 import { AgentTemplatesView } from "./routes/agents.js";
@@ -292,22 +296,39 @@ if (typeof window !== "undefined") {
   }
 }
 
-const router = createRouter({
-  routeTree: rootRoute.addChildren([
-    cockpitLayoutRoute.addChildren([
-      indexRoute,
-      settingsRoute,
-      agentsRoute,
-      repoSettingsRoute,
-      reviewDiffRoute,
-      operationsRoute,
-      onboardingRoute,
-      dashboardRoute,
-      historyRoute,
-      scratchpadRoute,
-      scheduledAgentsRoute,
-    ]),
+// Base routes always shipped. Dev-only routes are appended below behind a
+// static `if (import.meta.env.DEV)` guard which Vite tree-shakes out of
+// production bundles — the dynamic `import()` inside the branch never
+// emits a chunk for prod builds because the entire branch is dead code
+// when DEV is replaced with the literal `false`.
+const childRoutes: AnyRoute[] = [
+  cockpitLayoutRoute.addChildren([
+    indexRoute,
+    settingsRoute,
+    agentsRoute,
+    repoSettingsRoute,
+    reviewDiffRoute,
+    operationsRoute,
+    onboardingRoute,
+    dashboardRoute,
+    historyRoute,
+    scratchpadRoute,
+    scheduledAgentsRoute,
   ]),
+];
+
+if (import.meta.env.DEV) {
+  const { DesignSystemShowcase } = await import("./routes/design-system/index.js");
+  const designSystemRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: "/design-system",
+    component: DesignSystemShowcase,
+  });
+  childRoutes.push(designSystemRoute);
+}
+
+const router = createRouter({
+  routeTree: rootRoute.addChildren(childRoutes),
   defaultNotFoundComponent: NotFoundView,
 });
 
@@ -330,6 +351,9 @@ declare module "@tanstack/react-router" {
 
 createRoot(document.getElementById("root") as HTMLElement).render(
   <QueryClientProvider client={queryClient}>
-    <RouterProvider router={router} />
+    <TooltipProvider>
+      <RouterProvider router={router} />
+      <Toaster />
+    </TooltipProvider>
   </QueryClientProvider>,
 );

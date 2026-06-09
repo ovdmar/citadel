@@ -478,7 +478,7 @@ function renderNavigator(overrides: {
       createElement(QueryClientProvider, { client: queryClient }, createElement(NavigatorHarness, { overrides })),
     );
   });
-  return rootElement;
+  return document.body;
 }
 
 function NavigatorHarness(props: {

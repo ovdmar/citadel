@@ -1,6 +1,6 @@
 import type { Repo } from "@citadel/contracts";
 import { useMutation } from "@tanstack/react-query";
-import { Check, Search, X } from "lucide-react";
+import { Check, Search } from "lucide-react";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { api, queryClient } from "./api.js";
 import {
@@ -11,6 +11,7 @@ import {
   removeOptimisticCheckout,
 } from "./app-state.js";
 import { Button } from "./components/ui/button.js";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./components/ui/dialog.js";
 import { type GroupKey, type NavigatorGrouping, normalizeNavigatorGrouping } from "./navigator-groups.js";
 import { repoNameWithOwner } from "./repo-labels.js";
 import { useToast } from "./toast.js";
@@ -418,32 +419,22 @@ function optimisticCheckoutId(): string {
 }
 
 export function Modal(props: { title: string; onClose: () => void; children: ReactNode }) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") props.onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [props.onClose]);
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={props.onClose}>
-      <dialog open className="modal-frame" aria-label={props.title} onMouseDown={(event) => event.stopPropagation()}>
-        <div className="modal-header">
-          <Search size={14} aria-hidden />
-          <h2>{props.title}</h2>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            onClick={props.onClose}
-            aria-label="Close"
-            title="Close (Esc)"
-          >
-            <X size={14} />
-          </Button>
-        </div>
+    <Dialog
+      open
+      onOpenChange={(next) => {
+        if (!next) props.onClose();
+      }}
+    >
+      <DialogContent aria-describedby={undefined}>
+        <DialogHeader>
+          <DialogTitle className="modal-title">
+            <Search size={14} aria-hidden />
+            {props.title}
+          </DialogTitle>
+        </DialogHeader>
         <div className="modal-body">{props.children}</div>
-      </dialog>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }
